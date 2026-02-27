@@ -14,11 +14,17 @@ struct CathedralView: View {
     @State private var showShareSheet = false
     @State private var showCopiedConfirmation = false
 
+    @AppStorage("exportMode") private var exportModeRaw = ExportMode.instructions.rawValue
+
+    private var exportMode: ExportMode {
+        ExportMode(rawValue: exportModeRaw) ?? .instructions
+    }
+
     private var profile: CathedralProfile? { profiles.first }
 
     private var compiledOutput: String {
         guard let profile else { return "" }
-        return Compiler.compile(profile: profile)
+        return ExportFormatter.export(profile: profile, mode: exportMode)
     }
 
     var body: some View {
@@ -111,6 +117,13 @@ struct CathedralView: View {
 
     private var compiledSection: some View {
         Section("Context Block") {
+            Picker("Format", selection: $exportModeRaw) {
+                ForEach(ExportMode.allCases) { mode in
+                    Text(mode.title).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+
             ScrollView {
                 Text(compiledOutput.isEmpty
                      ? "(add goals or constraints to compile)"
