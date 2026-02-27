@@ -7,6 +7,6 @@ struct CathedralOSApp: App {
         WindowGroup {
             CathedralView()
         }
-        .modelContainer(for: [Goal.self, Constraint.self, CathedralProfile.self])
+        .modelContainer(for: [Role.self, Domain.self, Goal.self, Constraint.self, CathedralProfile.self])
     }
 }

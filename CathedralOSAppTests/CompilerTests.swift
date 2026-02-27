@@ -10,7 +10,7 @@ final class CompilerTests: XCTestCase {
     override func setUpWithError() throws {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         container = try ModelContainer(
-            for: Goal.self, Constraint.self, CathedralProfile.self,
+            for: Role.self, Domain.self, Goal.self, Constraint.self, CathedralProfile.self,
             configurations: config
         )
         modelContext = ModelContext(container)
@@ -127,6 +127,56 @@ final class CompilerTests: XCTestCase {
             bias.contains("Respect constraints and avoid requiring long uninterrupted blocks."),
             "instruction_bias must contain 'Respect constraints and avoid requiring long uninterrupted blocks.'"
         )
+    }
+
+    func testOutputContainsRolesAndDomainKeys() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = Compiler.compile(profile: profile)
+        let block = try parseCathedralContext(from: output)
+
+        XCTAssertNotNil(block["roles"])
+        XCTAssertNotNil(block["domains"])
+    }
+
+    func testRolesAreSortedAscendingByTitle() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let roleZ = Role(title: "Z Role")
+        let roleA = Role(title: "A Role")
+        let roleM = Role(title: "M Role")
+        modelContext.insert(roleZ)
+        modelContext.insert(roleA)
+        modelContext.insert(roleM)
+        profile.roles.append(roleZ)
+        profile.roles.append(roleA)
+        profile.roles.append(roleM)
+
+        let output = Compiler.compile(profile: profile)
+        let block = try parseCathedralContext(from: output)
+        let roles = try XCTUnwrap(block["roles"] as? [String])
+
+        XCTAssertEqual(roles, ["A Role", "M Role", "Z Role"])
+    }
+
+    func testDomainsAreSortedAscendingByTitle() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let domainZ = Domain(title: "Z Domain")
+        let domainA = Domain(title: "A Domain")
+        modelContext.insert(domainZ)
+        modelContext.insert(domainA)
+        profile.domains.append(domainZ)
+        profile.domains.append(domainA)
+
+        let output = Compiler.compile(profile: profile)
+        let block = try parseCathedralContext(from: output)
+        let domains = try XCTUnwrap(block["domains"] as? [String])
+
+        XCTAssertEqual(domains, ["A Domain", "Z Domain"])
     }
 
     // MARK: - Helpers
