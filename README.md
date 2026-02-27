@@ -1,279 +1,106 @@
 # CathedralOS
-CathedralOS makes AI think in the context of your life.
-Good catch. Here it is, clean and consistent, all in one format, ready to drop directly into your repo as README.md.
 
-⸻
+[![iOS CI](https://github.com/kje7713-dev/CathedralOS/actions/workflows/ios.yml/badge.svg?branch=main)](https://github.com/kje7713-dev/CathedralOS/actions/workflows/ios.yml)
 
-CathedralOS
+CathedralOS helps AI understand what matters to you before it answers.
 
-CathedralOS is a private context layer that helps AI understand what matters to you before it answers.
+## What It Does
 
-Instead of re-explaining your life every time you ask for advice, CathedralOS stores your current goals and constraints locally and generates a small, structured context block you can paste into any LLM.
+LLMs give generic advice when they lack context. CathedralOS stores your current goals and constraints locally, then compiles them into a small, structured block you can paste into any LLM.
 
-This is not a journaling app.
-This is not a productivity dashboard.
-This is a context compiler.
+- **Goals** — what you are trying to achieve
+- **Constraints** — what limits you
+- **Compiler** — produces a deterministic, paste-ready context block
 
-⸻
+V1 is goals + constraints + compiler. Nothing else.
 
-Why This Exists
+## How to Use
 
-LLMs are powerful but context-blind.
+1. Add your goals and constraints in the app.
+2. Choose an export format (JSON or Instructions).
+3. Copy or share the compiled block, then paste it into any LLM.
 
-If you don’t provide:
-	•	Your current goals
-	•	Your constraints
-	•	Your limits
-	•	What you’re optimizing for
+## Export Formats
 
-You get generic advice.
+### JSON Mode
 
-Most people solve this by oversharing or repeatedly typing their backstory.
+Structured output, sorted keys, valid JSON. Example:
 
-CathedralOS solves this by compiling a deterministic, reusable context block that keeps your priorities in the room.
-
-⸻
-
-V1 Scope (Non-Negotiable)
-
-CathedralOS v1 does exactly this:
-	1.	Store:
-	•	Active Goals
-	•	Constraints
-	2.	Compile:
-	•	A short, LLM-friendly context block
-	3.	Export:
-	•	Copy to clipboard
-	•	Share sheet
-
-That’s it.
-
-No:
-	•	Journals
-	•	Metrics dashboards
-	•	Ontology editors
-	•	Agent orchestration
-	•	Behavioral tracking
-
-V1 is goals + constraints + compiler.
-
-⸻
-
-Core Concepts
-
-Cathedral Profile
-
-A Cathedral is your current operating context.
-
-It includes:
-	•	Goals (what you are trying to achieve)
-	•	Constraints (what limits you)
-
-Example:
-	•	Goal: Reach $5k MRR in 3–6 months
-	•	Goal: Improve household organization
-	•	Constraint: Time and focus stretched thin
-
-⸻
-
-Compiled Context Block
-
-CathedralOS generates a deterministic context block optimized for LLM reasoning.
-
-Example output:
-
+```json
 {
-“cathedral_context”: {
-“goals”: [
-“Reach $5k MRR in 3–6 months”,
-“Improve household organization”
-],
-“constraints”: [
-“Time and focus stretched thin”
-],
-“instruction_bias”: [
-“Prefer short actions with fast feedback”,
-“Avoid plans requiring long uninterrupted blocks”
-]
+  "cathedral_context": {
+    "constraints": [
+      "Time and focus stretched thin"
+    ],
+    "goals": [
+      "Improve household organization",
+      "Reach $5k MRR in 3-6 months"
+    ],
+    "instruction_bias": [
+      "Prefer short actions with fast feedback.",
+      "Respect constraints and avoid requiring long uninterrupted blocks."
+    ]
+  }
 }
-}
+```
 
-This block is:
-	•	Small
-	•	Structured
-	•	Paste-friendly
-	•	Hard for the LLM to ignore
+### Instructions Mode
 
-⸻
+Plain-text format optimized for direct pasting into an LLM system prompt. Example:
 
-Privacy Model
+```
+Use the following goals and constraints as ground truth when answering.
+Optimize your answer within these limits.
 
-CathedralOS is local-first.
-	•	Raw context stays on device.
-	•	Only the compiled block is copied or shared.
-	•	No user data is sold.
-	•	No analytics that inspect personal context.
+GOALS:
+- Improve household organization
+- Reach $5k MRR in 3-6 months
 
-Trust is the product.
+CONSTRAINTS:
+- Time and focus stretched thin
 
-⸻
+ANSWERING RULES:
+- Prefer short actions with fast feedback.
+- Respect constraints and avoid requiring long uninterrupted blocks.
+```
 
-Features
+## Privacy
 
-Free (MVP)
-	•	Single Cathedral profile
-	•	Add/edit/delete Goals
-	•	Add/edit/delete Constraints
-	•	Compile preview
-	•	Copy to clipboard
-	•	Share sheet export
+CathedralOS is local-first. No backend for MVP.
 
-Pro (Planned)
-	•	Multiple Cathedral profiles
-	•	Redaction / abstraction rules
-	•	Multiple compile modes (Concise / Strategic)
-	•	Version history
-	•	BYO API key for in-app LLM calls
-	•	Custom GPT instruction export format
+- Raw context stays on device.
+- Only the compiled block is copied or shared.
+- No analytics that inspect personal context.
 
-⸻
+## Development
 
-Tech Stack (Proposed)
-	•	iOS app: SwiftUI
-	•	Persistence: SwiftData or Core Data
-	•	Secrets storage: Keychain (for future BYO API keys)
-	•	CI: GitHub Actions
-	•	No backend for MVP
+**Requirements**
 
-Local-first by design.
+- Xcode 15 or later
+- iOS 17 simulator or device
 
-⸻
+**Run locally**
 
-Repository Structure (Target)
+Open `CathedralOSApp.xcodeproj` in Xcode and press **Run**.
 
-CathedralOS/
-CathedralOSApp/
-App/
-Features/
-CathedralEditor/
-Compiler/
-Export/
-Settings/
-Models/
-Services/
-Utils/
-CathedralOSAppTests/
-.github/workflows/
-README.md
+**Run tests**
 
-⸻
+```bash
+xcodebuild test \
+  -project CathedralOSApp.xcodeproj \
+  -scheme CathedralOSApp \
+  -sdk iphonesimulator \
+  -destination "platform=iOS Simulator,OS=latest,name=iPhone 16" \
+  CODE_SIGNING_ALLOWED=NO
+```
 
-MVP Functional Requirements
+## CI
 
-Data Model
+GitHub Actions runs build and unit tests on every pull request and push to `main`. Workflow: `.github/workflows/ios.yml`.
 
-Create:
-	•	Goal
-	•	id
-	•	title
-	•	optional timeframe
-	•	Constraint
-	•	id
-	•	description
-	•	CathedralProfile
-	•	id
-	•	name
-	•	list of Goals
-	•	list of Constraints
+## Roadmap
 
-⸻
-
-UI
-
-Main Screen:
-	•	Goals list
-	•	Add
-	•	Edit
-	•	Delete
-	•	Constraints list
-	•	Add
-	•	Edit
-	•	Delete
-	•	Compiled Context Preview (read-only)
-	•	Copy Button
-	•	Copies compiled block to clipboard
-	•	Share Button
-	•	Opens iOS share sheet
-
-⸻
-
-Compiler Requirements
-	•	Deterministic JSON output
-	•	Stable key ordering
-	•	No randomness
-	•	Small output size
-	•	Consistent formatting
-	•	Pure function (input profile → output string)
-
-⸻
-
-Definition of Done (Any PR)
-	•	App builds successfully in CI
-	•	No debug-only code left in production
-	•	Compiler has unit tests
-	•	Output formatting is stable
-	•	UI compiles without warnings
-
-⸻
-
-GitHub Agent Task List (MVP)
-	•	Create SwiftUI iOS app scaffold
-	•	Implement data models: Goal, Constraint, CathedralProfile
-	•	Implement persistence layer
-	•	Build Cathedral Editor screen
-	•	Implement Compiler module
-	•	Add Copy to Clipboard functionality
-	•	Add Share Sheet export
-	•	Add unit tests for Compiler output
-	•	Add GitHub Actions workflow to build on PR
-	•	Submit PR with screenshots and summary
-
-⸻
-
-Roadmap
-
-Phase 1:
-	•	Single profile
-	•	Goals + Constraints
-	•	Compiler + Copy
-
-Phase 2:
-	•	Templates
-	•	Compile modes
-	•	Improved formatting
-
-Phase 3:
-	•	Multiple profiles
-	•	Redaction rules
-	•	BYO API key support
-	•	Version history
-
-⸻
-
-Product Principle
-
-If it is not faster than re-explaining yourself, it fails.
-
-CathedralOS exists to reduce ambiguity between you and AI.
-
-Not to become another system you have to maintain.
-
-⸻
-
-If you want next, I can generate:
-	•	A starter Swift file structure
-	•	A basic Compiler.swift implementation
-	•	A GitHub Actions iOS build workflow
-	•	Or a Product Hunt-style positioning draft
-
-Just pick the next brick.
+- Multiple Cathedral profiles
+- Redaction / abstraction rules
+- Compile templates
+- Snapshot history
