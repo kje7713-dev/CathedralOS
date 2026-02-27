@@ -9,8 +9,12 @@ struct CathedralView: View {
 
     @State private var showAddGoal = false
     @State private var showAddConstraint = false
+    @State private var showAddRole = false
+    @State private var showAddDomain = false
     @State private var goalToEdit: Goal?
     @State private var constraintToEdit: Constraint?
+    @State private var roleToEdit: Role?
+    @State private var domainToEdit: Domain?
     @State private var showShareSheet = false
     @State private var showCopiedConfirmation = false
 
@@ -30,6 +34,8 @@ struct CathedralView: View {
     var body: some View {
         NavigationStack {
             List {
+                rolesSection
+                domainsSection
                 goalsSection
                 constraintsSection
                 compiledSection
@@ -40,6 +46,22 @@ struct CathedralView: View {
                 let newProfile = CathedralProfile()
                 modelContext.insert(newProfile)
             }
+        }
+        .sheet(isPresented: $showAddRole) {
+            if let profile {
+                RoleFormView(profile: profile, role: nil)
+            }
+        }
+        .sheet(item: $roleToEdit) { role in
+            RoleFormView(profile: nil, role: role)
+        }
+        .sheet(isPresented: $showAddDomain) {
+            if let profile {
+                DomainFormView(profile: profile, domain: nil)
+            }
+        }
+        .sheet(item: $domainToEdit) { domain in
+            DomainFormView(profile: nil, domain: domain)
         }
         .sheet(isPresented: $showAddGoal) {
             if let profile {
@@ -59,6 +81,50 @@ struct CathedralView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [compiledOutput])
+        }
+    }
+
+    // MARK: Roles Section
+
+    private var rolesSection: some View {
+        Section {
+            let sorted = profile?.roles.sorted(by: { $0.title < $1.title }) ?? []
+            ForEach(sorted) { role in
+                Text(role.title)
+                    .contentShape(Rectangle())
+                    .onTapGesture { roleToEdit = role }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deleteRole(role)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+            }
+        } header: {
+            SectionHeader(title: "Roles") { showAddRole = true }
+        }
+    }
+
+    // MARK: Domains Section
+
+    private var domainsSection: some View {
+        Section {
+            let sorted = profile?.domains.sorted(by: { $0.title < $1.title }) ?? []
+            ForEach(sorted) { domain in
+                Text(domain.title)
+                    .contentShape(Rectangle())
+                    .onTapGesture { domainToEdit = domain }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deleteDomain(domain)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+            }
+        } header: {
+            SectionHeader(title: "Domains") { showAddDomain = true }
         }
     }
 
@@ -166,6 +232,16 @@ struct CathedralView: View {
     }
 
     // MARK: Helpers
+
+    private func deleteRole(_ role: Role) {
+        profile?.roles.removeAll { $0.id == role.id }
+        modelContext.delete(role)
+    }
+
+    private func deleteDomain(_ domain: Domain) {
+        profile?.domains.removeAll { $0.id == domain.id }
+        modelContext.delete(domain)
+    }
 
     private func deleteGoal(_ goal: Goal) {
         profile?.goals.removeAll { $0.id == goal.id }
@@ -305,6 +381,112 @@ struct ConstraintFormView: View {
             let newConstraint = Constraint(title: trimmedTitle)
             modelContext.insert(newConstraint)
             profile.constraints.append(newConstraint)
+        }
+        dismiss()
+    }
+}
+
+// MARK: - Role Form
+
+struct RoleFormView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+
+    var profile: CathedralProfile?
+    var role: Role?
+
+    @State private var title = ""
+
+    private var isEditing: Bool { role != nil }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Role Details") {
+                    TextField("Title", text: $title)
+                }
+            }
+            .navigationTitle(isEditing ? "Edit Role" : "Add Role")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .onAppear {
+                if let role {
+                    title = role.title
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+
+        if let role {
+            role.title = trimmedTitle
+        } else if let profile {
+            let newRole = Role(title: trimmedTitle)
+            modelContext.insert(newRole)
+            profile.roles.append(newRole)
+        }
+        dismiss()
+    }
+}
+
+// MARK: - Domain Form
+
+struct DomainFormView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+
+    var profile: CathedralProfile?
+    var domain: Domain?
+
+    @State private var title = ""
+
+    private var isEditing: Bool { domain != nil }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Domain Details") {
+                    TextField("Title", text: $title)
+                }
+            }
+            .navigationTitle(isEditing ? "Edit Domain" : "Add Domain")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .onAppear {
+                if let domain {
+                    title = domain.title
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+
+        if let domain {
+            domain.title = trimmedTitle
+        } else if let profile {
+            let newDomain = Domain(title: trimmedTitle)
+            modelContext.insert(newDomain)
+            profile.domains.append(newDomain)
         }
         dismiss()
     }

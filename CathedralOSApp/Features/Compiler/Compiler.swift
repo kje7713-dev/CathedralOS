@@ -2,6 +2,14 @@ import Foundation
 
 struct Compiler {
     static func compile(profile: CathedralProfile) -> String {
+        let sortedRoles = profile.roles
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
+        let sortedDomains = profile.domains
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
         let sortedGoals = profile.goals
             .sorted { $0.title < $1.title }
             .map { $0.title }
@@ -16,6 +24,8 @@ struct Compiler {
         ]
 
         let inner: [String: Any] = [
+            "roles": sortedRoles,
+            "domains": sortedDomains,
             "goals": sortedGoals,
             "constraints": sortedConstraints,
             "instruction_bias": instructionBias

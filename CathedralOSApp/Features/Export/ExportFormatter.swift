@@ -13,6 +13,14 @@ struct ExportFormatter {
 
     private static func instructions(profile: CathedralProfile) -> String {
 
+        let roles = profile.roles
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
+        let domains = profile.domains
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
         let goals = profile.goals
             .sorted { $0.title < $1.title }
             .map { $0.title }
@@ -27,6 +35,22 @@ struct ExportFormatter {
         lines.append("Optimize your answer within these limits.")
         lines.append("")
 
+        lines.append("ROLES:")
+        if roles.isEmpty {
+            lines.append("- (none yet)")
+        } else {
+            for r in roles { lines.append("- \(r)") }
+        }
+
+        lines.append("")
+        lines.append("DOMAINS:")
+        if domains.isEmpty {
+            lines.append("- (none yet)")
+        } else {
+            for d in domains { lines.append("- \(d)") }
+        }
+
+        lines.append("")
         lines.append("GOALS:")
         if goals.isEmpty {
             lines.append("- (none yet)")
