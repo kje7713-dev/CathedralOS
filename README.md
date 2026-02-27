@@ -6,13 +6,13 @@ CathedralOS helps AI understand what matters to you before it answers.
 
 ## What It Does
 
-LLMs give generic advice when they lack context. CathedralOS stores your current goals and constraints locally, then compiles them into a small, structured block you can paste into any LLM.
+LLMs give generic advice when they lack context. CathedralOS stores your roles, domains, goals, and constraints locally, then compiles them into a small, structured block you can paste into any LLM.
 
+- **Roles** — who you are (e.g. founder, parent, engineer)
+- **Domains** — areas of your life or work you care about
 - **Goals** — what you are trying to achieve
 - **Constraints** — what limits you
 - **Compiler** — produces a deterministic, paste-ready context block
-
-V1 is goals + constraints + compiler. Nothing else.
 
 ## How to Use
 
@@ -32,6 +32,10 @@ Structured output, sorted keys, valid JSON. Example:
     "constraints": [
       "Time and focus stretched thin"
     ],
+    "domains": [
+      "Business",
+      "Home"
+    ],
     "goals": [
       "Improve household organization",
       "Reach $5k MRR in 3-6 months"
@@ -39,6 +43,10 @@ Structured output, sorted keys, valid JSON. Example:
     "instruction_bias": [
       "Prefer short actions with fast feedback.",
       "Respect constraints and avoid requiring long uninterrupted blocks."
+    ],
+    "roles": [
+      "Founder",
+      "Parent"
     ]
   }
 }
@@ -51,6 +59,14 @@ Plain-text format optimized for direct pasting into an LLM system prompt. Exampl
 ```
 Use the following goals and constraints as ground truth when answering.
 Optimize your answer within these limits.
+
+ROLES:
+- Founder
+- Parent
+
+DOMAINS:
+- Business
+- Home
 
 GOALS:
 - Improve household organization
