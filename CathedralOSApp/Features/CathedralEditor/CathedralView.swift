@@ -135,79 +135,35 @@ struct CathedralView: View {
         }
         .sheet(isPresented: $showAddSeason) {
             if let profile {
-                ItemFormView(
-                    screenTitle: "Add Season",
-                    onSave: { title in
-                        let item = Season(title: title)
-                        modelContext.insert(item)
-                        profile.seasons.append(item)
-                    }
-                )
+                SeasonFormView(profile: profile, season: nil)
             }
         }
         .sheet(item: $seasonToEdit) { season in
-            ItemFormView(
-                screenTitle: "Edit Season",
-                initialTitle: season.title,
-                onSave: { title in season.title = title }
-            )
+            SeasonFormView(profile: nil, season: season)
         }
         .sheet(isPresented: $showAddResource) {
             if let profile {
-                ItemFormView(
-                    screenTitle: "Add Resource",
-                    onSave: { title in
-                        let item = Resource(title: title)
-                        modelContext.insert(item)
-                        profile.resources.append(item)
-                    }
-                )
+                ResourceFormView(profile: profile, resource: nil)
             }
         }
         .sheet(item: $resourceToEdit) { resource in
-            ItemFormView(
-                screenTitle: "Edit Resource",
-                initialTitle: resource.title,
-                onSave: { title in resource.title = title }
-            )
+            ResourceFormView(profile: nil, resource: resource)
         }
         .sheet(isPresented: $showAddPreference) {
             if let profile {
-                ItemFormView(
-                    screenTitle: "Add Preference",
-                    onSave: { title in
-                        let item = Preference(title: title)
-                        modelContext.insert(item)
-                        profile.preferences.append(item)
-                    }
-                )
+                PreferenceFormView(profile: profile, preference: nil)
             }
         }
         .sheet(item: $preferenceToEdit) { preference in
-            ItemFormView(
-                screenTitle: "Edit Preference",
-                initialTitle: preference.title,
-                onSave: { title in preference.title = title }
-            )
+            PreferenceFormView(profile: nil, preference: preference)
         }
         .sheet(isPresented: $showAddFailurePattern) {
             if let profile {
-                ItemFormView(
-                    screenTitle: "Add Failure Pattern",
-                    onSave: { title in
-                        let item = FailurePattern(title: title)
-                        modelContext.insert(item)
-                        profile.failurePatterns.append(item)
-                    }
-                )
+                FailurePatternFormView(profile: profile, failurePattern: nil)
             }
         }
         .sheet(item: $failurePatternToEdit) { failurePattern in
-            ItemFormView(
-                screenTitle: "Edit Failure Pattern",
-                initialTitle: failurePattern.title,
-                onSave: { title in failurePattern.title = title }
-            )
+            FailurePatternFormView(profile: nil, failurePattern: failurePattern)
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [compiledOutput])
@@ -325,22 +281,64 @@ struct CathedralView: View {
         }
     }
 
+    // MARK: Safe Title Helper
+
+    private func safeTitle(for item: Role) -> String {
+        PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretID: item.secretID, secrets: Array(secrets))
+    }
+
+    private func safeTitle(for item: Domain) -> String {
+        PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretID: item.secretID, secrets: Array(secrets))
+    }
+
+    private func safeTitle(for item: Season) -> String {
+        PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretID: item.secretID, secrets: Array(secrets))
+    }
+
+    private func safeTitle(for item: Resource) -> String {
+        PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretID: item.secretID, secrets: Array(secrets))
+    }
+
+    private func safeTitle(for item: Preference) -> String {
+        PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretID: item.secretID, secrets: Array(secrets))
+    }
+
+    private func safeTitle(for item: FailurePattern) -> String {
+        PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretID: item.secretID, secrets: Array(secrets))
+    }
+
+    private func safeTitle(for item: Goal) -> String {
+        PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretID: item.secretID, secrets: Array(secrets))
+    }
+
+    private func safeTitle(for item: Constraint) -> String {
+        PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretID: item.secretID, secrets: Array(secrets))
+    }
+
     // MARK: Roles Section
 
     private var rolesSection: some View {
         Section {
-            let sorted = profile?.roles.sorted(by: { $0.title < $1.title }) ?? []
+            let sorted = (profile?.roles ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
             ForEach(sorted) { role in
-                Text(role.title)
-                    .contentShape(Rectangle())
-                    .onTapGesture { roleToEdit = role }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            deleteRole(role)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                HStack {
+                    Text(safeTitle(for: role))
+                    if role.isSensitive {
+                        Spacer()
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
                     }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { roleToEdit = role }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        deleteRole(role)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
         } header: {
             SectionHeader(title: "Roles") { showAddRole = true }
@@ -351,18 +349,26 @@ struct CathedralView: View {
 
     private var domainsSection: some View {
         Section {
-            let sorted = profile?.domains.sorted(by: { $0.title < $1.title }) ?? []
+            let sorted = (profile?.domains ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
             ForEach(sorted) { domain in
-                Text(domain.title)
-                    .contentShape(Rectangle())
-                    .onTapGesture { domainToEdit = domain }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            deleteDomain(domain)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                HStack {
+                    Text(safeTitle(for: domain))
+                    if domain.isSensitive {
+                        Spacer()
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
                     }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { domainToEdit = domain }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        deleteDomain(domain)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
         } header: {
             SectionHeader(title: "Domains") { showAddDomain = true }
@@ -373,18 +379,26 @@ struct CathedralView: View {
 
     private var seasonSection: some View {
         Section {
-            let sorted = profile?.seasons.sorted(by: { $0.title < $1.title }) ?? []
+            let sorted = (profile?.seasons ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
             ForEach(sorted) { season in
-                Text(season.title)
-                    .contentShape(Rectangle())
-                    .onTapGesture { seasonToEdit = season }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            deleteSeason(season)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                HStack {
+                    Text(safeTitle(for: season))
+                    if season.isSensitive {
+                        Spacer()
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
                     }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { seasonToEdit = season }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        deleteSeason(season)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
         } header: {
             SectionHeader(title: "Season") { showAddSeason = true }
@@ -395,18 +409,26 @@ struct CathedralView: View {
 
     private var resourcesSection: some View {
         Section {
-            let sorted = profile?.resources.sorted(by: { $0.title < $1.title }) ?? []
+            let sorted = (profile?.resources ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
             ForEach(sorted) { resource in
-                Text(resource.title)
-                    .contentShape(Rectangle())
-                    .onTapGesture { resourceToEdit = resource }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            deleteResource(resource)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                HStack {
+                    Text(safeTitle(for: resource))
+                    if resource.isSensitive {
+                        Spacer()
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
                     }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { resourceToEdit = resource }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        deleteResource(resource)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
         } header: {
             SectionHeader(title: "Resources") { showAddResource = true }
@@ -417,18 +439,26 @@ struct CathedralView: View {
 
     private var preferencesSection: some View {
         Section {
-            let sorted = profile?.preferences.sorted(by: { $0.title < $1.title }) ?? []
+            let sorted = (profile?.preferences ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
             ForEach(sorted) { preference in
-                Text(preference.title)
-                    .contentShape(Rectangle())
-                    .onTapGesture { preferenceToEdit = preference }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            deletePreference(preference)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                HStack {
+                    Text(safeTitle(for: preference))
+                    if preference.isSensitive {
+                        Spacer()
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
                     }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { preferenceToEdit = preference }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        deletePreference(preference)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
         } header: {
             SectionHeader(title: "Preferences") { showAddPreference = true }
@@ -439,18 +469,26 @@ struct CathedralView: View {
 
     private var failurePatternsSection: some View {
         Section {
-            let sorted = profile?.failurePatterns.sorted(by: { $0.title < $1.title }) ?? []
+            let sorted = (profile?.failurePatterns ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
             ForEach(sorted) { failurePattern in
-                Text(failurePattern.title)
-                    .contentShape(Rectangle())
-                    .onTapGesture { failurePatternToEdit = failurePattern }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            deleteFailurePattern(failurePattern)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                HStack {
+                    Text(safeTitle(for: failurePattern))
+                    if failurePattern.isSensitive {
+                        Spacer()
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
                     }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { failurePatternToEdit = failurePattern }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        deleteFailurePattern(failurePattern)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
         } header: {
             SectionHeader(title: "Failure Patterns") { showAddFailurePattern = true }
@@ -461,14 +499,22 @@ struct CathedralView: View {
 
     private var goalsSection: some View {
         Section {
-            let sorted = profile?.goals.sorted(by: { $0.title < $1.title }) ?? []
+            let sorted = (profile?.goals ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
             ForEach(sorted) { goal in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(goal.title)
-                    if let timeframe = goal.timeframe, !timeframe.isEmpty {
-                        Text(timeframe)
-                            .font(.caption)
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(safeTitle(for: goal))
+                        if let timeframe = goal.timeframe, !timeframe.isEmpty {
+                            Text(timeframe)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if goal.isSensitive {
+                        Spacer()
+                        Image(systemName: "lock.fill")
                             .foregroundStyle(.secondary)
+                            .imageScale(.small)
                     }
                 }
                 .contentShape(Rectangle())
@@ -490,18 +536,26 @@ struct CathedralView: View {
 
     private var constraintsSection: some View {
         Section {
-            let sorted = profile?.constraints.sorted(by: { $0.title < $1.title }) ?? []
+            let sorted = (profile?.constraints ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
             ForEach(sorted) { constraint in
-                Text(constraint.title)
-                    .contentShape(Rectangle())
-                    .onTapGesture { constraintToEdit = constraint }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            deleteConstraint(constraint)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                HStack {
+                    Text(safeTitle(for: constraint))
+                    if constraint.isSensitive {
+                        Spacer()
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
                     }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { constraintToEdit = constraint }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        deleteConstraint(constraint)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
         } header: {
             SectionHeader(title: "Constraints") { showAddConstraint = true }
@@ -940,6 +994,322 @@ struct DomainFormView: View {
             newDomain.secretID = selectedSecretID
             modelContext.insert(newDomain)
             profile.domains.append(newDomain)
+        }
+        dismiss()
+    }
+}
+
+// MARK: - Season Form
+
+struct SeasonFormView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Secret.createdAt) private var secrets: [Secret]
+
+    var profile: CathedralProfile?
+    var season: Season?
+
+    @State private var title = ""
+    @State private var isSensitive = false
+    @State private var abstractText = ""
+    @State private var selectedSecretID: UUID? = nil
+
+    private var isEditing: Bool { season != nil }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Season Details") {
+                    TextField("Title", text: $title)
+                }
+                Section("Privacy") {
+                    Toggle("Sensitive", isOn: $isSensitive)
+                    if isSensitive {
+                        TextField("Safe export text", text: $abstractText)
+                        Picker("Link Secret", selection: $selectedSecretID) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(secrets) { secret in
+                                Text(secret.name).tag(UUID?.some(secret.id))
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(isEditing ? "Edit Season" : "Add Season")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .onAppear {
+                if let season {
+                    title = season.title
+                    isSensitive = season.isSensitive
+                    abstractText = season.abstractText ?? ""
+                    selectedSecretID = season.secretID
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        let trimmedAbstract = abstractText.trimmingCharacters(in: .whitespaces)
+
+        if let season {
+            season.title = trimmedTitle
+            season.isSensitive = isSensitive
+            season.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            season.secretID = selectedSecretID
+        } else if let profile {
+            let newSeason = Season(title: trimmedTitle)
+            newSeason.isSensitive = isSensitive
+            newSeason.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            newSeason.secretID = selectedSecretID
+            modelContext.insert(newSeason)
+            profile.seasons.append(newSeason)
+        }
+        dismiss()
+    }
+}
+
+// MARK: - Resource Form
+
+struct ResourceFormView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Secret.createdAt) private var secrets: [Secret]
+
+    var profile: CathedralProfile?
+    var resource: Resource?
+
+    @State private var title = ""
+    @State private var isSensitive = false
+    @State private var abstractText = ""
+    @State private var selectedSecretID: UUID? = nil
+
+    private var isEditing: Bool { resource != nil }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Resource Details") {
+                    TextField("Title", text: $title)
+                }
+                Section("Privacy") {
+                    Toggle("Sensitive", isOn: $isSensitive)
+                    if isSensitive {
+                        TextField("Safe export text", text: $abstractText)
+                        Picker("Link Secret", selection: $selectedSecretID) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(secrets) { secret in
+                                Text(secret.name).tag(UUID?.some(secret.id))
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(isEditing ? "Edit Resource" : "Add Resource")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .onAppear {
+                if let resource {
+                    title = resource.title
+                    isSensitive = resource.isSensitive
+                    abstractText = resource.abstractText ?? ""
+                    selectedSecretID = resource.secretID
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        let trimmedAbstract = abstractText.trimmingCharacters(in: .whitespaces)
+
+        if let resource {
+            resource.title = trimmedTitle
+            resource.isSensitive = isSensitive
+            resource.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            resource.secretID = selectedSecretID
+        } else if let profile {
+            let newResource = Resource(title: trimmedTitle)
+            newResource.isSensitive = isSensitive
+            newResource.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            newResource.secretID = selectedSecretID
+            modelContext.insert(newResource)
+            profile.resources.append(newResource)
+        }
+        dismiss()
+    }
+}
+
+// MARK: - Preference Form
+
+struct PreferenceFormView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Secret.createdAt) private var secrets: [Secret]
+
+    var profile: CathedralProfile?
+    var preference: Preference?
+
+    @State private var title = ""
+    @State private var isSensitive = false
+    @State private var abstractText = ""
+    @State private var selectedSecretID: UUID? = nil
+
+    private var isEditing: Bool { preference != nil }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Preference Details") {
+                    TextField("Title", text: $title)
+                }
+                Section("Privacy") {
+                    Toggle("Sensitive", isOn: $isSensitive)
+                    if isSensitive {
+                        TextField("Safe export text", text: $abstractText)
+                        Picker("Link Secret", selection: $selectedSecretID) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(secrets) { secret in
+                                Text(secret.name).tag(UUID?.some(secret.id))
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(isEditing ? "Edit Preference" : "Add Preference")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .onAppear {
+                if let preference {
+                    title = preference.title
+                    isSensitive = preference.isSensitive
+                    abstractText = preference.abstractText ?? ""
+                    selectedSecretID = preference.secretID
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        let trimmedAbstract = abstractText.trimmingCharacters(in: .whitespaces)
+
+        if let preference {
+            preference.title = trimmedTitle
+            preference.isSensitive = isSensitive
+            preference.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            preference.secretID = selectedSecretID
+        } else if let profile {
+            let newPreference = Preference(title: trimmedTitle)
+            newPreference.isSensitive = isSensitive
+            newPreference.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            newPreference.secretID = selectedSecretID
+            modelContext.insert(newPreference)
+            profile.preferences.append(newPreference)
+        }
+        dismiss()
+    }
+}
+
+// MARK: - Failure Pattern Form
+
+struct FailurePatternFormView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Secret.createdAt) private var secrets: [Secret]
+
+    var profile: CathedralProfile?
+    var failurePattern: FailurePattern?
+
+    @State private var title = ""
+    @State private var isSensitive = false
+    @State private var abstractText = ""
+    @State private var selectedSecretID: UUID? = nil
+
+    private var isEditing: Bool { failurePattern != nil }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Failure Pattern Details") {
+                    TextField("Title", text: $title)
+                }
+                Section("Privacy") {
+                    Toggle("Sensitive", isOn: $isSensitive)
+                    if isSensitive {
+                        TextField("Safe export text", text: $abstractText)
+                        Picker("Link Secret", selection: $selectedSecretID) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(secrets) { secret in
+                                Text(secret.name).tag(UUID?.some(secret.id))
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(isEditing ? "Edit Failure Pattern" : "Add Failure Pattern")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .onAppear {
+                if let failurePattern {
+                    title = failurePattern.title
+                    isSensitive = failurePattern.isSensitive
+                    abstractText = failurePattern.abstractText ?? ""
+                    selectedSecretID = failurePattern.secretID
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        let trimmedAbstract = abstractText.trimmingCharacters(in: .whitespaces)
+
+        if let failurePattern {
+            failurePattern.title = trimmedTitle
+            failurePattern.isSensitive = isSensitive
+            failurePattern.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            failurePattern.secretID = selectedSecretID
+        } else if let profile {
+            let newFailurePattern = FailurePattern(title: trimmedTitle)
+            newFailurePattern.isSensitive = isSensitive
+            newFailurePattern.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            newFailurePattern.secretID = selectedSecretID
+            modelContext.insert(newFailurePattern)
+            profile.failurePatterns.append(newFailurePattern)
         }
         dismiss()
     }

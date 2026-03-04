@@ -375,4 +375,100 @@ final class ExportFormatterTests: XCTestCase {
         XCTAssertTrue(output.contains("Alias text"), "Instructions must contain the secret alias")
         XCTAssertFalse(output.contains("Sensitive real text"), "Instructions must NOT contain the real sensitive title")
     }
+
+    // MARK: - New Vector Sensitivity
+
+    func testInstructionsSensitiveResourceWithAbstractTextUsesAbstractText() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let resource = Resource(title: "Sensitive resource")
+        resource.isSensitive = true
+        resource.abstractText = "Safe resource abstract"
+        modelContext.insert(resource)
+        profile.resources.append(resource)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+        XCTAssertTrue(output.contains("Safe resource abstract"), "Instructions must contain the safe abstract text")
+        XCTAssertFalse(output.contains("Sensitive resource"), "Instructions must NOT contain the real sensitive title")
+    }
+
+    func testInstructionsSensitiveResourceWithSecretAliasUsesAlias() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let secret = Secret(name: "SecretR", alias: "Resource alias")
+        modelContext.insert(secret)
+
+        let resource = Resource(title: "Sensitive resource")
+        resource.isSensitive = true
+        resource.abstractText = nil
+        resource.secretID = secret.id
+        modelContext.insert(resource)
+        profile.resources.append(resource)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions, secrets: [secret])
+        XCTAssertTrue(output.contains("Resource alias"), "Instructions must contain the secret alias")
+        XCTAssertFalse(output.contains("Sensitive resource"), "Instructions must NOT contain the real sensitive title")
+    }
+
+    func testInstructionsSensitivePreferenceWithAbstractTextUsesAbstractText() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let preference = Preference(title: "Sensitive preference")
+        preference.isSensitive = true
+        preference.abstractText = "Safe preference abstract"
+        modelContext.insert(preference)
+        profile.preferences.append(preference)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+        XCTAssertTrue(output.contains("Safe preference abstract"), "Instructions must contain the safe abstract text")
+        XCTAssertFalse(output.contains("Sensitive preference"), "Instructions must NOT contain the real sensitive title")
+    }
+
+    func testInstructionsSensitiveFailurePatternWithAbstractTextUsesAbstractText() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let fp = FailurePattern(title: "Sensitive failure pattern")
+        fp.isSensitive = true
+        fp.abstractText = "Safe failure pattern abstract"
+        modelContext.insert(fp)
+        profile.failurePatterns.append(fp)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+        XCTAssertTrue(output.contains("Safe failure pattern abstract"), "Instructions must contain the safe abstract text")
+        XCTAssertFalse(output.contains("Sensitive failure pattern"), "Instructions must NOT contain the real sensitive title")
+    }
+
+    func testInstructionsSensitiveSeasonWithAbstractTextUsesAbstractText() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let season = Season(title: "Sensitive season")
+        season.isSensitive = true
+        season.abstractText = "Safe season abstract"
+        modelContext.insert(season)
+        profile.seasons.append(season)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+        XCTAssertTrue(output.contains("Safe season abstract"), "Instructions must contain the safe abstract text")
+        XCTAssertFalse(output.contains("Sensitive season"), "Instructions must NOT contain the real sensitive title")
+    }
+
+    func testJSONSensitiveResourceWithAbstractTextUsesAbstractText() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let resource = Resource(title: "Sensitive resource")
+        resource.isSensitive = true
+        resource.abstractText = "Safe resource abstract"
+        modelContext.insert(resource)
+        profile.resources.append(resource)
+
+        let output = ExportFormatter.export(profile: profile, mode: .json)
+        XCTAssertTrue(output.contains("Safe resource abstract"), "JSON must contain the safe abstract text")
+        XCTAssertFalse(output.contains("Sensitive resource"), "JSON must NOT contain the real sensitive title")
+    }
 }

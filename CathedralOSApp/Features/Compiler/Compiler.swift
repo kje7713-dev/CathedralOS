@@ -31,20 +31,32 @@ struct Compiler {
             .sorted()
 
         let sortedResources = profile.resources
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let sortedPreferences = profile.preferences
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let sortedFailurePatterns = profile.failurePatterns
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let sortedSeasons = profile.seasons
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let instructionBias: [String] = [
             "Prefer short actions with fast feedback.",
