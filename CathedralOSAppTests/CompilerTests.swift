@@ -12,7 +12,7 @@ final class CompilerTests: XCTestCase {
         container = try ModelContainer(
             for: Role.self, Domain.self, Goal.self, Constraint.self,
                 Resource.self, Preference.self, FailurePattern.self, Season.self,
-                CathedralProfile.self,
+                CathedralProfile.self, Secret.self,
             configurations: config
         )
         modelContext = ModelContext(container)
@@ -298,5 +298,41 @@ final class CompilerTests: XCTestCase {
             try JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
         return try XCTUnwrap(json["cathedral_context"] as? [String: Any])
+    }
+
+    // MARK: - Paste-Safe Redaction
+
+    func testSensitiveGoalWithAbstractTextUsesAbstractText() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let goal = Goal(title: "Sensitive real text")
+        goal.isSensitive = true
+        goal.abstractText = "Safe abstract"
+        modelContext.insert(goal)
+        profile.goals.append(goal)
+
+        let output = Compiler.compile(profile: profile)
+        XCTAssertTrue(output.contains("Safe abstract"), "Output must contain the safe abstract text")
+        XCTAssertFalse(output.contains("Sensitive real text"), "Output must NOT contain the real sensitive title")
+    }
+
+    func testSensitiveGoalWithSecretAliasUsesAlias() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let secret = Secret(name: "ConditionA", alias: "Alias text")
+        modelContext.insert(secret)
+
+        let goal = Goal(title: "Sensitive real text")
+        goal.isSensitive = true
+        goal.abstractText = nil
+        goal.secretID = secret.id
+        modelContext.insert(goal)
+        profile.goals.append(goal)
+
+        let output = Compiler.compile(profile: profile, secrets: [secret])
+        XCTAssertTrue(output.contains("Alias text"), "Output must contain the secret alias")
+        XCTAssertFalse(output.contains("Sensitive real text"), "Output must NOT contain the real sensitive title")
     }
 }

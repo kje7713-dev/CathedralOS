@@ -12,7 +12,7 @@ final class ProfileSelectionTests: XCTestCase {
         container = try ModelContainer(
             for: Role.self, Domain.self, Goal.self, Constraint.self,
                 Resource.self, Preference.self, FailurePattern.self, Season.self,
-                CathedralProfile.self,
+                CathedralProfile.self, Secret.self,
             configurations: config
         )
         modelContext = ModelContext(container)
