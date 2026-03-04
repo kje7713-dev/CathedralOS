@@ -25,6 +25,7 @@ struct CathedralView: View {
     @State private var failurePatternToEdit: FailurePattern?
     @State private var showShareSheet = false
     @State private var showCopiedConfirmation = false
+    @State private var showSecretsVault = false
 
     @State private var showNewProfile = false
     @State private var showRenameProfile = false
@@ -34,6 +35,7 @@ struct CathedralView: View {
 
     @AppStorage("exportMode") private var exportModeRaw = ExportMode.instructions.rawValue
     @AppStorage("activeProfileID") private var activeProfileID = ""
+    @Query private var secrets: [Secret]
 
     private var exportMode: ExportMode {
         ExportMode(rawValue: exportModeRaw) ?? .instructions
@@ -48,7 +50,7 @@ struct CathedralView: View {
 
     private var compiledOutput: String {
         guard let profile else { return "" }
-        return ExportFormatter.export(profile: profile, mode: exportMode)
+        return ExportFormatter.export(profile: profile, mode: exportMode, secrets: Array(secrets))
     }
 
     var body: some View {
@@ -66,6 +68,11 @@ struct CathedralView: View {
             }
             .navigationTitle("Cathedral")
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { showSecretsVault = true } label: {
+                        Image(systemName: "lock.fill")
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     profileMenu
                 }
@@ -79,6 +86,9 @@ struct CathedralView: View {
                     activeProfileID = profiles[0].id.uuidString
                 }
             }
+        }
+        .sheet(isPresented: $showSecretsVault) {
+            SecretsVaultView()
         }
         .sheet(isPresented: $showAddRole) {
             if let profile {
@@ -607,12 +617,16 @@ private struct SectionHeader: View {
 struct GoalFormView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Secret.createdAt) private var secrets: [Secret]
 
     var profile: CathedralProfile?
     var goal: Goal?
 
     @State private var title = ""
     @State private var timeframe = ""
+    @State private var isSensitive = false
+    @State private var abstractText = ""
+    @State private var selectedSecretID: UUID? = nil
 
     private var isEditing: Bool { goal != nil }
 
@@ -622,6 +636,18 @@ struct GoalFormView: View {
                 Section("Goal Details") {
                     TextField("Title", text: $title)
                     TextField("Timeframe (optional)", text: $timeframe)
+                }
+                Section("Privacy") {
+                    Toggle("Sensitive", isOn: $isSensitive)
+                    if isSensitive {
+                        TextField("Safe export text", text: $abstractText)
+                        Picker("Link Secret", selection: $selectedSecretID) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(secrets) { secret in
+                                Text(secret.name).tag(UUID?.some(secret.id))
+                            }
+                        }
+                    }
                 }
             }
             .navigationTitle(isEditing ? "Edit Goal" : "Add Goal")
@@ -639,6 +665,9 @@ struct GoalFormView: View {
                 if let goal {
                     title = goal.title
                     timeframe = goal.timeframe ?? ""
+                    isSensitive = goal.isSensitive
+                    abstractText = goal.abstractText ?? ""
+                    selectedSecretID = goal.secretID
                 }
             }
         }
@@ -648,12 +677,19 @@ struct GoalFormView: View {
         let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
         let trimmedTimeframe = timeframe.trimmingCharacters(in: .whitespaces)
         let tf: String? = trimmedTimeframe.isEmpty ? nil : trimmedTimeframe
+        let trimmedAbstract = abstractText.trimmingCharacters(in: .whitespaces)
 
         if let goal {
             goal.title = trimmedTitle
             goal.timeframe = tf
+            goal.isSensitive = isSensitive
+            goal.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            goal.secretID = selectedSecretID
         } else if let profile {
             let newGoal = Goal(title: trimmedTitle, timeframe: tf)
+            newGoal.isSensitive = isSensitive
+            newGoal.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            newGoal.secretID = selectedSecretID
             modelContext.insert(newGoal)
             profile.goals.append(newGoal)
         }
@@ -666,11 +702,15 @@ struct GoalFormView: View {
 struct ConstraintFormView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Secret.createdAt) private var secrets: [Secret]
 
     var profile: CathedralProfile?
     var constraint: Constraint?
 
     @State private var title = ""
+    @State private var isSensitive = false
+    @State private var abstractText = ""
+    @State private var selectedSecretID: UUID? = nil
 
     private var isEditing: Bool { constraint != nil }
 
@@ -679,6 +719,18 @@ struct ConstraintFormView: View {
             Form {
                 Section("Constraint Details") {
                     TextField("Title", text: $title)
+                }
+                Section("Privacy") {
+                    Toggle("Sensitive", isOn: $isSensitive)
+                    if isSensitive {
+                        TextField("Safe export text", text: $abstractText)
+                        Picker("Link Secret", selection: $selectedSecretID) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(secrets) { secret in
+                                Text(secret.name).tag(UUID?.some(secret.id))
+                            }
+                        }
+                    }
                 }
             }
             .navigationTitle(isEditing ? "Edit Constraint" : "Add Constraint")
@@ -695,6 +747,9 @@ struct ConstraintFormView: View {
             .onAppear {
                 if let constraint {
                     title = constraint.title
+                    isSensitive = constraint.isSensitive
+                    abstractText = constraint.abstractText ?? ""
+                    selectedSecretID = constraint.secretID
                 }
             }
         }
@@ -702,11 +757,18 @@ struct ConstraintFormView: View {
 
     private func save() {
         let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        let trimmedAbstract = abstractText.trimmingCharacters(in: .whitespaces)
 
         if let constraint {
             constraint.title = trimmedTitle
+            constraint.isSensitive = isSensitive
+            constraint.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            constraint.secretID = selectedSecretID
         } else if let profile {
             let newConstraint = Constraint(title: trimmedTitle)
+            newConstraint.isSensitive = isSensitive
+            newConstraint.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            newConstraint.secretID = selectedSecretID
             modelContext.insert(newConstraint)
             profile.constraints.append(newConstraint)
         }
@@ -719,11 +781,15 @@ struct ConstraintFormView: View {
 struct RoleFormView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Secret.createdAt) private var secrets: [Secret]
 
     var profile: CathedralProfile?
     var role: Role?
 
     @State private var title = ""
+    @State private var isSensitive = false
+    @State private var abstractText = ""
+    @State private var selectedSecretID: UUID? = nil
 
     private var isEditing: Bool { role != nil }
 
@@ -732,6 +798,18 @@ struct RoleFormView: View {
             Form {
                 Section("Role Details") {
                     TextField("Title", text: $title)
+                }
+                Section("Privacy") {
+                    Toggle("Sensitive", isOn: $isSensitive)
+                    if isSensitive {
+                        TextField("Safe export text", text: $abstractText)
+                        Picker("Link Secret", selection: $selectedSecretID) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(secrets) { secret in
+                                Text(secret.name).tag(UUID?.some(secret.id))
+                            }
+                        }
+                    }
                 }
             }
             .navigationTitle(isEditing ? "Edit Role" : "Add Role")
@@ -748,6 +826,9 @@ struct RoleFormView: View {
             .onAppear {
                 if let role {
                     title = role.title
+                    isSensitive = role.isSensitive
+                    abstractText = role.abstractText ?? ""
+                    selectedSecretID = role.secretID
                 }
             }
         }
@@ -755,11 +836,18 @@ struct RoleFormView: View {
 
     private func save() {
         let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        let trimmedAbstract = abstractText.trimmingCharacters(in: .whitespaces)
 
         if let role {
             role.title = trimmedTitle
+            role.isSensitive = isSensitive
+            role.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            role.secretID = selectedSecretID
         } else if let profile {
             let newRole = Role(title: trimmedTitle)
+            newRole.isSensitive = isSensitive
+            newRole.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            newRole.secretID = selectedSecretID
             modelContext.insert(newRole)
             profile.roles.append(newRole)
         }
@@ -772,11 +860,15 @@ struct RoleFormView: View {
 struct DomainFormView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Secret.createdAt) private var secrets: [Secret]
 
     var profile: CathedralProfile?
     var domain: Domain?
 
     @State private var title = ""
+    @State private var isSensitive = false
+    @State private var abstractText = ""
+    @State private var selectedSecretID: UUID? = nil
 
     private var isEditing: Bool { domain != nil }
 
@@ -785,6 +877,18 @@ struct DomainFormView: View {
             Form {
                 Section("Domain Details") {
                     TextField("Title", text: $title)
+                }
+                Section("Privacy") {
+                    Toggle("Sensitive", isOn: $isSensitive)
+                    if isSensitive {
+                        TextField("Safe export text", text: $abstractText)
+                        Picker("Link Secret", selection: $selectedSecretID) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(secrets) { secret in
+                                Text(secret.name).tag(UUID?.some(secret.id))
+                            }
+                        }
+                    }
                 }
             }
             .navigationTitle(isEditing ? "Edit Domain" : "Add Domain")
@@ -801,6 +905,9 @@ struct DomainFormView: View {
             .onAppear {
                 if let domain {
                     title = domain.title
+                    isSensitive = domain.isSensitive
+                    abstractText = domain.abstractText ?? ""
+                    selectedSecretID = domain.secretID
                 }
             }
         }
@@ -808,11 +915,18 @@ struct DomainFormView: View {
 
     private func save() {
         let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        let trimmedAbstract = abstractText.trimmingCharacters(in: .whitespaces)
 
         if let domain {
             domain.title = trimmedTitle
+            domain.isSensitive = isSensitive
+            domain.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            domain.secretID = selectedSecretID
         } else if let profile {
             let newDomain = Domain(title: trimmedTitle)
+            newDomain.isSensitive = isSensitive
+            newDomain.abstractText = trimmedAbstract.isEmpty ? nil : trimmedAbstract
+            newDomain.secretID = selectedSecretID
             modelContext.insert(newDomain)
             profile.domains.append(newDomain)
         }

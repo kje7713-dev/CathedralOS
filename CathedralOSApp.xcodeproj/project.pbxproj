@@ -25,6 +25,10 @@
 		000000000000000000000085 /* Preference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000084 /* Preference.swift */; };
 		000000000000000000000087 /* FailurePattern.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000086 /* FailurePattern.swift */; };
 		000000000000000000000089 /* Season.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000088 /* Season.swift */; };
+		00000000000000000000008B /* Secret.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000008A /* Secret.swift */; };
+		00000000000000000000008D /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000008C /* KeychainService.swift */; };
+		00000000000000000000008F /* PrivacyRedactor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000008E /* PrivacyRedactor.swift */; };
+		000000000000000000000091 /* SecretsVaultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000090 /* SecretsVaultView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -58,6 +62,10 @@
 		000000000000000000000084 /* Preference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preference.swift; sourceTree = "<group>"; };
 		000000000000000000000086 /* FailurePattern.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FailurePattern.swift; sourceTree = "<group>"; };
 		000000000000000000000088 /* Season.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Season.swift; sourceTree = "<group>"; };
+		00000000000000000000008A /* Secret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Secret.swift; sourceTree = "<group>"; };
+		00000000000000000000008C /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
+		00000000000000000000008E /* PrivacyRedactor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyRedactor.swift; sourceTree = "<group>"; };
+		000000000000000000000090 /* SecretsVaultView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretsVaultView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -103,6 +111,7 @@
 				000000000000000000000022 /* Features */,
 				000000000000000000000025 /* Models */,
 				000000000000000000000026 /* Utils */,
+				000000000000000000000093 /* Services */,
 			);
 			path = CathedralOSApp;
 			sourceTree = "<group>";
@@ -121,6 +130,7 @@
 				000000000000000000000023 /* CathedralEditor */,
 				000000000000000000000024 /* Compiler */,
 				000000000000000000000028 /* Export */,
+				000000000000000000000092 /* Secrets */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -162,6 +172,7 @@
 				000000000000000000000084 /* Preference.swift */,
 				000000000000000000000086 /* FailurePattern.swift */,
 				000000000000000000000088 /* Season.swift */,
+				00000000000000000000008A /* Secret.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -170,6 +181,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000072 /* ProfileSelector.swift */,
+				00000000000000000000008E /* PrivacyRedactor.swift */,
 			);
 			path = Utils;
 			sourceTree = "<group>";
@@ -182,6 +194,22 @@
 				000000000000000000000073 /* ProfileSelectionTests.swift */,
 			);
 			path = CathedralOSAppTests;
+			sourceTree = "<group>";
+		};
+		000000000000000000000092 /* Secrets */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000090 /* SecretsVaultView.swift */,
+			);
+			path = Secrets;
+			sourceTree = "<group>";
+		};
+		000000000000000000000093 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				00000000000000000000008C /* KeychainService.swift */,
+			);
+			path = Services;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -289,6 +317,10 @@
 				000000000000000000000085 /* Preference.swift in Sources */,
 				000000000000000000000087 /* FailurePattern.swift in Sources */,
 				000000000000000000000089 /* Season.swift in Sources */,
+				00000000000000000000008B /* Secret.swift in Sources */,
+				00000000000000000000008D /* KeychainService.swift in Sources */,
+				00000000000000000000008F /* PrivacyRedactor.swift in Sources */,
+				000000000000000000000091 /* SecretsVaultView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

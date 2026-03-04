@@ -2,32 +2,44 @@ import Foundation
 
 struct ExportFormatter {
 
-    static func export(profile: CathedralProfile, mode: ExportMode) -> String {
+    static func export(profile: CathedralProfile, mode: ExportMode, secrets: [Secret] = []) -> String {
         switch mode {
         case .json:
-            return Compiler.compile(profile: profile)
+            return Compiler.compile(profile: profile, secrets: secrets)
         case .instructions:
-            return instructions(profile: profile)
+            return instructions(profile: profile, secrets: secrets)
         }
     }
 
-    private static func instructions(profile: CathedralProfile) -> String {
+    private static func instructions(profile: CathedralProfile, secrets: [Secret]) -> String {
 
         let roles = profile.roles
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let domains = profile.domains
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let goals = profile.goals
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let constraints = profile.constraints
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let seasons = profile.seasons
             .sorted { $0.title < $1.title }

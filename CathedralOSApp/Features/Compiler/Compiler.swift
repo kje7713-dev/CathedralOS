@@ -1,22 +1,34 @@
 import Foundation
 
 struct Compiler {
-    static func compile(profile: CathedralProfile) -> String {
+    static func compile(profile: CathedralProfile, secrets: [Secret] = []) -> String {
         let sortedRoles = profile.roles
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let sortedDomains = profile.domains
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let sortedGoals = profile.goals
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let sortedConstraints = profile.constraints
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let sortedResources = profile.resources
             .sorted { $0.title < $1.title }

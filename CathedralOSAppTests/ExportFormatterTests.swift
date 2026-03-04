@@ -12,7 +12,7 @@ final class ExportFormatterTests: XCTestCase {
         container = try ModelContainer(
             for: Role.self, Domain.self, Goal.self, Constraint.self,
                 Resource.self, Preference.self, FailurePattern.self, Season.self,
-                CathedralProfile.self,
+                CathedralProfile.self, Secret.self,
             configurations: config
         )
         modelContext = ModelContext(container)
@@ -338,5 +338,41 @@ final class ExportFormatterTests: XCTestCase {
         let compilerOutput = Compiler.compile(profile: profile)
 
         XCTAssertEqual(formatterOutput, compilerOutput, "JSON mode must match Compiler output")
+    }
+
+    // MARK: - Paste-Safe Redaction
+
+    func testInstructionsSensitiveGoalWithAbstractTextUsesAbstractText() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let goal = Goal(title: "Sensitive real text")
+        goal.isSensitive = true
+        goal.abstractText = "Safe abstract"
+        modelContext.insert(goal)
+        profile.goals.append(goal)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+        XCTAssertTrue(output.contains("Safe abstract"), "Instructions must contain the safe abstract text")
+        XCTAssertFalse(output.contains("Sensitive real text"), "Instructions must NOT contain the real sensitive title")
+    }
+
+    func testInstructionsSensitiveGoalWithSecretAliasUsesAlias() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let secret = Secret(name: "ConditionA", alias: "Alias text")
+        modelContext.insert(secret)
+
+        let goal = Goal(title: "Sensitive real text")
+        goal.isSensitive = true
+        goal.abstractText = nil
+        goal.secretID = secret.id
+        modelContext.insert(goal)
+        profile.goals.append(goal)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions, secrets: [secret])
+        XCTAssertTrue(output.contains("Alias text"), "Instructions must contain the secret alias")
+        XCTAssertFalse(output.contains("Sensitive real text"), "Instructions must NOT contain the real sensitive title")
     }
 }
