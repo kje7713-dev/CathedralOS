@@ -42,20 +42,32 @@ struct ExportFormatter {
             .sorted()
 
         let seasons = profile.seasons
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let resources = profile.resources
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let preferences = profile.preferences
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         let failurePatterns = profile.failurePatterns
-            .sorted { $0.title < $1.title }
-            .map { $0.title }
+            .map { item -> String in
+                let alias = secrets.first(where: { $0.id == item.secretID })?.alias
+                return PrivacyRedactor.safeTitle(title: item.title, isSensitive: item.isSensitive, abstractText: item.abstractText, secretAlias: alias)
+            }
+            .sorted()
 
         var lines: [String] = []
 

@@ -32,6 +32,7 @@
 		000000000000000000000095 /* AskPackAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000094 /* AskPackAssembler.swift */; };
 		000000000000000000000097 /* AskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000096 /* AskView.swift */; };
 		00000000000000000000009A /* AskPackAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000099 /* AskPackAssemblerTests.swift */; };
+		00000000000000000000009C /* PrivacySafeTitleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000009B /* PrivacySafeTitleTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,6 +73,7 @@
 		000000000000000000000094 /* AskPackAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskPackAssembler.swift; sourceTree = "<group>"; };
 		000000000000000000000096 /* AskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskView.swift; sourceTree = "<group>"; };
 		000000000000000000000099 /* AskPackAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskPackAssemblerTests.swift; sourceTree = "<group>"; };
+		00000000000000000000009B /* PrivacySafeTitleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacySafeTitleTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -200,6 +202,7 @@
 				000000000000000000000052 /* ExportFormatterTests.swift */,
 				000000000000000000000073 /* ProfileSelectionTests.swift */,
 				000000000000000000000099 /* AskPackAssemblerTests.swift */,
+				00000000000000000000009B /* PrivacySafeTitleTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -351,6 +354,7 @@
 				000000000000000000000062 /* ExportFormatterTests.swift in Sources */,
 				000000000000000000000081 /* ProfileSelectionTests.swift in Sources */,
 				00000000000000000000009A /* AskPackAssemblerTests.swift in Sources */,
+				00000000000000000000009C /* PrivacySafeTitleTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

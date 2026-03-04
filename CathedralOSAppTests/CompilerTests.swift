@@ -335,4 +335,104 @@ final class CompilerTests: XCTestCase {
         XCTAssertTrue(output.contains("Alias text"), "Output must contain the secret alias")
         XCTAssertFalse(output.contains("Sensitive real text"), "Output must NOT contain the real sensitive title")
     }
+
+    // MARK: - New Vector Sensitivity
+
+    func testSensitiveResourceWithAbstractTextUsesAbstractText() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let resource = Resource(title: "Sensitive resource")
+        resource.isSensitive = true
+        resource.abstractText = "Safe resource abstract"
+        modelContext.insert(resource)
+        profile.resources.append(resource)
+
+        let output = Compiler.compile(profile: profile)
+        XCTAssertTrue(output.contains("Safe resource abstract"), "Output must contain the safe abstract text")
+        XCTAssertFalse(output.contains("Sensitive resource"), "Output must NOT contain the real sensitive title")
+    }
+
+    func testSensitiveResourceWithSecretAliasUsesAlias() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let secret = Secret(name: "SecretR", alias: "Resource alias")
+        modelContext.insert(secret)
+
+        let resource = Resource(title: "Sensitive resource")
+        resource.isSensitive = true
+        resource.abstractText = nil
+        resource.secretID = secret.id
+        modelContext.insert(resource)
+        profile.resources.append(resource)
+
+        let output = Compiler.compile(profile: profile, secrets: [secret])
+        XCTAssertTrue(output.contains("Resource alias"), "Output must contain the secret alias")
+        XCTAssertFalse(output.contains("Sensitive resource"), "Output must NOT contain the real sensitive title")
+    }
+
+    func testSensitivePreferenceWithAbstractTextUsesAbstractText() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let preference = Preference(title: "Sensitive preference")
+        preference.isSensitive = true
+        preference.abstractText = "Safe preference abstract"
+        modelContext.insert(preference)
+        profile.preferences.append(preference)
+
+        let output = Compiler.compile(profile: profile)
+        XCTAssertTrue(output.contains("Safe preference abstract"), "Output must contain the safe abstract text")
+        XCTAssertFalse(output.contains("Sensitive preference"), "Output must NOT contain the real sensitive title")
+    }
+
+    func testSensitiveFailurePatternWithAbstractTextUsesAbstractText() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let fp = FailurePattern(title: "Sensitive failure pattern")
+        fp.isSensitive = true
+        fp.abstractText = "Safe failure pattern abstract"
+        modelContext.insert(fp)
+        profile.failurePatterns.append(fp)
+
+        let output = Compiler.compile(profile: profile)
+        XCTAssertTrue(output.contains("Safe failure pattern abstract"), "Output must contain the safe abstract text")
+        XCTAssertFalse(output.contains("Sensitive failure pattern"), "Output must NOT contain the real sensitive title")
+    }
+
+    func testSensitiveSeasonWithAbstractTextUsesAbstractText() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let season = Season(title: "Sensitive season")
+        season.isSensitive = true
+        season.abstractText = "Safe season abstract"
+        modelContext.insert(season)
+        profile.seasons.append(season)
+
+        let output = Compiler.compile(profile: profile)
+        XCTAssertTrue(output.contains("Safe season abstract"), "Output must contain the safe abstract text")
+        XCTAssertFalse(output.contains("Sensitive season"), "Output must NOT contain the real sensitive title")
+    }
+
+    func testSensitiveSeasonWithSecretAliasUsesAlias() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let secret = Secret(name: "SecretS", alias: "Season alias")
+        modelContext.insert(secret)
+
+        let season = Season(title: "Sensitive season")
+        season.isSensitive = true
+        season.abstractText = nil
+        season.secretID = secret.id
+        modelContext.insert(season)
+        profile.seasons.append(season)
+
+        let output = Compiler.compile(profile: profile, secrets: [secret])
+        XCTAssertTrue(output.contains("Season alias"), "Output must contain the secret alias")
+        XCTAssertFalse(output.contains("Sensitive season"), "Output must NOT contain the real sensitive title")
+    }
 }

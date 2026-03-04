@@ -12,4 +12,15 @@ struct PrivacyRedactor {
         if let alias = secretAlias, !alias.isEmpty { return alias }
         return "(redacted)"
     }
+
+    static func safeTitle(
+        title: String,
+        isSensitive: Bool,
+        abstractText: String?,
+        secretID: UUID?,
+        secrets: [Secret]
+    ) -> String {
+        let alias = secrets.first(where: { $0.id == secretID })?.alias
+        return safeTitle(title: title, isSensitive: isSensitive, abstractText: abstractText, secretAlias: alias)
+    }
 }
