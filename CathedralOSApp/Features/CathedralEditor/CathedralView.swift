@@ -11,10 +11,18 @@ struct CathedralView: View {
     @State private var showAddConstraint = false
     @State private var showAddRole = false
     @State private var showAddDomain = false
+    @State private var showAddSeason = false
+    @State private var showAddResource = false
+    @State private var showAddPreference = false
+    @State private var showAddFailurePattern = false
     @State private var goalToEdit: Goal?
     @State private var constraintToEdit: Constraint?
     @State private var roleToEdit: Role?
     @State private var domainToEdit: Domain?
+    @State private var seasonToEdit: Season?
+    @State private var resourceToEdit: Resource?
+    @State private var preferenceToEdit: Preference?
+    @State private var failurePatternToEdit: FailurePattern?
     @State private var showShareSheet = false
     @State private var showCopiedConfirmation = false
 
@@ -48,6 +56,10 @@ struct CathedralView: View {
             List {
                 rolesSection
                 domainsSection
+                seasonSection
+                resourcesSection
+                preferencesSection
+                failurePatternsSection
                 goalsSection
                 constraintsSection
                 compiledSection
@@ -99,6 +111,82 @@ struct CathedralView: View {
         }
         .sheet(item: $constraintToEdit) { constraint in
             ConstraintFormView(profile: nil, constraint: constraint)
+        }
+        .sheet(isPresented: $showAddSeason) {
+            if let profile {
+                ItemFormView(
+                    screenTitle: "Add Season",
+                    onSave: { title in
+                        let item = Season(title: title)
+                        modelContext.insert(item)
+                        profile.seasons.append(item)
+                    }
+                )
+            }
+        }
+        .sheet(item: $seasonToEdit) { season in
+            ItemFormView(
+                screenTitle: "Edit Season",
+                initialTitle: season.title,
+                onSave: { title in season.title = title }
+            )
+        }
+        .sheet(isPresented: $showAddResource) {
+            if let profile {
+                ItemFormView(
+                    screenTitle: "Add Resource",
+                    onSave: { title in
+                        let item = Resource(title: title)
+                        modelContext.insert(item)
+                        profile.resources.append(item)
+                    }
+                )
+            }
+        }
+        .sheet(item: $resourceToEdit) { resource in
+            ItemFormView(
+                screenTitle: "Edit Resource",
+                initialTitle: resource.title,
+                onSave: { title in resource.title = title }
+            )
+        }
+        .sheet(isPresented: $showAddPreference) {
+            if let profile {
+                ItemFormView(
+                    screenTitle: "Add Preference",
+                    onSave: { title in
+                        let item = Preference(title: title)
+                        modelContext.insert(item)
+                        profile.preferences.append(item)
+                    }
+                )
+            }
+        }
+        .sheet(item: $preferenceToEdit) { preference in
+            ItemFormView(
+                screenTitle: "Edit Preference",
+                initialTitle: preference.title,
+                onSave: { title in preference.title = title }
+            )
+        }
+        .sheet(isPresented: $showAddFailurePattern) {
+            if let profile {
+                ItemFormView(
+                    screenTitle: "Add Failure Pattern",
+                    onSave: { title in
+                        let item = FailurePattern(title: title)
+                        modelContext.insert(item)
+                        profile.failurePatterns.append(item)
+                    }
+                )
+            }
+        }
+        .sheet(item: $failurePatternToEdit) { failurePattern in
+            ItemFormView(
+                screenTitle: "Edit Failure Pattern",
+                initialTitle: failurePattern.title,
+                onSave: { title in failurePattern.title = title }
+            )
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [compiledOutput])
@@ -260,6 +348,94 @@ struct CathedralView: View {
         }
     }
 
+    // MARK: Season Section
+
+    private var seasonSection: some View {
+        Section {
+            let sorted = profile?.seasons.sorted(by: { $0.title < $1.title }) ?? []
+            ForEach(sorted) { season in
+                Text(season.title)
+                    .contentShape(Rectangle())
+                    .onTapGesture { seasonToEdit = season }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deleteSeason(season)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+            }
+        } header: {
+            SectionHeader(title: "Season") { showAddSeason = true }
+        }
+    }
+
+    // MARK: Resources Section
+
+    private var resourcesSection: some View {
+        Section {
+            let sorted = profile?.resources.sorted(by: { $0.title < $1.title }) ?? []
+            ForEach(sorted) { resource in
+                Text(resource.title)
+                    .contentShape(Rectangle())
+                    .onTapGesture { resourceToEdit = resource }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deleteResource(resource)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+            }
+        } header: {
+            SectionHeader(title: "Resources") { showAddResource = true }
+        }
+    }
+
+    // MARK: Preferences Section
+
+    private var preferencesSection: some View {
+        Section {
+            let sorted = profile?.preferences.sorted(by: { $0.title < $1.title }) ?? []
+            ForEach(sorted) { preference in
+                Text(preference.title)
+                    .contentShape(Rectangle())
+                    .onTapGesture { preferenceToEdit = preference }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deletePreference(preference)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+            }
+        } header: {
+            SectionHeader(title: "Preferences") { showAddPreference = true }
+        }
+    }
+
+    // MARK: Failure Patterns Section
+
+    private var failurePatternsSection: some View {
+        Section {
+            let sorted = profile?.failurePatterns.sorted(by: { $0.title < $1.title }) ?? []
+            ForEach(sorted) { failurePattern in
+                Text(failurePattern.title)
+                    .contentShape(Rectangle())
+                    .onTapGesture { failurePatternToEdit = failurePattern }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deleteFailurePattern(failurePattern)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+            }
+        } header: {
+            SectionHeader(title: "Failure Patterns") { showAddFailurePattern = true }
+        }
+    }
+
     // MARK: Goals Section
 
     private var goalsSection: some View {
@@ -383,6 +559,26 @@ struct CathedralView: View {
     private func deleteConstraint(_ constraint: Constraint) {
         profile?.constraints.removeAll { $0.id == constraint.id }
         modelContext.delete(constraint)
+    }
+
+    private func deleteSeason(_ season: Season) {
+        profile?.seasons.removeAll { $0.id == season.id }
+        modelContext.delete(season)
+    }
+
+    private func deleteResource(_ resource: Resource) {
+        profile?.resources.removeAll { $0.id == resource.id }
+        modelContext.delete(resource)
+    }
+
+    private func deletePreference(_ preference: Preference) {
+        profile?.preferences.removeAll { $0.id == preference.id }
+        modelContext.delete(preference)
+    }
+
+    private func deleteFailurePattern(_ failurePattern: FailurePattern) {
+        profile?.failurePatterns.removeAll { $0.id == failurePattern.id }
+        modelContext.delete(failurePattern)
     }
 }
 
@@ -621,6 +817,41 @@ struct DomainFormView: View {
             profile.domains.append(newDomain)
         }
         dismiss()
+    }
+}
+
+// MARK: - Item Form (Reusable)
+
+struct ItemFormView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var screenTitle: String
+    var initialTitle: String = ""
+    var onSave: (String) -> Void
+
+    @State private var title = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Title", text: $title)
+            }
+            .navigationTitle(screenTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(title.trimmingCharacters(in: .whitespaces))
+                        dismiss()
+                    }
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .onAppear { title = initialTitle }
+        }
     }
 }
 

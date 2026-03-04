@@ -10,7 +10,9 @@ final class ExportFormatterTests: XCTestCase {
     override func setUpWithError() throws {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         container = try ModelContainer(
-            for: Role.self, Domain.self, Goal.self, Constraint.self, CathedralProfile.self,
+            for: Role.self, Domain.self, Goal.self, Constraint.self,
+                Resource.self, Preference.self, FailurePattern.self, Season.self,
+                CathedralProfile.self,
             configurations: config
         )
         modelContext = ModelContext(container)
@@ -190,6 +192,133 @@ final class ExportFormatterTests: XCTestCase {
         let zIndex = try XCTUnwrap(output.range(of: "Z Constraint")).lowerBound
 
         XCTAssertLessThan(aIndex, zIndex, "A Constraint should appear before Z Constraint")
+    }
+
+    // MARK: - New vector headings
+
+    func testInstructionsIncludesSeasonHeading() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+
+        XCTAssertTrue(output.contains("SEASON:"), "Instructions output must contain 'SEASON:' heading")
+    }
+
+    func testInstructionsIncludesResourcesHeading() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+
+        XCTAssertTrue(output.contains("RESOURCES:"), "Instructions output must contain 'RESOURCES:' heading")
+    }
+
+    func testInstructionsIncludesPreferencesHeading() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+
+        XCTAssertTrue(output.contains("PREFERENCES:"), "Instructions output must contain 'PREFERENCES:' heading")
+    }
+
+    func testInstructionsIncludesFailurePatternsHeading() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+
+        XCTAssertTrue(output.contains("FAILURE PATTERNS:"), "Instructions output must contain 'FAILURE PATTERNS:' heading")
+    }
+
+    func testInstructionsShowsNoneYetForEmptySeason() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+        let lines = output.components(separatedBy: "\n")
+        let seasonIndex = try XCTUnwrap(lines.firstIndex(of: "SEASON:"))
+
+        XCTAssertEqual(lines[seasonIndex + 1], "- (none yet)")
+    }
+
+    func testInstructionsShowsNoneYetForEmptyResources() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+        let lines = output.components(separatedBy: "\n")
+        let resourcesIndex = try XCTUnwrap(lines.firstIndex(of: "RESOURCES:"))
+
+        XCTAssertEqual(lines[resourcesIndex + 1], "- (none yet)")
+    }
+
+    func testInstructionsShowsNoneYetForEmptyPreferences() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+        let lines = output.components(separatedBy: "\n")
+        let preferencesIndex = try XCTUnwrap(lines.firstIndex(of: "PREFERENCES:"))
+
+        XCTAssertEqual(lines[preferencesIndex + 1], "- (none yet)")
+    }
+
+    func testInstructionsShowsNoneYetForEmptyFailurePatterns() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+        let lines = output.components(separatedBy: "\n")
+        let fpIndex = try XCTUnwrap(lines.firstIndex(of: "FAILURE PATTERNS:"))
+
+        XCTAssertEqual(lines[fpIndex + 1], "- (none yet)")
+    }
+
+    func testInstructionsResourcesAreSortedAlphabetically() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let rZ = Resource(title: "Z Resource")
+        let rA = Resource(title: "A Resource")
+        modelContext.insert(rZ)
+        modelContext.insert(rA)
+        profile.resources.append(rZ)
+        profile.resources.append(rA)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+
+        let aIndex = try XCTUnwrap(output.range(of: "A Resource")).lowerBound
+        let zIndex = try XCTUnwrap(output.range(of: "Z Resource")).lowerBound
+
+        XCTAssertLessThan(aIndex, zIndex, "A Resource should appear before Z Resource")
+    }
+
+    func testInstructionsSectionOrder() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = ExportFormatter.export(profile: profile, mode: .instructions)
+
+        let rolesIdx = try XCTUnwrap(output.range(of: "ROLES:")).lowerBound
+        let domainsIdx = try XCTUnwrap(output.range(of: "DOMAINS:")).lowerBound
+        let seasonIdx = try XCTUnwrap(output.range(of: "SEASON:")).lowerBound
+        let resourcesIdx = try XCTUnwrap(output.range(of: "RESOURCES:")).lowerBound
+        let preferencesIdx = try XCTUnwrap(output.range(of: "PREFERENCES:")).lowerBound
+        let failurePatternsIdx = try XCTUnwrap(output.range(of: "FAILURE PATTERNS:")).lowerBound
+        let goalsIdx = try XCTUnwrap(output.range(of: "GOALS:")).lowerBound
+        let constraintsIdx = try XCTUnwrap(output.range(of: "CONSTRAINTS:")).lowerBound
+        let answeringRulesIdx = try XCTUnwrap(output.range(of: "ANSWERING RULES:")).lowerBound
+
+        XCTAssertLessThan(rolesIdx, domainsIdx)
+        XCTAssertLessThan(domainsIdx, seasonIdx)
+        XCTAssertLessThan(seasonIdx, resourcesIdx)
+        XCTAssertLessThan(resourcesIdx, preferencesIdx)
+        XCTAssertLessThan(preferencesIdx, failurePatternsIdx)
+        XCTAssertLessThan(failurePatternsIdx, goalsIdx)
+        XCTAssertLessThan(goalsIdx, constraintsIdx)
+        XCTAssertLessThan(constraintsIdx, answeringRulesIdx)
     }
 
     // MARK: - JSON mode
