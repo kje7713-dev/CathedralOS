@@ -29,6 +29,9 @@
 		00000000000000000000008D /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000008C /* KeychainService.swift */; };
 		00000000000000000000008F /* PrivacyRedactor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000008E /* PrivacyRedactor.swift */; };
 		000000000000000000000091 /* SecretsVaultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000090 /* SecretsVaultView.swift */; };
+		000000000000000000000095 /* AskPackAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000094 /* AskPackAssembler.swift */; };
+		000000000000000000000097 /* AskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000096 /* AskView.swift */; };
+		00000000000000000000009A /* AskPackAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000099 /* AskPackAssemblerTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -66,6 +69,9 @@
 		00000000000000000000008C /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		00000000000000000000008E /* PrivacyRedactor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyRedactor.swift; sourceTree = "<group>"; };
 		000000000000000000000090 /* SecretsVaultView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretsVaultView.swift; sourceTree = "<group>"; };
+		000000000000000000000094 /* AskPackAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskPackAssembler.swift; sourceTree = "<group>"; };
+		000000000000000000000096 /* AskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskView.swift; sourceTree = "<group>"; };
+		000000000000000000000099 /* AskPackAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskPackAssemblerTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -131,6 +137,7 @@
 				000000000000000000000024 /* Compiler */,
 				000000000000000000000028 /* Export */,
 				000000000000000000000092 /* Secrets */,
+				000000000000000000000098 /* Ask */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -192,6 +199,7 @@
 				000000000000000000000036 /* CompilerTests.swift */,
 				000000000000000000000052 /* ExportFormatterTests.swift */,
 				000000000000000000000073 /* ProfileSelectionTests.swift */,
+				000000000000000000000099 /* AskPackAssemblerTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -202,6 +210,15 @@
 				000000000000000000000090 /* SecretsVaultView.swift */,
 			);
 			path = Secrets;
+			sourceTree = "<group>";
+		};
+		000000000000000000000098 /* Ask */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000094 /* AskPackAssembler.swift */,
+				000000000000000000000096 /* AskView.swift */,
+			);
+			path = Ask;
 			sourceTree = "<group>";
 		};
 		000000000000000000000093 /* Services */ = {
@@ -321,6 +338,8 @@
 				00000000000000000000008D /* KeychainService.swift in Sources */,
 				00000000000000000000008F /* PrivacyRedactor.swift in Sources */,
 				000000000000000000000091 /* SecretsVaultView.swift in Sources */,
+				000000000000000000000095 /* AskPackAssembler.swift in Sources */,
+				000000000000000000000097 /* AskView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -331,6 +350,7 @@
 				000000000000000000000046 /* CompilerTests.swift in Sources */,
 				000000000000000000000062 /* ExportFormatterTests.swift in Sources */,
 				000000000000000000000081 /* ProfileSelectionTests.swift in Sources */,
+				00000000000000000000009A /* AskPackAssemblerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
