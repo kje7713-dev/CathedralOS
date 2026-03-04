@@ -33,6 +33,12 @@
 		000000000000000000000097 /* AskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000096 /* AskView.swift */; };
 		00000000000000000000009A /* AskPackAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000099 /* AskPackAssemblerTests.swift */; };
 		00000000000000000000009C /* PrivacySafeTitleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000009B /* PrivacySafeTitleTests.swift */; };
+		00000000000000000000009E /* ProfileTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000009D /* ProfileTemplate.swift */; };
+		0000000000000000000000A0 /* BuiltInTemplates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000009F /* BuiltInTemplates.swift */; };
+		0000000000000000000000A2 /* ProfileFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000A1 /* ProfileFactory.swift */; };
+		0000000000000000000000A4 /* TemplatesPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000A3 /* TemplatesPickerView.swift */; };
+		0000000000000000000000A6 /* NewProfileFromTemplateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000A5 /* NewProfileFromTemplateView.swift */; };
+		0000000000000000000000A8 /* TemplatesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000A7 /* TemplatesTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -74,6 +80,12 @@
 		000000000000000000000096 /* AskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskView.swift; sourceTree = "<group>"; };
 		000000000000000000000099 /* AskPackAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskPackAssemblerTests.swift; sourceTree = "<group>"; };
 		00000000000000000000009B /* PrivacySafeTitleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacySafeTitleTests.swift; sourceTree = "<group>"; };
+		00000000000000000000009D /* ProfileTemplate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTemplate.swift; sourceTree = "<group>"; };
+		00000000000000000000009F /* BuiltInTemplates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInTemplates.swift; sourceTree = "<group>"; };
+		0000000000000000000000A1 /* ProfileFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileFactory.swift; sourceTree = "<group>"; };
+		0000000000000000000000A3 /* TemplatesPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplatesPickerView.swift; sourceTree = "<group>"; };
+		0000000000000000000000A5 /* NewProfileFromTemplateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewProfileFromTemplateView.swift; sourceTree = "<group>"; };
+		0000000000000000000000A7 /* TemplatesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplatesTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -120,6 +132,7 @@
 				000000000000000000000025 /* Models */,
 				000000000000000000000026 /* Utils */,
 				000000000000000000000093 /* Services */,
+				0000000000000000000000A9 /* Templates */,
 			);
 			path = CathedralOSApp;
 			sourceTree = "<group>";
@@ -140,6 +153,7 @@
 				000000000000000000000028 /* Export */,
 				000000000000000000000092 /* Secrets */,
 				000000000000000000000098 /* Ask */,
+				0000000000000000000000AA /* Templates */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -191,6 +205,7 @@
 			children = (
 				000000000000000000000072 /* ProfileSelector.swift */,
 				00000000000000000000008E /* PrivacyRedactor.swift */,
+				0000000000000000000000A1 /* ProfileFactory.swift */,
 			);
 			path = Utils;
 			sourceTree = "<group>";
@@ -203,6 +218,7 @@
 				000000000000000000000073 /* ProfileSelectionTests.swift */,
 				000000000000000000000099 /* AskPackAssemblerTests.swift */,
 				00000000000000000000009B /* PrivacySafeTitleTests.swift */,
+				0000000000000000000000A7 /* TemplatesTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -230,6 +246,24 @@
 				00000000000000000000008C /* KeychainService.swift */,
 			);
 			path = Services;
+			sourceTree = "<group>";
+		};
+		0000000000000000000000A9 /* Templates */ = {
+			isa = PBXGroup;
+			children = (
+				00000000000000000000009D /* ProfileTemplate.swift */,
+				00000000000000000000009F /* BuiltInTemplates.swift */,
+			);
+			path = Templates;
+			sourceTree = "<group>";
+		};
+		0000000000000000000000AA /* Templates */ = {
+			isa = PBXGroup;
+			children = (
+				0000000000000000000000A3 /* TemplatesPickerView.swift */,
+				0000000000000000000000A5 /* NewProfileFromTemplateView.swift */,
+			);
+			path = Templates;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -343,6 +377,11 @@
 				000000000000000000000091 /* SecretsVaultView.swift in Sources */,
 				000000000000000000000095 /* AskPackAssembler.swift in Sources */,
 				000000000000000000000097 /* AskView.swift in Sources */,
+				00000000000000000000009E /* ProfileTemplate.swift in Sources */,
+				0000000000000000000000A0 /* BuiltInTemplates.swift in Sources */,
+				0000000000000000000000A2 /* ProfileFactory.swift in Sources */,
+				0000000000000000000000A4 /* TemplatesPickerView.swift in Sources */,
+				0000000000000000000000A6 /* NewProfileFromTemplateView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -355,6 +394,7 @@
 				000000000000000000000081 /* ProfileSelectionTests.swift in Sources */,
 				00000000000000000000009A /* AskPackAssemblerTests.swift in Sources */,
 				00000000000000000000009C /* PrivacySafeTitleTests.swift in Sources */,
+				0000000000000000000000A8 /* TemplatesTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
