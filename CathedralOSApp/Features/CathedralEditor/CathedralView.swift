@@ -29,6 +29,7 @@ struct CathedralView: View {
     @State private var showAsk = false
 
     @State private var showNewProfile = false
+    @State private var showNewProfileFromTemplate = false
     @State private var showRenameProfile = false
     @State private var showDeleteProfileAlert = false
     @State private var newProfileName = ""
@@ -189,6 +190,9 @@ struct CathedralView: View {
                 }
             }
         }
+        .sheet(isPresented: $showNewProfileFromTemplate) {
+            NewProfileFromTemplateView(activeProfileID: $activeProfileID)
+        }
         .sheet(isPresented: $showRenameProfile) {
             NavigationStack {
                 Form {
@@ -233,6 +237,7 @@ struct CathedralView: View {
             }
             Divider()
             Button("New Profile") { showNewProfile = true }
+            Button("New Profile from Template") { showNewProfileFromTemplate = true }
             Button("Rename Profile") {
                 showRenameProfile = true
             }
