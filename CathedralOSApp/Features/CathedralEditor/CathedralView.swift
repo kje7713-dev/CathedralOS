@@ -26,6 +26,7 @@ struct CathedralView: View {
     @State private var showShareSheet = false
     @State private var showCopiedConfirmation = false
     @State private var showSecretsVault = false
+    @State private var showAsk = false
 
     @State private var showNewProfile = false
     @State private var showRenameProfile = false
@@ -74,7 +75,12 @@ struct CathedralView: View {
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    profileMenu
+                    HStack {
+                        Button { showAsk = true } label: {
+                            Image(systemName: "questionmark.circle")
+                        }
+                        profileMenu
+                    }
                 }
             }
             .task {
@@ -89,6 +95,11 @@ struct CathedralView: View {
         }
         .sheet(isPresented: $showSecretsVault) {
             SecretsVaultView()
+        }
+        .sheet(isPresented: $showAsk) {
+            if let profile {
+                AskView(profile: profile)
+            }
         }
         .sheet(isPresented: $showAddRole) {
             if let profile {
