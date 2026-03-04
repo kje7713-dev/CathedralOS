@@ -18,13 +18,25 @@ struct CathedralView: View {
     @State private var showShareSheet = false
     @State private var showCopiedConfirmation = false
 
+    @State private var showNewProfile = false
+    @State private var showRenameProfile = false
+    @State private var showDeleteProfileAlert = false
+    @State private var newProfileName = ""
+    @State private var renameProfileName = ""
+
     @AppStorage("exportMode") private var exportModeRaw = ExportMode.instructions.rawValue
+    @AppStorage("activeProfileID") private var activeProfileID = ""
 
     private var exportMode: ExportMode {
         ExportMode(rawValue: exportModeRaw) ?? .instructions
     }
 
-    private var profile: CathedralProfile? { profiles.first }
+    private var profile: CathedralProfile? {
+        ProfileSelector.resolveActiveProfile(
+            profiles: profiles,
+            activeIDString: activeProfileID.isEmpty ? nil : activeProfileID
+        )
+    }
 
     private var compiledOutput: String {
         guard let profile else { return "" }
@@ -41,10 +53,19 @@ struct CathedralView: View {
                 compiledSection
             }
             .navigationTitle("Cathedral")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    profileMenu
+                }
+            }
             .task {
-                guard profiles.isEmpty else { return }
-                let newProfile = CathedralProfile()
-                modelContext.insert(newProfile)
+                if profiles.isEmpty {
+                    let newProfile = CathedralProfile()
+                    modelContext.insert(newProfile)
+                    activeProfileID = newProfile.id.uuidString
+                } else if activeProfileID.isEmpty {
+                    activeProfileID = profiles[0].id.uuidString
+                }
             }
         }
         .sheet(isPresented: $showAddRole) {
@@ -81,6 +102,117 @@ struct CathedralView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [compiledOutput])
+        }
+        .sheet(isPresented: $showNewProfile) {
+            NavigationStack {
+                Form {
+                    TextField("Profile Name", text: $newProfileName)
+                }
+                .navigationTitle("New Profile")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            newProfileName = ""
+                            showNewProfile = false
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Create") { createProfile() }
+                            .disabled(newProfileName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showRenameProfile) {
+            NavigationStack {
+                Form {
+                    TextField("Profile Name", text: $renameProfileName)
+                }
+                .navigationTitle("Rename Profile")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showRenameProfile = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") { renameProfile() }
+                            .disabled(renameProfileName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+                .onAppear { renameProfileName = profile?.name ?? "" }
+            }
+        }
+        .alert("Delete Profile", isPresented: $showDeleteProfileAlert) {
+            Button("Delete", role: .destructive) { deleteActiveProfile() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Delete \"\(profile?.name ?? "this profile")\"? This cannot be undone.")
+        }
+    }
+
+    // MARK: Profile Menu
+
+    private var profileMenu: some View {
+        Menu {
+            ForEach(profiles.sorted(by: { $0.name < $1.name })) { p in
+                Button {
+                    activeProfileID = p.id.uuidString
+                } label: {
+                    if p.id.uuidString == activeProfileID {
+                        Label(p.name, systemImage: "checkmark")
+                    } else {
+                        Text(p.name)
+                    }
+                }
+            }
+            Divider()
+            Button("New Profile") { showNewProfile = true }
+            Button("Rename Profile") {
+                showRenameProfile = true
+            }
+            .disabled(profile == nil)
+            Button("Delete Profile", role: .destructive) { showDeleteProfileAlert = true }
+                .disabled(profile == nil)
+        } label: {
+            HStack(spacing: 4) {
+                Text(profile?.name ?? "Select Profile")
+                    .fontWeight(.medium)
+                Image(systemName: "chevron.down")
+                    .imageScale(.small)
+            }
+        }
+    }
+
+    // MARK: Profile Actions
+
+    private func createProfile() {
+        let trimmed = newProfileName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        let p = CathedralProfile(name: trimmed)
+        modelContext.insert(p)
+        activeProfileID = p.id.uuidString
+        newProfileName = ""
+        showNewProfile = false
+    }
+
+    private func renameProfile() {
+        let trimmed = renameProfileName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, let profile else { return }
+        profile.name = trimmed
+        showRenameProfile = false
+    }
+
+    private func deleteActiveProfile() {
+        guard let profile else { return }
+        let remaining = profiles.first(where: { $0.id != profile.id })
+        modelContext.delete(profile)
+        if let first = remaining {
+            activeProfileID = first.id.uuidString
+        } else {
+            let newProfile = CathedralProfile()
+            modelContext.insert(newProfile)
+            activeProfileID = newProfile.id.uuidString
         }
     }
 

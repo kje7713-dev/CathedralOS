@@ -19,6 +19,8 @@
 		000000000000000000000060 /* ExportMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000050 /* ExportMode.swift */; };
 		000000000000000000000061 /* ExportFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000051 /* ExportFormatter.swift */; };
 		000000000000000000000062 /* ExportFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000052 /* ExportFormatterTests.swift */; };
+		000000000000000000000080 /* ProfileSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000072 /* ProfileSelector.swift */; };
+		000000000000000000000081 /* ProfileSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000073 /* ProfileSelectionTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -46,6 +48,8 @@
 		000000000000000000000050 /* ExportMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportMode.swift; sourceTree = "<group>"; };
 		000000000000000000000051 /* ExportFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportFormatter.swift; sourceTree = "<group>"; };
 		000000000000000000000052 /* ExportFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportFormatterTests.swift; sourceTree = "<group>"; };
+		000000000000000000000072 /* ProfileSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileSelector.swift; sourceTree = "<group>"; };
+		000000000000000000000073 /* ProfileSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileSelectionTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -153,6 +157,7 @@
 		000000000000000000000026 /* Utils */ = {
 			isa = PBXGroup;
 			children = (
+				000000000000000000000072 /* ProfileSelector.swift */,
 			);
 			path = Utils;
 			sourceTree = "<group>";
@@ -162,6 +167,7 @@
 			children = (
 				000000000000000000000036 /* CompilerTests.swift */,
 				000000000000000000000052 /* ExportFormatterTests.swift */,
+				000000000000000000000073 /* ProfileSelectionTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -266,6 +272,7 @@
 				000000000000000000000045 /* CathedralProfile.swift in Sources */,
 				000000000000000000000060 /* ExportMode.swift in Sources */,
 				000000000000000000000061 /* ExportFormatter.swift in Sources */,
+				000000000000000000000080 /* ProfileSelector.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -275,6 +282,7 @@
 			files = (
 				000000000000000000000046 /* CompilerTests.swift in Sources */,
 				000000000000000000000062 /* ExportFormatterTests.swift in Sources */,
+				000000000000000000000081 /* ProfileSelectionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
