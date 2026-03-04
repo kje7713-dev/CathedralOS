@@ -21,6 +21,10 @@
 		000000000000000000000062 /* ExportFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000052 /* ExportFormatterTests.swift */; };
 		000000000000000000000080 /* ProfileSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000072 /* ProfileSelector.swift */; };
 		000000000000000000000081 /* ProfileSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000073 /* ProfileSelectionTests.swift */; };
+		000000000000000000000083 /* Resource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000082 /* Resource.swift */; };
+		000000000000000000000085 /* Preference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000084 /* Preference.swift */; };
+		000000000000000000000087 /* FailurePattern.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000086 /* FailurePattern.swift */; };
+		000000000000000000000089 /* Season.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000088 /* Season.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -50,6 +54,10 @@
 		000000000000000000000052 /* ExportFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportFormatterTests.swift; sourceTree = "<group>"; };
 		000000000000000000000072 /* ProfileSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileSelector.swift; sourceTree = "<group>"; };
 		000000000000000000000073 /* ProfileSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileSelectionTests.swift; sourceTree = "<group>"; };
+		000000000000000000000082 /* Resource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Resource.swift; sourceTree = "<group>"; };
+		000000000000000000000084 /* Preference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preference.swift; sourceTree = "<group>"; };
+		000000000000000000000086 /* FailurePattern.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FailurePattern.swift; sourceTree = "<group>"; };
+		000000000000000000000088 /* Season.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Season.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -150,6 +158,10 @@
 				000000000000000000000033 /* Goal.swift */,
 				000000000000000000000034 /* Constraint.swift */,
 				000000000000000000000035 /* CathedralProfile.swift */,
+				000000000000000000000082 /* Resource.swift */,
+				000000000000000000000084 /* Preference.swift */,
+				000000000000000000000086 /* FailurePattern.swift */,
+				000000000000000000000088 /* Season.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -273,6 +285,10 @@
 				000000000000000000000060 /* ExportMode.swift in Sources */,
 				000000000000000000000061 /* ExportFormatter.swift in Sources */,
 				000000000000000000000080 /* ProfileSelector.swift in Sources */,
+				000000000000000000000083 /* Resource.swift in Sources */,
+				000000000000000000000085 /* Preference.swift in Sources */,
+				000000000000000000000087 /* FailurePattern.swift in Sources */,
+				000000000000000000000089 /* Season.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

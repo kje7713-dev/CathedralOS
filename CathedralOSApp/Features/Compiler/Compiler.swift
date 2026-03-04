@@ -18,6 +18,22 @@ struct Compiler {
             .sorted { $0.title < $1.title }
             .map { $0.title }
 
+        let sortedResources = profile.resources
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
+        let sortedPreferences = profile.preferences
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
+        let sortedFailurePatterns = profile.failurePatterns
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
+        let sortedSeasons = profile.seasons
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
         let instructionBias: [String] = [
             "Prefer short actions with fast feedback.",
             "Respect constraints and avoid requiring long uninterrupted blocks."
@@ -28,6 +44,10 @@ struct Compiler {
             "domains": sortedDomains,
             "goals": sortedGoals,
             "constraints": sortedConstraints,
+            "resources": sortedResources,
+            "preferences": sortedPreferences,
+            "failure_patterns": sortedFailurePatterns,
+            "season": sortedSeasons,
             "instruction_bias": instructionBias
         ]
         let wrapper: [String: Any] = ["cathedral_context": inner]

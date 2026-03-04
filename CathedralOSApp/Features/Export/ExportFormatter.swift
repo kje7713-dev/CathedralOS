@@ -29,6 +29,22 @@ struct ExportFormatter {
             .sorted { $0.title < $1.title }
             .map { $0.title }
 
+        let seasons = profile.seasons
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
+        let resources = profile.resources
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
+        let preferences = profile.preferences
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
+        let failurePatterns = profile.failurePatterns
+            .sorted { $0.title < $1.title }
+            .map { $0.title }
+
         var lines: [String] = []
 
         lines.append("Use the following goals and constraints as ground truth when answering.")
@@ -48,6 +64,38 @@ struct ExportFormatter {
             lines.append("- (none yet)")
         } else {
             for d in domains { lines.append("- \(d)") }
+        }
+
+        lines.append("")
+        lines.append("SEASON:")
+        if seasons.isEmpty {
+            lines.append("- (none yet)")
+        } else {
+            for s in seasons { lines.append("- \(s)") }
+        }
+
+        lines.append("")
+        lines.append("RESOURCES:")
+        if resources.isEmpty {
+            lines.append("- (none yet)")
+        } else {
+            for r in resources { lines.append("- \(r)") }
+        }
+
+        lines.append("")
+        lines.append("PREFERENCES:")
+        if preferences.isEmpty {
+            lines.append("- (none yet)")
+        } else {
+            for p in preferences { lines.append("- \(p)") }
+        }
+
+        lines.append("")
+        lines.append("FAILURE PATTERNS:")
+        if failurePatterns.isEmpty {
+            lines.append("- (none yet)")
+        } else {
+            for f in failurePatterns { lines.append("- \(f)") }
         }
 
         lines.append("")

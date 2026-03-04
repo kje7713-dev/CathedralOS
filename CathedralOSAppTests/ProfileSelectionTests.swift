@@ -10,7 +10,9 @@ final class ProfileSelectionTests: XCTestCase {
     override func setUpWithError() throws {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         container = try ModelContainer(
-            for: Role.self, Domain.self, Goal.self, Constraint.self, CathedralProfile.self,
+            for: Role.self, Domain.self, Goal.self, Constraint.self,
+                Resource.self, Preference.self, FailurePattern.self, Season.self,
+                CathedralProfile.self,
             configurations: config
         )
         modelContext = ModelContext(container)
