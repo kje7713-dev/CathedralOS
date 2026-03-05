@@ -74,12 +74,16 @@ struct Compiler {
             "season": sortedSeasons,
             "instruction_bias": instructionBias
         ]
-        let wrapper: [String: Any] = ["cathedral_context": inner]
+        let wrapper: [String: Any] = [
+            "schema": "cathedralos.context",
+            "version": 1,
+            "cathedral_context": inner
+        ]
 
         guard
             let data = try? JSONSerialization.data(
                 withJSONObject: wrapper,
-                options: [.prettyPrinted, .sortedKeys]
+                options: [.sortedKeys]
             ),
             let output = String(data: data, encoding: .utf8)
         else {
