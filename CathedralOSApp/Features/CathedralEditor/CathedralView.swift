@@ -35,12 +35,12 @@ struct CathedralView: View {
     @State private var newProfileName = ""
     @State private var renameProfileName = ""
 
-    @AppStorage("exportMode") private var exportModeRaw = ExportMode.instructions.rawValue
+    @AppStorage("exportMode") private var exportModeRaw = ExportMode.json.rawValue
     @AppStorage("activeProfileID") private var activeProfileID = ""
     @Query private var secrets: [Secret]
 
     private var exportMode: ExportMode {
-        ExportMode(rawValue: exportModeRaw) ?? .instructions
+        ExportMode(rawValue: exportModeRaw) ?? .json
     }
 
     private var profile: CathedralProfile? {
@@ -570,7 +570,7 @@ struct CathedralView: View {
     // MARK: Compiled Section
 
     private var compiledSection: some View {
-        Section("Context Block") {
+        Section {
             Picker("Format", selection: $exportModeRaw) {
                 ForEach(ExportMode.allCases) { mode in
                     Text(mode.title).tag(mode.rawValue)
@@ -580,7 +580,7 @@ struct CathedralView: View {
 
             ScrollView {
                 Text(compiledOutput.isEmpty
-                     ? "(add goals or constraints to compile)"
+                     ? "(no profile selected)"
                      : compiledOutput)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(compiledOutput.isEmpty ? .secondary : .primary)
@@ -598,7 +598,7 @@ struct CathedralView: View {
                     }
                 } label: {
                     Label(
-                        showCopiedConfirmation ? "Copied!" : "Copy Context Block",
+                        showCopiedConfirmation ? "Copied!" : "Copy",
                         systemImage: showCopiedConfirmation
                             ? "checkmark.circle.fill"
                             : "doc.on.doc"
@@ -616,6 +616,13 @@ struct CathedralView: View {
                 .disabled(compiledOutput.isEmpty)
             }
             .padding(.vertical, 4)
+        } header: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Export")
+                Text("Machine (JSON) / Human (Instructions)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

@@ -100,6 +100,46 @@ final class CompilerTests: XCTestCase {
         XCTAssertNotNil(json["cathedral_context"], "Output must contain 'cathedral_context' key")
     }
 
+    func testOutputContainsSchemaKey() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = Compiler.compile(profile: profile)
+        let data = try XCTUnwrap(output.data(using: .utf8))
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        let schema = try XCTUnwrap(json["schema"] as? String)
+        XCTAssertEqual(schema, "cathedralos.context", "Output must contain schema = 'cathedralos.context'")
+    }
+
+    func testOutputContainsVersionKey() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let output = Compiler.compile(profile: profile)
+        let data = try XCTUnwrap(output.data(using: .utf8))
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        let version = try XCTUnwrap(json["version"] as? Int)
+        XCTAssertEqual(version, 1, "Output must contain version = 1")
+    }
+
+    func testJSONIsCompact() throws {
+        let profile = CathedralProfile(name: "Test")
+        modelContext.insert(profile)
+
+        let goal = Goal(title: "Build MVP")
+        modelContext.insert(goal)
+        profile.goals.append(goal)
+
+        let output = Compiler.compile(profile: profile)
+        XCTAssertFalse(output.contains("\n"), "JSON output must be compact (no newline characters)")
+    }
+
     func testOutputContainsGoalsConstraintsAndInstructionBias() throws {
         let profile = CathedralProfile(name: "Test")
         modelContext.insert(profile)
