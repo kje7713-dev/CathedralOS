@@ -1,0 +1,60 @@
+default_platform(:ios)
+
+platform :ios do
+  # ---------------------------------------------------------------------------
+  # beta — build a signed archive and upload to TestFlight
+  # ---------------------------------------------------------------------------
+  # Required environment variables (set as GitHub Secrets):
+  #   ASC_KEY_ID        — App Store Connect API key ID
+  #   ASC_ISSUER_ID     — App Store Connect issuer ID
+  #   ASC_API_KEY       — Base64-encoded .p8 private key contents
+  #   APPLE_TEAM_ID     — 10-character Apple Developer Team ID
+  #   APP_IDENTIFIER    — Bundle ID, e.g. com.cathedralos.CathedralOSApp
+  #   MATCH_GIT_URL     — HTTPS URL of the private Match certificates repo
+  #   MATCH_PASSWORD    — Passphrase used to encrypt Match assets
+  #   MATCH_GIT_TOKEN   — Personal access token for the Match repo (used as git password)
+  # ---------------------------------------------------------------------------
+  lane :beta do
+    # --- App Store Connect API key auth ---
+    asc_key_content = ENV["ASC_API_KEY"]
+    app_store_connect_api_key(
+      key_id:        ENV["ASC_KEY_ID"],
+      issuer_id:     ENV["ASC_ISSUER_ID"],
+      key_content:   asc_key_content,
+      is_key_content_base64: true,
+      in_house:      false
+    )
+
+    # --- Code signing via Match ---
+    # Match clones the certs repo using MATCH_GIT_TOKEN as the git password.
+    # The repo URL is read from fastlane/Matchfile (or MATCH_GIT_URL env var).
+    match(
+      type:               "appstore",
+      readonly:           true,
+      git_basic_authorization: Base64.strict_encode64("x-token:#{ENV['MATCH_GIT_TOKEN']}")
+    )
+
+    # --- Increment build number to the current timestamp (CI-safe) ---
+    increment_build_number(
+      build_number: Time.now.utc.strftime("%Y%m%d%H%M"),
+      xcodeproj:    "CathedralOSApp.xcodeproj"
+    )
+
+    # --- Build signed archive ---
+    gym(
+      project:          "CathedralOSApp.xcodeproj",
+      scheme:           "CathedralOSApp",
+      configuration:    "Release",
+      sdk:              "iphoneos",
+      export_method:    "app-store",
+      output_directory: "./build",
+      output_name:      "CathedralOSApp.ipa",
+      clean:            true
+    )
+
+    # --- Upload to TestFlight ---
+    upload_to_testflight(
+      skip_waiting_for_build_processing: true
+    )
+  end
+end

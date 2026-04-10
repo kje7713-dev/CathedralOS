@@ -1,0 +1,2 @@
+app_identifier(ENV["APP_IDENTIFIER"] || "com.cathedralos.CathedralOSApp")
+team_id(ENV["APPLE_TEAM_ID"])
