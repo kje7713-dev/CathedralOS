@@ -114,6 +114,74 @@ xcodebuild test \
 
 GitHub Actions runs build and unit tests on every pull request and push to `main`. Workflow: `.github/workflows/ios.yml`.
 
+## TestFlight CI/CD Setup
+
+A separate workflow (`.github/workflows/testflight.yml`) builds a signed archive and uploads it to TestFlight. It is triggered manually (`workflow_dispatch`) or automatically on pushes to `main`.
+
+### Required GitHub Secrets
+
+Add these in **Settings → Secrets and variables → Actions → Repository secrets**:
+
+| Secret name | Description |
+|---|---|
+| `ASC_KEY_ID` | App Store Connect API key ID (e.g. `ABC1234DEF`) |
+| `ASC_ISSUER_ID` | App Store Connect issuer UUID |
+| `ASC_API_KEY` | **Base64-encoded** contents of the `.p8` API key file |
+| `APPLE_TEAM_ID` | 10-character Apple Developer Team ID |
+| `APP_IDENTIFIER` | Bundle ID — defaults to `com.cathedralos.CathedralOSApp` |
+| `MATCH_GIT_URL` | HTTPS URL of your private Match certificates repository |
+| `MATCH_PASSWORD` | Passphrase used to encrypt/decrypt Match assets |
+| `MATCH_GIT_TOKEN` | GitHub Personal Access Token (or equivalent) with read access to the Match repo |
+
+**Encode the `.p8` key for `ASC_API_KEY`:**
+
+```bash
+base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'
+```
+
+### Required Apple-side prerequisites
+
+1. **App ID** — Create an explicit App ID for `com.cathedralos.CathedralOSApp` in [Apple Developer portal](https://developer.apple.com/account/resources/identifiers/list) with the capabilities your app uses.
+2. **App in App Store Connect** — Create the app record at [appstoreconnect.apple.com](https://appstoreconnect.apple.com) with the same bundle ID.
+3. **App Store Connect API key** — Create an API key under **Users and Access → Keys** with the **App Manager** (or **Developer**) role. Download the `.p8` file — it can only be downloaded once.
+4. **Match certificates repository** — Create a private GitHub repository to store encrypted signing assets (e.g. `github.com/your-org/ios-certificates`). Set `MATCH_GIT_URL` to its HTTPS URL.
+5. **Bootstrap Match** — Run once locally to generate and store certificates/profiles:
+
+   ```bash
+   export MATCH_GIT_URL="https://github.com/your-org/ios-certificates"
+   export MATCH_PASSWORD="your-passphrase"
+   fastlane match appstore
+   ```
+
+   This creates an App Store distribution certificate + provisioning profile in the Match repo.
+
+### First-time setup runbook
+
+1. Complete all Apple-side prerequisites above.
+2. Add every secret listed in the table to the GitHub repository.
+3. Go to **Actions → TestFlight Deploy → Run workflow** and select the `main` branch.
+4. Watch the run. If it fails, the `fastlane-logs` artifact is uploaded automatically and contains the full Fastlane output.
+
+### Manually triggering a TestFlight upload
+
+```
+GitHub UI:  Actions → TestFlight Deploy → Run workflow → Run workflow
+gh CLI:     gh workflow run testflight.yml --ref main
+```
+
+### Signing behaviour
+
+The workflow uses [Match](https://docs.fastlane.tools/actions/match/) in `readonly` mode — it downloads existing certificates and profiles from your Match repo; it does **not** generate or overwrite anything during CI. This keeps CI deterministic and non-destructive.
+
+### Bundle identifier
+
+The bundle ID is `com.cathedralos.CathedralOSApp` (set in `CathedralOSApp.xcodeproj`). To change it:
+
+1. Update `PRODUCT_BUNDLE_IDENTIFIER` in the Xcode project (target **Build Settings**).
+2. Update the App ID in Apple Developer portal.
+3. Re-run `fastlane match appstore` locally to generate matching provisioning profiles.
+4. Update the `APP_IDENTIFIER` GitHub Secret.
+
 ## Roadmap
 
 - Multiple Cathedral profiles

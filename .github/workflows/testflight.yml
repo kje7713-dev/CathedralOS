@@ -1,0 +1,60 @@
+name: TestFlight Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+
+permissions:
+  contents: read
+
+jobs:
+  testflight:
+    name: Archive & Upload to TestFlight
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # Ruby version is pinned so gem installs are reproducible
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: false
+
+      - name: Install Fastlane
+        run: gem install fastlane --no-document
+
+      - name: Archive and Upload to TestFlight
+        env:
+          ASC_KEY_ID:        ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID:     ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY:       ${{ secrets.ASC_API_KEY }}
+          APPLE_TEAM_ID:     ${{ secrets.APPLE_TEAM_ID }}
+          APP_IDENTIFIER:    ${{ secrets.APP_IDENTIFIER }}
+          MATCH_GIT_URL:     ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD:    ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_TOKEN:   ${{ secrets.MATCH_GIT_TOKEN }}
+      # Disable Xcode's automatic signing so Match controls the profile
+          MATCH_XCCONFIG_SIGNING: "1"
+        run: |
+          set -o pipefail
+          fastlane beta 2>&1 | tee fastlane_output.txt
+
+      - name: Upload Fastlane logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastlane-logs
+          path: |
+            fastlane_output.txt
+            fastlane/report.xml
+          retention-days: 7
