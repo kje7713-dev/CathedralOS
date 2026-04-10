@@ -33,16 +33,6 @@ jobs:
       - name: Install Fastlane
         run: gem install fastlane --no-document
 
-      # Decode the base64 App Store Connect API key to a file Fastlane can read.
-      # Fastlane also accepts the raw base64 string directly via the
-      # app_store_connect_api_key action (is_key_content_base64: true), so no
-      # disk file is strictly required — but having it available aids debugging.
-      - name: Write ASC API key
-        run: |
-          echo "${{ secrets.ASC_API_KEY }}" | base64 --decode > /tmp/asc_api_key.p8
-        env:
-          ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
-
       - name: Archive and Upload to TestFlight
         env:
           ASC_KEY_ID:        ${{ secrets.ASC_KEY_ID }}
@@ -53,7 +43,7 @@ jobs:
           MATCH_GIT_URL:     ${{ secrets.MATCH_GIT_URL }}
           MATCH_PASSWORD:    ${{ secrets.MATCH_PASSWORD }}
           MATCH_GIT_TOKEN:   ${{ secrets.MATCH_GIT_TOKEN }}
-          # Disable Xcode's automatic signing so Match controls the profile
+      # Disable Xcode's automatic signing so Match controls the profile
           MATCH_XCCONFIG_SIGNING: "1"
         run: |
           set -o pipefail
