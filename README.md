@@ -128,7 +128,7 @@ Add these in **Settings → Secrets and variables → Actions → Repository sec
 | `ASC_ISSUER_ID` | App Store Connect issuer UUID |
 | `ASC_API_KEY` | **Base64-encoded** contents of the `.p8` API key file |
 | `APPLE_TEAM_ID` | 10-character Apple Developer Team ID |
-| `APP_IDENTIFIER` | Bundle ID — defaults to `com.cathedralos.CathedralOSApp` |
+| `APP_IDENTIFIER` | Bundle ID — defaults to `com.savagesbydesign.CathedralOS` |
 | `MATCH_GIT_URL` | HTTPS URL of your private Match certificates repository |
 | `MATCH_PASSWORD` | Passphrase used to encrypt/decrypt Match assets |
 | `MATCH_GIT_TOKEN` | GitHub Personal Access Token (or equivalent) with read access to the Match repo |
@@ -141,7 +141,7 @@ base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'
 
 ### Required Apple-side prerequisites
 
-1. **App ID** — Create an explicit App ID for `com.cathedralos.CathedralOSApp` in [Apple Developer portal](https://developer.apple.com/account/resources/identifiers/list) with the capabilities your app uses.
+1. **App ID** — Create an explicit App ID for `com.savagesbydesign.CathedralOS` in [Apple Developer portal](https://developer.apple.com/account/resources/identifiers/list) with the capabilities your app uses.
 2. **App in App Store Connect** — Create the app record at [appstoreconnect.apple.com](https://appstoreconnect.apple.com) with the same bundle ID.
 3. **App Store Connect API key** — Create an API key under **Users and Access → Keys** with the **App Manager** (or **Developer**) role. Download the `.p8` file — it can only be downloaded once.
 4. **Match certificates repository** — Create a private GitHub repository to store encrypted signing assets (e.g. `github.com/your-org/ios-certificates`). Set `MATCH_GIT_URL` to its HTTPS URL.
@@ -175,7 +175,7 @@ The workflow uses [Match](https://docs.fastlane.tools/actions/match/) in `readon
 
 ### Bundle identifier
 
-The bundle ID is `com.cathedralos.CathedralOSApp` (set in `CathedralOSApp.xcodeproj`). To change it:
+The bundle ID is `com.savagesbydesign.CathedralOS` (set in `CathedralOSApp.xcodeproj`). To change it:
 
 1. Update `PRODUCT_BUNDLE_IDENTIFIER` in the Xcode project (target **Build Settings**).
 2. Update the App ID in Apple Developer portal.

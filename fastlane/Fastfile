@@ -9,7 +9,7 @@ platform :ios do
   #   ASC_ISSUER_ID     — App Store Connect issuer ID
   #   ASC_API_KEY       — Base64-encoded .p8 private key contents
   #   APPLE_TEAM_ID     — 10-character Apple Developer Team ID
-  #   APP_IDENTIFIER    — Bundle ID, e.g. com.cathedralos.CathedralOSApp
+  #   APP_IDENTIFIER    — Bundle ID, e.g. com.savagesbydesign.CathedralOS
   #   MATCH_GIT_URL     — HTTPS URL of the private Match certificates repo
   #   MATCH_PASSWORD    — Passphrase used to encrypt Match assets
   #   MATCH_GIT_TOKEN   — Personal access token for the Match repo (used as git password)

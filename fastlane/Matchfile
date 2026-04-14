@@ -1,6 +1,6 @@
 git_url(ENV["MATCH_GIT_URL"])
 storage_mode("git")
 type("appstore")
-app_identifier(ENV["APP_IDENTIFIER"] || "com.cathedralos.CathedralOSApp")
+app_identifier(ENV["APP_IDENTIFIER"] || "com.savagesbydesign.CathedralOS")
 team_id(ENV["APPLE_TEAM_ID"])
 readonly(true)
