@@ -1,0 +1,60 @@
+name: Bootstrap Signing
+
+# One-time manual workflow to create missing App Store distribution
+# certificates and provisioning profiles in the private Match repo.
+# Run this before your first TestFlight deploy whenever the Match repo
+# is empty or the distribution cert is missing.
+#
+# MATCH_GIT_TOKEN must have **write** access to the Match certificates
+# repo for this workflow. Normal TestFlight deploys only need read access.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: Bootstrap Match Signing Assets
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: false
+
+      - name: Install Fastlane
+        run: gem install fastlane --no-document
+
+      - name: Bootstrap signing assets
+        env:
+          ASC_KEY_ID:      ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID:   ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY:     ${{ secrets.ASC_API_KEY }}
+          APPLE_TEAM_ID:   ${{ secrets.APPLE_TEAM_ID }}
+          APP_IDENTIFIER:  ${{ secrets.APP_IDENTIFIER }}
+          MATCH_GIT_URL:   ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD:  ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_TOKEN: ${{ secrets.MATCH_GIT_TOKEN }}
+        run: |
+          set -o pipefail
+          fastlane bootstrap_signing 2>&1 | tee fastlane_bootstrap_output.txt
+
+      - name: Upload Fastlane logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastlane-bootstrap-logs
+          path: |
+            fastlane_bootstrap_output.txt
+            fastlane/report.xml
+          retention-days: 7

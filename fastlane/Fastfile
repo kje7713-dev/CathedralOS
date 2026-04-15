@@ -1,33 +1,57 @@
 default_platform(:ios)
 
+# ---------------------------------------------------------------------------
+# Shared helper: verify all required env vars are present and that the bundle
+# ID stored in APP_IDENTIFIER matches the expected value.
+# ---------------------------------------------------------------------------
+EXPECTED_APP_IDENTIFIER = "com.savagesbydesign.CathedralOS".freeze
+
+def preflight_checks(required_vars)
+  missing = required_vars.select { |v| ENV[v].to_s.strip.empty? }
+  unless missing.empty?
+    UI.user_error!("Missing required secret(s): #{missing.join(', ')}. " \
+                   "Add them under Settings → Secrets and variables → Actions.")
+  end
+
+  app_id = ENV["APP_IDENTIFIER"].to_s.strip
+  unless app_id.empty? || app_id == EXPECTED_APP_IDENTIFIER
+    UI.user_error!("APP_IDENTIFIER is '#{app_id}' but must be " \
+                   "'#{EXPECTED_APP_IDENTIFIER}'. " \
+                   "Update the secret to match the Xcode project bundle ID.")
+  end
+end
+
 platform :ios do
   # ---------------------------------------------------------------------------
-  # beta — build a signed archive and upload to TestFlight
+  # beta — build a signed archive and upload to TestFlight (readonly signing)
   # ---------------------------------------------------------------------------
   # Required environment variables (set as GitHub Secrets):
   #   ASC_KEY_ID        — App Store Connect API key ID
   #   ASC_ISSUER_ID     — App Store Connect issuer ID
   #   ASC_API_KEY       — Base64-encoded .p8 private key contents
   #   APPLE_TEAM_ID     — 10-character Apple Developer Team ID
-  #   APP_IDENTIFIER    — Bundle ID, e.g. com.savagesbydesign.CathedralOS
+  #   APP_IDENTIFIER    — Bundle ID: com.savagesbydesign.CathedralOS
   #   MATCH_GIT_URL     — HTTPS URL of the private Match certificates repo
   #   MATCH_PASSWORD    — Passphrase used to encrypt Match assets
-  #   MATCH_GIT_TOKEN   — Personal access token for the Match repo (used as git password)
+  #   MATCH_GIT_TOKEN   — Personal access token for the Match repo (read access)
   # ---------------------------------------------------------------------------
   lane :beta do
+    preflight_checks(%w[
+      ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY
+      APPLE_TEAM_ID APP_IDENTIFIER
+      MATCH_GIT_URL MATCH_PASSWORD MATCH_GIT_TOKEN
+    ])
+
     # --- App Store Connect API key auth ---
-    asc_key_content = ENV["ASC_API_KEY"]
     app_store_connect_api_key(
       key_id:        ENV["ASC_KEY_ID"],
       issuer_id:     ENV["ASC_ISSUER_ID"],
-      key_content:   asc_key_content,
+      key_content:   ENV["ASC_API_KEY"],
       is_key_content_base64: true,
       in_house:      false
     )
 
-    # --- Code signing via Match ---
-    # Match clones the certs repo using MATCH_GIT_TOKEN as the git password.
-    # The repo URL is read from fastlane/Matchfile (or MATCH_GIT_URL env var).
+    # --- Code signing via Match (readonly — never overwrites certs/profiles) ---
     match(
       type:               "appstore",
       readonly:           true,
@@ -56,5 +80,50 @@ platform :ios do
     upload_to_testflight(
       skip_waiting_for_build_processing: true
     )
+  end
+
+  # ---------------------------------------------------------------------------
+  # bootstrap_signing — one-time lane to create missing distribution certs and
+  # provisioning profiles in the Match repo, entirely from CI.
+  #
+  # Run via GitHub Actions → Bootstrap Signing → Run workflow.
+  # MATCH_GIT_TOKEN must have *write* access to the certs repo for this lane.
+  # After a successful bootstrap, normal `beta` runs use readonly mode.
+  # ---------------------------------------------------------------------------
+  # Required environment variables (same as beta, but MATCH_GIT_TOKEN needs
+  # write access to the Match certificates repository):
+  #   ASC_KEY_ID  ASC_ISSUER_ID  ASC_API_KEY
+  #   APPLE_TEAM_ID  APP_IDENTIFIER
+  #   MATCH_GIT_URL  MATCH_PASSWORD  MATCH_GIT_TOKEN (write access)
+  # ---------------------------------------------------------------------------
+  lane :bootstrap_signing do
+    preflight_checks(%w[
+      ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY
+      APPLE_TEAM_ID APP_IDENTIFIER
+      MATCH_GIT_URL MATCH_PASSWORD MATCH_GIT_TOKEN
+    ])
+
+    # --- App Store Connect API key auth ---
+    app_store_connect_api_key(
+      key_id:        ENV["ASC_KEY_ID"],
+      issuer_id:     ENV["ASC_ISSUER_ID"],
+      key_content:   ENV["ASC_API_KEY"],
+      is_key_content_base64: true,
+      in_house:      false
+    )
+
+    UI.message("🔑 Bootstrapping Match signing assets (readonly: false) …")
+    UI.message("   App identifier : #{ENV['APP_IDENTIFIER']}")
+    UI.message("   Match repo     : #{ENV['MATCH_GIT_URL']}")
+
+    # --- Create (or refresh) distribution cert + provisioning profile ---
+    # readonly: false allows Match to generate and push new assets to the repo.
+    match(
+      type:               "appstore",
+      readonly:           false,
+      git_basic_authorization: Base64.strict_encode64("x-token:#{ENV['MATCH_GIT_TOKEN']}")
+    )
+
+    UI.success("✅ Bootstrap complete. Run the TestFlight Deploy workflow next.")
   end
 end
