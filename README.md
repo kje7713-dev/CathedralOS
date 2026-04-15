@@ -131,7 +131,7 @@ Add these in **Settings → Secrets and variables → Actions → Repository sec
 | `APP_IDENTIFIER` | Bundle ID — defaults to `com.savagesbydesign.CathedralOS` |
 | `MATCH_GIT_URL` | HTTPS URL of your private Match certificates repository |
 | `MATCH_PASSWORD` | Passphrase used to encrypt/decrypt Match assets |
-| `MATCH_GIT_TOKEN` | GitHub Personal Access Token (or equivalent) with read access to the Match repo |
+| `MATCH_GIT_TOKEN` | GitHub Personal Access Token (or equivalent) with read access to the Match repo; **write access required during bootstrap** |
 
 **Encode the `.p8` key for `ASC_API_KEY`:**
 
@@ -145,22 +145,16 @@ base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n'
 2. **App in App Store Connect** — Create the app record at [appstoreconnect.apple.com](https://appstoreconnect.apple.com) with the same bundle ID.
 3. **App Store Connect API key** — Create an API key under **Users and Access → Keys** with the **App Manager** (or **Developer**) role. Download the `.p8` file — it can only be downloaded once.
 4. **Match certificates repository** — Create a private GitHub repository to store encrypted signing assets (e.g. `github.com/your-org/ios-certificates`). Set `MATCH_GIT_URL` to its HTTPS URL.
-5. **Bootstrap Match** — Run once locally to generate and store certificates/profiles:
-
-   ```bash
-   export MATCH_GIT_URL="https://github.com/your-org/ios-certificates"
-   export MATCH_PASSWORD="your-passphrase"
-   fastlane match appstore
-   ```
-
-   This creates an App Store distribution certificate + provisioning profile in the Match repo.
+5. **Bootstrap Match** — Run once to generate and store certificates/profiles. No local Mac needed — use the **Bootstrap Signing** GitHub Actions workflow (see [Bootstrap signing from GitHub Actions](#bootstrap-signing-from-github-actions-no-local-mac-required) below).
 
 ### First-time setup runbook
 
 1. Complete all Apple-side prerequisites above.
 2. Add every secret listed in the table to the GitHub repository.
-3. Go to **Actions → TestFlight Deploy → Run workflow** and select the `main` branch.
-4. Watch the run. If it fails, the `fastlane-logs` artifact is uploaded automatically and contains the full Fastlane output.
+3. Temporarily ensure `MATCH_GIT_TOKEN` has **write** access to the Match certificates repo.
+4. Go to **Actions → Bootstrap Signing → Run workflow** and select the `main` branch to create the distribution cert and provisioning profile.
+5. After bootstrap succeeds, go to **Actions → TestFlight Deploy → Run workflow** to verify the full build and upload.
+6. (Optional) Downgrade `MATCH_GIT_TOKEN` to read-only access — normal TestFlight runs do not need write access.
 
 ### Manually triggering a TestFlight upload
 
@@ -179,8 +173,30 @@ The bundle ID is `com.savagesbydesign.CathedralOS` (set in `CathedralOSApp.xcode
 
 1. Update `PRODUCT_BUNDLE_IDENTIFIER` in the Xcode project (target **Build Settings**).
 2. Update the App ID in Apple Developer portal.
-3. Re-run `fastlane match appstore` locally to generate matching provisioning profiles.
+3. Re-run the **Bootstrap Signing** workflow (or `fastlane bootstrap_signing` locally) to generate matching provisioning profiles.
 4. Update the `APP_IDENTIFIER` GitHub Secret.
+
+## Bootstrap signing from GitHub Actions (no local Mac required)
+
+This is the recommended path when you only have a phone or no macOS machine available. The **Bootstrap Signing** workflow (`bootstrap-signing.yml`) creates the App Store distribution certificate and provisioning profile in the private Match certificates repository entirely from CI.
+
+### When to run Bootstrap Signing
+
+- First time setting up the repository (Match certs repo is empty)
+- After rotating or revoking the distribution certificate
+- Whenever the `beta` lane fails with `"No code signing identity found"`
+
+### Steps
+
+1. **Ensure all secrets are set** in **Settings → Secrets and variables → Actions → Repository secrets** (see the table above). Pay attention to `APP_IDENTIFIER` — it must be `com.savagesbydesign.CathedralOS`.
+
+2. **Give `MATCH_GIT_TOKEN` write access** to the private Match certificates repository (`CathedralOS-certs` or equivalent). This is only needed during bootstrap; you can downgrade to read-only after.
+
+3. **Run Bootstrap Signing**: go to **Actions → Bootstrap Signing → Run workflow** and click **Run workflow** on the `main` branch. The workflow runs `fastlane bootstrap_signing`, which calls Match with `readonly: false` to generate and push the certificate and profile.
+
+4. **After success, run TestFlight Deploy**: go to **Actions → TestFlight Deploy → Run workflow**. The `beta` lane uses `readonly: true`, so it will download the assets created in step 3 without modifying anything.
+
+> **Security note:** Once bootstrap succeeds you can revoke write access on `MATCH_GIT_TOKEN` or rotate it to a read-only token. Normal TestFlight deploys never need write access to the Match repo.
 
 ## Roadmap
 
