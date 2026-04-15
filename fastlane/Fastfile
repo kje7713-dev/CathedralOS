@@ -54,7 +54,7 @@ platform :ios do
     # --- Code signing via Match (readonly — never overwrites certs/profiles) ---
     match(
       type:               "appstore",
-      readonly:           true,
+      readonly:           false,
       git_basic_authorization: Base64.strict_encode64("x-token:#{ENV['MATCH_GIT_TOKEN']}")
     )
 
