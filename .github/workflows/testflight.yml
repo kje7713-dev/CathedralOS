@@ -43,8 +43,6 @@ jobs:
           MATCH_GIT_URL:     ${{ secrets.MATCH_GIT_URL }}
           MATCH_PASSWORD:    ${{ secrets.MATCH_PASSWORD }}
           MATCH_GIT_TOKEN:   ${{ secrets.MATCH_GIT_TOKEN }}
-      # Disable Xcode's automatic signing so Match controls the profile
-          MATCH_XCCONFIG_SIGNING: "1"
         run: |
           set -o pipefail
           fastlane beta 2>&1 | tee fastlane_output.txt
