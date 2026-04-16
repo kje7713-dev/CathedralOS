@@ -6,6 +6,7 @@ struct CathedralOSApp: App {
     var body: some Scene {
         WindowGroup {
             CathedralView()
+                .tint(CathedralTheme.Colors.accent)
         }
         .modelContainer(for: [Role.self, Domain.self, Goal.self, Constraint.self, CathedralProfile.self, Secret.self])
     }
