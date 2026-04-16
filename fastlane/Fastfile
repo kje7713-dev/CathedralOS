@@ -23,7 +23,7 @@ end
 
 platform :ios do
   # ---------------------------------------------------------------------------
-  # beta — build a signed archive and upload to TestFlight (readonly signing)
+  # beta — build a signed archive and upload to TestFlight
   # ---------------------------------------------------------------------------
   # Required environment variables (set as GitHub Secrets):
   #   ASC_KEY_ID        — App Store Connect API key ID
@@ -34,6 +34,8 @@ platform :ios do
   #   MATCH_GIT_URL     — HTTPS URL of the private Match certificates repo
   #   MATCH_PASSWORD    — Passphrase used to encrypt Match assets
   #   MATCH_GIT_TOKEN   — Personal access token for the Match repo (read access)
+  #   MATCH_READONLY    — (optional) Set to "false" to allow Match to refresh
+  #                       certs/profiles; defaults to "true" (readonly)
   # ---------------------------------------------------------------------------
   lane :beta do
     preflight_checks(%w[
@@ -42,20 +44,36 @@ platform :ios do
       MATCH_GIT_URL MATCH_PASSWORD MATCH_GIT_TOKEN
     ])
 
+    ci_environment = is_ci
+
     # --- App Store Connect API key auth ---
     app_store_connect_api_key(
-      key_id:        ENV["ASC_KEY_ID"],
-      issuer_id:     ENV["ASC_ISSUER_ID"],
-      key_content:   ENV["ASC_API_KEY"],
+      key_id:                ENV["ASC_KEY_ID"],
+      issuer_id:             ENV["ASC_ISSUER_ID"],
+      key_content:           ENV["ASC_API_KEY"],
       is_key_content_base64: true,
-      in_house:      false
+      in_house:              false
     )
 
-    # --- Code signing via Match (readonly — never overwrites certs/profiles) ---
+    # --- Create a dedicated CI keychain for code signing ---
+    create_keychain(
+      name:             "ci_keychain",
+      password:         ENV["MATCH_PASSWORD"],
+      default_keychain: true,
+      unlock:           true,
+      timeout:          3600,
+      lock_when_sleeps: false
+    )
+
+    # --- Code signing via Match ---
+    # readonly mode defaults to true; set MATCH_READONLY=false to refresh assets
+    readonly_mode = (ENV["MATCH_READONLY"] || "true").downcase == "true"
     match(
-      type:               "appstore",
-      readonly:           false,
-      git_basic_authorization: Base64.strict_encode64("x-token:#{ENV['MATCH_GIT_TOKEN']}")
+      type:                    "appstore",
+      readonly:                readonly_mode,
+      keychain_name:           "ci_keychain",
+      keychain_password:       ENV["MATCH_PASSWORD"],
+      git_basic_authorization: Base64.strict_encode64("x-access-token:#{ENV['MATCH_GIT_TOKEN']}")
     )
 
     # --- Increment build number to the current timestamp (CI-safe) ---
@@ -71,19 +89,29 @@ platform :ios do
       configuration:    "Release",
       sdk:              "iphoneos",
       export_method:    "app-store",
+      export_options:   {
+        provisioningProfiles: {
+          ENV["APP_IDENTIFIER"] => "match AppStore #{ENV['APP_IDENTIFIER']}"
+        }
+      },
       output_directory: "./build",
       output_name:      "CathedralOSApp.ipa",
       clean:            true,
-      xcargs:           "DEVELOPMENT_TEAM=#{ENV['APPLE_TEAM_ID']} " \
-                        "CODE_SIGN_STYLE=Manual " \
-                        "CODE_SIGN_IDENTITY='Apple Distribution' " \
-                        "PROVISIONING_PROFILE_SPECIFIER='match AppStore #{ENV['APP_IDENTIFIER']}'"
+      export_xcargs:    "-allowProvisioningUpdates"
     )
 
     # --- Upload to TestFlight ---
     upload_to_testflight(
       skip_waiting_for_build_processing: true
     )
+  ensure
+    # Cleanup: remove the CI keychain so it doesn't persist between runs.
+    # Guard with rescue in case create_keychain was never reached.
+    begin
+      delete_keychain(name: "ci_keychain") if ci_environment
+    rescue => e
+      UI.important("⚠️  Could not delete CI keychain: #{e.message}")
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -107,13 +135,25 @@ platform :ios do
       MATCH_GIT_URL MATCH_PASSWORD MATCH_GIT_TOKEN
     ])
 
+    ci_environment = is_ci
+
     # --- App Store Connect API key auth ---
     app_store_connect_api_key(
-      key_id:        ENV["ASC_KEY_ID"],
-      issuer_id:     ENV["ASC_ISSUER_ID"],
-      key_content:   ENV["ASC_API_KEY"],
+      key_id:                ENV["ASC_KEY_ID"],
+      issuer_id:             ENV["ASC_ISSUER_ID"],
+      key_content:           ENV["ASC_API_KEY"],
       is_key_content_base64: true,
-      in_house:      false
+      in_house:              false
+    )
+
+    # --- Create a dedicated CI keychain for code signing ---
+    create_keychain(
+      name:             "ci_keychain",
+      password:         ENV["MATCH_PASSWORD"],
+      default_keychain: true,
+      unlock:           true,
+      timeout:          3600,
+      lock_when_sleeps: false
     )
 
     UI.message("🔑 Bootstrapping Match signing assets (readonly: false) …")
@@ -123,11 +163,21 @@ platform :ios do
     # --- Create (or refresh) distribution cert + provisioning profile ---
     # readonly: false allows Match to generate and push new assets to the repo.
     match(
-      type:               "appstore",
-      readonly:           false,
-      git_basic_authorization: Base64.strict_encode64("x-token:#{ENV['MATCH_GIT_TOKEN']}")
+      type:                    "appstore",
+      readonly:                false,
+      keychain_name:           "ci_keychain",
+      keychain_password:       ENV["MATCH_PASSWORD"],
+      git_basic_authorization: Base64.strict_encode64("x-access-token:#{ENV['MATCH_GIT_TOKEN']}")
     )
 
     UI.success("✅ Bootstrap complete. Run the TestFlight Deploy workflow next.")
+  ensure
+    # Cleanup: remove the CI keychain so it doesn't persist between runs.
+    # Guard with rescue in case create_keychain was never reached.
+    begin
+      delete_keychain(name: "ci_keychain") if ci_environment
+    rescue => e
+      UI.important("⚠️  Could not delete CI keychain: #{e.message}")
+    end
   end
 end
