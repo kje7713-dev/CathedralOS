@@ -23,9 +23,11 @@ struct NewProfileFromTemplateView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
             }
         }
+        .tint(CathedralTheme.Colors.accent)
         .sheet(isPresented: $showNamePrompt) {
             namePromptSheet
         }
@@ -35,7 +37,9 @@ struct NewProfileFromTemplateView: View {
         NavigationStack {
             Form {
                 TextField("Profile Name", text: $profileName)
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
             }
+            .cathedralFormStyle()
             .navigationTitle("Name Your Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -48,6 +52,7 @@ struct NewProfileFromTemplateView: View {
                 }
             }
         }
+        .tint(CathedralTheme.Colors.accent)
     }
 
     private func createFromTemplate() {

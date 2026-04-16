@@ -68,17 +68,23 @@ struct CathedralView: View {
                 constraintsSection
                 compiledSection
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .navigationTitle("Cathedral")
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button { showSecretsVault = true } label: {
                         Image(systemName: "lock.fill")
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack {
+                    HStack(spacing: CathedralTheme.Spacing.md) {
                         Button { showAsk = true } label: {
-                            Image(systemName: "questionmark.circle")
+                            Image(systemName: "bubble.left.and.text.bubble.right")
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
                         }
                         profileMenu
                     }
@@ -94,6 +100,7 @@ struct CathedralView: View {
                 }
             }
         }
+        .tint(CathedralTheme.Colors.accent)
         .sheet(isPresented: $showSecretsVault) {
             SecretsVaultView()
         }
@@ -173,7 +180,9 @@ struct CathedralView: View {
             NavigationStack {
                 Form {
                     TextField("Profile Name", text: $newProfileName)
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
                 }
+                .cathedralFormStyle()
                 .navigationTitle("New Profile")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -197,7 +206,9 @@ struct CathedralView: View {
             NavigationStack {
                 Form {
                     TextField("Profile Name", text: $renameProfileName)
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
                 }
+                .cathedralFormStyle()
                 .navigationTitle("Rename Profile")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -245,11 +256,13 @@ struct CathedralView: View {
             Button("Delete Profile", role: .destructive) { showDeleteProfileAlert = true }
                 .disabled(profile == nil)
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: CathedralTheme.Spacing.xs) {
                 Text(profile?.name ?? "Select Profile")
-                    .fontWeight(.medium)
+                    .font(CathedralTheme.Typography.body(14, weight: .medium))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
                 Image(systemName: "chevron.down")
-                    .imageScale(.small)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
         }
     }
@@ -325,18 +338,20 @@ struct CathedralView: View {
     private var rolesSection: some View {
         Section {
             let sorted = (profile?.roles ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No roles added")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
             ForEach(sorted) { role in
-                HStack {
-                    Text(safeTitle(for: role))
-                    if role.isSensitive {
-                        Spacer()
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.secondary)
-                            .imageScale(.small)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { roleToEdit = role }
+                CathedralItemRow(
+                    title: safeTitle(for: role),
+                    isSensitive: role.isSensitive
+                ) { roleToEdit = role }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
                         deleteRole(role)
@@ -346,7 +361,8 @@ struct CathedralView: View {
                 }
             }
         } header: {
-            SectionHeader(title: "Roles") { showAddRole = true }
+            CathedralSectionHeader("Roles") { showAddRole = true }
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
 
@@ -355,18 +371,20 @@ struct CathedralView: View {
     private var domainsSection: some View {
         Section {
             let sorted = (profile?.domains ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No domains added")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
             ForEach(sorted) { domain in
-                HStack {
-                    Text(safeTitle(for: domain))
-                    if domain.isSensitive {
-                        Spacer()
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.secondary)
-                            .imageScale(.small)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { domainToEdit = domain }
+                CathedralItemRow(
+                    title: safeTitle(for: domain),
+                    isSensitive: domain.isSensitive
+                ) { domainToEdit = domain }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
                         deleteDomain(domain)
@@ -376,7 +394,8 @@ struct CathedralView: View {
                 }
             }
         } header: {
-            SectionHeader(title: "Domains") { showAddDomain = true }
+            CathedralSectionHeader("Domains") { showAddDomain = true }
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
 
@@ -385,18 +404,20 @@ struct CathedralView: View {
     private var seasonSection: some View {
         Section {
             let sorted = (profile?.seasons ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No seasons added")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
             ForEach(sorted) { season in
-                HStack {
-                    Text(safeTitle(for: season))
-                    if season.isSensitive {
-                        Spacer()
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.secondary)
-                            .imageScale(.small)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { seasonToEdit = season }
+                CathedralItemRow(
+                    title: safeTitle(for: season),
+                    isSensitive: season.isSensitive
+                ) { seasonToEdit = season }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
                         deleteSeason(season)
@@ -406,7 +427,8 @@ struct CathedralView: View {
                 }
             }
         } header: {
-            SectionHeader(title: "Season") { showAddSeason = true }
+            CathedralSectionHeader("Season") { showAddSeason = true }
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
 
@@ -415,18 +437,20 @@ struct CathedralView: View {
     private var resourcesSection: some View {
         Section {
             let sorted = (profile?.resources ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No resources added")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
             ForEach(sorted) { resource in
-                HStack {
-                    Text(safeTitle(for: resource))
-                    if resource.isSensitive {
-                        Spacer()
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.secondary)
-                            .imageScale(.small)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { resourceToEdit = resource }
+                CathedralItemRow(
+                    title: safeTitle(for: resource),
+                    isSensitive: resource.isSensitive
+                ) { resourceToEdit = resource }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
                         deleteResource(resource)
@@ -436,7 +460,8 @@ struct CathedralView: View {
                 }
             }
         } header: {
-            SectionHeader(title: "Resources") { showAddResource = true }
+            CathedralSectionHeader("Resources") { showAddResource = true }
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
 
@@ -445,18 +470,20 @@ struct CathedralView: View {
     private var preferencesSection: some View {
         Section {
             let sorted = (profile?.preferences ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No preferences added")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
             ForEach(sorted) { preference in
-                HStack {
-                    Text(safeTitle(for: preference))
-                    if preference.isSensitive {
-                        Spacer()
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.secondary)
-                            .imageScale(.small)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { preferenceToEdit = preference }
+                CathedralItemRow(
+                    title: safeTitle(for: preference),
+                    isSensitive: preference.isSensitive
+                ) { preferenceToEdit = preference }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
                         deletePreference(preference)
@@ -466,7 +493,8 @@ struct CathedralView: View {
                 }
             }
         } header: {
-            SectionHeader(title: "Preferences") { showAddPreference = true }
+            CathedralSectionHeader("Preferences") { showAddPreference = true }
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
 
@@ -475,18 +503,20 @@ struct CathedralView: View {
     private var failurePatternsSection: some View {
         Section {
             let sorted = (profile?.failurePatterns ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No failure patterns added")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
             ForEach(sorted) { failurePattern in
-                HStack {
-                    Text(safeTitle(for: failurePattern))
-                    if failurePattern.isSensitive {
-                        Spacer()
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.secondary)
-                            .imageScale(.small)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { failurePatternToEdit = failurePattern }
+                CathedralItemRow(
+                    title: safeTitle(for: failurePattern),
+                    isSensitive: failurePattern.isSensitive
+                ) { failurePatternToEdit = failurePattern }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
                         deleteFailurePattern(failurePattern)
@@ -496,7 +526,8 @@ struct CathedralView: View {
                 }
             }
         } header: {
-            SectionHeader(title: "Failure Patterns") { showAddFailurePattern = true }
+            CathedralSectionHeader("Failure Patterns") { showAddFailurePattern = true }
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
 
@@ -505,25 +536,21 @@ struct CathedralView: View {
     private var goalsSection: some View {
         Section {
             let sorted = (profile?.goals ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No goals added")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
             ForEach(sorted) { goal in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(safeTitle(for: goal))
-                        if let timeframe = goal.timeframe, !timeframe.isEmpty {
-                            Text(timeframe)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    if goal.isSensitive {
-                        Spacer()
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.secondary)
-                            .imageScale(.small)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { goalToEdit = goal }
+                CathedralItemRow(
+                    title: safeTitle(for: goal),
+                    subtitle: goal.timeframe,
+                    isSensitive: goal.isSensitive
+                ) { goalToEdit = goal }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
                         deleteGoal(goal)
@@ -533,7 +560,8 @@ struct CathedralView: View {
                 }
             }
         } header: {
-            SectionHeader(title: "Goals") { showAddGoal = true }
+            CathedralSectionHeader("Goals") { showAddGoal = true }
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
 
@@ -542,18 +570,20 @@ struct CathedralView: View {
     private var constraintsSection: some View {
         Section {
             let sorted = (profile?.constraints ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No constraints added")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
             ForEach(sorted) { constraint in
-                HStack {
-                    Text(safeTitle(for: constraint))
-                    if constraint.isSensitive {
-                        Spacer()
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.secondary)
-                            .imageScale(.small)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { constraintToEdit = constraint }
+                CathedralItemRow(
+                    title: safeTitle(for: constraint),
+                    isSensitive: constraint.isSensitive
+                ) { constraintToEdit = constraint }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
                         deleteConstraint(constraint)
@@ -563,7 +593,8 @@ struct CathedralView: View {
                 }
             }
         } header: {
-            SectionHeader(title: "Constraints") { showAddConstraint = true }
+            CathedralSectionHeader("Constraints") { showAddConstraint = true }
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
 
@@ -571,58 +602,73 @@ struct CathedralView: View {
 
     private var compiledSection: some View {
         Section {
-            Picker("Format", selection: $exportModeRaw) {
-                ForEach(ExportMode.allCases) { mode in
-                    Text(mode.title).tag(mode.rawValue)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            ScrollView {
-                Text(compiledOutput.isEmpty
-                     ? "(no profile selected)"
-                     : compiledOutput)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(compiledOutput.isEmpty ? .secondary : .primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
-            }
-            .frame(minHeight: 80, maxHeight: 240)
-
-            HStack(spacing: 16) {
-                Button {
-                    UIPasteboard.general.string = compiledOutput
-                    showCopiedConfirmation = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        showCopiedConfirmation = false
+            VStack(spacing: CathedralTheme.Spacing.md) {
+                // Format picker
+                Picker("Format", selection: $exportModeRaw) {
+                    ForEach(ExportMode.allCases) { mode in
+                        Text(mode.title).tag(mode.rawValue)
                     }
-                } label: {
-                    Label(
-                        showCopiedConfirmation ? "Copied!" : "Copy",
-                        systemImage: showCopiedConfirmation
-                            ? "checkmark.circle.fill"
-                            : "doc.on.doc"
-                    )
                 }
-                .disabled(compiledOutput.isEmpty)
+                .pickerStyle(.segmented)
 
-                Spacer()
-
-                Button {
-                    showShareSheet = true
-                } label: {
-                    Label("Share", systemImage: "square.and.arrow.up")
+                // Output preview
+                ScrollView {
+                    Text(compiledOutput.isEmpty
+                         ? "(no profile selected)"
+                         : compiledOutput)
+                        .font(CathedralTheme.Typography.mono())
+                        .foregroundStyle(compiledOutput.isEmpty
+                            ? CathedralTheme.Colors.tertiaryText
+                            : CathedralTheme.Colors.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .disabled(compiledOutput.isEmpty)
+                .frame(minHeight: 72, maxHeight: 200)
+                .padding(CathedralTheme.Spacing.md)
+                .background(CathedralTheme.Colors.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm)
+                        .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+
+                // CTAs
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    CathedralPrimaryButton(
+                        showCopiedConfirmation ? "Copied" : "Copy",
+                        systemImage: showCopiedConfirmation ? "checkmark" : "doc.on.doc"
+                    ) {
+                        UIPasteboard.general.string = compiledOutput
+                        showCopiedConfirmation = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            showCopiedConfirmation = false
+                        }
+                    }
+                    .disabled(compiledOutput.isEmpty)
+
+                    CathedralSecondaryButton("Share", systemImage: "square.and.arrow.up") {
+                        showShareSheet = true
+                    }
+                    .disabled(compiledOutput.isEmpty)
+                }
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, CathedralTheme.Spacing.sm)
+            .listRowBackground(CathedralTheme.Colors.background)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(
+                top: 0,
+                leading: CathedralTheme.Spacing.base,
+                bottom: CathedralTheme.Spacing.xl,
+                trailing: CathedralTheme.Spacing.base
+            ))
         } header: {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Export")
+                CathedralSectionHeader("Export")
                 Text("Machine (JSON) / Human (Instructions)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(CathedralTheme.Typography.caption(11))
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                    .tracking(0.2)
             }
+            .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
 
@@ -669,25 +715,8 @@ struct CathedralView: View {
     }
 }
 
-// MARK: - Section Header
-
-private struct SectionHeader: View {
-    let title: String
-    let onAdd: () -> Void
-
-    var body: some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Button(action: onAdd) {
-                Image(systemName: "plus.circle.fill")
-                    .imageScale(.large)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.blue)
-        }
-    }
-}
+// MARK: - Section Header (legacy alias — replaced by CathedralSectionHeader)
+// All sections now use CathedralSectionHeader directly.
 
 // MARK: - Goal Form
 
@@ -727,6 +756,7 @@ struct GoalFormView: View {
                     }
                 }
             }
+            .cathedralFormStyle()
             .navigationTitle(isEditing ? "Edit Goal" : "Add Goal")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -810,6 +840,7 @@ struct ConstraintFormView: View {
                     }
                 }
             }
+            .cathedralFormStyle()
             .navigationTitle(isEditing ? "Edit Constraint" : "Add Constraint")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -889,6 +920,7 @@ struct RoleFormView: View {
                     }
                 }
             }
+            .cathedralFormStyle()
             .navigationTitle(isEditing ? "Edit Role" : "Add Role")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -968,6 +1000,7 @@ struct DomainFormView: View {
                     }
                 }
             }
+            .cathedralFormStyle()
             .navigationTitle(isEditing ? "Edit Domain" : "Add Domain")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1047,6 +1080,7 @@ struct SeasonFormView: View {
                     }
                 }
             }
+            .cathedralFormStyle()
             .navigationTitle(isEditing ? "Edit Season" : "Add Season")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1126,6 +1160,7 @@ struct ResourceFormView: View {
                     }
                 }
             }
+            .cathedralFormStyle()
             .navigationTitle(isEditing ? "Edit Resource" : "Add Resource")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1205,6 +1240,7 @@ struct PreferenceFormView: View {
                     }
                 }
             }
+            .cathedralFormStyle()
             .navigationTitle(isEditing ? "Edit Preference" : "Add Preference")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1284,6 +1320,7 @@ struct FailurePatternFormView: View {
                     }
                 }
             }
+            .cathedralFormStyle()
             .navigationTitle(isEditing ? "Edit Failure Pattern" : "Add Failure Pattern")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1343,6 +1380,7 @@ struct ItemFormView: View {
             Form {
                 TextField("Title", text: $title)
             }
+            .cathedralFormStyle()
             .navigationTitle(screenTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -13,19 +13,33 @@ struct SecretsVaultView: View {
         NavigationStack {
             List {
                 if secrets.isEmpty {
-                    Text("No secrets yet.")
-                        .foregroundStyle(.secondary)
+                    CathedralEmptyState(label: "No secrets stored yet.")
+                        .listRowBackground(CathedralTheme.Colors.background)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
                 } else {
                     ForEach(secrets) { secret in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(secret.name)
-                                .fontWeight(.medium)
-                            Text(secret.alias)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        HStack(spacing: CathedralTheme.Spacing.sm) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(secret.name)
+                                    .font(CathedralTheme.Typography.body(15))
+                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                Text(secret.alias)
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                            }
+                            Spacer()
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                         }
+                        .padding(.vertical, CathedralTheme.Spacing.sm)
+                        .padding(.horizontal, CathedralTheme.Spacing.base)
                         .contentShape(Rectangle())
                         .onTapGesture { secretToEdit = secret }
+                        .listRowBackground(CathedralTheme.Colors.background)
+                        .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                        .listRowInsets(EdgeInsets())
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
                                 deleteSecret(secret)
@@ -36,19 +50,25 @@ struct SecretsVaultView: View {
                     }
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .navigationTitle("Secrets Vault")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showAddSecret = true } label: {
                         Image(systemName: "plus")
+                            .foregroundStyle(CathedralTheme.Colors.accent)
                     }
                 }
             }
         }
+        .tint(CathedralTheme.Colors.accent)
         .sheet(isPresented: $showAddSecret) {
             SecretFormView(secret: nil)
         }
@@ -91,8 +111,10 @@ struct SecretFormView: View {
                 } footer: {
                     Text("The value is stored in Keychain and never exported.")
                         .font(.caption)
+                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                 }
             }
+            .cathedralFormStyle()
             .navigationTitle(isEditing ? "Edit Secret" : "Add Secret")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -112,6 +134,7 @@ struct SecretFormView: View {
                 }
             }
         }
+        .tint(CathedralTheme.Colors.accent)
     }
 
     private func save() {
