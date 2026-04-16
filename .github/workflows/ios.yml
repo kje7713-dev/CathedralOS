@@ -12,7 +12,7 @@ permissions:
 jobs:
   build-and-test:
     name: Build and Test
-    runs-on: macos-latest
+    runs-on: macos-26
 
     steps:
       - name: Checkout
