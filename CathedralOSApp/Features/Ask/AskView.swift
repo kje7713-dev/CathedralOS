@@ -27,52 +27,80 @@ struct AskView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Export Mode") {
-                    Picker("Format", selection: $exportModeRaw) {
-                        ForEach(ExportMode.allCases) { mode in
-                            Text(mode.title).tag(mode.rawValue)
+            ScrollView {
+                VStack(spacing: CathedralTheme.Spacing.xl) {
+
+                    // Format picker
+                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                        Text("CONTEXT FORMAT")
+                            .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                            .tracking(1.5)
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+
+                        Picker("Format", selection: $exportModeRaw) {
+                            ForEach(ExportMode.allCases) { mode in
+                                Text(mode.title).tag(mode.rawValue)
+                            }
                         }
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
-                }
 
-                Section("Your Question") {
-                    TextEditor(text: $question)
-                        .frame(minHeight: 120)
-                }
+                    // Question input
+                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                        Text("YOUR QUESTION")
+                            .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                            .tracking(1.5)
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
 
-                Section {
-                    Button {
-                        UIPasteboard.general.string = assembledOutput
-                        showCopiedConfirmation = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                            showCopiedConfirmation = false
-                        }
-                    } label: {
-                        Label(
-                            showCopiedConfirmation ? "Copied!" : "Copy Prompt Pack",
+                        TextEditor(text: $question)
+                            .font(CathedralTheme.Typography.body())
+                            .foregroundStyle(CathedralTheme.Colors.primaryText)
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 140)
+                            .padding(CathedralTheme.Spacing.md)
+                            .background(CathedralTheme.Colors.surface)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                                    .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+                    }
+
+                    // Actions
+                    VStack(spacing: CathedralTheme.Spacing.sm) {
+                        CathedralPrimaryButton(
+                            showCopiedConfirmation ? "Copied" : "Copy Prompt Pack",
                             systemImage: showCopiedConfirmation ? "checkmark" : "doc.on.doc"
-                        )
-                    }
-                    .disabled(isQuestionEmpty)
+                        ) {
+                            UIPasteboard.general.string = assembledOutput
+                            showCopiedConfirmation = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                showCopiedConfirmation = false
+                            }
+                        }
+                        .disabled(isQuestionEmpty)
 
-                    Button {
-                        showShareSheet = true
-                    } label: {
-                        Label("Share Prompt Pack", systemImage: "square.and.arrow.up")
+                        CathedralSecondaryButton("Share Prompt Pack", systemImage: "square.and.arrow.up") {
+                            showShareSheet = true
+                        }
+                        .disabled(isQuestionEmpty)
                     }
-                    .disabled(isQuestionEmpty)
                 }
+                .padding(.horizontal, CathedralTheme.Spacing.base)
+                .padding(.top, CathedralTheme.Spacing.xl)
+                .padding(.bottom, CathedralTheme.Spacing.xxl)
             }
+            .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .navigationTitle("Ask Pack")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
             }
         }
+        .tint(CathedralTheme.Colors.accent)
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [assembledOutput])
         }
