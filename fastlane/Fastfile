@@ -77,10 +77,17 @@ platform :ios do
     )
 
     # --- Increment build number to the current timestamp (CI-safe) ---
-    increment_build_number(
-      build_number: Time.now.utc.strftime("%Y%m%d%H%M%S"),
-      xcodeproj:    "CathedralOSApp.xcodeproj"
-    )
+    # Use agvtool directly (without -all) so it only updates CURRENT_PROJECT_VERSION
+    # in the .xcodeproj and does not scan for Info.plist files.  With
+    # GENERATE_INFOPLIST_FILE=YES there is no physical plist to update, and the
+    # agvtool -all flag produces a spurious "Cannot find …/YES" warning.
+    # Run from the project root (parent of the fastlane/ folder) where agvtool
+    # can locate CathedralOSApp.xcodeproj.
+    build_num = Time.now.utc.strftime("%Y%m%d%H%M%S")
+    project_root = File.expand_path("..", __dir__)
+    Dir.chdir(project_root) do
+      sh("agvtool", "new-version", build_num)
+    end
 
     # --- Build signed archive ---
     gym(
