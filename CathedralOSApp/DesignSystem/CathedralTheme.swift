@@ -63,8 +63,12 @@ enum CathedralTheme {
                 : UIColor.tertiaryLabel
         })
 
-        // Accent — restrained brass/gold, used sparingly
-        static let accent = Color(red: 0.80, green: 0.70, blue: 0.50)
+        // Accent — restrained brass/gold, used sparingly; adaptive for light/dark
+        static let accent = Color(UIColor { t in
+            t.userInterfaceStyle == .dark
+                ? UIColor(red: 0.80, green: 0.70, blue: 0.50, alpha: 1)  // warm brass on dark
+                : UIColor(red: 0.60, green: 0.50, blue: 0.32, alpha: 1)  // deeper brass on light
+        })
 
         // Destructive
         static let destructive = Color(UIColor.systemRed)

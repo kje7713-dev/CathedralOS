@@ -405,7 +405,7 @@ struct CathedralView: View {
         Section {
             let sorted = (profile?.seasons ?? []).sorted { safeTitle(for: $0) < safeTitle(for: $1) }
             if sorted.isEmpty {
-                CathedralEmptyState(label: "No season added")
+                CathedralEmptyState(label: "No seasons added")
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
