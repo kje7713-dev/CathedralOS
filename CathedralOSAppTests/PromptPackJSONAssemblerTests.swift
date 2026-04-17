@@ -66,13 +66,13 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         pack.includeProjectSetting = true
         let payload = decodePayload(pack: pack, project: project)
 
-        XCTAssertNotNil(payload.setting)
-        XCTAssertEqual(payload.setting?.summary, "Victorian London")
-        XCTAssertEqual(payload.setting?.domains, ["Crime", "Society"])
-        XCTAssertEqual(payload.setting?.constraints, ["No magic"])
-        XCTAssertEqual(payload.setting?.themes, ["Redemption"])
-        XCTAssertEqual(payload.setting?.season, "Autumn 1888")
-        XCTAssertEqual(payload.setting?.instructionBias, "Write with restraint")
+        XCTAssertTrue(payload.setting.included)
+        XCTAssertEqual(payload.setting.summary, "Victorian London")
+        XCTAssertEqual(payload.setting.domains, ["Crime", "Society"])
+        XCTAssertEqual(payload.setting.constraints, ["No magic"])
+        XCTAssertEqual(payload.setting.themes, ["Redemption"])
+        XCTAssertEqual(payload.setting.season, "Autumn 1888")
+        XCTAssertEqual(payload.setting.instructionBias, "Write with restraint")
     }
 
     func testSettingNilWhenDisabled() {
@@ -85,7 +85,7 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         pack.includeProjectSetting = false
         let payload = decodePayload(pack: pack, project: project)
 
-        XCTAssertNil(payload.setting)
+        XCTAssertFalse(payload.setting.included)
     }
 
     func testSettingNilWhenProjectHasNoSetting() {
@@ -94,7 +94,7 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         pack.includeProjectSetting = true
         let payload = decodePayload(pack: pack, project: project)
 
-        XCTAssertNil(payload.setting)
+        XCTAssertFalse(payload.setting.included)
     }
 
     // MARK: Characters
