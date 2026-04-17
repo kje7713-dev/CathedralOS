@@ -132,7 +132,7 @@ struct CharacterFormView: View {
                         items.wrappedValue.remove(at: i)
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 16))
+                            .font(.system(size: CathedralTheme.Icons.deleteControl))
                             .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                     }
                     .buttonStyle(.plain)

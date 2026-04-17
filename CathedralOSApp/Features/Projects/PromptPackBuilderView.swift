@@ -161,7 +161,7 @@ struct PromptPackBuilderView: View {
             Spacer()
             if isSelected {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: CathedralTheme.Icons.selectionMark, weight: .semibold))
                     .foregroundStyle(CathedralTheme.Colors.accent)
             }
         }

@@ -123,6 +123,17 @@ enum CathedralTheme {
         static let md: CGFloat   = 12
         static let lg: CGFloat   = 16
     }
+
+    // MARK: Icon Sizes
+
+    enum Icons {
+        /// Delete / remove control (tag rows, list items).
+        static let deleteControl: CGFloat = 16
+        /// Checkmark in single-selection rows.
+        static let selectionMark: CGFloat = 13
+        /// Large glyph in full-screen empty states.
+        static let emptyStateGlyph: CGFloat = 44
+    }
 }
 
 // MARK: - View Modifiers

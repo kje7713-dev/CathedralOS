@@ -61,7 +61,7 @@ struct ProjectsListView: View {
         VStack(spacing: CathedralTheme.Spacing.xl) {
             Spacer()
             Image(systemName: "books.vertical")
-                .font(.system(size: 44, weight: .ultraLight))
+                .font(.system(size: CathedralTheme.Icons.emptyStateGlyph, weight: .ultraLight))
                 .foregroundStyle(CathedralTheme.Colors.tertiaryText)
 
             VStack(spacing: CathedralTheme.Spacing.xs) {
