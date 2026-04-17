@@ -19,12 +19,16 @@ struct PromptPackPreviewView: View {
     @State private var copiedPrompt    = false
     @State private var copiedJSON      = false
 
+    private var exportPayload: PromptPackExportPayload {
+        PromptPackExportBuilder.build(pack: pack, project: project)
+    }
+
     private var promptText: String {
-        PromptPackAssembler.assemble(pack: pack, project: project)
+        PromptPackAssembler.assemble(payload: exportPayload)
     }
 
     private var jsonText: String {
-        PromptPackJSONAssembler.jsonString(pack: pack, project: project)
+        PromptPackJSONAssembler.jsonString(payload: exportPayload)
     }
 
     private var activeText: String {

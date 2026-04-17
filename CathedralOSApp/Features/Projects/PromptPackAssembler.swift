@@ -2,19 +2,24 @@ import Foundation
 
 /// Pure assembly logic — no compression, no summarization, no token budget.
 /// Outputs exactly what the user assembled.
+/// Both overloads produce identical output; `assemble(payload:)` is the
+/// canonical path — `assemble(pack:project:)` builds the payload and delegates.
 enum PromptPackAssembler {
 
-    static func assemble(pack: PromptPack, project: StoryProject) -> String {
+    // MARK: Canonical entry point
+
+    static func assemble(payload: PromptPackExportPayload) -> String {
         var sections: [String] = []
 
         // Project header
-        sections.append("# \(project.name)")
-        if !project.summary.isEmpty {
-            sections.append(project.summary)
+        sections.append("# \(payload.project.name)")
+        if !payload.project.summary.isEmpty {
+            sections.append(payload.project.summary)
         }
 
         // Setting
-        if pack.includeProjectSetting, let setting = project.projectSetting {
+        if payload.setting.included {
+            let setting = payload.setting
             var settingLines: [String] = ["## Setting"]
             if !setting.summary.isEmpty { settingLines.append(setting.summary) }
             if !setting.domains.isEmpty {
@@ -35,13 +40,10 @@ enum PromptPackAssembler {
             sections.append(settingLines.joined(separator: "\n"))
         }
 
-        // Characters
-        let characters = project.characters.filter { c in
-            pack.selectedCharacterIDs.contains(c.id)
-        }
-        if !characters.isEmpty {
+        // Characters — already filtered and sorted by the builder
+        if !payload.selectedCharacters.isEmpty {
             var charSection = "## Characters"
-            for c in characters.sorted(by: { $0.name < $1.name }) {
+            for c in payload.selectedCharacters {
                 var lines: [String] = ["### \(c.name)"]
                 if !c.roles.isEmpty { lines.append("Roles: \(c.roles.joined(separator: ", "))") }
                 if !c.goals.isEmpty { lines.append("Goals: \(c.goals.joined(separator: "; "))") }
@@ -56,8 +58,7 @@ enum PromptPackAssembler {
         }
 
         // Story Spark
-        if let sparkID = pack.selectedStorySparkID,
-           let spark = project.storySparks.first(where: { $0.id == sparkID }) {
+        if let spark = payload.selectedStorySpark {
             var sparkLines = ["## Story Spark: \(spark.title)"]
             if !spark.situation.isEmpty { sparkLines.append("Situation: \(spark.situation)") }
             if !spark.stakes.isEmpty { sparkLines.append("Stakes: \(spark.stakes)") }
@@ -66,23 +67,29 @@ enum PromptPackAssembler {
         }
 
         // Aftertaste
-        if let aftertasteID = pack.selectedAftertasteID,
-           let aftertaste = project.aftertastes.first(where: { $0.id == aftertasteID }) {
+        if let aftertaste = payload.selectedAftertaste {
             var aLines = ["## Aftertaste: \(aftertaste.label)"]
             if let note = aftertaste.note, !note.isEmpty { aLines.append(note) }
             sections.append(aLines.joined(separator: "\n"))
         }
 
         // Pack notes
-        if let notes = pack.notes, !notes.isEmpty {
+        if let notes = payload.promptPack.notes, !notes.isEmpty {
             sections.append("## Notes\n\(notes)")
         }
 
         // Instruction bias
-        if let bias = pack.instructionBias, !bias.isEmpty {
+        if let bias = payload.promptPack.instructionBias, !bias.isEmpty {
             sections.append("## Instruction Bias\n\(bias)")
         }
 
         return sections.joined(separator: "\n\n")
+    }
+
+    // MARK: Convenience overload
+
+    /// Builds the canonical payload via PromptPackExportBuilder then assembles prompt text.
+    static func assemble(pack: PromptPack, project: StoryProject) -> String {
+        assemble(payload: PromptPackExportBuilder.build(pack: pack, project: project))
     }
 }

@@ -3,6 +3,7 @@ import Foundation
 // MARK: - PromptPackExportPayload
 // Canonical export model for structured JSON export of a Prompt Pack.
 // Designed for direct LLM injection — no pruning, no summarization.
+// Every section is always present so consumers never encounter missing keys.
 
 struct PromptPackExportPayload: Codable {
 
@@ -16,7 +17,9 @@ struct PromptPackExportPayload: Codable {
     // MARK: Payload sections
 
     let project: ProjectPayload
-    let setting: SettingPayload?
+    /// Setting is always present. Use `setting.included` to determine whether
+    /// the user chose to include it in the pack.
+    let setting: SettingPayload
     let selectedCharacters: [CharacterPayload]
     let selectedStorySpark: StorySparkPayload?
     let selectedAftertaste: AftertastePayload?
@@ -25,11 +28,16 @@ struct PromptPackExportPayload: Codable {
     // MARK: Nested types
 
     struct ProjectPayload: Codable {
+        let id: UUID
         let name: String
         let summary: String
     }
 
     struct SettingPayload: Codable {
+        /// True when the user has enabled setting inclusion in this pack and the
+        /// project has a setting configured. False otherwise; remaining fields
+        /// will be empty but are still structurally present.
+        let included: Bool
         let summary: String
         let domains: [String]
         let constraints: [String]
@@ -39,6 +47,7 @@ struct PromptPackExportPayload: Codable {
     }
 
     struct CharacterPayload: Codable {
+        let id: UUID
         let name: String
         let roles: [String]
         let goals: [String]
@@ -50,6 +59,7 @@ struct PromptPackExportPayload: Codable {
     }
 
     struct StorySparkPayload: Codable {
+        let id: UUID
         let title: String
         let situation: String
         let stakes: String
@@ -57,12 +67,15 @@ struct PromptPackExportPayload: Codable {
     }
 
     struct AftertastePayload: Codable {
+        let id: UUID
         let label: String
         let note: String?
     }
 
     struct PromptPackPayload: Codable {
+        let id: UUID
         let name: String
+        let includeProjectSetting: Bool
         let notes: String?
         let instructionBias: String?
     }
