@@ -8,6 +8,11 @@ struct CathedralOSApp: App {
             CathedralView()
                 .tint(CathedralTheme.Colors.accent)
         }
-        .modelContainer(for: [Role.self, Domain.self, Goal.self, Constraint.self, CathedralProfile.self, Secret.self])
+        .modelContainer(for: [
+            Role.self, Domain.self, Goal.self, Constraint.self,
+            CathedralProfile.self, Secret.self,
+            StoryProject.self, StoryCharacter.self,
+            StorySpark.self, Aftertaste.self, PromptPack.self
+        ])
     }
 }

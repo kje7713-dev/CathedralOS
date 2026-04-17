@@ -41,6 +41,11 @@
 		0000000000000000000000A8 /* TemplatesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000A7 /* TemplatesTests.swift */; };
 		0000000000000000000000B1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B0 /* Assets.xcassets */; };
 		0000000000000000000000B2 /* CathedralTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B3 /* CathedralTheme.swift */; };
+		0000000000000000000000B6 /* StoryProject.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B5 /* StoryProject.swift */; };
+		0000000000000000000000B8 /* StoryCharacter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B7 /* StoryCharacter.swift */; };
+		0000000000000000000000BA /* StorySpark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B9 /* StorySpark.swift */; };
+		0000000000000000000000BC /* Aftertaste.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000BB /* Aftertaste.swift */; };
+		0000000000000000000000BE /* PromptPack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000BD /* PromptPack.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -90,6 +95,11 @@
 		0000000000000000000000A7 /* TemplatesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplatesTests.swift; sourceTree = "<group>"; };
 		0000000000000000000000B0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		0000000000000000000000B3 /* CathedralTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CathedralTheme.swift; sourceTree = "<group>"; };
+		0000000000000000000000B5 /* StoryProject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryProject.swift; sourceTree = "<group>"; };
+		0000000000000000000000B7 /* StoryCharacter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryCharacter.swift; sourceTree = "<group>"; };
+		0000000000000000000000B9 /* StorySpark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorySpark.swift; sourceTree = "<group>"; };
+		0000000000000000000000BB /* Aftertaste.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Aftertaste.swift; sourceTree = "<group>"; };
+		0000000000000000000000BD /* PromptPack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPack.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -210,6 +220,11 @@
 				000000000000000000000086 /* FailurePattern.swift */,
 				000000000000000000000088 /* Season.swift */,
 				00000000000000000000008A /* Secret.swift */,
+				0000000000000000000000B5 /* StoryProject.swift */,
+				0000000000000000000000B7 /* StoryCharacter.swift */,
+				0000000000000000000000B9 /* StorySpark.swift */,
+				0000000000000000000000BB /* Aftertaste.swift */,
+				0000000000000000000000BD /* PromptPack.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -398,6 +413,11 @@
 				0000000000000000000000A4 /* TemplatesPickerView.swift in Sources */,
 				0000000000000000000000A6 /* NewProfileFromTemplateView.swift in Sources */,
 				0000000000000000000000B2 /* CathedralTheme.swift in Sources */,
+				0000000000000000000000B6 /* StoryProject.swift in Sources */,
+				0000000000000000000000B8 /* StoryCharacter.swift in Sources */,
+				0000000000000000000000BA /* StorySpark.swift in Sources */,
+				0000000000000000000000BC /* Aftertaste.swift in Sources */,
+				0000000000000000000000BE /* PromptPack.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
