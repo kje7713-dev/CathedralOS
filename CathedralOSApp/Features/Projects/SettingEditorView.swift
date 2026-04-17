@@ -77,9 +77,9 @@ struct SettingEditorView: View {
         placeholder: String
     ) -> some View {
         Section {
-            ForEach(items.wrappedValue.indices, id: \.self) { i in
+            ForEach(Array(items.wrappedValue.enumerated()), id: \.offset) { i, item in
                 HStack {
-                    Text(items.wrappedValue[i])
+                    Text(item)
                         .font(CathedralTheme.Typography.body())
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                     Spacer()
