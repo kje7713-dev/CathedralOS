@@ -13,29 +13,23 @@ enum PromptPackExportBuilder {
 
     static func build(pack: PromptPack, project: StoryProject) -> PromptPackExportPayload {
 
-        // Setting — always present; `included` reflects user intent and availability
-        let settingPayload: PromptPackExportPayload.SettingPayload
-        if pack.includeProjectSetting, let setting = project.projectSetting {
-            settingPayload = .init(
-                included: true,
-                summary: setting.summary,
-                domains: setting.domains,
-                constraints: setting.constraints,
-                themes: setting.themes,
-                season: setting.season,
-                instructionBias: setting.instructionBias
-            )
-        } else {
-            settingPayload = .init(
-                included: false,
-                summary: "",
-                domains: [],
-                constraints: [],
-                themes: [],
-                season: "",
-                instructionBias: nil
-            )
-        }
+        // Setting — always present.
+        // `included` always mirrors the pack's `includeProjectSetting` flag.
+        // `hasData`  reflects whether the project has setting data, independently
+        //             of whether this pack chose to include it.
+        // Fields are populated only when the pack includes the setting AND data exists.
+        let hasSetting = project.projectSetting != nil
+        let settingSource = (pack.includeProjectSetting && hasSetting) ? project.projectSetting : nil
+        let settingPayload = PromptPackExportPayload.SettingPayload(
+            included: pack.includeProjectSetting,
+            hasData: hasSetting,
+            summary: settingSource?.summary ?? "",
+            domains: settingSource?.domains ?? [],
+            constraints: settingSource?.constraints ?? [],
+            themes: settingSource?.themes ?? [],
+            season: settingSource?.season ?? "",
+            instructionBias: settingSource?.instructionBias
+        )
 
         // Characters — filtered to selected IDs, sorted alphabetically
         let characters = project.characters

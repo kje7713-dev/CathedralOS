@@ -17,8 +17,8 @@ enum PromptPackAssembler {
             sections.append(payload.project.summary)
         }
 
-        // Setting
-        if payload.setting.included {
+        // Setting — render only when the pack includes the setting AND data exists
+        if payload.setting.included && payload.setting.hasData {
             let setting = payload.setting
             var settingLines: [String] = ["## Setting"]
             if !setting.summary.isEmpty { settingLines.append(setting.summary) }
