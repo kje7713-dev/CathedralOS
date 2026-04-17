@@ -57,6 +57,9 @@
 		0000000000000000000000CE /* PromptPackBuilderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000CD /* PromptPackBuilderView.swift */; };
 		0000000000000000000000D0 /* PromptPackPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000CF /* PromptPackPreviewView.swift */; };
 		0000000000000000000000D2 /* PromptPackAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000D1 /* PromptPackAssembler.swift */; };
+		0000000000000000000000E7 /* PromptPackExportPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000E6 /* PromptPackExportPayload.swift */; };
+		0000000000000000000000E9 /* PromptPackJSONAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000E8 /* PromptPackJSONAssembler.swift */; };
+		0000000000000000000000EB /* PromptPackJSONAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000EA /* PromptPackJSONAssemblerTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -122,6 +125,9 @@
 		0000000000000000000000CD /* PromptPackBuilderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackBuilderView.swift; sourceTree = "<group>"; };
 		0000000000000000000000CF /* PromptPackPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackPreviewView.swift; sourceTree = "<group>"; };
 		0000000000000000000000D1 /* PromptPackAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackAssembler.swift; sourceTree = "<group>"; };
+		0000000000000000000000E6 /* PromptPackExportPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackExportPayload.swift; sourceTree = "<group>"; };
+		0000000000000000000000E8 /* PromptPackJSONAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackJSONAssembler.swift; sourceTree = "<group>"; };
+		0000000000000000000000EA /* PromptPackJSONAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackJSONAssemblerTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -249,6 +255,7 @@
 				0000000000000000000000B9 /* StorySpark.swift */,
 				0000000000000000000000BB /* Aftertaste.swift */,
 				0000000000000000000000BD /* PromptPack.swift */,
+				0000000000000000000000E6 /* PromptPackExportPayload.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -273,6 +280,7 @@
 				00000000000000000000009B /* PrivacySafeTitleTests.swift */,
 				0000000000000000000000A7 /* TemplatesTests.swift */,
 				0000000000000000000000E5 /* PromptPackAssemblerTests.swift */,
+				0000000000000000000000EA /* PromptPackJSONAssemblerTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -332,6 +340,7 @@
 				0000000000000000000000CD /* PromptPackBuilderView.swift */,
 				0000000000000000000000CF /* PromptPackPreviewView.swift */,
 				0000000000000000000000D1 /* PromptPackAssembler.swift */,
+				0000000000000000000000E8 /* PromptPackJSONAssembler.swift */,
 			);
 			path = Projects;
 			sourceTree = "<group>";
@@ -469,6 +478,8 @@
 				0000000000000000000000CE /* PromptPackBuilderView.swift in Sources */,
 				0000000000000000000000D0 /* PromptPackPreviewView.swift in Sources */,
 				0000000000000000000000D2 /* PromptPackAssembler.swift in Sources */,
+				0000000000000000000000E7 /* PromptPackExportPayload.swift in Sources */,
+				0000000000000000000000E9 /* PromptPackJSONAssembler.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -483,6 +494,7 @@
 				00000000000000000000009C /* PrivacySafeTitleTests.swift in Sources */,
 				0000000000000000000000A8 /* TemplatesTests.swift in Sources */,
 				0000000000000000000000D4 /* PromptPackAssemblerTests.swift in Sources */,
+				0000000000000000000000EB /* PromptPackJSONAssemblerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
