@@ -100,7 +100,7 @@ struct CathedralView: View {
                     activeProfileID = profiles[0].id.uuidString
                 }
                 if storyProjects.isEmpty {
-                    let defaultProject = StoryProject(name: "My Story")
+                    let defaultProject = StoryProject()
                     modelContext.insert(defaultProject)
                 }
             }
