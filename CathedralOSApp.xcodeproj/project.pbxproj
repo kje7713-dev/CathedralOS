@@ -46,6 +46,16 @@
 		0000000000000000000000BA /* StorySpark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B9 /* StorySpark.swift */; };
 		0000000000000000000000BC /* Aftertaste.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000BB /* Aftertaste.swift */; };
 		0000000000000000000000BE /* PromptPack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000BD /* PromptPack.swift */; };
+		0000000000000000000000C0 /* ProjectSetting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000BF /* ProjectSetting.swift */; };
+		0000000000000000000000C2 /* ProjectsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000C1 /* ProjectsListView.swift */; };
+		0000000000000000000000C4 /* ProjectDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000C3 /* ProjectDetailView.swift */; };
+		0000000000000000000000C6 /* CharacterFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000C5 /* CharacterFormView.swift */; };
+		0000000000000000000000C8 /* SettingEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000C7 /* SettingEditorView.swift */; };
+		0000000000000000000000CA /* StorySparkFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000C9 /* StorySparkFormView.swift */; };
+		0000000000000000000000CC /* AftertasteFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000CB /* AftertasteFormView.swift */; };
+		0000000000000000000000CE /* PromptPackBuilderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000CD /* PromptPackBuilderView.swift */; };
+		0000000000000000000000D0 /* PromptPackPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000CF /* PromptPackPreviewView.swift */; };
+		0000000000000000000000D2 /* PromptPackAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000D1 /* PromptPackAssembler.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -100,6 +110,16 @@
 		0000000000000000000000B9 /* StorySpark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorySpark.swift; sourceTree = "<group>"; };
 		0000000000000000000000BB /* Aftertaste.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Aftertaste.swift; sourceTree = "<group>"; };
 		0000000000000000000000BD /* PromptPack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPack.swift; sourceTree = "<group>"; };
+		0000000000000000000000BF /* ProjectSetting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSetting.swift; sourceTree = "<group>"; };
+		0000000000000000000000C1 /* ProjectsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsListView.swift; sourceTree = "<group>"; };
+		0000000000000000000000C3 /* ProjectDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectDetailView.swift; sourceTree = "<group>"; };
+		0000000000000000000000C5 /* CharacterFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CharacterFormView.swift; sourceTree = "<group>"; };
+		0000000000000000000000C7 /* SettingEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingEditorView.swift; sourceTree = "<group>"; };
+		0000000000000000000000C9 /* StorySparkFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorySparkFormView.swift; sourceTree = "<group>"; };
+		0000000000000000000000CB /* AftertasteFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AftertasteFormView.swift; sourceTree = "<group>"; };
+		0000000000000000000000CD /* PromptPackBuilderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackBuilderView.swift; sourceTree = "<group>"; };
+		0000000000000000000000CF /* PromptPackPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackPreviewView.swift; sourceTree = "<group>"; };
+		0000000000000000000000D1 /* PromptPackAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackAssembler.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -178,6 +198,7 @@
 				000000000000000000000092 /* Secrets */,
 				000000000000000000000098 /* Ask */,
 				0000000000000000000000AA /* Templates */,
+				0000000000000000000000D3 /* Projects */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -221,6 +242,7 @@
 				000000000000000000000088 /* Season.swift */,
 				00000000000000000000008A /* Secret.swift */,
 				0000000000000000000000B5 /* StoryProject.swift */,
+				0000000000000000000000BF /* ProjectSetting.swift */,
 				0000000000000000000000B7 /* StoryCharacter.swift */,
 				0000000000000000000000B9 /* StorySpark.swift */,
 				0000000000000000000000BB /* Aftertaste.swift */,
@@ -293,6 +315,22 @@
 				0000000000000000000000A5 /* NewProfileFromTemplateView.swift */,
 			);
 			path = Templates;
+			sourceTree = "<group>";
+		};
+		0000000000000000000000D3 /* Projects */ = {
+			isa = PBXGroup;
+			children = (
+				0000000000000000000000C1 /* ProjectsListView.swift */,
+				0000000000000000000000C3 /* ProjectDetailView.swift */,
+				0000000000000000000000C5 /* CharacterFormView.swift */,
+				0000000000000000000000C7 /* SettingEditorView.swift */,
+				0000000000000000000000C9 /* StorySparkFormView.swift */,
+				0000000000000000000000CB /* AftertasteFormView.swift */,
+				0000000000000000000000CD /* PromptPackBuilderView.swift */,
+				0000000000000000000000CF /* PromptPackPreviewView.swift */,
+				0000000000000000000000D1 /* PromptPackAssembler.swift */,
+			);
+			path = Projects;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -418,6 +456,16 @@
 				0000000000000000000000BA /* StorySpark.swift in Sources */,
 				0000000000000000000000BC /* Aftertaste.swift in Sources */,
 				0000000000000000000000BE /* PromptPack.swift in Sources */,
+				0000000000000000000000C0 /* ProjectSetting.swift in Sources */,
+				0000000000000000000000C2 /* ProjectsListView.swift in Sources */,
+				0000000000000000000000C4 /* ProjectDetailView.swift in Sources */,
+				0000000000000000000000C6 /* CharacterFormView.swift in Sources */,
+				0000000000000000000000C8 /* SettingEditorView.swift in Sources */,
+				0000000000000000000000CA /* StorySparkFormView.swift in Sources */,
+				0000000000000000000000CC /* AftertasteFormView.swift in Sources */,
+				0000000000000000000000CE /* PromptPackBuilderView.swift in Sources */,
+				0000000000000000000000D0 /* PromptPackPreviewView.swift in Sources */,
+				0000000000000000000000D2 /* PromptPackAssembler.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

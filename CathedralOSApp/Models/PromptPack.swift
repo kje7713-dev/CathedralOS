@@ -10,6 +10,7 @@ class PromptPack {
     var selectedAftertasteID: UUID?
     var notes: String?
     var instructionBias: String?
+    var includeProjectSetting: Bool
     var project: StoryProject?
 
     init(name: String) {
@@ -20,5 +21,6 @@ class PromptPack {
         self.selectedAftertasteID = nil
         self.notes = nil
         self.instructionBias = nil
+        self.includeProjectSetting = true
     }
 }

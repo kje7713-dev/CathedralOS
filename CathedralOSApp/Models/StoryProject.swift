@@ -6,7 +6,8 @@ class StoryProject {
     var id: UUID
     var name: String
     var summary: String
-    var setting: String
+    @Relationship(deleteRule: .cascade, inverse: \ProjectSetting.project)
+    var projectSetting: ProjectSetting?
     @Relationship(deleteRule: .cascade, inverse: \StoryCharacter.project)
     var characters: [StoryCharacter]
     @Relationship(deleteRule: .cascade, inverse: \StorySpark.project)
@@ -20,7 +21,7 @@ class StoryProject {
         self.id = UUID()
         self.name = name
         self.summary = ""
-        self.setting = ""
+        self.projectSetting = nil
         self.characters = []
         self.storySparks = []
         self.aftertastes = []
