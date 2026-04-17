@@ -26,7 +26,7 @@ struct PromptPackBuilderView: View {
                     TextField("Pack name", text: $name)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                 } header: {
-                    Text("Name")
+                    CathedralFormSectionHeader("Name")
                 }
 
                 // Characters
@@ -52,7 +52,7 @@ struct PromptPackBuilderView: View {
                         }
                     }
                 } header: {
-                    Text("Characters")
+                    CathedralFormSectionHeader("Characters")
                 } footer: {
                     Text("Select any number of characters to include.")
                         .foregroundStyle(CathedralTheme.Colors.tertiaryText)
@@ -66,35 +66,17 @@ struct PromptPackBuilderView: View {
                             .font(CathedralTheme.Typography.caption())
                             .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                     } else {
-                        // None option
-                        HStack {
-                            Text("None")
-                                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            Spacer()
-                            if selectedSparkID == nil {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(CathedralTheme.Colors.accent)
-                            }
+                        selectionRow(label: "None", isSelected: selectedSparkID == nil) {
+                            selectedSparkID = nil
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture { selectedSparkID = nil }
-
                         ForEach(sparks) { spark in
-                            HStack {
-                                Text(spark.title)
-                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                                Spacer()
-                                if selectedSparkID == spark.id {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(CathedralTheme.Colors.accent)
-                                }
+                            selectionRow(label: spark.title, isSelected: selectedSparkID == spark.id) {
+                                selectedSparkID = spark.id
                             }
-                            .contentShape(Rectangle())
-                            .onTapGesture { selectedSparkID = spark.id }
                         }
                     }
                 } header: {
-                    Text("Story Spark")
+                    CathedralFormSectionHeader("Story Spark")
                 }
 
                 // Aftertaste
@@ -105,34 +87,17 @@ struct PromptPackBuilderView: View {
                             .font(CathedralTheme.Typography.caption())
                             .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                     } else {
-                        HStack {
-                            Text("None")
-                                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            Spacer()
-                            if selectedAftertasteID == nil {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(CathedralTheme.Colors.accent)
-                            }
+                        selectionRow(label: "None", isSelected: selectedAftertasteID == nil) {
+                            selectedAftertasteID = nil
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture { selectedAftertasteID = nil }
-
                         ForEach(aftertastes) { a in
-                            HStack {
-                                Text(a.label)
-                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                                Spacer()
-                                if selectedAftertasteID == a.id {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(CathedralTheme.Colors.accent)
-                                }
+                            selectionRow(label: a.label, isSelected: selectedAftertasteID == a.id) {
+                                selectedAftertasteID = a.id
                             }
-                            .contentShape(Rectangle())
-                            .onTapGesture { selectedAftertasteID = a.id }
                         }
                     }
                 } header: {
-                    Text("Aftertaste")
+                    CathedralFormSectionHeader("Aftertaste")
                 }
 
                 // Setting
@@ -141,7 +106,7 @@ struct PromptPackBuilderView: View {
                         .tint(CathedralTheme.Colors.accent)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                 } header: {
-                    Text("Setting")
+                    CathedralFormSectionHeader("Setting")
                 } footer: {
                     if project.projectSetting == nil {
                         Text("No setting defined for this project yet.")
@@ -156,7 +121,7 @@ struct PromptPackBuilderView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .lineLimit(3...6)
                 } header: {
-                    Text("Notes")
+                    CathedralFormSectionHeader("Notes")
                 }
 
                 // Instruction Bias
@@ -166,7 +131,7 @@ struct PromptPackBuilderView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .lineLimit(3...6)
                 } header: {
-                    Text("Instruction Bias")
+                    CathedralFormSectionHeader("Instruction Bias")
                 }
             }
             .cathedralFormStyle()
@@ -184,6 +149,24 @@ struct PromptPackBuilderView: View {
             .onAppear { loadExisting() }
         }
         .tint(CathedralTheme.Colors.accent)
+    }
+
+    // MARK: Selection Row
+
+    @ViewBuilder
+    private func selectionRow(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+            Spacer()
+            if isSelected {
+                Image(systemName: "checkmark")
+                    .font(.system(size: CathedralTheme.Icons.selectionMark, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.accent)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { action() }
     }
 
     // MARK: Actions

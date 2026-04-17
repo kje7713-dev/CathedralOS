@@ -123,6 +123,17 @@ enum CathedralTheme {
         static let md: CGFloat   = 12
         static let lg: CGFloat   = 16
     }
+
+    // MARK: Icon Sizes
+
+    enum Icons {
+        /// Delete / remove control (tag rows, list items).
+        static let deleteControl: CGFloat = 16
+        /// Checkmark in single-selection rows.
+        static let selectionMark: CGFloat = 13
+        /// Large glyph in full-screen empty states.
+        static let emptyStateGlyph: CGFloat = 44
+    }
 }
 
 // MARK: - View Modifiers
@@ -368,5 +379,100 @@ struct CathedralDivider: View {
             .fill(CathedralTheme.Colors.separator)
             .frame(height: 1)
             .padding(.leading, CathedralTheme.Spacing.base)
+    }
+}
+
+// MARK: - CathedralTagChip
+
+/// Display-only pill chip for a single tag value.
+/// Use inside ForEach to render a collection of tags.
+struct CathedralTagChip: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(CathedralTheme.Typography.caption(12))
+            .foregroundStyle(CathedralTheme.Colors.primaryText)
+            .padding(.horizontal, CathedralTheme.Spacing.sm)
+            .padding(.vertical, CathedralTheme.Spacing.xs)
+            .background(CathedralTheme.Colors.surfaceRaised)
+            .overlay(
+                Capsule()
+                    .stroke(CathedralTheme.Colors.border, lineWidth: 0.5)
+            )
+            .clipShape(Capsule())
+    }
+}
+
+// MARK: - CathedralFormSectionHeader
+
+/// Branded section header for use inside SwiftUI Form `Section` headers.
+/// Applies Cathedral uppercase + tracking typography and suppresses the
+/// system's automatic uppercasing via `.textCase(nil)`.
+struct CathedralFormSectionHeader: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(CathedralTheme.Typography.label(10, weight: .semibold))
+            .tracking(1.5)
+            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            .textCase(nil)
+    }
+}
+
+// MARK: - CathedralNavRowLabel
+
+/// Visual row content for use as a `NavigationLink` label.
+/// Matches `CathedralItemRow` visuals but carries NO `.onTapGesture`,
+/// preventing gesture interception on the enclosing NavigationLink.
+struct CathedralNavRowLabel: View {
+    let title: String
+    let subtitle: String?
+
+    init(title: String, subtitle: String? = nil) {
+        self.title = title
+        self.subtitle = subtitle
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(CathedralTheme.Typography.body(15))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.vertical, CathedralTheme.Spacing.sm)
+    }
+}
+
+// MARK: - CathedralMetadataPill
+
+/// Small inline metadata label — used for count badges and status labels.
+struct CathedralMetadataPill: View {
+    let label: String
+
+    var body: some View {
+        Text(label)
+            .font(CathedralTheme.Typography.label(10, weight: .medium))
+            .tracking(0.5)
+            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            .padding(.horizontal, CathedralTheme.Spacing.sm)
+            .padding(.vertical, 3)
+            .background(CathedralTheme.Colors.surfaceRaised)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }

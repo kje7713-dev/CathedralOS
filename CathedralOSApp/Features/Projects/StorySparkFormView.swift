@@ -22,7 +22,7 @@ struct StorySparkFormView: View {
                     TextField("Title", text: $title)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                 } header: {
-                    Text("Title")
+                    CathedralFormSectionHeader("Title")
                 }
 
                 Section {
@@ -31,7 +31,7 @@ struct StorySparkFormView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .lineLimit(3...8)
                 } header: {
-                    Text("Situation")
+                    CathedralFormSectionHeader("Situation")
                 }
 
                 Section {
@@ -40,7 +40,7 @@ struct StorySparkFormView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .lineLimit(3...6)
                 } header: {
-                    Text("Stakes")
+                    CathedralFormSectionHeader("Stakes")
                 }
 
                 Section {
@@ -49,7 +49,7 @@ struct StorySparkFormView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .lineLimit(3...6)
                 } header: {
-                    Text("Twist (optional)")
+                    CathedralFormSectionHeader("Twist (optional)")
                 }
             }
             .cathedralFormStyle()

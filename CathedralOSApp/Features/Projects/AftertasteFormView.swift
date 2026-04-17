@@ -20,7 +20,7 @@ struct AftertasteFormView: View {
                     TextField("e.g. Quiet dread that never fully resolves", text: $label)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                 } header: {
-                    Text("Label")
+                    CathedralFormSectionHeader("Label")
                 }
 
                 Section {
@@ -29,7 +29,7 @@ struct AftertasteFormView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .lineLimit(3...8)
                 } header: {
-                    Text("Note (optional)")
+                    CathedralFormSectionHeader("Note (optional)")
                 }
             }
             .cathedralFormStyle()

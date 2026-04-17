@@ -14,6 +14,10 @@ struct PromptPackPreviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
+
+                // Metadata strip
+                metadataStrip
+
                 // Assembled text
                 Text(assembled)
                     .font(CathedralTheme.Typography.body(14))
@@ -51,5 +55,32 @@ struct PromptPackPreviewView: View {
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [assembled])
         }
+    }
+
+    // MARK: Metadata Strip
+
+    private var metadataStrip: some View {
+        let pills = metadataPills
+        return Group {
+            if !pills.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: CathedralTheme.Spacing.xs) {
+                        ForEach(pills, id: \.self) { label in
+                            CathedralMetadataPill(label: label)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var metadataPills: [String] {
+        var pills: [String] = []
+        let charCount = pack.selectedCharacterIDs.count
+        if charCount > 0 { pills.append("\(charCount) \(charCount == 1 ? "character" : "characters")") }
+        if pack.selectedStorySparkID != nil { pills.append("spark") }
+        if pack.selectedAftertasteID != nil { pills.append("aftertaste") }
+        if pack.includeProjectSetting && project.projectSetting != nil { pills.append("setting") }
+        return pills
     }
 }

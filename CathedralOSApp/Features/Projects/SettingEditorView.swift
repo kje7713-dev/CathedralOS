@@ -25,7 +25,7 @@ struct SettingEditorView: View {
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
                     .lineLimit(3...8)
             } header: {
-                Text("Summary / Notes")
+                CathedralFormSectionHeader("Summary / Notes")
             }
 
             // Domains
@@ -42,7 +42,7 @@ struct SettingEditorView: View {
                 TextField("e.g. Late autumn, year three of the drought", text: $season)
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
             } header: {
-                Text("Season / Time")
+                CathedralFormSectionHeader("Season / Time")
             }
 
             // Instruction Bias
@@ -52,7 +52,7 @@ struct SettingEditorView: View {
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
                     .lineLimit(3...6)
             } header: {
-                Text("Instruction Bias")
+                CathedralFormSectionHeader("Instruction Bias")
             }
         }
         .cathedralFormStyle()
@@ -78,16 +78,15 @@ struct SettingEditorView: View {
     ) -> some View {
         Section {
             ForEach(Array(items.wrappedValue.enumerated()), id: \.offset) { i, item in
-                HStack {
-                    Text(item)
-                        .font(CathedralTheme.Typography.body())
-                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    CathedralTagChip(text: item)
                     Spacer()
                     Button {
                         items.wrappedValue.remove(at: i)
                     } label: {
-                        Image(systemName: "minus.circle.fill")
-                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: CathedralTheme.Icons.deleteControl))
+                            .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                     }
                     .buttonStyle(.plain)
                 }
@@ -109,7 +108,7 @@ struct SettingEditorView: View {
                 .disabled(newItem.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         } header: {
-            Text(header)
+            CathedralFormSectionHeader(header)
         }
     }
 

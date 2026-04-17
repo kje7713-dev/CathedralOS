@@ -34,7 +34,7 @@ struct CharacterFormView: View {
                     TextField("Character name", text: $name)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                 } header: {
-                    Text("Name")
+                    CathedralFormSectionHeader("Name")
                 }
 
                 // Roles
@@ -84,7 +84,7 @@ struct CharacterFormView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .lineLimit(3...8)
                 } header: {
-                    Text("Notes")
+                    CathedralFormSectionHeader("Notes")
                 }
 
                 // Instruction Bias
@@ -94,7 +94,7 @@ struct CharacterFormView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .lineLimit(3...8)
                 } header: {
-                    Text("Instruction Bias")
+                    CathedralFormSectionHeader("Instruction Bias")
                 }
             }
             .cathedralFormStyle()
@@ -125,16 +125,15 @@ struct CharacterFormView: View {
     ) -> some View {
         Section {
             ForEach(Array(items.wrappedValue.enumerated()), id: \.offset) { i, item in
-                HStack {
-                    Text(item)
-                        .font(CathedralTheme.Typography.body())
-                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    CathedralTagChip(text: item)
                     Spacer()
                     Button {
                         items.wrappedValue.remove(at: i)
                     } label: {
-                        Image(systemName: "minus.circle.fill")
-                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: CathedralTheme.Icons.deleteControl))
+                            .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                     }
                     .buttonStyle(.plain)
                 }
@@ -156,7 +155,7 @@ struct CharacterFormView: View {
                 .disabled(newItem.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         } header: {
-            Text(header)
+            CathedralFormSectionHeader(header)
         }
     }
 
