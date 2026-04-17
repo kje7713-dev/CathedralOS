@@ -38,7 +38,6 @@ struct CathedralView: View {
     @AppStorage("exportMode") private var exportModeRaw = ExportMode.json.rawValue
     @AppStorage("activeProfileID") private var activeProfileID = ""
     @Query private var secrets: [Secret]
-    @Query private var storyProjects: [StoryProject]
 
     private var exportMode: ExportMode {
         ExportMode(rawValue: exportModeRaw) ?? .json
@@ -98,10 +97,6 @@ struct CathedralView: View {
                     activeProfileID = newProfile.id.uuidString
                 } else if activeProfileID.isEmpty {
                     activeProfileID = profiles[0].id.uuidString
-                }
-                if storyProjects.isEmpty {
-                    let defaultProject = StoryProject()
-                    modelContext.insert(defaultProject)
                 }
             }
         }
