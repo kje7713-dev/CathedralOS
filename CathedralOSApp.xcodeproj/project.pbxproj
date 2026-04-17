@@ -39,6 +39,7 @@
 		0000000000000000000000A4 /* TemplatesPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000A3 /* TemplatesPickerView.swift */; };
 		0000000000000000000000A6 /* NewProfileFromTemplateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000A5 /* NewProfileFromTemplateView.swift */; };
 		0000000000000000000000A8 /* TemplatesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000A7 /* TemplatesTests.swift */; };
+		0000000000000000000000D4 /* PromptPackAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000D3 /* PromptPackAssemblerTests.swift */; };
 		0000000000000000000000B1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B0 /* Assets.xcassets */; };
 		0000000000000000000000B2 /* CathedralTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B3 /* CathedralTheme.swift */; };
 		0000000000000000000000B6 /* StoryProject.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B5 /* StoryProject.swift */; };
@@ -103,6 +104,7 @@
 		0000000000000000000000A3 /* TemplatesPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplatesPickerView.swift; sourceTree = "<group>"; };
 		0000000000000000000000A5 /* NewProfileFromTemplateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewProfileFromTemplateView.swift; sourceTree = "<group>"; };
 		0000000000000000000000A7 /* TemplatesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplatesTests.swift; sourceTree = "<group>"; };
+		0000000000000000000000D3 /* PromptPackAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackAssemblerTests.swift; sourceTree = "<group>"; };
 		0000000000000000000000B0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		0000000000000000000000B3 /* CathedralTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CathedralTheme.swift; sourceTree = "<group>"; };
 		0000000000000000000000B5 /* StoryProject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryProject.swift; sourceTree = "<group>"; };
@@ -270,6 +272,7 @@
 				000000000000000000000099 /* AskPackAssemblerTests.swift */,
 				00000000000000000000009B /* PrivacySafeTitleTests.swift */,
 				0000000000000000000000A7 /* TemplatesTests.swift */,
+				0000000000000000000000D3 /* PromptPackAssemblerTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -479,6 +482,7 @@
 				00000000000000000000009A /* AskPackAssemblerTests.swift in Sources */,
 				00000000000000000000009C /* PrivacySafeTitleTests.swift in Sources */,
 				0000000000000000000000A8 /* TemplatesTests.swift in Sources */,
+				0000000000000000000000D4 /* PromptPackAssemblerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

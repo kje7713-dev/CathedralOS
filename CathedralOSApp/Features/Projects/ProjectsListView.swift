@@ -13,50 +13,13 @@ struct ProjectsListView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            Group {
                 if projects.isEmpty {
-                    CathedralEmptyState(label: "No projects yet. Create one to begin.")
-                        .listRowBackground(CathedralTheme.Colors.background)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets())
-                }
-                ForEach(projects) { project in
-                    NavigationLink {
-                        ProjectDetailView(project: project)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(project.name)
-                                .font(CathedralTheme.Typography.body(15))
-                                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            if !project.summary.isEmpty {
-                                Text(project.summary)
-                                    .font(CathedralTheme.Typography.caption())
-                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                                    .lineLimit(1)
-                            }
-                        }
-                        .padding(.vertical, CathedralTheme.Spacing.xs)
-                    }
-                    .listRowBackground(CathedralTheme.Colors.background)
-                    .listRowSeparatorTint(CathedralTheme.Colors.separator)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
-                            projectToDelete = project
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                        Button {
-                            renameText = project.name
-                            projectToRename = project
-                        } label: {
-                            Label("Rename", systemImage: "pencil")
-                        }
-                        .tint(CathedralTheme.Colors.accent)
-                    }
+                    emptyState
+                } else {
+                    projectList
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .navigationTitle("Projects")
             .navigationBarTitleDisplayMode(.large)
@@ -66,12 +29,6 @@ struct ProjectsListView: View {
                         Image(systemName: "plus")
                             .foregroundStyle(CathedralTheme.Colors.accent)
                     }
-                }
-            }
-            .task {
-                if projects.isEmpty {
-                    let defaultProject = StoryProject()
-                    modelContext.insert(defaultProject)
                 }
             }
         }
@@ -96,6 +53,103 @@ struct ProjectsListView: View {
         } message: {
             Text("Delete \"\(projectToDelete?.name ?? "this project")\"? This cannot be undone.")
         }
+    }
+
+    // MARK: Empty State
+
+    private var emptyState: some View {
+        VStack(spacing: CathedralTheme.Spacing.xl) {
+            Spacer()
+            Image(systemName: "books.vertical")
+                .font(.system(size: 44, weight: .ultraLight))
+                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+
+            VStack(spacing: CathedralTheme.Spacing.xs) {
+                Text("No Projects")
+                    .font(CathedralTheme.Typography.headline(18))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                Text("Create a project to begin assembling your story.")
+                    .font(CathedralTheme.Typography.body())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .multilineTextAlignment(.center)
+            }
+
+            CathedralPrimaryButton("New Project", systemImage: "plus") {
+                showAddProject = true
+            }
+            .padding(.horizontal, CathedralTheme.Spacing.xxl)
+            Spacer()
+        }
+        .padding(CathedralTheme.Spacing.xl)
+    }
+
+    // MARK: Project List
+
+    private var projectList: some View {
+        List {
+            ForEach(projects) { project in
+                NavigationLink {
+                    ProjectDetailView(project: project)
+                } label: {
+                    projectRow(project)
+                }
+                .listRowBackground(CathedralTheme.Colors.surface)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        projectToDelete = project
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    Button {
+                        renameText = project.name
+                        projectToRename = project
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                    .tint(CathedralTheme.Colors.accent)
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(CathedralTheme.Colors.background.ignoresSafeArea())
+    }
+
+    @ViewBuilder
+    private func projectRow(_ project: StoryProject) -> some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text(project.name)
+                .font(CathedralTheme.Typography.headline(16))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+
+            if !project.summary.isEmpty {
+                Text(project.summary)
+                    .font(CathedralTheme.Typography.body(14))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .lineLimit(2)
+            }
+
+            let pills = metadataPills(for: project)
+            if !pills.isEmpty {
+                HStack(spacing: CathedralTheme.Spacing.xs) {
+                    ForEach(pills, id: \.self) { label in
+                        CathedralMetadataPill(label: label)
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(.vertical, CathedralTheme.Spacing.sm)
+    }
+
+    private func metadataPills(for project: StoryProject) -> [String] {
+        var pills: [String] = []
+        let charCount = project.characters.count
+        if charCount > 0 { pills.append("\(charCount) \(charCount == 1 ? "character" : "characters")") }
+        let packCount = project.promptPacks.count
+        if packCount > 0 { pills.append("\(packCount) \(packCount == 1 ? "pack" : "packs")") }
+        return pills
     }
 
     // MARK: Add Sheet

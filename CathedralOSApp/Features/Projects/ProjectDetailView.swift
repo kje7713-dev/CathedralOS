@@ -59,12 +59,20 @@ struct ProjectDetailView: View {
 
     private var summarySection: some View {
         Section {
-            TextField("Project summary…", text: $project.summary, axis: .vertical)
-                .font(CathedralTheme.Typography.body())
-                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                .lineLimit(3...6)
-                .listRowBackground(CathedralTheme.Colors.background)
-                .listRowSeparator(.hidden)
+            CathedralCard {
+                TextField("Project summary…", text: $project.summary, axis: .vertical)
+                    .font(CathedralTheme.Typography.body())
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    .lineLimit(3...6)
+            }
+            .listRowBackground(CathedralTheme.Colors.background)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(
+                top: CathedralTheme.Spacing.sm,
+                leading: CathedralTheme.Spacing.base,
+                bottom: CathedralTheme.Spacing.sm,
+                trailing: CathedralTheme.Spacing.base
+            ))
         } header: {
             CathedralSectionHeader("Summary")
                 .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
@@ -112,22 +120,10 @@ struct ProjectDetailView: View {
                 SettingEditorView(project: project)
             } label: {
                 let s = project.projectSetting
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Edit Setting")
-                        .font(CathedralTheme.Typography.body(15))
-                        .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    if let summary = s?.summary, !summary.isEmpty {
-                        Text(summary)
-                            .font(CathedralTheme.Typography.caption())
-                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                            .lineLimit(2)
-                    } else if s == nil {
-                        Text("No setting defined")
-                            .font(CathedralTheme.Typography.caption())
-                            .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-                    }
-                }
-                .padding(.vertical, CathedralTheme.Spacing.xs)
+                CathedralNavRowLabel(
+                    title: "Edit Setting",
+                    subtitle: s?.summary.nilIfEmpty ?? (s == nil ? "No setting defined" : nil)
+                )
             }
             .listRowBackground(CathedralTheme.Colors.background)
             .listRowSeparatorTint(CathedralTheme.Colors.separator)
@@ -218,10 +214,12 @@ struct ProjectDetailView: View {
                 NavigationLink {
                     PromptPackPreviewView(project: project, pack: pack)
                 } label: {
-                    CathedralItemRow(
+                    // Use CathedralNavRowLabel (no onTapGesture) to avoid
+                    // gesture interception on the enclosing NavigationLink.
+                    CathedralNavRowLabel(
                         title: pack.name,
                         subtitle: packSubtitle(pack)
-                    ) {}
+                    )
                 }
                 .listRowBackground(CathedralTheme.Colors.background)
                 .listRowSeparatorTint(CathedralTheme.Colors.separator)
