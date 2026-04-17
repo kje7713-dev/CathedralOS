@@ -31,6 +31,10 @@ struct PromptPackPreviewView: View {
         viewMode == .prompt ? promptText : jsonText
     }
 
+    private var contentFont: Font {
+        viewMode == .json ? CathedralTheme.Typography.mono(12) : CathedralTheme.Typography.body(14)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
@@ -77,9 +81,7 @@ struct PromptPackPreviewView: View {
 
     private var contentBlock: some View {
         Text(activeText)
-            .font(viewMode == .json
-                  ? CathedralTheme.Typography.mono(12)
-                  : CathedralTheme.Typography.body(14))
+            .font(contentFont)
             .foregroundStyle(CathedralTheme.Colors.primaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
