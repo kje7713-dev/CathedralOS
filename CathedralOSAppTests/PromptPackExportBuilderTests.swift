@@ -57,6 +57,7 @@ final class PromptPackExportBuilderTests: XCTestCase {
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
         XCTAssertTrue(payload.setting.included, "Setting must be included when enabled and project has a setting")
+        XCTAssertTrue(payload.setting.hasData, "hasData must be true when project has a setting")
         XCTAssertEqual(payload.setting.summary, "Victorian London")
         XCTAssertEqual(payload.setting.domains, ["Crime", "Society"])
         XCTAssertEqual(payload.setting.constraints, ["No magic"])
@@ -77,9 +78,10 @@ final class PromptPackExportBuilderTests: XCTestCase {
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
         XCTAssertFalse(payload.setting.included, "Setting must not be included when pack has includeProjectSetting = false")
+        XCTAssertTrue(payload.setting.hasData, "hasData must be true when project has a setting, even if excluded")
     }
 
-    func testSettingExcludedWhenProjectHasNoSetting() {
+    func testSettingIncludedTrueButNoDataWhenProjectHasNoSetting() {
         let project = makeProject()
         // no projectSetting
 
@@ -88,7 +90,9 @@ final class PromptPackExportBuilderTests: XCTestCase {
 
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
-        XCTAssertFalse(payload.setting.included, "Setting must not be included when project has no setting configured")
+        XCTAssertTrue(payload.setting.included,
+                      "included must mirror includeProjectSetting — it must be true even when project has no setting data")
+        XCTAssertFalse(payload.setting.hasData, "hasData must be false when project has no setting")
     }
 
     func testSettingStructurallyPresentWhenExcluded() {
@@ -98,8 +102,9 @@ final class PromptPackExportBuilderTests: XCTestCase {
 
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
-        // Even when excluded, the setting object is structurally present with empty values
+        // Even when excluded, the setting object is structurally present with empty values.
         XCTAssertFalse(payload.setting.included)
+        XCTAssertFalse(payload.setting.hasData)
         XCTAssertEqual(payload.setting.summary, "")
         XCTAssertTrue(payload.setting.domains.isEmpty)
         XCTAssertTrue(payload.setting.constraints.isEmpty)
@@ -427,5 +432,187 @@ final class PromptPackExportBuilderTests: XCTestCase {
         let second = PromptPackJSONAssembler.jsonString(pack: pack, project: project)
 
         XCTAssertEqual(first, second, "JSON output must be deterministic for identical input")
+    }
+
+    // MARK: JSON null-encoding — optional fields must appear as null, not be omitted
+
+    private func jsonObject(pack: PromptPack, project: StoryProject) -> [String: Any] {
+        let json = PromptPackJSONAssembler.jsonString(pack: pack, project: project)
+        let data = json.data(using: .utf8)!
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    }
+
+    func testSelectedSparkKeyPresentAsNullWhenNoneSelected() {
+        let pack = makePack()
+        pack.selectedStorySparkID = nil
+        let obj = jsonObject(pack: pack, project: makeProject())
+
+        XCTAssertTrue(obj.keys.contains("selectedStorySpark"),
+                      "selectedStorySpark key must always be present in JSON")
+        XCTAssertTrue(obj["selectedStorySpark"] is NSNull,
+                      "selectedStorySpark must be null when no spark is selected")
+    }
+
+    func testSelectedAftertasteKeyPresentAsNullWhenNoneSelected() {
+        let pack = makePack()
+        pack.selectedAftertasteID = nil
+        let obj = jsonObject(pack: pack, project: makeProject())
+
+        XCTAssertTrue(obj.keys.contains("selectedAftertaste"),
+                      "selectedAftertaste key must always be present in JSON")
+        XCTAssertTrue(obj["selectedAftertaste"] is NSNull,
+                      "selectedAftertaste must be null when no aftertaste is selected")
+    }
+
+    func testSelectedSparkKeyPresentAsObjectWhenSelected() {
+        let project = makeProject()
+        let spark = StorySpark(title: "Spark", situation: "Sit.", stakes: "Stakes.")
+        project.storySparks = [spark]
+
+        let pack = makePack()
+        pack.selectedStorySparkID = spark.id
+
+        let obj = jsonObject(pack: pack, project: project)
+        XCTAssertFalse(obj["selectedStorySpark"] is NSNull,
+                       "selectedStorySpark must be an object when a spark is selected")
+        XCTAssertNotNil(obj["selectedStorySpark"], "selectedStorySpark must not be nil")
+    }
+
+    func testSelectedAftertasteKeyPresentAsObjectWhenSelected() {
+        let project = makeProject()
+        let at = Aftertaste(label: "Dread")
+        project.aftertastes = [at]
+
+        let pack = makePack()
+        pack.selectedAftertasteID = at.id
+
+        let obj = jsonObject(pack: pack, project: project)
+        XCTAssertFalse(obj["selectedAftertaste"] is NSNull,
+                       "selectedAftertaste must be an object when an aftertaste is selected")
+        XCTAssertNotNil(obj["selectedAftertaste"], "selectedAftertaste must not be nil")
+    }
+
+    func testSettingInstructionBiasKeyPresentAsNullWhenNil() {
+        let project = makeProject()
+        let setting = ProjectSetting()
+        setting.instructionBias = nil
+        project.projectSetting = setting
+
+        let pack = makePack()
+        pack.includeProjectSetting = true
+
+        let obj = jsonObject(pack: pack, project: project)
+        let settingObj = obj["setting"] as? [String: Any]
+        XCTAssertNotNil(settingObj)
+        XCTAssertTrue(settingObj?.keys.contains("instructionBias") ?? false,
+                      "setting.instructionBias key must always be present")
+        XCTAssertTrue(settingObj?["instructionBias"] is NSNull,
+                      "setting.instructionBias must be null when not set")
+    }
+
+    func testCharacterNotesAndInstructionBiasKeysPresentAsNullWhenNil() {
+        let project = makeProject()
+        let char = StoryCharacter(name: "Ghost")
+        char.notes = nil
+        char.instructionBias = nil
+        project.characters = [char]
+
+        let pack = makePack()
+        pack.selectedCharacterIDs = [char.id]
+
+        let obj = jsonObject(pack: pack, project: project)
+        let chars = obj["selectedCharacters"] as? [[String: Any]]
+        let charObj = chars?.first
+        XCTAssertNotNil(charObj)
+        XCTAssertTrue(charObj?.keys.contains("notes") ?? false,
+                      "character.notes key must always be present")
+        XCTAssertTrue(charObj?["notes"] is NSNull,
+                      "character.notes must be null when not set")
+        XCTAssertTrue(charObj?.keys.contains("instructionBias") ?? false,
+                      "character.instructionBias key must always be present")
+        XCTAssertTrue(charObj?["instructionBias"] is NSNull,
+                      "character.instructionBias must be null when not set")
+    }
+
+    func testCharacterNotesAndInstructionBiasPreservedWhenSet() {
+        let project = makeProject()
+        let char = StoryCharacter(name: "Elena")
+        char.notes = "Carries a secret"
+        char.instructionBias = "Write with restraint"
+        project.characters = [char]
+
+        let pack = makePack()
+        pack.selectedCharacterIDs = [char.id]
+
+        let obj = jsonObject(pack: pack, project: project)
+        let chars = obj["selectedCharacters"] as? [[String: Any]]
+        let charObj = chars?.first
+        XCTAssertEqual(charObj?["notes"] as? String, "Carries a secret")
+        XCTAssertEqual(charObj?["instructionBias"] as? String, "Write with restraint")
+    }
+
+    func testPromptPackNotesAndInstructionBiasKeysPresentAsNullWhenNil() {
+        let pack = makePack()
+        pack.notes = nil
+        pack.instructionBias = nil
+
+        let obj = jsonObject(pack: pack, project: makeProject())
+        let packObj = obj["promptPack"] as? [String: Any]
+        XCTAssertNotNil(packObj)
+        XCTAssertTrue(packObj?.keys.contains("notes") ?? false,
+                      "promptPack.notes key must always be present")
+        XCTAssertTrue(packObj?["notes"] is NSNull,
+                      "promptPack.notes must be null when not set")
+        XCTAssertTrue(packObj?.keys.contains("instructionBias") ?? false,
+                      "promptPack.instructionBias key must always be present")
+        XCTAssertTrue(packObj?["instructionBias"] is NSNull,
+                      "promptPack.instructionBias must be null when not set")
+    }
+
+    func testPromptPackNotesAndInstructionBiasPreservedWhenSet() {
+        let pack = makePack()
+        pack.notes = "Use fragments."
+        pack.instructionBias = "Focus on subtext."
+
+        let obj = jsonObject(pack: pack, project: makeProject())
+        let packObj = obj["promptPack"] as? [String: Any]
+        XCTAssertEqual(packObj?["notes"] as? String, "Use fragments.")
+        XCTAssertEqual(packObj?["instructionBias"] as? String, "Focus on subtext.")
+    }
+
+    func testSettingHasDataTrueWhenExcludedButProjectHasSetting() {
+        let project = makeProject()
+        let setting = ProjectSetting()
+        setting.summary = "Victorian London"
+        project.projectSetting = setting
+
+        let pack = makePack()
+        pack.includeProjectSetting = false
+
+        let payload = PromptPackExportBuilder.build(pack: pack, project: project)
+
+        XCTAssertFalse(payload.setting.included,
+                       "included must be false when includeProjectSetting is false")
+        XCTAssertTrue(payload.setting.hasData,
+                      "hasData must be true when the project has setting data, even if the pack excludes it")
+    }
+
+    func testSettingIncludedTrueWithNoDataYieldsEmptyFields() {
+        let project = makeProject()
+        // no projectSetting
+
+        let pack = makePack()
+        pack.includeProjectSetting = true
+
+        let payload = PromptPackExportBuilder.build(pack: pack, project: project)
+
+        XCTAssertTrue(payload.setting.included)
+        XCTAssertFalse(payload.setting.hasData)
+        XCTAssertEqual(payload.setting.summary, "")
+        XCTAssertTrue(payload.setting.domains.isEmpty)
+        XCTAssertTrue(payload.setting.constraints.isEmpty)
+        XCTAssertTrue(payload.setting.themes.isEmpty)
+        XCTAssertEqual(payload.setting.season, "")
+        XCTAssertNil(payload.setting.instructionBias)
     }
 }
