@@ -1,14 +1,34 @@
 import SwiftUI
 
+// MARK: - Export mode for Prompt Pack preview
+
+private enum PromptPackViewMode: String, CaseIterable {
+    case prompt = "Prompt"
+    case json   = "JSON"
+}
+
+// MARK: - PromptPackPreviewView
+
 struct PromptPackPreviewView: View {
     let project: StoryProject
     let pack: PromptPack
 
-    @State private var showShareSheet = false
-    @State private var showCopied = false
+    @State private var viewMode: PromptPackViewMode = .prompt
+    @State private var showSharePrompt = false
+    @State private var showShareJSON   = false
+    @State private var copiedPrompt    = false
+    @State private var copiedJSON      = false
 
-    private var assembled: String {
+    private var promptText: String {
         PromptPackAssembler.assemble(pack: pack, project: project)
+    }
+
+    private var jsonText: String {
+        PromptPackJSONAssembler.jsonString(pack: pack, project: project)
+    }
+
+    private var activeText: String {
+        viewMode == .prompt ? promptText : jsonText
     }
 
     var body: some View {
@@ -18,33 +38,14 @@ struct PromptPackPreviewView: View {
                 // Metadata strip
                 metadataStrip
 
-                // Assembled text
-                Text(assembled)
-                    .font(CathedralTheme.Typography.body(14))
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(CathedralTheme.Spacing.base)
-                    .background(CathedralTheme.Colors.surface)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                            .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+                // Mode picker — Prompt / JSON
+                modePicker
 
-                // Actions
-                VStack(spacing: CathedralTheme.Spacing.sm) {
-                    CathedralPrimaryButton("Share / Export", systemImage: "square.and.arrow.up") {
-                        showShareSheet = true
-                    }
-                    CathedralSecondaryButton(showCopied ? "Copied!" : "Copy to Clipboard", systemImage: "doc.on.doc") {
-                        UIPasteboard.general.string = assembled
-                        showCopied = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                            showCopied = false
-                        }
-                    }
-                }
+                // Content block
+                contentBlock
+
+                // Export actions
+                exportActions
             }
             .padding(CathedralTheme.Spacing.base)
         }
@@ -52,8 +53,78 @@ struct PromptPackPreviewView: View {
         .navigationTitle(pack.name)
         .navigationBarTitleDisplayMode(.large)
         .tint(CathedralTheme.Colors.accent)
-        .sheet(isPresented: $showShareSheet) {
-            ShareSheet(activityItems: [assembled])
+        .sheet(isPresented: $showSharePrompt) {
+            ShareSheet(activityItems: [promptText])
+        }
+        .sheet(isPresented: $showShareJSON) {
+            ShareSheet(activityItems: [jsonText])
+        }
+    }
+
+    // MARK: Mode Picker
+
+    private var modePicker: some View {
+        Picker("Export format", selection: $viewMode) {
+            ForEach(PromptPackViewMode.allCases, id: \.self) { mode in
+                Text(mode.rawValue).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.vertical, CathedralTheme.Spacing.xs)
+    }
+
+    // MARK: Content Block
+
+    private var contentBlock: some View {
+        Text(activeText)
+            .font(viewMode == .json
+                  ? CathedralTheme.Typography.mono(12)
+                  : CathedralTheme.Typography.body(14))
+            .foregroundStyle(CathedralTheme.Colors.primaryText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+            .padding(CathedralTheme.Spacing.base)
+            .background(CathedralTheme.Colors.surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                    .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+
+    // MARK: Export Actions
+
+    private var exportActions: some View {
+        VStack(spacing: CathedralTheme.Spacing.sm) {
+            if viewMode == .prompt {
+                CathedralPrimaryButton("Share Prompt", systemImage: "square.and.arrow.up") {
+                    showSharePrompt = true
+                }
+                CathedralSecondaryButton(
+                    copiedPrompt ? "Copied!" : "Copy Prompt",
+                    systemImage: "doc.on.doc"
+                ) {
+                    UIPasteboard.general.string = promptText
+                    copiedPrompt = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        copiedPrompt = false
+                    }
+                }
+            } else {
+                CathedralPrimaryButton("Share JSON", systemImage: "square.and.arrow.up") {
+                    showShareJSON = true
+                }
+                CathedralSecondaryButton(
+                    copiedJSON ? "Copied!" : "Copy JSON",
+                    systemImage: "doc.on.doc"
+                ) {
+                    UIPasteboard.general.string = jsonText
+                    copiedJSON = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        copiedJSON = false
+                    }
+                }
+            }
         }
     }
 
