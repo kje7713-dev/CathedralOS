@@ -15,20 +15,16 @@ enum PromptPackExportBuilder {
 
         // Setting — always present.
         // `included` always mirrors the pack's `includeProjectSetting` flag.
-        // `hasData`  reflects whether the project has setting data, independently
-        //             of whether this pack chose to include it.
         // Fields are populated only when the pack includes the setting AND data exists.
-        let hasSetting = project.projectSetting != nil
-        let settingSource = (pack.includeProjectSetting && hasSetting) ? project.projectSetting : nil
+        let settingSource = pack.includeProjectSetting ? project.projectSetting : nil
         let settingPayload = PromptPackExportPayload.SettingPayload(
             included: pack.includeProjectSetting,
-            hasData: hasSetting,
             summary: settingSource?.summary ?? "",
             domains: settingSource?.domains ?? [],
             constraints: settingSource?.constraints ?? [],
             themes: settingSource?.themes ?? [],
             season: settingSource?.season ?? "",
-            instructionBias: settingSource?.instructionBias
+            instructionBias: settingSource?.instructionBias ?? ""
         )
 
         // Characters — filtered to selected IDs, sorted alphabetically
@@ -44,8 +40,8 @@ enum PromptPackExportBuilder {
                     preferences: c.preferences,
                     resources: c.resources,
                     failurePatterns: c.failurePatterns,
-                    notes: c.notes,
-                    instructionBias: c.instructionBias
+                    notes: c.notes ?? "",
+                    instructionBias: c.instructionBias ?? ""
                 )
             }
 
@@ -85,8 +81,8 @@ enum PromptPackExportBuilder {
                 id: pack.id,
                 name: pack.name,
                 includeProjectSetting: pack.includeProjectSetting,
-                notes: pack.notes,
-                instructionBias: pack.instructionBias
+                notes: pack.notes ?? "",
+                instructionBias: pack.instructionBias ?? ""
             )
         )
     }
