@@ -15,7 +15,9 @@ enum PromptPackExportBuilder {
 
         // Setting — always present.
         // `included` always mirrors the pack's `includeProjectSetting` flag.
-        // Fields are populated only when the pack includes the setting AND data exists.
+        // When included is true but project.projectSetting is nil, settingSource
+        // is nil and all fields fall back to their empty defaults — same net result
+        // as the previous explicit hasSetting guard.
         let settingSource = pack.includeProjectSetting ? project.projectSetting : nil
         let settingPayload = PromptPackExportPayload.SettingPayload(
             included: pack.includeProjectSetting,
