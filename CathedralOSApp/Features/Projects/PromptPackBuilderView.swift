@@ -149,6 +149,7 @@ struct PromptPackBuilderView: View {
             .onAppear { loadExisting() }
         }
         .tint(CathedralTheme.Colors.accent)
+        .interactiveDismissDisabled(isEditing || !name.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     // MARK: Selection Row

@@ -176,6 +176,7 @@ struct ProjectsListView: View {
                 }
             }
         }
+        .interactiveDismissDisabled(!newProjectName.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     // MARK: Rename Sheet
@@ -204,6 +205,7 @@ struct ProjectsListView: View {
                 }
             }
         }
+        .interactiveDismissDisabled(true)
     }
 
     // MARK: Actions

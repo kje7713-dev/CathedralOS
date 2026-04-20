@@ -67,6 +67,7 @@ struct StorySparkFormView: View {
             .onAppear { loadExisting() }
         }
         .tint(CathedralTheme.Colors.accent)
+        .interactiveDismissDisabled(isEditing || !title.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func loadExisting() {

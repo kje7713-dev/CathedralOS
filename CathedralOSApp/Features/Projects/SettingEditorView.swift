@@ -127,6 +127,14 @@ struct SettingEditorView: View {
     }
 
     private func saveBack() {
+        // Commit any staged tag text that the user typed but didn't add via '+'
+        let trimmedNewDomain = newDomain.trimmingCharacters(in: .whitespaces)
+        if !trimmedNewDomain.isEmpty { domains.append(trimmedNewDomain); newDomain = "" }
+        let trimmedNewConstraint = newConstraint.trimmingCharacters(in: .whitespaces)
+        if !trimmedNewConstraint.isEmpty { constraints.append(trimmedNewConstraint); newConstraint = "" }
+        let trimmedNewTheme = newTheme.trimmingCharacters(in: .whitespaces)
+        if !trimmedNewTheme.isEmpty { themes.append(trimmedNewTheme); newTheme = "" }
+
         let trimmedSummary = summary.trimmingCharacters(in: .whitespaces)
         let trimmedSeason = season.trimmingCharacters(in: .whitespaces)
         let trimmedBias = instructionBias.trimmingCharacters(in: .whitespaces)

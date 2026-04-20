@@ -47,12 +47,7 @@ struct AftertasteFormView: View {
             .onAppear { loadExisting() }
         }
         .tint(CathedralTheme.Colors.accent)
-    }
-
-    private func loadExisting() {
-        guard let a = aftertaste else { return }
-        label = a.label
-        note = a.note ?? ""
+        .interactiveDismissDisabled(isEditing || !label.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func save() {
