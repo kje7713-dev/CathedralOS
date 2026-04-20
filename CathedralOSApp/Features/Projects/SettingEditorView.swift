@@ -45,44 +45,19 @@ struct SettingEditorView: View {
     @State private var currentFieldLevel: FieldLevel = .basic
     @State private var enabledGroups: Set<String> = []
 
-    private func show(_ groupKey: String, nativeLevel: FieldLevel) -> Bool {
-        switch currentFieldLevel {
-        case .basic:    return enabledGroups.contains(groupKey)
-        case .advanced: return nativeLevel == .advanced || enabledGroups.contains(groupKey)
-        case .literary: return true
-        }
-    }
-
-    private var optionalAdvancedGroups: [(key: String, label: String)] {
-        guard currentFieldLevel == .basic else { return [] }
-        return [
-            (FieldGroupKey.settingWorld,  "World Rules & Technology"),
-            (FieldGroupKey.settingForces, "Historical & Political Forces"),
-            (FieldGroupKey.settingBias,   "Instruction Bias"),
-        ]
-    }
-
-    private var optionalLiteraryGroups: [(key: String, label: String)] {
-        guard currentFieldLevel != .literary else { return [] }
-        return [
-            (FieldGroupKey.settingCulture,  "Culture & Institutions"),
-            (FieldGroupKey.settingPressure, "Religious & Economic Pressure"),
-        ]
+    private func show(_ groupID: String, nativeLevel: FieldLevel) -> Bool {
+        FieldTemplateEngine.shouldShow(
+            groupID: groupID,
+            nativeLevel: nativeLevel,
+            currentLevel: currentFieldLevel,
+            enabledGroups: enabledGroups
+        )
     }
 
     var body: some View {
         Form {
             // Field depth selector
-            Section {
-                Picker("Field Depth", selection: $currentFieldLevel) {
-                    ForEach(FieldLevel.allCases, id: \.self) { level in
-                        Text(level.displayName).tag(level)
-                    }
-                }
-                .pickerStyle(.segmented)
-            } header: {
-                CathedralFormSectionHeader("Field Depth")
-            }
+            FieldDepthPicker(selection: $currentFieldLevel)
 
             // Basic fields
             Section {
@@ -94,10 +69,9 @@ struct SettingEditorView: View {
                 CathedralFormSectionHeader("Summary / Notes")
             }
 
-            tagSection(header: "Domains",     items: $domains,     newItem: $newDomain,     placeholder: "e.g. Victorian England")
-            tagSection(header: "Constraints", items: $constraints, newItem: $newConstraint, placeholder: "e.g. No modern technology")
-            tagSection(header: "Themes",      items: $themes,      newItem: $newTheme,      placeholder: "e.g. Redemption")
-
+            TagFieldSection(header: "Domains",     items: $domains,     newItem: $newDomain,     placeholder: "e.g. Victorian England")
+            TagFieldSection(header: "Constraints", items: $constraints, newItem: $newConstraint, placeholder: "e.g. No modern technology")
+            TagFieldSection(header: "Themes",      items: $themes,      newItem: $newTheme,      placeholder: "e.g. Redemption")
             Section {
                 TextField("e.g. Late autumn, year three of the drought", text: $season)
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
@@ -107,7 +81,7 @@ struct SettingEditorView: View {
 
             // Advanced — World
             if show(FieldGroupKey.settingWorld, nativeLevel: .advanced) {
-                tagSection(header: "World Rules", items: $worldRules, newItem: $newWorldRule, placeholder: "e.g. Magic requires sacrifice")
+                TagFieldSection(header: "World Rules", items: $worldRules, newItem: $newWorldRule, placeholder: "e.g. Magic requires sacrifice")
                 Section {
                     TextField("Technology level of this world…", text: $technologyLevel)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
@@ -174,10 +148,10 @@ struct SettingEditorView: View {
 
             // Literary — Culture
             if show(FieldGroupKey.settingCulture, nativeLevel: .literary) {
-                tagSection(header: "Taboos",          items: $taboos,         newItem: $newTaboo,         placeholder: "e.g. Speaking the king's name aloud")
-                tagSection(header: "Institutions",    items: $institutions,   newItem: $newInstitution,   placeholder: "e.g. The Church of the Pale")
-                tagSection(header: "Dominant Values", items: $dominantValues, newItem: $newDominantValue, placeholder: "e.g. Honor above life")
-                tagSection(header: "Hidden Truths",   items: $hiddenTruths,   newItem: $newHiddenTruth,   placeholder: "e.g. The king has been dead for years")
+                TagFieldSection(header: "Taboos",          items: $taboos,         newItem: $newTaboo,         placeholder: "e.g. Speaking the king's name aloud")
+                TagFieldSection(header: "Institutions",    items: $institutions,   newItem: $newInstitution,   placeholder: "e.g. The Church of the Pale")
+                TagFieldSection(header: "Dominant Values", items: $dominantValues, newItem: $newDominantValue, placeholder: "e.g. Honor above life")
+                TagFieldSection(header: "Hidden Truths",   items: $hiddenTruths,   newItem: $newHiddenTruth,   placeholder: "e.g. The king has been dead for years")
             }
 
             // Literary — Pressure
@@ -201,40 +175,11 @@ struct SettingEditorView: View {
             }
 
             // Optional sections
-            let advGroups = optionalAdvancedGroups
-            let litGroups = optionalLiteraryGroups
-            if !advGroups.isEmpty || !litGroups.isEmpty {
-                Section {
-                    if !advGroups.isEmpty {
-                        Text("Advanced").font(CathedralTheme.Typography.caption()).foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        ForEach(advGroups, id: \.key) { group in
-                            Toggle(group.label, isOn: Binding(
-                                get: { enabledGroups.contains(group.key) },
-                                set: { on in
-                                    if on { enabledGroups.insert(group.key) }
-                                    else  { enabledGroups.remove(group.key) }
-                                }
-                            ))
-                            .font(CathedralTheme.Typography.body())
-                        }
-                    }
-                    if !litGroups.isEmpty {
-                        Text("Literary").font(CathedralTheme.Typography.caption()).foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        ForEach(litGroups, id: \.key) { group in
-                            Toggle(group.label, isOn: Binding(
-                                get: { enabledGroups.contains(group.key) },
-                                set: { on in
-                                    if on { enabledGroups.insert(group.key) }
-                                    else  { enabledGroups.remove(group.key) }
-                                }
-                            ))
-                            .font(CathedralTheme.Typography.body())
-                        }
-                    }
-                } header: {
-                    CathedralFormSectionHeader("Optional Sections")
-                }
-            }
+            OptionalSectionTogglePanel(
+                advancedGroups: FieldTemplateEngine.optionalAdvancedGroups(for: .setting, at: currentFieldLevel),
+                literaryGroups: FieldTemplateEngine.optionalLiteraryGroups(for: .setting, at: currentFieldLevel),
+                enabledGroups: $enabledGroups
+            )
         }
         .cathedralFormStyle()
         .navigationTitle("Setting")
@@ -247,51 +192,6 @@ struct SettingEditorView: View {
         .onAppear { loadFromProject() }
         .onDisappear { saveBack() }
         .tint(CathedralTheme.Colors.accent)
-    }
-
-    // MARK: Tag Section
-
-    @ViewBuilder
-    private func tagSection(
-        header: String,
-        items: Binding<[String]>,
-        newItem: Binding<String>,
-        placeholder: String
-    ) -> some View {
-        Section {
-            ForEach(Array(items.wrappedValue.enumerated()), id: \.offset) { i, item in
-                HStack(spacing: CathedralTheme.Spacing.sm) {
-                    CathedralTagChip(text: item)
-                    Spacer()
-                    Button {
-                        items.wrappedValue.remove(at: i)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: CathedralTheme.Icons.deleteControl))
-                            .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            HStack {
-                TextField(placeholder, text: newItem)
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                Button {
-                    let trimmed = newItem.wrappedValue.trimmingCharacters(in: .whitespaces)
-                    guard !trimmed.isEmpty else { return }
-                    items.wrappedValue.append(trimmed)
-                    newItem.wrappedValue = ""
-                } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                }
-                .buttonStyle(.plain)
-                .disabled(newItem.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-        } header: {
-            CathedralFormSectionHeader(header)
-        }
     }
 
     // MARK: Load / Save
