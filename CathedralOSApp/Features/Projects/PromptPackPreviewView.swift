@@ -18,6 +18,7 @@ struct PromptPackPreviewView: View {
     @State private var showShareJSON   = false
     @State private var copiedPrompt    = false
     @State private var copiedJSON      = false
+    @State private var showEditPack    = false
 
     private var exportPayload: PromptPackExportPayload {
         PromptPackExportBuilder.build(pack: pack, project: project)
@@ -61,6 +62,14 @@ struct PromptPackPreviewView: View {
         .navigationTitle(pack.name)
         .navigationBarTitleDisplayMode(.large)
         .tint(CathedralTheme.Colors.accent)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Edit") { showEditPack = true }
+            }
+        }
+        .sheet(isPresented: $showEditPack) {
+            PromptPackBuilderView(project: project, pack: pack)
+        }
         .sheet(isPresented: $showSharePrompt) {
             ShareSheet(activityItems: [promptText])
         }
