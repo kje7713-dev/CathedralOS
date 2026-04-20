@@ -112,6 +112,7 @@ struct CharacterFormView: View {
             .onAppear { loadExisting() }
         }
         .tint(CathedralTheme.Colors.accent)
+        .interactiveDismissDisabled(isEditing || !name.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     // MARK: Tag Section Builder
@@ -173,7 +174,21 @@ struct CharacterFormView: View {
         instructionBias = c.instructionBias ?? ""
     }
 
+    private func commitStagedTags() {
+        let trimmedRole = newRole.trimmingCharacters(in: .whitespaces)
+        if !trimmedRole.isEmpty { roles.append(trimmedRole); newRole = "" }
+        let trimmedGoal = newGoal.trimmingCharacters(in: .whitespaces)
+        if !trimmedGoal.isEmpty { goals.append(trimmedGoal); newGoal = "" }
+        let trimmedPreference = newPreference.trimmingCharacters(in: .whitespaces)
+        if !trimmedPreference.isEmpty { preferences.append(trimmedPreference); newPreference = "" }
+        let trimmedResource = newResource.trimmingCharacters(in: .whitespaces)
+        if !trimmedResource.isEmpty { resources.append(trimmedResource); newResource = "" }
+        let trimmedFailurePattern = newFailurePattern.trimmingCharacters(in: .whitespaces)
+        if !trimmedFailurePattern.isEmpty { failurePatterns.append(trimmedFailurePattern); newFailurePattern = "" }
+    }
+
     private func save() {
+        commitStagedTags()
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         guard !trimmedName.isEmpty else { return }
 

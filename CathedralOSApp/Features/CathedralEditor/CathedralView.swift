@@ -198,6 +198,7 @@ struct CathedralView: View {
                     }
                 }
             }
+            .interactiveDismissDisabled(!newProfileName.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .sheet(isPresented: $showNewProfileFromTemplate) {
             NewProfileFromTemplateView(activeProfileID: $activeProfileID)
@@ -222,6 +223,7 @@ struct CathedralView: View {
                 }
                 .onAppear { renameProfileName = profile?.name ?? "" }
             }
+            .interactiveDismissDisabled(true)
         }
         .alert("Delete Profile", isPresented: $showDeleteProfileAlert) {
             Button("Delete", role: .destructive) { deleteActiveProfile() }
@@ -778,6 +780,7 @@ struct GoalFormView: View {
                 }
             }
         }
+        .interactiveDismissDisabled(isEditing || !title.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func save() {
@@ -861,6 +864,7 @@ struct ConstraintFormView: View {
                 }
             }
         }
+        .interactiveDismissDisabled(isEditing || !title.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func save() {
@@ -941,6 +945,7 @@ struct RoleFormView: View {
                 }
             }
         }
+        .interactiveDismissDisabled(isEditing || !title.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func save() {
@@ -1021,6 +1026,7 @@ struct DomainFormView: View {
                 }
             }
         }
+        .interactiveDismissDisabled(isEditing || !title.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func save() {
@@ -1101,6 +1107,7 @@ struct SeasonFormView: View {
                 }
             }
         }
+        .interactiveDismissDisabled(isEditing || !title.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func save() {
@@ -1181,6 +1188,7 @@ struct ResourceFormView: View {
                 }
             }
         }
+        .interactiveDismissDisabled(isEditing || !title.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func save() {
@@ -1261,6 +1269,7 @@ struct PreferenceFormView: View {
                 }
             }
         }
+        .interactiveDismissDisabled(isEditing || !title.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func save() {
@@ -1341,6 +1350,7 @@ struct FailurePatternFormView: View {
                 }
             }
         }
+        .interactiveDismissDisabled(isEditing || !title.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func save() {
@@ -1397,6 +1407,7 @@ struct ItemFormView: View {
             }
             .onAppear { title = initialTitle }
         }
+        .interactiveDismissDisabled(!initialTitle.isEmpty || !title.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 }
 

@@ -53,6 +53,7 @@ struct NewProfileFromTemplateView: View {
             }
         }
         .tint(CathedralTheme.Colors.accent)
+        .interactiveDismissDisabled(!profileName.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func createFromTemplate() {

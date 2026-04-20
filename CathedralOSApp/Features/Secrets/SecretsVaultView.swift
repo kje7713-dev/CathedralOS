@@ -135,6 +135,7 @@ struct SecretFormView: View {
             }
         }
         .tint(CathedralTheme.Colors.accent)
+        .interactiveDismissDisabled(isEditing || !name.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private func save() {
