@@ -14,19 +14,29 @@ enum PromptPackExportBuilder {
     static func build(pack: PromptPack, project: StoryProject) -> PromptPackExportPayload {
 
         // Setting — always present.
-        // `included` always mirrors the pack's `includeProjectSetting` flag.
-        // When included is true but project.projectSetting is nil, settingSource
-        // is nil and all fields fall back to their empty defaults — same net result
-        // as the previous explicit hasSetting guard.
         let settingSource = pack.includeProjectSetting ? project.projectSetting : nil
+        let s = settingSource
         let settingPayload = PromptPackExportPayload.SettingPayload(
-            included: pack.includeProjectSetting,
-            summary: settingSource?.summary ?? "",
-            domains: settingSource?.domains ?? [],
-            constraints: settingSource?.constraints ?? [],
-            themes: settingSource?.themes ?? [],
-            season: settingSource?.season ?? "",
-            instructionBias: settingSource?.instructionBias ?? ""
+            included:             pack.includeProjectSetting,
+            summary:              s?.summary ?? "",
+            domains:              s?.domains ?? [],
+            constraints:          s?.constraints ?? [],
+            themes:               s?.themes ?? [],
+            season:               s?.season ?? "",
+            worldRules:           s?.worldRules ?? [],
+            historicalPressure:   s?.historicalPressure ?? "",
+            politicalForces:      s?.politicalForces ?? "",
+            socialOrder:          s?.socialOrder ?? "",
+            environmentalPressure: s?.environmentalPressure ?? "",
+            technologyLevel:      s?.technologyLevel ?? "",
+            mythicFrame:          s?.mythicFrame ?? "",
+            instructionBias:      s?.instructionBias ?? "",
+            religiousPressure:    s?.religiousPressure ?? "",
+            economicPressure:     s?.economicPressure ?? "",
+            taboos:               s?.taboos ?? [],
+            institutions:         s?.institutions ?? [],
+            dominantValues:       s?.dominantValues ?? [],
+            hiddenTruths:         s?.hiddenTruths ?? []
         )
 
         // Characters — filtered to selected IDs, sorted alphabetically
@@ -35,15 +45,37 @@ enum PromptPackExportBuilder {
             .sorted { $0.name < $1.name }
             .map { c in
                 PromptPackExportPayload.CharacterPayload(
-                    id: c.id,
-                    name: c.name,
-                    roles: c.roles,
-                    goals: c.goals,
-                    preferences: c.preferences,
-                    resources: c.resources,
-                    failurePatterns: c.failurePatterns,
-                    notes: c.notes ?? "",
-                    instructionBias: c.instructionBias ?? ""
+                    id:                c.id,
+                    name:              c.name,
+                    roles:             c.roles,
+                    goals:             c.goals,
+                    preferences:       c.preferences,
+                    resources:         c.resources,
+                    failurePatterns:   c.failurePatterns,
+                    fears:             c.fears,
+                    flaws:             c.flaws,
+                    secrets:           c.secrets,
+                    wounds:            c.wounds,
+                    contradictions:    c.contradictions,
+                    needs:             c.needs,
+                    obsessions:        c.obsessions,
+                    attachments:       c.attachments,
+                    notes:             c.notes ?? "",
+                    instructionBias:   c.instructionBias ?? "",
+                    selfDeceptions:    c.selfDeceptions,
+                    identityConflicts: c.identityConflicts,
+                    moralLines:        c.moralLines,
+                    breakingPoints:    c.breakingPoints,
+                    virtues:           c.virtues,
+                    publicMask:        c.publicMask ?? "",
+                    privateLogic:      c.privateLogic ?? "",
+                    speechStyle:       c.speechStyle ?? "",
+                    arcStart:          c.arcStart ?? "",
+                    arcEnd:            c.arcEnd ?? "",
+                    coreLie:           c.coreLie ?? "",
+                    coreTruth:         c.coreTruth ?? "",
+                    reputation:        c.reputation ?? "",
+                    status:            c.status ?? ""
                 )
             }
 
@@ -52,11 +84,20 @@ enum PromptPackExportBuilder {
         if let sparkID = pack.selectedStorySparkID,
            let spark = project.storySparks.first(where: { $0.id == sparkID }) {
             sparkPayload = .init(
-                id: spark.id,
-                title: spark.title,
-                situation: spark.situation,
-                stakes: spark.stakes,
-                twist: spark.twist ?? ""
+                id:                spark.id,
+                title:             spark.title,
+                situation:         spark.situation,
+                stakes:            spark.stakes,
+                twist:             spark.twist ?? "",
+                urgency:           spark.urgency ?? "",
+                threat:            spark.threat ?? "",
+                opportunity:       spark.opportunity ?? "",
+                complication:      spark.complication ?? "",
+                clock:             spark.clock ?? "",
+                triggerEvent:      spark.triggerEvent ?? "",
+                initialImbalance:  spark.initialImbalance ?? "",
+                falseResolution:   spark.falseResolution ?? "",
+                reversalPotential: spark.reversalPotential ?? ""
             )
         } else {
             sparkPayload = nil
@@ -66,25 +107,34 @@ enum PromptPackExportBuilder {
         let aftertastePayload: PromptPackExportPayload.AftertastePayload?
         if let aftertasteID = pack.selectedAftertasteID,
            let aftertaste = project.aftertastes.first(where: { $0.id == aftertasteID }) {
-            aftertastePayload = .init(id: aftertaste.id, label: aftertaste.label, note: aftertaste.note ?? "")
+            aftertastePayload = .init(
+                id:                      aftertaste.id,
+                label:                   aftertaste.label,
+                note:                    aftertaste.note ?? "",
+                emotionalResidue:        aftertaste.emotionalResidue ?? "",
+                endingTexture:           aftertaste.endingTexture ?? "",
+                desiredAmbiguityLevel:   aftertaste.desiredAmbiguityLevel ?? "",
+                readerQuestionLeftOpen:  aftertaste.readerQuestionLeftOpen ?? "",
+                lastImageFeeling:        aftertaste.lastImageFeeling ?? ""
+            )
         } else {
             aftertastePayload = nil
         }
 
         return PromptPackExportPayload(
-            schema: schemaIdentifier,
-            version: schemaVersion,
-            project: .init(id: project.id, name: project.name, summary: project.summary),
-            setting: settingPayload,
+            schema:             schemaIdentifier,
+            version:            schemaVersion,
+            project:            .init(id: project.id, name: project.name, summary: project.summary),
+            setting:            settingPayload,
             selectedCharacters: characters,
             selectedStorySpark: sparkPayload,
             selectedAftertaste: aftertastePayload,
-            promptPack: .init(
-                id: pack.id,
-                name: pack.name,
+            promptPack:         .init(
+                id:                    pack.id,
+                name:                  pack.name,
                 includeProjectSetting: pack.includeProjectSetting,
-                notes: pack.notes ?? "",
-                instructionBias: pack.instructionBias ?? ""
+                notes:                 pack.notes ?? "",
+                instructionBias:       pack.instructionBias ?? ""
             )
         )
     }
