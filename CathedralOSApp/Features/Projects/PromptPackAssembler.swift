@@ -62,14 +62,14 @@ enum PromptPackAssembler {
             var sparkLines = ["## Story Spark: \(spark.title)"]
             if !spark.situation.isEmpty { sparkLines.append("Situation: \(spark.situation)") }
             if !spark.stakes.isEmpty { sparkLines.append("Stakes: \(spark.stakes)") }
-            if let twist = spark.twist, !twist.isEmpty { sparkLines.append("Twist: \(twist)") }
+            if !spark.twist.isEmpty { sparkLines.append("Twist: \(spark.twist)") }
             sections.append(sparkLines.joined(separator: "\n"))
         }
 
         // Aftertaste
         if let aftertaste = payload.selectedAftertaste {
             var aLines = ["## Aftertaste: \(aftertaste.label)"]
-            if let note = aftertaste.note, !note.isEmpty { aLines.append(note) }
+            if !aftertaste.note.isEmpty { aLines.append(aftertaste.note) }
             sections.append(aLines.joined(separator: "\n"))
         }
 

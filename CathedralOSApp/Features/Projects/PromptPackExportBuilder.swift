@@ -8,7 +8,7 @@ import Foundation
 
 enum PromptPackExportBuilder {
 
-    static let schemaIdentifier = "cathedral-os/prompt-pack-export"
+    static let schemaIdentifier = "cathedralos.story_packet"
     static let schemaVersion = 1
 
     static func build(pack: PromptPack, project: StoryProject) -> PromptPackExportPayload {
@@ -58,7 +58,7 @@ enum PromptPackExportBuilder {
                 title: spark.title,
                 situation: spark.situation,
                 stakes: spark.stakes,
-                twist: spark.twist
+                twist: spark.twist ?? ""
             )
         } else {
             sparkPayload = nil
@@ -68,7 +68,7 @@ enum PromptPackExportBuilder {
         let aftertastePayload: PromptPackExportPayload.AftertastePayload?
         if let aftertasteID = pack.selectedAftertasteID,
            let aftertaste = project.aftertastes.first(where: { $0.id == aftertasteID }) {
-            aftertastePayload = .init(id: aftertaste.id, label: aftertaste.label, note: aftertaste.note)
+            aftertastePayload = .init(id: aftertaste.id, label: aftertaste.label, note: aftertaste.note ?? "")
         } else {
             aftertastePayload = nil
         }

@@ -232,13 +232,15 @@ struct PromptPackExportPayload: Codable {
         let title: String
         let situation: String
         let stakes: String
-        let twist: String?
+        /// Always present — empty string when no twist is set.
+        let twist: String
     }
 
     struct AftertastePayload: Codable {
         let id: UUID
         let label: String
-        let note: String?
+        /// Always present — empty string when no note is set.
+        let note: String
     }
 
     struct PromptPackPayload: Codable {

@@ -238,7 +238,7 @@ final class PromptPackExportBuilderTests: XCTestCase {
         XCTAssertNil(payload.selectedStorySpark)
     }
 
-    func testSparkTwistNilPreserved() {
+    func testSparkTwistNilNormalizedToEmptyString() {
         let project = makeProject()
         let spark = StorySpark(title: "Spark", situation: "Sit.", stakes: "Stakes.")
         spark.twist = nil
@@ -249,7 +249,8 @@ final class PromptPackExportBuilderTests: XCTestCase {
 
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
-        XCTAssertNil(payload.selectedStorySpark?.twist)
+        XCTAssertEqual(payload.selectedStorySpark?.twist, "",
+                       "twist must be normalized to empty string when the model field is nil")
     }
 
     // MARK: Aftertaste included
@@ -281,7 +282,7 @@ final class PromptPackExportBuilderTests: XCTestCase {
         XCTAssertNil(payload.selectedAftertaste)
     }
 
-    func testAftertasteNoteNilPreserved() {
+    func testAftertasteNoteNilNormalizedToEmptyString() {
         let project = makeProject()
         let at = Aftertaste(label: "Quiet dread")
         at.note = nil
@@ -292,7 +293,8 @@ final class PromptPackExportBuilderTests: XCTestCase {
 
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
-        XCTAssertNil(payload.selectedAftertaste?.note)
+        XCTAssertEqual(payload.selectedAftertaste?.note, "",
+                       "note must be normalized to empty string when the model field is nil")
     }
 
     // MARK: Pack notes included
