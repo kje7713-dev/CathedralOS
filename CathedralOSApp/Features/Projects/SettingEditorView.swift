@@ -338,7 +338,7 @@ struct SettingEditorView: View {
         commit(&worldRules,    &newWorldRule)
         commit(&taboos,        &newTaboo)
         commit(&institutions,  &newInstitution)
-        commit(&dominantValues,&newDominantValue)
+        commit(&dominantValues, &newDominantValue)
         commit(&hiddenTruths,  &newHiddenTruth)
 
         let trimmedSummary = summary.trimmingCharacters(in: .whitespaces)
