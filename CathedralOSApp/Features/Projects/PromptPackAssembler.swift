@@ -19,9 +19,12 @@ enum PromptPackAssembler {
 
         // Setting — render only when the pack includes the setting AND data exists
         let setting = payload.setting
-        let settingHasData = !setting.summary.isEmpty || !setting.domains.isEmpty
-            || !setting.themes.isEmpty || !setting.constraints.isEmpty
-            || !setting.season.isEmpty || !setting.instructionBias.isEmpty
+        let settingHasData = !setting.summary.isEmpty
+            || !setting.domains.isEmpty
+            || !setting.themes.isEmpty
+            || !setting.constraints.isEmpty
+            || !setting.season.isEmpty
+            || !setting.instructionBias.isEmpty
         if setting.included && settingHasData {
             var settingLines: [String] = ["## Setting"]
             if !setting.summary.isEmpty { settingLines.append(setting.summary) }
