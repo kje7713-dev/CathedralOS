@@ -50,6 +50,12 @@ struct AftertasteFormView: View {
         .interactiveDismissDisabled(isEditing || !label.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
+    private func loadExisting() {
+        guard let a = aftertaste else { return }
+        label = a.label
+        note = a.note ?? ""
+    }
+
     private func save() {
         let trimmedLabel = label.trimmingCharacters(in: .whitespaces)
         guard !trimmedLabel.isEmpty else { return }
