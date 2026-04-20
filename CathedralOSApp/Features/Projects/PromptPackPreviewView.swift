@@ -47,6 +47,11 @@ struct PromptPackPreviewView: View {
                 // Metadata strip
                 metadataStrip
 
+                // Sparse-pack notice
+                if isSparse {
+                    sparsePackNotice
+                }
+
                 // Mode picker — Prompt / JSON
                 modePicker
 
@@ -168,5 +173,32 @@ struct PromptPackPreviewView: View {
         if pack.selectedAftertasteID != nil { pills.append("aftertaste") }
         if pack.includeProjectSetting && project.projectSetting != nil { pills.append("setting") }
         return pills
+    }
+
+    // MARK: Sparse-pack notice
+
+    private var isSparse: Bool {
+        pack.selectedCharacterIDs.isEmpty
+            && pack.selectedStorySparkID == nil
+            && pack.selectedAftertasteID == nil
+    }
+
+    private var sparsePackNotice: some View {
+        HStack(spacing: CathedralTheme.Spacing.sm) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            Text("This pack has no characters, spark, or aftertaste selected. The export will be sparse.")
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+        }
+        .padding(CathedralTheme.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
     }
 }

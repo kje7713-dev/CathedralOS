@@ -57,7 +57,6 @@ final class PromptPackExportBuilderTests: XCTestCase {
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
         XCTAssertTrue(payload.setting.included, "Setting must be included when enabled and project has a setting")
-        XCTAssertTrue(payload.setting.hasData, "hasData must be true when project has a setting")
         XCTAssertEqual(payload.setting.summary, "Victorian London")
         XCTAssertEqual(payload.setting.domains, ["Crime", "Society"])
         XCTAssertEqual(payload.setting.constraints, ["No magic"])
@@ -78,7 +77,6 @@ final class PromptPackExportBuilderTests: XCTestCase {
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
         XCTAssertFalse(payload.setting.included, "Setting must not be included when pack has includeProjectSetting = false")
-        XCTAssertTrue(payload.setting.hasData, "hasData must be true when project has a setting, even if excluded")
     }
 
     func testSettingIncludedTrueButNoDataWhenProjectHasNoSetting() {
@@ -92,7 +90,6 @@ final class PromptPackExportBuilderTests: XCTestCase {
 
         XCTAssertTrue(payload.setting.included,
                       "included must mirror includeProjectSetting — it must be true even when project has no setting data")
-        XCTAssertFalse(payload.setting.hasData, "hasData must be false when project has no setting")
     }
 
     func testSettingStructurallyPresentWhenExcluded() {
@@ -104,13 +101,12 @@ final class PromptPackExportBuilderTests: XCTestCase {
 
         // Even when excluded, the setting object is structurally present with empty values.
         XCTAssertFalse(payload.setting.included)
-        XCTAssertFalse(payload.setting.hasData)
         XCTAssertEqual(payload.setting.summary, "")
         XCTAssertTrue(payload.setting.domains.isEmpty)
         XCTAssertTrue(payload.setting.constraints.isEmpty)
         XCTAssertTrue(payload.setting.themes.isEmpty)
         XCTAssertEqual(payload.setting.season, "")
-        XCTAssertNil(payload.setting.instructionBias)
+        XCTAssertEqual(payload.setting.instructionBias, "")
     }
 
     // MARK: includeProjectSetting reflected in pack payload
@@ -167,10 +163,10 @@ final class PromptPackExportBuilderTests: XCTestCase {
 
     // MARK: Empty optional fields
 
-    func testEmptyOptionalFieldsPreservedAsNil() {
+    func testEmptyOptionalFieldsNormalizedToEmptyString() {
         let project = makeProject()
         let char = StoryCharacter(name: "Ghost")
-        // notes and instructionBias default to nil
+        // notes and instructionBias default to nil — builder normalizes to ""
         project.characters = [char]
 
         let pack = makePack()
@@ -180,10 +176,10 @@ final class PromptPackExportBuilderTests: XCTestCase {
 
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
-        XCTAssertNil(payload.selectedCharacters[0].notes)
-        XCTAssertNil(payload.selectedCharacters[0].instructionBias)
-        XCTAssertNil(payload.promptPack.notes)
-        XCTAssertNil(payload.promptPack.instructionBias)
+        XCTAssertEqual(payload.selectedCharacters[0].notes, "")
+        XCTAssertEqual(payload.selectedCharacters[0].instructionBias, "")
+        XCTAssertEqual(payload.promptPack.notes, "")
+        XCTAssertEqual(payload.promptPack.instructionBias, "")
     }
 
     func testEmptyArraysPreservedInCharacter() {
@@ -308,13 +304,13 @@ final class PromptPackExportBuilderTests: XCTestCase {
         XCTAssertEqual(payload.promptPack.notes, "Use a fragmented style.")
     }
 
-    func testPackNotesNilPreserved() {
+    func testPackNotesNilNormalizedToEmptyString() {
         let pack = makePack()
         pack.notes = nil
 
         let payload = PromptPackExportBuilder.build(pack: pack, project: makeProject())
 
-        XCTAssertNil(payload.promptPack.notes)
+        XCTAssertEqual(payload.promptPack.notes, "")
     }
 
     // MARK: instructionBias included
@@ -494,7 +490,7 @@ final class PromptPackExportBuilderTests: XCTestCase {
         XCTAssertNotNil(obj["selectedAftertaste"], "selectedAftertaste must not be nil")
     }
 
-    func testSettingInstructionBiasKeyPresentAsNullWhenNil() {
+    func testSettingInstructionBiasEmptyStringWhenNil() {
         let project = makeProject()
         let setting = ProjectSetting()
         setting.instructionBias = nil
@@ -508,11 +504,11 @@ final class PromptPackExportBuilderTests: XCTestCase {
         XCTAssertNotNil(settingObj)
         XCTAssertTrue(settingObj?.keys.contains("instructionBias") ?? false,
                       "setting.instructionBias key must always be present")
-        XCTAssertTrue(settingObj?["instructionBias"] is NSNull,
-                      "setting.instructionBias must be null when not set")
+        XCTAssertEqual(settingObj?["instructionBias"] as? String, "",
+                       "setting.instructionBias must be empty string (not null) when not set")
     }
 
-    func testCharacterNotesAndInstructionBiasKeysPresentAsNullWhenNil() {
+    func testCharacterNotesAndInstructionBiasEmptyStringWhenNil() {
         let project = makeProject()
         let char = StoryCharacter(name: "Ghost")
         char.notes = nil
@@ -528,12 +524,12 @@ final class PromptPackExportBuilderTests: XCTestCase {
         XCTAssertNotNil(charObj)
         XCTAssertTrue(charObj?.keys.contains("notes") ?? false,
                       "character.notes key must always be present")
-        XCTAssertTrue(charObj?["notes"] is NSNull,
-                      "character.notes must be null when not set")
+        XCTAssertEqual(charObj?["notes"] as? String, "",
+                       "character.notes must be empty string (not null) when not set")
         XCTAssertTrue(charObj?.keys.contains("instructionBias") ?? false,
                       "character.instructionBias key must always be present")
-        XCTAssertTrue(charObj?["instructionBias"] is NSNull,
-                      "character.instructionBias must be null when not set")
+        XCTAssertEqual(charObj?["instructionBias"] as? String, "",
+                       "character.instructionBias must be empty string (not null) when not set")
     }
 
     func testCharacterNotesAndInstructionBiasPreservedWhenSet() {
@@ -553,7 +549,7 @@ final class PromptPackExportBuilderTests: XCTestCase {
         XCTAssertEqual(charObj?["instructionBias"] as? String, "Write with restraint")
     }
 
-    func testPromptPackNotesAndInstructionBiasKeysPresentAsNullWhenNil() {
+    func testPromptPackNotesAndInstructionBiasEmptyStringWhenNil() {
         let pack = makePack()
         pack.notes = nil
         pack.instructionBias = nil
@@ -563,12 +559,12 @@ final class PromptPackExportBuilderTests: XCTestCase {
         XCTAssertNotNil(packObj)
         XCTAssertTrue(packObj?.keys.contains("notes") ?? false,
                       "promptPack.notes key must always be present")
-        XCTAssertTrue(packObj?["notes"] is NSNull,
-                      "promptPack.notes must be null when not set")
+        XCTAssertEqual(packObj?["notes"] as? String, "",
+                       "promptPack.notes must be empty string (not null) when not set")
         XCTAssertTrue(packObj?.keys.contains("instructionBias") ?? false,
                       "promptPack.instructionBias key must always be present")
-        XCTAssertTrue(packObj?["instructionBias"] is NSNull,
-                      "promptPack.instructionBias must be null when not set")
+        XCTAssertEqual(packObj?["instructionBias"] as? String, "",
+                       "promptPack.instructionBias must be empty string (not null) when not set")
     }
 
     func testPromptPackNotesAndInstructionBiasPreservedWhenSet() {
@@ -582,7 +578,7 @@ final class PromptPackExportBuilderTests: XCTestCase {
         XCTAssertEqual(packObj?["instructionBias"] as? String, "Focus on subtext.")
     }
 
-    func testSettingHasDataTrueWhenExcludedButProjectHasSetting() {
+    func testSettingHasCorrectIncludedFlagWhenExcludedButProjectHasSetting() {
         let project = makeProject()
         let setting = ProjectSetting()
         setting.summary = "Victorian London"
@@ -595,8 +591,6 @@ final class PromptPackExportBuilderTests: XCTestCase {
 
         XCTAssertFalse(payload.setting.included,
                        "included must be false when includeProjectSetting is false")
-        XCTAssertTrue(payload.setting.hasData,
-                      "hasData must be true when the project has setting data, even if the pack excludes it")
     }
 
     func testSettingIncludedTrueWithNoDataYieldsEmptyFields() {
@@ -609,12 +603,11 @@ final class PromptPackExportBuilderTests: XCTestCase {
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
         XCTAssertTrue(payload.setting.included)
-        XCTAssertFalse(payload.setting.hasData)
         XCTAssertEqual(payload.setting.summary, "")
         XCTAssertTrue(payload.setting.domains.isEmpty)
         XCTAssertTrue(payload.setting.constraints.isEmpty)
         XCTAssertTrue(payload.setting.themes.isEmpty)
         XCTAssertEqual(payload.setting.season, "")
-        XCTAssertNil(payload.setting.instructionBias)
+        XCTAssertEqual(payload.setting.instructionBias, "")
     }
 }

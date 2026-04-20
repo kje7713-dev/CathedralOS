@@ -94,11 +94,9 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         pack.includeProjectSetting = true
         let payload = decodePayload(pack: pack, project: project)
 
-        // included mirrors includeProjectSetting; hasData is false because there is no setting object
+        // included mirrors includeProjectSetting; setting fields fall back to empty defaults when no setting object exists
         XCTAssertTrue(payload.setting.included,
                       "included must mirror includeProjectSetting even when project has no setting data")
-        XCTAssertFalse(payload.setting.hasData,
-                       "hasData must be false when project has no setting object")
     }
 
     // MARK: Characters
@@ -203,7 +201,7 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         XCTAssertNil(payload.selectedStorySpark)
     }
 
-    func testSparkTwistNilPreserved() {
+    func testSparkTwistNilNormalizedToEmptyString() {
         let project = makeProject()
         let spark = StorySpark(title: "Spark", situation: "Sit.", stakes: "Stakes.")
         spark.twist = nil
@@ -213,7 +211,8 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         pack.selectedStorySparkID = spark.id
         let payload = decodePayload(pack: pack, project: project)
 
-        XCTAssertNil(payload.selectedStorySpark?.twist)
+        XCTAssertEqual(payload.selectedStorySpark?.twist, "",
+                       "twist must be normalized to empty string (not null) when the model field is nil")
     }
 
     // MARK: Aftertaste
@@ -245,7 +244,7 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         XCTAssertNil(payload.selectedAftertaste)
     }
 
-    func testAftertasteNoteNilPreserved() {
+    func testAftertasteNoteNilNormalizedToEmptyString() {
         let project = makeProject()
         let at = Aftertaste(label: "Quiet dread")
         at.note = nil
@@ -255,7 +254,8 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         pack.selectedAftertasteID = at.id
         let payload = decodePayload(pack: pack, project: project)
 
-        XCTAssertNil(payload.selectedAftertaste?.note)
+        XCTAssertEqual(payload.selectedAftertaste?.note, "",
+                       "note must be normalized to empty string (not null) when the model field is nil")
     }
 
     // MARK: Prompt Pack fields
@@ -272,15 +272,15 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         XCTAssertEqual(payload.promptPack.instructionBias, "Focus on subtext.")
     }
 
-    func testPromptPackNilFieldsPreserved() {
+    func testPromptPackNilFieldsNormalizedToEmptyString() {
         let project = makeProject()
         let pack = makePack()
         pack.notes = nil
         pack.instructionBias = nil
         let payload = decodePayload(pack: pack, project: project)
 
-        XCTAssertNil(payload.promptPack.notes)
-        XCTAssertNil(payload.promptPack.instructionBias)
+        XCTAssertEqual(payload.promptPack.notes, "")
+        XCTAssertEqual(payload.promptPack.instructionBias, "")
     }
 
     // MARK: JSON output validity
@@ -313,7 +313,7 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         XCTAssertEqual(first, second, "JSON output must be deterministic for the same input")
     }
 
-    // MARK: hasData
+    // MARK: Setting inclusion
 
     func testSettingIncludedWhenEnabledWithData() {
         let project = makeProject()
@@ -326,7 +326,6 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         let payload = decodePayload(pack: pack, project: project)
 
         XCTAssertTrue(payload.setting.included)
-        XCTAssertTrue(payload.setting.hasData)
     }
 
     func testSettingIncludedFalseWhenDisabled() {
@@ -340,8 +339,6 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         let payload = decodePayload(pack: pack, project: project)
 
         XCTAssertFalse(payload.setting.included)
-        XCTAssertTrue(payload.setting.hasData,
-                      "hasData must be true when project has a setting even if the pack excludes it")
     }
 
     // MARK: JSON null keys — optional fields must be null, not omitted
@@ -400,7 +397,7 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
                        "selectedAftertaste must be an object when an aftertaste is selected")
     }
 
-    func testPromptPackNotesIsNullInJSONWhenNil() {
+    func testPromptPackNotesEmptyStringInJSONWhenNil() {
         let pack = makePack()
         pack.notes = nil
         let obj = jsonDict(pack: pack, project: makeProject())
@@ -408,11 +405,11 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
 
         XCTAssertTrue(packObj?.keys.contains("notes") ?? false,
                       "promptPack.notes must always be present in JSON")
-        XCTAssertTrue(packObj?["notes"] is NSNull,
-                      "promptPack.notes must be null when not set")
+        XCTAssertEqual(packObj?["notes"] as? String, "",
+                       "promptPack.notes must be empty string (not null) when not set")
     }
 
-    func testPromptPackInstructionBiasIsNullInJSONWhenNil() {
+    func testPromptPackInstructionBiasEmptyStringInJSONWhenNil() {
         let pack = makePack()
         pack.instructionBias = nil
         let obj = jsonDict(pack: pack, project: makeProject())
@@ -420,8 +417,8 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
 
         XCTAssertTrue(packObj?.keys.contains("instructionBias") ?? false,
                       "promptPack.instructionBias must always be present in JSON")
-        XCTAssertTrue(packObj?["instructionBias"] is NSNull,
-                      "promptPack.instructionBias must be null when not set")
+        XCTAssertEqual(packObj?["instructionBias"] as? String, "",
+                       "promptPack.instructionBias must be empty string (not null) when not set")
     }
 
     func testPromptPackNotesAndInstructionBiasPreservedWhenSet() {
@@ -435,7 +432,7 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
         XCTAssertEqual(packObj?["instructionBias"] as? String, "Focus on subtext.")
     }
 
-    func testSettingInstructionBiasIsNullInJSONWhenNilAndIncluded() {
+    func testSettingInstructionBiasEmptyStringInJSONWhenNilAndIncluded() {
         let project = makeProject()
         let setting = ProjectSetting()
         setting.instructionBias = nil
@@ -448,11 +445,11 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
 
         XCTAssertTrue(settingObj?.keys.contains("instructionBias") ?? false,
                       "setting.instructionBias must always be present in JSON")
-        XCTAssertTrue(settingObj?["instructionBias"] is NSNull,
-                      "setting.instructionBias must be null when not set")
+        XCTAssertEqual(settingObj?["instructionBias"] as? String, "",
+                       "setting.instructionBias must be empty string (not null) when not set")
     }
 
-    func testCharacterNotesAndBiasAreNullInJSONWhenNil() {
+    func testCharacterNotesAndBiasAreEmptyStringInJSONWhenNil() {
         let project = makeProject()
         let char = StoryCharacter(name: "Ghost")
         char.notes = nil
@@ -467,12 +464,12 @@ final class PromptPackJSONAssemblerTests: XCTestCase {
 
         XCTAssertTrue(charObj?.keys.contains("notes") ?? false,
                       "character.notes must always be present in JSON")
-        XCTAssertTrue(charObj?["notes"] is NSNull,
-                      "character.notes must be null when not set")
+        XCTAssertEqual(charObj?["notes"] as? String, "",
+                       "character.notes must be empty string (not null) when not set")
         XCTAssertTrue(charObj?.keys.contains("instructionBias") ?? false,
                       "character.instructionBias must always be present in JSON")
-        XCTAssertTrue(charObj?["instructionBias"] is NSNull,
-                      "character.instructionBias must be null when not set")
+        XCTAssertEqual(charObj?["instructionBias"] as? String, "",
+                       "character.instructionBias must be empty string (not null) when not set")
     }
 
     func testCharacterNotesAndBiasPreservedWhenSet() {
