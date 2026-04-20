@@ -63,6 +63,8 @@
 		0000000000000000000000EC /* PromptPackExportBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000ED /* PromptPackExportBuilder.swift */; };
 		0000000000000000000000EE /* PromptPackExportBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000EF /* PromptPackExportBuilderTests.swift */; };
 		0000000000000000000000F0 /* PromptPackBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F1 /* PromptPackBuilderTests.swift */; };
+		0000000000000000000000F3 /* FieldLevel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F2 /* FieldLevel.swift */; };
+		0000000000000000000000F5 /* TieredFieldsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F4 /* TieredFieldsTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -134,6 +136,8 @@
 		0000000000000000000000ED /* PromptPackExportBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackExportBuilder.swift; sourceTree = "<group>"; };
 		0000000000000000000000EF /* PromptPackExportBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackExportBuilderTests.swift; sourceTree = "<group>"; };
 		0000000000000000000000F1 /* PromptPackBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackBuilderTests.swift; sourceTree = "<group>"; };
+		0000000000000000000000F2 /* FieldLevel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldLevel.swift; sourceTree = "<group>"; };
+		0000000000000000000000F4 /* TieredFieldsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TieredFieldsTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -262,6 +266,7 @@
 				0000000000000000000000BB /* Aftertaste.swift */,
 				0000000000000000000000BD /* PromptPack.swift */,
 				0000000000000000000000E6 /* PromptPackExportPayload.swift */,
+				0000000000000000000000F2 /* FieldLevel.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -289,6 +294,7 @@
 				0000000000000000000000EA /* PromptPackJSONAssemblerTests.swift */,
 				0000000000000000000000EF /* PromptPackExportBuilderTests.swift */,
 				0000000000000000000000F1 /* PromptPackBuilderTests.swift */,
+				0000000000000000000000F4 /* TieredFieldsTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -490,6 +496,7 @@
 				0000000000000000000000E7 /* PromptPackExportPayload.swift in Sources */,
 				0000000000000000000000E9 /* PromptPackJSONAssembler.swift in Sources */,
 				0000000000000000000000EC /* PromptPackExportBuilder.swift in Sources */,
+				0000000000000000000000F3 /* FieldLevel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -507,6 +514,7 @@
 				0000000000000000000000EB /* PromptPackJSONAssemblerTests.swift in Sources */,
 				0000000000000000000000EE /* PromptPackExportBuilderTests.swift in Sources */,
 				0000000000000000000000F0 /* PromptPackBuilderTests.swift in Sources */,
+				0000000000000000000000F5 /* TieredFieldsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
