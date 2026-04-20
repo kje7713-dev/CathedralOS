@@ -83,7 +83,6 @@ enum PromptPackExportBuilder {
         let sparkPayload: PromptPackExportPayload.StorySparkPayload?
         if let sparkID = pack.selectedStorySparkID,
            let spark = project.storySparks.first(where: { $0.id == sparkID }) {
-            let sparkID2   = spark.id
             let title      = spark.title
             let situation  = spark.situation
             let stakes     = spark.stakes
@@ -98,7 +97,7 @@ enum PromptPackExportBuilder {
             let falseResolution  = spark.falseResolution ?? ""
             let reversalPotential = spark.reversalPotential ?? ""
             sparkPayload = PromptPackExportPayload.StorySparkPayload(
-                id:                sparkID2,
+                id:                sparkID,
                 title:             title,
                 situation:         situation,
                 stakes:            stakes,
