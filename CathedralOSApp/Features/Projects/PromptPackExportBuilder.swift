@@ -83,21 +83,34 @@ enum PromptPackExportBuilder {
         let sparkPayload: PromptPackExportPayload.StorySparkPayload?
         if let sparkID = pack.selectedStorySparkID,
            let spark = project.storySparks.first(where: { $0.id == sparkID }) {
-            sparkPayload = .init(
-                id:                spark.id,
-                title:             spark.title,
-                situation:         spark.situation,
-                stakes:            spark.stakes,
-                twist:             spark.twist ?? "",
-                urgency:           spark.urgency ?? "",
-                threat:            spark.threat ?? "",
-                opportunity:       spark.opportunity ?? "",
-                complication:      spark.complication ?? "",
-                clock:             spark.clock ?? "",
-                triggerEvent:      spark.triggerEvent ?? "",
-                initialImbalance:  spark.initialImbalance ?? "",
-                falseResolution:   spark.falseResolution ?? "",
-                reversalPotential: spark.reversalPotential ?? ""
+            let title      = spark.title
+            let situation  = spark.situation
+            let stakes     = spark.stakes
+            let twist      = spark.twist ?? ""
+            let urgency    = spark.urgency ?? ""
+            let threat     = spark.threat ?? ""
+            let opportunity      = spark.opportunity ?? ""
+            let complication     = spark.complication ?? ""
+            let clock            = spark.clock ?? ""
+            let triggerEvent     = spark.triggerEvent ?? ""
+            let initialImbalance = spark.initialImbalance ?? ""
+            let falseResolution  = spark.falseResolution ?? ""
+            let reversalPotential = spark.reversalPotential ?? ""
+            sparkPayload = PromptPackExportPayload.StorySparkPayload(
+                id:                sparkID,
+                title:             title,
+                situation:         situation,
+                stakes:            stakes,
+                twist:             twist,
+                urgency:           urgency,
+                threat:            threat,
+                opportunity:       opportunity,
+                complication:      complication,
+                clock:             clock,
+                triggerEvent:      triggerEvent,
+                initialImbalance:  initialImbalance,
+                falseResolution:   falseResolution,
+                reversalPotential: reversalPotential
             )
         } else {
             sparkPayload = nil
