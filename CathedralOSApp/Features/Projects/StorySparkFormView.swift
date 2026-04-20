@@ -33,38 +33,20 @@ struct StorySparkFormView: View {
 
     private var isEditing: Bool { spark != nil }
 
-    private func show(_ groupKey: String, nativeLevel: FieldLevel) -> Bool {
-        switch currentFieldLevel {
-        case .basic:    return enabledGroups.contains(groupKey)
-        case .advanced: return nativeLevel == .advanced || enabledGroups.contains(groupKey)
-        case .literary: return true
-        }
-    }
-
-    private var optionalAdvancedGroups: [(key: String, label: String)] {
-        guard currentFieldLevel == .basic else { return [] }
-        return [(FieldGroupKey.sparkTension, "Urgency & Tension")]
-    }
-
-    private var optionalLiteraryGroups: [(key: String, label: String)] {
-        guard currentFieldLevel != .literary else { return [] }
-        return [(FieldGroupKey.sparkStructure, "Story Structure")]
+    private func show(_ groupID: String, nativeLevel: FieldLevel) -> Bool {
+        FieldTemplateEngine.shouldShow(
+            groupID: groupID,
+            nativeLevel: nativeLevel,
+            currentLevel: currentFieldLevel,
+            enabledGroups: enabledGroups
+        )
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 // Field depth
-                Section {
-                    Picker("Field Depth", selection: $currentFieldLevel) {
-                        ForEach(FieldLevel.allCases, id: \.self) { level in
-                            Text(level.displayName).tag(level)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    CathedralFormSectionHeader("Field Depth")
-                }
+                FieldDepthPicker(selection: $currentFieldLevel)
 
                 // Basic
                 Section {
@@ -180,40 +162,11 @@ struct StorySparkFormView: View {
                 }
 
                 // Optional sections
-                let advGroups = optionalAdvancedGroups
-                let litGroups = optionalLiteraryGroups
-                if !advGroups.isEmpty || !litGroups.isEmpty {
-                    Section {
-                        if !advGroups.isEmpty {
-                            Text("Advanced").font(CathedralTheme.Typography.caption()).foregroundStyle(CathedralTheme.Colors.secondaryText)
-                            ForEach(advGroups, id: \.key) { group in
-                                Toggle(group.label, isOn: Binding(
-                                    get: { enabledGroups.contains(group.key) },
-                                    set: { on in
-                                        if on { enabledGroups.insert(group.key) }
-                                        else  { enabledGroups.remove(group.key) }
-                                    }
-                                ))
-                                .font(CathedralTheme.Typography.body())
-                            }
-                        }
-                        if !litGroups.isEmpty {
-                            Text("Literary").font(CathedralTheme.Typography.caption()).foregroundStyle(CathedralTheme.Colors.secondaryText)
-                            ForEach(litGroups, id: \.key) { group in
-                                Toggle(group.label, isOn: Binding(
-                                    get: { enabledGroups.contains(group.key) },
-                                    set: { on in
-                                        if on { enabledGroups.insert(group.key) }
-                                        else  { enabledGroups.remove(group.key) }
-                                    }
-                                ))
-                                .font(CathedralTheme.Typography.body())
-                            }
-                        }
-                    } header: {
-                        CathedralFormSectionHeader("Optional Sections")
-                    }
-                }
+                OptionalSectionTogglePanel(
+                    advancedGroups: FieldTemplateEngine.optionalAdvancedGroups(for: .spark, at: currentFieldLevel),
+                    literaryGroups: FieldTemplateEngine.optionalLiteraryGroups(for: .spark, at: currentFieldLevel),
+                    enabledGroups: $enabledGroups
+                )
             }
             .cathedralFormStyle()
             .navigationTitle(isEditing ? "Edit Spark" : "New Spark")

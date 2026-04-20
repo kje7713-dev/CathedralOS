@@ -65,6 +65,10 @@
 		0000000000000000000000F0 /* PromptPackBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F1 /* PromptPackBuilderTests.swift */; };
 		0000000000000000000000F3 /* FieldLevel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F2 /* FieldLevel.swift */; };
 		0000000000000000000000F5 /* TieredFieldsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F4 /* TieredFieldsTests.swift */; };
+		0000000000000000000000F7 /* FieldTemplateDefinition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F6 /* FieldTemplateDefinition.swift */; };
+		0000000000000000000000F9 /* FieldTemplateEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F8 /* FieldTemplateEngine.swift */; };
+		0000000000000000000000FB /* FieldDepthComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FA /* FieldDepthComponents.swift */; };
+		0000000000000000000000FD /* FieldTemplateEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FC /* FieldTemplateEngineTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -138,6 +142,10 @@
 		0000000000000000000000F1 /* PromptPackBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackBuilderTests.swift; sourceTree = "<group>"; };
 		0000000000000000000000F2 /* FieldLevel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldLevel.swift; sourceTree = "<group>"; };
 		0000000000000000000000F4 /* TieredFieldsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TieredFieldsTests.swift; sourceTree = "<group>"; };
+		0000000000000000000000F6 /* FieldTemplateDefinition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldTemplateDefinition.swift; sourceTree = "<group>"; };
+		0000000000000000000000F8 /* FieldTemplateEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldTemplateEngine.swift; sourceTree = "<group>"; };
+		0000000000000000000000FA /* FieldDepthComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldDepthComponents.swift; sourceTree = "<group>"; };
+		0000000000000000000000FC /* FieldTemplateEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldTemplateEngineTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -195,6 +203,7 @@
 			isa = PBXGroup;
 			children = (
 				0000000000000000000000B3 /* CathedralTheme.swift */,
+				0000000000000000000000FA /* FieldDepthComponents.swift */,
 			);
 			path = DesignSystem;
 			sourceTree = "<group>";
@@ -267,6 +276,7 @@
 				0000000000000000000000BD /* PromptPack.swift */,
 				0000000000000000000000E6 /* PromptPackExportPayload.swift */,
 				0000000000000000000000F2 /* FieldLevel.swift */,
+				0000000000000000000000F6 /* FieldTemplateDefinition.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -295,6 +305,7 @@
 				0000000000000000000000EF /* PromptPackExportBuilderTests.swift */,
 				0000000000000000000000F1 /* PromptPackBuilderTests.swift */,
 				0000000000000000000000F4 /* TieredFieldsTests.swift */,
+				0000000000000000000000FC /* FieldTemplateEngineTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -320,6 +331,7 @@
 			isa = PBXGroup;
 			children = (
 				00000000000000000000008C /* KeychainService.swift */,
+				0000000000000000000000F8 /* FieldTemplateEngine.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -497,6 +509,9 @@
 				0000000000000000000000E9 /* PromptPackJSONAssembler.swift in Sources */,
 				0000000000000000000000EC /* PromptPackExportBuilder.swift in Sources */,
 				0000000000000000000000F3 /* FieldLevel.swift in Sources */,
+				0000000000000000000000F7 /* FieldTemplateDefinition.swift in Sources */,
+				0000000000000000000000F9 /* FieldTemplateEngine.swift in Sources */,
+				0000000000000000000000FB /* FieldDepthComponents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -515,6 +530,7 @@
 				0000000000000000000000EE /* PromptPackExportBuilderTests.swift in Sources */,
 				0000000000000000000000F0 /* PromptPackBuilderTests.swift in Sources */,
 				0000000000000000000000F5 /* TieredFieldsTests.swift in Sources */,
+				0000000000000000000000FD /* FieldTemplateEngineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

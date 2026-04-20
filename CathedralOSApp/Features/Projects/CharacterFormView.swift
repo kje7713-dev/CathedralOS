@@ -73,49 +73,20 @@ struct CharacterFormView: View {
 
     // MARK: Group visibility
 
-    private func show(_ groupKey: String, nativeLevel: FieldLevel) -> Bool {
-        switch currentFieldLevel {
-        case .basic:     return enabledGroups.contains(groupKey)
-        case .advanced:  return nativeLevel == .advanced || enabledGroups.contains(groupKey)
-        case .literary:  return true
-        }
-    }
-
-    // Groups that still need opt-in toggles at current level
-    private var optionalAdvancedGroups: [(key: String, label: String)] {
-        guard currentFieldLevel == .basic else { return [] }
-        return [
-            (FieldGroupKey.charPsychology, "Fears, Flaws & Needs"),
-            (FieldGroupKey.charBackstory,  "Wounds, Secrets & Attachments"),
-            (FieldGroupKey.charNotes,      "Notes"),
-            (FieldGroupKey.charBias,       "Instruction Bias"),
-        ]
-    }
-
-    private var optionalLiteraryGroups: [(key: String, label: String)] {
-        guard currentFieldLevel != .literary else { return [] }
-        return [
-            (FieldGroupKey.charInnerLife, "Inner Life & Deceptions"),
-            (FieldGroupKey.charPersona,   "Persona & Voice"),
-            (FieldGroupKey.charArc,       "Character Arc"),
-            (FieldGroupKey.charSocial,    "Virtues & Status"),
-        ]
+    private func show(_ groupID: String, nativeLevel: FieldLevel) -> Bool {
+        FieldTemplateEngine.shouldShow(
+            groupID: groupID,
+            nativeLevel: nativeLevel,
+            currentLevel: currentFieldLevel,
+            enabledGroups: enabledGroups
+        )
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 // Field depth selector
-                Section {
-                    Picker("Field Depth", selection: $currentFieldLevel) {
-                        ForEach(FieldLevel.allCases, id: \.self) { level in
-                            Text(level.displayName).tag(level)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    CathedralFormSectionHeader("Field Depth")
-                }
+                FieldDepthPicker(selection: $currentFieldLevel)
 
                 // Name
                 Section {
@@ -126,26 +97,26 @@ struct CharacterFormView: View {
                 }
 
                 // Basic fields
-                tagSection(header: "Roles",           items: $roles,          newItem: $newRole,          placeholder: "e.g. Protagonist")
-                tagSection(header: "Goals",           items: $goals,          newItem: $newGoal,          placeholder: "e.g. Survive the winter")
-                tagSection(header: "Preferences",     items: $preferences,    newItem: $newPreference,    placeholder: "e.g. Prefers negotiation over combat")
-                tagSection(header: "Resources",       items: $resources,      newItem: $newResource,      placeholder: "e.g. Old family estate")
-                tagSection(header: "Failure Patterns",items: $failurePatterns,newItem: $newFailurePattern,placeholder: "e.g. Trusts too quickly")
+                TagFieldSection(header: "Roles",            items: $roles,          newItem: $newRole,          placeholder: "e.g. Protagonist")
+                TagFieldSection(header: "Goals",            items: $goals,          newItem: $newGoal,          placeholder: "e.g. Survive the winter")
+                TagFieldSection(header: "Preferences",      items: $preferences,    newItem: $newPreference,    placeholder: "e.g. Prefers negotiation over combat")
+                TagFieldSection(header: "Resources",        items: $resources,      newItem: $newResource,      placeholder: "e.g. Old family estate")
+                TagFieldSection(header: "Failure Patterns", items: $failurePatterns,newItem: $newFailurePattern,placeholder: "e.g. Trusts too quickly")
 
                 // Advanced — Psychology
                 if show(FieldGroupKey.charPsychology, nativeLevel: .advanced) {
-                    tagSection(header: "Fears",          items: $fears,         newItem: $newFear,         placeholder: "e.g. Fear of abandonment")
-                    tagSection(header: "Flaws",          items: $flaws,         newItem: $newFlaw,         placeholder: "e.g. Pride")
-                    tagSection(header: "Needs",          items: $needs,         newItem: $newNeed,         placeholder: "e.g. Validation from authority")
-                    tagSection(header: "Contradictions", items: $contradictions,newItem: $newContradiction,placeholder: "e.g. Craves belonging, pushes people away")
+                    TagFieldSection(header: "Fears",          items: $fears,         newItem: $newFear,         placeholder: "e.g. Fear of abandonment")
+                    TagFieldSection(header: "Flaws",          items: $flaws,         newItem: $newFlaw,         placeholder: "e.g. Pride")
+                    TagFieldSection(header: "Needs",          items: $needs,         newItem: $newNeed,         placeholder: "e.g. Validation from authority")
+                    TagFieldSection(header: "Contradictions", items: $contradictions,newItem: $newContradiction,placeholder: "e.g. Craves belonging, pushes people away")
                 }
 
                 // Advanced — Backstory
                 if show(FieldGroupKey.charBackstory, nativeLevel: .advanced) {
-                    tagSection(header: "Wounds",     items: $wounds,     newItem: $newWound,     placeholder: "e.g. Lost a sibling in childhood")
-                    tagSection(header: "Secrets",    items: $secrets,    newItem: $newSecret,    placeholder: "e.g. Knows who the killer is")
-                    tagSection(header: "Attachments",items: $attachments,newItem: $newAttachment,placeholder: "e.g. Mother's old photograph")
-                    tagSection(header: "Obsessions", items: $obsessions, newItem: $newObsession, placeholder: "e.g. Tracking the missing heir")
+                    TagFieldSection(header: "Wounds",     items: $wounds,     newItem: $newWound,     placeholder: "e.g. Lost a sibling in childhood")
+                    TagFieldSection(header: "Secrets",    items: $secrets,    newItem: $newSecret,    placeholder: "e.g. Knows who the killer is")
+                    TagFieldSection(header: "Attachments",items: $attachments,newItem: $newAttachment,placeholder: "e.g. Mother's old photograph")
+                    TagFieldSection(header: "Obsessions", items: $obsessions, newItem: $newObsession, placeholder: "e.g. Tracking the missing heir")
                 }
 
                 // Advanced — Notes
@@ -174,9 +145,9 @@ struct CharacterFormView: View {
 
                 // Literary — Inner Life
                 if show(FieldGroupKey.charInnerLife, nativeLevel: .literary) {
-                    tagSection(header: "Self-Deceptions",   items: $selfDeceptions,  newItem: $newSelfDeception,  placeholder: "e.g. Believes she is helping")
-                    tagSection(header: "Identity Conflicts",items: $identityConflicts,newItem: $newIdentityConflict,placeholder: "e.g. Hero vs. coward")
-                    tagSection(header: "Moral Lines",       items: $moralLines,      newItem: $newMoralLine,      placeholder: "e.g. Will never betray family")
+                    TagFieldSection(header: "Self-Deceptions",    items: $selfDeceptions,   newItem: $newSelfDeception,   placeholder: "e.g. Believes she is helping")
+                    TagFieldSection(header: "Identity Conflicts",items: $identityConflicts, newItem: $newIdentityConflict, placeholder: "e.g. Hero vs. coward")
+                    TagFieldSection(header: "Moral Lines",        items: $moralLines,       newItem: $newMoralLine,       placeholder: "e.g. Will never betray family")
                     Section {
                         TextField("Core lie the character believes…", text: $coreLie, axis: .vertical)
                             .font(CathedralTheme.Typography.body())
@@ -241,12 +212,12 @@ struct CharacterFormView: View {
                     } header: {
                         CathedralFormSectionHeader("Arc End")
                     }
-                    tagSection(header: "Breaking Points", items: $breakingPoints, newItem: $newBreakingPoint, placeholder: "e.g. Moment she chooses self over duty")
+                    TagFieldSection(header: "Breaking Points", items: $breakingPoints, newItem: $newBreakingPoint, placeholder: "e.g. Moment she chooses self over duty")
                 }
 
                 // Literary — Social Profile
                 if show(FieldGroupKey.charSocial, nativeLevel: .literary) {
-                    tagSection(header: "Virtues", items: $virtues, newItem: $newVirtue, placeholder: "e.g. Loyalty")
+                    TagFieldSection(header: "Virtues", items: $virtues, newItem: $newVirtue, placeholder: "e.g. Loyalty")
                     Section {
                         TextField("How others see this character…", text: $reputation)
                             .foregroundStyle(CathedralTheme.Colors.primaryText)
@@ -262,40 +233,11 @@ struct CharacterFormView: View {
                 }
 
                 // Optional sections toggle panel
-                let advGroups = optionalAdvancedGroups
-                let litGroups = optionalLiteraryGroups
-                if !advGroups.isEmpty || !litGroups.isEmpty {
-                    Section {
-                        if !advGroups.isEmpty {
-                            Text("Advanced").font(CathedralTheme.Typography.caption()).foregroundStyle(CathedralTheme.Colors.secondaryText)
-                            ForEach(advGroups, id: \.key) { group in
-                                Toggle(group.label, isOn: Binding(
-                                    get: { enabledGroups.contains(group.key) },
-                                    set: { on in
-                                        if on { enabledGroups.insert(group.key) }
-                                        else  { enabledGroups.remove(group.key) }
-                                    }
-                                ))
-                                .font(CathedralTheme.Typography.body())
-                            }
-                        }
-                        if !litGroups.isEmpty {
-                            Text("Literary").font(CathedralTheme.Typography.caption()).foregroundStyle(CathedralTheme.Colors.secondaryText)
-                            ForEach(litGroups, id: \.key) { group in
-                                Toggle(group.label, isOn: Binding(
-                                    get: { enabledGroups.contains(group.key) },
-                                    set: { on in
-                                        if on { enabledGroups.insert(group.key) }
-                                        else  { enabledGroups.remove(group.key) }
-                                    }
-                                ))
-                                .font(CathedralTheme.Typography.body())
-                            }
-                        }
-                    } header: {
-                        CathedralFormSectionHeader("Optional Sections")
-                    }
-                }
+                OptionalSectionTogglePanel(
+                    advancedGroups: FieldTemplateEngine.optionalAdvancedGroups(for: .character, at: currentFieldLevel),
+                    literaryGroups: FieldTemplateEngine.optionalLiteraryGroups(for: .character, at: currentFieldLevel),
+                    enabledGroups: $enabledGroups
+                )
             }
             .cathedralFormStyle()
             .navigationTitle(title)
@@ -316,49 +258,6 @@ struct CharacterFormView: View {
     }
 
     // MARK: Tag Section Builder
-
-    @ViewBuilder
-    private func tagSection(
-        header: String,
-        items: Binding<[String]>,
-        newItem: Binding<String>,
-        placeholder: String
-    ) -> some View {
-        Section {
-            ForEach(Array(items.wrappedValue.enumerated()), id: \.offset) { i, item in
-                HStack(spacing: CathedralTheme.Spacing.sm) {
-                    CathedralTagChip(text: item)
-                    Spacer()
-                    Button {
-                        items.wrappedValue.remove(at: i)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: CathedralTheme.Icons.deleteControl))
-                            .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            HStack {
-                TextField(placeholder, text: newItem)
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                Button {
-                    let trimmed = newItem.wrappedValue.trimmingCharacters(in: .whitespaces)
-                    guard !trimmed.isEmpty else { return }
-                    items.wrappedValue.append(trimmed)
-                    newItem.wrappedValue = ""
-                } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                }
-                .buttonStyle(.plain)
-                .disabled(newItem.wrappedValue.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-        } header: {
-            CathedralFormSectionHeader(header)
-        }
-    }
 
     // MARK: Actions
 
