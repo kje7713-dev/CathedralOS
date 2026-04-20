@@ -3,6 +3,7 @@ import SwiftData
 
 struct SettingEditorView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
     @Bindable var project: StoryProject
 
     @State private var domains: [String] = []
@@ -60,10 +61,11 @@ struct SettingEditorView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Save") { saveBack() }
+                Button("Save") { saveThenDismiss() }
             }
         }
         .onAppear { loadFromProject() }
+        .onDisappear { saveBack() }
         .tint(CathedralTheme.Colors.accent)
     }
 
@@ -125,10 +127,18 @@ struct SettingEditorView: View {
     }
 
     private func saveBack() {
+        let trimmedSummary = summary.trimmingCharacters(in: .whitespaces)
+        let trimmedSeason = season.trimmingCharacters(in: .whitespaces)
+        let trimmedBias = instructionBias.trimmingCharacters(in: .whitespaces)
+
         let s: ProjectSetting
         if let existing = project.projectSetting {
             s = existing
         } else {
+            // Don't create an empty setting if no data has been entered.
+            guard !trimmedSummary.isEmpty || !domains.isEmpty || !constraints.isEmpty ||
+                  !themes.isEmpty || !trimmedSeason.isEmpty || !trimmedBias.isEmpty
+            else { return }
             s = ProjectSetting()
             modelContext.insert(s)
             project.projectSetting = s
@@ -136,9 +146,14 @@ struct SettingEditorView: View {
         s.domains = domains
         s.constraints = constraints
         s.themes = themes
-        s.season = season.trimmingCharacters(in: .whitespaces)
-        s.instructionBias = instructionBias.trimmingCharacters(in: .whitespaces).nilIfEmpty
-        s.summary = summary.trimmingCharacters(in: .whitespaces)
+        s.season = trimmedSeason
+        s.instructionBias = trimmedBias.nilIfEmpty
+        s.summary = trimmedSummary
+    }
+
+    private func saveThenDismiss() {
+        saveBack()
+        dismiss()
     }
 }
 
