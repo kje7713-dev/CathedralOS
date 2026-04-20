@@ -18,8 +18,11 @@ enum PromptPackAssembler {
         }
 
         // Setting — render only when the pack includes the setting AND data exists
-        if payload.setting.included && payload.setting.hasData {
-            let setting = payload.setting
+        let setting = payload.setting
+        let settingHasData = !setting.summary.isEmpty || !setting.domains.isEmpty
+            || !setting.themes.isEmpty || !setting.constraints.isEmpty
+            || !setting.season.isEmpty || !setting.instructionBias.isEmpty
+        if setting.included && settingHasData {
             var settingLines: [String] = ["## Setting"]
             if !setting.summary.isEmpty { settingLines.append(setting.summary) }
             if !setting.domains.isEmpty {
@@ -34,8 +37,8 @@ enum PromptPackAssembler {
             if !setting.season.isEmpty {
                 settingLines.append("Season / Time: \(setting.season)")
             }
-            if let bias = setting.instructionBias, !bias.isEmpty {
-                settingLines.append("Setting instruction bias: \(bias)")
+            if !setting.instructionBias.isEmpty {
+                settingLines.append("Setting instruction bias: \(setting.instructionBias)")
             }
             sections.append(settingLines.joined(separator: "\n"))
         }
@@ -50,8 +53,8 @@ enum PromptPackAssembler {
                 if !c.preferences.isEmpty { lines.append("Preferences: \(c.preferences.joined(separator: "; "))") }
                 if !c.resources.isEmpty { lines.append("Resources: \(c.resources.joined(separator: "; "))") }
                 if !c.failurePatterns.isEmpty { lines.append("Failure patterns: \(c.failurePatterns.joined(separator: "; "))") }
-                if let notes = c.notes, !notes.isEmpty { lines.append("Notes: \(notes)") }
-                if let bias = c.instructionBias, !bias.isEmpty { lines.append("Character instruction bias: \(bias)") }
+                if !c.notes.isEmpty { lines.append("Notes: \(c.notes)") }
+                if !c.instructionBias.isEmpty { lines.append("Character instruction bias: \(c.instructionBias)") }
                 charSection += "\n" + lines.joined(separator: "\n")
             }
             sections.append(charSection)
@@ -74,13 +77,13 @@ enum PromptPackAssembler {
         }
 
         // Pack notes
-        if let notes = payload.promptPack.notes, !notes.isEmpty {
-            sections.append("## Notes\n\(notes)")
+        if !payload.promptPack.notes.isEmpty {
+            sections.append("## Notes\n\(payload.promptPack.notes)")
         }
 
         // Instruction bias
-        if let bias = payload.promptPack.instructionBias, !bias.isEmpty {
-            sections.append("## Instruction Bias\n\(bias)")
+        if !payload.promptPack.instructionBias.isEmpty {
+            sections.append("## Instruction Bias\n\(payload.promptPack.instructionBias)")
         }
 
         return sections.joined(separator: "\n\n")
