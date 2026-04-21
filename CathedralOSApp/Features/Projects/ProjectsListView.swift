@@ -11,7 +11,7 @@ struct ProjectsListView: View {
     @State private var renameText = ""
     @State private var projectToDelete: StoryProject?
     @State private var showImportProject = false
-    @State private var schemaTemplateJSON: String = ""
+    private let schemaTemplateJSON = ProjectSchemaTemplateBuilder.buildAnnotatedJSON()
 
     var body: some View {
         NavigationStack {
@@ -44,9 +44,6 @@ struct ProjectsListView: View {
                         } label: {
                             Image(systemName: "ellipsis.circle")
                                 .foregroundStyle(CathedralTheme.Colors.accent)
-                        }
-                        .onAppear {
-                            schemaTemplateJSON = ProjectSchemaTemplateBuilder.buildAnnotatedJSON()
                         }
 
                         Button { showAddProject = true } label: {

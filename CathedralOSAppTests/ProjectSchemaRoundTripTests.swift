@@ -147,27 +147,25 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             motifs: []
         )
 
-        XCTAssertNoThrow({
-            let project = ProjectImportMapper.map(payload)
-            XCTAssertEqual(project.name, "Minimal")
-            XCTAssertEqual(project.characters.count, 1)
-            // All empty strings normalize to nil on optional String properties
-            XCTAssertNil(project.characters.first?.notes)
-            XCTAssertNil(project.characters.first?.instructionBias)
-            XCTAssertNil(project.characters.first?.arcStart)
-            XCTAssertNil(project.characters.first?.arcEnd)
-            XCTAssertNil(project.characters.first?.publicMask)
-            XCTAssertNil(project.characters.first?.privateLogic)
-            XCTAssertNil(project.characters.first?.speechStyle)
-            XCTAssertNil(project.characters.first?.coreLie)
-            XCTAssertNil(project.characters.first?.coreTruth)
-            XCTAssertNil(project.characters.first?.reputation)
-            XCTAssertNil(project.characters.first?.status)
-            XCTAssertNotNil(project.projectSetting)
-            XCTAssertNil(project.projectSetting?.historicalPressure)
-            XCTAssertNil(project.projectSetting?.politicalForces)
-            XCTAssertNil(project.projectSetting?.instructionBias)
-        }())
+        let project = ProjectImportMapper.map(payload)
+        XCTAssertEqual(project.name, "Minimal")
+        XCTAssertEqual(project.characters.count, 1)
+        // All empty strings normalize to nil on optional String properties
+        XCTAssertNil(project.characters.first?.notes)
+        XCTAssertNil(project.characters.first?.instructionBias)
+        XCTAssertNil(project.characters.first?.arcStart)
+        XCTAssertNil(project.characters.first?.arcEnd)
+        XCTAssertNil(project.characters.first?.publicMask)
+        XCTAssertNil(project.characters.first?.privateLogic)
+        XCTAssertNil(project.characters.first?.speechStyle)
+        XCTAssertNil(project.characters.first?.coreLie)
+        XCTAssertNil(project.characters.first?.coreTruth)
+        XCTAssertNil(project.characters.first?.reputation)
+        XCTAssertNil(project.characters.first?.status)
+        XCTAssertNotNil(project.projectSetting)
+        XCTAssertNil(project.projectSetting?.historicalPressure)
+        XCTAssertNil(project.projectSetting?.politicalForces)
+        XCTAssertNil(project.projectSetting?.instructionBias)
     }
 
     // MARK: 7. Mapping Creates Expected Entity Counts
