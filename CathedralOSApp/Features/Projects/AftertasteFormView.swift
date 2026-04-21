@@ -23,11 +23,11 @@ struct AftertasteFormView: View {
 
     // Field depth
     @State private var currentFieldLevel: FieldLevel = .basic
-    @State private var enabledGroups: Set<String> = []
+    @State private var enabledGroups: Set<FieldGroupID> = []
 
     private var isEditing: Bool { aftertaste != nil }
 
-    private func show(_ groupID: String, nativeLevel: FieldLevel) -> Bool {
+    private func show(_ groupID: FieldGroupID, nativeLevel: FieldLevel) -> Bool {
         FieldTemplateEngine.shouldShow(
             groupID: groupID,
             nativeLevel: nativeLevel,
@@ -60,7 +60,7 @@ struct AftertasteFormView: View {
                 }
 
                 // Advanced
-                if show(FieldGroupKey.aftertasteDepth, nativeLevel: .advanced) {
+                if show(.aftertasteDepth, nativeLevel: .advanced) {
                     Section {
                         TextField("What emotion lingers after the story ends?", text: $emotionalResidue, axis: .vertical)
                             .font(CathedralTheme.Typography.body())
@@ -86,7 +86,7 @@ struct AftertasteFormView: View {
                 }
 
                 // Literary
-                if show(FieldGroupKey.aftertasteResonance, nativeLevel: .literary) {
+                if show(.aftertasteResonance, nativeLevel: .literary) {
                     Section {
                         TextField("What question should linger in the reader's mind?", text: $readerQuestionLeftOpen, axis: .vertical)
                             .font(CathedralTheme.Typography.body())
@@ -140,7 +140,7 @@ struct AftertasteFormView: View {
         readerQuestionLeftOpen = a.readerQuestionLeftOpen ?? ""
         lastImageFeeling       = a.lastImageFeeling ?? ""
         currentFieldLevel      = FieldLevel(rawValue: a.fieldLevel) ?? .basic
-        enabledGroups          = Set(a.enabledFieldGroups)
+        enabledGroups          = Set(a.enabledFieldGroups.compactMap(FieldGroupID.init))
     }
 
     private func save() {
@@ -156,7 +156,7 @@ struct AftertasteFormView: View {
             a.readerQuestionLeftOpen = readerQuestionLeftOpen.trimmingCharacters(in: .whitespaces).nilIfEmpty
             a.lastImageFeeling       = lastImageFeeling.trimmingCharacters(in: .whitespaces).nilIfEmpty
             a.fieldLevel             = currentFieldLevel.rawValue
-            a.enabledFieldGroups     = Array(enabledGroups)
+            a.enabledFieldGroups     = enabledGroups.map(\.rawValue)
         }
 
         if let a = aftertaste {
@@ -171,6 +171,3 @@ struct AftertasteFormView: View {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
-}

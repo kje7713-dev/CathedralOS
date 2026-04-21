@@ -14,10 +14,10 @@ enum FieldTemplateEngine {
     /// - At `.advanced`: groups native to `.advanced` are always shown; others require opt-in.
     /// - At `.literary`: all groups are shown unconditionally.
     static func shouldShow(
-        groupID: String,
+        groupID: FieldGroupID,
         nativeLevel: FieldLevel,
         currentLevel: FieldLevel,
-        enabledGroups: Set<String>
+        enabledGroups: Set<FieldGroupID>
     ) -> Bool {
         switch currentLevel {
         case .basic:    return enabledGroups.contains(groupID)

@@ -7,7 +7,7 @@ final class FieldTemplateEngineTests: XCTestCase {
 
     func testShowAtBasicRequiresOptIn() {
         XCTAssertFalse(FieldTemplateEngine.shouldShow(
-            groupID: FieldGroupKey.charPsychology,
+            groupID: .charPsychology,
             nativeLevel: .advanced,
             currentLevel: .basic,
             enabledGroups: []
@@ -16,16 +16,16 @@ final class FieldTemplateEngineTests: XCTestCase {
 
     func testShowAtBasicWithOptIn() {
         XCTAssertTrue(FieldTemplateEngine.shouldShow(
-            groupID: FieldGroupKey.charPsychology,
+            groupID: .charPsychology,
             nativeLevel: .advanced,
             currentLevel: .basic,
-            enabledGroups: [FieldGroupKey.charPsychology]
+            enabledGroups: [.charPsychology]
         ))
     }
 
     func testShowAtAdvancedShowsNativeAdvancedGroup() {
         XCTAssertTrue(FieldTemplateEngine.shouldShow(
-            groupID: FieldGroupKey.charPsychology,
+            groupID: .charPsychology,
             nativeLevel: .advanced,
             currentLevel: .advanced,
             enabledGroups: []
@@ -34,7 +34,7 @@ final class FieldTemplateEngineTests: XCTestCase {
 
     func testShowAtAdvancedRequiresOptInForLiteraryGroup() {
         XCTAssertFalse(FieldTemplateEngine.shouldShow(
-            groupID: FieldGroupKey.charInnerLife,
+            groupID: .charInnerLife,
             nativeLevel: .literary,
             currentLevel: .advanced,
             enabledGroups: []
@@ -43,22 +43,22 @@ final class FieldTemplateEngineTests: XCTestCase {
 
     func testShowAtAdvancedWithOptInForLiteraryGroup() {
         XCTAssertTrue(FieldTemplateEngine.shouldShow(
-            groupID: FieldGroupKey.charInnerLife,
+            groupID: .charInnerLife,
             nativeLevel: .literary,
             currentLevel: .advanced,
-            enabledGroups: [FieldGroupKey.charInnerLife]
+            enabledGroups: [.charInnerLife]
         ))
     }
 
     func testShowAtLiteraryAlwaysTrue() {
         XCTAssertTrue(FieldTemplateEngine.shouldShow(
-            groupID: FieldGroupKey.charPsychology,
+            groupID: .charPsychology,
             nativeLevel: .advanced,
             currentLevel: .literary,
             enabledGroups: []
         ))
         XCTAssertTrue(FieldTemplateEngine.shouldShow(
-            groupID: FieldGroupKey.charInnerLife,
+            groupID: .charInnerLife,
             nativeLevel: .literary,
             currentLevel: .literary,
             enabledGroups: []
@@ -99,19 +99,19 @@ final class FieldTemplateEngineTests: XCTestCase {
 
     func testCharacterTemplateAdvancedGroupIDs() {
         let ids = EntityFieldTemplate.character.advancedGroups.map(\.id)
-        XCTAssertTrue(ids.contains(FieldGroupKey.charPsychology))
-        XCTAssertTrue(ids.contains(FieldGroupKey.charBackstory))
-        XCTAssertTrue(ids.contains(FieldGroupKey.charNotes))
-        XCTAssertTrue(ids.contains(FieldGroupKey.charBias))
+        XCTAssertTrue(ids.contains(.charPsychology))
+        XCTAssertTrue(ids.contains(.charBackstory))
+        XCTAssertTrue(ids.contains(.charNotes))
+        XCTAssertTrue(ids.contains(.charBias))
         XCTAssertEqual(ids.count, 4)
     }
 
     func testCharacterTemplateLiteraryGroupIDs() {
         let ids = EntityFieldTemplate.character.literaryGroups.map(\.id)
-        XCTAssertTrue(ids.contains(FieldGroupKey.charInnerLife))
-        XCTAssertTrue(ids.contains(FieldGroupKey.charPersona))
-        XCTAssertTrue(ids.contains(FieldGroupKey.charArc))
-        XCTAssertTrue(ids.contains(FieldGroupKey.charSocial))
+        XCTAssertTrue(ids.contains(.charInnerLife))
+        XCTAssertTrue(ids.contains(.charPersona))
+        XCTAssertTrue(ids.contains(.charArc))
+        XCTAssertTrue(ids.contains(.charSocial))
         XCTAssertEqual(ids.count, 4)
     }
 
@@ -119,16 +119,16 @@ final class FieldTemplateEngineTests: XCTestCase {
 
     func testSettingTemplateAdvancedGroupIDs() {
         let ids = EntityFieldTemplate.setting.advancedGroups.map(\.id)
-        XCTAssertTrue(ids.contains(FieldGroupKey.settingWorld))
-        XCTAssertTrue(ids.contains(FieldGroupKey.settingForces))
-        XCTAssertTrue(ids.contains(FieldGroupKey.settingBias))
+        XCTAssertTrue(ids.contains(.settingWorld))
+        XCTAssertTrue(ids.contains(.settingForces))
+        XCTAssertTrue(ids.contains(.settingBias))
         XCTAssertEqual(ids.count, 3)
     }
 
     func testSettingTemplateLiteraryGroupIDs() {
         let ids = EntityFieldTemplate.setting.literaryGroups.map(\.id)
-        XCTAssertTrue(ids.contains(FieldGroupKey.settingCulture))
-        XCTAssertTrue(ids.contains(FieldGroupKey.settingPressure))
+        XCTAssertTrue(ids.contains(.settingCulture))
+        XCTAssertTrue(ids.contains(.settingPressure))
         XCTAssertEqual(ids.count, 2)
     }
 
@@ -137,8 +137,8 @@ final class FieldTemplateEngineTests: XCTestCase {
     func testSparkTemplateGroupIDs() {
         let advIDs = EntityFieldTemplate.spark.advancedGroups.map(\.id)
         let litIDs = EntityFieldTemplate.spark.literaryGroups.map(\.id)
-        XCTAssertEqual(advIDs, [FieldGroupKey.sparkTension])
-        XCTAssertEqual(litIDs, [FieldGroupKey.sparkStructure])
+        XCTAssertEqual(advIDs, [.sparkTension])
+        XCTAssertEqual(litIDs, [.sparkStructure])
     }
 
     // MARK: EntityFieldTemplate — Aftertaste
@@ -146,8 +146,8 @@ final class FieldTemplateEngineTests: XCTestCase {
     func testAftertasteTemplateGroupIDs() {
         let advIDs = EntityFieldTemplate.aftertaste.advancedGroups.map(\.id)
         let litIDs = EntityFieldTemplate.aftertaste.literaryGroups.map(\.id)
-        XCTAssertEqual(advIDs, [FieldGroupKey.aftertasteDepth])
-        XCTAssertEqual(litIDs, [FieldGroupKey.aftertasteResonance])
+        XCTAssertEqual(advIDs, [.aftertasteDepth])
+        XCTAssertEqual(litIDs, [.aftertasteResonance])
     }
 
     // MARK: FieldGroupDefinition nativeLevels
@@ -168,5 +168,39 @@ final class FieldTemplateEngineTests: XCTestCase {
         for group in EntityFieldTemplate.setting.literaryGroups {
             XCTAssertEqual(group.nativeLevel, .literary)
         }
+    }
+
+    // MARK: FieldGroupID persistence bridge
+
+    func testFieldGroupIDRawValuesAreStable() {
+        XCTAssertEqual(FieldGroupID.charPsychology.rawValue,  "char.adv.psychology")
+        XCTAssertEqual(FieldGroupID.charBackstory.rawValue,   "char.adv.backstory")
+        XCTAssertEqual(FieldGroupID.charNotes.rawValue,       "char.adv.notes")
+        XCTAssertEqual(FieldGroupID.charBias.rawValue,        "char.adv.bias")
+        XCTAssertEqual(FieldGroupID.charInnerLife.rawValue,   "char.lit.inner")
+        XCTAssertEqual(FieldGroupID.charPersona.rawValue,     "char.lit.persona")
+        XCTAssertEqual(FieldGroupID.charArc.rawValue,         "char.lit.arc")
+        XCTAssertEqual(FieldGroupID.charSocial.rawValue,      "char.lit.social")
+        XCTAssertEqual(FieldGroupID.settingWorld.rawValue,    "setting.adv.world")
+        XCTAssertEqual(FieldGroupID.settingForces.rawValue,   "setting.adv.forces")
+        XCTAssertEqual(FieldGroupID.settingBias.rawValue,     "setting.adv.bias")
+        XCTAssertEqual(FieldGroupID.settingCulture.rawValue,  "setting.lit.culture")
+        XCTAssertEqual(FieldGroupID.settingPressure.rawValue, "setting.lit.pressure")
+        XCTAssertEqual(FieldGroupID.sparkTension.rawValue,    "spark.adv.tension")
+        XCTAssertEqual(FieldGroupID.sparkStructure.rawValue,  "spark.lit.structure")
+        XCTAssertEqual(FieldGroupID.aftertasteDepth.rawValue,     "aftertaste.adv.depth")
+        XCTAssertEqual(FieldGroupID.aftertasteResonance.rawValue, "aftertaste.lit.resonance")
+    }
+
+    func testFieldGroupIDRoundTripsFromPersistedString() {
+        let persistedStrings = ["char.adv.psychology", "setting.lit.culture", "spark.adv.tension"]
+        let recovered = persistedStrings.compactMap(FieldGroupID.init(rawValue:))
+        XCTAssertEqual(recovered, [.charPsychology, .settingCulture, .sparkTension])
+    }
+
+    func testFieldGroupIDDropsUnknownPersistedStrings() {
+        let mixed = ["char.adv.psychology", "unknown.legacy.key", "spark.adv.tension"]
+        let recovered = mixed.compactMap(FieldGroupID.init(rawValue:))
+        XCTAssertEqual(recovered, [.charPsychology, .sparkTension])
     }
 }

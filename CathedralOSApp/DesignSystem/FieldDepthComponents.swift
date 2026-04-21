@@ -32,7 +32,7 @@ struct FieldDepthPicker: View {
 struct OptionalSectionTogglePanel: View {
     let advancedGroups: [FieldGroupDefinition]
     let literaryGroups: [FieldGroupDefinition]
-    @Binding var enabledGroups: Set<String>
+    @Binding var enabledGroups: Set<FieldGroupID>
 
     var body: some View {
         if !advancedGroups.isEmpty || !literaryGroups.isEmpty {

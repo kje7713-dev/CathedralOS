@@ -43,9 +43,9 @@ struct SettingEditorView: View {
 
     // Field depth
     @State private var currentFieldLevel: FieldLevel = .basic
-    @State private var enabledGroups: Set<String> = []
+    @State private var enabledGroups: Set<FieldGroupID> = []
 
-    private func show(_ groupID: String, nativeLevel: FieldLevel) -> Bool {
+    private func show(_ groupID: FieldGroupID, nativeLevel: FieldLevel) -> Bool {
         FieldTemplateEngine.shouldShow(
             groupID: groupID,
             nativeLevel: nativeLevel,
@@ -80,7 +80,7 @@ struct SettingEditorView: View {
             }
 
             // Advanced — World
-            if show(FieldGroupKey.settingWorld, nativeLevel: .advanced) {
+            if show(.settingWorld, nativeLevel: .advanced) {
                 TagFieldSection(header: "World Rules", items: $worldRules, newItem: $newWorldRule, placeholder: "e.g. Magic requires sacrifice")
                 Section {
                     TextField("Technology level of this world…", text: $technologyLevel)
@@ -99,7 +99,7 @@ struct SettingEditorView: View {
             }
 
             // Advanced — Forces
-            if show(FieldGroupKey.settingForces, nativeLevel: .advanced) {
+            if show(.settingForces, nativeLevel: .advanced) {
                 Section {
                     TextField("Historical pressures shaping this world…", text: $historicalPressure, axis: .vertical)
                         .font(CathedralTheme.Typography.body())
@@ -135,7 +135,7 @@ struct SettingEditorView: View {
             }
 
             // Advanced — Instruction Bias
-            if show(FieldGroupKey.settingBias, nativeLevel: .advanced) {
+            if show(.settingBias, nativeLevel: .advanced) {
                 Section {
                     TextField("How should the LLM interpret this setting?", text: $instructionBias, axis: .vertical)
                         .font(CathedralTheme.Typography.body())
@@ -147,7 +147,7 @@ struct SettingEditorView: View {
             }
 
             // Literary — Culture
-            if show(FieldGroupKey.settingCulture, nativeLevel: .literary) {
+            if show(.settingCulture, nativeLevel: .literary) {
                 TagFieldSection(header: "Taboos",          items: $taboos,         newItem: $newTaboo,         placeholder: "e.g. Speaking the king's name aloud")
                 TagFieldSection(header: "Institutions",    items: $institutions,   newItem: $newInstitution,   placeholder: "e.g. The Church of the Pale")
                 TagFieldSection(header: "Dominant Values", items: $dominantValues, newItem: $newDominantValue, placeholder: "e.g. Honor above life")
@@ -155,7 +155,7 @@ struct SettingEditorView: View {
             }
 
             // Literary — Pressure
-            if show(FieldGroupKey.settingPressure, nativeLevel: .literary) {
+            if show(.settingPressure, nativeLevel: .literary) {
                 Section {
                     TextField("Religious forces and tensions…", text: $religiousPressure, axis: .vertical)
                         .font(CathedralTheme.Typography.body())
@@ -218,11 +218,11 @@ struct SettingEditorView: View {
         dominantValues       = s.dominantValues
         hiddenTruths         = s.hiddenTruths
         currentFieldLevel    = FieldLevel(rawValue: s.fieldLevel) ?? .basic
-        enabledGroups        = Set(s.enabledFieldGroups)
+        enabledGroups        = Set(s.enabledFieldGroups.compactMap(FieldGroupID.init))
 
         // Backward compat: if instructionBias already has content, ensure it's visible
         if !(s.instructionBias ?? "").isEmpty && currentFieldLevel == .basic {
-            enabledGroups.insert(FieldGroupKey.settingBias)
+            enabledGroups.insert(.settingBias)
         }
     }
 
@@ -276,7 +276,7 @@ struct SettingEditorView: View {
         s.dominantValues       = dominantValues
         s.hiddenTruths         = hiddenTruths
         s.fieldLevel           = currentFieldLevel.rawValue
-        s.enabledFieldGroups   = Array(enabledGroups)
+        s.enabledFieldGroups   = enabledGroups.map(\.rawValue)
     }
 
     private func saveThenDismiss() {
@@ -285,6 +285,3 @@ struct SettingEditorView: View {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
-}

@@ -253,18 +253,3 @@ struct ProjectDetailView: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
-
-// MARK: - String Helper
-
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
-    }
-}
-
-extension Optional where Wrapped == String {
-    var nilIfEmpty: String? {
-        guard let self else { return nil }
-        return self.isEmpty ? nil : self
-    }
-}

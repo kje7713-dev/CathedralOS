@@ -69,6 +69,7 @@
 		0000000000000000000000F9 /* FieldTemplateEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F8 /* FieldTemplateEngine.swift */; };
 		0000000000000000000000FB /* FieldDepthComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FA /* FieldDepthComponents.swift */; };
 		0000000000000000000000FD /* FieldTemplateEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FC /* FieldTemplateEngineTests.swift */; };
+		0000000000000000000000FF /* StringExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FE /* StringExtensions.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -146,6 +147,7 @@
 		0000000000000000000000F8 /* FieldTemplateEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldTemplateEngine.swift; sourceTree = "<group>"; };
 		0000000000000000000000FA /* FieldDepthComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldDepthComponents.swift; sourceTree = "<group>"; };
 		0000000000000000000000FC /* FieldTemplateEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldTemplateEngineTests.swift; sourceTree = "<group>"; };
+		0000000000000000000000FE /* StringExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StringExtensions.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -287,6 +289,7 @@
 				000000000000000000000072 /* ProfileSelector.swift */,
 				00000000000000000000008E /* PrivacyRedactor.swift */,
 				0000000000000000000000A1 /* ProfileFactory.swift */,
+				0000000000000000000000FE /* StringExtensions.swift */,
 			);
 			path = Utils;
 			sourceTree = "<group>";
@@ -512,6 +515,7 @@
 				0000000000000000000000F7 /* FieldTemplateDefinition.swift in Sources */,
 				0000000000000000000000F9 /* FieldTemplateEngine.swift in Sources */,
 				0000000000000000000000FB /* FieldDepthComponents.swift in Sources */,
+				0000000000000000000000FF /* StringExtensions.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
