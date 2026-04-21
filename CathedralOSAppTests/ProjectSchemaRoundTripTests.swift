@@ -59,7 +59,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             XCTFail("Expected failure for wrong schema")
             return
         }
-        XCTAssertTrue(errors.contains { $0.message.contains("some.other_schema") })
+        XCTAssertTrue(errors.issues.contains { $0.message.contains("some.other_schema") })
     }
 
     // MARK: 4. Validator Rejects Wrong Version
@@ -84,7 +84,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             XCTFail("Expected failure for wrong version")
             return
         }
-        XCTAssertTrue(errors.contains { $0.message.contains("99") })
+        XCTAssertTrue(errors.issues.contains { $0.message.contains("99") })
     }
 
     // MARK: 5. Validator Returns Error For Empty Project Name
@@ -109,7 +109,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             XCTFail("Expected failure for empty project name")
             return
         }
-        XCTAssertTrue(errors.contains { $0.message.contains("Project name is required") })
+        XCTAssertTrue(errors.issues.contains { $0.message.contains("Project name is required") })
     }
 
     // MARK: 6. Normalization Of Missing Optional Fields
