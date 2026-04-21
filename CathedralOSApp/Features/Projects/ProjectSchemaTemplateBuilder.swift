@@ -197,22 +197,31 @@ enum ProjectSchemaTemplateBuilder {
     static func build(project: StoryProject) -> ProjectImportExportPayload {
         let settingPayload: ProjectImportExportPayload.SettingPayload?
         if let s = project.projectSetting {
-            settingPayload = .init(
+            let historicalPressure: String = s.historicalPressure ?? ""
+            let politicalForces: String = s.politicalForces ?? ""
+            let socialOrder: String = s.socialOrder ?? ""
+            let environmentalPressure: String = s.environmentalPressure ?? ""
+            let technologyLevel: String = s.technologyLevel ?? ""
+            let mythicFrame: String = s.mythicFrame ?? ""
+            let settingInstructionBias: String = s.instructionBias ?? ""
+            let religiousPressure: String = s.religiousPressure ?? ""
+            let economicPressure: String = s.economicPressure ?? ""
+            settingPayload = ProjectImportExportPayload.SettingPayload(
                 summary: s.summary,
                 domains: s.domains,
                 constraints: s.constraints,
                 themes: s.themes,
                 season: s.season,
                 worldRules: s.worldRules,
-                historicalPressure: s.historicalPressure ?? "",
-                politicalForces: s.politicalForces ?? "",
-                socialOrder: s.socialOrder ?? "",
-                environmentalPressure: s.environmentalPressure ?? "",
-                technologyLevel: s.technologyLevel ?? "",
-                mythicFrame: s.mythicFrame ?? "",
-                instructionBias: s.instructionBias ?? "",
-                religiousPressure: s.religiousPressure ?? "",
-                economicPressure: s.economicPressure ?? "",
+                historicalPressure: historicalPressure,
+                politicalForces: politicalForces,
+                socialOrder: socialOrder,
+                environmentalPressure: environmentalPressure,
+                technologyLevel: technologyLevel,
+                mythicFrame: mythicFrame,
+                instructionBias: settingInstructionBias,
+                religiousPressure: religiousPressure,
+                economicPressure: economicPressure,
                 taboos: s.taboos,
                 institutions: s.institutions,
                 dominantValues: s.dominantValues,
@@ -224,8 +233,19 @@ enum ProjectSchemaTemplateBuilder {
             settingPayload = nil
         }
 
-        let characterPayloads = project.characters.map { c in
-            ProjectImportExportPayload.CharacterPayload(
+        let characterPayloads = project.characters.map { c -> ProjectImportExportPayload.CharacterPayload in
+            let charNotes: String = c.notes ?? ""
+            let charInstructionBias: String = c.instructionBias ?? ""
+            let publicMask: String = c.publicMask ?? ""
+            let privateLogic: String = c.privateLogic ?? ""
+            let speechStyle: String = c.speechStyle ?? ""
+            let arcStart: String = c.arcStart ?? ""
+            let arcEnd: String = c.arcEnd ?? ""
+            let coreLie: String = c.coreLie ?? ""
+            let coreTruth: String = c.coreTruth ?? ""
+            let reputation: String = c.reputation ?? ""
+            let status: String = c.status ?? ""
+            return ProjectImportExportPayload.CharacterPayload(
                 id: c.id,
                 name: c.name,
                 roles: c.roles,
@@ -241,84 +261,114 @@ enum ProjectSchemaTemplateBuilder {
                 needs: c.needs,
                 obsessions: c.obsessions,
                 attachments: c.attachments,
-                notes: c.notes ?? "",
-                instructionBias: c.instructionBias ?? "",
+                notes: charNotes,
+                instructionBias: charInstructionBias,
                 selfDeceptions: c.selfDeceptions,
                 identityConflicts: c.identityConflicts,
                 moralLines: c.moralLines,
                 breakingPoints: c.breakingPoints,
                 virtues: c.virtues,
-                publicMask: c.publicMask ?? "",
-                privateLogic: c.privateLogic ?? "",
-                speechStyle: c.speechStyle ?? "",
-                arcStart: c.arcStart ?? "",
-                arcEnd: c.arcEnd ?? "",
-                coreLie: c.coreLie ?? "",
-                coreTruth: c.coreTruth ?? "",
-                reputation: c.reputation ?? "",
-                status: c.status ?? "",
+                publicMask: publicMask,
+                privateLogic: privateLogic,
+                speechStyle: speechStyle,
+                arcStart: arcStart,
+                arcEnd: arcEnd,
+                coreLie: coreLie,
+                coreTruth: coreTruth,
+                reputation: reputation,
+                status: status,
                 fieldLevel: c.fieldLevel,
                 enabledFieldGroups: c.enabledFieldGroups
             )
         }
 
-        let sparkPayloads = project.storySparks.map { s in
-            ProjectImportExportPayload.StorySparkPayload(
+        let sparkPayloads = project.storySparks.map { s -> ProjectImportExportPayload.StorySparkPayload in
+            let twist: String = s.twist ?? ""
+            let urgency: String = s.urgency ?? ""
+            let threat: String = s.threat ?? ""
+            let opportunity: String = s.opportunity ?? ""
+            let complication: String = s.complication ?? ""
+            let clock: String = s.clock ?? ""
+            let triggerEvent: String = s.triggerEvent ?? ""
+            let initialImbalance: String = s.initialImbalance ?? ""
+            let falseResolution: String = s.falseResolution ?? ""
+            let reversalPotential: String = s.reversalPotential ?? ""
+            return ProjectImportExportPayload.StorySparkPayload(
                 id: s.id,
                 title: s.title,
                 situation: s.situation,
                 stakes: s.stakes,
-                twist: s.twist ?? "",
-                urgency: s.urgency ?? "",
-                threat: s.threat ?? "",
-                opportunity: s.opportunity ?? "",
-                complication: s.complication ?? "",
-                clock: s.clock ?? "",
-                triggerEvent: s.triggerEvent ?? "",
-                initialImbalance: s.initialImbalance ?? "",
-                falseResolution: s.falseResolution ?? "",
-                reversalPotential: s.reversalPotential ?? "",
+                twist: twist,
+                urgency: urgency,
+                threat: threat,
+                opportunity: opportunity,
+                complication: complication,
+                clock: clock,
+                triggerEvent: triggerEvent,
+                initialImbalance: initialImbalance,
+                falseResolution: falseResolution,
+                reversalPotential: reversalPotential,
                 fieldLevel: s.fieldLevel,
                 enabledFieldGroups: s.enabledFieldGroups
             )
         }
 
-        let aftertastePayloads = project.aftertastes.map { a in
-            ProjectImportExportPayload.AftertastePayload(
+        let aftertastePayloads = project.aftertastes.map { a -> ProjectImportExportPayload.AftertastePayload in
+            let note: String = a.note ?? ""
+            let emotionalResidue: String = a.emotionalResidue ?? ""
+            let endingTexture: String = a.endingTexture ?? ""
+            let desiredAmbiguityLevel: String = a.desiredAmbiguityLevel ?? ""
+            let readerQuestionLeftOpen: String = a.readerQuestionLeftOpen ?? ""
+            let lastImageFeeling: String = a.lastImageFeeling ?? ""
+            return ProjectImportExportPayload.AftertastePayload(
                 id: a.id,
                 label: a.label,
-                note: a.note ?? "",
-                emotionalResidue: a.emotionalResidue ?? "",
-                endingTexture: a.endingTexture ?? "",
-                desiredAmbiguityLevel: a.desiredAmbiguityLevel ?? "",
-                readerQuestionLeftOpen: a.readerQuestionLeftOpen ?? "",
-                lastImageFeeling: a.lastImageFeeling ?? "",
+                note: note,
+                emotionalResidue: emotionalResidue,
+                endingTexture: endingTexture,
+                desiredAmbiguityLevel: desiredAmbiguityLevel,
+                readerQuestionLeftOpen: readerQuestionLeftOpen,
+                lastImageFeeling: lastImageFeeling,
                 fieldLevel: a.fieldLevel,
                 enabledFieldGroups: a.enabledFieldGroups
             )
         }
 
-        let relationshipPayloads = project.relationships.map { r in
-            ProjectImportExportPayload.RelationshipPayload(
+        let relationshipPayloads = project.relationships.map { r -> ProjectImportExportPayload.RelationshipPayload in
+            let tension: String = r.tension ?? ""
+            let loyalty: String = r.loyalty ?? ""
+            let fear: String = r.fear ?? ""
+            let desire: String = r.desire ?? ""
+            let dependency: String = r.dependency ?? ""
+            let history: String = r.history ?? ""
+            let powerBalance: String = r.powerBalance ?? ""
+            let resentment: String = r.resentment ?? ""
+            let misunderstanding: String = r.misunderstanding ?? ""
+            let unspokenTruth: String = r.unspokenTruth ?? ""
+            let whatEachWantsFromTheOther: String = r.whatEachWantsFromTheOther ?? ""
+            let whatWouldBreakIt: String = r.whatWouldBreakIt ?? ""
+            let whatWouldTransformIt: String = r.whatWouldTransformIt ?? ""
+            let relNotes: String = r.notes ?? ""
+            return ProjectImportExportPayload.RelationshipPayload(
                 id: r.id,
                 name: r.name,
                 sourceCharacterID: r.sourceCharacterID,
                 targetCharacterID: r.targetCharacterID,
                 relationshipType: r.relationshipType,
-                tension: r.tension ?? "",
-                loyalty: r.loyalty ?? "",
-                fear: r.fear ?? "",
-                desire: r.desire ?? "",
-                dependency: r.dependency ?? "",
-                history: r.history ?? "",
-                powerBalance: r.powerBalance ?? "",
-                resentment: r.resentment ?? "",
-                misunderstanding: r.misunderstanding ?? "",
-                unspokenTruth: r.unspokenTruth ?? "",
-                whatEachWantsFromTheOther: r.whatEachWantsFromTheOther ?? "",
-                whatWouldBreakIt: r.whatWouldBreakIt ?? "",
-                whatWouldTransformIt: r.whatWouldTransformIt ?? "",
-                notes: r.notes ?? "",
+                tension: tension,
+                loyalty: loyalty,
+                fear: fear,
+                desire: desire,
+                dependency: dependency,
+                history: history,
+                powerBalance: powerBalance,
+                resentment: resentment,
+                misunderstanding: misunderstanding,
+                unspokenTruth: unspokenTruth,
+                whatEachWantsFromTheOther: whatEachWantsFromTheOther,
+                whatWouldBreakIt: whatWouldBreakIt,
+                whatWouldTransformIt: whatWouldTransformIt,
+                notes: relNotes,
                 fieldLevel: r.fieldLevel,
                 enabledFieldGroups: r.enabledFieldGroups
             )
