@@ -10,6 +10,8 @@ struct ProjectsListView: View {
     @State private var projectToRename: StoryProject?
     @State private var renameText = ""
     @State private var projectToDelete: StoryProject?
+    @State private var showImportProject = false
+    private let schemaTemplateJSON = ProjectSchemaTemplateBuilder.buildAnnotatedJSON()
 
     var body: some View {
         NavigationStack {
@@ -25,14 +27,37 @@ struct ProjectsListView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showAddProject = true } label: {
-                        Image(systemName: "plus")
-                            .foregroundStyle(CathedralTheme.Colors.accent)
+                    HStack(spacing: CathedralTheme.Spacing.sm) {
+                        Menu {
+                            Button {
+                                showImportProject = true
+                            } label: {
+                                Label("Import Project", systemImage: "square.and.arrow.down")
+                            }
+                            ShareLink(
+                                item: schemaTemplateJSON,
+                                subject: Text("CathedralOS Project Schema Template"),
+                                message: Text("Paste this into an LLM to build a project, then import it back into CathedralOS.")
+                            ) {
+                                Label("Export Schema Template", systemImage: "square.and.arrow.up")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .foregroundStyle(CathedralTheme.Colors.accent)
+                        }
+
+                        Button { showAddProject = true } label: {
+                            Image(systemName: "plus")
+                                .foregroundStyle(CathedralTheme.Colors.accent)
+                        }
                     }
                 }
             }
         }
         .tint(CathedralTheme.Colors.accent)
+        .sheet(isPresented: $showImportProject) {
+            ProjectImportView()
+        }
         .sheet(isPresented: $showAddProject) {
             addProjectSheet
         }
