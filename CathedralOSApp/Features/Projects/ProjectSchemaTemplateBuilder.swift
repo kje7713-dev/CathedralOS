@@ -357,6 +357,7 @@ enum ProjectSchemaTemplateBuilder {
             project: .init(
                 name: project.name,
                 summary: project.summary,
+                // notes and tags are reserved fields not stored on StoryProject
                 notes: "",
                 tags: []
             ),
