@@ -134,6 +134,63 @@ enum PromptPackExportBuilder {
             aftertastePayload = nil
         }
 
+        // Relationships
+        let relationships = project.relationships
+            .filter { pack.selectedRelationshipIDs.contains($0.id) }
+            .sorted { $0.name < $1.name }
+            .map { r in
+                PromptPackExportPayload.RelationshipPayload(
+                    id:                         r.id,
+                    name:                       r.name,
+                    relationshipType:           r.relationshipType,
+                    tension:                    r.tension ?? "",
+                    loyalty:                    r.loyalty ?? "",
+                    fear:                       r.fear ?? "",
+                    desire:                     r.desire ?? "",
+                    dependency:                 r.dependency ?? "",
+                    history:                    r.history ?? "",
+                    powerBalance:               r.powerBalance ?? "",
+                    resentment:                 r.resentment ?? "",
+                    misunderstanding:           r.misunderstanding ?? "",
+                    unspokenTruth:              r.unspokenTruth ?? "",
+                    whatEachWantsFromTheOther:  r.whatEachWantsFromTheOther ?? "",
+                    whatWouldBreakIt:           r.whatWouldBreakIt ?? "",
+                    whatWouldTransformIt:       r.whatWouldTransformIt ?? "",
+                    notes:                      r.notes ?? ""
+                )
+            }
+
+        // Theme Questions
+        let themeQuestions = project.themeQuestions
+            .filter { pack.selectedThemeQuestionIDs.contains($0.id) }
+            .sorted { $0.question < $1.question }
+            .map { t in
+                PromptPackExportPayload.ThemeQuestionPayload(
+                    id:            t.id,
+                    question:      t.question,
+                    coreTension:   t.coreTension ?? "",
+                    valueConflict: t.valueConflict ?? "",
+                    moralFaultLine: t.moralFaultLine ?? "",
+                    endingTruth:   t.endingTruth ?? "",
+                    notes:         t.notes ?? ""
+                )
+            }
+
+        // Motifs
+        let motifs = project.motifs
+            .filter { pack.selectedMotifIDs.contains($0.id) }
+            .sorted { $0.label < $1.label }
+            .map { m in
+                PromptPackExportPayload.MotifPayload(
+                    id:       m.id,
+                    label:    m.label,
+                    category: m.category,
+                    meaning:  m.meaning ?? "",
+                    examples: m.examples,
+                    notes:    m.notes ?? ""
+                )
+            }
+
         return PromptPackExportPayload(
             schema:             schemaIdentifier,
             version:            schemaVersion,
@@ -142,6 +199,9 @@ enum PromptPackExportBuilder {
             selectedCharacters: characters,
             selectedStorySpark: sparkPayload,
             selectedAftertaste: aftertastePayload,
+            selectedRelationships:  relationships,
+            selectedThemeQuestions: themeQuestions,
+            selectedMotifs:         motifs,
             promptPack:         .init(
                 id:                    pack.id,
                 name:                  pack.name,

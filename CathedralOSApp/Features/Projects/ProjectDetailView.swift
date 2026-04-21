@@ -11,6 +11,12 @@ struct ProjectDetailView: View {
     @State private var sparkToEdit: StorySpark?
     @State private var showAddAftertaste = false
     @State private var aftertasteToEdit: Aftertaste?
+    @State private var showAddRelationship = false
+    @State private var relationshipToEdit: StoryRelationship?
+    @State private var showAddThemeQuestion = false
+    @State private var themeQuestionToEdit: ThemeQuestion?
+    @State private var showAddMotif = false
+    @State private var motifToEdit: Motif?
     @State private var showAddPromptPack = false
     @State private var packToEdit: PromptPack?
 
@@ -21,6 +27,9 @@ struct ProjectDetailView: View {
             settingSection
             sparksSection
             aftertastesSection
+            relationshipsSection
+            themeQuestionsSection
+            motifsSection
             promptPacksSection
         }
         .listStyle(.plain)
@@ -46,6 +55,24 @@ struct ProjectDetailView: View {
         }
         .sheet(item: $aftertasteToEdit) { a in
             AftertasteFormView(project: nil, aftertaste: a)
+        }
+        .sheet(isPresented: $showAddRelationship) {
+            RelationshipFormView(project: project, relationship: nil)
+        }
+        .sheet(item: $relationshipToEdit) { r in
+            RelationshipFormView(project: nil, relationship: r)
+        }
+        .sheet(isPresented: $showAddThemeQuestion) {
+            ThemeQuestionFormView(project: project, themeQuestion: nil)
+        }
+        .sheet(item: $themeQuestionToEdit) { t in
+            ThemeQuestionFormView(project: nil, themeQuestion: t)
+        }
+        .sheet(isPresented: $showAddMotif) {
+            MotifFormView(project: project, motif: nil)
+        }
+        .sheet(item: $motifToEdit) { m in
+            MotifFormView(project: nil, motif: m)
         }
         .sheet(isPresented: $showAddPromptPack) {
             PromptPackBuilderView(project: project, pack: nil)
@@ -244,12 +271,111 @@ struct ProjectDetailView: View {
         }
     }
 
+    private var relationshipsSection: some View {
+        Section {
+            let sorted = project.relationships.sorted { $0.name < $1.name }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No relationships yet.")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
+            ForEach(sorted) { r in
+                CathedralItemRow(
+                    title: r.name,
+                    subtitle: r.relationshipType.nilIfEmpty
+                ) { relationshipToEdit = r }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        modelContext.delete(r)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+            }
+        } header: {
+            CathedralSectionHeader("Relationships") { showAddRelationship = true }
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
+        }
+    }
+
+    private var themeQuestionsSection: some View {
+        Section {
+            let sorted = project.themeQuestions.sorted { $0.question < $1.question }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No theme questions yet.")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
+            ForEach(sorted) { t in
+                CathedralItemRow(
+                    title: t.question,
+                    subtitle: t.coreTension?.nilIfEmpty
+                ) { themeQuestionToEdit = t }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        modelContext.delete(t)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+            }
+        } header: {
+            CathedralSectionHeader("Theme Questions") { showAddThemeQuestion = true }
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
+        }
+    }
+
+    private var motifsSection: some View {
+        Section {
+            let sorted = project.motifs.sorted { $0.label < $1.label }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No motifs yet.")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
+            ForEach(sorted) { m in
+                CathedralItemRow(
+                    title: m.label,
+                    subtitle: m.category.nilIfEmpty
+                ) { motifToEdit = m }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        modelContext.delete(m)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+            }
+        } header: {
+            CathedralSectionHeader("Motifs") { showAddMotif = true }
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
+        }
+    }
+
     private func packSubtitle(_ pack: PromptPack) -> String? {
         var parts: [String] = []
         let charCount = pack.selectedCharacterIDs.count
         if charCount > 0 { parts.append("\(charCount) character\(charCount == 1 ? "" : "s")") }
         if pack.selectedStorySparkID != nil { parts.append("spark") }
         if pack.selectedAftertasteID != nil { parts.append("aftertaste") }
+        let relCount = pack.selectedRelationshipIDs.count
+        if relCount > 0 { parts.append("\(relCount) relationship\(relCount == 1 ? "" : "s")") }
+        let themeCount = pack.selectedThemeQuestionIDs.count
+        if themeCount > 0 { parts.append("\(themeCount) theme\(themeCount == 1 ? "" : "s")") }
+        let motifCount = pack.selectedMotifIDs.count
+        if motifCount > 0 { parts.append("\(motifCount) motif\(motifCount == 1 ? "" : "s")") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

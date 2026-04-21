@@ -16,6 +16,12 @@ class StoryProject {
     var aftertastes: [Aftertaste]
     @Relationship(deleteRule: .cascade, inverse: \PromptPack.project)
     var promptPacks: [PromptPack]
+    @Relationship(deleteRule: .cascade, inverse: \StoryRelationship.project)
+    var relationships: [StoryRelationship]
+    @Relationship(deleteRule: .cascade, inverse: \ThemeQuestion.project)
+    var themeQuestions: [ThemeQuestion]
+    @Relationship(deleteRule: .cascade, inverse: \Motif.project)
+    var motifs: [Motif]
 
     init(name: String = "My Story") {
         self.id = UUID()
@@ -26,5 +32,8 @@ class StoryProject {
         self.storySparks = []
         self.aftertastes = []
         self.promptPacks = []
+        self.relationships = []
+        self.themeQuestions = []
+        self.motifs = []
     }
 }
