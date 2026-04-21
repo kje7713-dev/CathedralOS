@@ -140,7 +140,7 @@ struct AftertasteFormView: View {
         readerQuestionLeftOpen = a.readerQuestionLeftOpen ?? ""
         lastImageFeeling       = a.lastImageFeeling ?? ""
         currentFieldLevel      = FieldLevel(rawValue: a.fieldLevel) ?? .basic
-        enabledGroups          = Set(a.enabledFieldGroups.compactMap(FieldGroupID.init))
+        enabledGroups          = Set(a.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
     }
 
     private func save() {

@@ -202,7 +202,7 @@ struct StorySparkFormView: View {
         falseResolution   = s.falseResolution ?? ""
         reversalPotential = s.reversalPotential ?? ""
         currentFieldLevel = FieldLevel(rawValue: s.fieldLevel) ?? .basic
-        enabledGroups     = Set(s.enabledFieldGroups.compactMap(FieldGroupID.init))
+        enabledGroups     = Set(s.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
     }
 
     private func save() {

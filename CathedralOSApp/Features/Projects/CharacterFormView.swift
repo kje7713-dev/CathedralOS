@@ -294,7 +294,7 @@ struct CharacterFormView: View {
         reputation      = c.reputation ?? ""
         status          = c.status ?? ""
         currentFieldLevel = FieldLevel(rawValue: c.fieldLevel) ?? .basic
-        enabledGroups = Set(c.enabledFieldGroups.compactMap(FieldGroupID.init))
+        enabledGroups = Set(c.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
 
         // Backward compat: if existing data exists for advanced fields,
         // ensure those groups are visible even if not yet stored.

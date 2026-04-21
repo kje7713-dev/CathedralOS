@@ -218,7 +218,7 @@ struct SettingEditorView: View {
         dominantValues       = s.dominantValues
         hiddenTruths         = s.hiddenTruths
         currentFieldLevel    = FieldLevel(rawValue: s.fieldLevel) ?? .basic
-        enabledGroups        = Set(s.enabledFieldGroups.compactMap(FieldGroupID.init))
+        enabledGroups        = Set(s.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
 
         // Backward compat: if instructionBias already has content, ensure it's visible
         if !(s.instructionBias ?? "").isEmpty && currentFieldLevel == .basic {
