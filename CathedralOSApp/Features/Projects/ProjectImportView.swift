@@ -120,7 +120,7 @@ struct ProjectImportView: View {
         case .success(let (payload, warnings)):
             state = .previewing(payload, warnings)
         case .failure(let errors):
-            validationErrors = errors
+            validationErrors = errors.issues
         }
     }
 

@@ -6,40 +6,44 @@ struct ImportValidationIssue {
     let message: String
 }
 
+struct ImportValidationError: Error {
+    let issues: [ImportValidationIssue]
+}
+
 enum ProjectImportValidator {
 
     // MARK: - JSON String Validation
 
-    static func validate(jsonString: String) -> Result<(ProjectImportExportPayload, [ImportValidationIssue]), [ImportValidationIssue]> {
+    static func validate(jsonString: String) -> Result<(ProjectImportExportPayload, [ImportValidationIssue]), ImportValidationError> {
         guard let data = jsonString.data(using: .utf8) else {
-            return .failure([ImportValidationIssue(severity: .error, message: "Invalid JSON: Could not encode string as UTF-8.")])
+            return .failure(ImportValidationError(issues: [ImportValidationIssue(severity: .error, message: "Invalid JSON: Could not encode string as UTF-8.")]))
         }
 
         let payload: ProjectImportExportPayload
         do {
             payload = try JSONDecoder().decode(ProjectImportExportPayload.self, from: data)
         } catch {
-            return .failure([ImportValidationIssue(severity: .error, message: "Invalid JSON: \(error.localizedDescription)")])
+            return .failure(ImportValidationError(issues: [ImportValidationIssue(severity: .error, message: "Invalid JSON: \(error.localizedDescription)")]))
         }
 
         guard payload.schema == "cathedralos.project_schema" else {
-            return .failure([ImportValidationIssue(
+            return .failure(ImportValidationError(issues: [ImportValidationIssue(
                 severity: .error,
                 message: "Unrecognized schema '\(payload.schema)'. Expected 'cathedralos.project_schema'."
-            )])
+            )]))
         }
 
         guard payload.version == 1 else {
-            return .failure([ImportValidationIssue(
+            return .failure(ImportValidationError(issues: [ImportValidationIssue(
                 severity: .error,
                 message: "Unsupported schema version \(payload.version). Only version 1 is supported."
-            )])
+            )]))
         }
 
         let issues = validate(payload: payload)
         let errors = issues.filter { $0.severity == .error }
         if !errors.isEmpty {
-            return .failure(errors)
+            return .failure(ImportValidationError(issues: errors))
         }
 
         return .success((payload, issues))
