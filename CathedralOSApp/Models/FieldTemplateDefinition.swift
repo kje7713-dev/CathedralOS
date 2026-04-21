@@ -2,10 +2,11 @@ import Foundation
 
 /// Defines a single optional/tiered field group within an entity template.
 ///
-/// The `id` matches a `FieldGroupKey` constant, preserving backward compatibility
-/// with persisted `enabledFieldGroups` arrays stored on each entity.
+/// The `id` is a `FieldGroupID` whose raw value matches the string previously
+/// stored in persisted `enabledFieldGroups` arrays on each entity, preserving
+/// backward compatibility across app updates.
 struct FieldGroupDefinition: Identifiable {
-    let id: String
+    let id: FieldGroupID
     let nativeLevel: FieldLevel
     let label: String
 }
@@ -25,46 +26,46 @@ extension EntityFieldTemplate {
 
     static let character = EntityFieldTemplate(
         advancedGroups: [
-            FieldGroupDefinition(id: FieldGroupKey.charPsychology, nativeLevel: .advanced, label: "Fears, Flaws & Needs"),
-            FieldGroupDefinition(id: FieldGroupKey.charBackstory,  nativeLevel: .advanced, label: "Wounds, Secrets & Attachments"),
-            FieldGroupDefinition(id: FieldGroupKey.charNotes,      nativeLevel: .advanced, label: "Notes"),
-            FieldGroupDefinition(id: FieldGroupKey.charBias,       nativeLevel: .advanced, label: "Instruction Bias"),
+            FieldGroupDefinition(id: .charPsychology, nativeLevel: .advanced, label: "Fears, Flaws & Needs"),
+            FieldGroupDefinition(id: .charBackstory,  nativeLevel: .advanced, label: "Wounds, Secrets & Attachments"),
+            FieldGroupDefinition(id: .charNotes,      nativeLevel: .advanced, label: "Notes"),
+            FieldGroupDefinition(id: .charBias,       nativeLevel: .advanced, label: "Instruction Bias"),
         ],
         literaryGroups: [
-            FieldGroupDefinition(id: FieldGroupKey.charInnerLife,  nativeLevel: .literary, label: "Inner Life & Deceptions"),
-            FieldGroupDefinition(id: FieldGroupKey.charPersona,    nativeLevel: .literary, label: "Persona & Voice"),
-            FieldGroupDefinition(id: FieldGroupKey.charArc,        nativeLevel: .literary, label: "Character Arc"),
-            FieldGroupDefinition(id: FieldGroupKey.charSocial,     nativeLevel: .literary, label: "Virtues & Status"),
+            FieldGroupDefinition(id: .charInnerLife,  nativeLevel: .literary, label: "Inner Life & Deceptions"),
+            FieldGroupDefinition(id: .charPersona,    nativeLevel: .literary, label: "Persona & Voice"),
+            FieldGroupDefinition(id: .charArc,        nativeLevel: .literary, label: "Character Arc"),
+            FieldGroupDefinition(id: .charSocial,     nativeLevel: .literary, label: "Virtues & Status"),
         ]
     )
 
     static let setting = EntityFieldTemplate(
         advancedGroups: [
-            FieldGroupDefinition(id: FieldGroupKey.settingWorld,   nativeLevel: .advanced, label: "World Rules & Technology"),
-            FieldGroupDefinition(id: FieldGroupKey.settingForces,  nativeLevel: .advanced, label: "Historical & Political Forces"),
-            FieldGroupDefinition(id: FieldGroupKey.settingBias,    nativeLevel: .advanced, label: "Instruction Bias"),
+            FieldGroupDefinition(id: .settingWorld,   nativeLevel: .advanced, label: "World Rules & Technology"),
+            FieldGroupDefinition(id: .settingForces,  nativeLevel: .advanced, label: "Historical & Political Forces"),
+            FieldGroupDefinition(id: .settingBias,    nativeLevel: .advanced, label: "Instruction Bias"),
         ],
         literaryGroups: [
-            FieldGroupDefinition(id: FieldGroupKey.settingCulture,  nativeLevel: .literary, label: "Culture & Institutions"),
-            FieldGroupDefinition(id: FieldGroupKey.settingPressure, nativeLevel: .literary, label: "Religious & Economic Pressure"),
+            FieldGroupDefinition(id: .settingCulture,  nativeLevel: .literary, label: "Culture & Institutions"),
+            FieldGroupDefinition(id: .settingPressure, nativeLevel: .literary, label: "Religious & Economic Pressure"),
         ]
     )
 
     static let spark = EntityFieldTemplate(
         advancedGroups: [
-            FieldGroupDefinition(id: FieldGroupKey.sparkTension,   nativeLevel: .advanced, label: "Urgency & Tension"),
+            FieldGroupDefinition(id: .sparkTension,   nativeLevel: .advanced, label: "Urgency & Tension"),
         ],
         literaryGroups: [
-            FieldGroupDefinition(id: FieldGroupKey.sparkStructure,  nativeLevel: .literary, label: "Story Structure"),
+            FieldGroupDefinition(id: .sparkStructure,  nativeLevel: .literary, label: "Story Structure"),
         ]
     )
 
     static let aftertaste = EntityFieldTemplate(
         advancedGroups: [
-            FieldGroupDefinition(id: FieldGroupKey.aftertasteDepth,     nativeLevel: .advanced, label: "Emotional Depth"),
+            FieldGroupDefinition(id: .aftertasteDepth,     nativeLevel: .advanced, label: "Emotional Depth"),
         ],
         literaryGroups: [
-            FieldGroupDefinition(id: FieldGroupKey.aftertasteResonance, nativeLevel: .literary, label: "Resonance & Questions"),
+            FieldGroupDefinition(id: .aftertasteResonance, nativeLevel: .literary, label: "Resonance & Questions"),
         ]
     )
 }

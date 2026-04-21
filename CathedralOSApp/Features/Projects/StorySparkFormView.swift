@@ -29,11 +29,11 @@ struct StorySparkFormView: View {
 
     // Field depth
     @State private var currentFieldLevel: FieldLevel = .basic
-    @State private var enabledGroups: Set<String> = []
+    @State private var enabledGroups: Set<FieldGroupID> = []
 
     private var isEditing: Bool { spark != nil }
 
-    private func show(_ groupID: String, nativeLevel: FieldLevel) -> Bool {
+    private func show(_ groupID: FieldGroupID, nativeLevel: FieldLevel) -> Bool {
         FieldTemplateEngine.shouldShow(
             groupID: groupID,
             nativeLevel: nativeLevel,
@@ -84,7 +84,7 @@ struct StorySparkFormView: View {
                 }
 
                 // Advanced — Tension
-                if show(FieldGroupKey.sparkTension, nativeLevel: .advanced) {
+                if show(.sparkTension, nativeLevel: .advanced) {
                     Section {
                         TextField("Why must this be resolved now?", text: $urgency, axis: .vertical)
                             .font(CathedralTheme.Typography.body())
@@ -126,7 +126,7 @@ struct StorySparkFormView: View {
                 }
 
                 // Literary — Structure
-                if show(FieldGroupKey.sparkStructure, nativeLevel: .literary) {
+                if show(.sparkStructure, nativeLevel: .literary) {
                     Section {
                         TextField("What specific event ignites this story?", text: $triggerEvent, axis: .vertical)
                             .font(CathedralTheme.Typography.body())
@@ -202,7 +202,7 @@ struct StorySparkFormView: View {
         falseResolution   = s.falseResolution ?? ""
         reversalPotential = s.reversalPotential ?? ""
         currentFieldLevel = FieldLevel(rawValue: s.fieldLevel) ?? .basic
-        enabledGroups     = Set(s.enabledFieldGroups)
+        enabledGroups     = Set(s.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
     }
 
     private func save() {
@@ -224,7 +224,7 @@ struct StorySparkFormView: View {
             s.falseResolution   = falseResolution.trimmingCharacters(in: .whitespaces).nilIfEmpty
             s.reversalPotential = reversalPotential.trimmingCharacters(in: .whitespaces).nilIfEmpty
             s.fieldLevel        = currentFieldLevel.rawValue
-            s.enabledFieldGroups = Array(enabledGroups)
+            s.enabledFieldGroups = enabledGroups.map(\.rawValue)
         }
 
         if let s = spark {
@@ -241,6 +241,3 @@ struct StorySparkFormView: View {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
-}

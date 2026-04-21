@@ -208,7 +208,3 @@ struct PromptPackBuilderView: View {
         p.instructionBias = instructionBias.trimmingCharacters(in: .whitespaces).nilIfEmpty
     }
 }
-
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
-}

@@ -15,40 +15,44 @@ enum FieldLevel: String, CaseIterable {
     }
 }
 
-/// String keys identifying optional field groups that can be selectively
+/// Type-safe identifiers for optional field groups that can be selectively
 /// enabled when an entity is at a lower field depth level.
-enum FieldGroupKey {
+///
+/// Raw `String` values are stable and match the keys previously stored via
+/// the old `FieldGroupKey` constants, preserving backward compatibility with
+/// any persisted `enabledFieldGroups` arrays on existing entities.
+enum FieldGroupID: String, CaseIterable {
 
     // MARK: StoryCharacter — Advanced
-    static let charPsychology  = "char.adv.psychology"   // fears, flaws, needs, contradictions
-    static let charBackstory   = "char.adv.backstory"    // wounds, secrets, attachments, obsessions
-    static let charNotes       = "char.adv.notes"        // notes
-    static let charBias        = "char.adv.bias"         // instructionBias
+    case charPsychology  = "char.adv.psychology"   // fears, flaws, needs, contradictions
+    case charBackstory   = "char.adv.backstory"    // wounds, secrets, attachments, obsessions
+    case charNotes       = "char.adv.notes"        // notes
+    case charBias        = "char.adv.bias"         // instructionBias
 
     // MARK: StoryCharacter — Literary
-    static let charInnerLife   = "char.lit.inner"        // selfDeceptions, identityConflicts, moralLines, coreLie, coreTruth
-    static let charPersona     = "char.lit.persona"      // publicMask, privateLogic, speechStyle
-    static let charArc         = "char.lit.arc"          // arcStart, arcEnd, breakingPoints
-    static let charSocial      = "char.lit.social"       // virtues, reputation, status
+    case charInnerLife   = "char.lit.inner"        // selfDeceptions, identityConflicts, moralLines, coreLie, coreTruth
+    case charPersona     = "char.lit.persona"      // publicMask, privateLogic, speechStyle
+    case charArc         = "char.lit.arc"          // arcStart, arcEnd, breakingPoints
+    case charSocial      = "char.lit.social"       // virtues, reputation, status
 
     // MARK: ProjectSetting — Advanced
-    static let settingWorld    = "setting.adv.world"     // worldRules, technologyLevel, mythicFrame
-    static let settingForces   = "setting.adv.forces"    // historicalPressure, politicalForces, socialOrder, environmentalPressure
-    static let settingBias     = "setting.adv.bias"      // instructionBias
+    case settingWorld    = "setting.adv.world"     // worldRules, technologyLevel, mythicFrame
+    case settingForces   = "setting.adv.forces"    // historicalPressure, politicalForces, socialOrder, environmentalPressure
+    case settingBias     = "setting.adv.bias"      // instructionBias
 
     // MARK: ProjectSetting — Literary
-    static let settingCulture  = "setting.lit.culture"   // taboos, institutions, dominantValues, hiddenTruths
-    static let settingPressure = "setting.lit.pressure"  // religiousPressure, economicPressure
+    case settingCulture  = "setting.lit.culture"   // taboos, institutions, dominantValues, hiddenTruths
+    case settingPressure = "setting.lit.pressure"  // religiousPressure, economicPressure
 
     // MARK: StorySpark — Advanced
-    static let sparkTension    = "spark.adv.tension"     // urgency, threat, opportunity, complication, clock
+    case sparkTension    = "spark.adv.tension"     // urgency, threat, opportunity, complication, clock
 
     // MARK: StorySpark — Literary
-    static let sparkStructure  = "spark.lit.structure"   // triggerEvent, initialImbalance, falseResolution, reversalPotential
+    case sparkStructure  = "spark.lit.structure"   // triggerEvent, initialImbalance, falseResolution, reversalPotential
 
     // MARK: Aftertaste — Advanced
-    static let aftertasteDepth     = "aftertaste.adv.depth"     // emotionalResidue, endingTexture, desiredAmbiguityLevel
+    case aftertasteDepth     = "aftertaste.adv.depth"     // emotionalResidue, endingTexture, desiredAmbiguityLevel
 
     // MARK: Aftertaste — Literary
-    static let aftertasteResonance = "aftertaste.lit.resonance" // readerQuestionLeftOpen, lastImageFeeling
+    case aftertasteResonance = "aftertaste.lit.resonance" // readerQuestionLeftOpen, lastImageFeeling
 }

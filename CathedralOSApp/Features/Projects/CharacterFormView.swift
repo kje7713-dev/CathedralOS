@@ -66,14 +66,14 @@ struct CharacterFormView: View {
 
     // Field depth
     @State private var currentFieldLevel: FieldLevel = .basic
-    @State private var enabledGroups: Set<String> = []
+    @State private var enabledGroups: Set<FieldGroupID> = []
 
     private var isEditing: Bool { character != nil }
     private var title: String { isEditing ? "Edit Character" : "New Character" }
 
     // MARK: Group visibility
 
-    private func show(_ groupID: String, nativeLevel: FieldLevel) -> Bool {
+    private func show(_ groupID: FieldGroupID, nativeLevel: FieldLevel) -> Bool {
         FieldTemplateEngine.shouldShow(
             groupID: groupID,
             nativeLevel: nativeLevel,
@@ -104,7 +104,7 @@ struct CharacterFormView: View {
                 TagFieldSection(header: "Failure Patterns", items: $failurePatterns,newItem: $newFailurePattern,placeholder: "e.g. Trusts too quickly")
 
                 // Advanced — Psychology
-                if show(FieldGroupKey.charPsychology, nativeLevel: .advanced) {
+                if show(.charPsychology, nativeLevel: .advanced) {
                     TagFieldSection(header: "Fears",          items: $fears,         newItem: $newFear,         placeholder: "e.g. Fear of abandonment")
                     TagFieldSection(header: "Flaws",          items: $flaws,         newItem: $newFlaw,         placeholder: "e.g. Pride")
                     TagFieldSection(header: "Needs",          items: $needs,         newItem: $newNeed,         placeholder: "e.g. Validation from authority")
@@ -112,7 +112,7 @@ struct CharacterFormView: View {
                 }
 
                 // Advanced — Backstory
-                if show(FieldGroupKey.charBackstory, nativeLevel: .advanced) {
+                if show(.charBackstory, nativeLevel: .advanced) {
                     TagFieldSection(header: "Wounds",     items: $wounds,     newItem: $newWound,     placeholder: "e.g. Lost a sibling in childhood")
                     TagFieldSection(header: "Secrets",    items: $secrets,    newItem: $newSecret,    placeholder: "e.g. Knows who the killer is")
                     TagFieldSection(header: "Attachments",items: $attachments,newItem: $newAttachment,placeholder: "e.g. Mother's old photograph")
@@ -120,7 +120,7 @@ struct CharacterFormView: View {
                 }
 
                 // Advanced — Notes
-                if show(FieldGroupKey.charNotes, nativeLevel: .advanced) {
+                if show(.charNotes, nativeLevel: .advanced) {
                     Section {
                         TextField("Optional notes…", text: $notes, axis: .vertical)
                             .font(CathedralTheme.Typography.body())
@@ -132,7 +132,7 @@ struct CharacterFormView: View {
                 }
 
                 // Advanced — Instruction Bias
-                if show(FieldGroupKey.charBias, nativeLevel: .advanced) {
+                if show(.charBias, nativeLevel: .advanced) {
                     Section {
                         TextField("Optional instruction bias…", text: $instructionBias, axis: .vertical)
                             .font(CathedralTheme.Typography.body())
@@ -144,7 +144,7 @@ struct CharacterFormView: View {
                 }
 
                 // Literary — Inner Life
-                if show(FieldGroupKey.charInnerLife, nativeLevel: .literary) {
+                if show(.charInnerLife, nativeLevel: .literary) {
                     TagFieldSection(header: "Self-Deceptions",    items: $selfDeceptions,   newItem: $newSelfDeception,   placeholder: "e.g. Believes she is helping")
                     TagFieldSection(header: "Identity Conflicts",items: $identityConflicts, newItem: $newIdentityConflict, placeholder: "e.g. Hero vs. coward")
                     TagFieldSection(header: "Moral Lines",        items: $moralLines,       newItem: $newMoralLine,       placeholder: "e.g. Will never betray family")
@@ -167,7 +167,7 @@ struct CharacterFormView: View {
                 }
 
                 // Literary — Persona & Voice
-                if show(FieldGroupKey.charPersona, nativeLevel: .literary) {
+                if show(.charPersona, nativeLevel: .literary) {
                     Section {
                         TextField("How this character presents to the world…", text: $publicMask, axis: .vertical)
                             .font(CathedralTheme.Typography.body())
@@ -195,7 +195,7 @@ struct CharacterFormView: View {
                 }
 
                 // Literary — Character Arc
-                if show(FieldGroupKey.charArc, nativeLevel: .literary) {
+                if show(.charArc, nativeLevel: .literary) {
                     Section {
                         TextField("Where the character begins their arc…", text: $arcStart, axis: .vertical)
                             .font(CathedralTheme.Typography.body())
@@ -216,7 +216,7 @@ struct CharacterFormView: View {
                 }
 
                 // Literary — Social Profile
-                if show(FieldGroupKey.charSocial, nativeLevel: .literary) {
+                if show(.charSocial, nativeLevel: .literary) {
                     TagFieldSection(header: "Virtues", items: $virtues, newItem: $newVirtue, placeholder: "e.g. Loyalty")
                     Section {
                         TextField("How others see this character…", text: $reputation)
@@ -294,14 +294,14 @@ struct CharacterFormView: View {
         reputation      = c.reputation ?? ""
         status          = c.status ?? ""
         currentFieldLevel = FieldLevel(rawValue: c.fieldLevel) ?? .basic
-        enabledGroups = Set(c.enabledFieldGroups)
+        enabledGroups = Set(c.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
 
         // Backward compat: if existing data exists for advanced fields,
         // ensure those groups are visible even if not yet stored.
         if !(c.notes ?? "").isEmpty || !(c.instructionBias ?? "").isEmpty {
             if currentFieldLevel == .basic {
-                if !(c.notes ?? "").isEmpty          { enabledGroups.insert(FieldGroupKey.charNotes) }
-                if !(c.instructionBias ?? "").isEmpty { enabledGroups.insert(FieldGroupKey.charBias) }
+                if !(c.notes ?? "").isEmpty          { enabledGroups.insert(.charNotes) }
+                if !(c.instructionBias ?? "").isEmpty { enabledGroups.insert(.charBias) }
             }
         }
     }
@@ -368,7 +368,7 @@ struct CharacterFormView: View {
             c.reputation       = reputation.trimmingCharacters(in: .whitespaces).nilIfEmpty
             c.status           = status.trimmingCharacters(in: .whitespaces).nilIfEmpty
             c.fieldLevel       = currentFieldLevel.rawValue
-            c.enabledFieldGroups = Array(enabledGroups)
+            c.enabledFieldGroups = enabledGroups.map(\.rawValue)
         }
 
         if let c = character {
@@ -383,6 +383,3 @@ struct CharacterFormView: View {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
-}
