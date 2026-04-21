@@ -70,6 +70,13 @@
 		0000000000000000000000FB /* FieldDepthComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FA /* FieldDepthComponents.swift */; };
 		0000000000000000000000FD /* FieldTemplateEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FC /* FieldTemplateEngineTests.swift */; };
 		0000000000000000000000FF /* StringExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FE /* StringExtensions.swift */; };
+		000000000000000000000101 /* StoryRelationship.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000100 /* StoryRelationship.swift */; };
+		000000000000000000000103 /* ThemeQuestion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000102 /* ThemeQuestion.swift */; };
+		000000000000000000000105 /* Motif.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000104 /* Motif.swift */; };
+		000000000000000000000107 /* RelationshipFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000106 /* RelationshipFormView.swift */; };
+		000000000000000000000109 /* ThemeQuestionFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000108 /* ThemeQuestionFormView.swift */; };
+		00000000000000000000010B /* MotifFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010A /* MotifFormView.swift */; };
+		00000000000000000000010D /* LiteraryEntitiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010C /* LiteraryEntitiesTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -148,6 +155,13 @@
 		0000000000000000000000FA /* FieldDepthComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldDepthComponents.swift; sourceTree = "<group>"; };
 		0000000000000000000000FC /* FieldTemplateEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldTemplateEngineTests.swift; sourceTree = "<group>"; };
 		0000000000000000000000FE /* StringExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StringExtensions.swift; sourceTree = "<group>"; };
+		000000000000000000000100 /* StoryRelationship.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryRelationship.swift; sourceTree = "<group>"; };
+		000000000000000000000102 /* ThemeQuestion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeQuestion.swift; sourceTree = "<group>"; };
+		000000000000000000000104 /* Motif.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Motif.swift; sourceTree = "<group>"; };
+		000000000000000000000106 /* RelationshipFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelationshipFormView.swift; sourceTree = "<group>"; };
+		000000000000000000000108 /* ThemeQuestionFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeQuestionFormView.swift; sourceTree = "<group>"; };
+		00000000000000000000010A /* MotifFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotifFormView.swift; sourceTree = "<group>"; };
+		00000000000000000000010C /* LiteraryEntitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteraryEntitiesTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -279,6 +293,9 @@
 				0000000000000000000000E6 /* PromptPackExportPayload.swift */,
 				0000000000000000000000F2 /* FieldLevel.swift */,
 				0000000000000000000000F6 /* FieldTemplateDefinition.swift */,
+				000000000000000000000100 /* StoryRelationship.swift */,
+				000000000000000000000102 /* ThemeQuestion.swift */,
+				000000000000000000000104 /* Motif.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -309,6 +326,7 @@
 				0000000000000000000000F1 /* PromptPackBuilderTests.swift */,
 				0000000000000000000000F4 /* TieredFieldsTests.swift */,
 				0000000000000000000000FC /* FieldTemplateEngineTests.swift */,
+				00000000000000000000010C /* LiteraryEntitiesTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -371,6 +389,9 @@
 				0000000000000000000000D1 /* PromptPackAssembler.swift */,
 				0000000000000000000000E8 /* PromptPackJSONAssembler.swift */,
 				0000000000000000000000ED /* PromptPackExportBuilder.swift */,
+				000000000000000000000106 /* RelationshipFormView.swift */,
+				000000000000000000000108 /* ThemeQuestionFormView.swift */,
+				00000000000000000000010A /* MotifFormView.swift */,
 			);
 			path = Projects;
 			sourceTree = "<group>";
@@ -516,6 +537,12 @@
 				0000000000000000000000F9 /* FieldTemplateEngine.swift in Sources */,
 				0000000000000000000000FB /* FieldDepthComponents.swift in Sources */,
 				0000000000000000000000FF /* StringExtensions.swift in Sources */,
+				000000000000000000000101 /* StoryRelationship.swift in Sources */,
+				000000000000000000000103 /* ThemeQuestion.swift in Sources */,
+				000000000000000000000105 /* Motif.swift in Sources */,
+				000000000000000000000107 /* RelationshipFormView.swift in Sources */,
+				000000000000000000000109 /* ThemeQuestionFormView.swift in Sources */,
+				00000000000000000000010B /* MotifFormView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -535,6 +562,7 @@
 				0000000000000000000000F0 /* PromptPackBuilderTests.swift in Sources */,
 				0000000000000000000000F5 /* TieredFieldsTests.swift in Sources */,
 				0000000000000000000000FD /* FieldTemplateEngineTests.swift in Sources */,
+				00000000000000000000010D /* LiteraryEntitiesTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

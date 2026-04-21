@@ -68,4 +68,32 @@ extension EntityFieldTemplate {
             FieldGroupDefinition(id: .aftertasteResonance, nativeLevel: .literary, label: "Resonance & Questions"),
         ]
     )
+
+    static let relationship = EntityFieldTemplate(
+        advancedGroups: [
+            FieldGroupDefinition(id: .relCore,     nativeLevel: .advanced, label: "History & Power"),
+            FieldGroupDefinition(id: .relConflict, nativeLevel: .advanced, label: "Resentment & Misunderstanding"),
+        ],
+        literaryGroups: [
+            FieldGroupDefinition(id: .relLiterary, nativeLevel: .literary, label: "Wants, Breaks & Transforms"),
+        ]
+    )
+
+    static let themeQuestion = EntityFieldTemplate(
+        advancedGroups: [
+            FieldGroupDefinition(id: .themeAdvanced, nativeLevel: .advanced, label: "Core Tension & Value Conflict"),
+        ],
+        literaryGroups: [
+            FieldGroupDefinition(id: .themeLiterary, nativeLevel: .literary, label: "Moral Fault Line & Ending Truth"),
+        ]
+    )
+
+    static let motif = EntityFieldTemplate(
+        advancedGroups: [
+            FieldGroupDefinition(id: .motifAdvanced, nativeLevel: .advanced, label: "Meaning & Examples"),
+        ],
+        literaryGroups: [
+            FieldGroupDefinition(id: .motifLiterary, nativeLevel: .literary, label: "Notes"),
+        ]
+    )
 }

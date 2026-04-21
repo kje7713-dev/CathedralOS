@@ -11,6 +11,9 @@ class PromptPack {
     var notes: String?
     var instructionBias: String?
     var includeProjectSetting: Bool = true
+    var selectedRelationshipIDs: [UUID]
+    var selectedThemeQuestionIDs: [UUID]
+    var selectedMotifIDs: [UUID]
     var project: StoryProject?
 
     init(name: String) {
@@ -22,5 +25,8 @@ class PromptPack {
         self.notes = nil
         self.instructionBias = nil
         self.includeProjectSetting = true
+        self.selectedRelationshipIDs = []
+        self.selectedThemeQuestionIDs = []
+        self.selectedMotifIDs = []
     }
 }

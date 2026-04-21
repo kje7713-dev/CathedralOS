@@ -27,6 +27,9 @@ struct PromptPackExportPayload: Codable {
     let selectedStorySpark: StorySparkPayload?
     /// Always present — null when no aftertaste is selected.
     let selectedAftertaste: AftertastePayload?
+    let selectedRelationships: [RelationshipPayload]
+    let selectedThemeQuestions: [ThemeQuestionPayload]
+    let selectedMotifs: [MotifPayload]
     let promptPack: PromptPackPayload
 
     // MARK: Memberwise initializer
@@ -39,6 +42,9 @@ struct PromptPackExportPayload: Codable {
         selectedCharacters: [CharacterPayload],
         selectedStorySpark: StorySparkPayload?,
         selectedAftertaste: AftertastePayload?,
+        selectedRelationships: [RelationshipPayload] = [],
+        selectedThemeQuestions: [ThemeQuestionPayload] = [],
+        selectedMotifs: [MotifPayload] = [],
         promptPack: PromptPackPayload
     ) {
         self.schema = schema
@@ -48,6 +54,9 @@ struct PromptPackExportPayload: Codable {
         self.selectedCharacters = selectedCharacters
         self.selectedStorySpark = selectedStorySpark
         self.selectedAftertaste = selectedAftertaste
+        self.selectedRelationships = selectedRelationships
+        self.selectedThemeQuestions = selectedThemeQuestions
+        self.selectedMotifs = selectedMotifs
         self.promptPack = promptPack
     }
 
@@ -55,7 +64,7 @@ struct PromptPackExportPayload: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case schema, version, project, setting, selectedCharacters
-        case selectedStorySpark, selectedAftertaste, promptPack
+        case selectedStorySpark, selectedAftertaste, selectedRelationships, selectedThemeQuestions, selectedMotifs, promptPack
     }
 
     init(from decoder: Decoder) throws {
@@ -67,6 +76,9 @@ struct PromptPackExportPayload: Codable {
         selectedCharacters = try c.decode([CharacterPayload].self, forKey: .selectedCharacters)
         selectedStorySpark = try c.decodeIfPresent(StorySparkPayload.self, forKey: .selectedStorySpark)
         selectedAftertaste = try c.decodeIfPresent(AftertastePayload.self, forKey: .selectedAftertaste)
+        selectedRelationships  = try c.decode([RelationshipPayload].self,   forKey: .selectedRelationships)
+        selectedThemeQuestions = try c.decode([ThemeQuestionPayload].self,  forKey: .selectedThemeQuestions)
+        selectedMotifs         = try c.decode([MotifPayload].self,          forKey: .selectedMotifs)
         promptPack         = try c.decode(PromptPackPayload.self,  forKey: .promptPack)
     }
 
@@ -82,6 +94,9 @@ struct PromptPackExportPayload: Codable {
         else                             { try c.encodeNil(forKey: .selectedStorySpark) }
         if let at = selectedAftertaste   { try c.encode(at,    forKey: .selectedAftertaste) }
         else                             { try c.encodeNil(forKey: .selectedAftertaste) }
+        try c.encode(selectedRelationships,  forKey: .selectedRelationships)
+        try c.encode(selectedThemeQuestions, forKey: .selectedThemeQuestions)
+        try c.encode(selectedMotifs,         forKey: .selectedMotifs)
         try c.encode(promptPack, forKey: .promptPack)
     }
 
@@ -194,6 +209,54 @@ struct PromptPackExportPayload: Codable {
         // Literary
         let readerQuestionLeftOpen: String
         let lastImageFeeling: String
+    }
+
+    struct RelationshipPayload: Codable {
+        let id: UUID
+        // Basic
+        let name: String
+        let relationshipType: String
+        let tension: String
+        let loyalty: String
+        let fear: String
+        let desire: String
+        // Advanced
+        let dependency: String
+        let history: String
+        let powerBalance: String
+        let resentment: String
+        let misunderstanding: String
+        let unspokenTruth: String
+        // Literary
+        let whatEachWantsFromTheOther: String
+        let whatWouldBreakIt: String
+        let whatWouldTransformIt: String
+        let notes: String
+    }
+
+    struct ThemeQuestionPayload: Codable {
+        let id: UUID
+        // Basic
+        let question: String
+        // Advanced
+        let coreTension: String
+        let valueConflict: String
+        // Literary
+        let moralFaultLine: String
+        let endingTruth: String
+        let notes: String
+    }
+
+    struct MotifPayload: Codable {
+        let id: UUID
+        // Basic
+        let label: String
+        let category: String
+        // Advanced
+        let meaning: String
+        let examples: [String]
+        // Literary
+        let notes: String
     }
 
     struct PromptPackPayload: Codable {

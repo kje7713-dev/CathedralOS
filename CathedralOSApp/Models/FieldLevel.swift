@@ -55,4 +55,23 @@ enum FieldGroupID: String, CaseIterable {
 
     // MARK: Aftertaste — Literary
     case aftertasteResonance = "aftertaste.lit.resonance" // readerQuestionLeftOpen, lastImageFeeling
+
+    // MARK: StoryRelationship — Advanced
+    case relCore     = "rel.adv.core"        // dependency, history, powerBalance
+    case relConflict = "rel.adv.conflict"    // resentment, misunderstanding, unspokenTruth
+
+    // MARK: StoryRelationship — Literary
+    case relLiterary = "rel.lit.literary"    // whatEachWantsFromTheOther, whatWouldBreakIt, whatWouldTransformIt, notes
+
+    // MARK: ThemeQuestion — Advanced
+    case themeAdvanced = "theme.adv.tension"  // coreTension, valueConflict
+
+    // MARK: ThemeQuestion — Literary
+    case themeLiterary = "theme.lit.fault"    // moralFaultLine, endingTruth, notes
+
+    // MARK: Motif — Advanced
+    case motifAdvanced = "motif.adv.meaning"  // meaning, examples
+
+    // MARK: Motif — Literary
+    case motifLiterary = "motif.lit.notes"    // notes
 }

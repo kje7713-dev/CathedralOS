@@ -131,6 +131,60 @@ enum PromptPackAssembler {
             sections.append(lines.joined(separator: "\n"))
         }
 
+        // Relationships
+        if !payload.selectedRelationships.isEmpty {
+            var relSection = "## Relationships"
+            for r in payload.selectedRelationships {
+                var lines: [String] = ["### \(r.name)"]
+                if !r.relationshipType.isEmpty          { lines.append("Type: \(r.relationshipType)") }
+                if !r.tension.isEmpty                   { lines.append("Tension: \(r.tension)") }
+                if !r.loyalty.isEmpty                   { lines.append("Loyalty: \(r.loyalty)") }
+                if !r.fear.isEmpty                      { lines.append("Fear: \(r.fear)") }
+                if !r.desire.isEmpty                    { lines.append("Desire: \(r.desire)") }
+                if !r.dependency.isEmpty                { lines.append("Dependency: \(r.dependency)") }
+                if !r.history.isEmpty                   { lines.append("History: \(r.history)") }
+                if !r.powerBalance.isEmpty              { lines.append("Power balance: \(r.powerBalance)") }
+                if !r.resentment.isEmpty                { lines.append("Resentment: \(r.resentment)") }
+                if !r.misunderstanding.isEmpty          { lines.append("Misunderstanding: \(r.misunderstanding)") }
+                if !r.unspokenTruth.isEmpty             { lines.append("Unspoken truth: \(r.unspokenTruth)") }
+                if !r.whatEachWantsFromTheOther.isEmpty { lines.append("What each wants: \(r.whatEachWantsFromTheOther)") }
+                if !r.whatWouldBreakIt.isEmpty          { lines.append("What would break it: \(r.whatWouldBreakIt)") }
+                if !r.whatWouldTransformIt.isEmpty      { lines.append("What would transform it: \(r.whatWouldTransformIt)") }
+                if !r.notes.isEmpty                     { lines.append("Notes: \(r.notes)") }
+                relSection += "\n" + lines.joined(separator: "\n")
+            }
+            sections.append(relSection)
+        }
+
+        // Theme Questions
+        if !payload.selectedThemeQuestions.isEmpty {
+            var themeSection = "## Theme Questions"
+            for t in payload.selectedThemeQuestions {
+                var lines: [String] = ["### \(t.question)"]
+                if !t.coreTension.isEmpty    { lines.append("Core tension: \(t.coreTension)") }
+                if !t.valueConflict.isEmpty  { lines.append("Value conflict: \(t.valueConflict)") }
+                if !t.moralFaultLine.isEmpty { lines.append("Moral fault line: \(t.moralFaultLine)") }
+                if !t.endingTruth.isEmpty    { lines.append("Ending truth: \(t.endingTruth)") }
+                if !t.notes.isEmpty          { lines.append("Notes: \(t.notes)") }
+                themeSection += "\n" + lines.joined(separator: "\n")
+            }
+            sections.append(themeSection)
+        }
+
+        // Motifs
+        if !payload.selectedMotifs.isEmpty {
+            var motifSection = "## Motifs"
+            for m in payload.selectedMotifs {
+                var lines: [String] = ["### \(m.label)"]
+                if !m.category.isEmpty { lines.append("Category: \(m.category)") }
+                if !m.meaning.isEmpty  { lines.append("Meaning: \(m.meaning)") }
+                if !m.examples.isEmpty { lines.append("Examples: \(m.examples.joined(separator: "; "))") }
+                if !m.notes.isEmpty    { lines.append("Notes: \(m.notes)") }
+                motifSection += "\n" + lines.joined(separator: "\n")
+            }
+            sections.append(motifSection)
+        }
+
         // Pack notes
         if !payload.promptPack.notes.isEmpty {
             sections.append("## Notes\n\(payload.promptPack.notes)")
