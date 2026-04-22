@@ -21,7 +21,8 @@ struct CathedralOSApp: App {
             Role.self, Domain.self, Goal.self, Constraint.self,
             CathedralProfile.self, Secret.self,
             StoryProject.self, ProjectSetting.self, StoryCharacter.self,
-            StorySpark.self, Aftertaste.self, PromptPack.self
+            StorySpark.self, Aftertaste.self, PromptPack.self,
+            StoryRelationship.self, ThemeQuestion.self, Motif.self
         ])
     }
 }
