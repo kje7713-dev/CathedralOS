@@ -19,9 +19,29 @@ enum ProjectSchemaTemplateBuilder {
     // MARK: - LLM Instruction Block
 
     static let llmInstructionBlock = """
-    You are filling out a CathedralOS project schema. The completed JSON will be \
-    pasted directly into the app for import. Follow every rule below exactly — \
-    violations will cause the import to fail with an error.
+    TASK TYPE: SERIALIZATION — NOT CREATIVE WRITING.
+    You are producing a machine-importable JSON payload for CathedralOS. \
+    The output will be fed to a strict JSON parser with no tolerance for formatting drift. \
+    If any instruction conflicts with prose quality or stylistic preference, \
+    machine-import safety wins without exception.
+
+    OUTPUT MUST BE ASCII-ONLY:
+    Use ASCII characters only inside all string values and keys. \
+    The importer rejects any non-ASCII character anywhere in the payload. \
+    Do not use typographic punctuation for style under any circumstance.
+
+    FORBIDDEN CHARACTERS (do not use any of these):
+    - Curly/smart double quotes: \u{201C} \u{201D} (use straight " instead)
+    - Curly/smart apostrophes: \u{2018} \u{2019} (use straight ' instead)
+    - Em dash: \u{2014} (use hyphen - instead)
+    - En dash: \u{2013} (use hyphen - instead)
+    - Horizontal ellipsis: \u{2026} (use three periods ... instead)
+    - Non-breaking space: \u{00A0} (use a normal space instead)
+    - Any other non-ASCII Unicode punctuation or symbol
+
+    PERMITTED PUNCTUATION ONLY:
+    comma, period, colon, semicolon, question mark, exclamation mark, \
+    hyphen-minus, parentheses, brackets, slash, straight quotes, straight apostrophe
 
     HARD RULES (import will be rejected if broken):
     1. "schema" must remain exactly: "cathedralos.project_schema" — do not change it.
@@ -44,6 +64,17 @@ enum ProjectSchemaTemplateBuilder {
     12. "enabledFieldGroups" is reserved for internal use — always set it to [].
     13. "setting" must appear in your output. \
     If there is no world-building context, set "setting": null instead of omitting it.
+
+    FINAL COMPLIANCE PASS — before responding, verify:
+    - All required keys are present and none have been removed.
+    - "schema" is exactly "cathedralos.project_schema".
+    - "version" is exactly the integer 1 (not a string).
+    - Every relationship "sourceCharacterID" and "targetCharacterID" matches an existing character "id".
+    - Every "enabledFieldGroups" is [].
+    - Every "fieldLevel" is "basic", "advanced", or "literary".
+    - No markdown code fences, commentary, or text appears outside the JSON object.
+    - The entire output contains only ASCII characters — no curly quotes, no dashes other than \
+    hyphen-minus, no ellipsis character, no non-breaking spaces, no typographic Unicode.
 
     Fill in the following JSON template with an original, complete story project:
     """

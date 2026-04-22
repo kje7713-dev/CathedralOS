@@ -13,6 +13,7 @@ struct ProjectImportView: View {
     @State private var state: ImportState = .pasting
     @State private var pastedJSON: String = ""
     @State private var validationErrors: [ImportValidationIssue] = []
+    @State private var wasNormalized: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -21,12 +22,17 @@ struct ProjectImportView: View {
                 case .pasting:
                     pasteView
                 case .previewing(let payload, let warnings):
-                    ProjectImportPreviewView(
-                        payload: payload,
-                        warnings: warnings,
-                        onConfirm: { importProject(payload) },
-                        onCancel: { state = .pasting }
-                    )
+                    VStack(spacing: 0) {
+                        if wasNormalized {
+                            normalizationBanner
+                        }
+                        ProjectImportPreviewView(
+                            payload: payload,
+                            warnings: warnings,
+                            onConfirm: { importProject(payload) },
+                            onCancel: { state = .pasting }
+                        )
+                    }
                 }
             }
             .navigationTitle("Import Project")
@@ -112,11 +118,31 @@ struct ProjectImportView: View {
         }
     }
 
+    // MARK: - Normalization Banner
+
+    private var normalizationBanner: some View {
+        HStack(spacing: CathedralTheme.Spacing.sm) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.orange)
+            Text("Smart punctuation was normalized before import.")
+                .font(CathedralTheme.Typography.body(13))
+                .foregroundStyle(Color.orange)
+            Spacer()
+        }
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.vertical, CathedralTheme.Spacing.sm)
+        .background(Color.orange.opacity(0.1))
+    }
+
     // MARK: - Actions
 
     private func validate() {
         validationErrors = []
-        switch ProjectImportValidator.validate(jsonString: pastedJSON) {
+        wasNormalized = false
+        let (normalized, changed) = ImportTextNormalizer.normalize(pastedJSON)
+        wasNormalized = changed
+        switch ProjectImportValidator.validate(jsonString: normalized) {
         case .success(let (payload, warnings)):
             state = .previewing(payload, warnings)
         case .failure(let errors):
