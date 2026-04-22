@@ -11,9 +11,8 @@ struct ProjectsListView: View {
     @State private var renameText = ""
     @State private var projectToDelete: StoryProject?
     @State private var showImportProject = false
-    private let schemaTemplateJSON = ProjectSchemaTemplateBuilder.buildAnnotatedJSON()
     private let schemaExampleJSON = ProjectSchemaTemplateBuilder.buildExampleJSON()
-    @State private var showCopiedLLMInstructions = false
+    @State private var showCopiedLLMPrompt = false
 
     var body: some View {
         NavigationStack {
@@ -36,12 +35,11 @@ struct ProjectsListView: View {
                             } label: {
                                 Label("Import Project", systemImage: "square.and.arrow.down")
                             }
-                            ShareLink(
-                                item: schemaTemplateJSON,
-                                subject: Text("CathedralOS Annotated Schema Template"),
-                                message: Text("Paste this into an LLM to build a project, then import it back into CathedralOS.")
-                            ) {
-                                Label("Export Schema Template", systemImage: "square.and.arrow.up")
+                            Button {
+                                UIPasteboard.general.string = ProjectSchemaTemplateBuilder.buildLLMPrompt(mode: .annotated)
+                                showCopiedLLMPrompt = true
+                            } label: {
+                                Label("Copy LLM Prompt", systemImage: "text.badge.plus")
                             }
                             ShareLink(
                                 item: schemaExampleJSON,
@@ -49,12 +47,6 @@ struct ProjectsListView: View {
                                 message: Text("Use this as a reference example when authoring a new project with an LLM.")
                             ) {
                                 Label("Export Example Schema", systemImage: "doc.text")
-                            }
-                            Button {
-                                UIPasteboard.general.string = ProjectSchemaTemplateBuilder.llmInstructionBlock
-                                showCopiedLLMInstructions = true
-                            } label: {
-                                Label("Copy LLM Instructions", systemImage: "text.badge.plus")
                             }
                         } label: {
                             Image(systemName: "ellipsis.circle")
@@ -93,10 +85,10 @@ struct ProjectsListView: View {
         } message: {
             Text("Delete \"\(projectToDelete?.name ?? "this project")\"? This cannot be undone.")
         }
-        .alert("Copied", isPresented: $showCopiedLLMInstructions) {
+        .alert("Copied", isPresented: $showCopiedLLMPrompt) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("LLM instructions copied to clipboard.")
+            Text("LLM prompt copied to clipboard.")
         }
     }
 

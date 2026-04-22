@@ -191,10 +191,26 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
         XCTAssertTrue(payload.motifs.isEmpty)
     }
 
-    // MARK: 2j. LLM Instruction Block Is Non-Empty
+    // MARK: 2j. LLM Instruction Block Is Non-Empty And Covers Validator Rules
 
-    func testLLMInstructionBlockIsNonEmpty() {
-        XCTAssertFalse(ProjectSchemaTemplateBuilder.llmInstructionBlock.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    func testLLMInstructionBlockCoversValidatorRules() {
+        let block = ProjectSchemaTemplateBuilder.llmInstructionBlock
+        XCTAssertFalse(block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        // Must reference the exact schema identifier so the LLM preserves it
+        XCTAssertTrue(block.contains("cathedralos.project_schema"),
+                      "Instruction block must name the exact schema identifier")
+        // Must reference the exact version so the LLM preserves it
+        XCTAssertTrue(block.contains("version") && block.contains(": 1"),
+                      "Instruction block must name the exact schema version")
+        // Must call out the required project name field
+        XCTAssertTrue(block.contains("name"),
+                      "Instruction block must mention the required project name field")
+        // Must require raw JSON output with no markdown fences
+        XCTAssertTrue(block.contains("no ```json") || block.contains("do not wrap") || block.contains("code fence"),
+                      "Instruction block must warn against markdown code fences")
+        // Must explain relationship ID referential integrity
+        XCTAssertTrue(block.contains("sourceCharacterID") || block.contains("relationships"),
+                      "Instruction block must cover relationship ID consistency")
     }
 
     // MARK: 2k. Build JSON Mode Dispatcher
@@ -211,6 +227,46 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
         XCTAssertNotEqual(blank, annotated)
         XCTAssertNotEqual(blank, example)
         XCTAssertNotEqual(annotated, example)
+    }
+
+    // MARK: 2l. buildLLMPrompt Combines Instructions And Template
+
+    func testBuildLLMPromptCombinesInstructionsAndTemplate() {
+        for mode in [SchemaTemplateMode.blank, .annotated, .example] {
+            let prompt = ProjectSchemaTemplateBuilder.buildLLMPrompt(mode: mode)
+            let json = ProjectSchemaTemplateBuilder.buildJSON(mode: mode)
+            let block = ProjectSchemaTemplateBuilder.llmInstructionBlock
+
+            XCTAssertTrue(prompt.contains(block),
+                          "LLM prompt for mode \(mode) must contain the instruction block")
+            XCTAssertTrue(prompt.contains(json),
+                          "LLM prompt for mode \(mode) must contain the JSON template")
+            guard let blockRange = prompt.range(of: block),
+                  let jsonRange = prompt.range(of: json) else {
+                XCTFail("Could not locate block or json range in prompt for mode \(mode)")
+                continue
+            }
+            XCTAssertLessThan(blockRange.lowerBound, jsonRange.lowerBound,
+                              "Instructions must appear before the JSON template in the prompt")
+        }
+    }
+
+    // MARK: 2m. buildLLMPrompt Annotated JSON Is Importable After Stripping Instructions
+
+    func testBuildLLMPromptAnnotatedJSONIsImportable() throws {
+        let prompt = ProjectSchemaTemplateBuilder.buildLLMPrompt(mode: .annotated)
+        // The JSON portion starts at the first '{' after the instruction block
+        guard let jsonStart = prompt.range(of: "{") else {
+            XCTFail("buildLLMPrompt annotated must contain a JSON object")
+            return
+        }
+        let json = String(prompt[jsonStart.lowerBound...])
+        guard let data = json.data(using: .utf8) else {
+            XCTFail("JSON portion of LLM prompt could not be encoded to Data")
+            return
+        }
+        XCTAssertNoThrow(try JSONDecoder().decode(ProjectImportExportPayload.self, from: data),
+                         "JSON portion of buildLLMPrompt annotated must decode as ProjectImportExportPayload")
     }
 
     // MARK: 3. Validator Rejects Wrong Schema
