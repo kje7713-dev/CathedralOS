@@ -5,6 +5,9 @@ enum ProjectImportMapper {
     static func map(_ payload: ProjectImportExportPayload) -> StoryProject {
         let project = StoryProject(name: payload.project.name)
         project.summary = payload.project.summary
+        project.readingLevel = payload.project.readingLevel
+        project.contentRating = payload.project.contentRating
+        project.audienceNotes = payload.project.audienceNotes
 
         if let sp = payload.setting {
             let setting = ProjectSetting()

@@ -20,6 +20,38 @@ struct ProjectImportExportPayload: Codable {
         let summary: String
         let notes: String
         let tags: [String]
+        let readingLevel: String
+        let contentRating: String
+        let audienceNotes: String
+
+        init(
+            name: String,
+            summary: String,
+            notes: String,
+            tags: [String],
+            readingLevel: String = "",
+            contentRating: String = "",
+            audienceNotes: String = ""
+        ) {
+            self.name = name
+            self.summary = summary
+            self.notes = notes
+            self.tags = tags
+            self.readingLevel = readingLevel
+            self.contentRating = contentRating
+            self.audienceNotes = audienceNotes
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            name         = try c.decode(String.self,   forKey: .name)
+            summary      = try c.decode(String.self,   forKey: .summary)
+            notes        = try c.decode(String.self,   forKey: .notes)
+            tags         = try c.decode([String].self, forKey: .tags)
+            readingLevel = try c.decodeIfPresent(String.self, forKey: .readingLevel) ?? ""
+            contentRating = try c.decodeIfPresent(String.self, forKey: .contentRating) ?? ""
+            audienceNotes = try c.decodeIfPresent(String.self, forKey: .audienceNotes) ?? ""
+        }
     }
 
     struct SettingPayload: Codable {

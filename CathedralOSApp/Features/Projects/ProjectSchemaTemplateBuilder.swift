@@ -103,7 +103,8 @@ enum ProjectSchemaTemplateBuilder {
         ProjectImportExportPayload(
             schema: schemaIdentifier,
             version: schemaVersion,
-            project: .init(name: "", summary: "", notes: "", tags: []),
+            project: .init(name: "", summary: "", notes: "", tags: [],
+                           readingLevel: "", contentRating: "", audienceNotes: ""),
             setting: nil,
             characters: [],
             storySparks: [],
@@ -307,7 +308,10 @@ enum ProjectSchemaTemplateBuilder {
                 name: "(fill: your story project title)",
                 summary: "(fill: a one-paragraph summary of your story)",
                 notes: "",
-                tags: ["(fill: genre or tag)"]
+                tags: ["(fill: genre or tag)"],
+                readingLevel: "(fill: early_reader, middle_grade, young_adult, adult, or custom)",
+                contentRating: "(fill: g, pg, pg_13, r, or custom)",
+                audienceNotes: "(fill: optional tone or audience guidance for LLM output)"
             ),
             setting: setting,
             characters: [char1, char2],
@@ -513,7 +517,10 @@ enum ProjectSchemaTemplateBuilder {
                 name: "The Signal",
                 summary: "A suspended researcher races to decode a reactivated military signal before the man who shut down her lab buries it permanently — and discovers the signal has been responding to her all along.",
                 notes: "",
-                tags: ["sci-fi", "thriller", "surveillance"]
+                tags: ["sci-fi", "thriller", "surveillance"],
+                readingLevel: "adult",
+                contentRating: "pg_13",
+                audienceNotes: "Prioritize psychological tension over action. Keep the tone cold and precise."
             ),
             setting: setting,
             characters: [char1, char2],
@@ -744,7 +751,10 @@ enum ProjectSchemaTemplateBuilder {
                 summary: project.summary,
                 // notes and tags are reserved fields not stored on StoryProject
                 notes: "",
-                tags: []
+                tags: [],
+                readingLevel: project.readingLevel,
+                contentRating: project.contentRating,
+                audienceNotes: project.audienceNotes
             ),
             setting: settingPayload,
             characters: characterPayloads,
