@@ -25,7 +25,7 @@ enum ProjectImportValidator {
         } catch {
             var message = "Invalid JSON: \(error.localizedDescription)"
             if containsSmartQuotes(jsonString) {
-                message += " The JSON appears to contain smart quotes or typographic punctuation (\u{201C}\u{201D} or \u{2018}\u{2019}). Replace curly quotes with straight quotes \" and try again."
+                message += " The JSON appears to contain smart quotes (\u{201C}\u{201D} or \u{2018}\u{2019}). Replace curly quotes with straight quotes \" and try again."
             } else if ImportTextNormalizer.containsNonASCII(jsonString) {
                 message += " The payload contains non-ASCII characters not supported by this importer. Check for typographic punctuation such as em dashes, ellipsis characters, or non-breaking spaces."
             } else if !jsonString.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") {

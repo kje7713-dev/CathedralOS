@@ -123,9 +123,9 @@ final class ImportHardeningTests: XCTestCase {
     // MARK: - ImportTextNormalizer: containsNonASCII
 
     func testContainsNonASCIIDetectsUnicode() {
-        XCTAssertTrue(ImportTextNormalizer.containsNonASCII("caf\u{00E9}"))
-        XCTAssertTrue(ImportTextNormalizer.containsNonASCII("\u{2014}em dash"))
-        XCTAssertTrue(ImportTextNormalizer.containsNonASCII("caf\u{00E9}"))
+        XCTAssertTrue(ImportTextNormalizer.containsNonASCII("caf\u{00E9}"))    // accented e
+        XCTAssertTrue(ImportTextNormalizer.containsNonASCII("\u{2014}em dash")) // em dash
+        XCTAssertTrue(ImportTextNormalizer.containsNonASCII("\u{2026}ellipsis")) // horizontal ellipsis
     }
 
     func testContainsNonASCIIIgnoresPureASCII() {
