@@ -79,6 +79,7 @@
 		00000000000000000000010D /* LiteraryEntitiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010C /* LiteraryEntitiesTests.swift */; };
 		000000000000000000000111 /* ProjectImportExportPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000110 /* ProjectImportExportPayload.swift */; };
 		000000000000000000000113 /* ProjectSchemaTemplateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000112 /* ProjectSchemaTemplateBuilder.swift */; };
+		00000000000000000000011F /* ImportTextNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011E /* ImportTextNormalizer.swift */; };
 		000000000000000000000115 /* ProjectImportValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000114 /* ProjectImportValidator.swift */; };
 		000000000000000000000117 /* ProjectImportMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000116 /* ProjectImportMapper.swift */; };
 		000000000000000000000119 /* ProjectImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000118 /* ProjectImportView.swift */; };
@@ -171,6 +172,7 @@
 		00000000000000000000010C /* LiteraryEntitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteraryEntitiesTests.swift; sourceTree = "<group>"; };
 		000000000000000000000110 /* ProjectImportExportPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectImportExportPayload.swift; sourceTree = "<group>"; };
 		000000000000000000000112 /* ProjectSchemaTemplateBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSchemaTemplateBuilder.swift; sourceTree = "<group>"; };
+		00000000000000000000011E /* ImportTextNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportTextNormalizer.swift; sourceTree = "<group>"; };
 		000000000000000000000114 /* ProjectImportValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectImportValidator.swift; sourceTree = "<group>"; };
 		000000000000000000000116 /* ProjectImportMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectImportMapper.swift; sourceTree = "<group>"; };
 		000000000000000000000118 /* ProjectImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectImportView.swift; sourceTree = "<group>"; };
@@ -409,6 +411,7 @@
 				000000000000000000000108 /* ThemeQuestionFormView.swift */,
 				00000000000000000000010A /* MotifFormView.swift */,
 				000000000000000000000112 /* ProjectSchemaTemplateBuilder.swift */,
+				00000000000000000000011E /* ImportTextNormalizer.swift */,
 				000000000000000000000114 /* ProjectImportValidator.swift */,
 				000000000000000000000116 /* ProjectImportMapper.swift */,
 				000000000000000000000118 /* ProjectImportView.swift */,
@@ -566,6 +569,7 @@
 				00000000000000000000010B /* MotifFormView.swift in Sources */,
 				000000000000000000000111 /* ProjectImportExportPayload.swift in Sources */,
 				000000000000000000000113 /* ProjectSchemaTemplateBuilder.swift in Sources */,
+				00000000000000000000011F /* ImportTextNormalizer.swift in Sources */,
 				000000000000000000000115 /* ProjectImportValidator.swift in Sources */,
 				000000000000000000000117 /* ProjectImportMapper.swift in Sources */,
 				000000000000000000000119 /* ProjectImportView.swift in Sources */,
