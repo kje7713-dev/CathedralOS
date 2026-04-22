@@ -220,9 +220,23 @@ struct SettingEditorView: View {
         currentFieldLevel    = FieldLevel(rawValue: s.fieldLevel) ?? .basic
         enabledGroups        = Set(s.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
 
-        // Backward compat: if instructionBias already has content, ensure it's visible
-        if !(s.instructionBias ?? "").isEmpty && currentFieldLevel == .basic {
+        // Ensure all field groups with populated data are visible.
+        // Handles imported content where fieldLevel may not reflect populated fields.
+        if !worldRules.isEmpty || !technologyLevel.isEmpty || !mythicFrame.isEmpty {
+            enabledGroups.insert(.settingWorld)
+        }
+        if !historicalPressure.isEmpty || !politicalForces.isEmpty
+            || !socialOrder.isEmpty || !environmentalPressure.isEmpty {
+            enabledGroups.insert(.settingForces)
+        }
+        if !instructionBias.isEmpty {
             enabledGroups.insert(.settingBias)
+        }
+        if !taboos.isEmpty || !institutions.isEmpty || !dominantValues.isEmpty || !hiddenTruths.isEmpty {
+            enabledGroups.insert(.settingCulture)
+        }
+        if !religiousPressure.isEmpty || !economicPressure.isEmpty {
+            enabledGroups.insert(.settingPressure)
         }
     }
 

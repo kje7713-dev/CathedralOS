@@ -78,28 +78,64 @@ struct OptionalSectionTogglePanel: View {
 
 /// Reusable tag-input section used across entity form editors.
 ///
-/// Replaces the identical `tagSection(header:items:newItem:placeholder:)` helper
-/// functions that were duplicated in CharacterFormView and SettingEditorView.
+/// Supports adding new tags, deleting existing tags, and editing existing tags
+/// in place by tapping on a chip. Replacing the identical
+/// `tagSection(header:items:newItem:placeholder:)` helper functions that were
+/// duplicated in CharacterFormView and SettingEditorView.
 struct TagFieldSection: View {
     let header: String
     @Binding var items: [String]
     @Binding var newItem: String
     let placeholder: String
 
+    @State private var editingIndex: Int? = nil
+    @State private var editingText: String = ""
+    @FocusState private var editFocused: Bool
+
     var body: some View {
         Section {
             ForEach(Array(items.enumerated()), id: \.offset) { i, item in
                 HStack(spacing: CathedralTheme.Spacing.sm) {
-                    CathedralTagChip(text: item)
-                    Spacer()
-                    Button {
-                        items.remove(at: i)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: CathedralTheme.Icons.deleteControl))
-                            .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                    if editingIndex == i {
+                        TextField("", text: $editingText)
+                            .font(CathedralTheme.Typography.body())
+                            .foregroundStyle(CathedralTheme.Colors.primaryText)
+                            .focused($editFocused)
+                            .onSubmit { commitEdit(at: i) }
+                        Spacer()
+                        Button {
+                            commitEdit(at: i)
+                        } label: {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: CathedralTheme.Icons.deleteControl))
+                                .foregroundStyle(CathedralTheme.Colors.accent)
+                        }
+                        .buttonStyle(.plain)
+                        Button {
+                            cancelEdit()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: CathedralTheme.Icons.deleteControl))
+                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        CathedralTagChip(text: item)
+                            .onTapGesture {
+                                editingIndex = i
+                                editingText  = item
+                                editFocused  = true
+                            }
+                        Spacer()
+                        Button {
+                            deleteItem(at: i)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: CathedralTheme.Icons.deleteControl))
+                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
             HStack {
@@ -121,5 +157,41 @@ struct TagFieldSection: View {
         } header: {
             CathedralFormSectionHeader(header)
         }
+    }
+
+    // MARK: - Actions
+
+    private func commitEdit(at index: Int) {
+        let trimmed = editingText.trimmingCharacters(in: .whitespaces)
+        editingIndex = nil
+        editingText  = ""
+        editFocused  = false
+        guard index < items.count else { return }
+        if !trimmed.isEmpty {
+            items[index] = trimmed
+        } else {
+            items.remove(at: index)
+        }
+    }
+
+    private func cancelEdit() {
+        editingIndex = nil
+        editingText  = ""
+        editFocused  = false
+    }
+
+    /// Removes the item at `index`, adjusting `editingIndex` when another item
+    /// is currently being edited and its index would shift due to the removal.
+    private func deleteItem(at index: Int) {
+        if let editing = editingIndex {
+            if editing == index {
+                editingIndex = nil
+                editingText  = ""
+                editFocused  = false
+            } else if editing > index {
+                editingIndex = editing - 1
+            }
+        }
+        items.remove(at: index)
     }
 }
