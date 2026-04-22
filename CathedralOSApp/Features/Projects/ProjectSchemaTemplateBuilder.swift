@@ -32,14 +32,18 @@ enum ProjectSchemaTemplateBuilder {
     Symbolic IDs like "char_1", "char_2" may be used as-is and will be remapped on import.
 
     FORMAT RULES (the output must be raw importable JSON):
-    5. Return valid JSON only. Do not wrap in markdown code fences (no ```json).
-    6. Do not include any explanation, commentary, or text outside the JSON object.
-    7. Do not remove any keys — every key in the template must appear in your output.
-    8. Use "" for optional text fields you are not filling in.
-    9. Use [] for optional array fields you are not filling in.
-    10. "fieldLevel" must be one of: "basic", "advanced", or "literary". Use "basic" if unsure.
-    11. "enabledFieldGroups" is reserved for internal use — always set it to [].
-    12. "setting" may be omitted (null) if the story has no world-building context.
+    5. Return a single top-level JSON object only. The output must parse with a strict JSON parser.
+    6. Do not wrap in markdown code fences (no ```json). \
+    Do not include any explanation, commentary, or text outside the JSON object.
+    7. Use only straight ASCII double quotes " for all keys and string values. \
+    Never use curly or smart quotes such as \u{201C} or \u{201D}.
+    8. Do not remove any keys — every key in the template must appear in your output.
+    9. Use "" for optional text fields you are not filling in.
+    10. Use [] for optional array fields you are not filling in.
+    11. "fieldLevel" must be one of: "basic", "advanced", or "literary". Use "basic" if unsure.
+    12. "enabledFieldGroups" is reserved for internal use — always set it to [].
+    13. "setting" must appear in your output. \
+    If there is no world-building context, set "setting": null instead of omitting it.
 
     Fill in the following JSON template with an original, complete story project:
     """

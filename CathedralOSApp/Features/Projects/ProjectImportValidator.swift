@@ -23,7 +23,11 @@ enum ProjectImportValidator {
         do {
             payload = try JSONDecoder().decode(ProjectImportExportPayload.self, from: data)
         } catch {
-            return .failure(ImportValidationError(issues: [ImportValidationIssue(severity: .error, message: "Invalid JSON: \(error.localizedDescription)")]))
+            var message = "Invalid JSON: \(error.localizedDescription)"
+            if containsSmartQuotes(jsonString) {
+                message += " Your JSON may contain smart quotes (\u{201C}\u{201D} or \u{2018}\u{2019}). Replace curly quotes with straight quotes \" and try again."
+            }
+            return .failure(ImportValidationError(issues: [ImportValidationIssue(severity: .error, message: message)]))
         }
 
         guard payload.schema == "cathedralos.project_schema" else {
@@ -73,5 +77,12 @@ enum ProjectImportValidator {
         }
 
         return issues
+    }
+
+    // MARK: - Smart Quote Detection
+
+    static func containsSmartQuotes(_ string: String) -> Bool {
+        string.contains("\u{201C}") || string.contains("\u{201D}")
+            || string.contains("\u{2018}") || string.contains("\u{2019}")
     }
 }

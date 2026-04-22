@@ -213,6 +213,51 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
                       "Instruction block must cover relationship ID consistency")
     }
 
+    // MARK: 2j-a. LLM Instruction Block Requires Straight ASCII Double Quotes
+
+    func testLLMInstructionBlockRequiresStraightQuotes() {
+        let block = ProjectSchemaTemplateBuilder.llmInstructionBlock
+        // Must call out straight quotes explicitly
+        XCTAssertTrue(block.contains("straight") || block.contains("ASCII"),
+                      "Instruction block must require straight ASCII double quotes")
+        // Must warn against curly / smart quotes by naming them
+        XCTAssertTrue(
+            block.contains("curly") || block.contains("smart quote") || block.contains("\u{201C}") || block.contains("\u{201D}"),
+            "Instruction block must warn against curly or smart quotes"
+        )
+    }
+
+    // MARK: 2j-b. LLM Instruction Block Requires Strict JSON Parser / Single Object
+
+    func testLLMInstructionBlockRequiresStrictJSONParser() {
+        let block = ProjectSchemaTemplateBuilder.llmInstructionBlock
+        XCTAssertTrue(
+            block.contains("strict JSON parser") || block.contains("single top-level JSON object"),
+            "Instruction block must require a single top-level JSON object parseable by a strict parser"
+        )
+    }
+
+    // MARK: 2j-c. LLM Instruction Block Clarifies Setting Must Appear And May Be Null
+
+    func testLLMInstructionBlockClarifiesSettingMayBeNull() {
+        let block = ProjectSchemaTemplateBuilder.llmInstructionBlock
+        // Must say "setting" must appear (not be omitted)
+        XCTAssertTrue(
+            block.contains("\"setting\" must appear") || block.contains("setting\" must appear"),
+            "Instruction block must state that 'setting' must appear in the output"
+        )
+        // Must offer null as the explicit alternative to omission
+        XCTAssertTrue(
+            block.contains("null") && block.contains("setting"),
+            "Instruction block must explain that 'setting' can be set to null"
+        )
+        // Must NOT describe setting as simply omittable
+        XCTAssertFalse(
+            block.contains("may be omitted"),
+            "Instruction block must not say 'setting' may be omitted — use null instead"
+        )
+    }
+
     // MARK: 2k. Build JSON Mode Dispatcher
 
     func testBuildJSONModeDispatcher() {
@@ -344,7 +389,50 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
         XCTAssertTrue(errors.issues.contains { $0.message.contains("Project name is required") })
     }
 
-    // MARK: 6. Normalization Of Missing Optional Fields
+    // MARK: 5a. Validator Hints At Smart Quotes On Parse Failure
+
+    func testValidatorHintsAtSmartQuotesOnParseFailure() {
+        // Construct malformed JSON that uses smart/curly quotes instead of straight quotes
+        let corruptedJSON = "{\u{201C}schema\u{201D}: \u{201C}cathedralos.project_schema\u{201D}}"
+        let result = ProjectImportValidator.validate(jsonString: corruptedJSON)
+
+        guard case .failure(let errors) = result else {
+            XCTFail("Expected failure for JSON with smart quotes")
+            return
+        }
+        let message = errors.issues.map(\.message).joined()
+        XCTAssertTrue(
+            message.contains("smart quote") || message.contains("curly quote") || message.contains("\u{201C}"),
+            "Error message should hint about smart/curly quotes when they are present in the input"
+        )
+    }
+
+    // MARK: 5b. Validator Does Not Add Smart-Quote Hint For Clean JSON Errors
+
+    func testValidatorDoesNotAddSmartQuoteHintForCleanJSONErrors() {
+        // Plain invalid JSON with no curly quotes
+        let invalidJSON = "not json at all"
+        let result = ProjectImportValidator.validate(jsonString: invalidJSON)
+
+        guard case .failure(let errors) = result else {
+            XCTFail("Expected failure for invalid JSON")
+            return
+        }
+        let message = errors.issues.map(\.message).joined()
+        XCTAssertFalse(
+            message.contains("smart quote") || message.contains("curly quote"),
+            "Error message should not mention smart quotes when none are present in the input"
+        )
+    }
+
+    // MARK: 5c. containsSmartQuotes Detection
+
+    func testContainsSmartQuotesDetection() {
+        XCTAssertTrue(ProjectImportValidator.containsSmartQuotes("\u{201C}hello\u{201D}"))
+        XCTAssertTrue(ProjectImportValidator.containsSmartQuotes("\u{2018}hello\u{2019}"))
+        XCTAssertFalse(ProjectImportValidator.containsSmartQuotes("\"straight quotes\""))
+        XCTAssertFalse(ProjectImportValidator.containsSmartQuotes("no quotes at all"))
+    }
 
     func testNormalizationOfMissingOptionalFields() {
         let charID = UUID()
