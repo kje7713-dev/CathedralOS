@@ -12,6 +12,8 @@ struct ProjectsListView: View {
     @State private var projectToDelete: StoryProject?
     @State private var showImportProject = false
     private let schemaTemplateJSON = ProjectSchemaTemplateBuilder.buildAnnotatedJSON()
+    private let schemaExampleJSON = ProjectSchemaTemplateBuilder.buildExampleJSON()
+    @State private var showCopiedLLMInstructions = false
 
     var body: some View {
         NavigationStack {
@@ -36,10 +38,23 @@ struct ProjectsListView: View {
                             }
                             ShareLink(
                                 item: schemaTemplateJSON,
-                                subject: Text("CathedralOS Project Schema Template"),
+                                subject: Text("CathedralOS Annotated Schema Template"),
                                 message: Text("Paste this into an LLM to build a project, then import it back into CathedralOS.")
                             ) {
                                 Label("Export Schema Template", systemImage: "square.and.arrow.up")
+                            }
+                            ShareLink(
+                                item: schemaExampleJSON,
+                                subject: Text("CathedralOS Example Project Schema"),
+                                message: Text("Use this as a reference example when authoring a new project with an LLM.")
+                            ) {
+                                Label("Export Example Schema", systemImage: "doc.text")
+                            }
+                            Button {
+                                UIPasteboard.general.string = ProjectSchemaTemplateBuilder.llmInstructionBlock
+                                showCopiedLLMInstructions = true
+                            } label: {
+                                Label("Copy LLM Instructions", systemImage: "text.badge.plus")
                             }
                         } label: {
                             Image(systemName: "ellipsis.circle")
@@ -77,6 +92,11 @@ struct ProjectsListView: View {
             Button("Cancel", role: .cancel) { projectToDelete = nil }
         } message: {
             Text("Delete \"\(projectToDelete?.name ?? "this project")\"? This cannot be undone.")
+        }
+        .alert("Copied", isPresented: $showCopiedLLMInstructions) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("LLM instructions copied to clipboard.")
         }
     }
 

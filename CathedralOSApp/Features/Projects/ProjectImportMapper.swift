@@ -32,8 +32,9 @@ enum ProjectImportMapper {
             project.projectSetting = setting
         }
 
-        // Build characters and track old-ID → new-ID mapping
-        var charIDMap: [UUID: UUID] = [:]
+        // Build characters and track old-ID (string) → new-ID mapping.
+        // Accepts both real UUID strings and symbolic IDs like "char_1".
+        var charIDMap: [String: UUID] = [:]
         var characters: [StoryCharacter] = []
         for cp in payload.characters {
             let char = StoryCharacter(name: cp.name)
