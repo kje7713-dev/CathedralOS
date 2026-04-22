@@ -166,6 +166,7 @@ struct TagFieldSection: View {
         editingIndex = nil
         editingText  = ""
         editFocused  = false
+        guard index < items.count else { return }
         if !trimmed.isEmpty {
             items[index] = trimmed
         } else {
@@ -182,8 +183,14 @@ struct TagFieldSection: View {
     /// Removes the item at `index`, adjusting `editingIndex` when another item
     /// is currently being edited and its index would shift due to the removal.
     private func deleteItem(at index: Int) {
-        if let editing = editingIndex, editing > index {
-            editingIndex = editing - 1
+        if let editing = editingIndex {
+            if editing == index {
+                editingIndex = nil
+                editingText  = ""
+                editFocused  = false
+            } else if editing > index {
+                editingIndex = editing - 1
+            }
         }
         items.remove(at: index)
     }
