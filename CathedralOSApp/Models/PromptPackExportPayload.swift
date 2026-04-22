@@ -106,6 +106,29 @@ struct PromptPackExportPayload: Codable {
         let id: UUID
         let name: String
         let summary: String
+        let readingLevel: String
+        let contentRating: String
+        let audienceNotes: String
+
+        init(id: UUID, name: String, summary: String,
+             readingLevel: String = "", contentRating: String = "", audienceNotes: String = "") {
+            self.id = id
+            self.name = name
+            self.summary = summary
+            self.readingLevel = readingLevel
+            self.contentRating = contentRating
+            self.audienceNotes = audienceNotes
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id      = try c.decode(UUID.self,   forKey: .id)
+            name    = try c.decode(String.self, forKey: .name)
+            summary = try c.decode(String.self, forKey: .summary)
+            readingLevel  = try c.decodeIfPresent(String.self, forKey: .readingLevel)  ?? ""
+            contentRating = try c.decodeIfPresent(String.self, forKey: .contentRating) ?? ""
+            audienceNotes = try c.decodeIfPresent(String.self, forKey: .audienceNotes) ?? ""
+        }
     }
 
     struct SettingPayload: Codable {

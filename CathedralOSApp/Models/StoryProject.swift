@@ -6,6 +6,10 @@ class StoryProject {
     var id: UUID
     var name: String
     var summary: String
+    // Audience targeting metadata
+    var readingLevel: String
+    var contentRating: String
+    var audienceNotes: String
     @Relationship(deleteRule: .cascade, inverse: \ProjectSetting.project)
     var projectSetting: ProjectSetting?
     @Relationship(deleteRule: .cascade, inverse: \StoryCharacter.project)
@@ -27,6 +31,9 @@ class StoryProject {
         self.id = UUID()
         self.name = name
         self.summary = ""
+        self.readingLevel = ""
+        self.contentRating = ""
+        self.audienceNotes = ""
         self.projectSetting = nil
         self.characters = []
         self.storySparks = []

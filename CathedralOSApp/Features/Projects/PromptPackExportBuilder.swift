@@ -194,7 +194,14 @@ enum PromptPackExportBuilder {
         return PromptPackExportPayload(
             schema:             schemaIdentifier,
             version:            schemaVersion,
-            project:            .init(id: project.id, name: project.name, summary: project.summary),
+            project:            .init(
+                id: project.id,
+                name: project.name,
+                summary: project.summary,
+                readingLevel: project.readingLevel,
+                contentRating: project.contentRating,
+                audienceNotes: project.audienceNotes
+            ),
             setting:            settingPayload,
             selectedCharacters: characters,
             selectedStorySpark: sparkPayload,

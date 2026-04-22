@@ -23,6 +23,7 @@ struct ProjectDetailView: View {
     var body: some View {
         List {
             summarySection
+            audienceSection
             charactersSection
             settingSection
             sparksSection
@@ -102,6 +103,70 @@ struct ProjectDetailView: View {
             ))
         } header: {
             CathedralSectionHeader("Summary")
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
+        }
+    }
+
+    // MARK: Audience Section
+
+    private static let readingLevels: [(label: String, value: String)] = [
+        ("Not set", ""),
+        ("Early Reader", "early_reader"),
+        ("Middle Grade", "middle_grade"),
+        ("Young Adult", "young_adult"),
+        ("Adult", "adult"),
+        ("Custom", "custom")
+    ]
+
+    private static let contentRatings: [(label: String, value: String)] = [
+        ("Not set", ""),
+        ("G", "g"),
+        ("PG", "pg"),
+        ("PG-13", "pg_13"),
+        ("R", "r"),
+        ("Custom", "custom")
+    ]
+
+    private var audienceSection: some View {
+        Section {
+            CathedralCard {
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                    Picker("Reading Level", selection: $project.readingLevel) {
+                        ForEach(Self.readingLevels, id: \.value) { item in
+                            Text(item.label).tag(item.value)
+                        }
+                    }
+                    .font(CathedralTheme.Typography.body())
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+
+                    Divider()
+
+                    Picker("Content Rating", selection: $project.contentRating) {
+                        ForEach(Self.contentRatings, id: \.value) { item in
+                            Text(item.label).tag(item.value)
+                        }
+                    }
+                    .font(CathedralTheme.Typography.body())
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+
+                    Divider()
+
+                    TextField("Audience notes…", text: $project.audienceNotes, axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(2...5)
+                }
+            }
+            .listRowBackground(CathedralTheme.Colors.background)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(
+                top: CathedralTheme.Spacing.sm,
+                leading: CathedralTheme.Spacing.base,
+                bottom: CathedralTheme.Spacing.sm,
+                trailing: CathedralTheme.Spacing.base
+            ))
+        } header: {
+            CathedralSectionHeader("Audience")
                 .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
