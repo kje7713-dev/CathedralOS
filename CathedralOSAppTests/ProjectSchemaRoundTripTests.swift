@@ -37,6 +37,182 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
                          "Annotated JSON must round-trip through Codable")
     }
 
+    // MARK: 2b. Annotated Template Uses Symbolic IDs
+
+    func testAnnotatedTemplateUsesSymbolicIDs() {
+        let json = ProjectSchemaTemplateBuilder.buildAnnotatedJSON()
+        XCTAssertTrue(json.contains("\"char_1\""), "Annotated template should contain symbolic id char_1")
+        XCTAssertTrue(json.contains("\"char_2\""), "Annotated template should contain symbolic id char_2")
+        XCTAssertTrue(json.contains("\"rel_1\""),   "Annotated template should contain symbolic id rel_1")
+        XCTAssertTrue(json.contains("\"spark_1\""), "Annotated template should contain symbolic id spark_1")
+        XCTAssertTrue(json.contains("\"theme_1\""), "Annotated template should contain symbolic id theme_1")
+        XCTAssertTrue(json.contains("\"motif_1\""), "Annotated template should contain symbolic id motif_1")
+    }
+
+    // MARK: 2c. Annotated Template Relationship References Are Consistent
+
+    func testAnnotatedTemplateRelationshipConsistency() throws {
+        let json = ProjectSchemaTemplateBuilder.buildAnnotatedJSON()
+        guard let data = json.data(using: .utf8) else {
+            XCTFail("Could not encode annotated JSON as data")
+            return
+        }
+        let payload = try JSONDecoder().decode(ProjectImportExportPayload.self, from: data)
+
+        let charIDs = Set(payload.characters.map { $0.id })
+        for rel in payload.relationships {
+            XCTAssertTrue(charIDs.contains(rel.sourceCharacterID),
+                          "sourceCharacterID '\(rel.sourceCharacterID)' must exist in characters array")
+            XCTAssertTrue(charIDs.contains(rel.targetCharacterID),
+                          "targetCharacterID '\(rel.targetCharacterID)' must exist in characters array")
+        }
+    }
+
+    // MARK: 2d. Example Schema Is Valid JSON
+
+    func testExampleSchemaIsValidJSON() {
+        let json = ProjectSchemaTemplateBuilder.buildExampleJSON()
+        XCTAssertFalse(json.isEmpty)
+
+        guard let data = json.data(using: .utf8) else {
+            XCTFail("Example JSON could not be encoded to Data")
+            return
+        }
+
+        XCTAssertNoThrow(try JSONDecoder().decode(ProjectImportExportPayload.self, from: data),
+                         "Example JSON must round-trip through Codable")
+    }
+
+    // MARK: 2e. Example Schema Uses Symbolic IDs
+
+    func testExampleSchemaUsesSymbolicIDs() {
+        let json = ProjectSchemaTemplateBuilder.buildExampleJSON()
+        XCTAssertTrue(json.contains("\"char_1\""), "Example schema should contain symbolic id char_1")
+        XCTAssertTrue(json.contains("\"char_2\""), "Example schema should contain symbolic id char_2")
+        XCTAssertTrue(json.contains("\"rel_1\""),   "Example schema should contain symbolic id rel_1")
+    }
+
+    // MARK: 2f. Example Schema Relationship References Are Consistent
+
+    func testExampleSchemaRelationshipConsistency() throws {
+        let json = ProjectSchemaTemplateBuilder.buildExampleJSON()
+        guard let data = json.data(using: .utf8) else {
+            XCTFail("Could not encode example JSON as data")
+            return
+        }
+        let payload = try JSONDecoder().decode(ProjectImportExportPayload.self, from: data)
+
+        let charIDs = Set(payload.characters.map { $0.id })
+        for rel in payload.relationships {
+            XCTAssertTrue(charIDs.contains(rel.sourceCharacterID),
+                          "sourceCharacterID '\(rel.sourceCharacterID)' must exist in characters array")
+            XCTAssertTrue(charIDs.contains(rel.targetCharacterID),
+                          "targetCharacterID '\(rel.targetCharacterID)' must exist in characters array")
+        }
+    }
+
+    // MARK: 2g. Import Remaps Symbolic IDs To Real UUIDs
+
+    func testImportRemapsSymbolicIDsToRealUUIDs() throws {
+        let json = ProjectSchemaTemplateBuilder.buildExampleJSON()
+        guard let data = json.data(using: .utf8) else {
+            XCTFail("Could not encode example JSON as data")
+            return
+        }
+        let payload = try JSONDecoder().decode(ProjectImportExportPayload.self, from: data)
+
+        // The payload should contain symbolic (non-UUID) ids
+        for char in payload.characters {
+            XCTAssertNil(UUID(uuidString: char.id),
+                         "Payload character id '\(char.id)' should be a symbolic id, not a UUID string")
+        }
+
+        // After import, characters must carry real UUIDs, not the original symbolic strings
+        let project = ProjectImportMapper.map(payload)
+        let symbolicIDs = Set(payload.characters.map { $0.id })
+
+        for char in project.characters {
+            let importedIDString = char.id.uuidString
+            XCTAssertNotNil(UUID(uuidString: importedIDString),
+                            "Imported character should have a valid UUID id")
+            XCTAssertFalse(symbolicIDs.contains(importedIDString),
+                           "Imported character UUID '\(importedIDString)' must not equal the original symbolic id")
+        }
+    }
+
+    // MARK: 2h. Import Relationship Refs Point To Correct Characters After Remap
+
+    func testImportRelationshipRefsPointToCorrectCharactersAfterRemap() throws {
+        let json = ProjectSchemaTemplateBuilder.buildExampleJSON()
+        guard let data = json.data(using: .utf8) else {
+            XCTFail("Could not encode example JSON as data")
+            return
+        }
+        let payload = try JSONDecoder().decode(ProjectImportExportPayload.self, from: data)
+        let project = ProjectImportMapper.map(payload)
+
+        guard !project.relationships.isEmpty else {
+            XCTFail("Example schema should import at least one relationship")
+            return
+        }
+
+        let importedCharIDs = Set(project.characters.map { $0.id })
+        for rel in project.relationships {
+            XCTAssertTrue(importedCharIDs.contains(rel.sourceCharacterID),
+                          "sourceCharacterID should reference a real imported character UUID")
+            XCTAssertTrue(importedCharIDs.contains(rel.targetCharacterID),
+                          "targetCharacterID should reference a real imported character UUID")
+        }
+    }
+
+    // MARK: 2i. Blank Schema Export Shape
+
+    func testBlankSchemaExportShape() {
+        let json = ProjectSchemaTemplateBuilder.buildBlankJSON()
+        XCTAssertFalse(json.isEmpty)
+
+        guard let data = json.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(ProjectImportExportPayload.self, from: data) else {
+            XCTFail("Blank schema JSON should decode correctly")
+            return
+        }
+
+        XCTAssertEqual(payload.schema, "cathedralos.project_schema")
+        XCTAssertEqual(payload.version, 1)
+        XCTAssertEqual(payload.project.name, "")
+        XCTAssertEqual(payload.project.summary, "")
+        XCTAssertTrue(payload.project.tags.isEmpty)
+        XCTAssertNil(payload.setting)
+        XCTAssertTrue(payload.characters.isEmpty)
+        XCTAssertTrue(payload.storySparks.isEmpty)
+        XCTAssertTrue(payload.aftertastes.isEmpty)
+        XCTAssertTrue(payload.relationships.isEmpty)
+        XCTAssertTrue(payload.themeQuestions.isEmpty)
+        XCTAssertTrue(payload.motifs.isEmpty)
+    }
+
+    // MARK: 2j. LLM Instruction Block Is Non-Empty
+
+    func testLLMInstructionBlockIsNonEmpty() {
+        XCTAssertFalse(ProjectSchemaTemplateBuilder.llmInstructionBlock.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    // MARK: 2k. Build JSON Mode Dispatcher
+
+    func testBuildJSONModeDispatcher() {
+        let blank = ProjectSchemaTemplateBuilder.buildJSON(mode: .blank)
+        let annotated = ProjectSchemaTemplateBuilder.buildJSON(mode: .annotated)
+        let example = ProjectSchemaTemplateBuilder.buildJSON(mode: .example)
+
+        XCTAssertFalse(blank.isEmpty)
+        XCTAssertFalse(annotated.isEmpty)
+        XCTAssertFalse(example.isEmpty)
+        // Each mode should produce different output
+        XCTAssertNotEqual(blank, annotated)
+        XCTAssertNotEqual(blank, example)
+        XCTAssertNotEqual(annotated, example)
+    }
+
     // MARK: 3. Validator Rejects Wrong Schema
 
     func testSchemaValidation_wrongSchema() {
@@ -59,7 +235,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             XCTFail("Expected failure for wrong schema")
             return
         }
-        XCTAssertTrue(errors.contains { $0.message.contains("some.other_schema") })
+        XCTAssertTrue(errors.issues.contains { $0.message.contains("some.other_schema") })
     }
 
     // MARK: 4. Validator Rejects Wrong Version
@@ -84,7 +260,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             XCTFail("Expected failure for wrong version")
             return
         }
-        XCTAssertTrue(errors.contains { $0.message.contains("99") })
+        XCTAssertTrue(errors.issues.contains { $0.message.contains("99") })
     }
 
     // MARK: 5. Validator Returns Error For Empty Project Name
@@ -109,7 +285,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             XCTFail("Expected failure for empty project name")
             return
         }
-        XCTAssertTrue(errors.contains { $0.message.contains("Project name is required") })
+        XCTAssertTrue(errors.issues.contains { $0.message.contains("Project name is required") })
     }
 
     // MARK: 6. Normalization Of Missing Optional Fields
@@ -130,7 +306,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             ),
             characters: [
                 .init(
-                    id: charID, name: "Alice",
+                    id: charID.uuidString, name: "Alice",
                     roles: [], goals: [], preferences: [], resources: [], failurePatterns: [],
                     fears: [], flaws: [], secrets: [], wounds: [], contradictions: [],
                     needs: [], obsessions: [], attachments: [], notes: "", instructionBias: "",
@@ -297,7 +473,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
 
     private func makeCharPayload(id: UUID = UUID(), name: String = "Test Char") -> ProjectImportExportPayload.CharacterPayload {
         .init(
-            id: id, name: name,
+            id: id.uuidString, name: name,
             roles: [], goals: [], preferences: [], resources: [], failurePatterns: [],
             fears: [], flaws: [], secrets: [], wounds: [], contradictions: [],
             needs: [], obsessions: [], attachments: [], notes: "", instructionBias: "",
@@ -310,7 +486,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
 
     private func makeSparkPayload() -> ProjectImportExportPayload.StorySparkPayload {
         .init(
-            id: UUID(), title: "Test Spark", situation: "Sit.", stakes: "High.",
+            id: UUID().uuidString, title: "Test Spark", situation: "Sit.", stakes: "High.",
             twist: "", urgency: "", threat: "", opportunity: "", complication: "", clock: "",
             triggerEvent: "", initialImbalance: "", falseResolution: "", reversalPotential: "",
             fieldLevel: "basic", enabledFieldGroups: []
@@ -319,7 +495,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
 
     private func makeAftertastePayload() -> ProjectImportExportPayload.AftertastePayload {
         .init(
-            id: UUID(), label: "Test Aftertaste",
+            id: UUID().uuidString, label: "Test Aftertaste",
             note: "", emotionalResidue: "", endingTexture: "", desiredAmbiguityLevel: "",
             readerQuestionLeftOpen: "", lastImageFeeling: "",
             fieldLevel: "basic", enabledFieldGroups: []
@@ -332,7 +508,8 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
         name: String = "Test Rel"
     ) -> ProjectImportExportPayload.RelationshipPayload {
         .init(
-            id: UUID(), name: name, sourceCharacterID: source, targetCharacterID: target,
+            id: UUID().uuidString, name: name,
+            sourceCharacterID: source.uuidString, targetCharacterID: target.uuidString,
             relationshipType: "ally",
             tension: "", loyalty: "", fear: "", desire: "", dependency: "", history: "",
             powerBalance: "", resentment: "", misunderstanding: "", unspokenTruth: "",
@@ -343,7 +520,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
 
     private func makeThemePayload() -> ProjectImportExportPayload.ThemeQuestionPayload {
         .init(
-            id: UUID(), question: "Test Question",
+            id: UUID().uuidString, question: "Test Question",
             coreTension: "", valueConflict: "", moralFaultLine: "", endingTruth: "", notes: "",
             fieldLevel: "basic", enabledFieldGroups: []
         )
@@ -351,7 +528,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
 
     private func makeMotifPayload() -> ProjectImportExportPayload.MotifPayload {
         .init(
-            id: UUID(), label: "Test Motif", category: "Symbol",
+            id: UUID().uuidString, label: "Test Motif", category: "Symbol",
             meaning: "", examples: [], notes: "",
             fieldLevel: "basic", enabledFieldGroups: []
         )

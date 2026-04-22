@@ -47,7 +47,7 @@ struct ProjectImportExportPayload: Codable {
     }
 
     struct CharacterPayload: Codable {
-        let id: UUID
+        let id: String
         let name: String
         // Basic
         let roles: [String]
@@ -86,7 +86,7 @@ struct ProjectImportExportPayload: Codable {
     }
 
     struct StorySparkPayload: Codable {
-        let id: UUID
+        let id: String
         let title: String
         let situation: String
         let stakes: String
@@ -105,7 +105,7 @@ struct ProjectImportExportPayload: Codable {
     }
 
     struct AftertastePayload: Codable {
-        let id: UUID
+        let id: String
         let label: String
         let note: String
         let emotionalResidue: String
@@ -118,10 +118,10 @@ struct ProjectImportExportPayload: Codable {
     }
 
     struct RelationshipPayload: Codable {
-        let id: UUID
+        let id: String
         let name: String
-        let sourceCharacterID: UUID
-        let targetCharacterID: UUID
+        let sourceCharacterID: String
+        let targetCharacterID: String
         let relationshipType: String
         let tension: String
         let loyalty: String
@@ -142,7 +142,7 @@ struct ProjectImportExportPayload: Codable {
     }
 
     struct ThemeQuestionPayload: Codable {
-        let id: UUID
+        let id: String
         let question: String
         let coreTension: String
         let valueConflict: String
@@ -154,7 +154,7 @@ struct ProjectImportExportPayload: Codable {
     }
 
     struct MotifPayload: Codable {
-        let id: UUID
+        let id: String
         let label: String
         let category: String
         let meaning: String
