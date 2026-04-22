@@ -19,16 +19,38 @@ enum ProjectSchemaTemplateBuilder {
     // MARK: - LLM Instruction Block
 
     static let llmInstructionBlock = """
-    Instructions for filling this schema:
-    - Fill this JSON with a complete original story project.
-    - Return valid JSON only. Do not add explanation or markdown fences.
-    - Do not remove any keys.
-    - Preserve "schema" and "version" exactly as given.
-    - Keep relationship references consistent: sourceCharacterID and targetCharacterID must match ids in the characters array.
-    - You may use the provided symbolic ids (e.g. "char_1", "rel_1") as-is; the app will remap them to real identifiers on import.
-    - Use empty string "" for optional text fields you are not filling.
-    - Use empty array [] for optional list fields you are not filling.
+    You are filling out a CathedralOS project schema. The completed JSON will be \
+    pasted directly into the app for import. Follow every rule below exactly — \
+    violations will cause the import to fail with an error.
+
+    HARD RULES (import will be rejected if broken):
+    1. "schema" must remain exactly: "cathedralos.project_schema" — do not change it.
+    2. "version" must remain exactly: 1 — as a JSON integer, not a string.
+    3. "project"."name" must be a non-empty, non-whitespace string. It is the only required field.
+    4. Every "sourceCharacterID" and "targetCharacterID" in the "relationships" array \
+    must exactly match an "id" value from the "characters" array. \
+    Symbolic IDs like "char_1", "char_2" may be used as-is and will be remapped on import.
+
+    FORMAT RULES (the output must be raw importable JSON):
+    5. Return valid JSON only. Do not wrap in markdown code fences (no ```json).
+    6. Do not include any explanation, commentary, or text outside the JSON object.
+    7. Do not remove any keys — every key in the template must appear in your output.
+    8. Use "" for optional text fields you are not filling in.
+    9. Use [] for optional array fields you are not filling in.
+    10. "fieldLevel" must be one of: "basic", "advanced", or "literary". Use "basic" if unsure.
+    11. "enabledFieldGroups" is reserved for internal use — always set it to [].
+    12. "setting" may be omitted (null) if the story has no world-building context.
+
+    Fill in the following JSON template with an original, complete story project:
     """
+
+    // MARK: - Unified LLM Prompt (instructions + template, single copyable block)
+
+    /// Returns a single copyable string suitable for pasting into an LLM:
+    /// the full instruction block followed by the JSON template for the given mode.
+    static func buildLLMPrompt(mode: SchemaTemplateMode) -> String {
+        llmInstructionBlock + "\n\n" + buildJSON(mode: mode)
+    }
 
     // MARK: - JSON Dispatcher
 
