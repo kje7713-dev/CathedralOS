@@ -236,6 +236,18 @@ struct RelationshipFormView: View {
         notes                       = r.notes ?? ""
         currentFieldLevel           = FieldLevel(rawValue: r.fieldLevel) ?? .basic
         enabledGroups               = Set(r.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
+
+        // Ensure all field groups with populated data are visible.
+        if !dependency.isEmpty || !history.isEmpty || !powerBalance.isEmpty {
+            enabledGroups.insert(.relCore)
+        }
+        if !resentment.isEmpty || !misunderstanding.isEmpty || !unspokenTruth.isEmpty {
+            enabledGroups.insert(.relConflict)
+        }
+        if !whatEachWantsFromTheOther.isEmpty || !whatWouldBreakIt.isEmpty
+            || !whatWouldTransformIt.isEmpty || !notes.isEmpty {
+            enabledGroups.insert(.relLiterary)
+        }
     }
 
     private func save() {

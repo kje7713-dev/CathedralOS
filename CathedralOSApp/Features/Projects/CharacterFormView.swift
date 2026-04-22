@@ -296,13 +296,34 @@ struct CharacterFormView: View {
         currentFieldLevel = FieldLevel(rawValue: c.fieldLevel) ?? .basic
         enabledGroups = Set(c.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
 
-        // Backward compat: if existing data exists for advanced fields,
-        // ensure those groups are visible even if not yet stored.
-        if !(c.notes ?? "").isEmpty || !(c.instructionBias ?? "").isEmpty {
-            if currentFieldLevel == .basic {
-                if !(c.notes ?? "").isEmpty          { enabledGroups.insert(.charNotes) }
-                if !(c.instructionBias ?? "").isEmpty { enabledGroups.insert(.charBias) }
-            }
+        // Ensure all field groups with populated data are visible.
+        // This handles imported content (and older saved characters) where
+        // fieldLevel or enabledFieldGroups may not reflect populated fields.
+        if !fears.isEmpty || !flaws.isEmpty || !needs.isEmpty || !contradictions.isEmpty {
+            enabledGroups.insert(.charPsychology)
+        }
+        if !wounds.isEmpty || !secrets.isEmpty || !attachments.isEmpty || !obsessions.isEmpty {
+            enabledGroups.insert(.charBackstory)
+        }
+        if !(c.notes ?? "").isEmpty {
+            enabledGroups.insert(.charNotes)
+        }
+        if !(c.instructionBias ?? "").isEmpty {
+            enabledGroups.insert(.charBias)
+        }
+        if !selfDeceptions.isEmpty || !identityConflicts.isEmpty || !moralLines.isEmpty
+            || !(c.coreLie ?? "").isEmpty || !(c.coreTruth ?? "").isEmpty {
+            enabledGroups.insert(.charInnerLife)
+        }
+        if !(c.publicMask ?? "").isEmpty || !(c.privateLogic ?? "").isEmpty
+            || !(c.speechStyle ?? "").isEmpty {
+            enabledGroups.insert(.charPersona)
+        }
+        if !(c.arcStart ?? "").isEmpty || !(c.arcEnd ?? "").isEmpty || !breakingPoints.isEmpty {
+            enabledGroups.insert(.charArc)
+        }
+        if !virtues.isEmpty || !(c.reputation ?? "").isEmpty || !(c.status ?? "").isEmpty {
+            enabledGroups.insert(.charSocial)
         }
     }
 

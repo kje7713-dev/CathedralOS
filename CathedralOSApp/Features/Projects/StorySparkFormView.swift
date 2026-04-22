@@ -203,6 +203,16 @@ struct StorySparkFormView: View {
         reversalPotential = s.reversalPotential ?? ""
         currentFieldLevel = FieldLevel(rawValue: s.fieldLevel) ?? .basic
         enabledGroups     = Set(s.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
+
+        // Ensure all field groups with populated data are visible.
+        if !urgency.isEmpty || !threat.isEmpty || !opportunity.isEmpty
+            || !complication.isEmpty || !clock.isEmpty {
+            enabledGroups.insert(.sparkTension)
+        }
+        if !triggerEvent.isEmpty || !initialImbalance.isEmpty
+            || !falseResolution.isEmpty || !reversalPotential.isEmpty {
+            enabledGroups.insert(.sparkStructure)
+        }
     }
 
     private func save() {

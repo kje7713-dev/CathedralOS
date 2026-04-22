@@ -111,6 +111,14 @@ struct MotifFormView: View {
         notes    = m.notes ?? ""
         currentFieldLevel = FieldLevel(rawValue: m.fieldLevel) ?? .basic
         enabledGroups = Set(m.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
+
+        // Ensure all field groups with populated data are visible.
+        if !meaning.isEmpty || !examples.isEmpty {
+            enabledGroups.insert(.motifAdvanced)
+        }
+        if !notes.isEmpty {
+            enabledGroups.insert(.motifLiterary)
+        }
     }
 
     private func commitStagedTags() {

@@ -129,6 +129,14 @@ struct ThemeQuestionFormView: View {
         notes         = t.notes ?? ""
         currentFieldLevel = FieldLevel(rawValue: t.fieldLevel) ?? .basic
         enabledGroups = Set(t.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
+
+        // Ensure all field groups with populated data are visible.
+        if !coreTension.isEmpty || !valueConflict.isEmpty {
+            enabledGroups.insert(.themeAdvanced)
+        }
+        if !moralFaultLine.isEmpty || !endingTruth.isEmpty || !notes.isEmpty {
+            enabledGroups.insert(.themeLiterary)
+        }
     }
 
     private func save() {

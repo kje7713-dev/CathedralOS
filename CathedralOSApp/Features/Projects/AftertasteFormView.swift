@@ -141,6 +141,14 @@ struct AftertasteFormView: View {
         lastImageFeeling       = a.lastImageFeeling ?? ""
         currentFieldLevel      = FieldLevel(rawValue: a.fieldLevel) ?? .basic
         enabledGroups          = Set(a.enabledFieldGroups.compactMap(FieldGroupID.init(rawValue:)))
+
+        // Ensure all field groups with populated data are visible.
+        if !emotionalResidue.isEmpty || !endingTexture.isEmpty || !desiredAmbiguityLevel.isEmpty {
+            enabledGroups.insert(.aftertasteDepth)
+        }
+        if !readerQuestionLeftOpen.isEmpty || !lastImageFeeling.isEmpty {
+            enabledGroups.insert(.aftertasteResonance)
+        }
     }
 
     private func save() {
