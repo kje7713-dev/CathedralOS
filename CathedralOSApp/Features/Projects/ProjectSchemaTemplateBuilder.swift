@@ -24,10 +24,8 @@ enum ProjectSchemaTemplateBuilder {
     - Return valid JSON only. Do not add explanation or markdown fences.
     - Do not remove any keys.
     - Preserve "schema" and "version" exactly as given.
-    - Keep relationship references consistent: \
-sourceCharacterID and targetCharacterID must match ids in the characters array.
-    - You may use the provided symbolic ids (e.g. "char_1", "rel_1") as-is; \
-the app will remap them to real identifiers on import.
+    - Keep relationship references consistent: sourceCharacterID and targetCharacterID must match ids in the characters array.
+    - You may use the provided symbolic ids (e.g. "char_1", "rel_1") as-is; the app will remap them to real identifiers on import.
     - Use empty string "" for optional text fields you are not filling.
     - Use empty array [] for optional list fields you are not filling.
     """

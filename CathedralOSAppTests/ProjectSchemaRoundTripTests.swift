@@ -120,14 +120,23 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             return
         }
         let payload = try JSONDecoder().decode(ProjectImportExportPayload.self, from: data)
+
+        // The payload should contain symbolic (non-UUID) ids
+        for char in payload.characters {
+            XCTAssertNil(UUID(uuidString: char.id),
+                         "Payload character id '\(char.id)' should be a symbolic id, not a UUID string")
+        }
+
+        // After import, characters must carry real UUIDs, not the original symbolic strings
         let project = ProjectImportMapper.map(payload)
+        let symbolicIDs = Set(payload.characters.map { $0.id })
 
         for char in project.characters {
-            XCTAssertNotNil(UUID(uuidString: char.id.uuidString),
+            let importedIDString = char.id.uuidString
+            XCTAssertNotNil(UUID(uuidString: importedIDString),
                             "Imported character should have a valid UUID id")
-            // The symbolic id "char_1" should not survive import as a literal id value
-            XCTAssertNil(UUID(uuidString: "char_1"),
-                         "Symbolic id 'char_1' is not a valid UUID — confirms symbolic ids were remapped")
+            XCTAssertFalse(symbolicIDs.contains(importedIDString),
+                           "Imported character UUID '\(importedIDString)' must not equal the original symbolic id")
         }
     }
 
