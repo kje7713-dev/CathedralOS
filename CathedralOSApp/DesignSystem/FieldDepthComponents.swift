@@ -170,7 +170,7 @@ struct TagFieldSection: View {
     /// No-ops when the trimmed value is empty.
     /// Extracted as `internal static` so unit tests can exercise the logic directly.
     static func commitAdd(newItem: inout String, to items: inout [String]) {
-        let trimmed = newItem.trimmingCharacters(in: .whitespaces)
+        let trimmed = newItem.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         items.append(trimmed)
         newItem = ""
