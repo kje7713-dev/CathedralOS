@@ -91,6 +91,7 @@ struct TagFieldSection: View {
     @State private var editingIndex: Int? = nil
     @State private var editingText: String = ""
     @FocusState private var editFocused: Bool
+    @FocusState private var addFocused: Bool
 
     var body: some View {
         Section {
@@ -142,12 +143,13 @@ struct TagFieldSection: View {
                 TextField(placeholder, text: $newItem)
                     .font(CathedralTheme.Typography.body())
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    .focused($addFocused)
                     .onSubmit { commitNewItem() }
                 Button { commitNewItem() } label: {
                     Image(systemName: "plus.circle.fill")
                         .foregroundStyle(CathedralTheme.Colors.accent)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
                 .disabled(newItem.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         } header: {
