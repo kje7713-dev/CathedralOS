@@ -67,16 +67,15 @@ struct ProjectsListView: View {
             }
         }
         .tint(CathedralTheme.Colors.accent)
-        .sheet(isPresented: $showImportProject) {
-            ProjectImportView(onImported: { project in
-                pendingNavigationProject = project
-            })
-        }
-        .onChange(of: showImportProject) { _, isPresented in
-            if !isPresented, let project = pendingNavigationProject {
+        .sheet(isPresented: $showImportProject, onDismiss: {
+            if let project = pendingNavigationProject {
                 navigationPath.append(project)
                 pendingNavigationProject = nil
             }
+        }) {
+            ProjectImportView(onImported: { project in
+                pendingNavigationProject = project
+            })
         }
         .sheet(isPresented: $showAddProject) {
             addProjectSheet
