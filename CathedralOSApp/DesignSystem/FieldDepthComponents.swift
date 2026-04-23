@@ -139,7 +139,7 @@ struct TagFieldSection: View {
                     }
                 }
             }
-            HStack {
+            HStack(spacing: CathedralTheme.Spacing.sm) {
                 TextField(placeholder, text: $newItem)
                     .font(CathedralTheme.Typography.body())
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
@@ -147,9 +147,10 @@ struct TagFieldSection: View {
                     .onSubmit { commitNewItem() }
                 Button { commitNewItem() } label: {
                     Image(systemName: "plus.circle.fill")
+                        .font(.system(size: CathedralTheme.Icons.deleteControl))
                         .foregroundStyle(CathedralTheme.Colors.accent)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .disabled(newItem.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         } header: {
@@ -160,6 +161,15 @@ struct TagFieldSection: View {
     // MARK: - Actions
 
     private func commitNewItem() {
+        TagFieldSection.commitAdd(newItem: &newItem, to: &items)
+    }
+
+    // MARK: - Testable Logic
+
+    /// Appends `newItem` (trimmed) to `items` and clears `newItem`.
+    /// No-ops when the trimmed value is empty.
+    /// Extracted as `internal static` so unit tests can exercise the logic directly.
+    static func commitAdd(newItem: inout String, to items: inout [String]) {
         let trimmed = newItem.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         items.append(trimmed)
