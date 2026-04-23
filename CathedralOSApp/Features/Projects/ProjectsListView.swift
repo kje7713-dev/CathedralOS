@@ -5,17 +5,19 @@ struct ProjectsListView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \StoryProject.name) private var projects: [StoryProject]
 
+    @State private var navigationPath = NavigationPath()
     @State private var showAddProject = false
     @State private var newProjectName = ""
     @State private var projectToRename: StoryProject?
     @State private var renameText = ""
     @State private var projectToDelete: StoryProject?
     @State private var showImportProject = false
+    @State private var pendingNavigationProject: StoryProject?
     private let schemaExampleJSON = ProjectSchemaTemplateBuilder.buildExampleJSON()
     @State private var showCopiedLLMPrompt = false
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             Group {
                 if projects.isEmpty {
                     emptyState
@@ -60,10 +62,21 @@ struct ProjectsListView: View {
                     }
                 }
             }
+            .navigationDestination(for: StoryProject.self) { project in
+                ProjectDetailView(project: project)
+            }
         }
         .tint(CathedralTheme.Colors.accent)
         .sheet(isPresented: $showImportProject) {
-            ProjectImportView()
+            ProjectImportView(onImported: { project in
+                pendingNavigationProject = project
+            })
+        }
+        .onChange(of: showImportProject) { _, isPresented in
+            if !isPresented, let project = pendingNavigationProject {
+                navigationPath.append(project)
+                pendingNavigationProject = nil
+            }
         }
         .sheet(isPresented: $showAddProject) {
             addProjectSheet
@@ -125,9 +138,7 @@ struct ProjectsListView: View {
     private var projectList: some View {
         List {
             ForEach(projects) { project in
-                NavigationLink {
-                    ProjectDetailView(project: project)
-                } label: {
+                NavigationLink(value: project) {
                     projectRow(project)
                 }
                 .listRowBackground(CathedralTheme.Colors.surface)

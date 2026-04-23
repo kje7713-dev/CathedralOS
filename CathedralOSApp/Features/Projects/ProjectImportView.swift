@@ -5,6 +5,8 @@ struct ProjectImportView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
+    var onImported: (StoryProject) -> Void = { _ in }
+
     private enum ImportState {
         case pasting
         case previewing(ProjectImportExportPayload, [ImportValidationIssue])
@@ -153,6 +155,7 @@ struct ProjectImportView: View {
     private func importProject(_ payload: ProjectImportExportPayload) {
         let project = ProjectImportMapper.map(payload)
         modelContext.insert(project)
+        onImported(project)
         dismiss()
     }
 }
