@@ -40,9 +40,12 @@ struct ProjectDetailView: View {
         .navigationBarTitleDisplayMode(.large)
         .tint(CathedralTheme.Colors.accent)
         .sheet(isPresented: $showAddCharacter) {
-            CharacterFormView(project: project, character: nil)
+            NavigationStack {
+                CharacterFormView(project: project, character: nil)
+            }
+            .tint(CathedralTheme.Colors.accent)
         }
-        .sheet(item: $characterToEdit) { c in
+        .navigationDestination(item: $characterToEdit) { c in
             CharacterFormView(project: nil, character: c)
         }
         .sheet(isPresented: $showAddSpark) {

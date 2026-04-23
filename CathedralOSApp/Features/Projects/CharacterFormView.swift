@@ -83,176 +83,174 @@ struct CharacterFormView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                // Field depth selector
-                FieldDepthPicker(selection: $currentFieldLevel)
+        Form {
+            // Field depth selector
+            FieldDepthPicker(selection: $currentFieldLevel)
 
-                // Name
+            // Name
+            Section {
+                TextField("Character name", text: $name)
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+            } header: {
+                CathedralFormSectionHeader("Name")
+            }
+
+            // Basic fields
+            TagFieldSection(header: "Roles",            items: $roles,          newItem: $newRole,          placeholder: "e.g. Protagonist",                    addLabel: "Add Role")
+            TagFieldSection(header: "Goals",            items: $goals,          newItem: $newGoal,          placeholder: "e.g. Survive the winter",              addLabel: "Add Goal")
+            TagFieldSection(header: "Preferences",      items: $preferences,    newItem: $newPreference,    placeholder: "e.g. Prefers negotiation over combat", addLabel: "Add Preference")
+            TagFieldSection(header: "Resources",        items: $resources,      newItem: $newResource,      placeholder: "e.g. Old family estate",               addLabel: "Add Resource")
+            TagFieldSection(header: "Failure Patterns", items: $failurePatterns,newItem: $newFailurePattern,placeholder: "e.g. Trusts too quickly",              addLabel: "Add Failure Pattern")
+
+            // Advanced — Psychology
+            if show(.charPsychology, nativeLevel: .advanced) {
+                TagFieldSection(header: "Fears",          items: $fears,         newItem: $newFear,         placeholder: "e.g. Fear of abandonment",            addLabel: "Add Fear")
+                TagFieldSection(header: "Flaws",          items: $flaws,         newItem: $newFlaw,         placeholder: "e.g. Pride",                          addLabel: "Add Flaw")
+                TagFieldSection(header: "Needs",          items: $needs,         newItem: $newNeed,         placeholder: "e.g. Validation from authority",       addLabel: "Add Need")
+                TagFieldSection(header: "Contradictions", items: $contradictions,newItem: $newContradiction,placeholder: "e.g. Craves belonging, pushes people away", addLabel: "Add Contradiction")
+            }
+
+            // Advanced — Backstory
+            if show(.charBackstory, nativeLevel: .advanced) {
+                TagFieldSection(header: "Wounds",     items: $wounds,     newItem: $newWound,     placeholder: "e.g. Lost a sibling in childhood", addLabel: "Add Wound")
+                TagFieldSection(header: "Secrets",    items: $secrets,    newItem: $newSecret,    placeholder: "e.g. Knows who the killer is",     addLabel: "Add Secret")
+                TagFieldSection(header: "Attachments",items: $attachments,newItem: $newAttachment,placeholder: "e.g. Mother's old photograph",      addLabel: "Add Attachment")
+                TagFieldSection(header: "Obsessions", items: $obsessions, newItem: $newObsession, placeholder: "e.g. Tracking the missing heir",    addLabel: "Add Obsession")
+            }
+
+            // Advanced — Notes
+            if show(.charNotes, nativeLevel: .advanced) {
                 Section {
-                    TextField("Character name", text: $name)
+                    TextField("Optional notes…", text: $notes, axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(3...8)
+                } header: {
+                    CathedralFormSectionHeader("Notes")
+                }
+            }
+
+            // Advanced — Instruction Bias
+            if show(.charBias, nativeLevel: .advanced) {
+                Section {
+                    TextField("Optional instruction bias…", text: $instructionBias, axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(3...8)
+                } header: {
+                    CathedralFormSectionHeader("Instruction Bias")
+                }
+            }
+
+            // Literary — Inner Life
+            if show(.charInnerLife, nativeLevel: .literary) {
+                TagFieldSection(header: "Self-Deceptions",    items: $selfDeceptions,   newItem: $newSelfDeception,   placeholder: "e.g. Believes she is helping",  addLabel: "Add Self-Deception")
+                TagFieldSection(header: "Identity Conflicts",items: $identityConflicts, newItem: $newIdentityConflict, placeholder: "e.g. Hero vs. coward",          addLabel: "Add Identity Conflict")
+                TagFieldSection(header: "Moral Lines",        items: $moralLines,       newItem: $newMoralLine,       placeholder: "e.g. Will never betray family", addLabel: "Add Moral Line")
+                Section {
+                    TextField("Core lie the character believes…", text: $coreLie, axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(2...6)
+                } header: {
+                    CathedralFormSectionHeader("Core Lie")
+                }
+                Section {
+                    TextField("Core truth the character must discover…", text: $coreTruth, axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(2...6)
+                } header: {
+                    CathedralFormSectionHeader("Core Truth")
+                }
+            }
+
+            // Literary — Persona & Voice
+            if show(.charPersona, nativeLevel: .literary) {
+                Section {
+                    TextField("How this character presents to the world…", text: $publicMask, axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(2...6)
+                } header: {
+                    CathedralFormSectionHeader("Public Mask")
+                }
+                Section {
+                    TextField("The reasoning only this character knows…", text: $privateLogic, axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(2...6)
+                } header: {
+                    CathedralFormSectionHeader("Private Logic")
+                }
+                Section {
+                    TextField("How this character speaks and expresses…", text: $speechStyle, axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(2...6)
+                } header: {
+                    CathedralFormSectionHeader("Speech Style")
+                }
+            }
+
+            // Literary — Character Arc
+            if show(.charArc, nativeLevel: .literary) {
+                Section {
+                    TextField("Where the character begins their arc…", text: $arcStart, axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(2...6)
+                } header: {
+                    CathedralFormSectionHeader("Arc Start")
+                }
+                Section {
+                    TextField("Where the character ends their arc…", text: $arcEnd, axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(2...6)
+                } header: {
+                    CathedralFormSectionHeader("Arc End")
+                }
+                TagFieldSection(header: "Breaking Points", items: $breakingPoints, newItem: $newBreakingPoint, placeholder: "e.g. Moment she chooses self over duty", addLabel: "Add Breaking Point")
+            }
+
+            // Literary — Social Profile
+            if show(.charSocial, nativeLevel: .literary) {
+                TagFieldSection(header: "Virtues", items: $virtues, newItem: $newVirtue, placeholder: "e.g. Loyalty", addLabel: "Add Virtue")
+                Section {
+                    TextField("How others see this character…", text: $reputation)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                 } header: {
-                    CathedralFormSectionHeader("Name")
+                    CathedralFormSectionHeader("Reputation")
                 }
-
-                // Basic fields
-                TagFieldSection(header: "Roles",            items: $roles,          newItem: $newRole,          placeholder: "e.g. Protagonist",                    addLabel: "Add Role")
-                TagFieldSection(header: "Goals",            items: $goals,          newItem: $newGoal,          placeholder: "e.g. Survive the winter",              addLabel: "Add Goal")
-                TagFieldSection(header: "Preferences",      items: $preferences,    newItem: $newPreference,    placeholder: "e.g. Prefers negotiation over combat", addLabel: "Add Preference")
-                TagFieldSection(header: "Resources",        items: $resources,      newItem: $newResource,      placeholder: "e.g. Old family estate",               addLabel: "Add Resource")
-                TagFieldSection(header: "Failure Patterns", items: $failurePatterns,newItem: $newFailurePattern,placeholder: "e.g. Trusts too quickly",              addLabel: "Add Failure Pattern")
-
-                // Advanced — Psychology
-                if show(.charPsychology, nativeLevel: .advanced) {
-                    TagFieldSection(header: "Fears",          items: $fears,         newItem: $newFear,         placeholder: "e.g. Fear of abandonment",            addLabel: "Add Fear")
-                    TagFieldSection(header: "Flaws",          items: $flaws,         newItem: $newFlaw,         placeholder: "e.g. Pride",                          addLabel: "Add Flaw")
-                    TagFieldSection(header: "Needs",          items: $needs,         newItem: $newNeed,         placeholder: "e.g. Validation from authority",       addLabel: "Add Need")
-                    TagFieldSection(header: "Contradictions", items: $contradictions,newItem: $newContradiction,placeholder: "e.g. Craves belonging, pushes people away", addLabel: "Add Contradiction")
-                }
-
-                // Advanced — Backstory
-                if show(.charBackstory, nativeLevel: .advanced) {
-                    TagFieldSection(header: "Wounds",     items: $wounds,     newItem: $newWound,     placeholder: "e.g. Lost a sibling in childhood", addLabel: "Add Wound")
-                    TagFieldSection(header: "Secrets",    items: $secrets,    newItem: $newSecret,    placeholder: "e.g. Knows who the killer is",     addLabel: "Add Secret")
-                    TagFieldSection(header: "Attachments",items: $attachments,newItem: $newAttachment,placeholder: "e.g. Mother's old photograph",      addLabel: "Add Attachment")
-                    TagFieldSection(header: "Obsessions", items: $obsessions, newItem: $newObsession, placeholder: "e.g. Tracking the missing heir",    addLabel: "Add Obsession")
-                }
-
-                // Advanced — Notes
-                if show(.charNotes, nativeLevel: .advanced) {
-                    Section {
-                        TextField("Optional notes…", text: $notes, axis: .vertical)
-                            .font(CathedralTheme.Typography.body())
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            .lineLimit(3...8)
-                    } header: {
-                        CathedralFormSectionHeader("Notes")
-                    }
-                }
-
-                // Advanced — Instruction Bias
-                if show(.charBias, nativeLevel: .advanced) {
-                    Section {
-                        TextField("Optional instruction bias…", text: $instructionBias, axis: .vertical)
-                            .font(CathedralTheme.Typography.body())
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            .lineLimit(3...8)
-                    } header: {
-                        CathedralFormSectionHeader("Instruction Bias")
-                    }
-                }
-
-                // Literary — Inner Life
-                if show(.charInnerLife, nativeLevel: .literary) {
-                    TagFieldSection(header: "Self-Deceptions",    items: $selfDeceptions,   newItem: $newSelfDeception,   placeholder: "e.g. Believes she is helping",  addLabel: "Add Self-Deception")
-                    TagFieldSection(header: "Identity Conflicts",items: $identityConflicts, newItem: $newIdentityConflict, placeholder: "e.g. Hero vs. coward",          addLabel: "Add Identity Conflict")
-                    TagFieldSection(header: "Moral Lines",        items: $moralLines,       newItem: $newMoralLine,       placeholder: "e.g. Will never betray family", addLabel: "Add Moral Line")
-                    Section {
-                        TextField("Core lie the character believes…", text: $coreLie, axis: .vertical)
-                            .font(CathedralTheme.Typography.body())
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            .lineLimit(2...6)
-                    } header: {
-                        CathedralFormSectionHeader("Core Lie")
-                    }
-                    Section {
-                        TextField("Core truth the character must discover…", text: $coreTruth, axis: .vertical)
-                            .font(CathedralTheme.Typography.body())
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            .lineLimit(2...6)
-                    } header: {
-                        CathedralFormSectionHeader("Core Truth")
-                    }
-                }
-
-                // Literary — Persona & Voice
-                if show(.charPersona, nativeLevel: .literary) {
-                    Section {
-                        TextField("How this character presents to the world…", text: $publicMask, axis: .vertical)
-                            .font(CathedralTheme.Typography.body())
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            .lineLimit(2...6)
-                    } header: {
-                        CathedralFormSectionHeader("Public Mask")
-                    }
-                    Section {
-                        TextField("The reasoning only this character knows…", text: $privateLogic, axis: .vertical)
-                            .font(CathedralTheme.Typography.body())
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            .lineLimit(2...6)
-                    } header: {
-                        CathedralFormSectionHeader("Private Logic")
-                    }
-                    Section {
-                        TextField("How this character speaks and expresses…", text: $speechStyle, axis: .vertical)
-                            .font(CathedralTheme.Typography.body())
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            .lineLimit(2...6)
-                    } header: {
-                        CathedralFormSectionHeader("Speech Style")
-                    }
-                }
-
-                // Literary — Character Arc
-                if show(.charArc, nativeLevel: .literary) {
-                    Section {
-                        TextField("Where the character begins their arc…", text: $arcStart, axis: .vertical)
-                            .font(CathedralTheme.Typography.body())
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            .lineLimit(2...6)
-                    } header: {
-                        CathedralFormSectionHeader("Arc Start")
-                    }
-                    Section {
-                        TextField("Where the character ends their arc…", text: $arcEnd, axis: .vertical)
-                            .font(CathedralTheme.Typography.body())
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            .lineLimit(2...6)
-                    } header: {
-                        CathedralFormSectionHeader("Arc End")
-                    }
-                    TagFieldSection(header: "Breaking Points", items: $breakingPoints, newItem: $newBreakingPoint, placeholder: "e.g. Moment she chooses self over duty", addLabel: "Add Breaking Point")
-                }
-
-                // Literary — Social Profile
-                if show(.charSocial, nativeLevel: .literary) {
-                    TagFieldSection(header: "Virtues", items: $virtues, newItem: $newVirtue, placeholder: "e.g. Loyalty", addLabel: "Add Virtue")
-                    Section {
-                        TextField("How others see this character…", text: $reputation)
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    } header: {
-                        CathedralFormSectionHeader("Reputation")
-                    }
-                    Section {
-                        TextField("Social / political standing…", text: $status)
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    } header: {
-                        CathedralFormSectionHeader("Status")
-                    }
-                }
-
-                // Optional sections toggle panel
-                OptionalSectionTogglePanel(
-                    advancedGroups: FieldTemplateEngine.optionalAdvancedGroups(for: .character, at: currentFieldLevel),
-                    literaryGroups: FieldTemplateEngine.optionalLiteraryGroups(for: .character, at: currentFieldLevel),
-                    enabledGroups: $enabledGroups
-                )
-            }
-            .cathedralFormStyle()
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                Section {
+                    TextField("Social / political standing…", text: $status)
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                } header: {
+                    CathedralFormSectionHeader("Status")
                 }
             }
-            .onAppear { loadExisting() }
+
+            // Optional sections toggle panel
+            OptionalSectionTogglePanel(
+                advancedGroups: FieldTemplateEngine.optionalAdvancedGroups(for: .character, at: currentFieldLevel),
+                literaryGroups: FieldTemplateEngine.optionalLiteraryGroups(for: .character, at: currentFieldLevel),
+                enabledGroups: $enabledGroups
+            )
         }
+        .cathedralFormStyle()
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") { save() }
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .onAppear { loadExisting() }
         .tint(CathedralTheme.Colors.accent)
         .interactiveDismissDisabled(isEditing || !name.trimmingCharacters(in: .whitespaces).isEmpty)
     }
