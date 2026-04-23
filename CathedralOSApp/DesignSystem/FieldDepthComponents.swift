@@ -142,12 +142,8 @@ struct TagFieldSection: View {
                 TextField(placeholder, text: $newItem)
                     .font(CathedralTheme.Typography.body())
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
-                Button {
-                    let trimmed = newItem.trimmingCharacters(in: .whitespaces)
-                    guard !trimmed.isEmpty else { return }
-                    items.append(trimmed)
-                    newItem = ""
-                } label: {
+                    .onSubmit { commitNewItem() }
+                Button { commitNewItem() } label: {
                     Image(systemName: "plus.circle.fill")
                         .foregroundStyle(CathedralTheme.Colors.accent)
                 }
@@ -160,6 +156,13 @@ struct TagFieldSection: View {
     }
 
     // MARK: - Actions
+
+    private func commitNewItem() {
+        let trimmed = newItem.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        items.append(trimmed)
+        newItem = ""
+    }
 
     private func commitEdit(at index: Int) {
         let trimmed = editingText.trimmingCharacters(in: .whitespaces)
