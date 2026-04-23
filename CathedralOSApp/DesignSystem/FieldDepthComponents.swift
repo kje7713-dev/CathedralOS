@@ -164,7 +164,6 @@ struct TagFieldSection: View {
             }
             .contentShape(Rectangle())
             .buttonStyle(.plain)
-            .disabled(newItem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } header: {
             CathedralFormSectionHeader(header)
         }
