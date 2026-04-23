@@ -149,21 +149,19 @@ struct TagFieldSection: View {
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
                 .onSubmit { commitNewItem() }
 
-            // — Add input: dedicated full-row button —
-            // Rendered as its own Section row so the entire row is a reliable
-            // tap target, avoiding the fragile inline icon-button pattern.
-            Button(action: commitNewItem) {
-                Text(addLabel)
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(
-                        newItem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? CathedralTheme.Colors.tertiaryText
-                            : CathedralTheme.Colors.accent
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .contentShape(Rectangle())
-            .buttonStyle(.borderless)
+            // — Add input: dedicated full-row tap target —
+            // Using onTapGesture instead of Button avoids the tap-interception
+            // issue that Button/buttonStyle(.borderless) has inside SwiftUI Form sections.
+            Text(addLabel)
+                .font(CathedralTheme.Typography.body())
+                .foregroundStyle(
+                    newItem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? CathedralTheme.Colors.tertiaryText
+                        : CathedralTheme.Colors.accent
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { commitNewItem() }
         } header: {
             CathedralFormSectionHeader(header)
         }
@@ -172,7 +170,10 @@ struct TagFieldSection: View {
     // MARK: - Actions
 
     private func commitNewItem() {
-        TagFieldSection.commitAdd(newItem: &newItem, to: &items)
+        let trimmed = newItem.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        items.append(trimmed)
+        newItem = ""
     }
 
     // MARK: - Testable Logic
