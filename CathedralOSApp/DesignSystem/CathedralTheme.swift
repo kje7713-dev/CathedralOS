@@ -301,7 +301,7 @@ struct CathedralSectionHeader: View {
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
             }
         }
         .padding(.top, CathedralTheme.Spacing.xs)
