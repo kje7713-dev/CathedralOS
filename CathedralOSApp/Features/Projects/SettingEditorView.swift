@@ -69,9 +69,9 @@ struct SettingEditorView: View {
                 CathedralFormSectionHeader("Summary / Notes")
             }
 
-            TagFieldSection(header: "Domains",     items: $domains,     newItem: $newDomain,     placeholder: "e.g. Victorian England")
-            TagFieldSection(header: "Constraints", items: $constraints, newItem: $newConstraint, placeholder: "e.g. No modern technology")
-            TagFieldSection(header: "Themes",      items: $themes,      newItem: $newTheme,      placeholder: "e.g. Redemption")
+            TagFieldSection(header: "Domains",     items: $domains,     newItem: $newDomain,     placeholder: "e.g. Victorian England",     addLabel: "Add Domain")
+            TagFieldSection(header: "Constraints", items: $constraints, newItem: $newConstraint, placeholder: "e.g. No modern technology",   addLabel: "Add Constraint")
+            TagFieldSection(header: "Themes",      items: $themes,      newItem: $newTheme,      placeholder: "e.g. Redemption",             addLabel: "Add Theme")
             Section {
                 TextField("e.g. Late autumn, year three of the drought", text: $season)
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
@@ -81,7 +81,7 @@ struct SettingEditorView: View {
 
             // Advanced — World
             if show(.settingWorld, nativeLevel: .advanced) {
-                TagFieldSection(header: "World Rules", items: $worldRules, newItem: $newWorldRule, placeholder: "e.g. Magic requires sacrifice")
+                TagFieldSection(header: "World Rules", items: $worldRules, newItem: $newWorldRule, placeholder: "e.g. Magic requires sacrifice", addLabel: "Add World Rule")
                 Section {
                     TextField("Technology level of this world…", text: $technologyLevel)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
@@ -148,10 +148,10 @@ struct SettingEditorView: View {
 
             // Literary — Culture
             if show(.settingCulture, nativeLevel: .literary) {
-                TagFieldSection(header: "Taboos",          items: $taboos,         newItem: $newTaboo,         placeholder: "e.g. Speaking the king's name aloud")
-                TagFieldSection(header: "Institutions",    items: $institutions,   newItem: $newInstitution,   placeholder: "e.g. The Church of the Pale")
-                TagFieldSection(header: "Dominant Values", items: $dominantValues, newItem: $newDominantValue, placeholder: "e.g. Honor above life")
-                TagFieldSection(header: "Hidden Truths",   items: $hiddenTruths,   newItem: $newHiddenTruth,   placeholder: "e.g. The king has been dead for years")
+                TagFieldSection(header: "Taboos",          items: $taboos,         newItem: $newTaboo,         placeholder: "e.g. Speaking the king's name aloud", addLabel: "Add Taboo")
+                TagFieldSection(header: "Institutions",    items: $institutions,   newItem: $newInstitution,   placeholder: "e.g. The Church of the Pale",          addLabel: "Add Institution")
+                TagFieldSection(header: "Dominant Values", items: $dominantValues, newItem: $newDominantValue, placeholder: "e.g. Honor above life",                addLabel: "Add Dominant Value")
+                TagFieldSection(header: "Hidden Truths",   items: $hiddenTruths,   newItem: $newHiddenTruth,   placeholder: "e.g. The king has been dead for years", addLabel: "Add Hidden Truth")
             }
 
             // Literary — Pressure

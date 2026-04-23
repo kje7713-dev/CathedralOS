@@ -78,23 +78,26 @@ struct OptionalSectionTogglePanel: View {
 
 /// Reusable tag-input section used across entity form editors.
 ///
-/// Supports adding new tags, deleting existing tags, and editing existing tags
-/// in place by tapping on a chip. Replacing the identical
-/// `tagSection(header:items:newItem:placeholder:)` helper functions that were
-/// duplicated in CharacterFormView and SettingEditorView.
+/// Renders existing items as removable chips (with tap-to-edit), then presents
+/// a dedicated text field row and a clearly-labelled add button row below them.
+/// The two-part add structure avoids the fragile inline icon-button pattern that
+/// was unreliable inside SwiftUI Form/Section.
 struct TagFieldSection: View {
     let header: String
     @Binding var items: [String]
     @Binding var newItem: String
     let placeholder: String
+    /// Label shown on the add button, e.g. "Add Role", "Add Goal".
+    /// Defaults to "Add Item" when a contextual label is not provided.
+    var addLabel: String = "Add Item"
 
     @State private var editingIndex: Int? = nil
     @State private var editingText: String = ""
     @FocusState private var editFocused: Bool
-    @FocusState private var addFocused: Bool
 
     var body: some View {
         Section {
+            // — Existing items —
             ForEach(Array(items.enumerated()), id: \.offset) { i, item in
                 HStack(spacing: CathedralTheme.Spacing.sm) {
                     if editingIndex == i {
@@ -139,20 +142,29 @@ struct TagFieldSection: View {
                     }
                 }
             }
-            HStack(spacing: CathedralTheme.Spacing.sm) {
-                TextField(placeholder, text: $newItem)
+
+            // — Add input: text field row —
+            TextField(placeholder, text: $newItem)
+                .font(CathedralTheme.Typography.body())
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+                .onSubmit { commitNewItem() }
+
+            // — Add input: dedicated full-row button —
+            // Rendered as its own Section row so the entire row is a reliable
+            // tap target, avoiding the fragile inline icon-button pattern.
+            Button(action: commitNewItem) {
+                Text(addLabel)
                     .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    .focused($addFocused)
-                    .onSubmit { commitNewItem() }
-                Button { commitNewItem() } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: CathedralTheme.Icons.deleteControl))
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                }
-                .buttonStyle(.plain)
-                .disabled(newItem.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .foregroundStyle(
+                        newItem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? CathedralTheme.Colors.tertiaryText
+                            : CathedralTheme.Colors.accent
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .disabled(newItem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } header: {
             CathedralFormSectionHeader(header)
         }
@@ -174,6 +186,14 @@ struct TagFieldSection: View {
         guard !trimmed.isEmpty else { return }
         items.append(trimmed)
         newItem = ""
+    }
+
+    /// Removes the item at `index` from `items`.
+    /// No-ops when `index` is out of range.
+    /// Extracted as `internal static` so unit tests can exercise the logic directly.
+    static func commitRemove(at index: Int, from items: inout [String]) {
+        guard index >= 0, index < items.count else { return }
+        items.remove(at: index)
     }
 
     private func commitEdit(at index: Int) {
@@ -207,6 +227,6 @@ struct TagFieldSection: View {
                 editingIndex = editing - 1
             }
         }
-        items.remove(at: index)
+        TagFieldSection.commitRemove(at: index, from: &items)
     }
 }
