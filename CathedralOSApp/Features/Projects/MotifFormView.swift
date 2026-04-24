@@ -15,7 +15,6 @@ struct MotifFormView: View {
     // Advanced
     @State private var meaning = ""
     @State private var examples: [String] = []
-    @State private var newExample = ""
 
     // Literary
     @State private var notes = ""
@@ -64,7 +63,7 @@ struct MotifFormView: View {
                         CathedralFormSectionHeader("Meaning (optional)")
                     }
 
-                    TagFieldSection(header: "Examples", items: $examples, newItem: $newExample, placeholder: "e.g. The cracked window in Act 2")
+                    TagFieldSection(header: "Examples", items: $examples, placeholder: "e.g. The cracked window in Act 2")
                 }
 
                 if show(.motifLiterary, nativeLevel: .literary) {
@@ -121,13 +120,7 @@ struct MotifFormView: View {
         }
     }
 
-    private func commitStagedTags() {
-        let t = newExample.trimmingCharacters(in: .whitespaces)
-        if !t.isEmpty { examples.append(t); newExample = "" }
-    }
-
     private func save() {
-        commitStagedTags()
         let trimmedLabel = label.trimmingCharacters(in: .whitespaces)
         guard !trimmedLabel.isEmpty else { return }
 

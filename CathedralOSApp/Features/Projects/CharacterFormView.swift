@@ -44,26 +44,6 @@ struct CharacterFormView: View {
     @State private var reputation = ""
     @State private var status = ""
 
-    // Tag entry buffers
-    @State private var newRole = ""
-    @State private var newGoal = ""
-    @State private var newPreference = ""
-    @State private var newResource = ""
-    @State private var newFailurePattern = ""
-    @State private var newFear = ""
-    @State private var newFlaw = ""
-    @State private var newSecret = ""
-    @State private var newWound = ""
-    @State private var newContradiction = ""
-    @State private var newNeed = ""
-    @State private var newObsession = ""
-    @State private var newAttachment = ""
-    @State private var newSelfDeception = ""
-    @State private var newIdentityConflict = ""
-    @State private var newMoralLine = ""
-    @State private var newBreakingPoint = ""
-    @State private var newVirtue = ""
-
     // Field depth
     @State private var currentFieldLevel: FieldLevel = .basic
     @State private var enabledGroups: Set<FieldGroupID> = []
@@ -96,26 +76,26 @@ struct CharacterFormView: View {
             }
 
             // Basic fields
-            TagFieldSection(header: "Roles",            items: $roles,          newItem: $newRole,          placeholder: "e.g. Protagonist",                    addLabel: "Add Role")
-            TagFieldSection(header: "Goals",            items: $goals,          newItem: $newGoal,          placeholder: "e.g. Survive the winter",              addLabel: "Add Goal")
-            TagFieldSection(header: "Preferences",      items: $preferences,    newItem: $newPreference,    placeholder: "e.g. Prefers negotiation over combat", addLabel: "Add Preference")
-            TagFieldSection(header: "Resources",        items: $resources,      newItem: $newResource,      placeholder: "e.g. Old family estate",               addLabel: "Add Resource")
-            TagFieldSection(header: "Failure Patterns", items: $failurePatterns,newItem: $newFailurePattern,placeholder: "e.g. Trusts too quickly",              addLabel: "Add Failure Pattern")
+            TagFieldSection(header: "Roles",            items: $roles,          placeholder: "e.g. Protagonist",                    addLabel: "Add Role")
+            TagFieldSection(header: "Goals",            items: $goals,          placeholder: "e.g. Survive the winter",              addLabel: "Add Goal")
+            TagFieldSection(header: "Preferences",      items: $preferences,    placeholder: "e.g. Prefers negotiation over combat", addLabel: "Add Preference")
+            TagFieldSection(header: "Resources",        items: $resources,      placeholder: "e.g. Old family estate",               addLabel: "Add Resource")
+            TagFieldSection(header: "Failure Patterns", items: $failurePatterns,placeholder: "e.g. Trusts too quickly",              addLabel: "Add Failure Pattern")
 
             // Advanced — Psychology
             if show(.charPsychology, nativeLevel: .advanced) {
-                TagFieldSection(header: "Fears",          items: $fears,         newItem: $newFear,         placeholder: "e.g. Fear of abandonment",            addLabel: "Add Fear")
-                TagFieldSection(header: "Flaws",          items: $flaws,         newItem: $newFlaw,         placeholder: "e.g. Pride",                          addLabel: "Add Flaw")
-                TagFieldSection(header: "Needs",          items: $needs,         newItem: $newNeed,         placeholder: "e.g. Validation from authority",       addLabel: "Add Need")
-                TagFieldSection(header: "Contradictions", items: $contradictions,newItem: $newContradiction,placeholder: "e.g. Craves belonging, pushes people away", addLabel: "Add Contradiction")
+                TagFieldSection(header: "Fears",          items: $fears,         placeholder: "e.g. Fear of abandonment",            addLabel: "Add Fear")
+                TagFieldSection(header: "Flaws",          items: $flaws,         placeholder: "e.g. Pride",                          addLabel: "Add Flaw")
+                TagFieldSection(header: "Needs",          items: $needs,         placeholder: "e.g. Validation from authority",       addLabel: "Add Need")
+                TagFieldSection(header: "Contradictions", items: $contradictions,placeholder: "e.g. Craves belonging, pushes people away", addLabel: "Add Contradiction")
             }
 
             // Advanced — Backstory
             if show(.charBackstory, nativeLevel: .advanced) {
-                TagFieldSection(header: "Wounds",     items: $wounds,     newItem: $newWound,     placeholder: "e.g. Lost a sibling in childhood", addLabel: "Add Wound")
-                TagFieldSection(header: "Secrets",    items: $secrets,    newItem: $newSecret,    placeholder: "e.g. Knows who the killer is",     addLabel: "Add Secret")
-                TagFieldSection(header: "Attachments",items: $attachments,newItem: $newAttachment,placeholder: "e.g. Mother's old photograph",      addLabel: "Add Attachment")
-                TagFieldSection(header: "Obsessions", items: $obsessions, newItem: $newObsession, placeholder: "e.g. Tracking the missing heir",    addLabel: "Add Obsession")
+                TagFieldSection(header: "Wounds",     items: $wounds,     placeholder: "e.g. Lost a sibling in childhood", addLabel: "Add Wound")
+                TagFieldSection(header: "Secrets",    items: $secrets,    placeholder: "e.g. Knows who the killer is",     addLabel: "Add Secret")
+                TagFieldSection(header: "Attachments",items: $attachments,placeholder: "e.g. Mother's old photograph",      addLabel: "Add Attachment")
+                TagFieldSection(header: "Obsessions", items: $obsessions, placeholder: "e.g. Tracking the missing heir",    addLabel: "Add Obsession")
             }
 
             // Advanced — Notes
@@ -144,9 +124,9 @@ struct CharacterFormView: View {
 
             // Literary — Inner Life
             if show(.charInnerLife, nativeLevel: .literary) {
-                TagFieldSection(header: "Self-Deceptions",    items: $selfDeceptions,   newItem: $newSelfDeception,   placeholder: "e.g. Believes she is helping",  addLabel: "Add Self-Deception")
-                TagFieldSection(header: "Identity Conflicts",items: $identityConflicts, newItem: $newIdentityConflict, placeholder: "e.g. Hero vs. coward",          addLabel: "Add Identity Conflict")
-                TagFieldSection(header: "Moral Lines",        items: $moralLines,       newItem: $newMoralLine,       placeholder: "e.g. Will never betray family", addLabel: "Add Moral Line")
+                TagFieldSection(header: "Self-Deceptions",    items: $selfDeceptions,   placeholder: "e.g. Believes she is helping",  addLabel: "Add Self-Deception")
+                TagFieldSection(header: "Identity Conflicts",items: $identityConflicts, placeholder: "e.g. Hero vs. coward",          addLabel: "Add Identity Conflict")
+                TagFieldSection(header: "Moral Lines",        items: $moralLines,       placeholder: "e.g. Will never betray family", addLabel: "Add Moral Line")
                 Section {
                     TextField("Core lie the character believes…", text: $coreLie, axis: .vertical)
                         .font(CathedralTheme.Typography.body())
@@ -211,12 +191,12 @@ struct CharacterFormView: View {
                 } header: {
                     CathedralFormSectionHeader("Arc End")
                 }
-                TagFieldSection(header: "Breaking Points", items: $breakingPoints, newItem: $newBreakingPoint, placeholder: "e.g. Moment she chooses self over duty", addLabel: "Add Breaking Point")
+                TagFieldSection(header: "Breaking Points", items: $breakingPoints, placeholder: "e.g. Moment she chooses self over duty", addLabel: "Add Breaking Point")
             }
 
             // Literary — Social Profile
             if show(.charSocial, nativeLevel: .literary) {
-                TagFieldSection(header: "Virtues", items: $virtues, newItem: $newVirtue, placeholder: "e.g. Loyalty", addLabel: "Add Virtue")
+                TagFieldSection(header: "Virtues", items: $virtues, placeholder: "e.g. Loyalty", addLabel: "Add Virtue")
                 Section {
                     TextField("How others see this character…", text: $reputation)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
@@ -254,8 +234,6 @@ struct CharacterFormView: View {
         .tint(CathedralTheme.Colors.accent)
         .interactiveDismissDisabled(isEditing || !name.trimmingCharacters(in: .whitespaces).isEmpty)
     }
-
-    // MARK: Tag Section Builder
 
     // MARK: Actions
 
@@ -325,33 +303,7 @@ struct CharacterFormView: View {
         }
     }
 
-    private func commitStagedTags() {
-        func commit(_ val: inout [String], _ buf: inout String) {
-            let t = buf.trimmingCharacters(in: .whitespaces)
-            if !t.isEmpty { val.append(t); buf = "" }
-        }
-        commit(&roles,           &newRole)
-        commit(&goals,           &newGoal)
-        commit(&preferences,     &newPreference)
-        commit(&resources,       &newResource)
-        commit(&failurePatterns, &newFailurePattern)
-        commit(&fears,           &newFear)
-        commit(&flaws,           &newFlaw)
-        commit(&secrets,         &newSecret)
-        commit(&wounds,          &newWound)
-        commit(&contradictions,  &newContradiction)
-        commit(&needs,           &newNeed)
-        commit(&obsessions,      &newObsession)
-        commit(&attachments,     &newAttachment)
-        commit(&selfDeceptions,  &newSelfDeception)
-        commit(&identityConflicts, &newIdentityConflict)
-        commit(&moralLines,      &newMoralLine)
-        commit(&breakingPoints,  &newBreakingPoint)
-        commit(&virtues,         &newVirtue)
-    }
-
     private func save() {
-        commitStagedTags()
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         guard !trimmedName.isEmpty else { return }
 

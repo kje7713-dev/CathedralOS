@@ -79,13 +79,12 @@ struct OptionalSectionTogglePanel: View {
 /// Reusable tag-input section used across entity form editors.
 ///
 /// Renders existing items as removable chips (with tap-to-edit), then presents
-/// a dedicated text field row and a clearly-labelled add button row below them.
-/// The two-part add structure avoids the fragile inline icon-button pattern that
-/// was unreliable inside SwiftUI Form/Section.
+/// a clearly-labelled add button. Tapping the button opens a dedicated alert
+/// with a text field, avoiding the fragile inline-TextField pattern that was
+/// unreliable inside SwiftUI Form/Section (especially in edit/import flows).
 struct TagFieldSection: View {
     let header: String
     @Binding var items: [String]
-    @Binding var newItem: String
     let placeholder: String
     /// Label shown on the add button, e.g. "Add Role", "Add Goal".
     /// Defaults to "Add Item" when a contextual label is not provided.
@@ -94,6 +93,9 @@ struct TagFieldSection: View {
     @State private var editingIndex: Int? = nil
     @State private var editingText: String = ""
     @FocusState private var editFocused: Bool
+
+    @State private var showAddItemAlert = false
+    @State private var draftItemText = ""
 
     var body: some View {
         Section {
@@ -143,37 +145,31 @@ struct TagFieldSection: View {
                 }
             }
 
-            // — Add input: text field row —
-            TextField(placeholder, text: $newItem)
-                .font(CathedralTheme.Typography.body())
-                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                .onSubmit { commitNewItem() }
-
-            // — Add input: dedicated full-row tap target —
-            // Using onTapGesture instead of Button avoids the tap-interception
-            // issue that Button/buttonStyle(.borderless) has inside SwiftUI Form sections.
-            Text(addLabel)
-                .font(CathedralTheme.Typography.body())
-                .foregroundStyle(
-                    newItem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? CathedralTheme.Colors.tertiaryText
-                        : CathedralTheme.Colors.accent
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture { commitNewItem() }
+            // — Add button: always active, opens a dedicated input alert —
+            Button(addLabel) {
+                draftItemText = ""
+                showAddItemAlert = true
+            }
+            .font(CathedralTheme.Typography.body())
+            .foregroundStyle(CathedralTheme.Colors.accent)
+            .frame(maxWidth: .infinity, alignment: .leading)
         } header: {
             CathedralFormSectionHeader(header)
+        }
+        .alert(addLabel, isPresented: $showAddItemAlert) {
+            TextField(placeholder, text: $draftItemText)
+            Button("Add") { commitDraft() }
+            Button("Cancel", role: .cancel) { draftItemText = "" }
         }
     }
 
     // MARK: - Actions
 
-    private func commitNewItem() {
-        let trimmed = newItem.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func commitDraft() {
+        let trimmed = draftItemText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         items.append(trimmed)
-        newItem = ""
+        draftItemText = ""
     }
 
     // MARK: - Testable Logic
