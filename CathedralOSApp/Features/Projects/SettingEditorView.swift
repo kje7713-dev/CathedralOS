@@ -31,16 +31,6 @@ struct SettingEditorView: View {
     @State private var dominantValues: [String] = []
     @State private var hiddenTruths: [String] = []
 
-    // Tag entry buffers
-    @State private var newDomain = ""
-    @State private var newConstraint = ""
-    @State private var newTheme = ""
-    @State private var newWorldRule = ""
-    @State private var newTaboo = ""
-    @State private var newInstitution = ""
-    @State private var newDominantValue = ""
-    @State private var newHiddenTruth = ""
-
     // Field depth
     @State private var currentFieldLevel: FieldLevel = .basic
     @State private var enabledGroups: Set<FieldGroupID> = []
@@ -69,9 +59,9 @@ struct SettingEditorView: View {
                 CathedralFormSectionHeader("Summary / Notes")
             }
 
-            TagFieldSection(header: "Domains",     items: $domains,     newItem: $newDomain,     placeholder: "e.g. Victorian England",     addLabel: "Add Domain")
-            TagFieldSection(header: "Constraints", items: $constraints, newItem: $newConstraint, placeholder: "e.g. No modern technology",   addLabel: "Add Constraint")
-            TagFieldSection(header: "Themes",      items: $themes,      newItem: $newTheme,      placeholder: "e.g. Redemption",             addLabel: "Add Theme")
+            TagFieldSection(header: "Domains",     items: $domains,     placeholder: "e.g. Victorian England",     addLabel: "Add Domain")
+            TagFieldSection(header: "Constraints", items: $constraints, placeholder: "e.g. No modern technology",   addLabel: "Add Constraint")
+            TagFieldSection(header: "Themes",      items: $themes,      placeholder: "e.g. Redemption",             addLabel: "Add Theme")
             Section {
                 TextField("e.g. Late autumn, year three of the drought", text: $season)
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
@@ -81,7 +71,7 @@ struct SettingEditorView: View {
 
             // Advanced — World
             if show(.settingWorld, nativeLevel: .advanced) {
-                TagFieldSection(header: "World Rules", items: $worldRules, newItem: $newWorldRule, placeholder: "e.g. Magic requires sacrifice", addLabel: "Add World Rule")
+                TagFieldSection(header: "World Rules", items: $worldRules, placeholder: "e.g. Magic requires sacrifice", addLabel: "Add World Rule")
                 Section {
                     TextField("Technology level of this world…", text: $technologyLevel)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
@@ -148,10 +138,10 @@ struct SettingEditorView: View {
 
             // Literary — Culture
             if show(.settingCulture, nativeLevel: .literary) {
-                TagFieldSection(header: "Taboos",          items: $taboos,         newItem: $newTaboo,         placeholder: "e.g. Speaking the king's name aloud", addLabel: "Add Taboo")
-                TagFieldSection(header: "Institutions",    items: $institutions,   newItem: $newInstitution,   placeholder: "e.g. The Church of the Pale",          addLabel: "Add Institution")
-                TagFieldSection(header: "Dominant Values", items: $dominantValues, newItem: $newDominantValue, placeholder: "e.g. Honor above life",                addLabel: "Add Dominant Value")
-                TagFieldSection(header: "Hidden Truths",   items: $hiddenTruths,   newItem: $newHiddenTruth,   placeholder: "e.g. The king has been dead for years", addLabel: "Add Hidden Truth")
+                TagFieldSection(header: "Taboos",          items: $taboos,         placeholder: "e.g. Speaking the king's name aloud", addLabel: "Add Taboo")
+                TagFieldSection(header: "Institutions",    items: $institutions,   placeholder: "e.g. The Church of the Pale",          addLabel: "Add Institution")
+                TagFieldSection(header: "Dominant Values", items: $dominantValues, placeholder: "e.g. Honor above life",                addLabel: "Add Dominant Value")
+                TagFieldSection(header: "Hidden Truths",   items: $hiddenTruths,   placeholder: "e.g. The king has been dead for years", addLabel: "Add Hidden Truth")
             }
 
             // Literary — Pressure
@@ -241,20 +231,6 @@ struct SettingEditorView: View {
     }
 
     private func saveBack() {
-        // Commit staged tags
-        func commit(_ val: inout [String], _ buf: inout String) {
-            let t = buf.trimmingCharacters(in: .whitespaces)
-            if !t.isEmpty { val.append(t); buf = "" }
-        }
-        commit(&domains,       &newDomain)
-        commit(&constraints,   &newConstraint)
-        commit(&themes,        &newTheme)
-        commit(&worldRules,    &newWorldRule)
-        commit(&taboos,        &newTaboo)
-        commit(&institutions,  &newInstitution)
-        commit(&dominantValues, &newDominantValue)
-        commit(&hiddenTruths,  &newHiddenTruth)
-
         let trimmedSummary = summary.trimmingCharacters(in: .whitespaces)
         let trimmedSeason  = season.trimmingCharacters(in: .whitespaces)
         let trimmedBias    = instructionBias.trimmingCharacters(in: .whitespaces)
