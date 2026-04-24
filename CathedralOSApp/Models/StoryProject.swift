@@ -26,6 +26,8 @@ class StoryProject {
     var themeQuestions: [ThemeQuestion]
     @Relationship(deleteRule: .cascade, inverse: \Motif.project)
     var motifs: [Motif]
+    @Relationship(deleteRule: .cascade, inverse: \GenerationOutput.project)
+    var generations: [GenerationOutput]
 
     init(name: String = "My Story") {
         self.id = UUID()
@@ -42,5 +44,6 @@ class StoryProject {
         self.relationships = []
         self.themeQuestions = []
         self.motifs = []
+        self.generations = []
     }
 }
