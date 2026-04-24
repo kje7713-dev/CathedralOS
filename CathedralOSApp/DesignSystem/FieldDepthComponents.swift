@@ -167,9 +167,9 @@ struct TagFieldSection: View {
 
     private func commitDraft() {
         let trimmed = draftItemText.trimmingCharacters(in: .whitespacesAndNewlines)
-        draftItemText = ""
         guard !trimmed.isEmpty else { return }
         items.append(trimmed)
+        draftItemText = ""
     }
 
     // MARK: - Testable Logic
