@@ -198,8 +198,10 @@ final class GenerationOutputTests: XCTestCase {
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
         let json = PromptPackJSONAssembler.jsonString(payload: payload)
 
-        XCTAssertTrue(json.contains("\"version\" : 1"),
-                      "Serialized payload must include a version field")
+        let data = Data(json.utf8)
+        let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        XCTAssertNotNil(obj, "Payload JSON must be parseable")
+        XCTAssertEqual(obj?["version"] as? Int, 1, "Serialized payload must include version = 1")
     }
 
     // MARK: Favorite toggle
