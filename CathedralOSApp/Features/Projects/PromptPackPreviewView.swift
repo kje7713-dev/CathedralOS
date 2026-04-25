@@ -22,7 +22,23 @@ struct PromptPackPreviewView: View {
     @State private var copiedPrompt    = false
     @State private var copiedJSON      = false
     @State private var showEditPack    = false
-    @State private var savedDraft      = false
+
+    // Generation state
+    @State private var isGenerating = false
+    @State private var generationError: String?
+    @State private var lastGeneratedOutput: GenerationOutput?
+
+    let generationService: GenerationService
+
+    init(
+        project: StoryProject,
+        pack: PromptPack,
+        generationService: GenerationService = StoryGenerationService()
+    ) {
+        self.project = project
+        self.pack = pack
+        self.generationService = generationService
+    }
 
     private var exportPayload: PromptPackExportPayload {
         PromptPackExportBuilder.build(pack: pack, project: project)
@@ -212,15 +228,60 @@ struct PromptPackPreviewView: View {
     // MARK: Generate Action
 
     private var generateAction: some View {
-        VStack(spacing: CathedralTheme.Spacing.xs) {
-            CathedralSecondaryButton(
-                savedDraft ? "Draft Saved!" : "Save Draft Output",
-                systemImage: savedDraft ? "checkmark" : "square.and.pencil"
-            ) {
-                saveDraftOutput()
+        VStack(spacing: CathedralTheme.Spacing.sm) {
+
+            // Error banner
+            if let errorMessage = generationError {
+                HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                    Text(errorMessage)
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(CathedralTheme.Spacing.sm)
+                .background(CathedralTheme.Colors.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                        .stroke(CathedralTheme.Colors.destructive.opacity(0.4), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
 
-            Text("Saves a draft record with the current payload snapshot. Generation coming soon.")
+            // Success banner with link to generated output
+            if let output = lastGeneratedOutput,
+               output.status == GenerationStatus.complete.rawValue {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+                    Text("Generation complete — \(output.title)")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(2)
+                }
+                .padding(CathedralTheme.Spacing.sm)
+                .background(CathedralTheme.Colors.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                        .stroke(CathedralTheme.Colors.accent.opacity(0.4), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+
+            // Generate button
+            CathedralPrimaryButton(
+                isGenerating ? "Generating…" : "Generate",
+                systemImage: isGenerating ? "arrow.trianglehead.2.clockwise" : "sparkles"
+            ) {
+                Task { await startGeneration() }
+            }
+            .disabled(isGenerating)
+
+            Text("Sends the current pack payload to your generation backend. The result is saved to Generated Outputs.")
                 .font(CathedralTheme.Typography.caption())
                 .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                 .multilineTextAlignment(.center)
@@ -228,25 +289,54 @@ struct PromptPackPreviewView: View {
         }
     }
 
-    private func saveDraftOutput() {
-        let payload = exportPayload
-        let json = PromptPackJSONAssembler.jsonString(payload: payload)
+    // MARK: Generation Logic
+
+    private func startGeneration() async {
+        generationError = nil
+
+        // Freeze the payload and JSON snapshot at submission time.
+        let frozenPayload = exportPayload
+        let frozenJSON = PromptPackJSONAssembler.jsonString(payload: frozenPayload)
+
+        // Create the GenerationOutput record and mark it as generating.
         let gen = GenerationOutput(
             title: "\(pack.name) — \(project.name)",
-            outputText: "[Draft — no output generated yet]",
-            status: GenerationStatus.draft.rawValue,
+            outputText: "",
+            status: GenerationStatus.generating.rawValue,
             modelName: "",
             sourcePromptPackID: pack.id,
             sourcePromptPackName: pack.name,
-            sourcePayloadJSON: json,
+            sourcePayloadJSON: frozenJSON,
             outputType: GenerationOutputType.story.rawValue
         )
         gen.project = project
         modelContext.insert(gen)
+        lastGeneratedOutput = gen
 
-        savedDraft = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            savedDraft = false
+        isGenerating = true
+        defer { isGenerating = false }
+
+        do {
+            let response = try await generationService.generate(
+                project: project,
+                pack: pack,
+                requestedOutputType: .story
+            )
+
+            gen.outputText = response.generatedText
+            gen.modelName = response.modelName
+            gen.title = response.title ?? "\(pack.name) — \(project.name)"
+            gen.status = GenerationStatus.complete.rawValue
+            gen.updatedAt = Date()
+            // sourcePayloadJSON is never overwritten — snapshot is preserved.
+
+        } catch {
+            gen.status = GenerationStatus.failed.rawValue
+            gen.notes = error.localizedDescription
+            gen.updatedAt = Date()
+            // sourcePayloadJSON is never overwritten — snapshot is preserved.
+            generationError = (error as? GenerationServiceError)?.errorDescription
+                ?? error.localizedDescription
         }
     }
 }

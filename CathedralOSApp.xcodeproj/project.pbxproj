@@ -89,6 +89,10 @@
 		000000000000000000000123 /* GenerationOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000122 /* GenerationOutput.swift */; };
 		000000000000000000000125 /* GenerationOutputDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000124 /* GenerationOutputDetailView.swift */; };
 		000000000000000000000127 /* GenerationOutputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000126 /* GenerationOutputTests.swift */; };
+		000000000000000000000129 /* GenerationServiceConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000128 /* GenerationServiceConfiguration.swift */; };
+		00000000000000000000012B /* GenerationRequestDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000012A /* GenerationRequestDTO.swift */; };
+		00000000000000000000012D /* GenerationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000012C /* GenerationService.swift */; };
+		00000000000000000000012F /* GenerationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000012E /* GenerationServiceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -186,6 +190,10 @@
 		000000000000000000000122 /* GenerationOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutput.swift; sourceTree = "<group>"; };
 		000000000000000000000124 /* GenerationOutputDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputDetailView.swift; sourceTree = "<group>"; };
 		000000000000000000000126 /* GenerationOutputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputTests.swift; sourceTree = "<group>"; };
+		000000000000000000000128 /* GenerationServiceConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationServiceConfiguration.swift; sourceTree = "<group>"; };
+		00000000000000000000012A /* GenerationRequestDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationRequestDTO.swift; sourceTree = "<group>"; };
+		00000000000000000000012C /* GenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationService.swift; sourceTree = "<group>"; };
+		00000000000000000000012E /* GenerationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -356,6 +364,7 @@
 				00000000000000000000011C /* ProjectSchemaRoundTripTests.swift */,
 				000000000000000000000120 /* TagFieldLogicTests.swift */,
 				000000000000000000000126 /* GenerationOutputTests.swift */,
+				00000000000000000000012E /* GenerationServiceTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -382,6 +391,9 @@
 			children = (
 				00000000000000000000008C /* KeychainService.swift */,
 				0000000000000000000000F8 /* FieldTemplateEngine.swift */,
+				000000000000000000000128 /* GenerationServiceConfiguration.swift */,
+				00000000000000000000012A /* GenerationRequestDTO.swift */,
+				00000000000000000000012C /* GenerationService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -588,6 +600,9 @@
 				00000000000000000000011B /* ProjectImportPreviewView.swift in Sources */,
 				000000000000000000000123 /* GenerationOutput.swift in Sources */,
 				000000000000000000000125 /* GenerationOutputDetailView.swift in Sources */,
+				000000000000000000000129 /* GenerationServiceConfiguration.swift in Sources */,
+				00000000000000000000012B /* GenerationRequestDTO.swift in Sources */,
+				00000000000000000000012D /* GenerationService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -611,6 +626,7 @@
 				00000000000000000000011D /* ProjectSchemaRoundTripTests.swift in Sources */,
 				000000000000000000000121 /* TagFieldLogicTests.swift in Sources */,
 				000000000000000000000127 /* GenerationOutputTests.swift in Sources */,
+				00000000000000000000012F /* GenerationServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
