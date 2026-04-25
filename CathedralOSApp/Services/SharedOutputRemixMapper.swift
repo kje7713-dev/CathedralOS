@@ -133,7 +133,7 @@ enum SharedOutputRemixMapper {
 
     // MARK: - Provenance
 
-    static func provenanceNote(for detail: SharedOutputDetail) -> String {
+    private static func provenanceNote(for detail: SharedOutputDetail) -> String {
         var lines: [String] = [
             "Remixed from shared output.",
             "Source ID: \(detail.sharedOutputID)",

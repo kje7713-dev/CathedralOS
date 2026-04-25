@@ -214,8 +214,6 @@ final class RemixFromSharedOutputTests: XCTestCase {
     // MARK: - No source data: throws RemixError.noSourceData
 
     func testRemixThrowsNoSourceDataWhenJSONIsNil() {
-        let detail = makeDetail(sourcePayloadJSON: nil, sourcePromptPackName: nil)
-        // Override title/excerpt so fallback path also fails.
         let detailNoMeta = makeDetail(
             title: "",
             excerpt: "",
