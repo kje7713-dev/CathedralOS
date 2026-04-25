@@ -168,9 +168,9 @@ https://<project-ref>.supabase.co/functions/v1/generate-story
 | Mode | Max tokens |
 |---|---|
 | `short` | 800 |
-| `medium` | 1 600 |
-| `long` | 3 000 |
-| `chapter` | 6 000 |
+| `medium` | 1600 |
+| `long` | 3000 |
+| `chapter` | 6000 |
 
 If the client sends a higher value, the server silently clamps it to the cap.
 
