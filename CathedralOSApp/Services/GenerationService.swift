@@ -4,6 +4,7 @@ import Foundation
 
 enum GenerationServiceError: Error, LocalizedError {
     case endpointNotConfigured
+    case encodingError(Error)
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
     case decodingError(Error)
@@ -12,6 +13,8 @@ enum GenerationServiceError: Error, LocalizedError {
         switch self {
         case .endpointNotConfigured:
             return "Generation endpoint is not configured. Set GenerationEndpointURL in Info.plist."
+        case .encodingError(let underlying):
+            return "Could not encode request: \(underlying.localizedDescription)"
         case .networkError(let underlying):
             return "Network error: \(underlying.localizedDescription)"
         case .serverError(let code, let msg):
@@ -88,7 +91,7 @@ final class StoryGenerationService: GenerationService {
         do {
             bodyData = try encoder.encode(requestBody)
         } catch {
-            throw GenerationServiceError.networkError(error)
+            throw GenerationServiceError.encodingError(error)
         }
 
         var urlRequest = URLRequest(url: endpointURL)

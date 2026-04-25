@@ -290,14 +290,22 @@ final class GenerationServiceTests: XCTestCase {
         do {
             _ = try await mock.generate(project: project, pack: pack, requestedOutputType: .story)
             XCTFail("Expected error to be thrown")
-        } catch {
+        } catch let serviceError as GenerationServiceError {
             gen.status = GenerationStatus.failed.rawValue
-            gen.notes = error.localizedDescription
+            gen.notes = serviceError.errorDescription ?? serviceError.localizedDescription
+
+            // Verify the error description is human-readable and includes status code.
+            let desc = serviceError.errorDescription ?? ""
+            XCTAssertTrue(desc.contains("500"),
+                          "Error description must include the HTTP status code: \(desc)")
+            XCTAssertTrue(desc.contains("Server returned status"),
+                          "Error description must follow the expected format: \(desc)")
+        } catch {
+            XCTFail("Expected GenerationServiceError, got: \(error)")
         }
 
         XCTAssertEqual(gen.status, GenerationStatus.failed.rawValue)
         XCTAssertNotNil(gen.notes)
-        XCTAssertTrue(gen.notes?.contains("500") ?? false, "Notes should include status code")
     }
 
     // MARK: sourcePayloadJSON preserved on success
