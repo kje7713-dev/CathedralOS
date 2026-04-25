@@ -31,6 +31,46 @@ struct GenerationRequest: Codable {
 
     // MARK: Output controls
     let requestedOutputType: String
+
+    // MARK: Action controls
+    /// The generation action: "generate" | "regenerate" | "continue" | "remix".
+    let action: String
+    /// UUID string of the parent `GenerationOutput`, present for derived actions.
+    let parentGenerationID: String?
+    /// Prior output text included for "continue" and "remix" actions.
+    let previousOutputText: String?
+
+    init(
+        schema: String,
+        version: Int,
+        projectID: String,
+        projectName: String,
+        promptPackID: String,
+        promptPackName: String,
+        sourcePayload: PromptPackExportPayload,
+        readingLevel: String,
+        contentRating: String,
+        audienceNotes: String,
+        requestedOutputType: String,
+        action: String = "generate",
+        parentGenerationID: String? = nil,
+        previousOutputText: String? = nil
+    ) {
+        self.schema = schema
+        self.version = version
+        self.projectID = projectID
+        self.projectName = projectName
+        self.promptPackID = promptPackID
+        self.promptPackName = promptPackName
+        self.sourcePayload = sourcePayload
+        self.readingLevel = readingLevel
+        self.contentRating = contentRating
+        self.audienceNotes = audienceNotes
+        self.requestedOutputType = requestedOutputType
+        self.action = action
+        self.parentGenerationID = parentGenerationID
+        self.previousOutputText = previousOutputText
+    }
 }
 
 // MARK: - GenerationResponse

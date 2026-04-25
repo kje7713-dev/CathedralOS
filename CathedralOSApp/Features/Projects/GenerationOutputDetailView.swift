@@ -8,10 +8,23 @@ struct GenerationOutputDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var output: GenerationOutput
 
+    let generationService: GenerationService
+
+    init(output: GenerationOutput,
+         generationService: GenerationService = StoryGenerationService()) {
+        self._output = Bindable(output)
+        self.generationService = generationService
+    }
+
     @State private var copiedOutput      = false
     @State private var copiedJSON        = false
     @State private var showPayloadJSON   = false
     @State private var showDeleteConfirm = false
+
+    // MARK: Action state
+    @State private var isActioning  = false
+    @State private var actionError: String?
+    @State private var newOutput: GenerationOutput?
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -87,6 +100,10 @@ struct GenerationOutputDetailView: View {
                 if !output.sourcePromptPackName.isEmpty {
                     Divider()
                     metadataRow(label: "Source Pack", value: output.sourcePromptPackName)
+                }
+                if output.generationAction != "generate" {
+                    Divider()
+                    metadataRow(label: "Action", value: output.generationAction.capitalized)
                 }
             }
         }
@@ -209,6 +226,10 @@ struct GenerationOutputDetailView: View {
 
     private var actionButtons: some View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
+            if !output.sourcePayloadJSON.isEmpty {
+                generationActions
+            }
+
             if !output.outputText.isEmpty {
                 CathedralPrimaryButton(
                     copiedOutput ? "Copied!" : "Copy Output",
@@ -238,6 +259,139 @@ struct GenerationOutputDetailView: View {
             CathedralSecondaryButton("Delete Output", systemImage: "trash") {
                 showDeleteConfirm = true
             }
+        }
+    }
+
+    // MARK: Generation Actions
+
+    private var generationActions: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+
+            Text("ACTIONS".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+
+            // Error banner
+            if let errorMessage = actionError {
+                HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                    Text(errorMessage)
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(CathedralTheme.Spacing.sm)
+                .background(CathedralTheme.Colors.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                        .stroke(CathedralTheme.Colors.destructive.opacity(0.4), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+
+            // Success banner
+            if let created = newOutput,
+               created.status == GenerationStatus.complete.rawValue {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+                    Text("Saved — \(created.title)")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(2)
+                }
+                .padding(CathedralTheme.Spacing.sm)
+                .background(CathedralTheme.Colors.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                        .stroke(CathedralTheme.Colors.accent.opacity(0.4), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+
+            // Regenerate
+            CathedralPrimaryButton(
+                isActioning ? "Working…" : "Regenerate",
+                systemImage: isActioning ? "arrow.trianglehead.2.clockwise" : "arrow.clockwise"
+            ) {
+                Task { await performAction("regenerate") }
+            }
+            .disabled(isActioning)
+
+            // Continue — only meaningful when there is prior output text
+            if !output.outputText.isEmpty {
+                CathedralSecondaryButton("Continue", systemImage: "text.append") {
+                    Task { await performAction("continue") }
+                }
+                .disabled(isActioning)
+            }
+
+            // Remix
+            CathedralSecondaryButton("Remix", systemImage: "shuffle") {
+                Task { await performAction("remix") }
+            }
+            .disabled(isActioning)
+        }
+    }
+
+    // MARK: Action Logic
+
+    private func performAction(_ action: String) async {
+        guard let project = output.project else { return }
+        actionError = nil
+        newOutput = nil
+        isActioning = true
+        defer { isActioning = false }
+
+        let previousText: String? = (action == "continue" || action == "remix")
+            ? output.outputText.nilIfEmpty
+            : nil
+        let outputType = GenerationOutputType(rawValue: output.outputType) ?? .story
+        let actionLabel = action.prefix(1).uppercased() + action.dropFirst()
+
+        let newGen = GenerationOutput(
+            title: "\(actionLabel): \(output.title)",
+            outputText: "",
+            status: GenerationStatus.generating.rawValue,
+            modelName: "",
+            sourcePromptPackID: output.sourcePromptPackID,
+            sourcePromptPackName: output.sourcePromptPackName,
+            sourcePayloadJSON: output.sourcePayloadJSON,
+            outputType: output.outputType,
+            generationAction: action,
+            parentGenerationID: output.id
+        )
+        newGen.project = project
+        modelContext.insert(newGen)
+        project.generations.append(newGen)
+        newOutput = newGen
+
+        do {
+            let response = try await generationService.generateAction(
+                action: action,
+                sourcePayloadJSON: output.sourcePayloadJSON,
+                previousOutputText: previousText,
+                parentGenerationID: output.id,
+                requestedOutputType: outputType
+            )
+
+            newGen.outputText = response.generatedText
+            newGen.modelName = response.modelName
+            newGen.title = response.title ?? "\(actionLabel): \(output.title)"
+            newGen.status = GenerationStatus.complete.rawValue
+            newGen.updatedAt = Date()
+
+        } catch {
+            newGen.status = GenerationStatus.failed.rawValue
+            newGen.notes = error.localizedDescription
+            newGen.updatedAt = Date()
+            actionError = (error as? GenerationServiceError)?.errorDescription
+                ?? error.localizedDescription
         }
     }
 }
