@@ -514,7 +514,7 @@ final class GenerationOutputActionTests: XCTestCase {
                        "Default action must be 'generate' to preserve backward compatibility")
     }
 
-    func testRequestDTOEnodesContinueWithPreviousOutputText() throws {
+    func testRequestDTOEncodesContinueWithPreviousOutputText() throws {
         let project = makeProject()
         let pack = makePack()
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
