@@ -1,6 +1,14 @@
 import SwiftUI
 import SwiftData
 
+// MARK: - OutputListFilter
+
+enum OutputListFilter: String, CaseIterable {
+    case all       = "All"
+    case favorites = "Favorites"
+    case shared    = "Shared"
+}
+
 struct ProjectDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var project: StoryProject
@@ -20,6 +28,7 @@ struct ProjectDetailView: View {
     @State private var showAddPromptPack = false
     @State private var packToEdit: PromptPack?
     @State private var generationToView: GenerationOutput?
+    @State private var outputFilter: OutputListFilter = .all
 
     var body: some View {
         List {
@@ -454,16 +463,45 @@ struct ProjectDetailView: View {
 
     // MARK: Generations Section
 
+    private var filteredGenerations: [GenerationOutput] {
+        let sorted = project.generations.sorted { $0.createdAt > $1.createdAt }
+        switch outputFilter {
+        case .all:
+            return sorted
+        case .favorites:
+            return sorted.filter { $0.isFavorite }
+        case .shared:
+            return sorted.filter { $0.visibility != OutputVisibility.private.rawValue }
+        }
+    }
+
     private var generationsSection: some View {
         Section {
-            let sorted = project.generations.sorted { $0.createdAt > $1.createdAt }
-            if sorted.isEmpty {
-                CathedralEmptyState(label: "No generated outputs yet.")
+            // Filter picker
+            if !project.generations.isEmpty {
+                Picker("Filter", selection: $outputFilter) {
+                    ForEach(OutputListFilter.allCases, id: \.self) { f in
+                        Text(f.rawValue).tag(f)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: CathedralTheme.Spacing.xs,
+                                         leading: CathedralTheme.Spacing.base,
+                                         bottom: CathedralTheme.Spacing.xs,
+                                         trailing: CathedralTheme.Spacing.base))
+            }
+
+            if filteredGenerations.isEmpty {
+                CathedralEmptyState(label: project.generations.isEmpty
+                    ? "No generated outputs yet."
+                    : "No outputs match this filter.")
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
             }
-            ForEach(sorted) { gen in
+            ForEach(filteredGenerations) { gen in
                 CathedralItemRow(
                     title: gen.title,
                     subtitle: generationSubtitle(gen)
@@ -491,6 +529,10 @@ struct ProjectDetailView: View {
         parts.append(status)
         if !gen.sourcePromptPackName.isEmpty {
             parts.append(gen.sourcePromptPackName)
+        }
+        let vis = OutputVisibility(rawValue: gen.visibility) ?? .private
+        if vis != .private {
+            parts.append(vis.displayName)
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }

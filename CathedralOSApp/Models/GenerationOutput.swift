@@ -1,6 +1,22 @@
 import Foundation
 import SwiftData
 
+// MARK: - OutputVisibility
+
+enum OutputVisibility: String, CaseIterable {
+    case `private`  = "private"
+    case shared     = "shared"
+    case unlisted   = "unlisted"
+
+    var displayName: String {
+        switch self {
+        case .private:  return "Private"
+        case .shared:   return "Shared"
+        case .unlisted: return "Unlisted"
+        }
+    }
+}
+
 // MARK: - GenerationStatus
 
 enum GenerationStatus: String, CaseIterable {
@@ -76,6 +92,20 @@ class GenerationOutput {
     /// Approximate maximum output tokens that were requested for this output.
     var outputBudget: Int
 
+    // MARK: Publishing metadata
+    /// Raw value of `OutputVisibility`: "private" | "shared" | "unlisted".
+    /// Defaults to "private"; never exposes content publicly without an explicit publish action.
+    var visibility: String
+    /// Optional user-provided title for sharing; empty means use `title`.
+    var shareTitle: String
+    /// Optional short excerpt or summary to accompany a shared output.
+    var shareExcerpt: String
+    /// Date of first publish; nil until the output is published for the first time.
+    /// Remains set after an unpublish so the history is preserved.
+    var publishedAt: Date?
+    /// Whether this output may be remixed by others in future social features.
+    var allowRemix: Bool
+
     var project: StoryProject?
 
     init(
@@ -110,5 +140,10 @@ class GenerationOutput {
         self.parentGenerationID = parentGenerationID
         self.generationLengthMode = generationLengthMode
         self.outputBudget = outputBudget
+        self.visibility = OutputVisibility.private.rawValue
+        self.shareTitle = ""
+        self.shareExcerpt = ""
+        self.publishedAt = nil
+        self.allowRemix = false
     }
 }

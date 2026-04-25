@@ -218,4 +218,165 @@ final class GenerationOutputTests: XCTestCase {
         gen.isFavorite = false
         XCTAssertFalse(gen.isFavorite)
     }
+
+    // MARK: Publishing metadata defaults
+
+    func testVisibilityDefaultsToPrivate() {
+        let gen = makeOutput()
+        XCTAssertEqual(gen.visibility, OutputVisibility.private.rawValue)
+    }
+
+    func testShareTitleDefaultsToEmpty() {
+        let gen = makeOutput()
+        XCTAssertEqual(gen.shareTitle, "")
+    }
+
+    func testShareExcerptDefaultsToEmpty() {
+        let gen = makeOutput()
+        XCTAssertEqual(gen.shareExcerpt, "")
+    }
+
+    func testPublishedAtDefaultsToNil() {
+        let gen = makeOutput()
+        XCTAssertNil(gen.publishedAt)
+    }
+
+    func testAllowRemixDefaultsFalse() {
+        let gen = makeOutput()
+        XCTAssertFalse(gen.allowRemix)
+    }
+
+    // MARK: Publish / unpublish
+
+    func testPublishSetsVisibilityToShared() {
+        let gen = makeOutput()
+        gen.visibility = OutputVisibility.shared.rawValue
+        XCTAssertEqual(gen.visibility, OutputVisibility.shared.rawValue)
+    }
+
+    func testPublishSetsVisibilityToUnlisted() {
+        let gen = makeOutput()
+        gen.visibility = OutputVisibility.unlisted.rawValue
+        XCTAssertEqual(gen.visibility, OutputVisibility.unlisted.rawValue)
+    }
+
+    func testUnpublishRestoresVisibilityToPrivate() {
+        let gen = makeOutput()
+        gen.visibility = OutputVisibility.shared.rawValue
+        gen.visibility = OutputVisibility.private.rawValue
+        XCTAssertEqual(gen.visibility, OutputVisibility.private.rawValue)
+    }
+
+    func testPublishedAtSetOnFirstPublish() {
+        let gen = makeOutput()
+        XCTAssertNil(gen.publishedAt)
+        let before = Date()
+        gen.publishedAt = Date()
+        let after = Date()
+        XCTAssertNotNil(gen.publishedAt)
+        XCTAssertGreaterThanOrEqual(gen.publishedAt!, before)
+        XCTAssertLessThanOrEqual(gen.publishedAt!, after)
+    }
+
+    func testPublishedAtIsRetainedAfterUnpublish() {
+        // publishedAt is intentionally preserved after unpublish to retain history.
+        let gen = makeOutput()
+        let stamp = Date()
+        gen.publishedAt = stamp
+        gen.visibility = OutputVisibility.shared.rawValue
+        // Now unpublish
+        gen.visibility = OutputVisibility.private.rawValue
+        XCTAssertEqual(gen.publishedAt, stamp, "publishedAt should remain after unpublish")
+    }
+
+    // MARK: allowRemix
+
+    func testAllowRemixPersists() {
+        let gen = makeOutput()
+        gen.allowRemix = true
+        XCTAssertTrue(gen.allowRemix)
+        gen.allowRemix = false
+        XCTAssertFalse(gen.allowRemix)
+    }
+
+    // MARK: shareTitle / shareExcerpt
+
+    func testShareTitlePersists() {
+        let gen = makeOutput()
+        gen.shareTitle = "My Shared Story"
+        XCTAssertEqual(gen.shareTitle, "My Shared Story")
+    }
+
+    func testShareExcerptPersists() {
+        let gen = makeOutput()
+        gen.shareExcerpt = "A haunting tale of two cities."
+        XCTAssertEqual(gen.shareExcerpt, "A haunting tale of two cities.")
+    }
+
+    // MARK: OutputVisibility enum
+
+    func testOutputVisibilityRawValues() {
+        XCTAssertEqual(OutputVisibility.private.rawValue,  "private")
+        XCTAssertEqual(OutputVisibility.shared.rawValue,   "shared")
+        XCTAssertEqual(OutputVisibility.unlisted.rawValue, "unlisted")
+    }
+
+    func testOutputVisibilityDisplayNames() {
+        XCTAssertEqual(OutputVisibility.private.displayName,  "Private")
+        XCTAssertEqual(OutputVisibility.shared.displayName,   "Shared")
+        XCTAssertEqual(OutputVisibility.unlisted.displayName, "Unlisted")
+    }
+
+    // MARK: Filtering shared outputs
+
+    func testFilteringSharedOutputs() {
+        let project = makeProject()
+        let privateGen  = makeOutput(title: "Private")
+        let sharedGen   = makeOutput(title: "Shared")
+        let unlistedGen = makeOutput(title: "Unlisted")
+
+        sharedGen.visibility = OutputVisibility.shared.rawValue
+        unlistedGen.visibility = OutputVisibility.unlisted.rawValue
+
+        [privateGen, sharedGen, unlistedGen].forEach {
+            $0.project = project
+            project.generations.append($0)
+        }
+
+        let sharedOutputs = project.generations.filter {
+            $0.visibility != OutputVisibility.private.rawValue
+        }
+        XCTAssertEqual(sharedOutputs.count, 2)
+        XCTAssertTrue(sharedOutputs.contains { $0.title == "Shared" })
+        XCTAssertTrue(sharedOutputs.contains { $0.title == "Unlisted" })
+        XCTAssertFalse(sharedOutputs.contains { $0.title == "Private" })
+    }
+
+    // MARK: OutputPublishingDTO encoding
+
+    func testPublishingDTOEncoding() throws {
+        let gen = makeOutput(title: "DTO Test")
+        gen.shareTitle = "Share Me"
+        gen.shareExcerpt = "An excerpt."
+        gen.visibility = OutputVisibility.shared.rawValue
+        gen.allowRemix = true
+        gen.outputText = "The full text."
+        gen.sourcePayloadJSON = "{\"schema\":\"test\"}"
+
+        let dto = OutputPublishingDTO(output: gen)
+        XCTAssertEqual(dto.generationOutputID, gen.id.uuidString)
+        XCTAssertEqual(dto.shareTitle, "Share Me")
+        XCTAssertEqual(dto.shareExcerpt, "An excerpt.")
+        XCTAssertEqual(dto.visibility, OutputVisibility.shared.rawValue)
+        XCTAssertTrue(dto.allowRemix)
+        XCTAssertEqual(dto.outputText, "The full text.")
+        XCTAssertEqual(dto.sourcePayloadJSON, "{\"schema\":\"test\"}")
+
+        // Verify round-trip encoding
+        let data = try JSONEncoder().encode(dto)
+        let decoded = try JSONDecoder().decode(OutputPublishingDTO.self, from: data)
+        XCTAssertEqual(decoded.generationOutputID, dto.generationOutputID)
+        XCTAssertEqual(decoded.visibility, dto.visibility)
+        XCTAssertEqual(decoded.allowRemix, dto.allowRemix)
+    }
 }
