@@ -100,6 +100,11 @@
 		000000000000000000000139 /* GenerationLengthModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000138 /* GenerationLengthModeTests.swift */; };
 		00000000000000000000013B /* GenerationUsageTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000013A /* GenerationUsageTrackerTests.swift */; };
 		00000000000000000000013D /* OutputPublishingDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000013C /* OutputPublishingDTO.swift */; };
+		00000000000000000000013F /* PublicSharingServiceConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000013E /* PublicSharingServiceConfiguration.swift */; };
+		000000000000000000000141 /* PublicSharingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000140 /* PublicSharingService.swift */; };
+		000000000000000000000143 /* SharedOutputsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000142 /* SharedOutputsView.swift */; };
+		000000000000000000000145 /* SharedOutputDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000144 /* SharedOutputDetailView.swift */; };
+		000000000000000000000147 /* PublicSharingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000146 /* PublicSharingTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -208,6 +213,11 @@
 		000000000000000000000138 /* GenerationLengthModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationLengthModeTests.swift; sourceTree = "<group>"; };
 		00000000000000000000013A /* GenerationUsageTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationUsageTrackerTests.swift; sourceTree = "<group>"; };
 		00000000000000000000013C /* OutputPublishingDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputPublishingDTO.swift; sourceTree = "<group>"; };
+		00000000000000000000013E /* PublicSharingServiceConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicSharingServiceConfiguration.swift; sourceTree = "<group>"; };
+		000000000000000000000140 /* PublicSharingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicSharingService.swift; sourceTree = "<group>"; };
+		000000000000000000000142 /* SharedOutputsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedOutputsView.swift; sourceTree = "<group>"; };
+		000000000000000000000144 /* SharedOutputDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedOutputDetailView.swift; sourceTree = "<group>"; };
+		000000000000000000000146 /* PublicSharingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicSharingTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -384,6 +394,7 @@
 				000000000000000000000130 /* GenerationOutputActionTests.swift */,
 				000000000000000000000138 /* GenerationLengthModeTests.swift */,
 				00000000000000000000013A /* GenerationUsageTrackerTests.swift */,
+				000000000000000000000146 /* PublicSharingTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -415,6 +426,8 @@
 				00000000000000000000012C /* GenerationService.swift */,
 				000000000000000000000136 /* GenerationUsageTracker.swift */,
 				00000000000000000000013C /* OutputPublishingDTO.swift */,
+				00000000000000000000013E /* PublicSharingServiceConfiguration.swift */,
+				000000000000000000000140 /* PublicSharingService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -461,6 +474,8 @@
 				000000000000000000000118 /* ProjectImportView.swift */,
 				00000000000000000000011A /* ProjectImportPreviewView.swift */,
 				000000000000000000000124 /* GenerationOutputDetailView.swift */,
+				000000000000000000000142 /* SharedOutputsView.swift */,
+				000000000000000000000144 /* SharedOutputDetailView.swift */,
 			);
 			path = Projects;
 			sourceTree = "<group>";
@@ -628,6 +643,10 @@
 				000000000000000000000135 /* GenerationUsageEvent.swift in Sources */,
 				000000000000000000000137 /* GenerationUsageTracker.swift in Sources */,
 				00000000000000000000013D /* OutputPublishingDTO.swift in Sources */,
+				00000000000000000000013F /* PublicSharingServiceConfiguration.swift in Sources */,
+				000000000000000000000141 /* PublicSharingService.swift in Sources */,
+				000000000000000000000143 /* SharedOutputsView.swift in Sources */,
+				000000000000000000000145 /* SharedOutputDetailView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -655,6 +674,7 @@
 				000000000000000000000131 /* GenerationOutputActionTests.swift in Sources */,
 				000000000000000000000139 /* GenerationLengthModeTests.swift in Sources */,
 				00000000000000000000013B /* GenerationUsageTrackerTests.swift in Sources */,
+				000000000000000000000147 /* PublicSharingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

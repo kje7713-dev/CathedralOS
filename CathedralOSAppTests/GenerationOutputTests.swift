@@ -395,6 +395,42 @@ final class GenerationOutputTests: XCTestCase {
         XCTAssertFalse(sharedOutputs.contains { $0.title == "Private" })
     }
 
+    // MARK: Backend sharing metadata defaults
+
+    func testSharedOutputIDDefaultsToEmpty() {
+        let gen = makeOutput()
+        XCTAssertEqual(gen.sharedOutputID, "")
+    }
+
+    func testShareURLDefaultsToEmpty() {
+        let gen = makeOutput()
+        XCTAssertEqual(gen.shareURL, "")
+    }
+
+    func testLastPublishedAtDefaultsToNil() {
+        let gen = makeOutput()
+        XCTAssertNil(gen.lastPublishedAt)
+    }
+
+    func testSharedOutputIDPersists() {
+        let gen = makeOutput()
+        gen.sharedOutputID = "abc-123"
+        XCTAssertEqual(gen.sharedOutputID, "abc-123")
+    }
+
+    func testShareURLPersists() {
+        let gen = makeOutput()
+        gen.shareURL = "https://example.com/shared/abc-123"
+        XCTAssertEqual(gen.shareURL, "https://example.com/shared/abc-123")
+    }
+
+    func testLastPublishedAtPersists() {
+        let gen = makeOutput()
+        let now = Date()
+        gen.lastPublishedAt = now
+        XCTAssertEqual(gen.lastPublishedAt, now)
+    }
+
     // MARK: OutputPublishingDTO encoding
 
     func testPublishingDTOEncoding() throws {
@@ -407,19 +443,21 @@ final class GenerationOutputTests: XCTestCase {
         gen.sourcePayloadJSON = "{\"schema\":\"test\"}"
 
         let dto = OutputPublishingDTO(output: gen)
-        XCTAssertEqual(dto.generationOutputID, gen.id.uuidString)
+        XCTAssertEqual(dto.localGenerationOutputID, gen.id.uuidString)
         XCTAssertEqual(dto.shareTitle, "Share Me")
         XCTAssertEqual(dto.shareExcerpt, "An excerpt.")
-        XCTAssertEqual(dto.visibility, OutputVisibility.shared.rawValue)
         XCTAssertTrue(dto.allowRemix)
         XCTAssertEqual(dto.outputText, "The full text.")
         XCTAssertEqual(dto.sourcePayloadJSON, "{\"schema\":\"test\"}")
 
         // Verify round-trip encoding
-        let data = try JSONEncoder().encode(dto)
-        let decoded = try JSONDecoder().decode(OutputPublishingDTO.self, from: data)
-        XCTAssertEqual(decoded.generationOutputID, dto.generationOutputID)
-        XCTAssertEqual(decoded.visibility, dto.visibility)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(dto)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(OutputPublishingDTO.self, from: data)
+        XCTAssertEqual(decoded.localGenerationOutputID, dto.localGenerationOutputID)
         XCTAssertEqual(decoded.allowRemix, dto.allowRemix)
     }
 }

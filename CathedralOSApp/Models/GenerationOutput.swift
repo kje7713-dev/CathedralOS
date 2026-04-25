@@ -106,6 +106,15 @@ class GenerationOutput {
     /// Whether this output may be remixed by others in future social features.
     var allowRemix: Bool
 
+    // MARK: Backend sharing metadata
+    /// Opaque server-assigned ID returned on a successful publish. Empty when unpublished.
+    var sharedOutputID: String
+    /// Public URL returned by the backend on a successful publish. Empty when not available.
+    var shareURL: String
+    /// Timestamp of the most-recent successful publish to the backend.
+    /// Distinct from `publishedAt` (first-publish timestamp) so re-publishes are tracked.
+    var lastPublishedAt: Date?
+
     var project: StoryProject?
 
     init(
@@ -145,5 +154,8 @@ class GenerationOutput {
         self.shareExcerpt = ""
         self.publishedAt = nil
         self.allowRemix = false
+        self.sharedOutputID = ""
+        self.shareURL = ""
+        self.lastPublishedAt = nil
     }
 }

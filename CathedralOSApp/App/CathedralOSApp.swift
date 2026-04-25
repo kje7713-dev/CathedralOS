@@ -10,6 +10,10 @@ struct CathedralOSApp: App {
                     .tabItem {
                         Label("Projects", systemImage: "books.vertical")
                     }
+                SharedOutputsView()
+                    .tabItem {
+                        Label("Shared", systemImage: "globe")
+                    }
                 CathedralView()
                     .tabItem {
                         Label("Profile", systemImage: "person.crop.rectangle")
