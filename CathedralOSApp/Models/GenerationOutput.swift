@@ -70,6 +70,12 @@ class GenerationOutput {
     /// ID of the parent `GenerationOutput` this was derived from, if any.
     var parentGenerationID: UUID?
 
+    // MARK: Length / budget metadata
+    /// Raw value of `GenerationLengthMode` used when this output was generated.
+    var generationLengthMode: String
+    /// Approximate maximum output tokens that were requested for this output.
+    var outputBudget: Int
+
     var project: StoryProject?
 
     init(
@@ -82,7 +88,9 @@ class GenerationOutput {
         sourcePayloadJSON: String = "",
         outputType: String = GenerationOutputType.story.rawValue,
         generationAction: String = "generate",
-        parentGenerationID: UUID? = nil
+        parentGenerationID: UUID? = nil,
+        generationLengthMode: String = GenerationLengthMode.defaultMode.rawValue,
+        outputBudget: Int = GenerationLengthMode.defaultMode.outputBudget
     ) {
         self.id = UUID()
         self.title = title
@@ -100,5 +108,7 @@ class GenerationOutput {
         self.isFavorite = false
         self.generationAction = generationAction
         self.parentGenerationID = parentGenerationID
+        self.generationLengthMode = generationLengthMode
+        self.outputBudget = outputBudget
     }
 }

@@ -32,6 +32,13 @@ struct GenerationRequest: Codable {
     // MARK: Output controls
     let requestedOutputType: String
 
+    // MARK: Length / budget controls
+    /// Raw value of `GenerationLengthMode`: "short" | "medium" | "long" | "chapter".
+    let generationLengthMode: String
+    /// Approximate maximum output tokens for this request.
+    /// Derived from `GenerationLengthMode.outputBudget`; centralized there.
+    let approximateMaxOutputTokens: Int
+
     // MARK: Action controls
     /// The generation action: "generate" | "regenerate" | "continue" | "remix".
     let action: String
@@ -52,6 +59,8 @@ struct GenerationRequest: Codable {
         contentRating: String,
         audienceNotes: String,
         requestedOutputType: String,
+        generationLengthMode: String = GenerationLengthMode.defaultMode.rawValue,
+        approximateMaxOutputTokens: Int = GenerationLengthMode.defaultMode.outputBudget,
         action: String = "generate",
         parentGenerationID: String? = nil,
         previousOutputText: String? = nil
@@ -67,6 +76,8 @@ struct GenerationRequest: Codable {
         self.contentRating = contentRating
         self.audienceNotes = audienceNotes
         self.requestedOutputType = requestedOutputType
+        self.generationLengthMode = generationLengthMode
+        self.approximateMaxOutputTokens = approximateMaxOutputTokens
         self.action = action
         self.parentGenerationID = parentGenerationID
         self.previousOutputText = previousOutputText

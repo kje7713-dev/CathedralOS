@@ -15,12 +15,14 @@ final class MockOutputActionService: GenerationService {
     private(set) var lastPreviousOutputText: String?
     private(set) var lastParentGenerationID: UUID?
     private(set) var lastRequestedOutputType: GenerationOutputType?
+    private(set) var lastLengthMode: GenerationLengthMode?
     private(set) var actionCallCount = 0
 
     func generate(
         project: StoryProject,
         pack: PromptPack,
-        requestedOutputType: GenerationOutputType
+        requestedOutputType: GenerationOutputType,
+        lengthMode: GenerationLengthMode
     ) async throws -> GenerationResponse {
         throw GenerationServiceError.endpointNotConfigured
     }
@@ -30,7 +32,8 @@ final class MockOutputActionService: GenerationService {
         sourcePayloadJSON: String,
         previousOutputText: String?,
         parentGenerationID: UUID?,
-        requestedOutputType: GenerationOutputType
+        requestedOutputType: GenerationOutputType,
+        lengthMode: GenerationLengthMode
     ) async throws -> GenerationResponse {
         actionCallCount += 1
         lastAction = action
@@ -38,6 +41,7 @@ final class MockOutputActionService: GenerationService {
         lastPreviousOutputText = previousOutputText
         lastParentGenerationID = parentGenerationID
         lastRequestedOutputType = requestedOutputType
+        lastLengthMode = lengthMode
         return try stubbedActionResult.get()
     }
 }
@@ -146,7 +150,8 @@ final class GenerationOutputActionTests: XCTestCase {
             sourcePayloadJSON: original.sourcePayloadJSON,
             previousOutputText: nil,
             parentGenerationID: original.id,
-            requestedOutputType: .story
+            requestedOutputType: .story,
+            lengthMode: .medium
         )
 
         newGen.outputText = response.generatedText
@@ -186,7 +191,8 @@ final class GenerationOutputActionTests: XCTestCase {
             sourcePayloadJSON: original.sourcePayloadJSON,
             previousOutputText: nil,
             parentGenerationID: original.id,
-            requestedOutputType: .story
+            requestedOutputType: .story,
+            lengthMode: .medium
         )
 
         XCTAssertEqual(mock.lastSourcePayloadJSON, frozenJSON,
@@ -214,7 +220,8 @@ final class GenerationOutputActionTests: XCTestCase {
             sourcePayloadJSON: original.sourcePayloadJSON,
             previousOutputText: nil,
             parentGenerationID: original.id,
-            requestedOutputType: .story
+            requestedOutputType: .story,
+            lengthMode: .medium
         )
 
         XCTAssertEqual(mock.lastParentGenerationID, original.id,
@@ -243,7 +250,8 @@ final class GenerationOutputActionTests: XCTestCase {
             sourcePayloadJSON: original.sourcePayloadJSON,
             previousOutputText: original.outputText,
             parentGenerationID: original.id,
-            requestedOutputType: .story
+            requestedOutputType: .story,
+            lengthMode: .medium
         )
 
         XCTAssertEqual(mock.lastPreviousOutputText, existingText,
@@ -285,7 +293,8 @@ final class GenerationOutputActionTests: XCTestCase {
             sourcePayloadJSON: original.sourcePayloadJSON,
             previousOutputText: original.outputText,
             parentGenerationID: original.id,
-            requestedOutputType: .story
+            requestedOutputType: .story,
+            lengthMode: .medium
         )
 
         newGen.outputText = response.generatedText
@@ -350,7 +359,8 @@ final class GenerationOutputActionTests: XCTestCase {
                 sourcePayloadJSON: original.sourcePayloadJSON,
                 previousOutputText: nil,
                 parentGenerationID: original.id,
-                requestedOutputType: .story
+                requestedOutputType: .story,
+                lengthMode: .medium
             )
             XCTFail("Expected an error to be thrown")
         } catch let serviceError as GenerationServiceError {
@@ -395,7 +405,8 @@ final class GenerationOutputActionTests: XCTestCase {
             sourcePayloadJSON: original.sourcePayloadJSON,
             previousOutputText: original.outputText,
             parentGenerationID: original.id,
-            requestedOutputType: .story
+            requestedOutputType: .story,
+            lengthMode: .medium
         )
 
         XCTAssertEqual(mock.lastAction, "remix")
@@ -439,7 +450,8 @@ final class GenerationOutputActionTests: XCTestCase {
             sourcePayloadJSON: original.sourcePayloadJSON,
             previousOutputText: original.outputText,
             parentGenerationID: original.id,
-            requestedOutputType: .story
+            requestedOutputType: .story,
+            lengthMode: .medium
         )
 
         newGen.outputText = response.generatedText
@@ -556,7 +568,8 @@ final class GenerationOutputActionTests: XCTestCase {
                 sourcePayloadJSON: frozenJSON,
                 previousOutputText: nil,
                 parentGenerationID: nil,
-                requestedOutputType: .story
+                requestedOutputType: .story,
+                lengthMode: .medium
             )
             XCTFail("Expected endpointNotConfigured error")
         } catch GenerationServiceError.endpointNotConfigured {

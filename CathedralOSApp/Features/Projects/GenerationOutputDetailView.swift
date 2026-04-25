@@ -25,6 +25,7 @@ struct GenerationOutputDetailView: View {
     @State private var isActioning  = false
     @State private var actionError: String?
     @State private var newOutput: GenerationOutput?
+    @State private var selectedLengthMode: GenerationLengthMode = .defaultMode
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -104,6 +105,12 @@ struct GenerationOutputDetailView: View {
                 if output.generationAction != "generate" {
                     Divider()
                     metadataRow(label: "Action", value: output.generationAction.capitalized)
+                }
+                if !output.generationLengthMode.isEmpty {
+                    Divider()
+                    let modeName = GenerationLengthMode(rawValue: output.generationLengthMode)?.displayName
+                        ?? output.generationLengthMode.capitalized
+                    metadataRow(label: "Length", value: "\(modeName) (~\(output.outputBudget) tokens)")
                 }
             }
         }
@@ -272,6 +279,20 @@ struct GenerationOutputDetailView: View {
                 .tracking(1.5)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
 
+            // Output length picker for derived actions
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                Text("OUTPUT LENGTH".uppercased())
+                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                    .tracking(1.5)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Picker("Output length", selection: $selectedLengthMode) {
+                    ForEach(GenerationLengthMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
             // Error banner
             if let errorMessage = actionError {
                 HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
@@ -348,11 +369,20 @@ struct GenerationOutputDetailView: View {
         isActioning = true
         defer { isActioning = false }
 
+        let mode = selectedLengthMode
         let previousText: String? = (action == "continue" || action == "remix")
             ? output.outputText.nilIfEmpty
             : nil
         let outputType = GenerationOutputType(rawValue: output.outputType) ?? .story
         let actionLabel = action.prefix(1).uppercased() + action.dropFirst()
+
+        // Record usage event before the network call.
+        GenerationUsageTracker.shared.record(
+            action: action,
+            lengthMode: mode,
+            sourcePromptPackID: output.sourcePromptPackID,
+            generationOutputID: output.id
+        )
 
         let newGen = GenerationOutput(
             title: "\(actionLabel): \(output.title)",
@@ -364,7 +394,9 @@ struct GenerationOutputDetailView: View {
             sourcePayloadJSON: output.sourcePayloadJSON,
             outputType: output.outputType,
             generationAction: action,
-            parentGenerationID: output.id
+            parentGenerationID: output.id,
+            generationLengthMode: mode.rawValue,
+            outputBudget: mode.outputBudget
         )
         newGen.project = project
         modelContext.insert(newGen)
@@ -377,7 +409,8 @@ struct GenerationOutputDetailView: View {
                 sourcePayloadJSON: output.sourcePayloadJSON,
                 previousOutputText: previousText,
                 parentGenerationID: output.id,
-                requestedOutputType: outputType
+                requestedOutputType: outputType,
+                lengthMode: mode
             )
 
             newGen.outputText = response.generatedText

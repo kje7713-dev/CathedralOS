@@ -94,6 +94,11 @@
 		00000000000000000000012D /* GenerationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000012C /* GenerationService.swift */; };
 		00000000000000000000012F /* GenerationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000012E /* GenerationServiceTests.swift */; };
 		000000000000000000000131 /* GenerationOutputActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000130 /* GenerationOutputActionTests.swift */; };
+		000000000000000000000133 /* GenerationLengthMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000132 /* GenerationLengthMode.swift */; };
+		000000000000000000000135 /* GenerationUsageEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000134 /* GenerationUsageEvent.swift */; };
+		000000000000000000000137 /* GenerationUsageTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000136 /* GenerationUsageTracker.swift */; };
+		000000000000000000000139 /* GenerationLengthModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000138 /* GenerationLengthModeTests.swift */; };
+		00000000000000000000013B /* GenerationUsageTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000013A /* GenerationUsageTrackerTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -196,6 +201,11 @@
 		00000000000000000000012C /* GenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationService.swift; sourceTree = "<group>"; };
 		00000000000000000000012E /* GenerationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationServiceTests.swift; sourceTree = "<group>"; };
 		000000000000000000000130 /* GenerationOutputActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputActionTests.swift; sourceTree = "<group>"; };
+		000000000000000000000132 /* GenerationLengthMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationLengthMode.swift; sourceTree = "<group>"; };
+		000000000000000000000134 /* GenerationUsageEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationUsageEvent.swift; sourceTree = "<group>"; };
+		000000000000000000000136 /* GenerationUsageTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationUsageTracker.swift; sourceTree = "<group>"; };
+		000000000000000000000138 /* GenerationLengthModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationLengthModeTests.swift; sourceTree = "<group>"; };
+		00000000000000000000013A /* GenerationUsageTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationUsageTrackerTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -332,6 +342,8 @@
 				000000000000000000000104 /* Motif.swift */,
 				000000000000000000000110 /* ProjectImportExportPayload.swift */,
 				000000000000000000000122 /* GenerationOutput.swift */,
+				000000000000000000000132 /* GenerationLengthMode.swift */,
+				000000000000000000000134 /* GenerationUsageEvent.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -368,6 +380,8 @@
 				000000000000000000000126 /* GenerationOutputTests.swift */,
 				00000000000000000000012E /* GenerationServiceTests.swift */,
 				000000000000000000000130 /* GenerationOutputActionTests.swift */,
+				000000000000000000000138 /* GenerationLengthModeTests.swift */,
+				00000000000000000000013A /* GenerationUsageTrackerTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -397,6 +411,7 @@
 				000000000000000000000128 /* GenerationServiceConfiguration.swift */,
 				00000000000000000000012A /* GenerationRequestDTO.swift */,
 				00000000000000000000012C /* GenerationService.swift */,
+				000000000000000000000136 /* GenerationUsageTracker.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -606,6 +621,9 @@
 				000000000000000000000129 /* GenerationServiceConfiguration.swift in Sources */,
 				00000000000000000000012B /* GenerationRequestDTO.swift in Sources */,
 				00000000000000000000012D /* GenerationService.swift in Sources */,
+				000000000000000000000133 /* GenerationLengthMode.swift in Sources */,
+				000000000000000000000135 /* GenerationUsageEvent.swift in Sources */,
+				000000000000000000000137 /* GenerationUsageTracker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -631,6 +649,8 @@
 				000000000000000000000127 /* GenerationOutputTests.swift in Sources */,
 				00000000000000000000012F /* GenerationServiceTests.swift in Sources */,
 				000000000000000000000131 /* GenerationOutputActionTests.swift in Sources */,
+				000000000000000000000139 /* GenerationLengthModeTests.swift in Sources */,
+				00000000000000000000013B /* GenerationUsageTrackerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

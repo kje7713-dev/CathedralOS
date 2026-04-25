@@ -20,17 +20,20 @@ final class MockGenerationService: GenerationService {
     private(set) var lastProject: StoryProject?
     private(set) var lastPack: PromptPack?
     private(set) var lastOutputType: GenerationOutputType?
+    private(set) var lastLengthMode: GenerationLengthMode?
     private(set) var callCount = 0
 
     func generate(
         project: StoryProject,
         pack: PromptPack,
-        requestedOutputType: GenerationOutputType
+        requestedOutputType: GenerationOutputType,
+        lengthMode: GenerationLengthMode
     ) async throws -> GenerationResponse {
         callCount += 1
         lastProject = project
         lastPack = pack
         lastOutputType = requestedOutputType
+        lastLengthMode = lengthMode
         return try stubbedResult.get()
     }
 }
@@ -250,7 +253,7 @@ final class GenerationServiceTests: XCTestCase {
         ))
 
         let response = try await mock.generate(
-            project: project, pack: pack, requestedOutputType: .story
+            project: project, pack: pack, requestedOutputType: .story, lengthMode: .medium
         )
 
         gen.outputText = response.generatedText
@@ -288,7 +291,7 @@ final class GenerationServiceTests: XCTestCase {
         )
 
         do {
-            _ = try await mock.generate(project: project, pack: pack, requestedOutputType: .story)
+            _ = try await mock.generate(project: project, pack: pack, requestedOutputType: .story, lengthMode: .medium)
             XCTFail("Expected error to be thrown")
         } catch let serviceError as GenerationServiceError {
             gen.status = GenerationStatus.failed.rawValue
@@ -325,7 +328,7 @@ final class GenerationServiceTests: XCTestCase {
         let mock = MockGenerationService()
         mock.stubbedResult = .success(makeSuccessResponse())
 
-        let response = try await mock.generate(project: project, pack: pack, requestedOutputType: .story)
+        let response = try await mock.generate(project: project, pack: pack, requestedOutputType: .story, lengthMode: .medium)
 
         gen.outputText = response.generatedText
         gen.status = GenerationStatus.complete.rawValue
@@ -357,7 +360,7 @@ final class GenerationServiceTests: XCTestCase {
         )
 
         do {
-            _ = try await mock.generate(project: project, pack: pack, requestedOutputType: .story)
+            _ = try await mock.generate(project: project, pack: pack, requestedOutputType: .story, lengthMode: .medium)
             XCTFail("Expected error")
         } catch {
             gen.status = GenerationStatus.failed.rawValue
@@ -379,7 +382,7 @@ final class GenerationServiceTests: XCTestCase {
         let pack = makePack()
 
         do {
-            _ = try await service.generate(project: project, pack: pack, requestedOutputType: .story)
+            _ = try await service.generate(project: project, pack: pack, requestedOutputType: .story, lengthMode: .medium)
             XCTFail("Expected endpointNotConfigured error")
         } catch GenerationServiceError.endpointNotConfigured {
             // Pass — correct error surfaced.
@@ -447,11 +450,12 @@ final class GenerationServiceTests: XCTestCase {
         let mock = MockGenerationService()
         mock.stubbedResult = .success(makeSuccessResponse())
 
-        _ = try await mock.generate(project: project, pack: pack, requestedOutputType: .scene)
+        _ = try await mock.generate(project: project, pack: pack, requestedOutputType: .scene, lengthMode: .medium)
 
         XCTAssertEqual(mock.callCount, 1)
         XCTAssertEqual(mock.lastProject?.name, "Received Project")
         XCTAssertEqual(mock.lastPack?.name, "Received Pack")
         XCTAssertEqual(mock.lastOutputType, .scene)
+        XCTAssertEqual(mock.lastLengthMode, .medium)
     }
 }
