@@ -20,6 +20,7 @@ struct GenerationOutputDetailView: View {
     @State private var copiedJSON        = false
     @State private var showPayloadJSON   = false
     @State private var showDeleteConfirm = false
+    @State private var showShareSheet    = false
 
     // MARK: Action state
     @State private var isActioning  = false
@@ -38,7 +39,9 @@ struct GenerationOutputDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
                 metadataSection
+                provenanceSection
                 outputTextSection
+                publishingSection
                 if output.notes?.nilIfEmpty != nil {
                     notesSection
                 }
@@ -66,6 +69,9 @@ struct GenerationOutputDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This action cannot be undone.")
+        }
+        .sheet(isPresented: $showShareSheet) {
+            ShareSheet(activityItems: buildShareItems())
         }
     }
 
@@ -137,6 +143,52 @@ struct GenerationOutputDetailView: View {
         GenerationOutputType(rawValue: output.outputType)?.displayName ?? output.outputType
     }
 
+    // MARK: Provenance Section
+
+    private var provenanceSection: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            Text("PROVENANCE".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+
+            CathedralCard {
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                    if !output.sourcePromptPackName.isEmpty {
+                        provenanceRow(label: "Prompt Pack", value: output.sourcePromptPackName)
+                        Divider()
+                    }
+                    provenanceRow(label: "Action", value: output.generationAction.capitalized)
+                    if !output.modelName.isEmpty {
+                        Divider()
+                        provenanceRow(label: "Model", value: output.modelName)
+                    }
+                    if !output.generationLengthMode.isEmpty {
+                        Divider()
+                        let modeName = GenerationLengthMode(rawValue: output.generationLengthMode)?.displayName
+                            ?? output.generationLengthMode.capitalized
+                        provenanceRow(label: "Length Mode", value: modeName)
+                    }
+                    Divider()
+                    provenanceRow(label: "Generated", value: Self.dateFormatter.string(from: output.createdAt))
+                }
+            }
+        }
+    }
+
+    private func provenanceRow(label: String, value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .frame(width: 96, alignment: .leading)
+            Text(value)
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+            Spacer()
+        }
+    }
+
     // MARK: Output Text Section
 
     private var outputTextSection: some View {
@@ -167,6 +219,152 @@ struct GenerationOutputDetailView: View {
                     .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
         }
+    }
+
+    // MARK: Publishing Section
+
+    private var isPublished: Bool {
+        output.visibility != OutputVisibility.private.rawValue
+    }
+
+    /// Sets visibility to `newVisibility` and stamps `publishedAt` on the first transition
+    /// out of private. Centralises all publish-state mutation so the picker and the
+    /// Publish button share identical behaviour.
+    private func applyVisibility(_ newVisibility: OutputVisibility) {
+        let wasPrivate = output.visibility == OutputVisibility.private.rawValue
+        output.visibility = newVisibility.rawValue
+        if wasPrivate && newVisibility != .private && output.publishedAt == nil {
+            output.publishedAt = Date()
+        }
+        output.updatedAt = Date()
+    }
+
+    private var publishingSection: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            Text("PUBLISHING".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+
+            CathedralCard {
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+
+                    // Visibility picker
+                    HStack {
+                        Text("Visibility")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        Spacer()
+                        Picker("Visibility", selection: Binding(
+                            get: { OutputVisibility(rawValue: output.visibility) ?? .private },
+                            set: { applyVisibility($0) }
+                        )) {
+                            ForEach(OutputVisibility.allCases, id: \.self) { v in
+                                Text(v.displayName).tag(v)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .font(CathedralTheme.Typography.body())
+                        .tint(CathedralTheme.Colors.accent)
+                    }
+
+                    Divider()
+
+                    // Share title
+                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                        Text("Share Title")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        TextField("Optional share title…", text: Binding(
+                            get: { output.shareTitle },
+                            set: { output.shareTitle = $0; output.updatedAt = Date() }
+                        ))
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    }
+
+                    Divider()
+
+                    // Share excerpt
+                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                        Text("Share Excerpt")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        TextField("Optional short excerpt…", text: Binding(
+                            get: { output.shareExcerpt },
+                            set: { output.shareExcerpt = $0; output.updatedAt = Date() }
+                        ), axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(2...4)
+                    }
+
+                    Divider()
+
+                    // Allow remix toggle
+                    HStack {
+                        Text("Allow Remix")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { output.allowRemix },
+                            set: { output.allowRemix = $0; output.updatedAt = Date() }
+                        ))
+                        .labelsHidden()
+                        .tint(CathedralTheme.Colors.accent)
+                    }
+
+                    // Published date (read-only)
+                    if let publishedAt = output.publishedAt {
+                        Divider()
+                        HStack {
+                            Text("Published")
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                            Spacer()
+                            Text(Self.dateFormatter.string(from: publishedAt))
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                        }
+                    }
+                }
+            }
+
+            // Publish / Unpublish buttons
+            if isPublished {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    CathedralSecondaryButton("Share Output", systemImage: "square.and.arrow.up") {
+                        showShareSheet = true
+                    }
+                    .disabled(output.outputText.isEmpty)
+
+                    CathedralSecondaryButton("Unpublish", systemImage: "eye.slash") {
+                        output.visibility = OutputVisibility.private.rawValue
+                        output.updatedAt = Date()
+                    }
+                }
+            } else {
+                CathedralPrimaryButton("Publish", systemImage: "globe") {
+                    applyVisibility(.shared)
+                }
+                .disabled(output.outputText.isEmpty)
+            }
+        }
+    }
+
+    // MARK: Share Sheet helpers
+
+    private func buildShareItems() -> [Any] {
+        var parts: [String] = []
+        let title = output.shareTitle.isEmpty ? output.title : output.shareTitle
+        if !title.isEmpty { parts.append(title) }
+        if !output.shareExcerpt.isEmpty { parts.append(output.shareExcerpt) }
+        parts.append(output.outputText)
+        if !output.sourcePromptPackName.isEmpty {
+            parts.append("Generated with \(output.sourcePromptPackName)")
+        }
+        return [parts.joined(separator: "\n\n")]
     }
 
     // MARK: Notes Section
@@ -428,3 +626,17 @@ struct GenerationOutputDetailView: View {
         }
     }
 }
+
+// MARK: - ShareSheet
+
+/// Wraps `UIActivityViewController` for the system share sheet.
+private struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
