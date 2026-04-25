@@ -186,6 +186,12 @@ final class AuthServiceTests: XCTestCase {
         )
     }
 
+    func testNotImplementedErrorDescription() {
+        let error = AuthServiceError.notImplemented
+        let desc = error.errorDescription ?? ""
+        XCTAssertFalse(desc.isEmpty, "Error description must not be empty")
+    }
+
     func testSignInFailedErrorDescriptionIncludesReason() {
         let error = AuthServiceError.signInFailed("Token expired")
         let desc = error.errorDescription ?? ""

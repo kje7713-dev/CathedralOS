@@ -127,7 +127,7 @@ struct AccountView: View {
             try await authService.signIn()
             authState = authService.authState
         } catch {
-            actionError = AuthServiceError.signInFailed(error.localizedDescription).errorDescription
+            actionError = (error as? AuthServiceError)?.errorDescription ?? error.localizedDescription
         }
     }
 

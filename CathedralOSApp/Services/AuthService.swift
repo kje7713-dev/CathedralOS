@@ -36,6 +36,7 @@ enum AuthState: Equatable {
 
 enum AuthServiceError: Error, LocalizedError {
     case notConfigured
+    case notImplemented
     case signInFailed(String)
     case signOutFailed(String)
 
@@ -43,6 +44,8 @@ enum AuthServiceError: Error, LocalizedError {
         switch self {
         case .notConfigured:
             return "Auth service is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist."
+        case .notImplemented:
+            return "Sign in is not yet implemented."
         case .signInFailed(let reason):
             return "Sign in failed: \(reason)"
         case .signOutFailed(let reason):
@@ -103,7 +106,7 @@ final class BackendAuthService: AuthService {
             throw AuthServiceError.notConfigured
         }
         // TODO: Implement Supabase Auth sign-in (Sign in with Apple / magic link).
-        throw AuthServiceError.signInFailed("Sign in is not yet implemented.")
+        throw AuthServiceError.notImplemented
     }
 
     // MARK: - Sign out
