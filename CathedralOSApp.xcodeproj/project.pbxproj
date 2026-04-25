@@ -105,6 +105,15 @@
 		000000000000000000000143 /* SharedOutputsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000142 /* SharedOutputsView.swift */; };
 		000000000000000000000145 /* SharedOutputDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000144 /* SharedOutputDetailView.swift */; };
 		000000000000000000000147 /* PublicSharingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000146 /* PublicSharingTests.swift */; };
+		000000000000000000000149 /* SupabaseConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000148 /* SupabaseConfiguration.swift */; };
+		00000000000000000000014B /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000014A /* BackendClient.swift */; };
+		00000000000000000000014D /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000014C /* AuthService.swift */; };
+		00000000000000000000014F /* GenerationBackendService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000014E /* GenerationBackendService.swift */; };
+		000000000000000000000151 /* UsageSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000150 /* UsageSyncService.swift */; };
+		000000000000000000000153 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000152 /* AccountView.swift */; };
+		000000000000000000000155 /* SupabaseConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000154 /* SupabaseConfigurationTests.swift */; };
+		000000000000000000000157 /* BackendClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000156 /* BackendClientTests.swift */; };
+		000000000000000000000159 /* AuthServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000158 /* AuthServiceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -218,6 +227,15 @@
 		000000000000000000000142 /* SharedOutputsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedOutputsView.swift; sourceTree = "<group>"; };
 		000000000000000000000144 /* SharedOutputDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedOutputDetailView.swift; sourceTree = "<group>"; };
 		000000000000000000000146 /* PublicSharingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublicSharingTests.swift; sourceTree = "<group>"; };
+		000000000000000000000148 /* SupabaseConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseConfiguration.swift; sourceTree = "<group>"; };
+		00000000000000000000014A /* BackendClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendClient.swift; sourceTree = "<group>"; };
+		00000000000000000000014C /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
+		00000000000000000000014E /* GenerationBackendService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationBackendService.swift; sourceTree = "<group>"; };
+		000000000000000000000150 /* UsageSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageSyncService.swift; sourceTree = "<group>"; };
+		000000000000000000000152 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
+		000000000000000000000154 /* SupabaseConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseConfigurationTests.swift; sourceTree = "<group>"; };
+		000000000000000000000156 /* BackendClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendClientTests.swift; sourceTree = "<group>"; };
+		000000000000000000000158 /* AuthServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -298,6 +316,7 @@
 				000000000000000000000098 /* Ask */,
 				0000000000000000000000AA /* Templates */,
 				0000000000000000000000D3 /* Projects */,
+				00000000000000000000015A /* Account */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -395,6 +414,9 @@
 				000000000000000000000138 /* GenerationLengthModeTests.swift */,
 				00000000000000000000013A /* GenerationUsageTrackerTests.swift */,
 				000000000000000000000146 /* PublicSharingTests.swift */,
+				000000000000000000000154 /* SupabaseConfigurationTests.swift */,
+				000000000000000000000156 /* BackendClientTests.swift */,
+				000000000000000000000158 /* AuthServiceTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -428,6 +450,11 @@
 				00000000000000000000013C /* OutputPublishingDTO.swift */,
 				00000000000000000000013E /* PublicSharingServiceConfiguration.swift */,
 				000000000000000000000140 /* PublicSharingService.swift */,
+				000000000000000000000148 /* SupabaseConfiguration.swift */,
+				00000000000000000000014A /* BackendClient.swift */,
+				00000000000000000000014C /* AuthService.swift */,
+				00000000000000000000014E /* GenerationBackendService.swift */,
+				000000000000000000000150 /* UsageSyncService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -478,6 +505,14 @@
 				000000000000000000000144 /* SharedOutputDetailView.swift */,
 			);
 			path = Projects;
+			sourceTree = "<group>";
+		};
+		00000000000000000000015A /* Account */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000152 /* AccountView.swift */,
+			);
+			path = Account;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -647,6 +682,12 @@
 				000000000000000000000141 /* PublicSharingService.swift in Sources */,
 				000000000000000000000143 /* SharedOutputsView.swift in Sources */,
 				000000000000000000000145 /* SharedOutputDetailView.swift in Sources */,
+				000000000000000000000149 /* SupabaseConfiguration.swift in Sources */,
+				00000000000000000000014B /* BackendClient.swift in Sources */,
+				00000000000000000000014D /* AuthService.swift in Sources */,
+				00000000000000000000014F /* GenerationBackendService.swift in Sources */,
+				000000000000000000000151 /* UsageSyncService.swift in Sources */,
+				000000000000000000000153 /* AccountView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -675,6 +716,9 @@
 				000000000000000000000139 /* GenerationLengthModeTests.swift in Sources */,
 				00000000000000000000013B /* GenerationUsageTrackerTests.swift in Sources */,
 				000000000000000000000147 /* PublicSharingTests.swift in Sources */,
+				000000000000000000000155 /* SupabaseConfigurationTests.swift in Sources */,
+				000000000000000000000157 /* BackendClientTests.swift in Sources */,
+				000000000000000000000159 /* AuthServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -18,6 +18,10 @@ struct CathedralOSApp: App {
                     .tabItem {
                         Label("Profile", systemImage: "person.crop.rectangle")
                     }
+                AccountView()
+                    .tabItem {
+                        Label("Account", systemImage: "person.circle")
+                    }
             }
             .tint(CathedralTheme.Colors.accent)
         }
