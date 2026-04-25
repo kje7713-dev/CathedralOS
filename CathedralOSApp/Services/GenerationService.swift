@@ -37,7 +37,8 @@ protocol GenerationService {
     func generate(
         project: StoryProject,
         pack: PromptPack,
-        requestedOutputType: GenerationOutputType
+        requestedOutputType: GenerationOutputType,
+        lengthMode: GenerationLengthMode
     ) async throws -> GenerationResponse
 
     /// Submits a derived generation action (regenerate / continue / remix) using
@@ -48,7 +49,8 @@ protocol GenerationService {
         sourcePayloadJSON: String,
         previousOutputText: String?,
         parentGenerationID: UUID?,
-        requestedOutputType: GenerationOutputType
+        requestedOutputType: GenerationOutputType,
+        lengthMode: GenerationLengthMode
     ) async throws -> GenerationResponse
 }
 
@@ -61,7 +63,8 @@ extension GenerationService {
         sourcePayloadJSON: String,
         previousOutputText: String?,
         parentGenerationID: UUID?,
-        requestedOutputType: GenerationOutputType
+        requestedOutputType: GenerationOutputType,
+        lengthMode: GenerationLengthMode
     ) async throws -> GenerationResponse {
         throw GenerationServiceError.endpointNotConfigured
     }
@@ -87,7 +90,8 @@ final class StoryGenerationService: GenerationService {
     func generate(
         project: StoryProject,
         pack: PromptPack,
-        requestedOutputType: GenerationOutputType = .story
+        requestedOutputType: GenerationOutputType = .story,
+        lengthMode: GenerationLengthMode = .defaultMode
     ) async throws -> GenerationResponse {
 
         // Build canonical frozen payload.
@@ -104,7 +108,9 @@ final class StoryGenerationService: GenerationService {
             readingLevel: project.readingLevel,
             contentRating: project.contentRating,
             audienceNotes: project.audienceNotes,
-            requestedOutputType: requestedOutputType.rawValue
+            requestedOutputType: requestedOutputType.rawValue,
+            generationLengthMode: lengthMode.rawValue,
+            approximateMaxOutputTokens: lengthMode.outputBudget
         )
 
         return try await post(requestBody)
@@ -115,7 +121,8 @@ final class StoryGenerationService: GenerationService {
         sourcePayloadJSON: String,
         previousOutputText: String?,
         parentGenerationID: UUID?,
-        requestedOutputType: GenerationOutputType
+        requestedOutputType: GenerationOutputType,
+        lengthMode: GenerationLengthMode = .defaultMode
     ) async throws -> GenerationResponse {
 
         // Decode the frozen payload to reconstruct the full request.
@@ -142,6 +149,8 @@ final class StoryGenerationService: GenerationService {
             contentRating: frozenPayload.project.contentRating,
             audienceNotes: frozenPayload.project.audienceNotes,
             requestedOutputType: requestedOutputType.rawValue,
+            generationLengthMode: lengthMode.rawValue,
+            approximateMaxOutputTokens: lengthMode.outputBudget,
             action: action,
             parentGenerationID: parentGenerationID?.uuidString,
             previousOutputText: previousOutputText

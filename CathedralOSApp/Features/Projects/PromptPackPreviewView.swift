@@ -27,6 +27,8 @@ struct PromptPackPreviewView: View {
     @State private var isGenerating = false
     @State private var generationError: String?
     @State private var lastGeneratedOutput: GenerationOutput?
+    @State private var selectedLengthMode: GenerationLengthMode = .defaultMode
+    @State private var showChapterConfirm = false
 
     let generationService: GenerationService
 
@@ -103,6 +105,16 @@ struct PromptPackPreviewView: View {
         }
         .sheet(isPresented: $showShareJSON) {
             ShareSheet(activityItems: [jsonText])
+        }
+        .confirmationDialog(
+            "Chapter-length generation",
+            isPresented: $showChapterConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Generate anyway") { Task { await startGeneration() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Chapter mode requests up to \(GenerationLengthMode.chapter.outputBudget) output tokens and may take longer.")
         }
     }
 
@@ -230,6 +242,9 @@ struct PromptPackPreviewView: View {
     private var generateAction: some View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
 
+            // Output length picker
+            lengthModePicker
+
             // Error banner
             if let errorMessage = generationError {
                 HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
@@ -277,7 +292,11 @@ struct PromptPackPreviewView: View {
                 isGenerating ? "Generating…" : "Generate",
                 systemImage: isGenerating ? "arrow.trianglehead.2.clockwise" : "sparkles"
             ) {
-                Task { await startGeneration() }
+                if selectedLengthMode == .chapter {
+                    showChapterConfirm = true
+                } else {
+                    Task { await startGeneration() }
+                }
             }
             .disabled(isGenerating)
 
@@ -289,14 +308,39 @@ struct PromptPackPreviewView: View {
         }
     }
 
+    // MARK: Length Mode Picker
+
+    private var lengthModePicker: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("OUTPUT LENGTH".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            Picker("Output length", selection: $selectedLengthMode) {
+                ForEach(GenerationLengthMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
     // MARK: Generation Logic
 
     private func startGeneration() async {
         generationError = nil
+        let mode = selectedLengthMode
 
         // Freeze the payload and JSON snapshot at submission time.
         let frozenPayload = exportPayload
         let frozenJSON = PromptPackJSONAssembler.jsonString(payload: frozenPayload)
+
+        // Record usage event before the network call.
+        GenerationUsageTracker.shared.record(
+            action: "generate",
+            lengthMode: mode,
+            sourcePromptPackID: pack.id
+        )
 
         // Create the GenerationOutput record and mark it as generating.
         let gen = GenerationOutput(
@@ -307,7 +351,9 @@ struct PromptPackPreviewView: View {
             sourcePromptPackID: pack.id,
             sourcePromptPackName: pack.name,
             sourcePayloadJSON: frozenJSON,
-            outputType: GenerationOutputType.story.rawValue
+            outputType: GenerationOutputType.story.rawValue,
+            generationLengthMode: mode.rawValue,
+            outputBudget: mode.outputBudget
         )
         gen.project = project
         modelContext.insert(gen)
@@ -320,7 +366,8 @@ struct PromptPackPreviewView: View {
             let response = try await generationService.generate(
                 project: project,
                 pack: pack,
-                requestedOutputType: .story
+                requestedOutputType: .story,
+                lengthMode: mode
             )
 
             gen.outputText = response.generatedText
