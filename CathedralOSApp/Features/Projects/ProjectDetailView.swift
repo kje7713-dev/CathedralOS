@@ -19,6 +19,7 @@ struct ProjectDetailView: View {
     @State private var motifToEdit: Motif?
     @State private var showAddPromptPack = false
     @State private var packToEdit: PromptPack?
+    @State private var generationToView: GenerationOutput?
 
     var body: some View {
         List {
@@ -32,6 +33,7 @@ struct ProjectDetailView: View {
             themeQuestionsSection
             motifsSection
             promptPacksSection
+            generationsSection
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -83,6 +85,9 @@ struct ProjectDetailView: View {
         }
         .sheet(item: $packToEdit) { p in
             PromptPackBuilderView(project: project, pack: p)
+        }
+        .navigationDestination(item: $generationToView) { g in
+            GenerationOutputDetailView(output: g)
         }
     }
 
@@ -444,6 +449,49 @@ struct ProjectDetailView: View {
         if themeCount > 0 { parts.append("\(themeCount) theme\(themeCount == 1 ? "" : "s")") }
         let motifCount = pack.selectedMotifIDs.count
         if motifCount > 0 { parts.append("\(motifCount) motif\(motifCount == 1 ? "" : "s")") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    // MARK: Generations Section
+
+    private var generationsSection: some View {
+        Section {
+            let sorted = project.generations.sorted { $0.createdAt > $1.createdAt }
+            if sorted.isEmpty {
+                CathedralEmptyState(label: "No generated outputs yet.")
+                    .listRowBackground(CathedralTheme.Colors.background)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+            }
+            ForEach(sorted) { gen in
+                CathedralItemRow(
+                    title: gen.title,
+                    subtitle: generationSubtitle(gen)
+                ) { generationToView = gen }
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparatorTint(CathedralTheme.Colors.separator)
+                .listRowInsets(EdgeInsets())
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        modelContext.delete(gen)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+            }
+        } header: {
+            CathedralSectionHeader("Generated Outputs")
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
+        }
+    }
+
+    private func generationSubtitle(_ gen: GenerationOutput) -> String? {
+        var parts: [String] = []
+        let status = GenerationStatus(rawValue: gen.status)?.displayName ?? gen.status
+        parts.append(status)
+        if !gen.sourcePromptPackName.isEmpty {
+            parts.append(gen.sourcePromptPackName)
+        }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

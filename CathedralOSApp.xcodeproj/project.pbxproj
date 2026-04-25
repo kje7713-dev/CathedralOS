@@ -86,6 +86,9 @@
 		000000000000000000000119 /* ProjectImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000118 /* ProjectImportView.swift */; };
 		00000000000000000000011B /* ProjectImportPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011A /* ProjectImportPreviewView.swift */; };
 		00000000000000000000011D /* ProjectSchemaRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011C /* ProjectSchemaRoundTripTests.swift */; };
+		000000000000000000000123 /* GenerationOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000122 /* GenerationOutput.swift */; };
+		000000000000000000000125 /* GenerationOutputDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000124 /* GenerationOutputDetailView.swift */; };
+		000000000000000000000127 /* GenerationOutputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000126 /* GenerationOutputTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -180,6 +183,9 @@
 		000000000000000000000118 /* ProjectImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectImportView.swift; sourceTree = "<group>"; };
 		00000000000000000000011A /* ProjectImportPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectImportPreviewView.swift; sourceTree = "<group>"; };
 		00000000000000000000011C /* ProjectSchemaRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSchemaRoundTripTests.swift; sourceTree = "<group>"; };
+		000000000000000000000122 /* GenerationOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutput.swift; sourceTree = "<group>"; };
+		000000000000000000000124 /* GenerationOutputDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputDetailView.swift; sourceTree = "<group>"; };
+		000000000000000000000126 /* GenerationOutputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -315,6 +321,7 @@
 				000000000000000000000102 /* ThemeQuestion.swift */,
 				000000000000000000000104 /* Motif.swift */,
 				000000000000000000000110 /* ProjectImportExportPayload.swift */,
+				000000000000000000000122 /* GenerationOutput.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -348,6 +355,7 @@
 				00000000000000000000010C /* LiteraryEntitiesTests.swift */,
 				00000000000000000000011C /* ProjectSchemaRoundTripTests.swift */,
 				000000000000000000000120 /* TagFieldLogicTests.swift */,
+				000000000000000000000126 /* GenerationOutputTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -419,6 +427,7 @@
 				000000000000000000000116 /* ProjectImportMapper.swift */,
 				000000000000000000000118 /* ProjectImportView.swift */,
 				00000000000000000000011A /* ProjectImportPreviewView.swift */,
+				000000000000000000000124 /* GenerationOutputDetailView.swift */,
 			);
 			path = Projects;
 			sourceTree = "<group>";
@@ -577,6 +586,8 @@
 				000000000000000000000117 /* ProjectImportMapper.swift in Sources */,
 				000000000000000000000119 /* ProjectImportView.swift in Sources */,
 				00000000000000000000011B /* ProjectImportPreviewView.swift in Sources */,
+				000000000000000000000123 /* GenerationOutput.swift in Sources */,
+				000000000000000000000125 /* GenerationOutputDetailView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -599,6 +610,7 @@
 				00000000000000000000010D /* LiteraryEntitiesTests.swift in Sources */,
 				00000000000000000000011D /* ProjectSchemaRoundTripTests.swift in Sources */,
 				000000000000000000000121 /* TagFieldLogicTests.swift in Sources */,
+				000000000000000000000127 /* GenerationOutputTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

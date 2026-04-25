@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 // MARK: - Export mode for Prompt Pack preview
 
@@ -13,12 +14,15 @@ struct PromptPackPreviewView: View {
     let project: StoryProject
     let pack: PromptPack
 
-    @State private var viewMode: PromptPackViewMode = .prompt
+    @Environment(\.modelContext) private var modelContext
+
+    @State private var viewMode = PromptPackViewMode.prompt
     @State private var showSharePrompt = false
     @State private var showShareJSON   = false
     @State private var copiedPrompt    = false
     @State private var copiedJSON      = false
     @State private var showEditPack    = false
+    @State private var savedDraft      = false
 
     private var exportPayload: PromptPackExportPayload {
         PromptPackExportBuilder.build(pack: pack, project: project)
@@ -60,6 +64,9 @@ struct PromptPackPreviewView: View {
 
                 // Export actions
                 exportActions
+
+                // Generation action
+                generateAction
             }
             .padding(CathedralTheme.Spacing.base)
         }
@@ -200,5 +207,46 @@ struct PromptPackPreviewView: View {
                 .stroke(CathedralTheme.Colors.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+
+    // MARK: Generate Action
+
+    private var generateAction: some View {
+        VStack(spacing: CathedralTheme.Spacing.xs) {
+            CathedralSecondaryButton(
+                savedDraft ? "Draft Saved!" : "Save Draft Output",
+                systemImage: savedDraft ? "checkmark" : "square.and.pencil"
+            ) {
+                saveDraftOutput()
+            }
+
+            Text("Saves a draft record with the current payload snapshot. Generation coming soon.")
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func saveDraftOutput() {
+        let payload = exportPayload
+        let json = PromptPackJSONAssembler.jsonString(payload: payload)
+        let gen = GenerationOutput(
+            title: "\(pack.name) — \(project.name)",
+            outputText: "[Draft — no output generated yet]",
+            status: GenerationStatus.draft.rawValue,
+            modelName: "",
+            sourcePromptPackID: pack.id,
+            sourcePromptPackName: pack.name,
+            sourcePayloadJSON: json,
+            outputType: GenerationOutputType.story.rawValue
+        )
+        gen.project = project
+        modelContext.insert(gen)
+
+        savedDraft = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            savedDraft = false
+        }
     }
 }
