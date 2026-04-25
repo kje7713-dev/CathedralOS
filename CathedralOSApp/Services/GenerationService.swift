@@ -39,6 +39,32 @@ protocol GenerationService {
         pack: PromptPack,
         requestedOutputType: GenerationOutputType
     ) async throws -> GenerationResponse
+
+    /// Submits a derived generation action (regenerate / continue / remix) using
+    /// a frozen payload JSON captured at original generation time.
+    /// Returns a `GenerationResponse` on success; throws `GenerationServiceError` on failure.
+    func generateAction(
+        action: String,
+        sourcePayloadJSON: String,
+        previousOutputText: String?,
+        parentGenerationID: UUID?,
+        requestedOutputType: GenerationOutputType
+    ) async throws -> GenerationResponse
+}
+
+// MARK: - Default implementation
+
+extension GenerationService {
+    /// Default no-op so conformers that only need `generate` don't break.
+    func generateAction(
+        action: String,
+        sourcePayloadJSON: String,
+        previousOutputText: String?,
+        parentGenerationID: UUID?,
+        requestedOutputType: GenerationOutputType
+    ) async throws -> GenerationResponse {
+        throw GenerationServiceError.endpointNotConfigured
+    }
 }
 
 // MARK: - StoryGenerationService
@@ -64,10 +90,6 @@ final class StoryGenerationService: GenerationService {
         requestedOutputType: GenerationOutputType = .story
     ) async throws -> GenerationResponse {
 
-        guard let endpointURL = GenerationServiceConfiguration.endpointURL else {
-            throw GenerationServiceError.endpointNotConfigured
-        }
-
         // Build canonical frozen payload.
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
@@ -84,6 +106,57 @@ final class StoryGenerationService: GenerationService {
             audienceNotes: project.audienceNotes,
             requestedOutputType: requestedOutputType.rawValue
         )
+
+        return try await post(requestBody)
+    }
+
+    func generateAction(
+        action: String,
+        sourcePayloadJSON: String,
+        previousOutputText: String?,
+        parentGenerationID: UUID?,
+        requestedOutputType: GenerationOutputType
+    ) async throws -> GenerationResponse {
+
+        // Decode the frozen payload to reconstruct the full request.
+        let decoder = JSONDecoder()
+        let frozenPayload: PromptPackExportPayload
+        do {
+            frozenPayload = try decoder.decode(
+                PromptPackExportPayload.self,
+                from: Data(sourcePayloadJSON.utf8)
+            )
+        } catch {
+            throw GenerationServiceError.decodingError(error)
+        }
+
+        let requestBody = GenerationRequest(
+            schema: Self.requestSchema,
+            version: Self.requestVersion,
+            projectID: frozenPayload.project.id.uuidString,
+            projectName: frozenPayload.project.name,
+            promptPackID: frozenPayload.promptPack.id.uuidString,
+            promptPackName: frozenPayload.promptPack.name,
+            sourcePayload: frozenPayload,
+            readingLevel: frozenPayload.project.readingLevel,
+            contentRating: frozenPayload.project.contentRating,
+            audienceNotes: frozenPayload.project.audienceNotes,
+            requestedOutputType: requestedOutputType.rawValue,
+            action: action,
+            parentGenerationID: parentGenerationID?.uuidString,
+            previousOutputText: previousOutputText
+        )
+
+        return try await post(requestBody)
+    }
+
+    // MARK: - Private
+
+    private func post(_ requestBody: GenerationRequest) async throws -> GenerationResponse {
+
+        guard let endpointURL = GenerationServiceConfiguration.endpointURL else {
+            throw GenerationServiceError.endpointNotConfigured
+        }
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -113,9 +186,9 @@ final class StoryGenerationService: GenerationService {
             throw GenerationServiceError.serverError(statusCode: httpResponse.statusCode, message: msg)
         }
 
-        let decoder = JSONDecoder()
+        let responseDecoder = JSONDecoder()
         do {
-            return try decoder.decode(GenerationResponse.self, from: data)
+            return try responseDecoder.decode(GenerationResponse.self, from: data)
         } catch {
             throw GenerationServiceError.decodingError(error)
         }

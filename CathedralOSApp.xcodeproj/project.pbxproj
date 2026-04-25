@@ -93,6 +93,7 @@
 		00000000000000000000012B /* GenerationRequestDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000012A /* GenerationRequestDTO.swift */; };
 		00000000000000000000012D /* GenerationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000012C /* GenerationService.swift */; };
 		00000000000000000000012F /* GenerationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000012E /* GenerationServiceTests.swift */; };
+		000000000000000000000131 /* GenerationOutputActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000130 /* GenerationOutputActionTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -194,6 +195,7 @@
 		00000000000000000000012A /* GenerationRequestDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationRequestDTO.swift; sourceTree = "<group>"; };
 		00000000000000000000012C /* GenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationService.swift; sourceTree = "<group>"; };
 		00000000000000000000012E /* GenerationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationServiceTests.swift; sourceTree = "<group>"; };
+		000000000000000000000130 /* GenerationOutputActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputActionTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -365,6 +367,7 @@
 				000000000000000000000120 /* TagFieldLogicTests.swift */,
 				000000000000000000000126 /* GenerationOutputTests.swift */,
 				00000000000000000000012E /* GenerationServiceTests.swift */,
+				000000000000000000000130 /* GenerationOutputActionTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -627,6 +630,7 @@
 				000000000000000000000121 /* TagFieldLogicTests.swift in Sources */,
 				000000000000000000000127 /* GenerationOutputTests.swift in Sources */,
 				00000000000000000000012F /* GenerationServiceTests.swift in Sources */,
+				000000000000000000000131 /* GenerationOutputActionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -64,17 +64,25 @@ class GenerationOutput {
     var notes: String?
     var isFavorite: Bool
 
+    // MARK: Lineage
+    /// The action that produced this output: "generate" | "regenerate" | "continue" | "remix".
+    var generationAction: String
+    /// ID of the parent `GenerationOutput` this was derived from, if any.
+    var parentGenerationID: UUID?
+
     var project: StoryProject?
 
     init(
-        title: String,
+        title: String = "",
         outputText: String = "",
         status: String = GenerationStatus.draft.rawValue,
         modelName: String = "",
         sourcePromptPackID: UUID? = nil,
         sourcePromptPackName: String = "",
         sourcePayloadJSON: String = "",
-        outputType: String = GenerationOutputType.story.rawValue
+        outputType: String = GenerationOutputType.story.rawValue,
+        generationAction: String = "generate",
+        parentGenerationID: UUID? = nil
     ) {
         self.id = UUID()
         self.title = title
@@ -90,5 +98,7 @@ class GenerationOutput {
         self.outputType = outputType
         self.notes = nil
         self.isFavorite = false
+        self.generationAction = generationAction
+        self.parentGenerationID = parentGenerationID
     }
 }
