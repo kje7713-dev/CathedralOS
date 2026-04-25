@@ -111,7 +111,7 @@ create table if not exists public.shared_outputs (
   generation_length_mode   text        not null default 'medium',
   allow_remix              boolean     not null default false,
   visibility               text        not null default 'shared',
-  published_at             timestamptz          default now(),
+  published_at             timestamptz default now(),
   unpublished_at           timestamptz,
   created_at               timestamptz not null default now(),
   updated_at               timestamptz not null default now(),
