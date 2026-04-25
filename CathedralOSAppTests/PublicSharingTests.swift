@@ -547,6 +547,20 @@ final class PublicSharingTests: XCTestCase {
         XCTAssertFalse(desc.isEmpty)
     }
 
+    // MARK: displayMessage helper
+
+    func testDisplayMessageReturnsErrorDescriptionForSharingError() {
+        let error = PublicSharingServiceError.endpointNotConfigured
+        let msg = PublicSharingServiceError.displayMessage(from: error)
+        XCTAssertEqual(msg, error.errorDescription)
+    }
+
+    func testDisplayMessageFallsBackToLocalizedDescriptionForOtherErrors() {
+        let error = NSError(domain: "test", code: 42, userInfo: [NSLocalizedDescriptionKey: "Custom error"])
+        let msg = PublicSharingServiceError.displayMessage(from: error)
+        XCTAssertEqual(msg, "Custom error")
+    }
+
     // MARK: SharedOutputListItem Identifiable
 
     func testSharedOutputListItemIsIdentifiable() {

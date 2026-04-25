@@ -214,8 +214,7 @@ struct SharedOutputDetailView: View {
         do {
             detail = try await sharingService.fetchDetail(sharedOutputID: sharedOutputID)
         } catch {
-            loadError = (error as? PublicSharingServiceError)?.errorDescription
-                ?? error.localizedDescription
+            loadError = PublicSharingServiceError.displayMessage(from: error)
         }
     }
 }

@@ -71,6 +71,7 @@ final class BackendPublicSharingService: PublicSharingService {
 
         let dto = OutputPublishingDTO(output: output)
         let encoder = JSONEncoder()
+        // sortedKeys ensures deterministic JSON for consistent request bodies.
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let bodyData: Data
@@ -172,5 +173,15 @@ final class BackendPublicSharingService: PublicSharingService {
             let message = String(data: data, encoding: .utf8)
             throw PublicSharingServiceError.serverError(statusCode: http.statusCode, message: message)
         }
+    }
+}
+
+// MARK: - Error display helper
+
+extension PublicSharingServiceError {
+    /// Returns the most human-readable description of any error related to public sharing.
+    static func displayMessage(from error: Error) -> String {
+        (error as? PublicSharingServiceError)?.errorDescription
+            ?? error.localizedDescription
     }
 }

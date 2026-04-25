@@ -432,8 +432,7 @@ struct GenerationOutputDetailView: View {
             output.lastPublishedAt = now
             output.updatedAt = now
         } catch {
-            publishError = (error as? PublicSharingServiceError)?.errorDescription
-                ?? error.localizedDescription
+            publishError = Self.sharingErrorMessage(error)
         }
     }
 
@@ -444,16 +443,24 @@ struct GenerationOutputDetailView: View {
         defer { isUnpublishing = false }
 
         if !id.isEmpty {
+            // Only call backend when we have a server-issued ID to unpublish.
             do {
                 try await sharingService.unpublish(sharedOutputID: id)
             } catch {
-                publishError = (error as? PublicSharingServiceError)?.errorDescription
-                    ?? error.localizedDescription
+                publishError = Self.sharingErrorMessage(error)
                 return
             }
         }
+        // If id is empty, the output was never successfully synced to the backend,
+        // so clearing local state is the correct and complete action.
         output.visibility = OutputVisibility.private.rawValue
         output.updatedAt = Date()
+    }
+
+    // MARK: - Error helpers
+
+    private static func sharingErrorMessage(_ error: Error) -> String {
+        PublicSharingServiceError.displayMessage(from: error)
     }
 
     // MARK: Share Sheet helpers

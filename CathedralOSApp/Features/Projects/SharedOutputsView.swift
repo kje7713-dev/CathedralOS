@@ -131,8 +131,7 @@ struct SharedOutputsView: View {
         do {
             items = try await sharingService.fetchPublicList()
         } catch {
-            loadError = (error as? PublicSharingServiceError)?.errorDescription
-                ?? error.localizedDescription
+            loadError = PublicSharingServiceError.displayMessage(from: error)
         }
     }
 }
