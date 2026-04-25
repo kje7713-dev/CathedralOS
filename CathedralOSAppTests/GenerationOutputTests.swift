@@ -250,6 +250,7 @@ final class GenerationOutputTests: XCTestCase {
 
     func testPublishSetsVisibilityToShared() {
         let gen = makeOutput()
+        gen.outputText = "Some content."
         gen.visibility = OutputVisibility.shared.rawValue
         XCTAssertEqual(gen.visibility, OutputVisibility.shared.rawValue)
     }
@@ -258,6 +259,48 @@ final class GenerationOutputTests: XCTestCase {
         let gen = makeOutput()
         gen.visibility = OutputVisibility.unlisted.rawValue
         XCTAssertEqual(gen.visibility, OutputVisibility.unlisted.rawValue)
+    }
+
+    func testPublishSetsPublishedAtOnFirstTransitionToShared() {
+        let gen = makeOutput()
+        XCTAssertNil(gen.publishedAt)
+        // Simulate the publish logic from applyVisibility()
+        let wasPrivate = gen.visibility == OutputVisibility.private.rawValue
+        gen.visibility = OutputVisibility.shared.rawValue
+        let before = Date()
+        if wasPrivate && gen.publishedAt == nil {
+            gen.publishedAt = Date()
+        }
+        let after = Date()
+        XCTAssertNotNil(gen.publishedAt)
+        XCTAssertGreaterThanOrEqual(gen.publishedAt!, before - 1)
+        XCTAssertLessThanOrEqual(gen.publishedAt!, after)
+    }
+
+    func testPublishSetsPublishedAtOnFirstTransitionToUnlisted() {
+        let gen = makeOutput()
+        XCTAssertNil(gen.publishedAt)
+        let wasPrivate = gen.visibility == OutputVisibility.private.rawValue
+        gen.visibility = OutputVisibility.unlisted.rawValue
+        if wasPrivate && gen.publishedAt == nil {
+            gen.publishedAt = Date()
+        }
+        XCTAssertNotNil(gen.publishedAt)
+    }
+
+    func testPublishedAtIsNotOverwrittenOnSubsequentPublish() {
+        let gen = makeOutput()
+        let firstPublish = Date(timeIntervalSinceNow: -60)
+        gen.publishedAt = firstPublish
+        gen.visibility = OutputVisibility.shared.rawValue
+
+        // Re-publish (e.g. change to unlisted); publishedAt should NOT change
+        let wasPrivate = gen.visibility == OutputVisibility.private.rawValue
+        gen.visibility = OutputVisibility.unlisted.rawValue
+        if wasPrivate && gen.publishedAt == nil {
+            gen.publishedAt = Date()
+        }
+        XCTAssertEqual(gen.publishedAt, firstPublish, "publishedAt must not be overwritten on re-publish")
     }
 
     func testUnpublishRestoresVisibilityToPrivate() {

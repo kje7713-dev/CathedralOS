@@ -227,6 +227,18 @@ struct GenerationOutputDetailView: View {
         output.visibility != OutputVisibility.private.rawValue
     }
 
+    /// Sets visibility to `newVisibility` and stamps `publishedAt` on the first transition
+    /// out of private. Centralises all publish-state mutation so the picker and the
+    /// Publish button share identical behaviour.
+    private func applyVisibility(_ newVisibility: OutputVisibility) {
+        let wasPrivate = output.visibility == OutputVisibility.private.rawValue
+        output.visibility = newVisibility.rawValue
+        if wasPrivate && newVisibility != .private && output.publishedAt == nil {
+            output.publishedAt = Date()
+        }
+        output.updatedAt = Date()
+    }
+
     private var publishingSection: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
             Text("PUBLISHING".uppercased())
@@ -245,14 +257,7 @@ struct GenerationOutputDetailView: View {
                         Spacer()
                         Picker("Visibility", selection: Binding(
                             get: { OutputVisibility(rawValue: output.visibility) ?? .private },
-                            set: { newValue in
-                                let wasPrivate = output.visibility == OutputVisibility.private.rawValue
-                                output.visibility = newValue.rawValue
-                                if wasPrivate && newValue != .private && output.publishedAt == nil {
-                                    output.publishedAt = Date()
-                                }
-                                output.updatedAt = Date()
-                            }
+                            set: { applyVisibility($0) }
                         )) {
                             ForEach(OutputVisibility.allCases, id: \.self) { v in
                                 Text(v.displayName).tag(v)
@@ -341,11 +346,7 @@ struct GenerationOutputDetailView: View {
                 }
             } else {
                 CathedralPrimaryButton("Publish", systemImage: "globe") {
-                    if output.publishedAt == nil {
-                        output.publishedAt = Date()
-                    }
-                    output.visibility = OutputVisibility.shared.rawValue
-                    output.updatedAt = Date()
+                    applyVisibility(.shared)
                 }
                 .disabled(output.outputText.isEmpty)
             }
