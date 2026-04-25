@@ -9,11 +9,14 @@ struct GenerationOutputDetailView: View {
     @Bindable var output: GenerationOutput
 
     let generationService: GenerationService
+    let sharingService: PublicSharingService
 
     init(output: GenerationOutput,
-         generationService: GenerationService = StoryGenerationService()) {
+         generationService: GenerationService = StoryGenerationService(),
+         sharingService: PublicSharingService = BackendPublicSharingService()) {
         self._output = Bindable(output)
         self.generationService = generationService
+        self.sharingService = sharingService
     }
 
     @State private var copiedOutput      = false
@@ -21,6 +24,12 @@ struct GenerationOutputDetailView: View {
     @State private var showPayloadJSON   = false
     @State private var showDeleteConfirm = false
     @State private var showShareSheet    = false
+
+    // MARK: Publish / unpublish state
+    @State private var isPublishing      = false
+    @State private var isUnpublishing    = false
+    @State private var publishError: String?
+    @State private var showPublishConfirm = false
 
     // MARK: Action state
     @State private var isActioning  = false
@@ -69,6 +78,18 @@ struct GenerationOutputDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This action cannot be undone.")
+        }
+        .confirmationDialog(
+            "Publish this output?",
+            isPresented: $showPublishConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Publish") {
+                Task { await performPublish() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Published outputs may be visible to other users. Do not publish private or copyrighted material you do not have rights to share.")
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: buildShareItems())
@@ -227,18 +248,6 @@ struct GenerationOutputDetailView: View {
         output.visibility != OutputVisibility.private.rawValue
     }
 
-    /// Sets visibility to `newVisibility` and stamps `publishedAt` on the first transition
-    /// out of private. Centralises all publish-state mutation so the picker and the
-    /// Publish button share identical behaviour.
-    private func applyVisibility(_ newVisibility: OutputVisibility) {
-        let wasPrivate = output.visibility == OutputVisibility.private.rawValue
-        output.visibility = newVisibility.rawValue
-        if wasPrivate && newVisibility != .private && output.publishedAt == nil {
-            output.publishedAt = Date()
-        }
-        output.updatedAt = Date()
-    }
-
     private var publishingSection: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
             Text("PUBLISHING".uppercased())
@@ -249,23 +258,15 @@ struct GenerationOutputDetailView: View {
             CathedralCard {
                 VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
 
-                    // Visibility picker
+                    // Visibility (read-only display — mutated only by backend actions)
                     HStack {
                         Text("Visibility")
                             .font(CathedralTheme.Typography.caption())
                             .foregroundStyle(CathedralTheme.Colors.secondaryText)
                         Spacer()
-                        Picker("Visibility", selection: Binding(
-                            get: { OutputVisibility(rawValue: output.visibility) ?? .private },
-                            set: { applyVisibility($0) }
-                        )) {
-                            ForEach(OutputVisibility.allCases, id: \.self) { v in
-                                Text(v.displayName).tag(v)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .font(CathedralTheme.Typography.body())
-                        .tint(CathedralTheme.Colors.accent)
+                        Text(OutputVisibility(rawValue: output.visibility)?.displayName ?? output.visibility)
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.primaryText)
                     }
 
                     Divider()
@@ -319,7 +320,7 @@ struct GenerationOutputDetailView: View {
                     if let publishedAt = output.publishedAt {
                         Divider()
                         HStack {
-                            Text("Published")
+                            Text("First Published")
                                 .font(CathedralTheme.Typography.caption())
                                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
                             Spacer()
@@ -328,29 +329,138 @@ struct GenerationOutputDetailView: View {
                                 .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                         }
                     }
+
+                    // Last backend publish date (read-only)
+                    if let lastPublishedAt = output.lastPublishedAt {
+                        Divider()
+                        HStack {
+                            Text("Last Synced")
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                            Spacer()
+                            Text(Self.dateFormatter.string(from: lastPublishedAt))
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                        }
+                    }
+
+                    // Share URL (read-only, shown when available)
+                    if !output.shareURL.isEmpty {
+                        Divider()
+                        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                            Text("Share URL")
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                            Text(output.shareURL)
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.accent)
+                                .textSelection(.enabled)
+                                .lineLimit(2)
+                        }
+                    }
                 }
+            }
+
+            // Publish error banner
+            if let publishError {
+                HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                    Text(publishError)
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(CathedralTheme.Spacing.sm)
+                .background(CathedralTheme.Colors.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                        .stroke(CathedralTheme.Colors.destructive.opacity(0.4), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
 
             // Publish / Unpublish buttons
             if isPublished {
                 HStack(spacing: CathedralTheme.Spacing.sm) {
-                    CathedralSecondaryButton("Share Output", systemImage: "square.and.arrow.up") {
+                    CathedralSecondaryButton(
+                        "Share Output",
+                        systemImage: "square.and.arrow.up"
+                    ) {
                         showShareSheet = true
                     }
                     .disabled(output.outputText.isEmpty)
 
-                    CathedralSecondaryButton("Unpublish", systemImage: "eye.slash") {
-                        output.visibility = OutputVisibility.private.rawValue
-                        output.updatedAt = Date()
+                    CathedralSecondaryButton(
+                        isUnpublishing ? "Unpublishing…" : "Unpublish",
+                        systemImage: "eye.slash"
+                    ) {
+                        Task { await performUnpublish() }
                     }
+                    .disabled(isUnpublishing)
                 }
             } else {
-                CathedralPrimaryButton("Publish", systemImage: "globe") {
-                    applyVisibility(.shared)
+                CathedralPrimaryButton(
+                    isPublishing ? "Publishing…" : "Publish",
+                    systemImage: "globe"
+                ) {
+                    publishError = nil
+                    showPublishConfirm = true
                 }
-                .disabled(output.outputText.isEmpty)
+                .disabled(output.outputText.isEmpty || isPublishing)
             }
         }
+    }
+
+    // MARK: Publish / Unpublish Logic
+
+    private func performPublish() async {
+        isPublishing = true
+        publishError = nil
+        defer { isPublishing = false }
+
+        do {
+            let response = try await sharingService.publish(output: output)
+            let now = Date()
+            if output.publishedAt == nil {
+                output.publishedAt = now
+            }
+            output.visibility = OutputVisibility.shared.rawValue
+            output.sharedOutputID = response.sharedOutputID
+            output.shareURL = response.shareURL ?? ""
+            output.lastPublishedAt = now
+            output.updatedAt = now
+        } catch {
+            publishError = Self.sharingErrorMessage(error)
+        }
+    }
+
+    private func performUnpublish() async {
+        let id = output.sharedOutputID
+        isUnpublishing = true
+        publishError = nil
+        defer { isUnpublishing = false }
+
+        if !id.isEmpty {
+            // Only call backend when we have a server-issued ID to unpublish.
+            do {
+                try await sharingService.unpublish(sharedOutputID: id)
+            } catch {
+                publishError = Self.sharingErrorMessage(error)
+                return
+            }
+        }
+        // If id is empty, the output was never successfully synced to the backend,
+        // so clearing local state is the correct and complete action.
+        output.visibility = OutputVisibility.private.rawValue
+        output.updatedAt = Date()
+    }
+
+    // MARK: - Error helpers
+
+    private static func sharingErrorMessage(_ error: Error) -> String {
+        PublicSharingServiceError.displayMessage(from: error)
     }
 
     // MARK: Share Sheet helpers
@@ -361,6 +471,7 @@ struct GenerationOutputDetailView: View {
         if !title.isEmpty { parts.append(title) }
         if !output.shareExcerpt.isEmpty { parts.append(output.shareExcerpt) }
         parts.append(output.outputText)
+        if !output.shareURL.isEmpty { parts.append(output.shareURL) }
         if !output.sourcePromptPackName.isEmpty {
             parts.append("Generated with \(output.sourcePromptPackName)")
         }
