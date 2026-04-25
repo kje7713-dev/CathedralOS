@@ -1,9 +1,9 @@
 import SwiftUI
+import SwiftData
 
 // MARK: - SharedOutputDetailView
 // Detail view for a single public shared output.
-// Actions: copy text, share link, report (placeholder).
-// Remix is shown as coming-soon when allowRemix is true but no remix flow exists yet.
+// Actions: copy text, share link, remix (when allowRemix is true), report (placeholder).
 
 struct SharedOutputDetailView: View {
     let sharedOutputID: String
@@ -15,11 +15,19 @@ struct SharedOutputDetailView: View {
         self.sharingService = sharingService
     }
 
+    @Environment(\.modelContext) private var modelContext
+
     @State private var detail: SharedOutputDetail?
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var copiedText = false
     @State private var showShareSheet = false
+
+    // Remix state
+    @State private var showRemixConfirmation = false
+    @State private var isRemixing = false
+    @State private var remixError: String?
+    @State private var remixedProject: StoryProject?
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -46,6 +54,25 @@ struct SharedOutputDetailView: View {
             if let detail, let url = detail.shareURL {
                 ShareSheet(activityItems: [url])
             }
+        }
+        .navigationDestination(item: $remixedProject) { project in
+            ProjectDetailView(project: project)
+        }
+        .alert("Remix This Output?", isPresented: $showRemixConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remix") {
+                Task { await performRemix() }
+            }
+        } message: {
+            Text("This will copy the remixable source into your local projects. Your changes will not affect the original.")
+        }
+        .alert("Remix Failed", isPresented: Binding(
+            get: { remixError != nil },
+            set: { if !$0 { remixError = nil } }
+        )) {
+            Button("OK", role: .cancel) { remixError = nil }
+        } message: {
+            Text(remixError ?? "")
         }
         .task { await load() }
     }
@@ -199,9 +226,39 @@ struct SharedOutputDetailView: View {
             }
 
             if detail.allowRemix {
-                CathedralSecondaryButton("Remix (Coming Soon)", systemImage: "shuffle") {}
-                    .disabled(true)
+                if isRemixing {
+                    HStack(spacing: CathedralTheme.Spacing.sm) {
+                        ProgressView()
+                        Text("Remixing…")
+                            .font(CathedralTheme.Typography.body())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(CathedralTheme.Spacing.sm)
+                } else {
+                    CathedralSecondaryButton("Remix", systemImage: "shuffle") {
+                        showRemixConfirmation = true
+                    }
+                }
             }
+        }
+    }
+
+    // MARK: Remix action
+
+    @MainActor
+    private func performRemix() async {
+        guard let detail else { return }
+        isRemixing = true
+        defer { isRemixing = false }
+        do {
+            let project = try SharedOutputRemixMapper.remix(from: detail)
+            modelContext.insert(project)
+            remixedProject = project
+        } catch let remixErr as RemixError {
+            remixError = remixErr.errorDescription
+        } catch {
+            remixError = error.localizedDescription
         }
     }
 

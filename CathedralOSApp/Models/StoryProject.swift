@@ -10,6 +10,9 @@ class StoryProject {
     var readingLevel: String
     var contentRating: String
     var audienceNotes: String
+    /// General-purpose notes field. Also used to store remix provenance when a project
+    /// is imported from a public shared output.
+    var notes: String
     @Relationship(deleteRule: .cascade, inverse: \ProjectSetting.project)
     var projectSetting: ProjectSetting?
     @Relationship(deleteRule: .cascade, inverse: \StoryCharacter.project)
@@ -33,6 +36,7 @@ class StoryProject {
         self.id = UUID()
         self.name = name
         self.summary = ""
+        self.notes = ""
         self.readingLevel = ""
         self.contentRating = ""
         self.audienceNotes = ""

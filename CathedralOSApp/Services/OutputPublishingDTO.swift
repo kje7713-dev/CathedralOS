@@ -111,6 +111,9 @@ struct SharedOutputDetail: Codable {
     let allowRemix: Bool
     let createdAt: Date
     let shareURL: String?
+    /// Frozen JSON snapshot of the `PromptPackExportPayload` included when `allowRemix` is true.
+    /// Present only when the publisher explicitly permits remixing.
+    let sourcePayloadJSON: String?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -125,6 +128,7 @@ struct SharedOutputDetail: Codable {
         allowRemix          = try c.decodeIfPresent(Bool.self,   forKey: .allowRemix) ?? false
         createdAt           = try c.decodeIfPresent(Date.self,   forKey: .createdAt) ?? Date()
         shareURL            = try c.decodeIfPresent(String.self, forKey: .shareURL)
+        sourcePayloadJSON   = try c.decodeIfPresent(String.self, forKey: .sourcePayloadJSON)
     }
 }
 
