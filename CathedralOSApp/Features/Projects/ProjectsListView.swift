@@ -77,7 +77,12 @@ struct ProjectsListView: View {
                 pendingNavigationProject = project
             })
         }
-        .sheet(isPresented: $showAddProject) {
+        .sheet(isPresented: $showAddProject, onDismiss: {
+            if let project = pendingNavigationProject {
+                navigationPath.append(project)
+                pendingNavigationProject = nil
+            }
+        }) {
             addProjectSheet
         }
         .sheet(item: $projectToRename) { project in
@@ -262,6 +267,7 @@ struct ProjectsListView: View {
         guard !trimmed.isEmpty else { return }
         let p = StoryProject(name: trimmed)
         modelContext.insert(p)
+        pendingNavigationProject = p
         newProjectName = ""
         showAddProject = false
     }
