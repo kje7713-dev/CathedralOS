@@ -110,7 +110,7 @@ Used for Prompt Pack export and as the `sourcePayloadJSON` snapshot on `Generati
 
 ### GenerationRequestDTO / GenerationResponseDTO
 
-Request and response types for the `generate-story` Edge Function call. Request carries `sourcePayloadJSON`, `generationAction`, `generationLengthMode`, `outputBudget`, audience fields, and a `localGenerationID` for dedup. See [`docs/generate-story-edge-function.md`](generate-story-edge-function.md).
+Request and response types for the `generate-story` Edge Function call. Request carries `sourcePayloadJSON`, `generationAction`, `generationLengthMode`, `outputBudget`, audience fields, and a `localGenerationID` for dedup. See [`generate-story-edge-function.md`](generate-story-edge-function.md).
 
 ---
 
@@ -163,4 +163,4 @@ The iOS app never receives or stores an OpenAI key. All generation is mediated b
 | `shared_outputs` | Denormalized snapshot for public sharing |
 | `remix_events` | Lineage record of every remix action |
 
-All tables have RLS enabled. See [`docs/supabase-schema.md`](supabase-schema.md) for full schema details.
+All tables have RLS enabled. See [`supabase-schema.md`](supabase-schema.md) for full schema details.
