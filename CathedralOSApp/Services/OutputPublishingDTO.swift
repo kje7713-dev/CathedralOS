@@ -10,6 +10,9 @@ struct OutputPublishingDTO: Codable {
     // MARK: Identity
     /// UUID of the local `GenerationOutput` being published.
     let localGenerationOutputID: String
+    /// Supabase `generation_outputs.id` returned after cloud sync.
+    /// Empty when the output has never been synced; backend may use it for provenance linking.
+    let cloudGenerationOutputID: String
 
     // MARK: Sharing metadata
     let shareTitle: String
@@ -37,6 +40,7 @@ struct OutputPublishingDTO: Codable {
 
     init(output: GenerationOutput) {
         self.localGenerationOutputID = output.id.uuidString
+        self.cloudGenerationOutputID = output.cloudGenerationOutputID
         self.shareTitle = output.shareTitle
         self.shareExcerpt = output.shareExcerpt
         self.allowRemix = output.allowRemix

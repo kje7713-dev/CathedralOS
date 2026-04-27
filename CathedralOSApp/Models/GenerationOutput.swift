@@ -141,6 +141,11 @@ class GenerationOutput {
     /// Distinct from `publishedAt` (first-publish timestamp) so re-publishes are tracked.
     var lastPublishedAt: Date?
 
+    // MARK: Publish error metadata
+    /// Human-readable description of the last publish or unpublish error.
+    /// Cleared on the next successful publish or unpublish. Nil when no error is present.
+    var publishErrorMessage: String?
+
     // MARK: Cloud sync metadata
     /// Supabase `generation_outputs.id` (UUID string) returned after the record is synced.
     /// Empty when the output has never been synced to the cloud.
@@ -194,6 +199,7 @@ class GenerationOutput {
         self.sharedOutputID = ""
         self.shareURL = ""
         self.lastPublishedAt = nil
+        self.publishErrorMessage = nil
         self.cloudGenerationOutputID = ""
         self.syncStatus = SyncStatus.localOnly.rawValue
         self.lastSyncedAt = nil
