@@ -1,9 +1,11 @@
 import SwiftUI
+import SwiftData
 
 // MARK: - AccountView
 //
 // Lightweight account and backend status view.
-// Shows authentication state, backend configuration status, and sign-in / sign-out controls.
+// Shows authentication state, backend configuration status, sign-in / sign-out controls,
+// and output sync actions.
 //
 // Authentication is a stub — real sign-in will be wired in when the
 // Supabase Auth backend is integrated. The view does not force login on any
@@ -12,19 +14,32 @@ import SwiftUI
 struct AccountView: View {
 
     let authService: any AuthService
+    let syncService: any GenerationOutputSyncServiceProtocol
 
-    init(authService: any AuthService = BackendAuthService()) {
+    @Environment(\.modelContext) private var modelContext
+
+    init(
+        authService: any AuthService = BackendAuthService(),
+        syncService: any GenerationOutputSyncServiceProtocol = StubGenerationOutputSyncService()
+    ) {
         self.authService = authService
+        self.syncService = syncService
     }
 
     @State private var authState: AuthState = .unknown
     @State private var isWorking = false
     @State private var actionError: String?
 
+    // MARK: Sync state
+    @State private var isSyncing = false
+    @State private var syncError: String?
+    @State private var lastSyncMessage: String?
+
     var body: some View {
         NavigationStack {
             List {
                 accountSection
+                syncSection
                 backendStatusSection
             }
             .navigationTitle("Account")
@@ -98,6 +113,71 @@ struct AccountView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: - Sync section
+
+    private var syncSection: some View {
+        Section("Outputs") {
+            VStack(alignment: .leading, spacing: 8) {
+                syncStatusRow
+                Button {
+                    Task { await attemptSync() }
+                } label: {
+                    Label(
+                        isSyncing ? "Syncing…" : "Sync Outputs",
+                        systemImage: isSyncing ? "arrow.trianglehead.2.clockwise" : "arrow.triangle.2.circlepath"
+                    )
+                }
+                .disabled(isSyncing || !authState.isSignedIn)
+
+                if !authState.isSignedIn {
+                    Text("Sign in to sync outputs between devices.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let syncError {
+                    Text(syncError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                if let lastSyncMessage {
+                    Text(lastSyncMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder
+    private var syncStatusRow: some View {
+        if isSyncing {
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Syncing outputs…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else if syncError != nil {
+            Label("Sync failed", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        } else if lastSyncMessage != nil {
+            Label("Synced", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(CathedralTheme.Colors.accent)
+        } else if !authState.isSignedIn {
+            Label("Not signed in", systemImage: "person.slash")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            Label("Ready to sync", systemImage: "arrow.triangle.2.circlepath")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     // MARK: - Backend status section
 
     private var backendStatusSection: some View {
@@ -140,6 +220,26 @@ struct AccountView: View {
             authState = authService.authState
         } catch {
             actionError = (error as? AuthServiceError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func attemptSync() async {
+        guard authState.isSignedIn else {
+            syncError = GenerationOutputSyncError.notSignedIn.errorDescription
+            return
+        }
+        isSyncing = true
+        syncError = nil
+        lastSyncMessage = nil
+        defer { isSyncing = false }
+        do {
+            try await syncService.syncAll(in: modelContext)
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            lastSyncMessage = "Last synced at \(formatter.string(from: Date()))"
+        } catch {
+            syncError = (error as? GenerationOutputSyncError)?.errorDescription
+                ?? error.localizedDescription
         }
     }
 }

@@ -119,6 +119,12 @@ struct GenerationResponse: Codable {
     /// Echoed back by the backend when the request included `localGenerationID`.
     let localGenerationID: String?
 
+    // MARK: Cloud record linkage
+    /// The Supabase `generation_outputs.id` (UUID string) created or retrieved by the backend
+    /// when it inserts a `generation_outputs` row during generation. Present when the backend
+    /// supports cloud output persistence; nil for backends that do not yet insert this row.
+    let cloudGenerationOutputID: String?
+
     // MARK: Status
     /// Expected values: "success" | "error"
     let status: String
@@ -135,6 +141,7 @@ struct GenerationResponse: Codable {
         inputTokens         = try c.decodeIfPresent(Int.self, forKey: .inputTokens)
         outputTokens        = try c.decodeIfPresent(Int.self, forKey: .outputTokens)
         localGenerationID   = try c.decodeIfPresent(String.self, forKey: .localGenerationID)
+        cloudGenerationOutputID = try c.decodeIfPresent(String.self, forKey: .cloudGenerationOutputID)
         status              = try c.decode(String.self, forKey: .status)
         errorMessage        = try c.decodeIfPresent(String.self, forKey: .errorMessage)
     }
