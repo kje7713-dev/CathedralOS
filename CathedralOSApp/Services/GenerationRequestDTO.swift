@@ -47,6 +47,11 @@ struct GenerationRequest: Codable {
     /// Prior output text included for "continue" and "remix" actions.
     let previousOutputText: String?
 
+    // MARK: Client-side record linkage
+    /// UUID string of the local `GenerationOutput` record created before the network call.
+    /// Sent so the backend can correlate and optionally echo it back in the response.
+    let localGenerationID: String?
+
     init(
         schema: String,
         version: Int,
@@ -63,7 +68,8 @@ struct GenerationRequest: Codable {
         approximateMaxOutputTokens: Int = GenerationLengthMode.defaultMode.outputBudget,
         action: String = "generate",
         parentGenerationID: String? = nil,
-        previousOutputText: String? = nil
+        previousOutputText: String? = nil,
+        localGenerationID: String? = nil
     ) {
         self.schema = schema
         self.version = version
@@ -81,6 +87,7 @@ struct GenerationRequest: Codable {
         self.action = action
         self.parentGenerationID = parentGenerationID
         self.previousOutputText = previousOutputText
+        self.localGenerationID = localGenerationID
     }
 }
 
@@ -97,6 +104,20 @@ struct GenerationResponse: Codable {
 
     // MARK: Metadata
     let modelName: String
+    /// The action that was performed: "generate" | "regenerate" | "continue" | "remix".
+    let generationAction: String?
+    /// Raw value of `GenerationLengthMode` echoed back by the backend.
+    let generationLengthMode: String?
+    /// Output token budget echoed back by the backend.
+    let outputBudget: Int?
+
+    // MARK: Token usage (optional — may be omitted by the backend)
+    let inputTokens: Int?
+    let outputTokens: Int?
+
+    // MARK: Client-side record linkage
+    /// Echoed back by the backend when the request included `localGenerationID`.
+    let localGenerationID: String?
 
     // MARK: Status
     /// Expected values: "success" | "error"
@@ -105,10 +126,16 @@ struct GenerationResponse: Codable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        generatedText = try c.decodeIfPresent(String.self, forKey: .generatedText) ?? ""
-        title         = try c.decodeIfPresent(String.self, forKey: .title)
-        modelName     = try c.decodeIfPresent(String.self, forKey: .modelName) ?? ""
-        status        = try c.decode(String.self, forKey: .status)
-        errorMessage  = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        generatedText       = try c.decodeIfPresent(String.self, forKey: .generatedText) ?? ""
+        title               = try c.decodeIfPresent(String.self, forKey: .title)
+        modelName           = try c.decodeIfPresent(String.self, forKey: .modelName) ?? ""
+        generationAction    = try c.decodeIfPresent(String.self, forKey: .generationAction)
+        generationLengthMode = try c.decodeIfPresent(String.self, forKey: .generationLengthMode)
+        outputBudget        = try c.decodeIfPresent(Int.self, forKey: .outputBudget)
+        inputTokens         = try c.decodeIfPresent(Int.self, forKey: .inputTokens)
+        outputTokens        = try c.decodeIfPresent(Int.self, forKey: .outputTokens)
+        localGenerationID   = try c.decodeIfPresent(String.self, forKey: .localGenerationID)
+        status              = try c.decode(String.self, forKey: .status)
+        errorMessage        = try c.decodeIfPresent(String.self, forKey: .errorMessage)
     }
 }

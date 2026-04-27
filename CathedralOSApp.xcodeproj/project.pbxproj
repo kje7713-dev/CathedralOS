@@ -114,6 +114,7 @@
 		000000000000000000000155 /* SupabaseConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000154 /* SupabaseConfigurationTests.swift */; };
 		000000000000000000000157 /* BackendClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000156 /* BackendClientTests.swift */; };
 		000000000000000000000159 /* AuthServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000158 /* AuthServiceTests.swift */; };
+		00000000000000000000015E /* GenerationBackendServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000015D /* GenerationBackendServiceTests.swift */; };
 		00000000000000000000015C /* SharedOutputRemixMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000015B /* SharedOutputRemixMapper.swift */; };
 /* End PBXBuildFile section */
 
@@ -237,6 +238,7 @@
 		000000000000000000000154 /* SupabaseConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseConfigurationTests.swift; sourceTree = "<group>"; };
 		000000000000000000000156 /* BackendClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendClientTests.swift; sourceTree = "<group>"; };
 		000000000000000000000158 /* AuthServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthServiceTests.swift; sourceTree = "<group>"; };
+		00000000000000000000015D /* GenerationBackendServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationBackendServiceTests.swift; sourceTree = "<group>"; };
 		00000000000000000000015B /* SharedOutputRemixMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedOutputRemixMapper.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -419,6 +421,7 @@
 				000000000000000000000154 /* SupabaseConfigurationTests.swift */,
 				000000000000000000000156 /* BackendClientTests.swift */,
 				000000000000000000000158 /* AuthServiceTests.swift */,
+				00000000000000000000015D /* GenerationBackendServiceTests.swift */,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -723,6 +726,7 @@
 				000000000000000000000155 /* SupabaseConfigurationTests.swift in Sources */,
 				000000000000000000000157 /* BackendClientTests.swift in Sources */,
 				000000000000000000000159 /* AuthServiceTests.swift in Sources */,
+				00000000000000000000015E /* GenerationBackendServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

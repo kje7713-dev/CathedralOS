@@ -35,7 +35,7 @@ struct PromptPackPreviewView: View {
     init(
         project: StoryProject,
         pack: PromptPack,
-        generationService: GenerationService = StoryGenerationService()
+        generationService: GenerationService = SupabaseGenerationService()
     ) {
         self.project = project
         self.pack = pack
@@ -382,8 +382,18 @@ struct PromptPackPreviewView: View {
             gen.notes = error.localizedDescription
             gen.updatedAt = Date()
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
-            generationError = (error as? GenerationServiceError)?.errorDescription
-                ?? error.localizedDescription
+            generationError = localizedGenerationError(error)
         }
+    }
+
+    /// Returns a human-readable error string, with special handling for auth and config errors.
+    private func localizedGenerationError(_ error: Error) -> String {
+        if let backendError = error as? GenerationBackendServiceError {
+            return backendError.errorDescription ?? backendError.localizedDescription
+        }
+        if let serviceError = error as? GenerationServiceError {
+            return serviceError.errorDescription ?? serviceError.localizedDescription
+        }
+        return error.localizedDescription
     }
 }
