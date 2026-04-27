@@ -49,7 +49,7 @@ struct GenerationRequest: Codable {
 
     // MARK: Client-side record linkage
     /// UUID string of the local `GenerationOutput` record created before the network call.
-    /// Lets the backend echo back the client ID for correlation.
+    /// Sent so the backend can correlate and optionally echo it back in the response.
     let localGenerationID: String?
 
     init(
@@ -115,6 +115,10 @@ struct GenerationResponse: Codable {
     let inputTokens: Int?
     let outputTokens: Int?
 
+    // MARK: Client-side record linkage
+    /// Echoed back by the backend when the request included `localGenerationID`.
+    let localGenerationID: String?
+
     // MARK: Status
     /// Expected values: "success" | "error"
     let status: String
@@ -130,6 +134,7 @@ struct GenerationResponse: Codable {
         outputBudget        = try c.decodeIfPresent(Int.self, forKey: .outputBudget)
         inputTokens         = try c.decodeIfPresent(Int.self, forKey: .inputTokens)
         outputTokens        = try c.decodeIfPresent(Int.self, forKey: .outputTokens)
+        localGenerationID   = try c.decodeIfPresent(String.self, forKey: .localGenerationID)
         status              = try c.decode(String.self, forKey: .status)
         errorMessage        = try c.decodeIfPresent(String.self, forKey: .errorMessage)
     }

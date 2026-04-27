@@ -9,6 +9,7 @@ import XCTest
 
 /// Controllable auth service for injecting signed-in / signed-out / unknown states.
 /// Extends the basic MockAuthService pattern with session-check tracking.
+/// Intended for single-threaded test scenarios only — `authState` is not actor-isolated.
 final class MockCheckingAuthService: AuthService {
 
     var authState: AuthState
@@ -31,34 +32,6 @@ final class MockCheckingAuthService: AuthService {
     func signOut() async throws {}
 }
 
-// MARK: - MockURLProtocol
-
-/// URLProtocol subclass that intercepts requests and returns a canned response.
-final class MockURLProtocol: URLProtocol {
-
-    static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
-
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        guard let handler = MockURLProtocol.requestHandler else {
-            client?.urlProtocol(self, didFailWithError: URLError(.unknown))
-            return
-        }
-        do {
-            let (response, data) = try handler(request)
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
-        } catch {
-            client?.urlProtocol(self, didFailWithError: error)
-        }
-    }
-
-    override func stopLoading() {}
-}
-
 // MARK: - Helpers
 
 private func makeProject(
@@ -76,12 +49,6 @@ private func makeProject(
 
 private func makePack(name: String = "Test Pack") -> PromptPack {
     PromptPack(name: name)
-}
-
-private func makeMockSession() -> URLSession {
-    let config = URLSessionConfiguration.ephemeral
-    config.protocolClasses = [MockURLProtocol.self]
-    return URLSession(configuration: config)
 }
 
 private func makeSuccessResponseJSON(
@@ -474,7 +441,7 @@ final class GenerationBackendServiceTests: XCTestCase {
         )
 
         let error = GenerationBackendServiceError.networkError(
-            NSError(domain: "net", code: -1_009)
+            NSError(domain: "net", code: -1009)
         )
         gen.status = GenerationStatus.failed.rawValue
         gen.notes = error.localizedDescription

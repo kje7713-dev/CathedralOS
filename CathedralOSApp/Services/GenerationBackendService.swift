@@ -94,20 +94,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         lengthMode: GenerationLengthMode = .defaultMode
     ) async throws -> GenerationResponse {
 
-        // 1. Validate Supabase configuration before touching the network.
-        guard SupabaseConfiguration.isConfigured else {
-            throw GenerationBackendServiceError.notConfigured
-        }
+        try await validateConfigAndAuth()
 
-        // 2. Resolve auth state (triggers a session check if still .unknown).
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        guard authService.authState.isSignedIn else {
-            throw GenerationBackendServiceError.notSignedIn
-        }
-
-        // 3. Build the canonical frozen payload — snapshot taken here, not earlier.
+        // Build the canonical frozen payload — snapshot taken here, not earlier.
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
 
         let requestBody = GenerationRequest(
@@ -138,20 +127,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         lengthMode: GenerationLengthMode = .defaultMode
     ) async throws -> GenerationResponse {
 
-        // 1. Validate config.
-        guard SupabaseConfiguration.isConfigured else {
-            throw GenerationBackendServiceError.notConfigured
-        }
+        try await validateConfigAndAuth()
 
-        // 2. Resolve auth.
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        guard authService.authState.isSignedIn else {
-            throw GenerationBackendServiceError.notSignedIn
-        }
-
-        // 3. Decode the frozen payload.
+        // Decode the frozen payload.
         let decoder = JSONDecoder()
         let frozenPayload: PromptPackExportPayload
         do {
@@ -187,9 +165,25 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
 
     // MARK: - Private
 
+    /// Validates Supabase configuration is present and the user is signed in.
+    /// Resolves `.unknown` auth state via `checkSession()` before checking.
+    private func validateConfigAndAuth() async throws {
+        guard SupabaseConfiguration.isConfigured else {
+            throw GenerationBackendServiceError.notConfigured
+        }
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard authService.authState.isSignedIn else {
+            throw GenerationBackendServiceError.notSignedIn
+        }
+    }
+
     private func post(_ requestBody: GenerationRequest) async throws -> GenerationResponse {
 
-        // Build the Supabase backend client (config is already verified above).
+        // SupabaseBackendClient init reads the same config already validated in
+        // validateConfigAndAuth(); a failure here would be an unexpected race condition.
+        // We still handle it gracefully by mapping to .notConfigured.
         let client: SupabaseBackendClient
         do {
             client = try SupabaseBackendClient()
