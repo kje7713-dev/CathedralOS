@@ -2,102 +2,156 @@
 
 [![iOS CI](https://github.com/kje7713-dev/CathedralOS/actions/workflows/ios.yml/badge.svg?branch=main)](https://github.com/kje7713-dev/CathedralOS/actions/workflows/ios.yml)
 
-CathedralOS helps AI understand what matters to you before it answers.
+CathedralOS is a structured story and worldbuilding app for iOS. It helps writers build rich projects — characters, settings, relationships, themes, motifs, story sparks, and aftertastes — and then export that structure for LLM-powered story generation.
 
-## What It Does
+**What it supports today:**
+- Manual project building with tiered field templates (Basic / Advanced / Literary)
+- Project schema import/export for external LLM authoring workflows
+- Prompt Pack JSON/markdown export for LLM generation
+- Saved generation output scaffolding with lineage tracking (continue / remix)
+- Audience controls (reading level, content rating, audience notes)
 
-LLMs give generic advice when they lack context. CathedralOS stores your roles, domains, goals, and constraints locally, then compiles them into a small, structured block you can paste into any LLM.
+**Planned / in progress:**
+- Backend-backed generation via Supabase Edge Functions + OpenAI
+- Public sharing and remix of generated outputs
+- Saved output sync to Supabase Postgres
 
-- **Roles** — who you are (e.g. founder, parent, engineer)
-- **Domains** — areas of your life or work you care about
-- **Goals** — what you are trying to achieve
-- **Constraints** — what limits you
-- **Compiler** — produces a deterministic, paste-ready context block
+---
 
-## How to Use
+## Core Concepts
 
-1. Add your goals and constraints in the app.
-2. Choose an export format (JSON or Instructions).
-3. Copy or share the compiled block, then paste it into any LLM.
+| Model | Description |
+|---|---|
+| `StoryProject` | Top-level container. Owns all other entities. Holds name, summary, notes, and audience metadata. |
+| `ProjectSetting` | The world of the story — domains, constraints, themes, season, world rules, cultural pressures. One per project. |
+| `StoryCharacter` | A story character with tiered fields: roles/goals (Basic), psychology/backstory (Advanced), inner life/arc (Literary). |
+| `StoryRelationship` | A directional connection between two characters — type, tension, loyalty, history, power balance, and transformation potential. |
+| `ThemeQuestion` | A thematic question the story explores. At Literary depth adds moral fault lines and ending truths. |
+| `Motif` | A recurring symbol or image. At Advanced depth adds meaning and examples. |
+| `StorySpark` | A story premise — situation, stakes, twist. At Advanced depth adds urgency/threat/clock. At Literary depth adds structural beats. |
+| `Aftertaste` | The emotional residue a reader should feel after the story ends. At Literary depth captures the final image and open questions. |
+| `PromptPack` | A curated subset of project entities assembled for LLM generation. Exports a canonical structured packet. |
+| `GenerationOutput` | A saved AI-generated story, scene, chapter, or outline. Tracks status, lineage (action/parent), length mode, publishing metadata. |
 
-## Export Formats
+---
 
-### JSON Mode
+## Tiered Field Templates
 
-Structured output, sorted keys, valid JSON. Example:
+Every entity supports three depth levels. The level is stored per entity — different characters in the same project can be at different levels.
 
-```json
-{
-  "cathedral_context": {
-    "constraints": [
-      "Time and focus stretched thin"
-    ],
-    "domains": [
-      "Business",
-      "Home"
-    ],
-    "goals": [
-      "Improve household organization",
-      "Reach $5k MRR in 3-6 months"
-    ],
-    "instruction_bias": [
-      "Prefer short actions with fast feedback.",
-      "Respect constraints and avoid requiring long uninterrupted blocks."
-    ],
-    "roles": [
-      "Founder",
-      "Parent"
-    ]
-  }
-}
-```
+| Level | Purpose |
+|---|---|
+| **Basic** | Fast Mad-Libs-style input. Core fields only. |
+| **Advanced** | Deeper story control — psychology, history, forces, structure. |
+| **Literary** | High-control narrative/literary craft — inner life, arc, moral fault lines, hidden truths. |
 
-### Instructions Mode
+**Selective opt-in:** at Basic or Advanced, individual higher-level field groups can be enabled without switching the whole entity to a higher level. For example, a Basic character can enable "Inner Life & Deceptions" without enabling all Literary fields.
 
-Plain-text format optimized for direct pasting into an LLM system prompt. Example:
+**Architecture files:**
+- `FieldLevel` — `basic` / `advanced` / `literary` enum
+- `FieldGroupID` — stable string identifiers for every optional group across all entity types
+- `EntityFieldTemplate` — static per-entity templates listing which groups belong to Advanced vs Literary
+- `FieldTemplateEngine` — shared logic for `shouldShow`, `optionalAdvancedGroups`, `optionalLiteraryGroups`
 
-```
-Use the following goals and constraints as ground truth when answering.
-Optimize your answer within these limits.
+See [`docs/architecture.md`](docs/architecture.md) for a deeper walkthrough.
 
-ROLES:
-- Founder
-- Parent
+---
 
-DOMAINS:
-- Business
-- Home
+## Audience Controls
 
-GOALS:
-- Improve household organization
-- Reach $5k MRR in 3-6 months
+Every `StoryProject` carries three optional fields that guide generated output suitability:
 
-CONSTRAINTS:
-- Time and focus stretched thin
+| Field | Example |
+|---|---|
+| `readingLevel` | `middle_grade`, `young_adult`, `adult` |
+| `contentRating` | `g`, `pg`, `pg13`, `r` |
+| `audienceNotes` | `Keep horror spooky but not graphic.` |
 
-ANSWERING RULES:
-- Prefer short actions with fast feedback.
-- Respect constraints and avoid requiring long uninterrupted blocks.
-```
+These are included in Prompt Pack exports and passed to the generation backend.
 
-## Privacy
+---
 
-CathedralOS is local-first. No backend for MVP.
+## External LLM Workflows
 
-- Raw context stays on device.
-- Only the compiled block is copied or shared.
-- No analytics that inspect personal context.
+### Project Schema Import/Export
 
-## Development
+Export a project to JSON, fill it in an external LLM, and import it back as a fully editable project.
+
+**Workflow:**
+1. Export a project schema from the app (copy or share JSON).
+2. Paste into any LLM with instructions to fill the schema.
+3. Paste/import the returned JSON back into CathedralOS.
+4. The imported project becomes normal editable app data.
+
+**Schema rules:**
+- `schema` must be `cathedralos.project_schema`
+- `version` must be integer `1`
+- Must be strict valid JSON (smart quotes and typographic punctuation are not valid)
+- Relationship `sourceCharacterID` / `targetCharacterID` must match character IDs in the same payload
+
+See [`docs/schema-import-export.md`](docs/schema-import-export.md) for the full payload reference and LLM prompt guidance.
+
+### Prompt Pack Export
+
+A Prompt Pack assembles a curated subset of a project's entities and exports them as a structured generation packet.
+
+- Exports support JSON and prompt/markdown modes.
+- The exported packet is intended for direct LLM injection — all sections are always present so consumers never encounter missing keys.
+- A frozen `sourcePayloadJSON` snapshot is stored on each `GenerationOutput` for regenerate/continue/remix lineage.
+
+---
+
+## Generation
+
+### Current state
+
+- `GenerationOutput` model is fully defined and stored locally via SwiftData.
+- Source payload snapshots (`sourcePayloadJSON`) are preserved at generation time.
+- Lineage fields (`generationAction`, `parentGenerationID`) support continue/remix flows.
+- `GenerationLengthMode`: `short` (800 tokens) / `medium` (1600) / `long` (3000) / `chapter` (6000).
+- Local `GenerationUsageTracker` records usage events for audit purposes.
+- `GenerationStatus`: `draft` → `generating` → `complete` / `failed`.
+- `OutputVisibility`: `private` / `shared` / `unlisted`.
+
+### Backend generation (planned / in progress)
+
+Backend-backed generation is not yet wired to the iOS app. The intended stack:
+
+- **Supabase Auth** — user identity; JWT passed to Edge Functions
+- **Supabase Postgres** — stores `generation_outputs`, `generation_usage_events`, `shared_outputs`, `remix_events`
+- **Row Level Security** — all tables protected; users access only their own rows
+- **Supabase Edge Functions** (`generate-story`) — calls OpenAI server-side; never exposes keys to the client
+- **OpenAI** — called only from Edge Functions; no API key in the iOS app
+
+See [`docs/generate-story-edge-function.md`](docs/generate-story-edge-function.md) for the full Edge Function contract.
+
+---
+
+## Local Development
 
 **Requirements**
-
 - Xcode 15 or later
 - iOS 17 simulator or device
 
-**Run locally**
+**Run the app**
 
-Open `CathedralOSApp.xcodeproj` in Xcode and press **Run**.
+```bash
+open CathedralOSApp.xcodeproj
+# Press Run in Xcode, or:
+xcodebuild build \
+  -project CathedralOSApp.xcodeproj \
+  -scheme CathedralOSApp \
+  -sdk iphonesimulator \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+**Configure Supabase (optional — required for backend features)**
+
+See [`BACKEND_SETUP.md`](BACKEND_SETUP.md) for full instructions. Summary:
+
+1. Add `SupabaseProjectURL` and `SupabaseAnonKey` to `Info.plist` (or a `.xcconfig` file).
+2. Do **not** commit these values to source control.
+3. If the keys are absent, the app runs in local-only mode and shows a "Backend not configured" warning in the Account tab.
 
 **Run tests**
 
@@ -109,6 +163,59 @@ xcodebuild test \
   -destination "platform=iOS Simulator,OS=latest,name=iPhone 16" \
   CODE_SIGNING_ALLOWED=NO
 ```
+
+---
+
+## Testing
+
+The test suite (`CathedralOSAppTests/`) covers:
+
+| Area | Test file(s) |
+|---|---|
+| Field template engine | `FieldTemplateEngineTests`, `TieredFieldsTests` |
+| Schema import/export round-trip | `ProjectSchemaRoundTripTests`, `ImportHardeningTests`, `ImportedEntityEditingTests` |
+| Prompt Pack export | `PromptPackExportBuilderTests`, `PromptPackJSONAssemblerTests`, `PromptPackAssemblerTests` |
+| Tag-entry behavior | `TagFieldLogicTests` |
+| Generation output scaffold | `GenerationOutputTests`, `GenerationOutputActionTests`, `GenerationLengthModeTests` |
+| Usage tracking | `GenerationUsageTrackerTests` |
+| Literary entities | `LiteraryEntitiesTests` |
+| Audience controls | `AudienceControlsTests` |
+| Backend configuration | `SupabaseConfigurationTests`, `BackendClientTests`, `AuthServiceTests` |
+| Public sharing / remix | `PublicSharingTests`, `RemixFromSharedOutputTests` |
+| Other | `AskPackAssemblerTests`, `CompilerTests`, `ExportFormatterTests`, `GenerationServiceTests`, `PrivacySafeTitleTests`, `ProfileSelectionTests`, `PromptPackBuilderTests`, `TemplatesTests` |
+
+---
+
+## Backend Setup
+
+See [`BACKEND_SETUP.md`](BACKEND_SETUP.md) for iOS configuration (Info.plist keys, `.xcconfig` approach, CI injection).
+
+See [`docs/supabase-schema.md`](docs/supabase-schema.md) for the Postgres schema, RLS policies, and migration instructions.
+
+See [`docs/generate-story-edge-function.md`](docs/generate-story-edge-function.md) for the Edge Function contract, secrets, and deployment steps.
+
+### Backend Roadmap
+
+The Supabase backend is partially scaffolded. The following remain to be completed:
+
+- [ ] Wire `GenerationBackendService` to the `generate-story` Edge Function
+- [ ] Sync `GenerationOutput` records to `generation_outputs` after generation
+- [ ] Implement `UsageSyncService` to push local usage events to `generation_usage_events`
+- [ ] Implement `PublicSharingService` backend calls (publish, unpublish, browse)
+- [ ] Enforce usage quotas server-side
+- [ ] Enable public anonymous browse for `shared_outputs`
+
+---
+
+## Security Notes
+
+- **Never put `OPENAI_API_KEY` in the iOS app**, `.xcconfig`, or any committed file. It lives in Supabase function secrets only.
+- **Never commit the Supabase service-role key**. It bypasses all RLS policies.
+- The iOS app may use the Supabase **anon key** only. All data access is enforced by RLS policies.
+- All private cloud data (generation outputs, usage events, profiles) is protected by RLS. Row-level policies restrict every user to their own rows.
+- The `user_id` written to the database is always derived from the verified JWT on the server — never from the request body.
+
+---
 
 ## CI
 
@@ -200,7 +307,10 @@ This is the recommended path when you only have a phone or no macOS machine avai
 
 ## Roadmap
 
-- Multiple Cathedral profiles
-- Redaction / abstraction rules
-- Compile templates
-- Snapshot history
+- Harden import/export (validation, error messages, edge cases)
+- Backend-backed generation via Supabase Edge Functions
+- Saved output sync to Supabase Postgres
+- Usage controls and quota enforcement
+- Public sharing of generated outputs
+- Remix from shared outputs
+- Pricing / credits (future)
