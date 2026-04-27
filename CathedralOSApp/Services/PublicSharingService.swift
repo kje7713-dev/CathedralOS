@@ -9,6 +9,10 @@ enum PublicSharingServiceError: Error, LocalizedError {
     case serverError(statusCode: Int, message: String?)
     case decodingError(Error)
     case missingSharedOutputID
+    /// The user must be signed in to publish or unpublish.
+    case notSignedIn
+    /// The output text is empty; there is nothing to publish.
+    case emptyOutputText
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +32,10 @@ enum PublicSharingServiceError: Error, LocalizedError {
             return "Could not parse server response: \(underlying.localizedDescription)"
         case .missingSharedOutputID:
             return "Cannot unpublish: this output has not been published to the backend yet."
+        case .notSignedIn:
+            return "You must be signed in to publish or unpublish content."
+        case .emptyOutputText:
+            return "Cannot publish an output with no text."
         }
     }
 }
@@ -56,19 +64,50 @@ protocol PublicSharingService {
 /// API keys are **never** sent from the client — secrets are held server-side.
 final class BackendPublicSharingService: PublicSharingService {
 
+    private let authService: AuthService
+    /// Optional sync service used to upload a local-only output before publishing.
+    /// When provided and the output has no `cloudGenerationOutputID`, `publish` will
+    /// attempt a push sync first.  A sync failure is treated as non-fatal: the publish
+    /// continues even if the sync could not complete, allowing the backend to create a
+    /// shared record with an empty `cloudGenerationOutputID` link.
+    private let syncService: GenerationOutputSyncServiceProtocol?
     private let session: URLSession
 
-    init(session: URLSession = .shared) {
+    init(
+        authService: AuthService = BackendAuthService(),
+        syncService: GenerationOutputSyncServiceProtocol? = nil,
+        session: URLSession = .shared
+    ) {
+        self.authService = authService
+        self.syncService = syncService
         self.session = session
     }
 
     // MARK: Publish
 
     func publish(output: GenerationOutput) async throws -> PublishResponse {
+        // 1. Require a signed-in session before anything else.
+        try await requireSignedIn()
+
+        // 2. Output must have text to publish.
+        guard !output.outputText.isEmpty else {
+            throw PublicSharingServiceError.emptyOutputText
+        }
+
+        // 3. If the output has never been synced, attempt to push it first so the
+        //    backend can link the shared record to the cloud generation record.
+        //    Performed before the URL check so it can be tested without a configured
+        //    publish endpoint.  A sync failure is non-fatal: the publish continues
+        //    regardless, allowing the backend to create a shared record with an empty
+        //    `cloudGenerationOutputID` link.
+        if output.cloudGenerationOutputID.isEmpty, let syncService {
+            try? await syncService.pushOutput(output)
+        }
+
+        // 4. Confirm backend is configured.
         guard let url = PublicSharingServiceConfiguration.publishURL else {
             throw PublicSharingServiceError.endpointNotConfigured
         }
-
         let dto = OutputPublishingDTO(output: output)
         let encoder = JSONEncoder()
         // sortedKeys ensures deterministic JSON for consistent request bodies.
@@ -101,6 +140,9 @@ final class BackendPublicSharingService: PublicSharingService {
     // MARK: Unpublish
 
     func unpublish(sharedOutputID: String) async throws {
+        // Require a signed-in session.
+        try await requireSignedIn()
+
         guard let url = PublicSharingServiceConfiguration.unpublishURL(sharedOutputID: sharedOutputID) else {
             throw PublicSharingServiceError.endpointNotConfigured
         }
@@ -158,6 +200,17 @@ final class BackendPublicSharingService: PublicSharingService {
     }
 
     // MARK: - Private helpers
+
+    /// Checks auth state, resolving `.unknown` via `checkSession()` first.
+    /// Throws `.notSignedIn` when no active session is found.
+    private func requireSignedIn() async throws {
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard authService.authState.isSignedIn else {
+            throw PublicSharingServiceError.notSignedIn
+        }
+    }
 
     private func performRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
         do {

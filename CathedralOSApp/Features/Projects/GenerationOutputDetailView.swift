@@ -21,6 +21,7 @@ struct GenerationOutputDetailView: View {
 
     @State private var copiedOutput      = false
     @State private var copiedJSON        = false
+    @State private var copiedShareLink   = false
     @State private var showPayloadJSON   = false
     @State private var showDeleteConfirm = false
     @State private var showShareSheet    = false
@@ -66,6 +67,12 @@ struct GenerationOutputDetailView: View {
         .navigationBarTitleDisplayMode(.large)
         .tint(CathedralTheme.Colors.accent)
         .toolbar { toolbarContent }
+        .onAppear {
+            // Restore any persisted publish error so it is visible on re-entry.
+            if publishError == nil, let persisted = output.publishErrorMessage, !persisted.isEmpty {
+                publishError = persisted
+            }
+        }
         .confirmationDialog(
             "Delete this output?",
             isPresented: $showDeleteConfirm,
@@ -400,7 +407,36 @@ struct GenerationOutputDetailView: View {
                     }
                     .disabled(isUnpublishing)
                 }
+
+                // Copy Share Link — shown whenever a share URL has been returned by the backend.
+                if !output.shareURL.isEmpty {
+                    CathedralSecondaryButton(
+                        copiedShareLink ? "Copied!" : "Copy Share Link",
+                        systemImage: "link"
+                    ) {
+                        UIPasteboard.general.string = output.shareURL
+                        copiedShareLink = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            copiedShareLink = false
+                        }
+                    }
+                }
             } else {
+                // Copy Share Link is also available if a URL was previously returned
+                // (e.g. after an unpublish when the link may still resolve for a grace period).
+                if !output.shareURL.isEmpty {
+                    CathedralSecondaryButton(
+                        copiedShareLink ? "Copied!" : "Copy Share Link",
+                        systemImage: "link"
+                    ) {
+                        UIPasteboard.general.string = output.shareURL
+                        copiedShareLink = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            copiedShareLink = false
+                        }
+                    }
+                }
+
                 CathedralPrimaryButton(
                     isPublishing ? "Publishing…" : "Publish",
                     systemImage: "globe"
@@ -430,9 +466,13 @@ struct GenerationOutputDetailView: View {
             output.sharedOutputID = response.sharedOutputID
             output.shareURL = response.shareURL ?? ""
             output.lastPublishedAt = now
+            output.publishErrorMessage = nil
             output.updatedAt = now
         } catch {
-            publishError = Self.sharingErrorMessage(error)
+            let message = Self.sharingErrorMessage(error)
+            publishError = message
+            // Persist the error message so it survives navigation and re-display.
+            output.publishErrorMessage = message
         }
     }
 
@@ -447,13 +487,17 @@ struct GenerationOutputDetailView: View {
             do {
                 try await sharingService.unpublish(sharedOutputID: id)
             } catch {
-                publishError = Self.sharingErrorMessage(error)
+                let message = Self.sharingErrorMessage(error)
+                publishError = message
+                // Persist the error message so it survives navigation and re-display.
+                output.publishErrorMessage = message
                 return
             }
         }
         // If id is empty, the output was never successfully synced to the backend,
         // so clearing local state is the correct and complete action.
         output.visibility = OutputVisibility.private.rawValue
+        output.publishErrorMessage = nil
         output.updatedAt = Date()
     }
 

@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import CathedralOSApp
 
 // MARK: - PublicSharingTests
@@ -40,6 +41,46 @@ final class MockPublicSharingService: PublicSharingService {
 
     func fetchDetail(sharedOutputID: String) async throws -> SharedOutputDetail {
         return try detailResult.get()
+    }
+}
+
+// MARK: - MockPublicSharingAuthService
+
+/// Minimal `AuthService` stub for injection into `BackendPublicSharingService` in tests.
+private final class MockPublicSharingAuthService: AuthService {
+    var authState: AuthState
+    init(authState: AuthState = .signedOut) { self.authState = authState }
+    func checkSession() async {}
+    func signIn() async throws {}
+    func signOut() async throws { authState = .signedOut }
+}
+
+// MARK: - MockSyncServiceForPublishing
+
+/// Controllable sync service used in publish tests to verify sync-first behaviour.
+private final class MockSyncServiceForPublishing: GenerationOutputSyncServiceProtocol {
+    var errorToThrow: Error?
+    var cloudIDToReturn: String = "cloud-\(UUID().uuidString)"
+    private(set) var pushedOutputs: [GenerationOutput] = []
+
+    func pullOutputs(into context: ModelContext) async throws {
+        if let error = errorToThrow { throw error }
+    }
+
+    func pushOutput(_ output: GenerationOutput) async throws {
+        if let error = errorToThrow {
+            output.syncStatus = SyncStatus.failed.rawValue
+            throw error
+        }
+        pushedOutputs.append(output)
+        output.cloudGenerationOutputID = cloudIDToReturn
+        output.syncStatus = SyncStatus.synced.rawValue
+        output.lastSyncedAt = Date()
+        output.syncErrorMessage = nil
+    }
+
+    func syncAll(in context: ModelContext) async throws {
+        if let error = errorToThrow { throw error }
     }
 }
 
@@ -481,7 +522,9 @@ final class PublicSharingTests: XCTestCase {
     func testMissingBackendConfigProducesClearError() async {
         // BackendPublicSharingService reads PublicSharingBaseURL from Info.plist.
         // In the test bundle the key is absent, so endpointURL returns nil.
-        let service = BackendPublicSharingService()
+        // Provide a signed-in auth so the test reaches the endpoint check.
+        let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
+        let service = BackendPublicSharingService(authService: auth)
         let gen = makeOutput()
 
         do {
@@ -507,7 +550,9 @@ final class PublicSharingTests: XCTestCase {
     }
 
     func testMissingBackendConfigForUnpublishProducesClearError() async {
-        let service = BackendPublicSharingService()
+        // Provide a signed-in auth so the test reaches the endpoint check.
+        let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
+        let service = BackendPublicSharingService(authService: auth)
 
         do {
             try await service.unpublish(sharedOutputID: "some-id")
@@ -566,5 +611,232 @@ final class PublicSharingTests: XCTestCase {
     func testSharedOutputListItemIsIdentifiable() {
         let item = makeListItem(id: "my-id")
         XCTAssertEqual(item.id, "my-id")
+    }
+
+    // MARK: Auth requirement — BackendPublicSharingService
+
+    func testPublishFailsWhenNotSignedIn() async {
+        // Auth check fires before endpoint check, so no configured URL is needed.
+        let auth = MockPublicSharingAuthService(authState: .signedOut)
+        let service = BackendPublicSharingService(authService: auth)
+        let gen = makeOutput()
+
+        do {
+            _ = try await service.publish(output: gen)
+            XCTFail("Expected notSignedIn error")
+        } catch PublicSharingServiceError.notSignedIn {
+            // Pass
+        } catch {
+            XCTFail("Expected PublicSharingServiceError.notSignedIn, got: \(error)")
+        }
+    }
+
+    func testPublishFailsWhenAuthStateIsUnknown() async {
+        // `.unknown` resolves to signed-out when `checkSession` does nothing.
+        let auth = MockPublicSharingAuthService(authState: .unknown)
+        let service = BackendPublicSharingService(authService: auth)
+        let gen = makeOutput()
+
+        do {
+            _ = try await service.publish(output: gen)
+            XCTFail("Expected notSignedIn error")
+        } catch PublicSharingServiceError.notSignedIn {
+            // Pass
+        } catch {
+            XCTFail("Expected PublicSharingServiceError.notSignedIn, got: \(error)")
+        }
+    }
+
+    func testUnpublishFailsWhenNotSignedIn() async {
+        let auth = MockPublicSharingAuthService(authState: .signedOut)
+        let service = BackendPublicSharingService(authService: auth)
+
+        do {
+            try await service.unpublish(sharedOutputID: "srv-abc")
+            XCTFail("Expected notSignedIn error")
+        } catch PublicSharingServiceError.notSignedIn {
+            // Pass
+        } catch {
+            XCTFail("Expected PublicSharingServiceError.notSignedIn, got: \(error)")
+        }
+    }
+
+    func testNotSignedInErrorHasHumanReadableDescription() {
+        let error = PublicSharingServiceError.notSignedIn
+        let desc = error.errorDescription ?? ""
+        XCTAssertFalse(desc.isEmpty, "notSignedIn error description must not be empty")
+    }
+
+    // MARK: Output text validation — BackendPublicSharingService
+
+    func testPublishFailsWhenOutputTextIsEmpty() async {
+        let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
+        let service = BackendPublicSharingService(authService: auth)
+        let gen = makeOutput()
+        gen.outputText = ""
+
+        do {
+            _ = try await service.publish(output: gen)
+            XCTFail("Expected emptyOutputText error")
+        } catch PublicSharingServiceError.emptyOutputText {
+            // Pass
+        } catch {
+            XCTFail("Expected PublicSharingServiceError.emptyOutputText, got: \(error)")
+        }
+    }
+
+    func testEmptyOutputTextErrorHasHumanReadableDescription() {
+        let error = PublicSharingServiceError.emptyOutputText
+        let desc = error.errorDescription ?? ""
+        XCTAssertFalse(desc.isEmpty, "emptyOutputText error description must not be empty")
+    }
+
+    // MARK: Sync-first — BackendPublicSharingService
+
+    func testPublishSyncsLocalOnlyOutputFirstWhenCloudIDIsEmpty() async {
+        // Output with no cloud generation ID should trigger a sync attempt before publish.
+        // The publish will then fail with endpointNotConfigured (no Info.plist URL in tests),
+        // but the sync must have been called and the cloudGenerationOutputID set.
+        let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
+        let sync = MockSyncServiceForPublishing()
+        sync.cloudIDToReturn = "cloud-gen-xyz"
+
+        let service = BackendPublicSharingService(authService: auth, syncService: sync)
+        let gen = makeOutput()
+        gen.cloudGenerationOutputID = ""
+        gen.syncStatus = SyncStatus.localOnly.rawValue
+
+        // Publish will fail with endpointNotConfigured after sync runs.
+        do {
+            _ = try await service.publish(output: gen)
+        } catch PublicSharingServiceError.endpointNotConfigured {
+            // Expected — no URL configured in test bundle.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertEqual(sync.pushedOutputs.count, 1, "Sync must be called once for local-only output")
+        XCTAssertEqual(gen.cloudGenerationOutputID, "cloud-gen-xyz",
+                       "cloudGenerationOutputID must be set by the sync service")
+    }
+
+    func testPublishSkipsSyncWhenCloudIDAlreadyPresent() async {
+        // If the output already has a cloudGenerationOutputID, no sync should occur.
+        let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
+        let sync = MockSyncServiceForPublishing()
+
+        let service = BackendPublicSharingService(authService: auth, syncService: sync)
+        let gen = makeOutput()
+        gen.cloudGenerationOutputID = "already-synced-id"
+
+        do {
+            _ = try await service.publish(output: gen)
+        } catch PublicSharingServiceError.endpointNotConfigured {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertEqual(sync.pushedOutputs.count, 0, "Sync must not be called when cloudGenerationOutputID is already set")
+    }
+
+    func testPublishContinuesWhenSyncFails() async {
+        // A sync failure must be non-fatal; publish should continue and eventually
+        // fail with endpointNotConfigured (no configured URL in test bundle), not a sync error.
+        let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
+        let sync = MockSyncServiceForPublishing()
+        sync.errorToThrow = GenerationOutputSyncError.notSignedIn   // sync fails
+
+        let service = BackendPublicSharingService(authService: auth, syncService: sync)
+        let gen = makeOutput()
+        gen.cloudGenerationOutputID = ""
+
+        do {
+            _ = try await service.publish(output: gen)
+            XCTFail("Expected endpointNotConfigured error")
+        } catch PublicSharingServiceError.endpointNotConfigured {
+            // Pass — sync failure is swallowed, publish continues to URL check.
+        } catch {
+            XCTFail("Expected endpointNotConfigured, got: \(error)")
+        }
+    }
+
+    // MARK: cloudGenerationOutputID included in publish DTO
+
+    func testPublishDTOIncludesCloudGenerationOutputID() throws {
+        let gen = makeOutput()
+        gen.cloudGenerationOutputID = "cloud-abc-456"
+        let dto = OutputPublishingDTO(output: gen)
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(dto)
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(obj["cloudGenerationOutputID"] as? String, "cloud-abc-456")
+    }
+
+    func testPublishDTOCloudGenerationOutputIDEmptyWhenNotSynced() throws {
+        let gen = makeOutput()
+        gen.cloudGenerationOutputID = ""
+        let dto = OutputPublishingDTO(output: gen)
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(dto)
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(obj["cloudGenerationOutputID"] as? String, "")
+    }
+
+    // MARK: allowRemix persists after publish
+
+    func testAllowRemixPersistsAfterPublish() async throws {
+        let gen = makeOutput()
+        gen.allowRemix = true
+
+        let mock = MockPublicSharingService()
+        let response = makePublishResponse()
+        mock.publishResult = .success(response)
+
+        _ = try await mock.publish(output: gen)
+
+        // The publish call must not modify allowRemix.
+        XCTAssertTrue(gen.allowRemix, "allowRemix must remain true after a successful publish call")
+    }
+
+    func testAllowRemixFalseRemainsAfterPublish() async throws {
+        let gen = makeOutput()
+        gen.allowRemix = false
+
+        let mock = MockPublicSharingService()
+        let response = makePublishResponse()
+        mock.publishResult = .success(response)
+
+        _ = try await mock.publish(output: gen)
+
+        XCTAssertFalse(gen.allowRemix, "allowRemix must remain false after a successful publish call")
+    }
+
+    // MARK: publishErrorMessage is persisted and cleared
+
+    func testPublishErrorMessageIsNotSentInPublishDTO() throws {
+        // publishErrorMessage is local device state — it must NOT appear in the request DTO.
+        let gen = makeOutput()
+        gen.publishErrorMessage = "A previous error"
+        let dto = OutputPublishingDTO(output: gen)
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(dto)
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertNil(obj["publishErrorMessage"],
+                     "publishErrorMessage must NOT be sent in the publish request body")
+    }
+
+    func testGenerationOutputPublishErrorMessageDefaultsToNil() {
+        let gen = GenerationOutput(title: "Test")
+        XCTAssertNil(gen.publishErrorMessage, "publishErrorMessage must default to nil")
     }
 }
