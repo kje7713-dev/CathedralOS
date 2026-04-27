@@ -375,6 +375,12 @@ struct PromptPackPreviewView: View {
             gen.title = response.title ?? "\(pack.name) — \(project.name)"
             gen.status = GenerationStatus.complete.rawValue
             gen.updatedAt = Date()
+            // If the backend returned a cloud generation output ID, record it and mark synced.
+            if let cloudID = response.cloudGenerationOutputID, !cloudID.isEmpty {
+                gen.cloudGenerationOutputID = cloudID
+                gen.syncStatus = SyncStatus.synced.rawValue
+                gen.lastSyncedAt = Date()
+            }
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
 
         } catch {

@@ -1,6 +1,32 @@
 import Foundation
 import SwiftData
 
+// MARK: - SyncStatus
+
+/// Represents the cloud synchronization state of a local `GenerationOutput`.
+enum SyncStatus: String, CaseIterable {
+    /// Output exists only on this device; never uploaded to the cloud.
+    case localOnly      = "local_only"
+    /// Output is in sync with the cloud record.
+    case synced         = "synced"
+    /// Output has local changes that have not yet been pushed.
+    case pendingUpload  = "pending_upload"
+    /// Output exists in the cloud but local fields differ and need updating.
+    case pendingUpdate  = "pending_update"
+    /// The last sync attempt failed; see `syncErrorMessage` for details.
+    case failed         = "failed"
+
+    var displayName: String {
+        switch self {
+        case .localOnly:     return "Local Only"
+        case .synced:        return "Synced"
+        case .pendingUpload: return "Pending Upload"
+        case .pendingUpdate: return "Pending Update"
+        case .failed:        return "Failed"
+        }
+    }
+}
+
 // MARK: - OutputVisibility
 
 enum OutputVisibility: String, CaseIterable {
@@ -115,6 +141,17 @@ class GenerationOutput {
     /// Distinct from `publishedAt` (first-publish timestamp) so re-publishes are tracked.
     var lastPublishedAt: Date?
 
+    // MARK: Cloud sync metadata
+    /// Supabase `generation_outputs.id` (UUID string) returned after the record is synced.
+    /// Empty when the output has never been synced to the cloud.
+    var cloudGenerationOutputID: String
+    /// Raw value of `SyncStatus`: "local_only" | "synced" | "pending_upload" | "pending_update" | "failed".
+    var syncStatus: String
+    /// Timestamp of the most-recent successful sync to/from the cloud. Nil until first sync.
+    var lastSyncedAt: Date?
+    /// Human-readable description of the last sync error. Nil when no error is present.
+    var syncErrorMessage: String?
+
     var project: StoryProject?
 
     init(
@@ -157,5 +194,9 @@ class GenerationOutput {
         self.sharedOutputID = ""
         self.shareURL = ""
         self.lastPublishedAt = nil
+        self.cloudGenerationOutputID = ""
+        self.syncStatus = SyncStatus.localOnly.rawValue
+        self.lastSyncedAt = nil
+        self.syncErrorMessage = nil
     }
 }
