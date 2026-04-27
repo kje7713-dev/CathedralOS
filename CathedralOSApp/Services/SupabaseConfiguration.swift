@@ -98,7 +98,7 @@ enum SupabaseConfiguration {
     // MARK: - Endpoint path placeholders
 
     /// Supabase Edge Function path for the generation backend.
-    static let generationEdgeFunctionPath = "generate"
+    static let generationEdgeFunctionPath = "generate-story"
 
     /// Supabase Edge Function path for the public sharing backend.
     static let sharingEdgeFunctionPath = "shared-outputs"
