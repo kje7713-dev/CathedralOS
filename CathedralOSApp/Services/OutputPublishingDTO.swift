@@ -88,15 +88,24 @@ struct SharedOutputListItem: Codable, Identifiable {
     let authorDisplayName: String?
     let createdAt: Date
     let allowRemix: Bool
+    /// Raw value of `GenerationLengthMode`: "short" | "medium" | "long" | "chapter".
+    let generationLengthMode: String?
+    /// Raw content-rating tag assigned by the publisher (e.g. "general" | "teen" | "mature").
+    let contentRating: String?
+    /// Raw reading-level tag assigned by the publisher (e.g. "middle-grade" | "ya" | "adult").
+    let readingLevel: String?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        sharedOutputID    = try c.decode(String.self, forKey: .sharedOutputID)
-        shareTitle        = try c.decodeIfPresent(String.self, forKey: .shareTitle) ?? ""
-        shareExcerpt      = try c.decodeIfPresent(String.self, forKey: .shareExcerpt) ?? ""
-        authorDisplayName = try c.decodeIfPresent(String.self, forKey: .authorDisplayName)
-        createdAt         = try c.decodeIfPresent(Date.self,   forKey: .createdAt) ?? Date()
-        allowRemix        = try c.decodeIfPresent(Bool.self,   forKey: .allowRemix) ?? false
+        sharedOutputID       = try c.decode(String.self, forKey: .sharedOutputID)
+        shareTitle           = try c.decodeIfPresent(String.self, forKey: .shareTitle) ?? ""
+        shareExcerpt         = try c.decodeIfPresent(String.self, forKey: .shareExcerpt) ?? ""
+        authorDisplayName    = try c.decodeIfPresent(String.self, forKey: .authorDisplayName)
+        createdAt            = try c.decodeIfPresent(Date.self,   forKey: .createdAt) ?? Date()
+        allowRemix           = try c.decodeIfPresent(Bool.self,   forKey: .allowRemix) ?? false
+        generationLengthMode = try c.decodeIfPresent(String.self, forKey: .generationLengthMode)
+        contentRating        = try c.decodeIfPresent(String.self, forKey: .contentRating)
+        readingLevel         = try c.decodeIfPresent(String.self, forKey: .readingLevel)
     }
 }
 
@@ -108,6 +117,7 @@ struct SharedOutputDetail: Codable {
     let shareTitle: String
     let shareExcerpt: String
     let outputText: String
+    let authorDisplayName: String?
     let sourcePromptPackName: String?
     let modelName: String?
     let generationAction: String?
@@ -115,24 +125,34 @@ struct SharedOutputDetail: Codable {
     let allowRemix: Bool
     let createdAt: Date
     let shareURL: String?
+    /// Raw reading-level tag assigned by the publisher (e.g. "middle-grade" | "ya" | "adult").
+    let readingLevel: String?
+    /// Raw content-rating tag assigned by the publisher (e.g. "general" | "teen" | "mature").
+    let contentRating: String?
+    /// Audience notes supplied by the publisher.
+    let audienceNotes: String?
     /// Frozen JSON snapshot of the `PromptPackExportPayload` included when `allowRemix` is true.
     /// Present only when the publisher explicitly permits remixing.
     let sourcePayloadJSON: String?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        sharedOutputID      = try c.decode(String.self, forKey: .sharedOutputID)
-        shareTitle          = try c.decodeIfPresent(String.self, forKey: .shareTitle) ?? ""
-        shareExcerpt        = try c.decodeIfPresent(String.self, forKey: .shareExcerpt) ?? ""
-        outputText          = try c.decodeIfPresent(String.self, forKey: .outputText) ?? ""
+        sharedOutputID       = try c.decode(String.self, forKey: .sharedOutputID)
+        shareTitle           = try c.decodeIfPresent(String.self, forKey: .shareTitle) ?? ""
+        shareExcerpt         = try c.decodeIfPresent(String.self, forKey: .shareExcerpt) ?? ""
+        outputText           = try c.decodeIfPresent(String.self, forKey: .outputText) ?? ""
+        authorDisplayName    = try c.decodeIfPresent(String.self, forKey: .authorDisplayName)
         sourcePromptPackName = try c.decodeIfPresent(String.self, forKey: .sourcePromptPackName)
-        modelName           = try c.decodeIfPresent(String.self, forKey: .modelName)
-        generationAction    = try c.decodeIfPresent(String.self, forKey: .generationAction)
+        modelName            = try c.decodeIfPresent(String.self, forKey: .modelName)
+        generationAction     = try c.decodeIfPresent(String.self, forKey: .generationAction)
         generationLengthMode = try c.decodeIfPresent(String.self, forKey: .generationLengthMode)
-        allowRemix          = try c.decodeIfPresent(Bool.self,   forKey: .allowRemix) ?? false
-        createdAt           = try c.decodeIfPresent(Date.self,   forKey: .createdAt) ?? Date()
-        shareURL            = try c.decodeIfPresent(String.self, forKey: .shareURL)
-        sourcePayloadJSON   = try c.decodeIfPresent(String.self, forKey: .sourcePayloadJSON)
+        allowRemix           = try c.decodeIfPresent(Bool.self,   forKey: .allowRemix) ?? false
+        createdAt            = try c.decodeIfPresent(Date.self,   forKey: .createdAt) ?? Date()
+        shareURL             = try c.decodeIfPresent(String.self, forKey: .shareURL)
+        readingLevel         = try c.decodeIfPresent(String.self, forKey: .readingLevel)
+        contentRating        = try c.decodeIfPresent(String.self, forKey: .contentRating)
+        audienceNotes        = try c.decodeIfPresent(String.self, forKey: .audienceNotes)
+        sourcePayloadJSON    = try c.decodeIfPresent(String.self, forKey: .sourcePayloadJSON)
     }
 }
 

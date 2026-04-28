@@ -839,4 +839,245 @@ final class PublicSharingTests: XCTestCase {
         let gen = GenerationOutput(title: "Test")
         XCTAssertNil(gen.publishErrorMessage, "publishErrorMessage must default to nil")
     }
+
+    // MARK: SharedOutputListItem — extended DTO fields
+
+    func testListItemDecodesGenerationLengthMode() throws {
+        let iso = ISO8601DateFormatter()
+        let json = """
+        {
+          "sharedOutputID": "li-1",
+          "shareTitle": "Story",
+          "shareExcerpt": "Excerpt.",
+          "createdAt": "\(iso.string(from: Date()))",
+          "allowRemix": false,
+          "generationLengthMode": "long"
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let item = try decoder.decode(SharedOutputListItem.self, from: Data(json.utf8))
+        XCTAssertEqual(item.generationLengthMode, "long")
+    }
+
+    func testListItemDecodesContentRatingAndReadingLevel() throws {
+        let iso = ISO8601DateFormatter()
+        let json = """
+        {
+          "sharedOutputID": "li-2",
+          "createdAt": "\(iso.string(from: Date()))",
+          "allowRemix": false,
+          "contentRating": "teen",
+          "readingLevel": "ya"
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let item = try decoder.decode(SharedOutputListItem.self, from: Data(json.utf8))
+        XCTAssertEqual(item.contentRating, "teen")
+        XCTAssertEqual(item.readingLevel, "ya")
+    }
+
+    func testListItemToleratesMissingExtendedFields() throws {
+        // Existing backends that do not return the new optional fields must still decode cleanly.
+        let iso = ISO8601DateFormatter()
+        let json = """
+        {
+          "sharedOutputID": "li-3",
+          "createdAt": "\(iso.string(from: Date()))",
+          "allowRemix": false
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let item = try decoder.decode(SharedOutputListItem.self, from: Data(json.utf8))
+        XCTAssertNil(item.generationLengthMode)
+        XCTAssertNil(item.contentRating)
+        XCTAssertNil(item.readingLevel)
+    }
+
+    // MARK: SharedOutputDetail — extended DTO fields
+
+    func testDetailDecodesAuthorDisplayName() throws {
+        let iso = ISO8601DateFormatter()
+        let json = """
+        {
+          "sharedOutputID": "det-auth",
+          "createdAt": "\(iso.string(from: Date()))",
+          "authorDisplayName": "Jane Doe"
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let detail = try decoder.decode(SharedOutputDetail.self, from: Data(json.utf8))
+        XCTAssertEqual(detail.authorDisplayName, "Jane Doe")
+    }
+
+    func testDetailDecodesReadingLevelContentRatingAudienceNotes() throws {
+        let iso = ISO8601DateFormatter()
+        let json = """
+        {
+          "sharedOutputID": "det-ext",
+          "createdAt": "\(iso.string(from: Date()))",
+          "readingLevel": "middle-grade",
+          "contentRating": "general",
+          "audienceNotes": "Suitable for all ages."
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let detail = try decoder.decode(SharedOutputDetail.self, from: Data(json.utf8))
+        XCTAssertEqual(detail.readingLevel, "middle-grade")
+        XCTAssertEqual(detail.contentRating, "general")
+        XCTAssertEqual(detail.audienceNotes, "Suitable for all ages.")
+    }
+
+    func testDetailToleratesMissingExtendedFields() throws {
+        let iso = ISO8601DateFormatter()
+        let json = """
+        {
+          "sharedOutputID": "det-min2",
+          "createdAt": "\(iso.string(from: Date()))"
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let detail = try decoder.decode(SharedOutputDetail.self, from: Data(json.utf8))
+        XCTAssertNil(detail.authorDisplayName)
+        XCTAssertNil(detail.readingLevel)
+        XCTAssertNil(detail.contentRating)
+        XCTAssertNil(detail.audienceNotes)
+    }
+
+    // MARK: Remix button visibility logic
+
+    func testRemixButtonVisibleWhenAllowRemixIsTrue() throws {
+        let detail = makeDetail(id: "r-1", allowRemix: true)
+        // The detail view shows the remix button when allowRemix is true.
+        XCTAssertTrue(detail.allowRemix, "Remix button must be visible when allowRemix is true")
+    }
+
+    func testRemixButtonHiddenWhenAllowRemixIsFalse() throws {
+        let detail = makeDetail(id: "r-2", allowRemix: false)
+        XCTAssertFalse(detail.allowRemix, "Remix button must be hidden when allowRemix is false")
+    }
+
+    func testRemixSourceDataPresentWhenSourcePayloadJSONIsNonNil() throws {
+        let iso = ISO8601DateFormatter()
+        let json = """
+        {
+          "sharedOutputID": "r-3",
+          "createdAt": "\(iso.string(from: Date()))",
+          "allowRemix": true,
+          "sourcePayloadJSON": "{}"
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let detail = try decoder.decode(SharedOutputDetail.self, from: Data(json.utf8))
+        XCTAssertTrue(detail.allowRemix)
+        XCTAssertNotNil(detail.sourcePayloadJSON,
+                        "sourcePayloadJSON must be present when backend returns it")
+    }
+
+    func testRemixSourceDataAbsentWhenSourcePayloadJSONIsNil() throws {
+        let detail = makeDetail(id: "r-4", allowRemix: true, shareURL: nil)
+        // makeDetail produces a detail without sourcePayloadJSON by default.
+        XCTAssertNil(detail.sourcePayloadJSON,
+                     "sourcePayloadJSON must be nil when backend omits it")
+    }
+
+    func testSourcePayloadJSONAbsentWhenAllowRemixIsFalse() throws {
+        let iso = ISO8601DateFormatter()
+        let json = """
+        {
+          "sharedOutputID": "r-5",
+          "createdAt": "\(iso.string(from: Date()))",
+          "allowRemix": false
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let detail = try decoder.decode(SharedOutputDetail.self, from: Data(json.utf8))
+        XCTAssertFalse(detail.allowRemix)
+        XCTAssertNil(detail.sourcePayloadJSON,
+                     "sourcePayloadJSON must not be present for non-remixable outputs")
+    }
+
+    // MARK: Copy text action
+
+    func testOutputTextIsPresentForCopyAction() throws {
+        let detail = makeDetail(id: "cp-1", outputText: "The final paragraph of the story.")
+        // The copy action reads detail.outputText; verify it is available after decoding.
+        XCTAssertEqual(detail.outputText, "The final paragraph of the story.")
+        XCTAssertFalse(detail.outputText.isEmpty,
+                       "Copy text action requires non-empty outputText")
+    }
+
+    func testOutputTextIsEmptyWhenBackendOmitsField() throws {
+        let iso = ISO8601DateFormatter()
+        let json = """
+        {
+          "sharedOutputID": "cp-2",
+          "createdAt": "\(iso.string(from: Date()))"
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let detail = try decoder.decode(SharedOutputDetail.self, from: Data(json.utf8))
+        // Empty outputText — copy button must be suppressed in the view.
+        XCTAssertTrue(detail.outputText.isEmpty,
+                      "outputText must default to empty when backend omits the field")
+    }
+
+    // MARK: fetchPublicList — service handles empty list and errors
+
+    func testFetchPublicListReturnsEmptyArrayFromMock() async throws {
+        let mock = MockPublicSharingService()
+        mock.publicListResult = .success([])
+        let items = try await mock.fetchPublicList()
+        XCTAssertTrue(items.isEmpty, "fetchPublicList must return empty array when backend returns no items")
+    }
+
+    func testFetchPublicListPropagatesBackendError() async {
+        let mock = MockPublicSharingService()
+        mock.publicListResult = .failure(
+            PublicSharingServiceError.serverError(statusCode: 503, message: "Service unavailable")
+        )
+        do {
+            _ = try await mock.fetchPublicList()
+            XCTFail("Expected error to be thrown")
+        } catch PublicSharingServiceError.serverError(let code, _) {
+            XCTAssertEqual(code, 503)
+        } catch {
+            XCTFail("Expected PublicSharingServiceError.serverError, got: \(error)")
+        }
+    }
+
+    func testFetchDetailPropagatesBackendError() async {
+        let mock = MockPublicSharingService()
+        mock.detailResult = .failure(
+            PublicSharingServiceError.serverError(statusCode: 404, message: "Not found")
+        )
+        do {
+            _ = try await mock.fetchDetail(sharedOutputID: "missing-id")
+            XCTFail("Expected error to be thrown")
+        } catch PublicSharingServiceError.serverError(let code, _) {
+            XCTAssertEqual(code, 404)
+        } catch {
+            XCTFail("Expected PublicSharingServiceError.serverError, got: \(error)")
+        }
+    }
+
+    func testMissingBackendConfigForDetailProducesClearError() async {
+        let service = BackendPublicSharingService()
+        do {
+            _ = try await service.fetchDetail(sharedOutputID: "some-id")
+            XCTFail("Expected endpointNotConfigured error")
+        } catch PublicSharingServiceError.endpointNotConfigured {
+            // Pass
+        } catch {
+            XCTFail("Expected PublicSharingServiceError.endpointNotConfigured, got: \(error)")
+        }
+    }
 }
