@@ -6,15 +6,22 @@ import SwiftUI
 
 struct SharedOutputsView: View {
     let sharingService: PublicSharingService
+    let hiddenService: HiddenSharedOutputsService
 
-    init(sharingService: PublicSharingService = BackendPublicSharingService()) {
+    init(sharingService: PublicSharingService = BackendPublicSharingService(),
+         hiddenService: HiddenSharedOutputsService = UserDefaultsHiddenSharedOutputsService()) {
         self.sharingService = sharingService
+        self.hiddenService = hiddenService
     }
 
     @State private var items: [SharedOutputListItem] = []
     @State private var isLoading = false
     @State private var loadError: String?
-    @State private var selectedItem: SharedOutputListItem?
+    @State private var hiddenIDs: Set<String> = []
+
+    private var visibleItems: [SharedOutputListItem] {
+        items.filter { !hiddenIDs.contains($0.sharedOutputID) }
+    }
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -30,7 +37,7 @@ struct SharedOutputsView: View {
                     loadingState
                 } else if let loadError {
                     errorState(loadError)
-                } else if items.isEmpty {
+                } else if visibleItems.isEmpty {
                     emptyState
                 } else {
                     itemList
@@ -53,7 +60,8 @@ struct SharedOutputsView: View {
             .navigationDestination(for: SharedOutputListItem.self) { item in
                 SharedOutputDetailView(
                     sharedOutputID: item.sharedOutputID,
-                    sharingService: sharingService
+                    sharingService: sharingService,
+                    hiddenService: hiddenService
                 )
             }
             .task { await load() }
@@ -111,11 +119,20 @@ struct SharedOutputsView: View {
     private var itemList: some View {
         ScrollView {
             LazyVStack(spacing: CathedralTheme.Spacing.sm) {
-                ForEach(items) { item in
+                ForEach(visibleItems) { item in
                     NavigationLink(value: item) {
                         SharedOutputRowView(item: item, dateFormatter: Self.dateFormatter)
                     }
                     .buttonStyle(.plain)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button {
+                            hiddenService.hide(sharedOutputID: item.sharedOutputID)
+                            hiddenIDs.insert(item.sharedOutputID)
+                        } label: {
+                            Label("Hide", systemImage: "eye.slash")
+                        }
+                        .tint(CathedralTheme.Colors.secondaryText)
+                    }
                 }
             }
             .padding(CathedralTheme.Spacing.base)
@@ -130,6 +147,7 @@ struct SharedOutputsView: View {
         defer { isLoading = false }
         do {
             items = try await sharingService.fetchPublicList()
+            hiddenIDs = hiddenService.hiddenIDs
         } catch {
             loadError = PublicSharingServiceError.displayMessage(from: error)
         }

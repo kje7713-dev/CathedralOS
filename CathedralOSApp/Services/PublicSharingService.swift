@@ -9,10 +9,12 @@ enum PublicSharingServiceError: Error, LocalizedError {
     case serverError(statusCode: Int, message: String?)
     case decodingError(Error)
     case missingSharedOutputID
-    /// The user must be signed in to publish or unpublish.
+    /// The user must be signed in to publish, unpublish, or report.
     case notSignedIn
     /// The output text is empty; there is nothing to publish.
     case emptyOutputText
+    /// The report reason is empty; a reason must be chosen before submitting.
+    case missingReportReason
 
     var errorDescription: String? {
         switch self {
@@ -36,6 +38,8 @@ enum PublicSharingServiceError: Error, LocalizedError {
             return "You must be signed in to publish or unpublish content."
         case .emptyOutputText:
             return "Cannot publish an output with no text."
+        case .missingReportReason:
+            return "Please choose a reason before submitting the report."
         }
     }
 }
@@ -56,6 +60,11 @@ protocol PublicSharingService {
 
     /// Fetches the full detail of a single shared output.
     func fetchDetail(sharedOutputID: String) async throws -> SharedOutputDetail
+
+    /// Submits a report against a public shared output.
+    /// Requires a signed-in user.
+    /// Throws `PublicSharingServiceError` on failure.
+    func reportSharedOutput(sharedOutputID: String, reason: ReportReason, details: String) async throws
 }
 
 // MARK: - BackendPublicSharingService
@@ -197,6 +206,42 @@ final class BackendPublicSharingService: PublicSharingService {
         } catch {
             throw PublicSharingServiceError.decodingError(error)
         }
+    }
+
+    // MARK: Report
+
+    func reportSharedOutput(sharedOutputID: String, reason: ReportReason, details: String) async throws {
+        // Require a signed-in session.
+        try await requireSignedIn()
+
+        guard let url = PublicSharingServiceConfiguration.reportURL(sharedOutputID: sharedOutputID) else {
+            throw PublicSharingServiceError.endpointNotConfigured
+        }
+
+        let dto = SharedOutputReportDTO(
+            sharedOutputID: sharedOutputID,
+            reason: reason.rawValue,
+            details: details,
+            createdAt: Date()
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let bodyData: Data
+        do {
+            bodyData = try encoder.encode(dto)
+        } catch {
+            throw PublicSharingServiceError.encodingError(error)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = bodyData
+
+        let (data, urlResponse) = try await performRequest(request)
+        try validateResponse(urlResponse, data: data)
     }
 
     // MARK: - Private helpers

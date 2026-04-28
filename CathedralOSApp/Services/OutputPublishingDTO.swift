@@ -118,6 +118,10 @@ struct SharedOutputDetail: Codable {
     let shareExcerpt: String
     let outputText: String
     let authorDisplayName: String?
+    /// The UUID of the user who published this output.
+    /// Included in responses to the owner; used by the client to detect
+    /// ownership and show appropriate controls.
+    let ownerUserID: String?
     let sourcePromptPackName: String?
     let modelName: String?
     let generationAction: String?
@@ -142,6 +146,7 @@ struct SharedOutputDetail: Codable {
         shareExcerpt         = try c.decodeIfPresent(String.self, forKey: .shareExcerpt) ?? ""
         outputText           = try c.decodeIfPresent(String.self, forKey: .outputText) ?? ""
         authorDisplayName    = try c.decodeIfPresent(String.self, forKey: .authorDisplayName)
+        ownerUserID          = try c.decodeIfPresent(String.self, forKey: .ownerUserID)
         sourcePromptPackName = try c.decodeIfPresent(String.self, forKey: .sourcePromptPackName)
         modelName            = try c.decodeIfPresent(String.self, forKey: .modelName)
         generationAction     = try c.decodeIfPresent(String.self, forKey: .generationAction)
