@@ -276,10 +276,7 @@ struct SharedOutputDetailView: View {
                 try? await remixEventService.recordRemixEvent(
                     sharedOutputID: detail.sharedOutputID,
                     createdProjectLocalID: project.id.uuidString,
-                    // Pass nil when allowRemix is false (defensive guard — the button is
-                    // only shown when allowRemix is true, but nil is the safer default
-                    // when no source payload should be sent to the backend).
-                    sourcePayloadJSON: detail.allowRemix ? detail.sourcePayloadJSON : nil
+                    sourcePayloadJSON: detail.sourcePayloadJSON
                 )
             }
             remixedProject = project

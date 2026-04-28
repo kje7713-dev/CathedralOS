@@ -567,10 +567,8 @@ final class RemixFromSharedOutputTests: XCTestCase {
         let data = try encoder.encode(dto)
         let dict = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         // sourcePayloadJSON should be present and null (JSONSerialization represents null as NSNull).
-        XCTAssertTrue(dict.keys.contains("sourcePayloadJSON"),
-                      "DTO must include sourcePayloadJSON key even when nil")
-        XCTAssertTrue(dict["sourcePayloadJSON"] is NSNull,
-                      "nil sourcePayloadJSON should encode as JSON null")
+        XCTAssertTrue(dict.keys.contains("sourcePayloadJSON"), "DTO must include sourcePayloadJSON key even when nil")
+        XCTAssertTrue(dict["sourcePayloadJSON"] is NSNull, "nil sourcePayloadJSON should encode as JSON null")
     }
 
     // MARK: - RemixEventServiceError descriptions
