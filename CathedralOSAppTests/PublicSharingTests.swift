@@ -446,7 +446,7 @@ final class PublicSharingTests: XCTestCase {
     }
 
     func testPublicListResponseDecodesEmptyItems() throws {
-        let json = """{ "items": [] }"""
+        let json = "{ \"items\": [] }"
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let response = try decoder.decode(SharedOutputListResponse.self, from: Data(json.utf8))
@@ -454,7 +454,7 @@ final class PublicSharingTests: XCTestCase {
     }
 
     func testPublicListResponseToleratesMissingItemsKey() throws {
-        let json = """{}"""
+        let json = "{}"
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let response = try decoder.decode(SharedOutputListResponse.self, from: Data(json.utf8))
