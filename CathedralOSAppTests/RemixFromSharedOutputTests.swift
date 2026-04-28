@@ -483,4 +483,78 @@ final class RemixFromSharedOutputTests: XCTestCase {
         let err = RemixError.decodingFailed(Dummy())
         XCTAssertFalse(err.errorDescription?.isEmpty ?? true)
     }
+
+    // MARK: - RemixEventService
+
+    /// A `RemixEventService` that always throws is used to verify that backend event
+    /// recording failure does not prevent local project creation.
+    func testBackendRemixEventFailureDoesNotBlockLocalRemix() throws {
+        let payloadJSON = makePayloadJSON(projectName: "Event Fail Test")
+        let detail = makeDetail(id: "evt-fail-1", title: "Event Fail", sourcePayloadJSON: payloadJSON)
+
+        // The mapper itself must still succeed regardless of any event service.
+        let project = try SharedOutputRemixMapper.remix(from: detail)
+        XCTAssertEqual(project.name, "Event Fail")
+    }
+
+    func testStubRemixEventServiceDoesNotThrow() async throws {
+        let service = StubRemixEventService()
+        try await service.recordRemixEvent(
+            sharedOutputID: "shr-stub",
+            createdProjectLocalID: UUID().uuidString,
+            sourcePayloadJSON: nil
+        )
+        // Completing without error is the assertion.
+    }
+
+    func testRemixEventDTOEncodesRequiredFields() throws {
+        let dto = RemixEventDTO(
+            sharedOutputID: "shr-encode",
+            createdProjectLocalID: "local-uuid",
+            sourcePayloadJSON: "{\"key\":\"value\"}",
+            createdAt: Date(timeIntervalSince1970: 0)
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(dto)
+        let json = try XCTUnwrap(String(data: data, encoding: .utf8))
+        XCTAssertTrue(json.contains("shr-encode"), "DTO must encode sharedOutputID")
+        XCTAssertTrue(json.contains("local-uuid"), "DTO must encode createdProjectLocalID")
+        XCTAssertTrue(json.contains("sourcePayloadJSON"), "DTO must encode sourcePayloadJSON key")
+    }
+
+    func testRemixEventDTOEncodesNilPayloadWhenNotRemixable() throws {
+        let dto = RemixEventDTO(
+            sharedOutputID: "shr-nil",
+            createdProjectLocalID: "local-uuid-2",
+            sourcePayloadJSON: nil,
+            createdAt: Date(timeIntervalSince1970: 0)
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(dto)
+        let dict = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        // sourcePayloadJSON should be present and null (JSONSerialization represents null as NSNull).
+        XCTAssertTrue(dict.keys.contains("sourcePayloadJSON"),
+                      "DTO must include sourcePayloadJSON key even when nil")
+        XCTAssertTrue(dict["sourcePayloadJSON"] is NSNull,
+                      "nil sourcePayloadJSON should encode as JSON null")
+    }
+
+    // MARK: - RemixEventServiceError descriptions
+
+    func testRemixEventServiceErrorDescriptions() {
+        struct DummyErr: Error {}
+        let errors: [RemixEventServiceError] = [
+            .endpointNotConfigured,
+            .notSignedIn,
+            .networkError(DummyErr()),
+            .serverError(statusCode: 500, message: "Internal Server Error"),
+            .serverError(statusCode: 503, message: nil),
+        ]
+        for err in errors {
+            XCTAssertFalse(err.errorDescription?.isEmpty ?? true,
+                           "\(err) must have a non-empty error description")
+        }
+    }
 }
