@@ -486,13 +486,45 @@ final class RemixFromSharedOutputTests: XCTestCase {
 
     // MARK: - RemixEventService
 
-    /// A `RemixEventService` that always throws is used to verify that backend event
-    /// recording failure does not prevent local project creation.
-    func testBackendRemixEventFailureDoesNotBlockLocalRemix() throws {
+    // MARK: Mock throwing service
+
+    private final class MockThrowingRemixEventService: RemixEventServiceProtocol {
+        struct TestError: Error {}
+        private(set) var callCount = 0
+
+        func recordRemixEvent(
+            sharedOutputID: String,
+            createdProjectLocalID: String,
+            sourcePayloadJSON: String?
+        ) async throws {
+            callCount += 1
+            throw TestError()
+        }
+    }
+
+    /// Verifies that a `RemixEventServiceProtocol` implementation that throws
+    /// does not propagate its error when suppressed with `try?` — mirroring
+    /// the fire-and-forget pattern used in `SharedOutputDetailView.performRemix()`.
+    func testRemixEventServiceErrorIsSuppressedByTryOptional() async {
+        let service = MockThrowingRemixEventService()
+        // try? must not propagate the error.
+        let result = try? await service.recordRemixEvent(
+            sharedOutputID: "shr-1",
+            createdProjectLocalID: UUID().uuidString,
+            sourcePayloadJSON: nil
+        )
+        XCTAssertNil(result, "try? on a throwing service call must produce nil, not propagate the error")
+        XCTAssertEqual(service.callCount, 1, "Service should have been called once")
+    }
+
+    /// Verifies that local project creation via the mapper is independent of any
+    /// event service: the mapper does not call the event service and will always
+    /// succeed when given valid source data.
+    func testMapperSucceedsIndependentOfEventService() throws {
         let payloadJSON = makePayloadJSON(projectName: "Event Fail Test")
         let detail = makeDetail(id: "evt-fail-1", title: "Event Fail", sourcePayloadJSON: payloadJSON)
 
-        // The mapper itself must still succeed regardless of any event service.
+        // The mapper must not be coupled to the event service — it should succeed here.
         let project = try SharedOutputRemixMapper.remix(from: detail)
         XCTAssertEqual(project.name, "Event Fail")
     }
