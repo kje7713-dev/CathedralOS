@@ -126,6 +126,10 @@
 00000000000000000000016E /* RemixFromSharedOutputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000016D /* RemixFromSharedOutputTests.swift */; };
 000000000000000000000170 /* HiddenSharedOutputsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000016F /* HiddenSharedOutputsService.swift */; };
 000000000000000000000172 /* SharedOutputReportDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000171 /* SharedOutputReportDTO.swift */; };
+		000000000000000000000174 /* SharedOutputReportingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000173 /* SharedOutputReportingTests.swift */; };
+		000000000000000000000176 /* ProfileBootstrapService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000175 /* ProfileBootstrapService.swift */; };
+		000000000000000000000178 /* CloudActionGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000177 /* CloudActionGuard.swift */; };
+		00000000000000000000017A /* AuthHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000179 /* AuthHardeningTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -260,6 +264,10 @@
 00000000000000000000016D /* RemixFromSharedOutputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemixFromSharedOutputTests.swift; sourceTree = "<group>"; };
 00000000000000000000016F /* HiddenSharedOutputsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HiddenSharedOutputsService.swift; sourceTree = "<group>"; };
 000000000000000000000171 /* SharedOutputReportDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedOutputReportDTO.swift; sourceTree = "<group>"; };
+		000000000000000000000173 /* SharedOutputReportingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedOutputReportingTests.swift; sourceTree = "<group>"; };
+		000000000000000000000175 /* ProfileBootstrapService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileBootstrapService.swift; sourceTree = "<group>"; };
+		000000000000000000000177 /* CloudActionGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudActionGuard.swift; sourceTree = "<group>"; };
+		000000000000000000000179 /* AuthHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthHardeningTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -443,6 +451,8 @@
 				000000000000000000000169 /* ImportHardeningTests.swift */,
 				00000000000000000000016B /* ImportedEntityEditingTests.swift */,
 				00000000000000000000016D /* RemixFromSharedOutputTests.swift */,
+				000000000000000000000173 /* SharedOutputReportingTests.swift */,
+				000000000000000000000179 /* AuthHardeningTests.swift */,
 				000000000000000000000154 /* SupabaseConfigurationTests.swift */,
 				000000000000000000000156 /* BackendClientTests.swift */,
 				000000000000000000000158 /* AuthServiceTests.swift */,
@@ -491,6 +501,8 @@
 				000000000000000000000163 /* RemixEventService.swift */,
 				00000000000000000000016F /* HiddenSharedOutputsService.swift */,
 				000000000000000000000171 /* SharedOutputReportDTO.swift */,
+				000000000000000000000175 /* ProfileBootstrapService.swift */,
+				000000000000000000000177 /* CloudActionGuard.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -730,6 +742,8 @@
 				000000000000000000000164 /* RemixEventService.swift in Sources */,
 				000000000000000000000170 /* HiddenSharedOutputsService.swift in Sources */,
 				000000000000000000000172 /* SharedOutputReportDTO.swift in Sources */,
+				000000000000000000000176 /* ProfileBootstrapService.swift in Sources */,
+				000000000000000000000178 /* CloudActionGuard.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -767,6 +781,8 @@
 				00000000000000000000016A /* ImportHardeningTests.swift in Sources */,
 				00000000000000000000016C /* ImportedEntityEditingTests.swift in Sources */,
 				00000000000000000000016E /* RemixFromSharedOutputTests.swift in Sources */,
+				000000000000000000000174 /* SharedOutputReportingTests.swift in Sources */,
+				00000000000000000000017A /* AuthHardeningTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

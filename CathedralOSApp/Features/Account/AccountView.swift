@@ -3,32 +3,37 @@ import SwiftData
 
 // MARK: - AccountView
 //
-// Lightweight account and backend status view.
-// Shows authentication state, backend configuration status, sign-in / sign-out controls,
-// and output sync actions.
+// Account and backend status view.
+// Shows authentication state, backend configuration status, Sign in with Apple,
+// sign-out controls, output sync actions, and a summary of features that require
+// a signed-in account.
 //
-// Authentication is a stub — real sign-in will be wired in when the
-// Supabase Auth backend is integrated. The view does not force login on any
-// existing app flow.
+// Local-only editing (projects, characters, settings, exports) is never gated
+// behind authentication. Only cloud actions (generate, sync, publish, report,
+// record remix) require a signed-in session.
 
 struct AccountView: View {
 
     let authService: any AuthService
     let syncService: any GenerationOutputSyncServiceProtocol
+    let profileBootstrapService: (any ProfileBootstrapServiceProtocol)?
 
     @Environment(\.modelContext) private var modelContext
 
     init(
         authService: any AuthService = BackendAuthService(),
-        syncService: any GenerationOutputSyncServiceProtocol = StubGenerationOutputSyncService()
+        syncService: any GenerationOutputSyncServiceProtocol = StubGenerationOutputSyncService(),
+        profileBootstrapService: (any ProfileBootstrapServiceProtocol)? = nil
     ) {
         self.authService = authService
         self.syncService = syncService
+        self.profileBootstrapService = profileBootstrapService
     }
 
     @State private var authState: AuthState = .unknown
     @State private var isWorking = false
     @State private var actionError: String?
+    @State private var profileBootstrapWarning: String?
 
     // MARK: Sync state
     @State private var isSyncing = false
@@ -39,6 +44,7 @@ struct AccountView: View {
         NavigationStack {
             List {
                 accountSection
+                cloudFeaturesSection
                 syncSection
                 backendStatusSection
             }
@@ -74,22 +80,22 @@ struct AccountView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+            if let profileBootstrapWarning {
+                Text(profileBootstrapWarning)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
         }
     }
 
     private var signedOutContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Not signed in")
                 .font(.body)
-            Text("Sign in to sync outputs and enable public sharing.")
+            Text("Sign in to enable cloud generation, sync, publishing, remix, and reports.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Button {
-                Task { await attemptSignIn() }
-            } label: {
-                Label("Sign In", systemImage: "person.badge.plus")
-            }
-            .disabled(isWorking || !SupabaseConfiguration.isConfigured)
+            signInWithAppleButton
         }
         .padding(.vertical, 4)
     }
@@ -102,6 +108,10 @@ struct AccountView: View {
                 Text(email)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else {
+                Text("User ID: \(user.id.prefix(8))…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Button(role: .destructive) {
                 Task { await attemptSignOut() }
@@ -112,6 +122,61 @@ struct AccountView: View {
         }
         .padding(.vertical, 4)
     }
+
+    // MARK: Sign in with Apple button
+
+    @ViewBuilder
+    private var signInWithAppleButton: some View {
+        if SupabaseConfiguration.isConfigured {
+            Button {
+                Task { await attemptSignInWithApple() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "applelogo")
+                    Text("Sign in with Apple")
+                        .fontWeight(.semibold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 16)
+                .background(Color.primary)
+                .foregroundColor(Color(UIColor.systemBackground))
+                .cornerRadius(8)
+            }
+            .disabled(isWorking)
+            .buttonStyle(.plain)
+        } else {
+            Text("Configure backend to enable Sign in with Apple.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Cloud features section
+
+    private var cloudFeaturesSection: some View {
+        Section("Cloud Features") {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("The following actions require a signed-in account:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(cloudFeatureItems, id: \.self) { item in
+                    Label(item, systemImage: authState.isSignedIn ? "checkmark.circle.fill" : "lock.fill")
+                        .font(.caption)
+                        .foregroundStyle(authState.isSignedIn ? CathedralTheme.Colors.accent : .secondary)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private let cloudFeatureItems = [
+        "Generate content via backend",
+        "Sync outputs across devices",
+        "Publish shared outputs",
+        "Report shared content",
+        "Record remix events"
+    ]
 
     // MARK: - Sync section
 
@@ -199,13 +264,17 @@ struct AccountView: View {
 
     // MARK: - Actions
 
-    private func attemptSignIn() async {
+    private func attemptSignInWithApple() async {
         isWorking = true
         actionError = nil
+        profileBootstrapWarning = nil
         defer { isWorking = false }
         do {
-            try await authService.signIn()
+            try await authService.signInWithApple()
             authState = authService.authState
+            await attemptProfileBootstrap()
+        } catch AuthServiceError.cancelled {
+            // User tapped cancel — not an error worth surfacing.
         } catch {
             actionError = (error as? AuthServiceError)?.errorDescription ?? error.localizedDescription
         }
@@ -214,6 +283,7 @@ struct AccountView: View {
     private func attemptSignOut() async {
         isWorking = true
         actionError = nil
+        profileBootstrapWarning = nil
         defer { isWorking = false }
         do {
             try await authService.signOut()
@@ -240,6 +310,20 @@ struct AccountView: View {
         } catch {
             syncError = (error as? GenerationOutputSyncError)?.errorDescription
                 ?? error.localizedDescription
+        }
+    }
+
+    /// Attempts to bootstrap a profile row after sign-in.
+    /// Failure is non-fatal: shows a recoverable warning but does not block the UI.
+    private func attemptProfileBootstrap() async {
+        guard let service = profileBootstrapService,
+              let userID = authService.currentUserID else { return }
+        do {
+            let displayName = authService.authState.currentUser?.email
+            try await service.bootstrapProfile(userID: userID, displayName: displayName)
+        } catch {
+            // Non-fatal: show a warning but do not fail sign-in.
+            profileBootstrapWarning = "Profile sync encountered an issue. Cloud features may be limited."
         }
     }
 }

@@ -116,5 +116,59 @@ AuthService (BackendAuthService)   Future: GenerationBackendService
                                            UsageSyncService
 ```
 
-All future backend calls (generation, sharing, usage sync) will flow through
-this layer. No existing local-only flows are broken by its presence.
+All backend calls (generation, sharing, usage sync) flow through this layer.
+No local-only flows are broken by its presence.
+
+---
+
+## Authentication: Sign in with Apple
+
+CathedralOS uses Sign in with Apple as the primary iOS authentication method.
+The flow is:
+
+1. `BackendAuthService.signInWithApple()` generates a cryptographically secure nonce.
+2. `ASAuthorizationController` presents the system sign-in sheet.
+3. On success, the Apple identity token is exchanged for a Supabase session via
+   `POST /auth/v1/token?grant_type=id_token` (no Supabase Swift SDK required).
+4. The Supabase JWT access token, refresh token, user ID, and email are stored in
+   the iOS keychain.
+5. `AuthState` transitions to `.signedIn(AuthUser)`.
+
+Sign-in is **never** forced on app launch. Local-only operations (create projects,
+edit characters/settings, build prompt packs, export JSON/markdown) always work
+without a signed-in session.
+
+---
+
+## Cloud feature gating
+
+The following actions require an active signed-in session:
+
+| Action | Gating mechanism |
+|--------|-----------------|
+| Generate via backend | `SupabaseGenerationService.validateConfigAndAuth()` |
+| Sync outputs | `SupabaseGenerationOutputSyncService.requireSignedIn()` |
+| Publish / unpublish | `BackendPublicSharingService.requireSignedIn()` |
+| Report shared content | `BackendPublicSharingService.requireSignedIn()` |
+| Record remix events | `BackendRemixEventService` auth check |
+
+When a user is signed out, all of these throw a `.notSignedIn` error and surface
+a clear message directing them to the Account tab. No action silently fails.
+
+---
+
+## Security notes
+
+- **Service-role key** — never embed this; it grants full database access.
+  The iOS app uses only the anon key.
+- **OpenAI API key** — held server-side only, inside Edge Functions.
+  Never sent from the client.
+- **Anon key** — the public Supabase key. Safe to embed in the app binary.
+  Used in the `apikey` header for Edge Function and REST API calls.
+- **User JWT** — the Supabase access token issued at sign-in. Stored in the
+  iOS keychain. Sent as the `Authorization: Bearer <token>` header for
+  user-scoped REST API calls protected by Row-Level Security.
+- **Refresh token** — stored in the iOS keychain. Used to renew the access
+  token without requiring the user to sign in again.
+- **Do not commit** any of the above to version control. Use `.xcconfig` files
+  (gitignored) or CI secrets for build-time injection.
