@@ -3,22 +3,31 @@ import SwiftData
 
 // MARK: - SharedOutputDetailView
 // Detail view for a single public shared output.
-// Actions: copy text, share link, remix (when allowRemix is true), report (placeholder).
+// Actions vary by role:
+//   • Non-owner: copy text, share link, remix (when allowRemix is true), hide, report.
+//   • Owner:     copy text, share link, unpublish.
 
 struct SharedOutputDetailView: View {
     let sharedOutputID: String
     let sharingService: PublicSharingService
     let remixEventService: RemixEventServiceProtocol
+    let authService: AuthService
+    let hiddenService: HiddenSharedOutputsService
 
     init(sharedOutputID: String,
          sharingService: PublicSharingService = BackendPublicSharingService(),
-         remixEventService: RemixEventServiceProtocol = BackendRemixEventService()) {
+         remixEventService: RemixEventServiceProtocol = BackendRemixEventService(),
+         authService: AuthService = BackendAuthService(),
+         hiddenService: HiddenSharedOutputsService = UserDefaultsHiddenSharedOutputsService()) {
         self.sharedOutputID = sharedOutputID
         self.sharingService = sharingService
         self.remixEventService = remixEventService
+        self.authService = authService
+        self.hiddenService = hiddenService
     }
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
 
     @State private var detail: SharedOutputDetail?
     @State private var isLoading = false
@@ -32,12 +41,36 @@ struct SharedOutputDetailView: View {
     @State private var remixError: String?
     @State private var remixedProject: StoryProject?
 
+    // Report state
+    @State private var showReportSheet = false
+    @State private var selectedReportReason: ReportReason?
+    @State private var reportDetails = ""
+    @State private var isSubmittingReport = false
+    @State private var reportError: String?
+    @State private var reportSubmittedSuccess = false
+
+    // Owner / unpublish state
+    @State private var isUnpublishing = false
+    @State private var unpublishError: String?
+    @State private var showUnpublishConfirmation = false
+
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .medium
         f.timeStyle = .short
         return f
     }()
+
+    // MARK: Ownership
+
+    private var currentUserID: String? {
+        authService.authState.currentUser?.id
+    }
+
+    private func isOwner(of detail: SharedOutputDetail) -> Bool {
+        guard let uid = currentUserID, let ownerID = detail.ownerUserID else { return false }
+        return uid == ownerID
+    }
 
     var body: some View {
         ScrollView {
@@ -58,6 +91,9 @@ struct SharedOutputDetailView: View {
                 ShareSheet(activityItems: [url])
             }
         }
+        .sheet(isPresented: $showReportSheet) {
+            reportSheet
+        }
         .navigationDestination(item: $remixedProject) { project in
             ProjectDetailView(project: project)
         }
@@ -76,6 +112,27 @@ struct SharedOutputDetailView: View {
             Button("OK", role: .cancel) { remixError = nil }
         } message: {
             Text(remixError ?? "")
+        }
+        .alert("Report Submitted", isPresented: $reportSubmittedSuccess) {
+            Button("OK", role: .cancel) { reportSubmittedSuccess = false }
+        } message: {
+            Text("Thank you for your report. We will review it shortly.")
+        }
+        .alert("Unpublish Failed", isPresented: Binding(
+            get: { unpublishError != nil },
+            set: { if !$0 { unpublishError = nil } }
+        )) {
+            Button("OK", role: .cancel) { unpublishError = nil }
+        } message: {
+            Text(unpublishError ?? "")
+        }
+        .alert("Unpublish This Output?", isPresented: $showUnpublishConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Unpublish", role: .destructive) {
+                Task { await performUnpublish() }
+            }
+        } message: {
+            Text("This will remove the output from the public browse list. You can republish it later.")
         }
         .task { await load() }
     }
@@ -115,9 +172,7 @@ struct SharedOutputDetailView: View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
             metaSection(detail)
             outputSection(detail)
-            if detail.allowRemix || detail.shareURL != nil {
-                actionsSection(detail)
-            }
+            actionsSection(detail)
         }
         .padding(CathedralTheme.Spacing.base)
     }
@@ -221,6 +276,18 @@ struct SharedOutputDetailView: View {
 
     private func actionsSection(_ detail: SharedOutputDetail) -> some View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
+            if isOwner(of: detail) {
+                ownerActionsSection(detail)
+            } else {
+                viewerActionsSection(detail)
+            }
+        }
+    }
+
+    // MARK: Viewer actions (non-owner)
+
+    private func viewerActionsSection(_ detail: SharedOutputDetail) -> some View {
+        VStack(spacing: CathedralTheme.Spacing.sm) {
             if !detail.outputText.isEmpty {
                 CathedralPrimaryButton(
                     copiedText ? "Copied!" : "Copy Text",
@@ -256,7 +323,119 @@ struct SharedOutputDetailView: View {
                     }
                 }
             }
+
+            CathedralSecondaryButton("Hide", systemImage: "eye.slash") {
+                hiddenService.hide(sharedOutputID: detail.sharedOutputID)
+                dismiss()
+            }
+
+            CathedralSecondaryButton("Report", systemImage: "flag") {
+                showReportSheet = true
+            }
         }
+    }
+
+    // MARK: Owner actions
+
+    private func ownerActionsSection(_ detail: SharedOutputDetail) -> some View {
+        VStack(spacing: CathedralTheme.Spacing.sm) {
+            if !detail.outputText.isEmpty {
+                CathedralPrimaryButton(
+                    copiedText ? "Copied!" : "Copy Text",
+                    systemImage: "doc.on.doc"
+                ) {
+                    UIPasteboard.general.string = detail.outputText
+                    copiedText = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        copiedText = false
+                    }
+                }
+            }
+
+            if let shareURL = detail.shareURL, !shareURL.isEmpty {
+                CathedralSecondaryButton("Copy Share Link", systemImage: "link") {
+                    UIPasteboard.general.string = shareURL
+                }
+            }
+
+            if isUnpublishing {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    ProgressView()
+                    Text("Unpublishing…")
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(CathedralTheme.Spacing.sm)
+            } else {
+                CathedralSecondaryButton("Unpublish", systemImage: "eye.slash") {
+                    showUnpublishConfirmation = true
+                }
+            }
+        }
+    }
+
+    // MARK: Report sheet
+
+    private var reportSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Reason") {
+                    ForEach(ReportReason.allCases, id: \.rawValue) { reason in
+                        Button {
+                            selectedReportReason = reason
+                        } label: {
+                            HStack {
+                                Text(reason.displayName)
+                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                Spacer()
+                                if selectedReportReason == reason {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(CathedralTheme.Colors.accent)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Section("Details (optional)") {
+                    TextEditor(text: $reportDetails)
+                        .frame(minHeight: 80)
+                        .font(CathedralTheme.Typography.body())
+                }
+
+                if let reportError {
+                    Section {
+                        Text(reportError)
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                    }
+                }
+            }
+            .navigationTitle("Report Content")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        showReportSheet = false
+                        selectedReportReason = nil
+                        reportDetails = ""
+                        reportError = nil
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isSubmittingReport {
+                        ProgressView()
+                    } else {
+                        Button("Submit") {
+                            Task { await submitReport() }
+                        }
+                        .disabled(selectedReportReason == nil)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 
     // MARK: Remix action
@@ -287,6 +466,48 @@ struct SharedOutputDetailView: View {
         }
     }
 
+    // MARK: Report action
+
+    @MainActor
+    private func submitReport() async {
+        guard let reason = selectedReportReason else {
+            reportError = PublicSharingServiceError.missingReportReason.errorDescription
+            return
+        }
+        isSubmittingReport = true
+        reportError = nil
+        defer { isSubmittingReport = false }
+        do {
+            try await sharingService.reportSharedOutput(
+                sharedOutputID: sharedOutputID,
+                reason: reason,
+                details: reportDetails
+            )
+            showReportSheet = false
+            selectedReportReason = nil
+            reportDetails = ""
+            reportSubmittedSuccess = true
+        } catch {
+            reportError = PublicSharingServiceError.displayMessage(from: error)
+        }
+    }
+
+    // MARK: Unpublish action
+
+    @MainActor
+    private func performUnpublish() async {
+        guard let detail else { return }
+        isUnpublishing = true
+        unpublishError = nil
+        defer { isUnpublishing = false }
+        do {
+            try await sharingService.unpublish(sharedOutputID: detail.sharedOutputID)
+            dismiss()
+        } catch {
+            unpublishError = PublicSharingServiceError.displayMessage(from: error)
+        }
+    }
+
     // MARK: Data loading
 
     private func load() async {
@@ -300,3 +521,4 @@ struct SharedOutputDetailView: View {
         }
     }
 }
+
