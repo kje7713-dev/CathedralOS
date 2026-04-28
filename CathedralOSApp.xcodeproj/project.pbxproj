@@ -116,6 +116,14 @@
 		000000000000000000000159 /* AuthServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000158 /* AuthServiceTests.swift */; };
 		00000000000000000000015E /* GenerationBackendServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000015D /* GenerationBackendServiceTests.swift */; };
 		00000000000000000000015C /* SharedOutputRemixMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000015B /* SharedOutputRemixMapper.swift */; };
+000000000000000000000160 /* GenerationOutputSyncDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000015F /* GenerationOutputSyncDTO.swift */; };
+000000000000000000000162 /* GenerationOutputSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000161 /* GenerationOutputSyncService.swift */; };
+000000000000000000000164 /* RemixEventService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000163 /* RemixEventService.swift */; };
+000000000000000000000166 /* AudienceControlsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000165 /* AudienceControlsTests.swift */; };
+000000000000000000000168 /* GenerationOutputSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000167 /* GenerationOutputSyncTests.swift */; };
+00000000000000000000016A /* ImportHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000169 /* ImportHardeningTests.swift */; };
+00000000000000000000016C /* ImportedEntityEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000016B /* ImportedEntityEditingTests.swift */; };
+00000000000000000000016E /* RemixFromSharedOutputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000016D /* RemixFromSharedOutputTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -240,6 +248,14 @@
 		000000000000000000000158 /* AuthServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthServiceTests.swift; sourceTree = "<group>"; };
 		00000000000000000000015D /* GenerationBackendServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationBackendServiceTests.swift; sourceTree = "<group>"; };
 		00000000000000000000015B /* SharedOutputRemixMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedOutputRemixMapper.swift; sourceTree = "<group>"; };
+000000000000000000000015F /* GenerationOutputSyncDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputSyncDTO.swift; sourceTree = "<group>"; };
+000000000000000000000161 /* GenerationOutputSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputSyncService.swift; sourceTree = "<group>"; };
+000000000000000000000163 /* RemixEventService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemixEventService.swift; sourceTree = "<group>"; };
+000000000000000000000165 /* AudienceControlsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudienceControlsTests.swift; sourceTree = "<group>"; };
+000000000000000000000167 /* GenerationOutputSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputSyncTests.swift; sourceTree = "<group>"; };
+000000000000000000000169 /* ImportHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportHardeningTests.swift; sourceTree = "<group>"; };
+00000000000000000000016B /* ImportedEntityEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedEntityEditingTests.swift; sourceTree = "<group>"; };
+00000000000000000000016D /* RemixFromSharedOutputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemixFromSharedOutputTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -418,6 +434,11 @@
 				000000000000000000000138 /* GenerationLengthModeTests.swift */,
 				00000000000000000000013A /* GenerationUsageTrackerTests.swift */,
 				000000000000000000000146 /* PublicSharingTests.swift */,
+				000000000000000000000165 /* AudienceControlsTests.swift */,
+				000000000000000000000167 /* GenerationOutputSyncTests.swift */,
+				000000000000000000000169 /* ImportHardeningTests.swift */,
+				00000000000000000000016B /* ImportedEntityEditingTests.swift */,
+				00000000000000000000016D /* RemixFromSharedOutputTests.swift */,
 				000000000000000000000154 /* SupabaseConfigurationTests.swift */,
 				000000000000000000000156 /* BackendClientTests.swift */,
 				000000000000000000000158 /* AuthServiceTests.swift */,
@@ -461,6 +482,9 @@
 				00000000000000000000014E /* GenerationBackendService.swift */,
 				000000000000000000000150 /* UsageSyncService.swift */,
 				00000000000000000000015B /* SharedOutputRemixMapper.swift */,
+				000000000000000000000015F /* GenerationOutputSyncDTO.swift */,
+				000000000000000000000161 /* GenerationOutputSyncService.swift */,
+				000000000000000000000163 /* RemixEventService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -695,6 +719,9 @@
 				000000000000000000000151 /* UsageSyncService.swift in Sources */,
 				000000000000000000000153 /* AccountView.swift in Sources */,
 				00000000000000000000015C /* SharedOutputRemixMapper.swift in Sources */,
+				000000000000000000000160 /* GenerationOutputSyncDTO.swift in Sources */,
+				000000000000000000000162 /* GenerationOutputSyncService.swift in Sources */,
+				000000000000000000000164 /* RemixEventService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -727,6 +754,11 @@
 				000000000000000000000157 /* BackendClientTests.swift in Sources */,
 				000000000000000000000159 /* AuthServiceTests.swift in Sources */,
 				00000000000000000000015E /* GenerationBackendServiceTests.swift in Sources */,
+				000000000000000000000166 /* AudienceControlsTests.swift in Sources */,
+				000000000000000000000168 /* GenerationOutputSyncTests.swift in Sources */,
+				00000000000000000000016A /* ImportHardeningTests.swift in Sources */,
+				00000000000000000000016C /* ImportedEntityEditingTests.swift in Sources */,
+				00000000000000000000016E /* RemixFromSharedOutputTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

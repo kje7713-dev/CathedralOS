@@ -46,4 +46,9 @@ enum PublicSharingServiceConfiguration {
     static func publicDetailURL(sharedOutputID: String) -> URL? {
         baseURL?.appendingPathComponent("shared-outputs/\(sharedOutputID)")
     }
+
+    /// Endpoint for recording a remix event: `POST /remix-events`.
+    static var remixEventsURL: URL? {
+        baseURL?.appendingPathComponent("remix-events")
+    }
 }

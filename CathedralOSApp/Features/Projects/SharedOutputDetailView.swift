@@ -8,11 +8,14 @@ import SwiftData
 struct SharedOutputDetailView: View {
     let sharedOutputID: String
     let sharingService: PublicSharingService
+    let remixEventService: RemixEventServiceProtocol
 
     init(sharedOutputID: String,
-         sharingService: PublicSharingService = BackendPublicSharingService()) {
+         sharingService: PublicSharingService = BackendPublicSharingService(),
+         remixEventService: RemixEventServiceProtocol = BackendRemixEventService()) {
         self.sharedOutputID = sharedOutputID
         self.sharingService = sharingService
+        self.remixEventService = remixEventService
     }
 
     @Environment(\.modelContext) private var modelContext
@@ -266,6 +269,16 @@ struct SharedOutputDetailView: View {
         do {
             let project = try SharedOutputRemixMapper.remix(from: detail)
             modelContext.insert(project)
+            // Record the remix event to the backend. Failures are non-fatal: the local
+            // project has already been created and must not be rolled back if the event
+            // POST fails (network unavailable, not signed in, endpoint not configured, etc.).
+            Task {
+                try? await remixEventService.recordRemixEvent(
+                    sharedOutputID: detail.sharedOutputID,
+                    createdProjectLocalID: project.id.uuidString,
+                    sourcePayloadJSON: detail.sourcePayloadJSON
+                )
+            }
             remixedProject = project
         } catch let remixErr as RemixError {
             remixError = remixErr.errorDescription
