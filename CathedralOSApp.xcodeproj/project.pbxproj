@@ -124,6 +124,8 @@
 00000000000000000000016A /* ImportHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000169 /* ImportHardeningTests.swift */; };
 00000000000000000000016C /* ImportedEntityEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000016B /* ImportedEntityEditingTests.swift */; };
 00000000000000000000016E /* RemixFromSharedOutputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000016D /* RemixFromSharedOutputTests.swift */; };
+000000000000000000000170 /* HiddenSharedOutputsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000016F /* HiddenSharedOutputsService.swift */; };
+000000000000000000000172 /* SharedOutputReportDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000171 /* SharedOutputReportDTO.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -256,6 +258,8 @@
 000000000000000000000169 /* ImportHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportHardeningTests.swift; sourceTree = "<group>"; };
 00000000000000000000016B /* ImportedEntityEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedEntityEditingTests.swift; sourceTree = "<group>"; };
 00000000000000000000016D /* RemixFromSharedOutputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemixFromSharedOutputTests.swift; sourceTree = "<group>"; };
+00000000000000000000016F /* HiddenSharedOutputsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HiddenSharedOutputsService.swift; sourceTree = "<group>"; };
+000000000000000000000171 /* SharedOutputReportDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedOutputReportDTO.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -485,6 +489,8 @@
 				000000000000000000000015F /* GenerationOutputSyncDTO.swift */,
 				000000000000000000000161 /* GenerationOutputSyncService.swift */,
 				000000000000000000000163 /* RemixEventService.swift */,
+				00000000000000000000016F /* HiddenSharedOutputsService.swift */,
+				000000000000000000000171 /* SharedOutputReportDTO.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -722,6 +728,8 @@
 				000000000000000000000160 /* GenerationOutputSyncDTO.swift in Sources */,
 				000000000000000000000162 /* GenerationOutputSyncService.swift in Sources */,
 				000000000000000000000164 /* RemixEventService.swift in Sources */,
+				000000000000000000000170 /* HiddenSharedOutputsService.swift in Sources */,
+				000000000000000000000172 /* SharedOutputReportDTO.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
