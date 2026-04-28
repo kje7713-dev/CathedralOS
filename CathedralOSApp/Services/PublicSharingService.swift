@@ -35,7 +35,7 @@ enum PublicSharingServiceError: Error, LocalizedError {
         case .missingSharedOutputID:
             return "Cannot unpublish: this output has not been published to the backend yet."
         case .notSignedIn:
-            return "You must be signed in to publish or unpublish content."
+            return "You must be signed in to publish, unpublish, or report content."
         case .emptyOutputText:
             return "Cannot publish an output with no text."
         case .missingReportReason:
