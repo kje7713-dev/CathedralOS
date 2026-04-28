@@ -136,6 +136,9 @@ struct SharedOutputDetailView: View {
 
                 Divider()
 
+                if let author = detail.authorDisplayName, !author.isEmpty {
+                    metaRow(label: "Author", value: author)
+                }
                 if let packName = detail.sourcePromptPackName, !packName.isEmpty {
                     metaRow(label: "Source Pack", value: packName)
                 }
@@ -148,6 +151,15 @@ struct SharedOutputDetailView: View {
                 if let lengthMode = detail.generationLengthMode, !lengthMode.isEmpty {
                     let display = GenerationLengthMode(rawValue: lengthMode)?.displayName ?? lengthMode.capitalized
                     metaRow(label: "Length", value: display)
+                }
+                if let rating = detail.contentRating, !rating.isEmpty {
+                    metaRow(label: "Rating", value: rating.capitalized)
+                }
+                if let level = detail.readingLevel, !level.isEmpty {
+                    metaRow(label: "Reading Level", value: level.capitalized)
+                }
+                if let notes = detail.audienceNotes, !notes.isEmpty {
+                    metaRow(label: "Audience", value: notes)
                 }
                 metaRow(label: "Published", value: Self.dateFormatter.string(from: detail.createdAt))
 
