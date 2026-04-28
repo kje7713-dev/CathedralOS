@@ -434,7 +434,7 @@ final class BackendAuthService: AuthService {
 
     /// Generates a cryptographically secure random nonce string.
     static func generateNonce(length: Int = 32) -> String {
-        let charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._"
+        let charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._"
         let charsetArray = Array(charset)
         var result = ""
         var remainingLength = length
@@ -442,7 +442,9 @@ final class BackendAuthService: AuthService {
             let randoms: [UInt8] = (0..<16).map { _ in
                 var random: UInt8 = 0
                 if SecRandomCopyBytes(kSecRandomDefault, 1, &random) != errSecSuccess {
-                    fatalError("SecRandomCopyBytes failed — OS-level RNG unavailable")
+                    // SecRandomCopyBytes failure means the OS-level CSRNG is broken.
+                    // This is an unrecoverable system-level error and must not be silenced.
+                    fatalError("SecRandomCopyBytes failed — OS cryptographic random number generator unavailable. This indicates a critical system error.")
                 }
                 return random
             }

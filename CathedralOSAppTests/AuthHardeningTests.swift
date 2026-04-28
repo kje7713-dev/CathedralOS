@@ -452,6 +452,16 @@ final class AuthHardeningTests: XCTestCase {
         XCTAssertNotEqual(h1, h2, "Different inputs must produce different SHA256 hashes")
     }
 
+    func testSHA256EmptyStringProducesKnownDigest() {
+        // SHA256("") == e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        let hash = BackendAuthService.sha256("")
+        XCTAssertEqual(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb924" + "27ae41e4649b934ca495991b7852b855",
+            "SHA256 of empty string must equal the well-known constant"
+        )
+    }
+
     // MARK: - ProfileBootstrapService error descriptions
 
     func testProfileBootstrapErrorNotConfigured() {

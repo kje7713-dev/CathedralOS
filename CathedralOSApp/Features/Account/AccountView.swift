@@ -109,7 +109,8 @@ struct AccountView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("User ID: \(user.id.prefix(8))…")
+                let displayIDLength = 8
+                Text("User ID: \(user.id.prefix(displayIDLength))…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
