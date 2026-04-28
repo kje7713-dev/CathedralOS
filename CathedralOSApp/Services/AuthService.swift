@@ -91,7 +91,7 @@ protocol AuthService: AnyObject {
     /// Sign in with Apple using `ASAuthorizationController`.
     /// Handles nonce generation, Apple credential request, and Supabase token exchange.
     /// Must be called from the main actor to present the system sign-in sheet.
-    func signInWithApple() async throws
+    @MainActor func signInWithApple() async throws
 
     /// Signs the user in via a generic mechanism (stub; throws `.notImplemented` unless overridden).
     func signIn() async throws
@@ -114,7 +114,7 @@ extension AuthService {
         throw AuthServiceError.notImplemented
     }
 
-    func signInWithApple() async throws {
+    @MainActor func signInWithApple() async throws {
         throw AuthServiceError.notImplemented
     }
 
@@ -240,7 +240,7 @@ final class BackendAuthService: AuthService {
 
     /// Initiates Sign in with Apple, then exchanges the Apple identity token for a
     /// Supabase session via `POST /auth/v1/token?grant_type=id_token`.
-    func signInWithApple() async throws {
+    @MainActor func signInWithApple() async throws {
         guard SupabaseConfiguration.isConfigured else {
             throw AuthServiceError.notConfigured
         }
@@ -252,8 +252,8 @@ final class BackendAuthService: AuthService {
         // ASAuthorizationController.performRequests() must run on the main actor.
         let handler = AppleSignInHandler()
         let authorization: ASAuthorization = try await withCheckedThrowingContinuation { continuation in
-            handler.continuation = continuation
             Task { @MainActor [handler, hashedNonce] in
+                handler.continuation = continuation
                 handler.authorize(nonceHash: hashedNonce)
             }
         }
