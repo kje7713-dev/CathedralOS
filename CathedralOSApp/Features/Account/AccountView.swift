@@ -226,10 +226,12 @@ struct AccountView: View {
                     .padding(.top, 4)
 
                 if state.source != .backend {
+                    #if DEBUG
                     Text("Credit tracking is local only. Backend enforcement is required before public monetized release.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    #endif
                 }
             }
             .padding(.vertical, 4)
