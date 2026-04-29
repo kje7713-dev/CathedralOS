@@ -10,13 +10,19 @@ struct GenerationOutputDetailView: View {
 
     let generationService: GenerationService
     let sharingService: PublicSharingService
+    let usageLimitService: any UsageLimitServiceProtocol
+    let authService: any AuthService
 
     init(output: GenerationOutput,
          generationService: GenerationService = StoryGenerationService(),
-         sharingService: PublicSharingService = BackendPublicSharingService()) {
+         sharingService: PublicSharingService = BackendPublicSharingService(),
+         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
+         authService: any AuthService = BackendAuthService()) {
         self._output = Bindable(output)
         self.generationService = generationService
         self.sharingService = sharingService
+        self.usageLimitService = usageLimitService
+        self.authService = authService
     }
 
     @State private var copiedOutput      = false
@@ -37,6 +43,20 @@ struct GenerationOutputDetailView: View {
     @State private var actionError: String?
     @State private var newOutput: GenerationOutput?
     @State private var selectedLengthMode: GenerationLengthMode = .defaultMode
+
+    // MARK: Credit helpers
+
+    private var creditState: GenerationCreditState {
+        usageLimitService.currentState
+    }
+
+    private var selectedCreditCost: Int {
+        selectedLengthMode.creditCost
+    }
+
+    private var hasSufficientCredits: Bool {
+        creditState.availableCredits >= selectedCreditCost
+    }
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -644,6 +664,22 @@ struct GenerationOutputDetailView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                HStack(spacing: 4) {
+                    Image(systemName: "bolt.circle")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    Text("\(selectedCreditCost) \(selectedCreditCost == 1 ? "credit" : "credits")")
+                        .font(CathedralTheme.Typography.label(11, weight: .regular))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    Spacer()
+                    Text("\(creditState.availableCredits) remaining")
+                        .font(CathedralTheme.Typography.label(11, weight: .regular))
+                        .foregroundStyle(
+                            hasSufficientCredits
+                                ? CathedralTheme.Colors.secondaryText
+                                : CathedralTheme.Colors.destructive
+                        )
+                }
             }
 
             // Error banner
@@ -695,21 +731,28 @@ struct GenerationOutputDetailView: View {
             ) {
                 Task { await performAction("regenerate") }
             }
-            .disabled(isActioning)
+            .disabled(isActioning || !hasSufficientCredits)
 
             // Continue — only meaningful when there is prior output text
             if !output.outputText.isEmpty {
                 CathedralSecondaryButton("Continue", systemImage: "text.append") {
                     Task { await performAction("continue") }
                 }
-                .disabled(isActioning)
+                .disabled(isActioning || !hasSufficientCredits)
             }
 
             // Remix
             CathedralSecondaryButton("Remix", systemImage: "shuffle") {
                 Task { await performAction("remix") }
             }
-            .disabled(isActioning)
+            .disabled(isActioning || !hasSufficientCredits)
+
+            if !hasSufficientCredits {
+                Text("Not enough credits for \(selectedLengthMode.displayName) generation (\(selectedCreditCost) required, \(creditState.availableCredits) available).")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -719,10 +762,30 @@ struct GenerationOutputDetailView: View {
         guard let project = output.project else { return }
         actionError = nil
         newOutput = nil
+
+        let mode = selectedLengthMode
+
+        // Preflight: check credits and auth before any network call.
+        let preflight = usageLimitService.checkPreflight(
+            lengthMode: mode,
+            authState: authService.authState
+        )
+        switch preflight {
+        case .insufficientCredits(let available, let required):
+            actionError = "Not enough credits. Need \(required), have \(available)."
+            return
+        case .signedOut:
+            actionError = GenerationBackendServiceError.notSignedIn.errorDescription
+            return
+        case .backendConfigMissing:
+            break
+        case .allowed, .unknown:
+            break
+        }
+
         isActioning = true
         defer { isActioning = false }
 
-        let mode = selectedLengthMode
         let previousText: String? = (action == "continue" || action == "remix")
             ? output.outputText.nilIfEmpty
             : nil
@@ -772,14 +835,20 @@ struct GenerationOutputDetailView: View {
             newGen.status = GenerationStatus.complete.rawValue
             newGen.updatedAt = Date()
 
+            // On success: decrement local credits.
+            // MVP policy: failed generation does not consume credits.
+            usageLimitService.recordSuccessfulGeneration(
+                creditCost: mode.creditCost,
+                lengthMode: mode
+            )
+
         } catch {
             newGen.status = GenerationStatus.failed.rawValue
             newGen.notes = error.localizedDescription
             newGen.updatedAt = Date()
+            // MVP policy: do not charge credits on generation failure.
             actionError = (error as? GenerationServiceError)?.errorDescription
                 ?? error.localizedDescription
         }
     }
 }
-
-

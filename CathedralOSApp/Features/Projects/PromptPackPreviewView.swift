@@ -31,15 +31,35 @@ struct PromptPackPreviewView: View {
     @State private var showChapterConfirm = false
 
     let generationService: GenerationService
+    let usageLimitService: any UsageLimitServiceProtocol
+    let authService: any AuthService
 
     init(
         project: StoryProject,
         pack: PromptPack,
-        generationService: GenerationService = SupabaseGenerationService()
+        generationService: GenerationService = SupabaseGenerationService(),
+        usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
+        authService: any AuthService = BackendAuthService()
     ) {
         self.project = project
         self.pack = pack
         self.generationService = generationService
+        self.usageLimitService = usageLimitService
+        self.authService = authService
+    }
+
+    // MARK: Credit state
+
+    private var creditState: GenerationCreditState {
+        usageLimitService.currentState
+    }
+
+    private var selectedCreditCost: Int {
+        selectedLengthMode.creditCost
+    }
+
+    private var hasSufficientCredits: Bool {
+        creditState.availableCredits >= selectedCreditCost
     }
 
     private var exportPayload: PromptPackExportPayload {
@@ -298,13 +318,21 @@ struct PromptPackPreviewView: View {
                     Task { await startGeneration() }
                 }
             }
-            .disabled(isGenerating)
+            .disabled(isGenerating || !hasSufficientCredits)
 
-            Text("Sends the current pack payload to your generation backend. The result is saved to Generated Outputs.")
-                .font(CathedralTheme.Typography.caption())
-                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
+            if !hasSufficientCredits {
+                Text("Not enough credits for \(selectedLengthMode.displayName) generation (\(selectedCreditCost) required, \(creditState.availableCredits) available).")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            } else {
+                Text("Sends the current pack payload to your generation backend. The result is saved to Generated Outputs.")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
         }
     }
 
@@ -322,6 +350,23 @@ struct PromptPackPreviewView: View {
                 }
             }
             .pickerStyle(.segmented)
+            // Credit cost hint beneath the picker.
+            HStack(spacing: 4) {
+                Image(systemName: "bolt.circle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Text("\(selectedCreditCost) \(selectedCreditCost == 1 ? "credit" : "credits")")
+                    .font(CathedralTheme.Typography.label(11, weight: .regular))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Spacer()
+                Text("\(creditState.availableCredits) remaining")
+                    .font(CathedralTheme.Typography.label(11, weight: .regular))
+                    .foregroundStyle(
+                        hasSufficientCredits
+                            ? CathedralTheme.Colors.secondaryText
+                            : CathedralTheme.Colors.destructive
+                    )
+            }
         }
     }
 
@@ -330,6 +375,26 @@ struct PromptPackPreviewView: View {
     private func startGeneration() async {
         generationError = nil
         let mode = selectedLengthMode
+
+        // Preflight: check credits and auth before making any network call.
+        let preflight = usageLimitService.checkPreflight(
+            lengthMode: mode,
+            authState: authService.authState
+        )
+        switch preflight {
+        case .insufficientCredits(let available, let required):
+            generationError = "Not enough credits. Need \(required), have \(available)."
+            return
+        case .signedOut:
+            generationError = GenerationBackendServiceError.notSignedIn.errorDescription
+            return
+        case .backendConfigMissing:
+            // Backend not configured — fall through and let the service throw .notConfigured
+            // so the existing error path handles it consistently.
+            break
+        case .allowed, .unknown:
+            break
+        }
 
         // Freeze the payload and JSON snapshot at submission time.
         let frozenPayload = exportPayload
@@ -381,6 +446,13 @@ struct PromptPackPreviewView: View {
                 gen.syncStatus = SyncStatus.synced.rawValue
                 gen.lastSyncedAt = Date()
             }
+
+            // On success: decrement local credits.
+            // MVP policy: failed generation does not consume credits.
+            usageLimitService.recordSuccessfulGeneration(
+                creditCost: mode.creditCost,
+                lengthMode: mode
+            )
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
 
         } catch {
@@ -388,6 +460,7 @@ struct PromptPackPreviewView: View {
             gen.notes = error.localizedDescription
             gen.updatedAt = Date()
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
+            // MVP policy: do not charge credits on generation failure.
             generationError = localizedGenerationError(error)
         }
     }
