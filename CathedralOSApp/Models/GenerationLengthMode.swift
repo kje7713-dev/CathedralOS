@@ -35,6 +35,20 @@ enum GenerationLengthMode: String, CaseIterable, Codable {
         }
     }
 
+    // MARK: Credit cost
+    // Generation credit cost per request, keyed by length mode.
+    // Single source of truth — do not scatter credit costs across views or services.
+    // Actions (regenerate / continue / remix) use the same cost as the selected length mode.
+
+    var creditCost: Int {
+        switch self {
+        case .short:   return 1
+        case .medium:  return 2
+        case .long:    return 4
+        case .chapter: return 8
+        }
+    }
+
     // MARK: Default
 
     static var defaultMode: GenerationLengthMode { .medium }

@@ -17,17 +17,20 @@ struct AccountView: View {
     let authService: any AuthService
     let syncService: any GenerationOutputSyncServiceProtocol
     let profileBootstrapService: (any ProfileBootstrapServiceProtocol)?
+    let usageLimitService: any UsageLimitServiceProtocol
 
     @Environment(\.modelContext) private var modelContext
 
     init(
         authService: any AuthService = BackendAuthService(),
         syncService: any GenerationOutputSyncServiceProtocol = StubGenerationOutputSyncService(),
-        profileBootstrapService: (any ProfileBootstrapServiceProtocol)? = nil
+        profileBootstrapService: (any ProfileBootstrapServiceProtocol)? = nil,
+        usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared
     ) {
         self.authService = authService
         self.syncService = syncService
         self.profileBootstrapService = profileBootstrapService
+        self.usageLimitService = usageLimitService
     }
 
     @State private var authState: AuthState = .unknown
@@ -45,6 +48,7 @@ struct AccountView: View {
             List {
                 accountSection
                 cloudFeaturesSection
+                usageSection
                 syncSection
                 backendStatusSection
             }
@@ -151,6 +155,94 @@ struct AccountView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    // MARK: - Usage section
+
+    private var usageSection: some View {
+        let state = usageLimitService.currentState
+        return Section("Generation Credits") {
+            VStack(alignment: .leading, spacing: 8) {
+
+                // Plan row
+                HStack {
+                    Text("Plan")
+                        .font(.body)
+                    Spacer()
+                    Text(state.planName)
+                        .font(.body)
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    if state.source == .mock {
+                        Text("(dev)")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                // Credits remaining
+                HStack {
+                    Text("Credits remaining")
+                        .font(.body)
+                    Spacer()
+                    Text("\(state.availableCredits)")
+                        .font(.body)
+                        .foregroundStyle(
+                            state.availableCredits > 0
+                                ? CathedralTheme.Colors.primaryText
+                                : CathedralTheme.Colors.destructive
+                        )
+                    if state.source == .local {
+                        Text("(local)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                // Monthly count
+                HStack {
+                    Text("Generations this month")
+                        .font(.body)
+                    Spacer()
+                    Text("\(state.monthlyGenerationCount)")
+                        .font(.body)
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+
+                // Reset date
+                HStack {
+                    Text("Resets on")
+                        .font(.body)
+                    Spacer()
+                    Text(usageResetDateString(state.resetDate))
+                        .font(.body)
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+
+                // Explanation
+                Text("Credits are used when you generate content. Cost depends on output length: Short = 1, Medium = 2, Long = 4, Chapter = 8.")
+                    .font(.caption)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 4)
+
+                if state.source != .backend {
+                    #if DEBUG
+                    Text("Credit tracking is local only. Backend enforcement is required before public monetized release.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    #endif
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func usageResetDateString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 
     // MARK: - Cloud features section
