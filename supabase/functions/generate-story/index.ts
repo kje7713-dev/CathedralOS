@@ -295,7 +295,7 @@ async function handler(
   let store: CreditStore;
   let limiter: RateLimitStore;
 
-  if (creditStore && rateLimitStore) {
+  if (creditStore !== undefined && rateLimitStore !== undefined) {
     store = creditStore;
     limiter = rateLimitStore;
   } else {
@@ -311,8 +311,8 @@ async function handler(
       );
     }
     const adminClient = createClient(supabaseURL, serviceRoleKey);
-    store = creditStore ?? new SupabaseCreditStore(adminClient);
-    limiter = rateLimitStore ?? new SupabaseRateLimitStore(adminClient);
+    store = new SupabaseCreditStore(adminClient);
+    limiter = new SupabaseRateLimitStore(adminClient);
   }
 
   // -------------------------------------------------------------------------
