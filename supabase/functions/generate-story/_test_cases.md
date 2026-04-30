@@ -214,14 +214,100 @@ curl -s -X POST "$BASE_URL" \
 
 ---
 
+## Case 10 — Insufficient credits returns 402
+
+First, ensure the user has 0 available credits:
+- In Supabase Studio, set `user_entitlements.monthly_credit_allowance = 0`
+  and `purchased_credit_balance = 0` for the test user.
+
+```sh
+curl -s -X POST "$BASE_URL" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "apikey: $ANON_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sourcePayloadJSON": {"characters": []},
+    "generationAction": "generate",
+    "generationLengthMode": "short",
+    "outputBudget": 800
+  }'
+# Expected: 402
+# Expected body:
+# {
+#   "status": "failed",
+#   "errorCode": "insufficient_credits",
+#   "errorMessage": "Insufficient credits for this generation.",
+#   "requiredCredits": 1,
+#   "availableCredits": 0
+# }
+# Verify in Supabase Studio: NO row in generation_outputs, NO row in user_credit_ledger
+```
+
+---
+
+## Case 11 — Sufficient credits allows generation and charges
+
+Ensure the user has >= 1 available credit.
+
+```sh
+curl -s -X POST "$BASE_URL" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "apikey: $ANON_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sourcePayloadJSON": {
+      "schema": "cathedralos.prompt_pack_export",
+      "version": 1,
+      "project": {"id": "00000000-0000-0000-0000-000000000001", "name": "Test Project"},
+      "promptPack": {"id": "00000000-0000-0000-0000-000000000002", "name": "Adventure Pack", "prompts": []}
+    },
+    "generationAction": "generate",
+    "generationLengthMode": "short",
+    "outputBudget": 800
+  }'
+# Expected: 200
+# Expected body includes: status "complete", creditCostCharged: 1, remainingCredits: N-1
+# Verify in Supabase Studio:
+#   - generation_outputs row exists
+#   - user_credit_ledger row exists with delta = -1, reason = "generation_charge"
+#   - user_entitlements.monthly_credit_allowance decremented by 1
+```
+
+---
+
+## Case 12 — Provider failure does NOT charge credits
+
+Set `OPENAI_API_KEY=invalid` and ensure user has credits.
+
+```sh
+curl -s -X POST "$BASE_URL" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "apikey: $ANON_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sourcePayloadJSON": {"characters": []},
+    "generationAction": "generate",
+    "generationLengthMode": "short",
+    "outputBudget": 800
+  }'
+# Expected: 502
+# Verify in Supabase Studio:
+#   - NO new row in user_credit_ledger (no charge)
+#   - user_entitlements balance unchanged
+#   - generation_usage_events row with status "failed" (existing audit behaviour)
+```
+
+---
+
 ## Automated test patterns
 
-A future test suite can inject a mock `LLMProvider` via the exported `handler`
-function in `index.ts`. Example scaffold:
+A test suite can inject a mock `LLMProvider` and a mock `CreditStore` via the
+exported `handler` function in `index.ts`. See `index_test.ts` for examples.
 
 ```ts
 import { handler } from "./index.ts";
 import type { LLMProvider, LLMMessage } from "./_provider.ts";
+import type { CreditStore, UserEntitlement } from "./_credits.ts";
 
 const mockProvider: LLMProvider = {
   async complete(_messages: LLMMessage[], _maxTokens: number) {
@@ -234,5 +320,25 @@ const mockProvider: LLMProvider = {
   },
 };
 
-// Inject mockProvider as the second argument to handler() in tests.
+const mockCreditStore: CreditStore = {
+  async loadOrDefault(_userId) {
+    return {
+      user_id: _userId,
+      plan_name: "free",
+      is_pro: false,
+      monthly_credit_allowance: 10,
+      purchased_credit_balance: 0,
+      current_period_start: null,
+      current_period_end: null,
+      entitlement_source: "monthly_grant",
+      updated_at: new Date().toISOString(),
+    };
+  },
+  async charge(_userId, _cost, ent, _outputId) {
+    return { ...ent, monthly_credit_allowance: ent.monthly_credit_allowance - _cost };
+  },
+};
+
+// Inject mockProvider as 2nd argument and mockCreditStore as 3rd argument.
+// await handler(req, mockProvider, mockCreditStore);
 ```

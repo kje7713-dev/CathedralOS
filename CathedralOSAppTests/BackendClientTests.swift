@@ -80,7 +80,9 @@ final class BackendClientTests: XCTestCase {
             projectURL: URL(string: "https://xyz789.supabase.co")!,
             anonKey: "anon-key",
             generationEdgeFunctionPath: "generate",
-            sharingEdgeFunctionPath: "shared-outputs"
+            sharingEdgeFunctionPath: "shared-outputs",
+            creditStateEdgeFunctionPath: "get-credit-state",
+            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement"
         )
         let url = config.edgeFunctionURL(path: "generate")
         XCTAssertEqual(
@@ -94,7 +96,9 @@ final class BackendClientTests: XCTestCase {
             projectURL: URL(string: "https://xyz789.supabase.co")!,
             anonKey: "do-not-embed-me",
             generationEdgeFunctionPath: "generate",
-            sharingEdgeFunctionPath: "shared-outputs"
+            sharingEdgeFunctionPath: "shared-outputs",
+            creditStateEdgeFunctionPath: "get-credit-state",
+            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement"
         )
         let url = config.edgeFunctionURL(path: "generate")
         XCTAssertFalse(

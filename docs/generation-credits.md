@@ -1,8 +1,12 @@
-# Generation Credits — Scaffold Documentation
+# Generation Credits — Documentation
 
-> **Status: Local credit tracking + StoreKit 2 entitlement integration implemented.**
-> Backend enforcement is **required before any public monetized release**.
-> See also: [`docs/storekit-entitlements.md`](storekit-entitlements.md).
+> **Status: Backend enforcement implemented.**
+> Credits are now enforced server-side in `generate-story`.
+> The local client-side check remains as a fast-fail UX optimization only.
+> See also: [`docs/backend-credit-enforcement.md`](backend-credit-enforcement.md) and
+> [`docs/storekit-entitlements.md`](storekit-entitlements.md).
+>
+> ⚠️ **StoreKit receipt validation is still required before production paid launch.**
 
 ---
 
@@ -57,35 +61,37 @@ Before any generation network call, `checkPreflight(lengthMode:authState:)` retu
 
 ---
 
-## Charge policy (MVP)
+## Charge policy
 
-- **Successful generation** → credits are decremented via `recordSuccessfulGeneration(creditCost:lengthMode:)`.
-- **Failed generation** → credits are NOT consumed. The backend call was the point of failure; the user received no output.
-- **Partial output** (future) → treat as failure; do not charge until a consistent policy is defined.
+- **Successful generation** → Backend charges credits after the LLM response. iOS records locally via `recordSuccessfulGeneration(creditCost:lengthMode:)`.
+- **Failed generation** → Credits are NOT consumed. Neither the backend nor the client charges.
+- **Insufficient credits** → Backend returns `402` with `errorCode: "insufficient_credits"`. LLM is not called.
+
+See [`docs/backend-credit-enforcement.md`](backend-credit-enforcement.md) for full details.
+
+---
+
+## Backend enforcement (implemented)
+
+The `generate-story` Edge Function now enforces credits before calling OpenAI:
+
+1. Computes required credits from `generationLengthMode` server-side.
+2. Loads `user_entitlements` row (creates free-tier defaults for new users).
+3. Rejects with `402` if insufficient.
+4. Charges after successful generation; inserts ledger row.
+
+The client local check (`LocalUsageLimitService.checkPreflight`) is now a
+**fast-fail optimization** — it provides immediate UI feedback but is no longer
+the enforcement gate.
 
 ---
 
 ## What is NOT implemented in this PR
 
 - **Backend receipt validation** — StoreKit server-side validation via the App Store Server API.
-- **Real billing enforcement** — local credits are not trusted by the backend.
 - **Pricing experiments** — no A/B pricing or dynamic pricing.
 - **Social features** — out of scope.
 - **Public sharing changes** — out of scope.
-
----
-
-## Backend enforcement requirement
-
-> ⚠️ The backend **must** enforce credit balances server-side before any monetized public release.
->
-> The current local scaffold is a soft gate only. A motivated user could bypass it.
->
-> When you implement backend enforcement:
-> 1. Call a Supabase Edge Function (e.g. `deduct-credits`) before generation or inside the `generate-story` function.
-> 2. Return the authoritative credit balance in the `GenerationResponse`.
-> 3. Update `GenerationCreditState.source` to `.backend` and refresh `AccountView`.
-> 4. Replace `LocalUsageLimitService` preflight with a backend call, or keep the local check as a fast-fail optimization.
 
 ---
 

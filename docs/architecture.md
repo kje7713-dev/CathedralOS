@@ -162,5 +162,8 @@ The iOS app never receives or stores an OpenAI key. All generation is mediated b
 | `generation_usage_events` | Immutable audit log of generation requests |
 | `shared_outputs` | Denormalized snapshot for public sharing |
 | `remix_events` | Lineage record of every remix action |
+| `user_entitlements` | Backend-authoritative credit plan state (one row per user) |
+| `user_credit_ledger` | Immutable audit log of every credit movement |
 
 All tables have RLS enabled. See [`supabase-schema.md`](supabase-schema.md) for full schema details.
+See [`backend-credit-enforcement.md`](backend-credit-enforcement.md) for credit table design and policies.

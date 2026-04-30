@@ -49,6 +49,8 @@ struct ValidatedSupabaseConfiguration {
     let anonKey: String
     let generationEdgeFunctionPath: String
     let sharingEdgeFunctionPath: String
+    let creditStateEdgeFunctionPath: String
+    let storeKitSyncEdgeFunctionPath: String
 
     /// Builds the full URL for a named Supabase Edge Function.
     func edgeFunctionURL(path: String) -> URL {
@@ -103,6 +105,13 @@ enum SupabaseConfiguration {
     /// Supabase Edge Function path for the public sharing backend.
     static let sharingEdgeFunctionPath = "shared-outputs"
 
+    /// Supabase Edge Function path for fetching the backend-authoritative credit state.
+    static let creditStateEdgeFunctionPath = "get-credit-state"
+
+    /// Supabase Edge Function path for syncing StoreKit entitlements.
+    /// ⚠️ Admin/server-side use only — not callable from the iOS client.
+    static let storeKitSyncEdgeFunctionPath = "sync-storekit-entitlement"
+
     // MARK: - Validated configuration
 
     /// Returns a validated configuration, or throws a `SupabaseConfigurationError`
@@ -127,7 +136,9 @@ enum SupabaseConfiguration {
             projectURL: url,
             anonKey: key,
             generationEdgeFunctionPath: generationEdgeFunctionPath,
-            sharingEdgeFunctionPath: sharingEdgeFunctionPath
+            sharingEdgeFunctionPath: sharingEdgeFunctionPath,
+            creditStateEdgeFunctionPath: creditStateEdgeFunctionPath,
+            storeKitSyncEdgeFunctionPath: storeKitSyncEdgeFunctionPath
         )
     }
 }
