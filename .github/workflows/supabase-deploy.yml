@@ -1,0 +1,50 @@
+name: Supabase Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Supabase
+    runs-on: ubuntu-latest
+
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Supabase CLI
+        run: npm install -g supabase
+
+      - name: Link Supabase project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+
+      - name: Run database migrations
+        run: supabase db push --password "$SUPABASE_DB_PASSWORD"
+
+      - name: Deploy Edge Function - generate-story
+        if: ${{ hashFiles('supabase/functions/generate-story/index.ts') != '' }}
+        run: supabase functions deploy generate-story --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy Edge Function - sync-storekit-entitlement
+        if: ${{ hashFiles('supabase/functions/sync-storekit-entitlement/index.ts') != '' }}
+        run: supabase functions deploy sync-storekit-entitlement --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy Edge Function - app-store-server-notification
+        if: ${{ hashFiles('supabase/functions/app-store-server-notification/index.ts') != '' }}
+        run: supabase functions deploy app-store-server-notification --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy Edge Function - get-credit-state
+        if: ${{ hashFiles('supabase/functions/get-credit-state/index.ts') != '' }}
+        run: supabase functions deploy get-credit-state --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy Edge Function - backend-health
+        if: ${{ hashFiles('supabase/functions/backend-health/index.ts') != '' }}
+        run: supabase functions deploy backend-health --project-ref "$SUPABASE_PROJECT_REF"
