@@ -123,7 +123,7 @@ The iOS client derives entitlement state from StoreKit 2 locally verified transa
 
 The backend **must** independently verify purchase entitlement before honoring paid credits. Steps required:
 
-1. **Server-side receipt/transaction validation**: Call `POST https://api.storekit.itunes.apple.com/inApps/v1/transactions/{transactionId}` (or use the App Store Server API) to validate each transaction server-side.
+1. **Server-side transaction validation**: Use the [App Store Server API](https://developer.apple.com/documentation/appstoreserverapi) to verify transactions. The `GET /inApps/v1/transactions/{transactionId}` endpoint returns signed transaction information. Verify the JWT signature using Apple's public key before trusting the payload.
 2. **Entitlement sync**: After a verified purchase, update the user's credit balance in the database. Return the authoritative balance in `GenerationResponse`.
 3. **Backend preflight enforcement**: The `generate-story` Edge Function must deduct credits and check balance before running generation. Return an error if insufficient.
 4. **Update `GenerationCreditState.source`**: Set to `.backend` when returning authoritative balance from the server. The UI already shows "local" vs "backend" labels.

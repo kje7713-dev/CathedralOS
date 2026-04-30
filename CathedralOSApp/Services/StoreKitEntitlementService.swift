@@ -140,7 +140,10 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
         defer { isLoadingProducts = false }
         do {
             let products = try await Product.products(for: StoreKitProductIDs.allIDs)
-            availableProducts = products.sorted { $0.price < $1.price }
+            availableProducts = products.sorted {
+                if $0.price != $1.price { return $0.price < $1.price }
+                return $0.id < $1.id
+            }
         } catch {
             // Non-fatal: show no products in UI when store is unavailable.
             availableProducts = []
@@ -213,12 +216,15 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
             }
         }
 
-        if hasActiveSubscription {
+        if hasActiveSubscription, let subscriptionExpiresAt {
             entitlementState = .proTier(
-                expiresAt: subscriptionExpiresAt ?? Date().addingTimeInterval(30 * 86_400),
+                expiresAt: subscriptionExpiresAt,
                 purchasedCredits: purchasedCreditBalance
             )
         } else {
+            // No active subscription (or subscription has no expiration date — which
+            // should not occur for auto-renewing subscriptions but is treated as
+            // inactive to avoid incorrectly granting Pro access).
             entitlementState = StoreKitEntitlementState(
                 plan: .free,
                 isPro: false,
