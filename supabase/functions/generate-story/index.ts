@@ -9,6 +9,14 @@
 //   OPENAI_API_KEY            — OpenAI secret key
 //   OPENAI_MODEL_DEFAULT      — model used for normal generation (default: gpt-4o-mini)
 //   OPENAI_MODEL_PREMIUM      — (optional) reserved for future premium tier
+//   SUPABASE_SERVICE_ROLE_KEY — Supabase service-role key (auto-injected in Edge Functions)
+//
+// Credit enforcement:
+//   Credit cost is computed server-side from generationLengthMode.
+//   Client-submitted cost values are IGNORED.
+//   Insufficient credits → 402 with errorCode "insufficient_credits".
+//   Credits are charged ONLY after a successful LLM response.
+//   A failed LLM call does NOT charge credits.
 //
 // NEVER place any of these values in the iOS app or commit them to source
 // control. See docs/generate-story-edge-function.md for setup instructions.
@@ -16,6 +24,14 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildProviderFromEnv, LLMProvider } from "./_provider.ts";
+import {
+  ALLOWED_LENGTH_MODES,
+  type LengthMode,
+  getCreditCost,
+  checkCredits,
+  SupabaseCreditStore,
+  type CreditStore,
+} from "./_credits.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -23,9 +39,6 @@ import { buildProviderFromEnv, LLMProvider } from "./_provider.ts";
 
 const ALLOWED_ACTIONS = ["generate", "regenerate", "continue", "remix"] as const;
 type GenerationAction = typeof ALLOWED_ACTIONS[number];
-
-const ALLOWED_LENGTH_MODES = ["short", "medium", "long", "chapter"] as const;
-type LengthMode = typeof ALLOWED_LENGTH_MODES[number];
 
 const MAX_BUDGET: Record<LengthMode, number> = {
   short: 800,
@@ -181,7 +194,14 @@ function extractTitle(text: string, fallback: string): string {
 // ---------------------------------------------------------------------------
 
 // deno-lint-ignore no-explicit-any
-async function handler(req: Request, provider?: LLMProvider): Promise<Response> {
+async function handler(
+  req: Request,
+  provider?: LLMProvider,
+  // creditStore is for test injection only. In production (creditStore = undefined),
+  // the handler creates a SupabaseCreditStore backed by the SUPABASE_SERVICE_ROLE_KEY
+  // env var. Do not pass creditStore in production deployments.
+  creditStore?: CreditStore,
+): Promise<Response> {
   // Preflight
   if (req.method === "OPTIONS") {
     return corsResponse("", { status: 204 });
@@ -237,6 +257,31 @@ async function handler(req: Request, provider?: LLMProvider): Promise<Response> 
   }
 
   const userId = user.id;
+
+  // -------------------------------------------------------------------------
+  // Build service-role client for credit operations
+  // The service-role client bypasses RLS and can write to user_entitlements
+  // and user_credit_ledger. It is NEVER exposed to the iOS client.
+  // -------------------------------------------------------------------------
+
+  let store: CreditStore;
+  if (creditStore) {
+    // Injected for testing.
+    store = creditStore;
+  } else {
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!serviceRoleKey) {
+      return corsResponse(
+        JSON.stringify({
+          status: "failed",
+          errorMessage: "Server configuration error",
+        }),
+        { status: 500 },
+      );
+    }
+    const adminClient = createClient(supabaseURL, serviceRoleKey);
+    store = new SupabaseCreditStore(adminClient);
+  }
 
   // -------------------------------------------------------------------------
   // Parse request body
@@ -312,6 +357,30 @@ async function handler(req: Request, provider?: LLMProvider): Promise<Response> 
 
   const projectName = body.projectName ?? "";
   const promptPackName = body.promptPackName ?? "";
+
+  // -------------------------------------------------------------------------
+  // Credit enforcement — must happen BEFORE the LLM provider call
+  //
+  // Credit cost is computed server-side from generationLengthMode.
+  // The client-submitted cost (if any) is IGNORED.
+  // -------------------------------------------------------------------------
+
+  const requiredCredits = getCreditCost(generationLengthMode);
+  const entitlement = await store.loadOrDefault(userId);
+  const creditCheck = checkCredits(entitlement, requiredCredits);
+
+  if (!creditCheck.allowed) {
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "insufficient_credits",
+        errorMessage: "Insufficient credits for this generation.",
+        requiredCredits: creditCheck.requiredCredits,
+        availableCredits: creditCheck.availableCredits,
+      }),
+      { status: 402 },
+    );
+  }
 
   // -------------------------------------------------------------------------
   // Resolve provider (injected or from env)
@@ -448,6 +517,25 @@ async function handler(req: Request, provider?: LLMProvider): Promise<Response> 
   }
 
   // -------------------------------------------------------------------------
+  // Charge credits — only after successful generation
+  //
+  // Credits are charged AFTER the LLM provider returns successfully.
+  // A failed LLM call (handled in the catch block above) does NOT charge.
+  // Monthly allowance is drained first; purchased balance is used second.
+  // -------------------------------------------------------------------------
+
+  const updatedEntitlement = await store.charge(
+    userId,
+    requiredCredits,
+    entitlement,
+    generationOutputId,
+  );
+
+  const remainingCredits =
+    updatedEntitlement.monthly_credit_allowance +
+    updatedEntitlement.purchased_credit_balance;
+
+  // -------------------------------------------------------------------------
   // Return response
   // -------------------------------------------------------------------------
 
@@ -461,6 +549,8 @@ async function handler(req: Request, provider?: LLMProvider): Promise<Response> 
       outputBudget,
       inputTokens: llmResult.inputTokens,
       outputTokens: llmResult.outputTokens,
+      creditCostCharged: requiredCredits,
+      remainingCredits,
       status: "complete",
     }),
     { status: 200 },
@@ -469,5 +559,6 @@ async function handler(req: Request, provider?: LLMProvider): Promise<Response> 
 
 Deno.serve((req) => handler(req));
 
-// Export handler for testing.
+// Export handler and credit helpers for testing.
 export { handler };
+export { CREDIT_COST, getCreditCost, checkCredits, computeCharge } from "./_credits.ts";

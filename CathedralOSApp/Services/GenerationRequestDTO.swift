@@ -125,6 +125,19 @@ struct GenerationResponse: Codable {
     /// supports cloud output persistence; nil for backends that do not yet insert this row.
     let cloudGenerationOutputID: String?
 
+    // MARK: Credit enforcement fields
+    /// Machine-readable error code for structured error handling.
+    /// Currently defined values: "insufficient_credits"
+    let errorCode: String?
+    /// The number of credits required for this generation (present on insufficient_credits error).
+    let requiredCredits: Int?
+    /// The number of credits available to the user (present on insufficient_credits error).
+    let availableCredits: Int?
+    /// The number of credits charged for this generation (present on success).
+    let creditCostCharged: Int?
+    /// The number of credits remaining after this generation (present on success).
+    let remainingCredits: Int?
+
     // MARK: Status
     /// Expected values: "success" | "error"
     let status: String
@@ -142,6 +155,11 @@ struct GenerationResponse: Codable {
         outputTokens        = try c.decodeIfPresent(Int.self, forKey: .outputTokens)
         localGenerationID   = try c.decodeIfPresent(String.self, forKey: .localGenerationID)
         cloudGenerationOutputID = try c.decodeIfPresent(String.self, forKey: .cloudGenerationOutputID)
+        errorCode           = try c.decodeIfPresent(String.self, forKey: .errorCode)
+        requiredCredits     = try c.decodeIfPresent(Int.self, forKey: .requiredCredits)
+        availableCredits    = try c.decodeIfPresent(Int.self, forKey: .availableCredits)
+        creditCostCharged   = try c.decodeIfPresent(Int.self, forKey: .creditCostCharged)
+        remainingCredits    = try c.decodeIfPresent(Int.self, forKey: .remainingCredits)
         status              = try c.decode(String.self, forKey: .status)
         errorMessage        = try c.decodeIfPresent(String.self, forKey: .errorMessage)
     }

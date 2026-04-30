@@ -91,7 +91,9 @@ final class SupabaseConfigurationTests: XCTestCase {
             projectURL: URL(string: "https://abc123.supabase.co")!,
             anonKey: "test-anon-key",
             generationEdgeFunctionPath: "generate",
-            sharingEdgeFunctionPath: "shared-outputs"
+            sharingEdgeFunctionPath: "shared-outputs",
+            creditStateEdgeFunctionPath: "get-credit-state",
+            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement"
         )
         let url = config.edgeFunctionURL(path: "generate")
         XCTAssertEqual(
@@ -106,7 +108,9 @@ final class SupabaseConfigurationTests: XCTestCase {
             projectURL: URL(string: "https://abc123.supabase.co")!,
             anonKey: "test-anon-key",
             generationEdgeFunctionPath: "generate",
-            sharingEdgeFunctionPath: "shared-outputs"
+            sharingEdgeFunctionPath: "shared-outputs",
+            creditStateEdgeFunctionPath: "get-credit-state",
+            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement"
         )
         let url = config.edgeFunctionURL(path: "shared-outputs")
         XCTAssertEqual(
@@ -120,7 +124,9 @@ final class SupabaseConfigurationTests: XCTestCase {
             projectURL: URL(string: "https://abc123.supabase.co")!,
             anonKey: "super-secret-anon-key",
             generationEdgeFunctionPath: "generate",
-            sharingEdgeFunctionPath: "shared-outputs"
+            sharingEdgeFunctionPath: "shared-outputs",
+            creditStateEdgeFunctionPath: "get-credit-state",
+            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement"
         )
         let url = config.edgeFunctionURL(path: "generate")
         XCTAssertFalse(

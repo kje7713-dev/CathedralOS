@@ -33,13 +33,17 @@ iOS App (SupabaseBackendClient)
 Supabase Edge Function (generate-story/index.ts)
     │  1. Verify JWT → derive user_id
     │  2. Validate request body
-    │  3. Build prompt from sourcePayloadJSON
-    │  4. Call OpenAI via _provider.ts (secret key — never touches client)
-    │  5. Insert generation_outputs row
-    │  6. Insert generation_usage_events row
-    │  7. Return generated text
+    │  3. Compute required credits from generationLengthMode (server-side, never trust client)
+    │  4. Load user_entitlements → check credit balance
+    │  5. Return 402 insufficient_credits if balance too low (LLM NOT called)
+    │  6. Build prompt from sourcePayloadJSON
+    │  7. Call OpenAI via _provider.ts (secret key — never touches client)
+    │  8. Insert generation_outputs row
+    │  9. Insert generation_usage_events row
+    │  10. Charge credits: update user_entitlements, insert user_credit_ledger row
+    │  11. Return generated text + creditCostCharged + remainingCredits
     ▼
-Postgres (generation_outputs + generation_usage_events)
+Postgres (generation_outputs + generation_usage_events + user_entitlements + user_credit_ledger)
 ```
 
 ---
@@ -53,6 +57,7 @@ Set these using the Supabase CLI. **Do not commit any secret value.**
 | `OPENAI_API_KEY` | Yes | OpenAI secret key for LLM calls |
 | `OPENAI_MODEL_DEFAULT` | No | Model for normal generation (default: `gpt-4o-mini`) |
 | `OPENAI_MODEL_PREMIUM` | No | Reserved for a future premium tier |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes (auto-injected) | Used for credit enforcement DB writes |
 
 ### Set secrets locally (`.env.local`)
 
@@ -190,11 +195,25 @@ If the client sends a higher value, the server silently clamps it to the cap.
   "outputBudget": 800,
   "inputTokens": 342,
   "outputTokens": 617,
+  "creditCostCharged": 1,
+  "remainingCredits": 9,
   "status": "complete"
 }
 ```
 
-### Error
+### Error — insufficient credits (`402`)
+
+```json
+{
+  "status": "failed",
+  "errorCode": "insufficient_credits",
+  "errorMessage": "Insufficient credits for this generation.",
+  "requiredCredits": 8,
+  "availableCredits": 3
+}
+```
+
+### Error — other failures
 
 ```json
 {
@@ -207,6 +226,7 @@ If the client sends a higher value, the server silently clamps it to the cap.
 |---|---|
 | `401` | Missing or invalid JWT |
 | `400` | Malformed JSON body |
+| `402` | Insufficient credits (`errorCode: "insufficient_credits"`) |
 | `405` | Wrong HTTP method |
 | `422` | Validation error (invalid enum value, missing required field) |
 | `500` | Server configuration error |

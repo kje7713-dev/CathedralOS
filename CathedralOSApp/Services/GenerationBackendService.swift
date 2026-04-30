@@ -22,6 +22,10 @@ enum GenerationBackendServiceError: Error, LocalizedError {
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
     case decodingError(Error)
+    /// The backend rejected the request because the user has insufficient generation credits.
+    /// `required` is the credit cost for the requested generation; `available` is the user's
+    /// current balance as reported by the backend.
+    case insufficientCredits(required: Int, available: Int)
 
     var errorDescription: String? {
         switch self {
@@ -43,6 +47,8 @@ enum GenerationBackendServiceError: Error, LocalizedError {
             return base
         case .decodingError(let underlying):
             return "Could not parse server response: \(underlying.localizedDescription)"
+        case .insufficientCredits(let required, let available):
+            return "Not enough credits to generate. Required: \(required), available: \(available)."
         }
     }
 }
@@ -213,6 +219,18 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
 
         if let httpResponse = urlResponse as? HTTPURLResponse,
            !(200..<300).contains(httpResponse.statusCode) {
+            // Attempt to decode a structured error response first.
+            // The backend returns errorCode = "insufficient_credits" with a 402 status
+            // when the user does not have enough credits.
+            if let decoded = try? JSONDecoder().decode(GenerationResponse.self, from: data),
+               decoded.errorCode == "insufficient_credits" {
+                let required = decoded.requiredCredits ?? 0
+                let available = decoded.availableCredits ?? 0
+                throw GenerationBackendServiceError.insufficientCredits(
+                    required: required,
+                    available: available
+                )
+            }
             let msg = String(data: data, encoding: .utf8)
             throw GenerationBackendServiceError.serverError(
                 statusCode: httpResponse.statusCode,
