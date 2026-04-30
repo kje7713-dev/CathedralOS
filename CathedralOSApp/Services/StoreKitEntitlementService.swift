@@ -10,10 +10,13 @@ import StoreKit
 //  - Restore prior purchases (AppStore.sync)
 //  - Listen for transaction updates (renewals, refunds, revocations)
 //  - Expose the current StoreKitEntitlementState
+//  - Trigger backend server-side validation after any successful transaction
 //
-// ⚠️ Authority: entitlement state is client-side only.
-// Backend must validate StoreKit receipts/transactions before production release.
-// See docs/storekit-entitlements.md.
+// Authority model:
+//  - Local StoreKit state updates immediately for UI responsiveness.
+//  - Backend state is authoritative for generation credit enforcement.
+//  - After purchase/restore, call validateWithBackend(_:) to sync credits.
+//  See docs/storekit-entitlements.md.
 
 protocol StoreKitEntitlementServiceProtocol: AnyObject {
 
@@ -29,19 +32,35 @@ protocol StoreKitEntitlementServiceProtocol: AnyObject {
     /// Human-readable error from the most recent purchase or restore attempt.
     var purchaseError: String? { get }
 
+    /// Human-readable error from the most recent backend validation attempt.
+    /// Nil when validation succeeded or has not been attempted.
+    var backendValidationError: String? { get }
+
+    /// True while backend validation is in progress.
+    var isValidatingWithBackend: Bool { get }
+
+    /// Most recent response from the backend validation call, if available.
+    var lastBackendValidation: StoreKitValidationResponse? { get }
+
     /// Fetches products from the App Store for all known product IDs.
     func loadProducts() async
 
     /// Initiates a purchase flow for the given product.
+    /// On success, triggers backend validation automatically.
     /// Throws `StoreKitEntitlementError` if purchase fails or is unverified.
     func purchase(_ product: Product) async throws
 
     /// Calls `AppStore.sync()` to restore previous transactions, then refreshes
-    /// entitlement state.
+    /// entitlement state and triggers backend validation for each transaction.
     func restorePurchases() async throws
 
     /// Re-reads `Transaction.currentEntitlements` and updates `entitlementState`.
     func refreshEntitlement() async
+
+    /// Validates a set of transactions with the backend and returns the updated
+    /// entitlement response. Updates `lastBackendValidation` on success.
+    @discardableResult
+    func validateWithBackend(_ transactions: [Transaction]) async throws -> StoreKitValidationResponse
 }
 
 // MARK: - StoreKitEntitlementError
@@ -73,6 +92,10 @@ enum StoreKitEntitlementError: Error, LocalizedError {
 // revocations, and refunds are handled while the app is running.
 // Call `refreshEntitlement()` on foreground to pick up out-of-process changes.
 //
+// After any successful transaction, `purchase()` and `restorePurchases()` call
+// `validateWithBackend(_:)` to sync the backend entitlement. UI shows local
+// StoreKit state immediately; backend state is the credit authority.
+//
 // Thread safety: all mutable state is accessed from async contexts.
 // Use `await` when calling async methods from non-async contexts.
 
@@ -88,6 +111,15 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
     private(set) var availableProducts: [Product] = []
     private(set) var isLoadingProducts = false
     private(set) var purchaseError: String?
+    private(set) var backendValidationError: String?
+    private(set) var isValidatingWithBackend = false
+    private(set) var lastBackendValidation: StoreKitValidationResponse?
+
+    // MARK: Dependencies
+
+    /// Injected backend validation service. Set before calling purchase/restore.
+    /// When nil, backend validation is skipped (e.g. pre-auth or test builds).
+    var validationService: StoreKitValidationServiceProtocol?
 
     // MARK: Private
 
@@ -95,7 +127,9 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
 
     // MARK: Init / deinit
 
-    init() {}
+    init(validationService: StoreKitValidationServiceProtocol? = nil) {
+        self.validationService = validationService
+    }
 
     deinit {
         transactionListenerTask?.cancel()
@@ -122,12 +156,15 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
     private func handleVerificationResult(_ result: VerificationResult<Transaction>) async {
         switch result {
         case .unverified:
-            // ⚠️ Do not grant entitlement for unverified transactions.
-            // In production, server-side receipt validation is required.
+            // Do not grant entitlement for unverified transactions.
             break
         case .verified(let transaction):
-            // Refresh entitlement to reflect the new transaction state.
+            // Refresh local entitlement to reflect the new transaction state.
             await refreshEntitlement()
+            // Trigger backend validation asynchronously (non-blocking for update listener).
+            Task { [weak self] in
+                _ = try? await self?.validateWithBackend([transaction])
+            }
             // Finish the transaction to acknowledge receipt.
             await transaction.finish()
         }
@@ -154,15 +191,26 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
 
     func purchase(_ product: Product) async throws {
         purchaseError = nil
+        backendValidationError = nil
         let result = try await product.purchase()
         switch result {
         case .success(let verification):
             switch verification {
             case .verified(let transaction):
+                // Update local state immediately for UI responsiveness.
                 await refreshEntitlement()
+                // Validate with backend — this is the authoritative grant.
+                do {
+                    try await validateWithBackend([transaction])
+                } catch {
+                    // Surface the validation error without blocking the UX.
+                    // Local StoreKit state was already applied; the user can retry validation.
+                    backendValidationError = (error as? StoreKitValidationError)?.errorDescription
+                        ?? error.localizedDescription
+                }
                 await transaction.finish()
             case .unverified:
-                // ⚠️ Unverified: do not grant entitlement. Server validation needed.
+                // Do not grant entitlement. Server validation would also reject this.
                 throw StoreKitEntitlementError.verificationFailed
             }
         case .pending:
@@ -178,10 +226,28 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
     // MARK: - Restore Purchases
 
     func restorePurchases() async throws {
+        backendValidationError = nil
         // AppStore.sync() re-delivers all prior transactions to the update listener
         // and surfaces them via Transaction.currentEntitlements.
         try await AppStore.sync()
         await refreshEntitlement()
+
+        // Collect all current entitlement transactions for backend validation.
+        var transactions: [Transaction] = []
+        for await result in Transaction.currentEntitlements {
+            if case .verified(let transaction) = result {
+                transactions.append(transaction)
+            }
+        }
+
+        if !transactions.isEmpty {
+            do {
+                try await validateWithBackend(transactions)
+            } catch {
+                backendValidationError = (error as? StoreKitValidationError)?.errorDescription
+                    ?? error.localizedDescription
+            }
+        }
     }
 
     // MARK: - Entitlement Refresh
@@ -235,6 +301,23 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
             )
         }
     }
+
+    // MARK: - Backend Validation
+
+    @discardableResult
+    func validateWithBackend(_ transactions: [Transaction]) async throws -> StoreKitValidationResponse {
+        guard let validationService else {
+            // Validation service not configured (e.g. pre-auth). Skip silently.
+            throw StoreKitValidationError.notConfigured
+        }
+
+        isValidatingWithBackend = true
+        defer { isValidatingWithBackend = false }
+
+        let response = try await validationService.validateTransactions(transactions)
+        lastBackendValidation = response
+        return response
+    }
 }
 
 // MARK: - StubStoreKitEntitlementService
@@ -249,12 +332,17 @@ final class StubStoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
     var availableProducts: [Product] = []
     var isLoadingProducts = false
     var purchaseError: String?
+    var backendValidationError: String?
+    var isValidatingWithBackend = false
+    var lastBackendValidation: StoreKitValidationResponse?
 
     // MARK: Test controls
 
     var shouldThrowOnPurchase = false
     var shouldThrowOnRestore = false
     var purchaseGrantsProTier = true
+    var shouldThrowOnBackendValidation = false
+    var backendValidationResult: StoreKitValidationResponse = .stubPro()
 
     // MARK: Call counters (for test assertions)
 
@@ -262,6 +350,7 @@ final class StubStoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
     private(set) var purchaseCallCount = 0
     private(set) var restoreCallCount = 0
     private(set) var refreshCallCount = 0
+    private(set) var backendValidationCallCount = 0
 
     init(state: StoreKitEntitlementState = .freeTier()) {
         self.entitlementState = state
@@ -292,5 +381,15 @@ final class StubStoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
     func refreshEntitlement() async {
         refreshCallCount += 1
         // No-op: stub state is set directly by tests.
+    }
+
+    @discardableResult
+    func validateWithBackend(_ transactions: [Transaction]) async throws -> StoreKitValidationResponse {
+        backendValidationCallCount += 1
+        if shouldThrowOnBackendValidation {
+            throw StoreKitValidationError.serverError(statusCode: 500, message: "Stub error")
+        }
+        lastBackendValidation = backendValidationResult
+        return backendValidationResult
     }
 }

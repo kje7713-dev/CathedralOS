@@ -51,6 +51,7 @@ struct ValidatedSupabaseConfiguration {
     let sharingEdgeFunctionPath: String
     let creditStateEdgeFunctionPath: String
     let storeKitSyncEdgeFunctionPath: String
+    let storeKitValidateEdgeFunctionPath: String
 
     /// Builds the full URL for a named Supabase Edge Function.
     func edgeFunctionURL(path: String) -> URL {
@@ -112,6 +113,10 @@ enum SupabaseConfiguration {
     /// ⚠️ Admin/server-side use only — not callable from the iOS client.
     static let storeKitSyncEdgeFunctionPath = "sync-storekit-entitlement"
 
+    /// Supabase Edge Function path for iOS client StoreKit transaction validation.
+    /// Called by `BackendStoreKitValidationService` after a successful purchase or restore.
+    static let storeKitValidateEdgeFunctionPath = "sync-storekit-entitlement"
+
     // MARK: - Validated configuration
 
     /// Returns a validated configuration, or throws a `SupabaseConfigurationError`
@@ -138,7 +143,8 @@ enum SupabaseConfiguration {
             generationEdgeFunctionPath: generationEdgeFunctionPath,
             sharingEdgeFunctionPath: sharingEdgeFunctionPath,
             creditStateEdgeFunctionPath: creditStateEdgeFunctionPath,
-            storeKitSyncEdgeFunctionPath: storeKitSyncEdgeFunctionPath
+            storeKitSyncEdgeFunctionPath: storeKitSyncEdgeFunctionPath,
+            storeKitValidateEdgeFunctionPath: storeKitValidateEdgeFunctionPath
         )
     }
 }
