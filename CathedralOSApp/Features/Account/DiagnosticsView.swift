@@ -261,7 +261,8 @@ struct DiagnosticsView: View {
                 if let text = viewModel.snapshot?.copyText() {
                     UIPasteboard.general.string = text
                     copyConfirmation = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    Task {
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
                         copyConfirmation = false
                     }
                 }

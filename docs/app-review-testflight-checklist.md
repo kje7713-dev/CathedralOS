@@ -21,7 +21,7 @@ Every cloud action (generate, sync, publish, report, remix) will surface a clear
 "not configured" error. The Diagnostics screen reports `Backend configured: No`.
 
 **What to check:**
-- Account tab → Developer Tools → Diagnostics → Backend Config section shows `Yes` for all three rows.
+- Account tab → Developer Tools → Diagnostics → Backend Config section shows `Yes` for Backend configured, URL present, and Anon key present.
 - Account tab → Backend section shows "Backend configured" in green.
 
 ---

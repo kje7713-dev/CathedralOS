@@ -297,13 +297,14 @@ final class DiagnosticsViewModel: ObservableObject {
                 : "\(creditState.availableCredits) available (need at least \(shortCreditCost) for Short generation)"
         ))
 
-        // 4. StoreKit products loaded? (non-fatal)
-        let productsLoaded = !entitlementService.availableProducts.isEmpty || entitlementService.isLoadingProducts
+        // 4. StoreKit products loaded? (non-fatal; loading state is transient, not a failure)
+        let isLoading = entitlementService.isLoadingProducts
+        let productsLoaded = !entitlementService.availableProducts.isEmpty || isLoading
         items.append(GenerationPreflightItem(
             label: "StoreKit products loaded",
             passed: productsLoaded,
-            detail: entitlementService.isLoadingProducts
-                ? "Loading…"
+            detail: isLoading
+                ? "Loading… (check again after load completes)"
                 : entitlementService.availableProducts.isEmpty
                     ? "No products loaded — check App Store configuration"
                     : "\(entitlementService.availableProducts.count) products"
