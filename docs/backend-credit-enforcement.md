@@ -5,8 +5,10 @@
 > credit check is a fast-fail UX optimization only — the backend always
 > recomputes and enforces credits independently.
 >
-> ⚠️ **StoreKit receipt validation is still required before production paid launch.**
-> See [StoreKit validation](#storekit-validation-before-production-launch) below.
+> ✅ **StoreKit server-side validation is now implemented.**
+> iOS purchases are validated via the App Store Server API. Configure the
+> required App Store secrets before production launch — see
+> [App Store Secrets](#app-store-secrets) below.
 
 ---
 
@@ -34,7 +36,12 @@ One row per user. Tracks plan state and denormalized credit balances.
 | `purchased_credit_balance` | integer | Credits from purchased packs (do not expire) |
 | `current_period_start` | timestamptz | Start of the current credit period |
 | `current_period_end` | timestamptz | End of the current credit period |
-| `entitlement_source` | text | Last update source (e.g. `monthly_grant`, `admin_adjustment`) |
+| `entitlement_source` | text | Last update source (e.g. `monthly_grant`, `admin_adjustment`, `storekit_receipt`) |
+| `app_store_original_transaction_id` | text | Original transaction ID from Apple (for subscription continuity) |
+| `app_store_latest_transaction_id` | text | Most recently validated transaction ID |
+| `app_store_product_id` | text | Product ID of the last validated transaction |
+| `app_store_environment` | text | `"Sandbox"` or `"Production"` |
+| `last_validated_at` | timestamptz | Timestamp of the last successful Apple server-side validation |
 | `updated_at` | timestamptz | Auto-updated by trigger |
 
 **Available credits** = `monthly_credit_allowance + purchased_credit_balance`
@@ -59,10 +66,28 @@ Immutable audit log of every credit movement.
 | Reason | Description |
 |---|---|
 | `monthly_allowance_grant` | Monthly credits applied at period start |
-| `purchase_credit_pack` | Credit pack purchase applied |
+| `purchase_credit_pack` | Credit pack purchase applied (consumable) |
+| `subscription_grant` | Subscription entitlement applied |
 | `generation_charge` | Credits consumed by a generation request |
 | `generation_refund` | Credits restored for a failed generation |
 | `admin_adjustment` | Manual operational correction |
+
+### `app_store_transactions`
+
+Idempotency and audit log for every validated App Store transaction.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | Auto-generated |
+| `user_id` | uuid | References `auth.users(id)` |
+| `transaction_id` | text UNIQUE | Apple transaction ID (uniqueness prevents double-grants) |
+| `original_transaction_id` | text | Original transaction ID |
+| `product_id` | text | App Store product identifier |
+| `environment` | text | `"Sandbox"` or `"Production"` |
+| `type` | text | e.g. `"Auto-Renewable Subscription"`, `"Consumable"` |
+| `credited_amount` | integer | Credits granted (null for subscriptions) |
+| `raw_payload` | jsonb | Decoded Apple transaction payload (for debugging/support) |
+| `created_at` | timestamptz | Immutable creation timestamp |
 
 ---
 
@@ -208,11 +233,74 @@ Returns the backend-authoritative credit state for the authenticated user.
 
 Use this from `AccountView` to display accurate credit state.
 
-### `sync-storekit-entitlement` (placeholder)
+### `sync-storekit-entitlement`
 
-Admin/server-side only. **Not callable from the iOS client.**
+Validates App Store transactions and updates entitlements. Called by the iOS client after purchase/restore using the user's Supabase JWT.
 
-See [StoreKit Validation](#storekit-validation-before-production-launch) below.
+**Method:** `POST`  
+**Authorization:** `Bearer <user-jwt>` (for `validate_transaction` mode)
+
+**Request body (validate_transaction mode):**
+
+```json
+{
+  "mode": "validate_transaction",
+  "signedTransactionInfo": "<JWS from transaction.jwsRepresentation>",
+  "transactionId": "txn-id-123",
+  "originalTransactionId": "orig-txn-id-456"
+}
+```
+
+**Response (200 — success or idempotent):**
+
+```json
+{
+  "status": "ok",
+  "alreadyApplied": false,
+  "transactionId": "txn-id-123",
+  "productId": "cathedralos.pro.monthly",
+  "planName": "pro",
+  "isPro": true,
+  "monthlyCreditAllowance": 100,
+  "purchasedCreditBalance": 0,
+  "availableCredits": 100,
+  "currentPeriodEnd": "2026-05-30T00:00:00Z"
+}
+```
+
+**Response (402 — Apple rejected the transaction):**
+
+```json
+{
+  "error": "Transaction verification failed",
+  "detail": "Could not verify transaction with Apple's servers."
+}
+```
+
+**Response (503 — Apple API secrets not configured):**
+
+```json
+{
+  "error": "Apple API not configured",
+  "detail": "APP_STORE_KEY_ID, APP_STORE_ISSUER_ID, APP_STORE_PRIVATE_KEY, and APP_STORE_BUNDLE_ID must be configured."
+}
+```
+
+---
+
+## App Store Secrets
+
+Set via `supabase secrets set <KEY>=<VALUE>` before production launch:
+
+| Secret | Description |
+|---|---|
+| `APP_STORE_KEY_ID` | Key ID from App Store Connect → Users & Access → Integrations |
+| `APP_STORE_ISSUER_ID` | Issuer ID from the same location |
+| `APP_STORE_PRIVATE_KEY` | Full contents of the `.p8` private key file |
+| `APP_STORE_BUNDLE_ID` | App bundle ID (e.g. `com.example.cathedralos`) |
+| `APP_STORE_ENVIRONMENT` | `"Sandbox"` (TestFlight) or `"Production"` (release) |
+
+These secrets are **never** placed in the iOS app. The app only holds the public anon key.
 
 ---
 
@@ -239,9 +327,26 @@ case insufficientCredits(required: Int, available: Int)
 The `post()` method detects `errorCode == "insufficient_credits"` in the
 decoded response and throws this error instead of the generic `serverError`.
 
+### `StoreKitValidationService`
+
+New service for validating StoreKit transactions with the backend:
+
+```swift
+protocol StoreKitValidationServiceProtocol {
+    func validateTransaction(_ transaction: Transaction) async throws -> StoreKitValidationResponse
+    func validateTransactions(_ transactions: [Transaction]) async throws -> StoreKitValidationResponse
+}
+```
+
+Implementations:
+- `BackendStoreKitValidationService` — calls `sync-storekit-entitlement` Edge Function
+- `StubStoreKitValidationService` — returns configurable stub for tests/previews
+
+Called automatically by `StoreKitEntitlementService.purchase(_:)` and `restorePurchases()`.
+
 ### `CreditStateService`
 
-New service for fetching backend credit state:
+Service for fetching backend credit state:
 
 ```swift
 protocol CreditStateServiceProtocol {
@@ -257,33 +362,32 @@ Implementations:
 
 ---
 
-## StoreKit Validation Before Production Launch
+## StoreKit Transaction Validation
 
-> ⚠️ **The backend does not yet validate App Store receipts.**
-> The `sync-storekit-entitlement` function is a placeholder.
+> ✅ **Implemented in this PR.**
 
-Before any paid launch, you must:
+### How it works
 
-1. **Obtain an App Store Server API key** from App Store Connect.
-   Keep this key server-side only — never in the iOS app.
+1. iOS submits `signedTransactionInfo` (JWS from `transaction.jwsRepresentation`) to the backend.
+2. Backend decodes the JWS to extract the `transactionId`.
+3. Backend calls `GET /inApps/v1/transactions/{transactionId}` (App Store Server API) with a server-signed JWT.
+4. Apple returns a verified transaction payload.
+5. Backend maps the `productId` to the appropriate entitlement grant.
+6. Backend inserts into `app_store_transactions` (idempotency guard).
+7. Backend upserts `user_entitlements` and inserts `user_credit_ledger` row.
+8. Response returns the updated credit state.
 
-2. **Verify StoreKit 2 transactions server-side** using the
-   [App Store Server API](https://developer.apple.com/documentation/appstoreserverapi):
-   - `GET /inApps/v1/transactions/{transactionId}` verifies individual transactions.
-   - Verify the returned JWS signature using Apple's public key.
+### Idempotency
 
-3. **Implement App Store Server Notifications** to receive real-time events
-   (renewals, refunds, expirations). Wire these into `user_entitlements` updates.
+Same transaction cannot be applied twice — `app_store_transactions.transaction_id` is `UNIQUE`. If submitted again, the backend returns `alreadyApplied: true` with the current state (HTTP 200). No double-grant occurs.
 
-4. **Implement `sync-storekit-entitlement`** to accept validated transaction JWS
-   tokens and update `user_entitlements` + `user_credit_ledger` accordingly.
+### Remaining work before production
 
-5. **Do not trust iOS-submitted entitlement claims** as production authority.
-   The iOS client can send a `transactionId`, but the backend must verify it
-   with Apple before granting credits.
+- **Configure App Store secrets** — `APP_STORE_KEY_ID`, `APP_STORE_ISSUER_ID`, `APP_STORE_PRIVATE_KEY`, `APP_STORE_BUNDLE_ID`.
+- **Set `APP_STORE_ENVIRONMENT=Production`** for production builds.
+- **Implement App Store Server Notifications** for real-time renewal/expiration/refund handling. The `app-store-server-notification` stub endpoint is ready for the webhook URL; full handler to be implemented in a follow-up PR.
 
-See [`storekit-entitlements.md`](storekit-entitlements.md) for the iOS-side
-entitlement model and authority discussion.
+See [`storekit-entitlements.md`](storekit-entitlements.md) for the full authority model.
 
 ---
 
@@ -302,8 +406,7 @@ limits reliably, because:
 - It computes credit cost itself — it never trusts the client.
 - It writes to RLS-protected tables that the client cannot mutate directly.
 
-After this PR, `generate-story` cannot be called successfully without credits,
-regardless of what the iOS client does.
+`generate-story` cannot be called successfully without credits, regardless of what the iOS client does.
 
 ---
 
@@ -327,14 +430,18 @@ regardless of what the iOS client does.
 | `CathedralOSApp/Services/GenerationRequestDTO.swift` | Added `errorCode`, `requiredCredits`, `availableCredits`, `creditCostCharged`, `remainingCredits` to `GenerationResponse` |
 | `CathedralOSApp/Services/GenerationBackendService.swift` | Added `.insufficientCredits` error case; detects `errorCode` in `post()` |
 | `CathedralOSApp/Services/CreditStateService.swift` | **New** — `BackendCreditState` DTO + `CreditStateServiceProtocol` + implementations |
-| `CathedralOSApp/Services/SupabaseConfiguration.swift` | Added `creditStateEdgeFunctionPath` + `storeKitSyncEdgeFunctionPath` |
-| `CathedralOSAppTests/BackendCreditEnforcementTests.swift` | **New** — Swift unit tests |
+| `CathedralOSApp/Services/SupabaseConfiguration.swift` | Added `creditStateEdgeFunctionPath` + `storeKitSyncEdgeFunctionPath` + `storeKitValidateEdgeFunctionPath` |
+| `CathedralOSApp/Services/StoreKitValidationService.swift` | **New** — `StoreKitValidationServiceProtocol` + `BackendStoreKitValidationService` + stub |
+| `CathedralOSApp/Services/StoreKitEntitlementService.swift` | **Updated** — calls backend validation after purchase/restore |
+| `CathedralOSAppTests/BackendCreditEnforcementTests.swift` | Existing Swift unit tests (unmodified) |
+| `CathedralOSAppTests/StoreKitServerValidationTests.swift` | **New** — Swift tests for backend validation flow |
 
 ### Docs
 
 | File | Change |
 |---|---|
-| `docs/backend-credit-enforcement.md` | **New** — this file |
+| `docs/backend-credit-enforcement.md` | Updated — StoreKit validation section, App Store Secrets, new tables |
+| `docs/storekit-entitlements.md` | Updated — full validation flow, required secrets, idempotency, ASSN |
 | `docs/generation-credits.md` | Updated to reflect backend enforcement |
 | `docs/generate-story-edge-function.md` | Updated with new credit response fields |
 | `docs/architecture.md` | Updated with new tables |

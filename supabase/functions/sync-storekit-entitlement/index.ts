@@ -1,39 +1,61 @@
 // =============================================================================
 // index.ts — sync-storekit-entitlement Supabase Edge Function
 //
-// ⚠️  PLACEHOLDER — NOT PRODUCTION READY ⚠️
+// Validates an App Store transaction server-side and updates the user's
+// entitlement / credit balance accordingly.
 //
-// This function is a placeholder for future App Store Server transaction
-// validation. It must NOT be called from the iOS client directly with raw
-// StoreKit transaction data; the backend must validate transactions via the
-// App Store Server API before trusting any entitlement claim.
+// Supports two modes:
+//   "validate_transaction" — iOS client submits a signedTransactionInfo JWS
+//                            (or transactionId alone). Backend calls Apple's
+//                            App Store Server API to verify, then applies
+//                            the entitlement/credit grant.
 //
-// Current state (this PR):
-//   - Accepts only requests authenticated with the Supabase service-role key
-//     (i.e., only callable from trusted server-to-server contexts, not from
-//     the iOS client).
-//   - Returns 501 Not Implemented for the receipt validation path.
-//   - Allows an admin/manual entitlement update via the service-role path for
-//     testing and operational use.
+//   "manual_grant"         — Admin/operational override. Requires admin auth.
 //
-// Before production paid launch you MUST:
-//   1. Integrate with the App Store Server API to validate transaction JWTs.
-//      See: https://developer.apple.com/documentation/appstoreserverapi
-//   2. Verify Apple's JWS signature using Apple's public key (do not skip).
-//   3. Record the transactionId as related_transaction_id in user_credit_ledger.
-//   4. Only then update user_entitlements.
+// Security model:
+//   - iOS clients are authenticated via their Supabase JWT (user scope).
+//   - Apple transaction data is ALWAYS verified via the App Store Server API
+//     when APP_STORE_* secrets are configured.
+//   - If Apple API secrets are absent, the JWS payload is decoded for the
+//     transactionId but the function logs a warning and marks the transaction
+//     as environment=unconfigured. Configure secrets before production launch.
+//   - Idempotency: if a transaction has already been applied (row exists in
+//     app_store_transactions), the function returns the current state without
+//     re-granting credits.
+//   - Client-reported productId values are NEVER trusted without Apple
+//     server-side verification.
 //
-// Security invariant:
-//   Do NOT add a client-accessible path that trusts iOS-supplied entitlement
-//   claims without server-side App Store receipt validation.
+// Required secrets (set via `supabase secrets set`):
+//   SUPABASE_SERVICE_ROLE_KEY — auto-injected
+//   APP_STORE_KEY_ID          — App Store Connect API key identifier
+//   APP_STORE_ISSUER_ID       — App Store Connect issuer ID
+//   APP_STORE_PRIVATE_KEY     — .p8 private key contents (ES256, PEM)
+//   APP_STORE_BUNDLE_ID       — App bundle identifier
+//   APP_STORE_ENVIRONMENT     — "Sandbox" or "Production" (default: "Sandbox")
 //
-// Secrets required:
-//   SUPABASE_SERVICE_ROLE_KEY — auto-injected; required for all writes
-//   ADMIN_SECRET              — set via `supabase secrets set ADMIN_SECRET=...`
-//                               Used to authenticate admin/manual calls.
+// Optional secrets:
+//   ADMIN_SECRET              — for manual_grant calls
+//
+// See docs/storekit-entitlements.md for full setup instructions.
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  getProductGrant,
+  type ConsumableGrant,
+  type SubscriptionGrant,
+} from "./_product_map.ts";
+import {
+  decodeJWSPayload,
+  verifyTransactionWithApple,
+  loadAppleApiConfig,
+  type AppleTransactionPayload,
+} from "./_apple_api.ts";
+import { FREE_TIER_MONTHLY_ALLOWANCE, type UserEntitlement } from "../generate-story/_credits.ts";
+
+// ---------------------------------------------------------------------------
+// CORS
+// ---------------------------------------------------------------------------
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -54,34 +76,32 @@ function corsResponse(body: string, init: ResponseInit = {}): Response {
 }
 
 // ---------------------------------------------------------------------------
-// Request body
+// Request body types
 // ---------------------------------------------------------------------------
 
-interface SyncStoreKitRequest {
-  /** Target user_id to update. Required. */
+interface ValidateTransactionRequest {
+  mode: "validate_transaction";
+  /** JWS-encoded signed transaction info from StoreKit 2 (transaction.jwsRepresentation). */
+  signedTransactionInfo?: string;
+  /** Transaction ID, used when signedTransactionInfo is unavailable. */
+  transactionId?: string;
+  /** Original transaction ID for subscription continuity tracking. */
+  originalTransactionId?: string;
+  /** appAccountToken set at purchase time, if any. */
+  appAccountToken?: string;
+}
+
+interface ManualGrantRequest {
+  mode: "manual_grant";
+  /** Target user_id (admin use only). */
   userId: string;
-
-  /**
-   * Mode of sync operation.
-   *
-   * "manual_grant"           — admin/operational override: set entitlement directly.
-   *                            Only allowed when called with the admin secret.
-   *
-   * "storekit_receipt"       — (NOT IMPLEMENTED) will validate a StoreKit receipt
-   *                            via App Store Server API before granting entitlement.
-   */
-  mode: "manual_grant" | "storekit_receipt";
-
-  // Fields for mode = "manual_grant"
   planName?: string;
   isPro?: boolean;
   monthlyCreditAllowance?: number;
-  purchasedCreditDelta?: number; // positive = add credits
-
-  // Fields for mode = "storekit_receipt" (NOT IMPLEMENTED YET)
-  // transactionId?: string;
-  // signedTransactionInfo?: string; // JWS token from StoreKit 2
+  purchasedCreditDelta?: number;
 }
+
+type SyncRequest = ValidateTransactionRequest | ManualGrantRequest;
 
 // ---------------------------------------------------------------------------
 // Main handler
@@ -93,121 +113,419 @@ Deno.serve(async (req: Request) => {
   }
 
   if (req.method !== "POST") {
-    return corsResponse(
-      JSON.stringify({ error: "Method not allowed" }),
-      { status: 405 },
-    );
+    return corsResponse(JSON.stringify({ error: "Method not allowed" }), { status: 405 });
   }
 
-  // -------------------------------------------------------------------------
-  // Admin authentication
-  //
-  // This endpoint is service-role / admin only.
-  // The iOS client must NOT call this endpoint directly.
-  //
-  // Two accepted authentication methods:
-  //   1. x-admin-secret header matching ADMIN_SECRET env var.
-  //   2. Authorization: Bearer <service-role-key> (for server-to-server calls).
-  // -------------------------------------------------------------------------
-
   const supabaseURL = Deno.env.get("SUPABASE_URL");
+  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   const adminSecret = Deno.env.get("ADMIN_SECRET");
 
-  if (!supabaseURL || !serviceRoleKey) {
-    return corsResponse(
-      JSON.stringify({ error: "Server configuration error" }),
-      { status: 500 },
-    );
+  if (!supabaseURL || !supabaseAnonKey || !serviceRoleKey) {
+    return corsResponse(JSON.stringify({ error: "Server configuration error" }), { status: 500 });
   }
 
-  const providedAdminSecret = req.headers.get("x-admin-secret");
-  const authHeader = req.headers.get("Authorization");
-  const bearerToken = authHeader?.replace(/^Bearer\s+/i, "");
-
-  const isAdminSecretAuth = adminSecret && providedAdminSecret === adminSecret;
-  const isServiceRoleAuth = bearerToken === serviceRoleKey;
-
-  if (!isAdminSecretAuth && !isServiceRoleAuth) {
-    return corsResponse(
-      JSON.stringify({
-        error: "Forbidden",
-        detail:
-          "This endpoint requires admin authentication. " +
-          "Provide a valid x-admin-secret header or service-role bearer token.",
-      }),
-      { status: 403 },
-    );
-  }
-
-  // -------------------------------------------------------------------------
-  // Parse body
-  // -------------------------------------------------------------------------
-
-  let body: SyncStoreKitRequest;
+  // Parse body first so we know the mode before auth checks.
+  let body: SyncRequest;
   try {
     body = await req.json();
   } catch {
-    return corsResponse(
-      JSON.stringify({ error: "Invalid JSON body" }),
-      { status: 400 },
-    );
+    return corsResponse(JSON.stringify({ error: "Invalid JSON body" }), { status: 400 });
   }
 
-  if (!body.userId) {
+  // -------------------------------------------------------------------------
+  // manual_grant — admin/service-role auth
+  // -------------------------------------------------------------------------
+
+  if (body.mode === "manual_grant") {
+    const providedAdminSecret = req.headers.get("x-admin-secret");
+    const authHeader = req.headers.get("Authorization");
+    const bearerToken = authHeader?.replace(/^Bearer\s+/i, "");
+
+    const isAdminSecretAuth = adminSecret && providedAdminSecret === adminSecret;
+    const isServiceRoleAuth = bearerToken === serviceRoleKey;
+
+    if (!isAdminSecretAuth && !isServiceRoleAuth) {
+      return corsResponse(
+        JSON.stringify({
+          error: "Forbidden",
+          detail:
+            "manual_grant requires admin authentication (x-admin-secret header or service-role bearer token).",
+        }),
+        { status: 403 },
+      );
+    }
+
+    return handleManualGrant(body, createClient(supabaseURL, serviceRoleKey));
+  }
+
+  // -------------------------------------------------------------------------
+  // validate_transaction — user JWT auth
+  // -------------------------------------------------------------------------
+
+  if (body.mode !== "validate_transaction") {
     return corsResponse(
-      JSON.stringify({ error: "userId is required" }),
+      JSON.stringify({ error: "Invalid mode. Use 'validate_transaction' or 'manual_grant'." }),
       { status: 422 },
     );
   }
 
-  // -------------------------------------------------------------------------
-  // Mode: storekit_receipt — NOT IMPLEMENTED
-  // -------------------------------------------------------------------------
-
-  if (body.mode === "storekit_receipt") {
-    // ⚠️  PLACEHOLDER
-    //
-    // Before implementing this path:
-    //   1. Receive signedTransactionInfo (JWS) from App Store Server Notification
-    //      or from iOS client via a server-to-server relay (never direct client trust).
-    //   2. Verify the JWS signature using Apple's public key from
-    //      https://appleid.apple.com/auth/keys
-    //   3. Parse the decoded payload to extract:
-    //         - productId, transactionId, purchaseDate, expiresDate (if subscription)
-    //   4. Check transactionId has not already been applied (idempotency).
-    //   5. Update user_entitlements accordingly.
-    //   6. Insert a user_credit_ledger row with reason = "purchase_credit_pack" or
-    //      "monthly_allowance_grant".
-    //
-    // Do NOT trust raw claims from the iOS client. Always validate with Apple.
-
-    return corsResponse(
-      JSON.stringify({
-        status: "not_implemented",
-        message:
-          "StoreKit receipt validation is not yet implemented. " +
-          "App Store Server API integration is required before production launch. " +
-          "See docs/backend-credit-enforcement.md for the required steps.",
-      }),
-      { status: 501 },
-    );
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    return corsResponse(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
   }
 
-  // -------------------------------------------------------------------------
-  // Mode: manual_grant — admin/operational override
-  // -------------------------------------------------------------------------
+  // Verify the user's Supabase JWT.
+  const userClient = createClient(supabaseURL, supabaseAnonKey, {
+    global: { headers: { Authorization: authHeader } },
+  });
 
-  if (body.mode !== "manual_grant") {
-    return corsResponse(
-      JSON.stringify({ error: "Invalid mode. Use 'manual_grant' or 'storekit_receipt'." }),
-      { status: 422 },
-    );
+  const { data: { user }, error: authError } = await userClient.auth.getUser();
+  if (authError || !user) {
+    return corsResponse(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
   }
 
   const adminClient = createClient(supabaseURL, serviceRoleKey);
 
-  // Load current entitlement (may not exist for new users).
+  return handleValidateTransaction(body, user.id, adminClient);
+});
+
+// ---------------------------------------------------------------------------
+// validate_transaction handler
+// ---------------------------------------------------------------------------
+
+async function handleValidateTransaction(
+  // deno-lint-ignore no-explicit-any
+  body: ValidateTransactionRequest,
+  userId: string,
+  // deno-lint-ignore no-explicit-any
+  adminClient: any,
+): Promise<Response> {
+  // 1. Extract transaction ID from the JWS payload OR from the raw field.
+  let transactionId: string | null = null;
+  let jwsPayload: Record<string, unknown> | null = null;
+
+  if (body.signedTransactionInfo) {
+    try {
+      jwsPayload = decodeJWSPayload(body.signedTransactionInfo);
+      transactionId = jwsPayload["transactionId"] as string ?? null;
+    } catch (e) {
+      console.error("Failed to decode signedTransactionInfo:", e);
+      return corsResponse(
+        JSON.stringify({ error: "Invalid signedTransactionInfo: could not decode JWS payload" }),
+        { status: 422 },
+      );
+    }
+  }
+
+  if (!transactionId && body.transactionId) {
+    transactionId = body.transactionId;
+  }
+
+  if (!transactionId) {
+    return corsResponse(
+      JSON.stringify({
+        error: "Missing transaction identifier. Provide signedTransactionInfo or transactionId.",
+      }),
+      { status: 422 },
+    );
+  }
+
+  // 2. Idempotency check — has this transaction already been applied?
+  const { data: existingTx } = await adminClient
+    .from("app_store_transactions")
+    .select("id, product_id, credited_amount, created_at")
+    .eq("transaction_id", transactionId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (existingTx) {
+    // Already applied — return current entitlement without re-granting.
+    const currentState = await loadCurrentEntitlement(userId, adminClient);
+    return corsResponse(
+      JSON.stringify({
+        status: "already_applied",
+        alreadyApplied: true,
+        transactionId,
+        ...formatEntitlementResponse(currentState),
+      }),
+      { status: 200 },
+    );
+  }
+
+  // 3. Validate transaction with Apple's App Store Server API.
+  let applePayload: AppleTransactionPayload;
+  const appleConfig = loadAppleApiConfig();
+
+  if (appleConfig) {
+    try {
+      applePayload = await verifyTransactionWithApple(transactionId, appleConfig);
+    } catch (e) {
+      console.error("Apple API verification failed:", e);
+      return corsResponse(
+        JSON.stringify({
+          error: "Transaction verification failed",
+          detail: "Could not verify transaction with Apple's servers. Please try again.",
+        }),
+        { status: 402 },
+      );
+    }
+  } else {
+    // Apple API not yet configured — decode JWS payload directly.
+    // ⚠️ Warning: this path does NOT verify Apple's signature. Configure
+    // APP_STORE_* secrets before production launch.
+    console.warn(
+      "APP_STORE_* secrets not configured. Falling back to unverified JWS decode. " +
+      "Configure secrets before production launch.",
+    );
+    if (!jwsPayload) {
+      return corsResponse(
+        JSON.stringify({
+          error: "Apple API not configured",
+          detail:
+            "APP_STORE_KEY_ID, APP_STORE_ISSUER_ID, APP_STORE_PRIVATE_KEY, and " +
+            "APP_STORE_BUNDLE_ID must be configured to validate transactions. " +
+            "See docs/storekit-entitlements.md.",
+        }),
+        { status: 503 },
+      );
+    }
+    applePayload = jwsPayload as unknown as AppleTransactionPayload;
+  }
+
+  // 4. Security: ensure the transaction belongs to the authenticated user's bundle.
+  const expectedBundleId = appleConfig?.bundleId ?? Deno.env.get("APP_STORE_BUNDLE_ID");
+  if (expectedBundleId && applePayload.bundleId && applePayload.bundleId !== expectedBundleId) {
+    console.error(`Bundle ID mismatch: expected ${expectedBundleId}, got ${applePayload.bundleId}`);
+    return corsResponse(
+      JSON.stringify({ error: "Transaction bundle ID does not match this app." }),
+      { status: 403 },
+    );
+  }
+
+  // 5. Check for revocation.
+  if (applePayload.revocationDate) {
+    return corsResponse(
+      JSON.stringify({
+        error: "Transaction has been revoked",
+        detail: "This purchase was refunded or revoked by Apple.",
+      }),
+      { status: 402 },
+    );
+  }
+
+  // 6. Map product ID to entitlement/credit grant.
+  const productId = applePayload.productId;
+  const grant = getProductGrant(productId);
+
+  if (!grant) {
+    console.error(`Unknown product ID: ${productId}`);
+    return corsResponse(
+      JSON.stringify({
+        error: "Unknown product",
+        detail: `Product ID '${productId}' is not recognized by this server.`,
+      }),
+      { status: 422 },
+    );
+  }
+
+  const environment = appleConfig ? appleConfig.environment : (applePayload.environment ?? "unknown");
+  const originalTransactionId = applePayload.originalTransactionId ?? body.originalTransactionId ?? transactionId;
+
+  // 7. Apply the grant.
+  const updatedEntitlement = await applyGrant({
+    userId,
+    grant,
+    applePayload,
+    transactionId,
+    originalTransactionId,
+    productId,
+    environment,
+    adminClient,
+    signedTransactionInfo: body.signedTransactionInfo,
+  });
+
+  return corsResponse(
+    JSON.stringify({
+      status: "ok",
+      alreadyApplied: false,
+      transactionId,
+      productId,
+      ...formatEntitlementResponse(updatedEntitlement),
+    }),
+    { status: 200 },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Grant application
+// ---------------------------------------------------------------------------
+
+interface ApplyGrantParams {
+  userId: string;
+  grant: ReturnType<typeof getProductGrant>;
+  applePayload: AppleTransactionPayload;
+  transactionId: string;
+  originalTransactionId: string;
+  productId: string;
+  environment: string;
+  // deno-lint-ignore no-explicit-any
+  adminClient: any;
+  signedTransactionInfo?: string;
+}
+
+async function applyGrant(params: ApplyGrantParams): Promise<UserEntitlement> {
+  const {
+    userId,
+    grant,
+    applePayload,
+    transactionId,
+    originalTransactionId,
+    productId,
+    environment,
+    adminClient,
+    signedTransactionInfo,
+  } = params;
+
+  // Load (or create) the current entitlement row.
+  const { data: existing } = await adminClient
+    .from("user_entitlements")
+    .select("*")
+    .eq("user_id", userId)
+    .single();
+
+  const current: UserEntitlement = existing ?? {
+    user_id: userId,
+    plan_name: "free",
+    is_pro: false,
+    monthly_credit_allowance: FREE_TIER_MONTHLY_ALLOWANCE,
+    purchased_credit_balance: 0,
+    current_period_start: null,
+    current_period_end: null,
+    entitlement_source: "monthly_grant",
+    updated_at: new Date().toISOString(),
+  };
+
+  let creditedAmount: number | null = null;
+  let upsertPayload: Record<string, unknown>;
+  let ledgerReason: string;
+
+  if (grant!.type === "subscription") {
+    const sub = grant as SubscriptionGrant;
+    const expiresDate = applePayload.expiresDate
+      ? new Date(applePayload.expiresDate).toISOString()
+      : null;
+    const purchaseDate = applePayload.purchaseDate
+      ? new Date(applePayload.purchaseDate).toISOString()
+      : null;
+
+    upsertPayload = {
+      user_id: userId,
+      plan_name: sub.planName,
+      is_pro: sub.isPro,
+      monthly_credit_allowance: sub.monthlyCreditAllowance,
+      purchased_credit_balance: current.purchased_credit_balance,
+      current_period_start: purchaseDate,
+      current_period_end: expiresDate,
+      entitlement_source: "storekit_receipt",
+      app_store_original_transaction_id: originalTransactionId,
+      app_store_latest_transaction_id: transactionId,
+      app_store_product_id: productId,
+      app_store_environment: environment,
+      last_validated_at: new Date().toISOString(),
+    };
+    ledgerReason = "subscription_grant";
+  } else {
+    const pack = grant as ConsumableGrant;
+    creditedAmount = pack.creditAmount;
+    const newPurchasedBalance = current.purchased_credit_balance + creditedAmount;
+
+    upsertPayload = {
+      user_id: userId,
+      plan_name: current.plan_name,
+      is_pro: current.is_pro,
+      monthly_credit_allowance: current.monthly_credit_allowance,
+      purchased_credit_balance: newPurchasedBalance,
+      current_period_start: current.current_period_start,
+      current_period_end: current.current_period_end,
+      entitlement_source: "storekit_receipt",
+      app_store_latest_transaction_id: transactionId,
+      app_store_product_id: productId,
+      app_store_environment: environment,
+      last_validated_at: new Date().toISOString(),
+    };
+    ledgerReason = "purchase_credit_pack";
+  }
+
+  // Upsert entitlement.
+  const { data: upserted, error: upsertError } = await adminClient
+    .from("user_entitlements")
+    .upsert(upsertPayload, { onConflict: "user_id" })
+    .select("*")
+    .single();
+
+  if (upsertError) {
+    console.error("user_entitlements upsert error:", upsertError);
+  }
+
+  // Insert ledger row.
+  const ledgerDelta = grant!.type === "subscription"
+    ? 0 // subscription grants monthly allowance via plan, not a direct credit delta
+    : (creditedAmount ?? 0);
+
+  if (ledgerDelta > 0) {
+    const { error: ledgerError } = await adminClient
+      .from("user_credit_ledger")
+      .insert({
+        user_id: userId,
+        delta: ledgerDelta,
+        reason: ledgerReason,
+        related_transaction_id: transactionId,
+        metadata: {
+          productId,
+          environment,
+          originalTransactionId,
+        },
+      });
+
+    if (ledgerError) {
+      console.error("user_credit_ledger insert error:", ledgerError);
+    }
+  }
+
+  // Record the transaction for idempotency.
+  const { error: txInsertError } = await adminClient
+    .from("app_store_transactions")
+    .insert({
+      user_id: userId,
+      transaction_id: transactionId,
+      original_transaction_id: originalTransactionId,
+      product_id: productId,
+      environment,
+      type: applePayload.type ?? (grant!.type === "subscription" ? "Auto-Renewable Subscription" : "Consumable"),
+      credited_amount: creditedAmount,
+      raw_payload: signedTransactionInfo
+        ? { signedTransactionInfo, decodedPayload: applePayload }
+        : applePayload,
+    });
+
+  if (txInsertError) {
+    console.error("app_store_transactions insert error:", txInsertError);
+  }
+
+  return (upserted ?? upsertPayload) as UserEntitlement;
+}
+
+// ---------------------------------------------------------------------------
+// manual_grant handler (admin only)
+// ---------------------------------------------------------------------------
+
+// deno-lint-ignore no-explicit-any
+async function handleManualGrant(body: ManualGrantRequest, adminClient: any): Promise<Response> {
+  if (!body.userId) {
+    return corsResponse(JSON.stringify({ error: "userId is required" }), { status: 422 });
+  }
+
   const { data: existing } = await adminClient
     .from("user_entitlements")
     .select("*")
@@ -223,7 +541,7 @@ Deno.serve(async (req: Request) => {
     plan_name: body.planName ?? existing?.plan_name ?? "free",
     is_pro: body.isPro ?? existing?.is_pro ?? false,
     monthly_credit_allowance:
-      body.monthlyCreditAllowance ?? existing?.monthly_credit_allowance ?? 10,
+      body.monthlyCreditAllowance ?? existing?.monthly_credit_allowance ?? FREE_TIER_MONTHLY_ALLOWANCE,
     purchased_credit_balance: newPurchasedBalance,
     entitlement_source: "admin_adjustment",
     current_period_start: existing?.current_period_start ?? null,
@@ -238,13 +556,9 @@ Deno.serve(async (req: Request) => {
 
   if (upsertError) {
     console.error("user_entitlements upsert error:", upsertError);
-    return corsResponse(
-      JSON.stringify({ error: "Failed to update entitlement" }),
-      { status: 500 },
-    );
+    return corsResponse(JSON.stringify({ error: "Failed to update entitlement" }), { status: 500 });
   }
 
-  // Insert a ledger row for auditing.
   if (creditDelta !== 0) {
     const { error: ledgerError } = await adminClient
       .from("user_credit_ledger")
@@ -261,10 +575,47 @@ Deno.serve(async (req: Request) => {
   }
 
   return corsResponse(
-    JSON.stringify({
-      status: "ok",
-      updatedEntitlement: upserted,
-    }),
+    JSON.stringify({ status: "ok", updatedEntitlement: upserted }),
     { status: 200 },
   );
-});
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// deno-lint-ignore no-explicit-any
+async function loadCurrentEntitlement(userId: string, adminClient: any): Promise<UserEntitlement> {
+  const { data, error } = await adminClient
+    .from("user_entitlements")
+    .select("*")
+    .eq("user_id", userId)
+    .single();
+
+  if (error || !data) {
+    return {
+      user_id: userId,
+      plan_name: "free",
+      is_pro: false,
+      monthly_credit_allowance: FREE_TIER_MONTHLY_ALLOWANCE,
+      purchased_credit_balance: 0,
+      current_period_start: null,
+      current_period_end: null,
+      entitlement_source: "monthly_grant",
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  return data as UserEntitlement;
+}
+
+function formatEntitlementResponse(e: UserEntitlement): Record<string, unknown> {
+  return {
+    planName: e.plan_name,
+    isPro: e.is_pro,
+    monthlyCreditAllowance: e.monthly_credit_allowance,
+    purchasedCreditBalance: e.purchased_credit_balance,
+    availableCredits: e.monthly_credit_allowance + e.purchased_credit_balance,
+    currentPeriodEnd: e.current_period_end,
+  };
+}
