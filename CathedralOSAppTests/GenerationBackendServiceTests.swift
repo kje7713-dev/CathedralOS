@@ -291,7 +291,13 @@ final class GenerationBackendServiceTests: XCTestCase {
             .networkError(NSError(domain: "net", code: -1)),
             .serverError(statusCode: 500, message: "oops"),
             .serverError(statusCode: 403, message: nil),
-            .decodingError(NSError(domain: "dec", code: 2))
+            .decodingError(NSError(domain: "dec", code: 2)),
+            .insufficientCredits(required: 4, available: 1),
+            .rateLimited(retryAfterSeconds: 60),
+            .rateLimited(retryAfterSeconds: nil),
+            .providerTimeout,
+            .providerOverloaded,
+            .invalidRequest("bad mode"),
         ]
         for error in errors {
             let desc = error.errorDescription ?? ""
@@ -303,6 +309,121 @@ final class GenerationBackendServiceTests: XCTestCase {
         let error = GenerationBackendServiceError.serverError(statusCode: 429, message: "Too many requests")
         let desc = error.errorDescription ?? ""
         XCTAssertTrue(desc.contains("429"), "Server error description must include HTTP status code: \(desc)")
+    }
+
+    // MARK: - New error codes
+
+    func testRateLimitedErrorWithRetryAfterSeconds() {
+        let error = GenerationBackendServiceError.rateLimited(retryAfterSeconds: 60)
+        let desc = error.errorDescription ?? ""
+        XCTAssertFalse(desc.isEmpty)
+        XCTAssertTrue(
+            desc.contains("60") || desc.contains("wait") || desc.contains("requests"),
+            "Rate limited description should mention wait time or requests: \(desc)"
+        )
+    }
+
+    func testRateLimitedErrorWithoutRetryAfterSeconds() {
+        let error = GenerationBackendServiceError.rateLimited(retryAfterSeconds: nil)
+        let desc = error.errorDescription ?? ""
+        XCTAssertFalse(desc.isEmpty, "rateLimited(nil) must have a non-empty description")
+        XCTAssertTrue(
+            desc.contains("wait") || desc.contains("requests") || desc.contains("moment"),
+            "Description should guide the user to wait: \(desc)"
+        )
+    }
+
+    func testRateLimitedUserFacingMessage() {
+        let errorWithSeconds = GenerationBackendServiceError.rateLimited(retryAfterSeconds: 30)
+        let msg = errorWithSeconds.userFacingMessage
+        XCTAssertFalse(msg.isEmpty)
+        XCTAssertTrue(msg.contains("30"), "User-facing message should include wait time: \(msg)")
+
+        let errorNoSeconds = GenerationBackendServiceError.rateLimited(retryAfterSeconds: nil)
+        let msg2 = errorNoSeconds.userFacingMessage
+        XCTAssertFalse(msg2.isEmpty)
+    }
+
+    func testProviderTimeoutErrorHasDescription() {
+        let error = GenerationBackendServiceError.providerTimeout
+        let desc = error.errorDescription ?? ""
+        XCTAssertFalse(desc.isEmpty, "providerTimeout must have a non-empty description")
+        XCTAssertTrue(
+            desc.contains("time") || desc.contains("respond") || desc.contains("again"),
+            "Description should indicate timeout and suggest retry: \(desc)"
+        )
+    }
+
+    func testProviderTimeoutUserFacingMessage() {
+        let error = GenerationBackendServiceError.providerTimeout
+        let msg = error.userFacingMessage
+        XCTAssertFalse(msg.isEmpty)
+        XCTAssertTrue(
+            msg.contains("timed") || msg.contains("time") || msg.contains("again"),
+            "User-facing message should mention timeout: \(msg)"
+        )
+    }
+
+    func testProviderOverloadedErrorHasDescription() {
+        let error = GenerationBackendServiceError.providerOverloaded
+        let desc = error.errorDescription ?? ""
+        XCTAssertFalse(desc.isEmpty, "providerOverloaded must have a non-empty description")
+        XCTAssertTrue(
+            desc.contains("busy") || desc.contains("again") || desc.contains("moment"),
+            "Description should indicate temporary unavailability: \(desc)"
+        )
+    }
+
+    func testInvalidRequestErrorCarriesDetail() {
+        let detail = "generationLengthMode must be short, medium, long, or chapter"
+        let error = GenerationBackendServiceError.invalidRequest(detail)
+        let desc = error.errorDescription ?? ""
+        XCTAssertTrue(
+            desc.contains(detail) || desc.contains("processed"),
+            "invalidRequest description should include the detail: \(desc)"
+        )
+    }
+
+    func testAllNewErrorsHaveNonEmptyUserFacingMessages() {
+        let errors: [GenerationBackendServiceError] = [
+            .rateLimited(retryAfterSeconds: 60),
+            .rateLimited(retryAfterSeconds: nil),
+            .providerTimeout,
+            .providerOverloaded,
+            .invalidRequest("bad value"),
+        ]
+        for error in errors {
+            let msg = error.userFacingMessage
+            XCTAssertFalse(msg.isEmpty, "userFacingMessage must not be empty for \(error)")
+        }
+    }
+
+    // MARK: - GenerationResponse DTO decodes retryAfterSeconds
+
+    func testResponseDTODecodesRetryAfterSeconds() throws {
+        let json = """
+        {
+          "status": "failed",
+          "errorCode": "rate_limited",
+          "errorMessage": "Too many requests.",
+          "retryAfterSeconds": 60
+        }
+        """
+        let response = try JSONDecoder().decode(GenerationResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(response.errorCode, "rate_limited")
+        XCTAssertEqual(response.retryAfterSeconds, 60)
+    }
+
+    func testResponseDTOToleratesMissingRetryAfterSeconds() throws {
+        let json = """
+        {
+          "generatedText": "Some text.",
+          "status": "success"
+        }
+        """
+        let response = try JSONDecoder().decode(GenerationResponse.self, from: Data(json.utf8))
+        XCTAssertNil(response.retryAfterSeconds,
+                     "retryAfterSeconds should be nil when absent from JSON")
     }
 
     // MARK: - StubGenerationBackendService

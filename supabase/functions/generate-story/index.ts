@@ -11,6 +11,10 @@
 //   OPENAI_MODEL_PREMIUM      — (optional) reserved for future premium tier
 //   SUPABASE_SERVICE_ROLE_KEY — Supabase service-role key (auto-injected in Edge Functions)
 //
+// Request safety:
+//   Requests are validated and rate-limited before any LLM call is made.
+//   Payload size limits and per-user rate limits are enforced server-side.
+//
 // Credit enforcement:
 //   Credit cost is computed server-side from generationLengthMode.
 //   Client-submitted cost values are IGNORED.
@@ -18,12 +22,32 @@
 //   Credits are charged ONLY after a successful LLM response.
 //   A failed LLM call does NOT charge credits.
 //
+// Rate limiting (per user, rolling windows):
+//   5  requests / minute
+//   30 requests / hour
+//   20 failed requests / hour (anti-abuse)
+//   Exceeded limit → 429 with errorCode "rate_limited" + retryAfterSeconds.
+//
+// Provider timeout:
+//   OpenAI calls are aborted after PROVIDER_TIMEOUT_MS (30 s). A timed-out
+//   request returns errorCode "provider_timeout" and does NOT charge credits.
+//
+// Observability:
+//   Every request is logged to generation_request_logs (no raw prompt text).
+//   The log row is written after the response is determined.
+//
+// Retry policy:
+//   No automatic retries are performed server-side. Retrying a failed long
+//   generation would risk double-charging credits. The client may retry on
+//   transient errors (provider_timeout, provider_overloaded) using the
+//   retryAfterSeconds hint when present.
+//
 // NEVER place any of these values in the iOS app or commit them to source
 // control. See docs/generate-story-edge-function.md for setup instructions.
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { buildProviderFromEnv, LLMProvider } from "./_provider.ts";
+import { buildProviderFromEnv, LLMProvider, ProviderError } from "./_provider.ts";
 import {
   ALLOWED_LENGTH_MODES,
   type LengthMode,
@@ -32,6 +56,10 @@ import {
   SupabaseCreditStore,
   type CreditStore,
 } from "./_credits.ts";
+import {
+  SupabaseRateLimitStore,
+  type RateLimitStore,
+} from "./_rate_limiter.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -46,6 +74,12 @@ const MAX_BUDGET: Record<LengthMode, number> = {
   long: 3000,
   chapter: 6000,
 };
+
+/** Maximum allowed character length for sourcePayloadJSON (50 KB). */
+export const MAX_SOURCE_PAYLOAD_CHARS = 50_000;
+
+/** Maximum allowed character length for previousOutputText (20 KB). */
+export const MAX_PREVIOUS_OUTPUT_CHARS = 20_000;
 
 // ---------------------------------------------------------------------------
 // CORS headers — allow the Supabase iOS client to call this function
@@ -109,21 +143,21 @@ function buildPrompt(req: {
       : JSON.stringify(req.sourcePayloadJSON, null, 2);
 
   const lengthGuidance: Record<LengthMode, string> = {
-    short: "Write a short passage (roughly 300–500 words).",
-    medium: "Write a medium-length passage (roughly 600–1000 words).",
-    long: "Write a longer passage (roughly 1200–2000 words).",
-    chapter: "Write a full chapter-length passage (roughly 2500–4000 words).",
+    short: "Write a short passage (roughly 300-500 words).",
+    medium: "Write a medium-length passage (roughly 600-1000 words).",
+    long: "Write a longer passage (roughly 1200-2000 words).",
+    chapter: "Write a full chapter-length passage (roughly 2500-4000 words).",
   };
 
   const actionGuidance: Record<GenerationAction, string> = {
     generate:
       "Generate a brand-new story passage based on the details below.",
     regenerate:
-      "Regenerate the story passage — produce a fresh take on the same source material.",
+      "Regenerate the story passage -- produce a fresh take on the same source material.",
     continue:
       "Continue the story from where the previous passage left off. Do not repeat content that has already been written.",
     remix:
-      "Remix the story — reinterpret the source material in a creative new direction while respecting the core characters and setting.",
+      "Remix the story -- reinterpret the source material in a creative new direction while respecting the core characters and setting.",
   };
 
   const lines: string[] = [
@@ -135,28 +169,16 @@ function buildPrompt(req: {
     "",
   ];
 
-  if (req.readingLevel) {
-    lines.push(`Reading level: ${req.readingLevel}`);
-  }
-  if (req.contentRating) {
-    lines.push(`Content rating: ${req.contentRating}`);
-  }
-  if (req.audienceNotes) {
-    lines.push(`Audience notes: ${req.audienceNotes}`);
-  }
-
-  if (req.projectName) {
-    lines.push(`Project: ${req.projectName}`);
-  }
-  if (req.promptPackName) {
-    lines.push(`Prompt pack: ${req.promptPackName}`);
-  }
+  if (req.readingLevel) lines.push(`Reading level: ${req.readingLevel}`);
+  if (req.contentRating) lines.push(`Content rating: ${req.contentRating}`);
+  if (req.audienceNotes) lines.push(`Audience notes: ${req.audienceNotes}`);
+  if (req.projectName) lines.push(`Project: ${req.projectName}`);
+  if (req.promptPackName) lines.push(`Prompt pack: ${req.promptPackName}`);
 
   lines.push("", "--- Story context / prompt pack payload ---", payloadText);
 
   if (
-    (req.generationAction === "continue" ||
-      req.generationAction === "remix") &&
+    (req.generationAction === "continue" || req.generationAction === "remix") &&
     req.previousOutputText
   ) {
     lines.push(
@@ -180,12 +202,8 @@ function buildPrompt(req: {
 // ---------------------------------------------------------------------------
 
 function extractTitle(text: string, fallback: string): string {
-  // If the text begins with a markdown heading, use it as the title.
   const headingMatch = text.match(/^#{1,3}\s+(.+)/m);
-  if (headingMatch) {
-    return headingMatch[1].trim();
-  }
-  // Otherwise fall back to the pack/project name.
+  if (headingMatch) return headingMatch[1].trim();
   return fallback || "";
 }
 
@@ -193,15 +211,17 @@ function extractTitle(text: string, fallback: string): string {
 // Main handler
 // ---------------------------------------------------------------------------
 
-// deno-lint-ignore no-explicit-any
 async function handler(
   req: Request,
+  // provider, creditStore, rateLimitStore are for test injection only.
+  // In production these are resolved from env vars.
   provider?: LLMProvider,
-  // creditStore is for test injection only. In production (creditStore = undefined),
-  // the handler creates a SupabaseCreditStore backed by the SUPABASE_SERVICE_ROLE_KEY
-  // env var. Do not pass creditStore in production deployments.
   creditStore?: CreditStore,
+  rateLimitStore?: RateLimitStore,
 ): Promise<Response> {
+  const requestStartMs = Date.now();
+  const requestId = crypto.randomUUID();
+
   // Preflight
   if (req.method === "OPTIONS") {
     return corsResponse("", { status: 204 });
@@ -215,13 +235,17 @@ async function handler(
   }
 
   // -------------------------------------------------------------------------
-  // Auth — reject unauthenticated requests; derive user_id from JWT
+  // Auth -- reject unauthenticated requests; derive user_id from JWT
   // -------------------------------------------------------------------------
 
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) {
     return corsResponse(
-      JSON.stringify({ status: "failed", errorMessage: "Unauthorized" }),
+      JSON.stringify({
+        status: "failed",
+        errorCode: "unauthenticated",
+        errorMessage: "Unauthorized",
+      }),
       { status: 401 },
     );
   }
@@ -232,18 +256,17 @@ async function handler(
     return corsResponse(
       JSON.stringify({
         status: "failed",
+        errorCode: "backend_config_missing",
         errorMessage: "Server configuration error",
       }),
       { status: 500 },
     );
   }
 
-  // Build a client scoped to the requesting user so RLS applies to all writes.
   const userClient = createClient(supabaseURL, supabaseAnonKey, {
     global: { headers: { Authorization: authHeader } },
   });
 
-  // Verify JWT and extract user_id server-side. Never trust user_id from the body.
   const {
     data: { user },
     error: authError,
@@ -251,7 +274,11 @@ async function handler(
 
   if (authError || !user) {
     return corsResponse(
-      JSON.stringify({ status: "failed", errorMessage: "Unauthorized" }),
+      JSON.stringify({
+        status: "failed",
+        errorCode: "unauthenticated",
+        errorMessage: "Unauthorized",
+      }),
       { status: 401 },
     );
   }
@@ -259,28 +286,33 @@ async function handler(
   const userId = user.id;
 
   // -------------------------------------------------------------------------
-  // Build service-role client for credit operations
-  // The service-role client bypasses RLS and can write to user_entitlements
-  // and user_credit_ledger. It is NEVER exposed to the iOS client.
+  // Build service-role client for credit and rate-limit operations.
+  // This client bypasses RLS and can write to user_entitlements,
+  // user_credit_ledger, and generation_request_logs.
+  // It is NEVER exposed to the iOS client.
   // -------------------------------------------------------------------------
 
   let store: CreditStore;
-  if (creditStore) {
-    // Injected for testing.
+  let limiter: RateLimitStore;
+
+  if (creditStore && rateLimitStore) {
     store = creditStore;
+    limiter = rateLimitStore;
   } else {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!serviceRoleKey) {
       return corsResponse(
         JSON.stringify({
           status: "failed",
+          errorCode: "backend_config_missing",
           errorMessage: "Server configuration error",
         }),
         { status: 500 },
       );
     }
     const adminClient = createClient(supabaseURL, serviceRoleKey);
-    store = new SupabaseCreditStore(adminClient);
+    store = creditStore ?? new SupabaseCreditStore(adminClient);
+    limiter = rateLimitStore ?? new SupabaseRateLimitStore(adminClient);
   }
 
   // -------------------------------------------------------------------------
@@ -294,6 +326,7 @@ async function handler(
     return corsResponse(
       JSON.stringify({
         status: "failed",
+        errorCode: "invalid_request",
         errorMessage: "Invalid JSON body",
       }),
       { status: 400 },
@@ -308,6 +341,7 @@ async function handler(
     return corsResponse(
       JSON.stringify({
         status: "failed",
+        errorCode: "invalid_request",
         errorMessage: `Invalid generationAction. Allowed values: ${ALLOWED_ACTIONS.join(", ")}`,
       }),
       { status: 422 },
@@ -319,6 +353,7 @@ async function handler(
     return corsResponse(
       JSON.stringify({
         status: "failed",
+        errorCode: "invalid_request",
         errorMessage: `Invalid generationLengthMode. Allowed values: ${ALLOWED_LENGTH_MODES.join(", ")}`,
       }),
       { status: 422 },
@@ -330,13 +365,42 @@ async function handler(
     return corsResponse(
       JSON.stringify({
         status: "failed",
+        errorCode: "invalid_request",
         errorMessage: "sourcePayloadJSON is required",
       }),
       { status: 422 },
     );
   }
 
-  // Enforce server-side budget cap — do not trust the client value blindly.
+  // Enforce sourcePayloadJSON size limit.
+  const sourcePayloadStr =
+    typeof body.sourcePayloadJSON === "string"
+      ? body.sourcePayloadJSON
+      : JSON.stringify(body.sourcePayloadJSON);
+  if (sourcePayloadStr.length > MAX_SOURCE_PAYLOAD_CHARS) {
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "invalid_request",
+        errorMessage: `sourcePayloadJSON exceeds maximum size of ${MAX_SOURCE_PAYLOAD_CHARS} characters`,
+      }),
+      { status: 422 },
+    );
+  }
+
+  // Enforce previousOutputText size limit.
+  if (body.previousOutputText != null && body.previousOutputText.length > MAX_PREVIOUS_OUTPUT_CHARS) {
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "invalid_request",
+        errorMessage: `previousOutputText exceeds maximum size of ${MAX_PREVIOUS_OUTPUT_CHARS} characters`,
+      }),
+      { status: 422 },
+    );
+  }
+
+  // Enforce server-side budget cap -- do not trust the client value blindly.
   const serverMax = MAX_BUDGET[generationLengthMode];
   const outputBudget = Math.min(
     Math.max(1, Math.round(body.outputBudget ?? serverMax)),
@@ -348,6 +412,7 @@ async function handler(
     return corsResponse(
       JSON.stringify({
         status: "failed",
+        errorCode: "invalid_request",
         errorMessage:
           "previousOutputText is required when generationAction is 'continue'",
       }),
@@ -359,7 +424,44 @@ async function handler(
   const promptPackName = body.promptPackName ?? "";
 
   // -------------------------------------------------------------------------
-  // Credit enforcement — must happen BEFORE the LLM provider call
+  // Rate limiting -- must happen before credit check and provider call
+  //
+  // Per-user rolling-window limits are checked against generation_request_logs.
+  // Exceeding any limit returns 429 with retryAfterSeconds so the client can
+  // back off appropriately.
+  // -------------------------------------------------------------------------
+
+  const rateLimitCheck = await limiter.checkLimits(userId);
+  if (!rateLimitCheck.allowed) {
+    await limiter.recordRequest(userId, {
+      requestId,
+      action: generationAction,
+      generationLengthMode,
+      outputBudget,
+      status: "rate_limited",
+      errorCode: "rate_limited",
+      errorMessage: "Rate limit exceeded",
+      durationMs: Date.now() - requestStartMs,
+    });
+
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "rate_limited",
+        errorMessage: "Too many requests. Please wait before generating again.",
+        retryAfterSeconds: rateLimitCheck.retryAfterSeconds,
+      }),
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(rateLimitCheck.retryAfterSeconds ?? 60),
+        },
+      },
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Credit enforcement -- must happen BEFORE the LLM provider call
   //
   // Credit cost is computed server-side from generationLengthMode.
   // The client-submitted cost (if any) is IGNORED.
@@ -370,6 +472,17 @@ async function handler(
   const creditCheck = checkCredits(entitlement, requiredCredits);
 
   if (!creditCheck.allowed) {
+    await limiter.recordRequest(userId, {
+      requestId,
+      action: generationAction,
+      generationLengthMode,
+      outputBudget,
+      status: "insufficient_credits",
+      errorCode: "insufficient_credits",
+      errorMessage: "Insufficient credits for this generation.",
+      durationMs: Date.now() - requestStartMs,
+    });
+
     return corsResponse(
       JSON.stringify({
         status: "failed",
@@ -391,8 +504,22 @@ async function handler(
     llm = provider ?? buildProviderFromEnv();
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Provider configuration error";
+    await limiter.recordRequest(userId, {
+      requestId,
+      action: generationAction,
+      generationLengthMode,
+      outputBudget,
+      status: "failed",
+      errorCode: "backend_config_missing",
+      errorMessage: msg,
+      durationMs: Date.now() - requestStartMs,
+    });
     return corsResponse(
-      JSON.stringify({ status: "failed", errorMessage: msg }),
+      JSON.stringify({
+        status: "failed",
+        errorCode: "backend_config_missing",
+        errorMessage: msg,
+      }),
       { status: 500 },
     );
   }
@@ -415,8 +542,7 @@ async function handler(
   });
 
   let llmResult: { content: string; modelName: string; inputTokens?: number; outputTokens?: number };
-  let providerFailed = false;
-  let providerErrorMessage = "";
+  const modelDefault = Deno.env.get("OPENAI_MODEL_DEFAULT") || "gpt-4o-mini";
 
   try {
     llmResult = await llm.complete(
@@ -424,16 +550,24 @@ async function handler(
       outputBudget,
     );
   } catch (err) {
-    providerFailed = true;
-    providerErrorMessage = err instanceof Error ? err.message : "LLM provider error";
-    llmResult = { content: "", modelName: "" };
+    // Classify provider errors into stable error codes.
+    // Credits are NOT charged on provider failure.
+    let providerErrorCode = "unknown";
+    let httpStatus = 502;
 
-    // Best-effort: record a failed usage event even if we cannot return content.
+    if (err instanceof ProviderError) {
+      providerErrorCode = err.errorCode;
+      if (err.errorCode === "provider_timeout") httpStatus = 504;
+    }
+
+    const providerErrorMessage = err instanceof Error ? err.message : "LLM provider error";
+
+    // Best-effort: record a failed usage event for audit purposes.
     await userClient.from("generation_usage_events").insert({
       user_id: userId,
       generation_output_id: null,
       action: generationAction,
-      model_name: llmResult.modelName || Deno.env.get("OPENAI_MODEL_DEFAULT") || "gpt-4o-mini",
+      model_name: modelDefault,
       input_tokens: null,
       output_tokens: null,
       generation_length_mode: generationLengthMode,
@@ -441,12 +575,26 @@ async function handler(
       status: "failed",
     });
 
+    // Log the failed request.
+    await limiter.recordRequest(userId, {
+      requestId,
+      action: generationAction,
+      generationLengthMode,
+      outputBudget,
+      status: "failed",
+      errorCode: providerErrorCode,
+      errorMessage: providerErrorMessage,
+      modelName: modelDefault,
+      durationMs: Date.now() - requestStartMs,
+    });
+
     return corsResponse(
       JSON.stringify({
         status: "failed",
+        errorCode: providerErrorCode,
         errorMessage: `Generation failed: ${providerErrorMessage}`,
       }),
-      { status: 502 },
+      { status: httpStatus },
     );
   }
 
@@ -455,12 +603,9 @@ async function handler(
   // -------------------------------------------------------------------------
 
   const generatedText = llmResult.content.trim();
-  const title = extractTitle(
-    generatedText,
-    promptPackName || projectName,
-  );
+  const title = extractTitle(generatedText, promptPackName || projectName);
 
-  // Normalize sourcePayloadJSON for storage — always persist as an object.
+  // Normalize sourcePayloadJSON for storage -- always persist as an object.
   const sourcePayloadForDB =
     typeof body.sourcePayloadJSON === "string"
       ? JSON.parse(body.sourcePayloadJSON)
@@ -487,8 +632,6 @@ async function handler(
     .single();
 
   if (outputInsertError) {
-    // Log the error but do not block the response — the client still gets the
-    // generated text. A usage event is still recorded without an output link.
     console.error("generation_outputs insert error:", outputInsertError);
   }
 
@@ -517,7 +660,7 @@ async function handler(
   }
 
   // -------------------------------------------------------------------------
-  // Charge credits — only after successful generation
+  // Charge credits -- only after successful generation
   //
   // Credits are charged AFTER the LLM provider returns successfully.
   // A failed LLM call (handled in the catch block above) does NOT charge.
@@ -534,6 +677,22 @@ async function handler(
   const remainingCredits =
     updatedEntitlement.monthly_credit_allowance +
     updatedEntitlement.purchased_credit_balance;
+
+  // -------------------------------------------------------------------------
+  // Log successful request
+  // -------------------------------------------------------------------------
+
+  await limiter.recordRequest(userId, {
+    requestId,
+    action: generationAction,
+    generationLengthMode,
+    outputBudget,
+    status: "success",
+    modelName: llmResult.modelName,
+    inputTokens: llmResult.inputTokens,
+    outputTokens: llmResult.outputTokens,
+    durationMs: Date.now() - requestStartMs,
+  });
 
   // -------------------------------------------------------------------------
   // Return response
@@ -559,6 +718,8 @@ async function handler(
 
 Deno.serve((req) => handler(req));
 
-// Export handler and credit helpers for testing.
+// Export handler and helpers for testing.
 export { handler };
 export { CREDIT_COST, getCreditCost, checkCredits, computeCharge } from "./_credits.ts";
+export { RATE_LIMITS } from "./_rate_limiter.ts";
+export { classifyOpenAIStatus, ProviderError, PROVIDER_TIMEOUT_MS } from "./_provider.ts";
