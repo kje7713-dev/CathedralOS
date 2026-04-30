@@ -60,7 +60,7 @@ protocol StoreKitEntitlementServiceProtocol: AnyObject {
     /// Validates a set of transactions with the backend and returns the updated
     /// entitlement response. Updates `lastBackendValidation` on success.
     @discardableResult
-    func validateWithBackend(_ transactions: [Transaction]) async throws -> StoreKitValidationResponse
+    func validateWithBackend(_ verificationResults: [VerificationResult<Transaction>]) async throws -> StoreKitValidationResponse
 }
 
 // MARK: - StoreKitEntitlementError
@@ -163,7 +163,7 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
             await refreshEntitlement()
             // Trigger backend validation asynchronously (non-blocking for update listener).
             Task { [weak self] in
-                _ = try? await self?.validateWithBackend([transaction])
+                _ = try? await self?.validateWithBackend([result])
             }
             // Finish the transaction to acknowledge receipt.
             await transaction.finish()
@@ -201,7 +201,7 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
                 await refreshEntitlement()
                 // Validate with backend — this is the authoritative grant.
                 do {
-                    try await validateWithBackend([transaction])
+                    try await validateWithBackend([verification])
                 } catch {
                     // Surface the validation error without blocking the UX.
                     // Local StoreKit state was already applied; the user can retry validation.
@@ -232,17 +232,18 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
         try await AppStore.sync()
         await refreshEntitlement()
 
-        // Collect all current entitlement transactions for backend validation.
-        var transactions: [Transaction] = []
+        // Collect verified entitlement transactions for backend validation.
+        // Unverified transactions are skipped; the backend would reject them anyway.
+        var verificationResults: [VerificationResult<Transaction>] = []
         for await result in Transaction.currentEntitlements {
-            if case .verified(let transaction) = result {
-                transactions.append(transaction)
+            if case .verified = result {
+                verificationResults.append(result)
             }
         }
 
-        if !transactions.isEmpty {
+        if !verificationResults.isEmpty {
             do {
-                try await validateWithBackend(transactions)
+                try await validateWithBackend(verificationResults)
             } catch {
                 backendValidationError = (error as? StoreKitValidationError)?.errorDescription
                     ?? error.localizedDescription
@@ -305,7 +306,7 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
     // MARK: - Backend Validation
 
     @discardableResult
-    func validateWithBackend(_ transactions: [Transaction]) async throws -> StoreKitValidationResponse {
+    func validateWithBackend(_ verificationResults: [VerificationResult<Transaction>]) async throws -> StoreKitValidationResponse {
         guard let validationService else {
             // Validation service not configured (e.g. pre-auth). Skip silently.
             throw StoreKitValidationError.notConfigured
@@ -314,7 +315,7 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
         isValidatingWithBackend = true
         defer { isValidatingWithBackend = false }
 
-        let response = try await validationService.validateTransactions(transactions)
+        let response = try await validationService.validateTransactions(verificationResults)
         lastBackendValidation = response
         return response
     }
@@ -384,7 +385,7 @@ final class StubStoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
     }
 
     @discardableResult
-    func validateWithBackend(_ transactions: [Transaction]) async throws -> StoreKitValidationResponse {
+    func validateWithBackend(_ verificationResults: [VerificationResult<Transaction>]) async throws -> StoreKitValidationResponse {
         backendValidationCallCount += 1
         if shouldThrowOnBackendValidation {
             throw StoreKitValidationError.serverError(statusCode: 500, message: "Stub error")

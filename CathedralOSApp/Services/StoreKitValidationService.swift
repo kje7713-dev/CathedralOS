@@ -60,6 +60,7 @@ enum StoreKitValidationError: Error, LocalizedError {
     case notConfigured
     case notSignedIn
     case noTransactionData
+    case unverifiedTransaction
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
     case decodingError(Error)
@@ -73,6 +74,8 @@ enum StoreKitValidationError: Error, LocalizedError {
             return "You must be signed in to validate a purchase."
         case .noTransactionData:
             return "No transaction data available for validation."
+        case .unverifiedTransaction:
+            return "Transaction could not be verified by StoreKit. It will not be submitted for backend validation."
         case .networkError(let underlying):
             return "Network error during purchase validation: \(underlying.localizedDescription)"
         case .serverError(let code, let msg):
@@ -111,16 +114,19 @@ enum StoreKitValidationError: Error, LocalizedError {
 protocol StoreKitValidationServiceProtocol: AnyObject {
     /// Validates a single StoreKit 2 transaction with the backend.
     ///
-    /// - Parameter transaction: A StoreKit 2 `Transaction` (already verified by StoreKit locally).
+    /// - Parameter verificationResult: A StoreKit 2 `VerificationResult<Transaction>` from a purchase
+    ///   or entitlement update. The JWS representation is read directly from the result so that
+    ///   `jwsRepresentation` is available on iOS 15+ (whereas `Transaction.jwsRepresentation`
+    ///   requires iOS 17.2+).
     /// - Returns: The updated entitlement state from the backend.
     /// - Throws: `StoreKitValidationError` on failure.
-    func validateTransaction(_ transaction: Transaction) async throws -> StoreKitValidationResponse
+    func validateTransaction(_ verificationResult: VerificationResult<Transaction>) async throws -> StoreKitValidationResponse
 
     /// Validates a batch of transactions (e.g. after restorePurchases).
     ///
     /// Applies each transaction idempotently. Returns the final entitlement state
     /// from the last successful validation, or throws if all fail.
-    func validateTransactions(_ transactions: [Transaction]) async throws -> StoreKitValidationResponse
+    func validateTransactions(_ verificationResults: [VerificationResult<Transaction>]) async throws -> StoreKitValidationResponse
 }
 
 // MARK: - BackendStoreKitValidationService
@@ -141,7 +147,10 @@ final class BackendStoreKitValidationService: StoreKitValidationServiceProtocol 
 
     // MARK: - validateTransaction
 
-    func validateTransaction(_ transaction: Transaction) async throws -> StoreKitValidationResponse {
+    func validateTransaction(_ verificationResult: VerificationResult<Transaction>) async throws -> StoreKitValidationResponse {
+        guard case .verified(let transaction) = verificationResult else {
+            throw StoreKitValidationError.unverifiedTransaction
+        }
         guard SupabaseConfiguration.isConfigured else {
             throw StoreKitValidationError.notConfigured
         }
@@ -151,8 +160,10 @@ final class BackendStoreKitValidationService: StoreKitValidationServiceProtocol 
 
         let client = try makeClient()
 
+        // Use jwsRepresentation from VerificationResult (iOS 15+), not from Transaction
+        // (Transaction.jwsRepresentation requires iOS 17.2+).
         let requestBody = StoreKitValidationRequest(
-            signedTransactionInfo: transaction.jwsRepresentation,
+            signedTransactionInfo: verificationResult.jwsRepresentation,
             transactionId: String(transaction.id),
             originalTransactionId: String(transaction.originalID),
             appAccountToken: transaction.appAccountToken.map { $0.uuidString }
@@ -167,17 +178,17 @@ final class BackendStoreKitValidationService: StoreKitValidationServiceProtocol 
 
     // MARK: - validateTransactions (batch for restore)
 
-    func validateTransactions(_ transactions: [Transaction]) async throws -> StoreKitValidationResponse {
-        guard !transactions.isEmpty else {
+    func validateTransactions(_ verificationResults: [VerificationResult<Transaction>]) async throws -> StoreKitValidationResponse {
+        guard !verificationResults.isEmpty else {
             throw StoreKitValidationError.noTransactionData
         }
 
         var lastResponse: StoreKitValidationResponse?
         var lastError: Error?
 
-        for transaction in transactions {
+        for verificationResult in verificationResults {
             do {
-                lastResponse = try await validateTransaction(transaction)
+                lastResponse = try await validateTransaction(verificationResult)
             } catch {
                 lastError = error
                 // Continue — try to validate remaining transactions.
@@ -278,15 +289,21 @@ final class StubStoreKitValidationService: StoreKitValidationServiceProtocol {
         self.result = result
     }
 
-    func validateTransaction(_ transaction: Transaction) async throws -> StoreKitValidationResponse {
+    func validateTransaction(_ verificationResult: VerificationResult<Transaction>) async throws -> StoreKitValidationResponse {
         validateTransactionCallCount += 1
-        lastValidatedTransactionIDs.append(String(transaction.id))
+        if case .verified(let transaction) = verificationResult {
+            lastValidatedTransactionIDs.append(String(transaction.id))
+        }
         return try result.get()
     }
 
-    func validateTransactions(_ transactions: [Transaction]) async throws -> StoreKitValidationResponse {
+    func validateTransactions(_ verificationResults: [VerificationResult<Transaction>]) async throws -> StoreKitValidationResponse {
         validateTransactionsCallCount += 1
-        lastValidatedTransactionIDs.append(contentsOf: transactions.map { String($0.id) })
+        for verificationResult in verificationResults {
+            if case .verified(let transaction) = verificationResult {
+                lastValidatedTransactionIDs.append(String(transaction.id))
+            }
+        }
         return try result.get()
     }
 }
