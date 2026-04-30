@@ -5,8 +5,8 @@ import SwiftData
 //
 // Account and backend status view.
 // Shows authentication state, backend configuration status, Sign in with Apple,
-// sign-out controls, output sync actions, and a summary of features that require
-// a signed-in account.
+// sign-out controls, output sync actions, a summary of features that require
+// a signed-in account, and StoreKit subscription / credit management.
 //
 // Local-only editing (projects, characters, settings, exports) is never gated
 // behind authentication. Only cloud actions (generate, sync, publish, report,
@@ -18,6 +18,7 @@ struct AccountView: View {
     let syncService: any GenerationOutputSyncServiceProtocol
     let profileBootstrapService: (any ProfileBootstrapServiceProtocol)?
     let usageLimitService: any UsageLimitServiceProtocol
+    let entitlementService: any StoreKitEntitlementServiceProtocol
 
     @Environment(\.modelContext) private var modelContext
 
@@ -25,12 +26,14 @@ struct AccountView: View {
         authService: any AuthService = BackendAuthService(),
         syncService: any GenerationOutputSyncServiceProtocol = StubGenerationOutputSyncService(),
         profileBootstrapService: (any ProfileBootstrapServiceProtocol)? = nil,
-        usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared
+        usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
+        entitlementService: any StoreKitEntitlementServiceProtocol = StoreKitEntitlementService.shared
     ) {
         self.authService = authService
         self.syncService = syncService
         self.profileBootstrapService = profileBootstrapService
         self.usageLimitService = usageLimitService
+        self.entitlementService = entitlementService
     }
 
     @State private var authState: AuthState = .unknown
@@ -43,11 +46,19 @@ struct AccountView: View {
     @State private var syncError: String?
     @State private var lastSyncMessage: String?
 
+    // MARK: Entitlement state
+    @State private var entitlementState: StoreKitEntitlementState = .freeTier()
+    @State private var isRestoring = false
+    @State private var restoreError: String?
+    @State private var restoreSuccess: String?
+    @State private var showPaywall = false
+
     var body: some View {
         NavigationStack {
             List {
                 accountSection
                 cloudFeaturesSection
+                subscriptionSection
                 usageSection
                 syncSection
                 backendStatusSection
@@ -58,6 +69,20 @@ struct AccountView: View {
             .task {
                 await authService.checkSession()
                 authState = authService.authState
+                // Refresh StoreKit entitlement and seed local credit state.
+                await entitlementService.refreshEntitlement()
+                entitlementState = entitlementService.entitlementState
+                usageLimitService.applyEntitlement(entitlementState)
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView(
+                    entitlementService: entitlementService,
+                    usageLimitService: usageLimitService
+                )
+                .onDisappear {
+                    // Refresh entitlement state after paywall is dismissed.
+                    entitlementState = entitlementService.entitlementState
+                }
             }
         }
     }
@@ -154,6 +179,73 @@ struct AccountView: View {
             Text("Configure backend to enable Sign in with Apple.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Subscription section
+
+    private var subscriptionSection: some View {
+        Section("Subscription") {
+            VStack(alignment: .leading, spacing: 8) {
+
+                // Plan row
+                HStack {
+                    Text("Plan")
+                    Spacer()
+                    Text(entitlementState.plan.displayName)
+                        .foregroundStyle(
+                            entitlementState.isPro
+                                ? CathedralTheme.Colors.accent
+                                : CathedralTheme.Colors.secondaryText
+                        )
+                        .fontWeight(entitlementState.isPro ? .semibold : .regular)
+                }
+
+                // Subscription expiry (Pro only)
+                if let expiresAt = entitlementState.entitlementExpiresAt {
+                    HStack {
+                        Text("Active until")
+                        Spacer()
+                        Text(usageResetDateString(expiresAt))
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
+                }
+
+                // Upgrade button (shown when not Pro)
+                if !entitlementState.isPro {
+                    Button {
+                        showPaywall = true
+                    } label: {
+                        Label("Upgrade to Pro", systemImage: "sparkles")
+                    }
+                    .disabled(isWorking || isRestoring)
+                }
+
+                // Restore purchases
+                Button {
+                    Task { await attemptRestore() }
+                } label: {
+                    Label(
+                        isRestoring ? "Restoring…" : "Restore Purchases",
+                        systemImage: isRestoring
+                            ? "arrow.trianglehead.2.clockwise"
+                            : "arrow.triangle.2.circlepath"
+                    )
+                }
+                .disabled(isWorking || isRestoring)
+
+                if let restoreSuccess {
+                    Text(restoreSuccess)
+                        .font(.caption)
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+                }
+                if let restoreError {
+                    Text(restoreError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding(.vertical, 4)
         }
     }
 
@@ -356,6 +448,22 @@ struct AccountView: View {
     }
 
     // MARK: - Actions
+
+    private func attemptRestore() async {
+        isRestoring = true
+        restoreError = nil
+        restoreSuccess = nil
+        defer { isRestoring = false }
+        do {
+            try await entitlementService.restorePurchases()
+            entitlementState = entitlementService.entitlementState
+            usageLimitService.applyEntitlement(entitlementState)
+            restoreSuccess = "Purchases restored successfully."
+        } catch {
+            restoreError = (error as? StoreKitEntitlementError)?.errorDescription
+                ?? error.localizedDescription
+        }
+    }
 
     private func attemptSignInWithApple() async {
         isWorking = true

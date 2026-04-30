@@ -1,8 +1,8 @@
 # Generation Credits — Scaffold Documentation
 
-> **Status: Scaffold only.**
-> Local credit tracking is in place. StoreKit purchases and backend enforcement are not yet implemented.
+> **Status: Local credit tracking + StoreKit 2 entitlement integration implemented.**
 > Backend enforcement is **required before any public monetized release**.
+> See also: [`docs/storekit-entitlements.md`](storekit-entitlements.md).
 
 ---
 
@@ -32,9 +32,16 @@ Credit costs are defined in a single place: `GenerationLengthMode.creditCost` (`
 
 ### Services
 
-- **`UsageLimitServiceProtocol`** — Protocol for preflight checking and usage recording.
-- **`LocalUsageLimitService`** — UserDefaults-backed implementation. Resets credits on the first of each month.
+- **`UsageLimitServiceProtocol`** — Protocol for preflight checking, usage recording, and entitlement application.
+- **`LocalUsageLimitService`** — UserDefaults-backed implementation. Resets credits on the first of each month. Seeded from StoreKit entitlement via `applyEntitlement(_:)`.
 - **`StubUsageLimitService`** — Always returns `.allowed`; used in tests and SwiftUI previews.
+- **`StoreKitEntitlementService`** — StoreKit 2 service; loads products, purchases, restores, and refreshes entitlement state. Feeds credits into `UsageLimitServiceProtocol` via `applyEntitlement(_:)`.
+- **`StoreKitProductIDs`** — Central registry of App Store product IDs.
+
+### Entitlement model
+
+- **`StoreKitEntitlementState`** — Captures plan, isPro, monthlyCreditAllowance, purchasedCreditBalance, entitlementExpiresAt, lastVerifiedAt.
+- **`StoreKitPlan`** — `.free` / `.pro` with associated credit allowances.
 
 ### Preflight results
 
@@ -60,10 +67,11 @@ Before any generation network call, `checkPreflight(lengthMode:authState:)` retu
 
 ## What is NOT implemented in this PR
 
-- **StoreKit purchases** — no in-app purchase, subscription, or receipt validation.
+- **Backend receipt validation** — StoreKit server-side validation via the App Store Server API.
 - **Real billing enforcement** — local credits are not trusted by the backend.
-- **Pricing page** — no UI to purchase credits.
+- **Pricing experiments** — no A/B pricing or dynamic pricing.
 - **Social features** — out of scope.
+- **Public sharing changes** — out of scope.
 
 ---
 
@@ -83,7 +91,7 @@ Before any generation network call, `checkPreflight(lengthMode:authState:)` retu
 
 ## Future integration points
 
-- **StoreKit** → Plug a `StoreKitUsageLimitService` conformer into `UsageLimitServiceProtocol`. It can top up `availableCredits` locally after a verified purchase.
+- **Backend receipt validation** → Call the App Store Server API server-side to validate each transaction. See `docs/storekit-entitlements.md`.
 - **Backend entitlement fetch** → On sign-in / app foreground, fetch the backend credit state and merge it into `GenerationCreditState`. Set `source: .backend`.
 - **`GenerationResponse` credit metadata** → The backend can return `remainingCredits: Int` and `creditCostCharged: Int` in the response; record these in `GenerationCreditState`.
 

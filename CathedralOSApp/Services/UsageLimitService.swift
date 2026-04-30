@@ -23,7 +23,9 @@ enum PreflightResult: Equatable {
 //
 // ⚠️ Scaffold only: this service enforces credits locally.
 // Backend enforcement is required before public monetized release.
-// Plug StoreKit and a real backend entitlement endpoint into conformers here.
+// StoreKit entitlement is fed in via `applyEntitlement(_:)` to seed local state;
+// the backend must still validate before trusting paid credits in production.
+// See docs/storekit-entitlements.md.
 
 protocol UsageLimitServiceProtocol: AnyObject {
 
@@ -45,6 +47,16 @@ protocol UsageLimitServiceProtocol: AnyObject {
     ///   - creditCost: Credits consumed (equals `lengthMode.creditCost`).
     ///   - lengthMode: The output length mode used for this generation.
     func recordSuccessfulGeneration(creditCost: Int, lengthMode: GenerationLengthMode)
+
+    /// Seeds local credit state from a verified StoreKit entitlement.
+    ///
+    /// Call this after a purchase, restore, or app-foreground entitlement refresh.
+    /// The entitlement grants the plan's monthly credit allowance plus any
+    /// purchased credit pack balance. Existing usage counters are preserved.
+    ///
+    /// ⚠️ This is client-side convenience only — the backend must independently
+    /// validate entitlement before honoring credits in a monetized release.
+    func applyEntitlement(_ entitlement: StoreKitEntitlementState)
 }
 
 // MARK: - LocalUsageLimitService
@@ -129,6 +141,22 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
             monthlyBudgetUsed: newBudget,
             resetDate: state.resetDate,
             planName: state.planName
+        )
+    }
+
+    func applyEntitlement(_ entitlement: StoreKitEntitlementState) {
+        resetIfNeeded()
+        let existing = load()
+        // Grant the plan's monthly allowance plus any purchased credit pack balance.
+        // Preserve the existing usage counters (monthlyCount, monthlyBudgetUsed)
+        // so they are not reset by a purchase event.
+        let newCredits = entitlement.totalAvailableCredits
+        save(
+            availableCredits: newCredits,
+            monthlyCount: existing.monthlyGenerationCount,
+            monthlyBudgetUsed: existing.monthlyOutputBudgetUsed,
+            resetDate: existing.resetDate,
+            planName: entitlement.plan.displayName
         )
     }
 
@@ -217,5 +245,18 @@ final class StubUsageLimitService: UsageLimitServiceProtocol {
 
     func recordSuccessfulGeneration(creditCost: Int, lengthMode: GenerationLengthMode) {
         // No-op stub.
+    }
+
+    func applyEntitlement(_ entitlement: StoreKitEntitlementState) {
+        // Update the stub's visible state to reflect the entitlement.
+        currentState = GenerationCreditState(
+            availableCredits: entitlement.totalAvailableCredits,
+            monthlyGenerationCount: currentState.monthlyGenerationCount,
+            monthlyOutputBudgetUsed: currentState.monthlyOutputBudgetUsed,
+            resetDate: currentState.resetDate,
+            planName: entitlement.plan.displayName,
+            lastUpdatedAt: Date(),
+            source: .local
+        )
     }
 }
