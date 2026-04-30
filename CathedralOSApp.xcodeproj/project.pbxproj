@@ -142,6 +142,10 @@
 		00000000000000000000018E /* BackendCreditEnforcementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000018D /* BackendCreditEnforcementTests.swift */; };
 		000000000000000000000190 /* StoreKitValidationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000018F /* StoreKitValidationService.swift */; };
 		000000000000000000000192 /* StoreKitServerValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000191 /* StoreKitServerValidationTests.swift */; };
+		000000000000000000000194 /* BackendHealthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000193 /* BackendHealthService.swift */; };
+		000000000000000000000196 /* DiagnosticsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000195 /* DiagnosticsViewModel.swift */; };
+		000000000000000000000198 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000197 /* DiagnosticsView.swift */; };
+		00000000000000000000019A /* DiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000199 /* DiagnosticsTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -292,6 +296,10 @@
 		00000000000000000000018D /* BackendCreditEnforcementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendCreditEnforcementTests.swift; sourceTree = "<group>"; };
 		00000000000000000000018F /* StoreKitValidationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitValidationService.swift; sourceTree = "<group>"; };
 		000000000000000000000191 /* StoreKitServerValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitServerValidationTests.swift; sourceTree = "<group>"; };
+		000000000000000000000193 /* BackendHealthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendHealthService.swift; sourceTree = "<group>"; };
+		000000000000000000000195 /* DiagnosticsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsViewModel.swift; sourceTree = "<group>"; };
+		000000000000000000000197 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
+		000000000000000000000199 /* DiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -483,6 +491,7 @@
 				000000000000000000000189 /* StoreKitEntitlementTests.swift */,
 				00000000000000000000018D /* BackendCreditEnforcementTests.swift */,
 				000000000000000000000191 /* StoreKitServerValidationTests.swift */,
+				000000000000000000000199 /* DiagnosticsTests.swift */,
 				000000000000000000000154 /* SupabaseConfigurationTests.swift */,
 				000000000000000000000156 /* BackendClientTests.swift */,
 				000000000000000000000158 /* AuthServiceTests.swift */,
@@ -538,6 +547,8 @@
 				000000000000000000000185 /* StoreKitEntitlementService.swift */,
 				00000000000000000000018F /* StoreKitValidationService.swift */,
 				00000000000000000000018B /* CreditStateService.swift */,
+				000000000000000000000193 /* BackendHealthService.swift */,
+				000000000000000000000195 /* DiagnosticsViewModel.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -595,6 +606,7 @@
 			children = (
 				000000000000000000000152 /* AccountView.swift */,
 				000000000000000000000187 /* PaywallView.swift */,
+				000000000000000000000197 /* DiagnosticsView.swift */,
 			);
 			path = Account;
 			sourceTree = "<group>";
@@ -788,6 +800,9 @@
 				000000000000000000000188 /* PaywallView.swift in Sources */,
 				000000000000000000000190 /* StoreKitValidationService.swift in Sources */,
 				00000000000000000000018C /* CreditStateService.swift in Sources */,
+				000000000000000000000194 /* BackendHealthService.swift in Sources */,
+				000000000000000000000196 /* DiagnosticsViewModel.swift in Sources */,
+				000000000000000000000198 /* DiagnosticsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -831,6 +846,7 @@
 				00000000000000000000018A /* StoreKitEntitlementTests.swift in Sources */,
 				00000000000000000000018E /* BackendCreditEnforcementTests.swift in Sources */,
 				000000000000000000000192 /* StoreKitServerValidationTests.swift in Sources */,
+				00000000000000000000019A /* DiagnosticsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -62,6 +62,7 @@ struct AccountView: View {
                 usageSection
                 syncSection
                 backendStatusSection
+                diagnosticsSection
             }
             .navigationTitle("Account")
             .navigationBarTitleDisplayMode(.large)
@@ -443,6 +444,22 @@ struct AccountView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            }
+        }
+    }
+
+    // MARK: - Diagnostics section
+
+    private var diagnosticsSection: some View {
+        Section("Developer Tools") {
+            NavigationLink {
+                DiagnosticsView(
+                    authService: authService,
+                    usageLimitService: usageLimitService,
+                    entitlementService: entitlementService
+                )
+            } label: {
+                Label("Diagnostics", systemImage: "stethoscope")
             }
         }
     }
