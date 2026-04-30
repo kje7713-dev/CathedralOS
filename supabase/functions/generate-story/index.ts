@@ -194,7 +194,14 @@ function extractTitle(text: string, fallback: string): string {
 // ---------------------------------------------------------------------------
 
 // deno-lint-ignore no-explicit-any
-async function handler(req: Request, provider?: LLMProvider, creditStore?: CreditStore): Promise<Response> {
+async function handler(
+  req: Request,
+  provider?: LLMProvider,
+  // creditStore is for test injection only. In production (creditStore = undefined),
+  // the handler creates a SupabaseCreditStore backed by the SUPABASE_SERVICE_ROLE_KEY
+  // env var. Do not pass creditStore in production deployments.
+  creditStore?: CreditStore,
+): Promise<Response> {
   // Preflight
   if (req.method === "OPTIONS") {
     return corsResponse("", { status: 204 });

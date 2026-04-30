@@ -124,6 +124,8 @@ final class BackendCreditStateService: CreditStateServiceProtocol {
         }
 
         let url = client.edgeFunctionURL(path: SupabaseConfiguration.creditStateEdgeFunctionPath)
+        // `authorizedRequest` sets Authorization/apikey/Content-Type headers only.
+        // We set httpMethod explicitly for clarity; URLRequest default is GET.
         var request = client.authorizedRequest(for: url)
         request.httpMethod = "GET"
 
