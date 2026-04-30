@@ -32,18 +32,23 @@ iOS App (SupabaseBackendClient)
     ▼
 Supabase Edge Function (generate-story/index.ts)
     │  1. Verify JWT → derive user_id
-    │  2. Validate request body
-    │  3. Compute required credits from generationLengthMode (server-side, never trust client)
-    │  4. Load user_entitlements → check credit balance
-    │  5. Return 402 insufficient_credits if balance too low (LLM NOT called)
-    │  6. Build prompt from sourcePayloadJSON
-    │  7. Call OpenAI via _provider.ts (secret key — never touches client)
-    │  8. Insert generation_outputs row
-    │  9. Insert generation_usage_events row
-    │  10. Charge credits: update user_entitlements, insert user_credit_ledger row
-    │  11. Return generated text + creditCostCharged + remainingCredits
+    │  2. Validate request body (action, mode, required fields)
+    │  3. Enforce payload size limits (sourcePayloadJSON ≤ 50 KB, previousOutputText ≤ 20 KB)
+    │  4. Check per-user rate limits → return 429 "rate_limited" if exceeded (LLM NOT called)
+    │  5. Compute required credits from generationLengthMode (server-side, never trust client)
+    │  6. Load user_entitlements → check credit balance
+    │  7. Return 402 "insufficient_credits" if balance too low (LLM NOT called)
+    │  8. Build prompt from sourcePayloadJSON
+    │  9. Call OpenAI via _provider.ts (secret key — never touches client, 30 s timeout)
+    │  10. If provider fails: record usage event (failed), log request, return classified error
+    │  11. Insert generation_outputs row
+    │  12. Insert generation_usage_events row
+    │  13. Charge credits: update user_entitlements, insert user_credit_ledger row
+    │  14. Log request metadata to generation_request_logs
+    │  15. Return generated text + creditCostCharged + remainingCredits
     ▼
-Postgres (generation_outputs + generation_usage_events + user_entitlements + user_credit_ledger)
+Postgres (generation_outputs + generation_usage_events + user_entitlements +
+          user_credit_ledger + generation_request_logs)
 ```
 
 ---
@@ -179,6 +184,34 @@ https://<project-ref>.supabase.co/functions/v1/generate-story
 
 If the client sends a higher value, the server silently clamps it to the cap.
 
+### Payload size limits
+
+| Field | Max size |
+|---|---|
+| `sourcePayloadJSON` | 50,000 characters |
+| `previousOutputText` | 20,000 characters |
+
+Requests that exceed these limits are rejected with `422` and
+`errorCode: "invalid_request"` before any rate limit or credit check.
+
+### Rate limits
+
+Per-user rolling-window limits:
+
+| Window | Max requests | Max failed requests |
+|---|---|---|
+| 1 minute | 5 | — |
+| 1 hour | 30 | 20 |
+
+Exceeding any limit returns `429` with `errorCode: "rate_limited"` and
+`retryAfterSeconds` indicating when the user may retry.
+
+### Provider timeout
+
+The backend aborts OpenAI calls that do not respond within 30 seconds.
+A timed-out call returns `errorCode: "provider_timeout"` and does NOT charge
+credits.
+
 ---
 
 ## Response contract
@@ -213,6 +246,17 @@ If the client sends a higher value, the server silently clamps it to the cap.
 }
 ```
 
+### Error — rate limited (`429`)
+
+```json
+{
+  "status": "failed",
+  "errorCode": "rate_limited",
+  "errorMessage": "Too many requests. Please wait before generating again.",
+  "retryAfterSeconds": 60
+}
+```
+
 ### Error — other failures
 
 ```json
@@ -224,13 +268,15 @@ If the client sends a higher value, the server silently clamps it to the cap.
 
 | HTTP status | Meaning |
 |---|---|
-| `401` | Missing or invalid JWT |
-| `400` | Malformed JSON body |
+| `401` | Missing or invalid JWT (`errorCode: "unauthenticated"`) |
+| `400` | Malformed JSON body (`errorCode: "invalid_request"`) |
 | `402` | Insufficient credits (`errorCode: "insufficient_credits"`) |
 | `405` | Wrong HTTP method |
-| `422` | Validation error (invalid enum value, missing required field) |
-| `500` | Server configuration error |
-| `502` | LLM provider call failed |
+| `422` | Validation error — invalid enum value, missing required field, or oversized payload (`errorCode: "invalid_request"`) |
+| `429` | Rate limit exceeded (`errorCode: "rate_limited"`, includes `retryAfterSeconds`) |
+| `500` | Server configuration error (`errorCode: "backend_config_missing"`) |
+| `502` | LLM provider call failed (`errorCode: "provider_rejected"` or `"provider_overloaded"`) |
+| `504` | LLM provider timed out (`errorCode: "provider_timeout"`) |
 
 ---
 

@@ -26,6 +26,18 @@ enum GenerationBackendServiceError: Error, LocalizedError {
     /// `required` is the credit cost for the requested generation; `available` is the user's
     /// current balance as reported by the backend.
     case insufficientCredits(required: Int, available: Int)
+    /// The backend rejected the request because the user has sent too many requests recently.
+    /// `retryAfterSeconds` is the suggested wait time before retrying, when provided.
+    case rateLimited(retryAfterSeconds: Int?)
+    /// The LLM provider did not respond within the allowed time window.
+    /// Credits are not charged when this error occurs.
+    case providerTimeout
+    /// The LLM provider is temporarily overloaded or returned a server error.
+    /// Credits are not charged when this error occurs.
+    case providerOverloaded
+    /// The backend request was syntactically invalid. This typically indicates a
+    /// client bug (e.g. unsupported field value) rather than a transient error.
+    case invalidRequest(String)
 
     var errorDescription: String? {
         switch self {
@@ -49,6 +61,47 @@ enum GenerationBackendServiceError: Error, LocalizedError {
             return "Could not parse server response: \(underlying.localizedDescription)"
         case .insufficientCredits(let required, let available):
             return "Not enough credits to generate. Required: \(required), available: \(available)."
+        case .rateLimited(let retryAfter):
+            if let seconds = retryAfter {
+                return "Too many requests. Please wait \(seconds) second\(seconds == 1 ? "" : "s") before generating again."
+            }
+            return "Too many requests. Please wait a moment before generating again."
+        case .providerTimeout:
+            return "The generation service took too long to respond. Please try again."
+        case .providerOverloaded:
+            return "The generation service is temporarily busy. Please try again in a moment."
+        case .invalidRequest(let detail):
+            return "The request could not be processed: \(detail)"
+        }
+    }
+
+    /// User-facing message suitable for display in the app UI.
+    /// Technical details are omitted; only actionable guidance is shown.
+    var userFacingMessage: String {
+        switch self {
+        case .notImplemented, .notConfigured:
+            return "Generation is not available right now."
+        case .notSignedIn:
+            return "Please sign in to generate content."
+        case .encodingError, .decodingError:
+            return "Something went wrong processing your request. Please try again."
+        case .networkError:
+            return "Check your internet connection and try again."
+        case .serverError:
+            return "The server encountered an error. Please try again."
+        case .insufficientCredits(let required, let available):
+            return "Not enough credits. You need \(required) but have \(available)."
+        case .rateLimited(let retryAfter):
+            if let seconds = retryAfter {
+                return "You're generating too quickly. Try again in \(seconds) second\(seconds == 1 ? "" : "s")."
+            }
+            return "You're generating too quickly. Please wait a moment."
+        case .providerTimeout:
+            return "Generation timed out. Please try again."
+        case .providerOverloaded:
+            return "Generation service is busy. Please try again in a moment."
+        case .invalidRequest:
+            return "This request cannot be processed. Please try a different setting."
         }
     }
 }
@@ -220,16 +273,31 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         if let httpResponse = urlResponse as? HTTPURLResponse,
            !(200..<300).contains(httpResponse.statusCode) {
             // Attempt to decode a structured error response first.
-            // The backend returns errorCode = "insufficient_credits" with a 402 status
-            // when the user does not have enough credits.
-            if let decoded = try? JSONDecoder().decode(GenerationResponse.self, from: data),
-               decoded.errorCode == "insufficient_credits" {
-                let required = decoded.requiredCredits ?? 0
-                let available = decoded.availableCredits ?? 0
-                throw GenerationBackendServiceError.insufficientCredits(
-                    required: required,
-                    available: available
-                )
+            // The backend returns stable errorCode values for all known failure modes.
+            if let decoded = try? JSONDecoder().decode(GenerationResponse.self, from: data) {
+                switch decoded.errorCode {
+                case "insufficient_credits":
+                    let required = decoded.requiredCredits ?? 0
+                    let available = decoded.availableCredits ?? 0
+                    throw GenerationBackendServiceError.insufficientCredits(
+                        required: required,
+                        available: available
+                    )
+                case "rate_limited":
+                    throw GenerationBackendServiceError.rateLimited(
+                        retryAfterSeconds: decoded.retryAfterSeconds
+                    )
+                case "provider_timeout":
+                    throw GenerationBackendServiceError.providerTimeout
+                case "provider_overloaded":
+                    throw GenerationBackendServiceError.providerOverloaded
+                case "invalid_request":
+                    throw GenerationBackendServiceError.invalidRequest(
+                        decoded.errorMessage ?? "Invalid request"
+                    )
+                default:
+                    break
+                }
             }
             let msg = String(data: data, encoding: .utf8)
             throw GenerationBackendServiceError.serverError(

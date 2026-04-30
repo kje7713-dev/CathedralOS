@@ -342,3 +342,172 @@ const mockCreditStore: CreditStore = {
 // Inject mockProvider as 2nd argument and mockCreditStore as 3rd argument.
 // await handler(req, mockProvider, mockCreditStore);
 ```
+
+
+---
+
+## Case 13 — Rate limit exceeded (per minute)
+
+Trigger the rate limit by sending more than 5 requests within a 60-second window.
+
+```sh
+for i in {1..6}; do
+  curl -s -o /dev/null -w "Request $i: %{http_code}\n"     -X POST "$BASE_URL"     -H "Authorization: Bearer $TOKEN"     -H "apikey: $ANON_KEY"     -H "Content-Type: application/json"     -d '{"sourcePayloadJSON":{"characters":[]},"generationAction":"generate","generationLengthMode":"short","outputBudget":800}'
+done
+# Expected: requests 1–5 return 200 or another status (credits/provider permitting)
+#           request 6 returns 429 with errorCode "rate_limited" and retryAfterSeconds
+```
+
+Expected rate-limited response body:
+```json
+{
+  "status": "failed",
+  "errorCode": "rate_limited",
+  "errorMessage": "Too many requests. Please wait before generating again.",
+  "retryAfterSeconds": 60
+}
+```
+
+Verify in Supabase Studio:
+- `generation_request_logs` contains a row with `status = 'rate_limited'`
+- No `generation_outputs` or `user_credit_ledger` row for the rate-limited request
+
+---
+
+## Case 14 — Oversized sourcePayloadJSON rejected → 422
+
+```sh
+curl -s -X POST "$BASE_URL" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "apikey: $ANON_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"sourcePayloadJSON\": \"$(python3 -c 'print("x" * 50001)')\"
+    \"generationAction\": \"generate\",
+    \"generationLengthMode\": \"short\",
+    \"outputBudget\": 800
+  }"
+# Expected: 422
+# Expected body: { "errorCode": "invalid_request", "errorMessage": "sourcePayloadJSON exceeds maximum size..." }
+```
+
+---
+
+## Case 15 — Oversized previousOutputText rejected → 422
+
+```sh
+curl -s -X POST "$BASE_URL" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "apikey: $ANON_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"sourcePayloadJSON\": {},
+    \"generationAction\": \"continue\",
+    \"generationLengthMode\": \"medium\",
+    \"outputBudget\": 1600,
+    \"previousOutputText\": \"$(python3 -c 'print("x" * 20001)')\",
+  }"
+# Expected: 422
+# Expected body: { "errorCode": "invalid_request", "errorMessage": "previousOutputText exceeds maximum size..." }
+```
+
+---
+
+## Case 16 — Provider timeout maps to provider_timeout
+
+Set `OPENAI_API_KEY=sk-fake-key-that-causes-immediate-401` and serve the function.
+Alternatively configure a local proxy that holds connections open.
+
+```sh
+curl -s -X POST "$BASE_URL" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "apikey: $ANON_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"sourcePayloadJSON":{"characters":[]},"generationAction":"generate","generationLengthMode":"short","outputBudget":800}'
+# For a fake key → Expected: 502 with errorCode "provider_rejected"
+# For a timeout scenario → Expected: 504 with errorCode "provider_timeout"
+# Verify: no credit charge in user_credit_ledger
+# Verify: generation_request_logs row with error_code = 'provider_timeout' or 'provider_rejected'
+```
+
+---
+
+## Case 17 — Successful generation logs request metadata
+
+After a successful generation (Case 8):
+
+```sql
+-- In Supabase Studio SQL editor
+SELECT
+  request_id,
+  action,
+  generation_length_mode,
+  output_budget,
+  status,
+  model_name,
+  input_tokens,
+  output_tokens,
+  duration_ms,
+  created_at
+FROM generation_request_logs
+WHERE user_id = '<your-user-uuid>'
+ORDER BY created_at DESC
+LIMIT 1;
+-- Expected: status = 'success', model_name set, input_tokens / output_tokens > 0
+```
+
+---
+
+## Case 18 — Failed generation logs request metadata without charging
+
+After a failed generation (Case 9 — invalid API key):
+
+```sql
+SELECT *
+FROM generation_request_logs
+WHERE user_id = '<your-user-uuid>'
+ORDER BY created_at DESC
+LIMIT 1;
+-- Expected: status = 'failed', error_code = 'provider_rejected' or similar
+
+SELECT *
+FROM user_credit_ledger
+WHERE user_id = '<your-user-uuid>'
+ORDER BY created_at DESC
+LIMIT 1;
+-- Expected: NO new row with reason = 'generation_charge' from the failed attempt
+```
+
+---
+
+## Case 19 — Health check does not expose secrets
+
+```sh
+curl -s "https://<project-ref>.supabase.co/functions/v1/backend-health" \
+  -H "apikey: $ANON_KEY"
+# Expected: 200 (when configured) or 503 (when degraded)
+# Expected: JSON contains openaiKeyConfigured (boolean), NOT the key value itself
+# Expected: JSON does NOT contain the string "sk-" or any secret value
+```
+
+---
+
+## Automated test patterns (rate limiting)
+
+The rate limiter can be tested by injecting a `MockRateLimitStore` via the
+`handler()` fourth argument. See `index_test.ts` for examples.
+
+```ts
+import { handler } from "./index.ts";
+import type { RateLimitStore, RateLimitResult } from "./_rate_limiter.ts";
+
+const rateLimitedStore: RateLimitStore = {
+  async checkLimits(_userId) {
+    return { allowed: false, retryAfterSeconds: 60 };
+  },
+  async recordRequest(_userId, _params) {},
+};
+
+// Inject as 4th argument. Rate limit check fires before credit check.
+// await handler(req, mockProvider, mockCreditStore, rateLimitedStore);
+```

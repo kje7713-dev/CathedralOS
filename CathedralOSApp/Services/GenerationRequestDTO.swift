@@ -127,7 +127,9 @@ struct GenerationResponse: Codable {
 
     // MARK: Credit enforcement fields
     /// Machine-readable error code for structured error handling.
-    /// Currently defined values: "insufficient_credits"
+    /// Defined values: "insufficient_credits" | "rate_limited" | "provider_timeout"
+    ///                 | "provider_overloaded" | "provider_rejected" | "invalid_request"
+    ///                 | "unauthenticated" | "backend_config_missing" | "unknown"
     let errorCode: String?
     /// The number of credits required for this generation (present on insufficient_credits error).
     let requiredCredits: Int?
@@ -138,8 +140,13 @@ struct GenerationResponse: Codable {
     /// The number of credits remaining after this generation (present on success).
     let remainingCredits: Int?
 
+    // MARK: Rate limiting
+    /// Seconds the client should wait before retrying after a rate_limited error.
+    /// Only present when errorCode is "rate_limited".
+    let retryAfterSeconds: Int?
+
     // MARK: Status
-    /// Expected values: "success" | "error"
+    /// Expected values: "success" | "error" | "complete" | "failed"
     let status: String
     let errorMessage: String?
 
@@ -160,6 +167,7 @@ struct GenerationResponse: Codable {
         availableCredits    = try c.decodeIfPresent(Int.self, forKey: .availableCredits)
         creditCostCharged   = try c.decodeIfPresent(Int.self, forKey: .creditCostCharged)
         remainingCredits    = try c.decodeIfPresent(Int.self, forKey: .remainingCredits)
+        retryAfterSeconds   = try c.decodeIfPresent(Int.self, forKey: .retryAfterSeconds)
         status              = try c.decode(String.self, forKey: .status)
         errorMessage        = try c.decodeIfPresent(String.self, forKey: .errorMessage)
     }
