@@ -249,11 +249,12 @@ final class BackendAuthService: AuthService {
         let hashedNonce = Self.sha256(rawNonce)
 
         // Bridge the delegate-based ASAuthorizationController to async/await.
-        // ASAuthorizationController.performRequests() must run on the main actor.
-        let handler = AppleSignInHandler()
+        // AppleSignInHandler is @MainActor, so both its init and mutation of
+        // `continuation` must happen on the main actor.
+        let handler = await MainActor.run { AppleSignInHandler() }
         let authorization: ASAuthorization = try await withCheckedThrowingContinuation { continuation in
-            handler.continuation = continuation
             Task { @MainActor [handler, hashedNonce] in
+                handler.continuation = continuation
                 handler.authorize(nonceHash: hashedNonce)
             }
         }
