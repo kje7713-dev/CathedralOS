@@ -116,8 +116,12 @@ Deno.serve(async (req: Request) => {
     ...(dbError ? { dbError } : {}),
   };
 
+  console.log("[backend-health]", JSON.stringify(healthPayload));
+
+  // Return 200 even when degraded so the Supabase dashboard test panel
+  // surfaces the JSON body instead of hiding it behind a generic 503.
   return corsResponse(
     JSON.stringify(healthPayload),
-    { status: generationFunctionConfigured ? 200 : 503 },
+    { status: 200 },
   );
 });
