@@ -82,7 +82,8 @@ final class BackendClientTests: XCTestCase {
             generationEdgeFunctionPath: "generate",
             sharingEdgeFunctionPath: "shared-outputs",
             creditStateEdgeFunctionPath: "get-credit-state",
-            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement"
+            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement",
+            storeKitValidateEdgeFunctionPath: "sync-storekit-entitlement"
         )
         let url = config.edgeFunctionURL(path: "generate")
         XCTAssertEqual(
@@ -98,7 +99,8 @@ final class BackendClientTests: XCTestCase {
             generationEdgeFunctionPath: "generate",
             sharingEdgeFunctionPath: "shared-outputs",
             creditStateEdgeFunctionPath: "get-credit-state",
-            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement"
+            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement",
+            storeKitValidateEdgeFunctionPath: "sync-storekit-entitlement"
         )
         let url = config.edgeFunctionURL(path: "generate")
         XCTAssertFalse(
