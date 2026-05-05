@@ -340,6 +340,18 @@ private final class ControllableUsageLimitService: UsageLimitServiceProtocol {
             source: currentState.source
         )
     }
+
+    func applyEntitlement(_ entitlement: StoreKitEntitlementState) {
+        currentState = GenerationCreditState(
+            availableCredits: entitlement.totalAvailableCredits,
+            monthlyGenerationCount: currentState.monthlyGenerationCount,
+            monthlyOutputBudgetUsed: currentState.monthlyOutputBudgetUsed,
+            resetDate: currentState.resetDate,
+            planName: entitlement.plan.displayName,
+            lastUpdatedAt: Date(),
+            source: currentState.source
+        )
+    }
 }
 
 final class BackendNotCalledWhenBlockedTests: XCTestCase {
