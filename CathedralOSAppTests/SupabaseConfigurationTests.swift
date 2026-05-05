@@ -87,13 +87,9 @@ final class SupabaseConfigurationTests: XCTestCase {
     // MARK: - ValidatedSupabaseConfiguration URL builder
 
     func testEdgeFunctionURLBuilderProducesCorrectPath() {
-        let config = ValidatedSupabaseConfiguration(
+        let config = ValidatedSupabaseConfiguration.makeForTesting(
             projectURL: URL(string: "https://abc123.supabase.co")!,
-            anonKey: "test-anon-key",
-            generationEdgeFunctionPath: "generate",
-            sharingEdgeFunctionPath: "shared-outputs",
-            creditStateEdgeFunctionPath: "get-credit-state",
-            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement"
+            generationEdgeFunctionPath: "generate"
         )
         let url = config.edgeFunctionURL(path: "generate")
         XCTAssertEqual(
@@ -104,13 +100,9 @@ final class SupabaseConfigurationTests: XCTestCase {
     }
 
     func testEdgeFunctionURLBuilderForSharingPath() {
-        let config = ValidatedSupabaseConfiguration(
+        let config = ValidatedSupabaseConfiguration.makeForTesting(
             projectURL: URL(string: "https://abc123.supabase.co")!,
-            anonKey: "test-anon-key",
-            generationEdgeFunctionPath: "generate",
-            sharingEdgeFunctionPath: "shared-outputs",
-            creditStateEdgeFunctionPath: "get-credit-state",
-            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement"
+            sharingEdgeFunctionPath: "shared-outputs"
         )
         let url = config.edgeFunctionURL(path: "shared-outputs")
         XCTAssertEqual(
@@ -120,13 +112,9 @@ final class SupabaseConfigurationTests: XCTestCase {
     }
 
     func testEdgeFunctionURLDoesNotEmbedAnonKey() {
-        let config = ValidatedSupabaseConfiguration(
+        let config = ValidatedSupabaseConfiguration.makeForTesting(
             projectURL: URL(string: "https://abc123.supabase.co")!,
-            anonKey: "super-secret-anon-key",
-            generationEdgeFunctionPath: "generate",
-            sharingEdgeFunctionPath: "shared-outputs",
-            creditStateEdgeFunctionPath: "get-credit-state",
-            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement"
+            anonKey: "super-secret-anon-key"
         )
         let url = config.edgeFunctionURL(path: "generate")
         XCTAssertFalse(
