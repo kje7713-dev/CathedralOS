@@ -1,3 +1,5 @@
+require "shellwords"
+
 default_platform(:ios)
 
 # ---------------------------------------------------------------------------
@@ -96,6 +98,11 @@ platform :ios do
     # INFOPLIST_KEY_* build settings inject values into the generated Info.plist
     # (used when GENERATE_INFOPLIST_FILE=YES).  Only the public anon key and
     # project URL are injected here — no service-role keys or DB passwords.
+    xcargs = [
+      "INFOPLIST_KEY_SupabaseProjectURL=#{ENV['SUPABASE_PROJECT_URL'].to_s.shellescape}",
+      "INFOPLIST_KEY_SupabaseAnonKey=#{ENV['SUPABASE_ANON_KEY'].to_s.shellescape}"
+    ].join(" ")
+
     gym(
       project:          "CathedralOSApp.xcodeproj",
       scheme:           "CathedralOSApp",
@@ -110,10 +117,7 @@ platform :ios do
       output_directory: "./build",
       output_name:      "CathedralOSApp.ipa",
       clean:            true,
-      xcargs:           {
-        "INFOPLIST_KEY_SupabaseProjectURL" => ENV["SUPABASE_PROJECT_URL"].to_s,
-        "INFOPLIST_KEY_SupabaseAnonKey"    => ENV["SUPABASE_ANON_KEY"].to_s
-      },
+      xcargs:           xcargs,
       export_xcargs:    "-allowProvisioningUpdates"
     )
 
