@@ -1,4 +1,5 @@
 require "shellwords"
+require "fileutils"
 
 default_platform(:ios)
 
@@ -124,21 +125,33 @@ platform :ios do
     # --- Verify built IPA contains runtime Supabase keys ---
     ipa_path = "./build/CathedralOSApp.ipa"
     verify_dir = File.join(Dir.pwd, "build", "ipa_verify")
-    sh("rm", "-rf", verify_dir)
-    sh("mkdir", "-p", verify_dir)
+    expected_verify_prefix = File.join(Dir.pwd, "build") + File::SEPARATOR
+    unless verify_dir.start_with?(expected_verify_prefix)
+      UI.user_error!("Refusing to clear unexpected verify directory path: #{verify_dir}")
+    end
+
+    UI.user_error!("Expected IPA not found at #{ipa_path}") unless File.exist?(ipa_path)
+
+    FileUtils.rm_rf(verify_dir) if File.exist?(verify_dir)
+    FileUtils.mkdir_p(verify_dir)
     sh("unzip", "-q", ipa_path, "-d", verify_dir)
 
     plist_path = File.join(verify_dir, "Payload", "CathedralOSApp.app", "Info.plist")
+    UI.user_error!("Expected Info.plist not found in built IPA at #{plist_path}") unless File.exist?(plist_path)
 
-    read_plist_value = lambda do |key|
-      sh(
-        "/usr/libexec/PlistBuddy",
-        "-c",
-        "Print :#{key}",
-        plist_path,
-        log: false,
-        error_callback: proc { "" }
-      ).to_s.strip
+    read_plist_value = lambda do |plist_key|
+      begin
+        sh(
+          "/usr/libexec/PlistBuddy",
+          "-c",
+          "Print :#{plist_key}",
+          plist_path,
+          log: false
+        ).to_s.strip
+      rescue StandardError
+        UI.message("Built IPA plist key lookup for #{plist_key} returned non-success status; treating as missing.")
+        ""
+      end
     end
 
     url_present = !read_plist_value.call("SupabaseProjectURL").empty?
