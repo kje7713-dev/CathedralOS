@@ -8,7 +8,7 @@
 // Response includes:
 //   - Whether each required secret env var is configured (true/false only)
 //   - The configured OpenAI model name (non-secret)
-//   - Whether the database is reachable (simple connectivity check)
+//   - Whether the database is reachable (health_check_ping() RPC probe)
 //   - Current server timestamp
 //
 // This function does NOT require user authentication so it can be called by
@@ -19,6 +19,15 @@
 //   - No user data is queried or returned.
 //   - The anon key embedded in the iOS app is sufficient to call this endpoint.
 // =============================================================================
+
+// Structured error details returned when the DB probe fails.
+// Contains only sanitized, non-secret values (message, Postgres error code,
+// and hint from the PostgREST response body — never raw SQL or credentials).
+interface DbErrorDetail {
+  message: string;
+  code?: string;
+  hint?: string;
+}
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -38,9 +47,16 @@ function corsResponse(body: string, init: ResponseInit = {}): Response {
   });
 }
 
-Deno.serve(async (req: Request) => {
+// ---------------------------------------------------------------------------
+// Handler — exported for unit testing; Deno.serve wires it up below.
+// ---------------------------------------------------------------------------
+
+export async function handler(
+  req: Request,
+  fetchFn: typeof fetch = globalThis.fetch,
+): Promise<Response> {
   if (req.method === "OPTIONS") {
-    return corsResponse("", { status: 204 });
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
   if (req.method !== "GET") {
@@ -62,47 +78,73 @@ Deno.serve(async (req: Request) => {
   const openaiModel = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini (default)";
 
   // -------------------------------------------------------------------------
-  // Database connectivity check
+  // Database connectivity check via health_check_ping() RPC
+  //
+  // We call the dedicated health_check_ping() SQL function (added in
+  // 20260506000000_add_health_check_ping.sql) rather than querying a
+  // user-data table, so the probe is guaranteed to succeed once the DB is
+  // reachable regardless of whether any application rows exist.
   // -------------------------------------------------------------------------
 
   let dbReachable = false;
-  let dbError: string | null = null;
+  let dbError: DbErrorDetail | null = null;
 
   const supabaseURL = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
   if (supabaseURL && serviceRoleKey) {
     try {
-      // Use a raw REST probe so failures expose the HTTP status and body
-      // instead of an empty Supabase JS client error message.
-      const probeURL =
-        `${supabaseURL}/rest/v1/generation_request_logs?select=id&limit=1`;
-      const probeRes = await fetch(probeURL, {
-        method: "GET",
+      const probeURL = `${supabaseURL}/rest/v1/rpc/health_check_ping`;
+      const probeRes = await fetchFn(probeURL, {
+        method: "POST",
         headers: {
           "apikey": serviceRoleKey,
           "Authorization": `Bearer ${serviceRoleKey}`,
+          "Content-Type": "application/json",
         },
+        body: "{}",
       });
 
       if (probeRes.ok) {
         dbReachable = true;
       } else {
-        const body = await probeRes.text();
-        dbError = `DB REST error: HTTP ${probeRes.status} ${body}`;
+        // Extract sanitized diagnostic fields from the PostgREST error body.
+        // PostgREST errors are JSON with { message, code, details, hint }.
+        // We surface message/code/hint only — never raw SQL or stack traces.
+        const rawBody = await probeRes.text();
+        try {
+          const errJson = JSON.parse(rawBody) as Record<string, unknown>;
+          dbError = {
+            message: typeof errJson.message === "string"
+              ? errJson.message
+              : `HTTP ${probeRes.status}`,
+            ...(typeof errJson.code === "string" ? { code: errJson.code } : {}),
+            ...(typeof errJson.hint === "string" && errJson.hint
+              ? { hint: errJson.hint }
+              : {}),
+          };
+        } catch {
+          dbError = { message: `HTTP ${probeRes.status}` };
+        }
       }
     } catch (err) {
-      dbError = `DB connection error: ${err instanceof Error ? err.message : String(err)}`;
+      dbError = {
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
   } else {
-    dbError = "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not configured";
+    dbError = { message: "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not configured" };
   }
 
   // -------------------------------------------------------------------------
   // Overall status
+  //
+  // generationFunctionConfigured is true only when every dependency of the
+  // generate-story Edge Function is confirmed present and reachable.
   // -------------------------------------------------------------------------
 
-  const generationFunctionConfigured = openaiKeyPresent && serviceRoleKeyPresent && dbReachable;
+  const generationFunctionConfigured =
+    openaiKeyPresent && supabaseURLPresent && serviceRoleKeyPresent && dbReachable;
 
   const healthPayload = {
     status: generationFunctionConfigured ? "ok" : "degraded",
@@ -115,7 +157,7 @@ Deno.serve(async (req: Request) => {
       databaseReachable: dbReachable,
     },
     generationFunctionConfigured,
-    // Include a brief error summary when degraded (never includes secret values).
+    // Include structured error details when degraded (no secret values).
     ...(dbError ? { dbError } : {}),
   };
 
@@ -127,4 +169,6 @@ Deno.serve(async (req: Request) => {
     JSON.stringify(healthPayload),
     { status: 200 },
   );
-});
+}
+
+Deno.serve((req: Request) => handler(req));
