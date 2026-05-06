@@ -20,8 +20,6 @@
 //   - The anon key embedded in the iOS app is sufficient to call this endpoint.
 // =============================================================================
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -75,18 +73,23 @@ Deno.serve(async (req: Request) => {
 
   if (supabaseURL && serviceRoleKey) {
     try {
-      const adminClient = createClient(supabaseURL, serviceRoleKey);
-      // A simple count query against generation_request_logs is a lightweight
-      // connectivity check that does not return any user data.
-      const { error } = await adminClient
-        .from("generation_request_logs")
-        .select("id", { count: "exact", head: true })
-        .limit(1);
+      // Use a raw REST probe so failures expose the HTTP status and body
+      // instead of an empty Supabase JS client error message.
+      const probeURL =
+        `${supabaseURL}/rest/v1/generation_request_logs?select=id&limit=1`;
+      const probeRes = await fetch(probeURL, {
+        method: "GET",
+        headers: {
+          "apikey": serviceRoleKey,
+          "Authorization": `Bearer ${serviceRoleKey}`,
+        },
+      });
 
-      if (error) {
-        dbError = `DB query error: ${error.message}`;
-      } else {
+      if (probeRes.ok) {
         dbReachable = true;
+      } else {
+        const body = await probeRes.text();
+        dbError = `DB REST error: HTTP ${probeRes.status} ${body}`;
       }
     } catch (err) {
       dbError = `DB connection error: ${err instanceof Error ? err.message : String(err)}`;
