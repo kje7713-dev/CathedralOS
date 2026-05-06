@@ -36,12 +36,15 @@ platform :ios do
   #   MATCH_GIT_TOKEN   — Personal access token for the Match repo (read access)
   #   MATCH_READONLY    — (optional) Set to "false" to allow Match to refresh
   #                       certs/profiles; defaults to "true" (readonly)
+  #   SUPABASE_PROJECT_URL — Supabase project URL (public, injected into Info.plist)
+  #   SUPABASE_ANON_KEY    — Supabase anon/public key (injected into Info.plist)
   # ---------------------------------------------------------------------------
   lane :beta do
     preflight_checks(%w[
       ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY
       APPLE_TEAM_ID APP_IDENTIFIER
       MATCH_GIT_URL MATCH_PASSWORD MATCH_GIT_TOKEN
+      SUPABASE_PROJECT_URL SUPABASE_ANON_KEY
     ])
 
     ci_environment = is_ci
@@ -90,6 +93,9 @@ platform :ios do
     end
 
     # --- Build signed archive ---
+    # INFOPLIST_KEY_* build settings inject values into the generated Info.plist
+    # (used when GENERATE_INFOPLIST_FILE=YES).  Only the public anon key and
+    # project URL are injected here — no service-role keys or DB passwords.
     gym(
       project:          "CathedralOSApp.xcodeproj",
       scheme:           "CathedralOSApp",
@@ -104,6 +110,10 @@ platform :ios do
       output_directory: "./build",
       output_name:      "CathedralOSApp.ipa",
       clean:            true,
+      xcargs:           {
+        "INFOPLIST_KEY_SupabaseProjectURL" => ENV["SUPABASE_PROJECT_URL"].to_s,
+        "INFOPLIST_KEY_SupabaseAnonKey"    => ENV["SUPABASE_ANON_KEY"].to_s
+      },
       export_xcargs:    "-allowProvisioningUpdates"
     )
 
