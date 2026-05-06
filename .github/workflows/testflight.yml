@@ -35,14 +35,16 @@ jobs:
 
       - name: Archive and Upload to TestFlight
         env:
-          ASC_KEY_ID:        ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID:     ${{ secrets.ASC_ISSUER_ID }}
-          ASC_API_KEY:       ${{ secrets.ASC_API_KEY }}
-          APPLE_TEAM_ID:     ${{ secrets.APPLE_TEAM_ID }}
-          APP_IDENTIFIER:    ${{ secrets.APP_IDENTIFIER }}
-          MATCH_GIT_URL:     ${{ secrets.MATCH_GIT_URL }}
-          MATCH_PASSWORD:    ${{ secrets.MATCH_PASSWORD }}
-          MATCH_GIT_TOKEN:   ${{ secrets.MATCH_GIT_TOKEN }}
+          ASC_KEY_ID:            ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID:         ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY:           ${{ secrets.ASC_API_KEY }}
+          APPLE_TEAM_ID:         ${{ secrets.APPLE_TEAM_ID }}
+          APP_IDENTIFIER:        ${{ secrets.APP_IDENTIFIER }}
+          MATCH_GIT_URL:         ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD:        ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_TOKEN:       ${{ secrets.MATCH_GIT_TOKEN }}
+          SUPABASE_PROJECT_URL:  ${{ secrets.SUPABASE_PROJECT_URL }}
+          SUPABASE_ANON_KEY:     ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           set -o pipefail
           fastlane beta 2>&1 | tee fastlane_output.txt
