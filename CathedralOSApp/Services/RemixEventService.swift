@@ -40,6 +40,23 @@ struct RemixEventDTO: Encodable {
     let sourcePayloadJSON: String?
     /// Timestamp of the remix action.
     let createdAt: Date
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sharedOutputID, forKey: .sharedOutputID)
+        try container.encode(createdProjectLocalID, forKey: .createdProjectLocalID)
+        // Encode nil as explicit JSON null (not omitted) so the backend always
+        // receives the key. This distinguishes "not remixable" from a missing field.
+        try container.encode(sourcePayloadJSON, forKey: .sourcePayloadJSON)
+        try container.encode(createdAt, forKey: .createdAt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sharedOutputID
+        case createdProjectLocalID
+        case sourcePayloadJSON
+        case createdAt
+    }
 }
 
 // MARK: - RemixEventServiceProtocol
