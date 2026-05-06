@@ -240,10 +240,14 @@ final class BackendAuthService: AuthService {
 
     /// Generic sign-in entry point. Throws `.notConfigured` when the Supabase backend
     /// is absent so that callers receive a clear error regardless of run order.
+    /// When the backend is configured, throws `.notImplemented` because the concrete
+    /// sign-in path for this service is `signInWithApple()`, not this method.
     func signIn() async throws {
         guard SupabaseConfiguration.isConfigured else {
             throw AuthServiceError.notConfigured
         }
+        // The real entry point is signInWithApple(). This method exists only to
+        // surface .notConfigured before any UI flow is attempted.
         throw AuthServiceError.notImplemented
     }
 
