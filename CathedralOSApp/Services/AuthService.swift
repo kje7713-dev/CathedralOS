@@ -236,6 +236,17 @@ final class BackendAuthService: AuthService {
         }
     }
 
+    // MARK: - Sign in (generic)
+
+    /// Generic sign-in entry point. Throws `.notConfigured` when the Supabase backend
+    /// is absent so that callers receive a clear error regardless of run order.
+    func signIn() async throws {
+        guard SupabaseConfiguration.isConfigured else {
+            throw AuthServiceError.notConfigured
+        }
+        throw AuthServiceError.notImplemented
+    }
+
     // MARK: - Sign in with Apple
 
     /// Initiates Sign in with Apple, then exchanges the Apple identity token for a
