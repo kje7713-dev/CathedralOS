@@ -58,7 +58,7 @@ function corsResponse(body: string, init: ResponseInit = {}): Response {
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return corsResponse("", { status: 204 });
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
   if (req.method !== "GET" && req.method !== "POST") {
