@@ -76,9 +76,14 @@ final class BackendClientTests: XCTestCase {
     // MARK: - URL builder via ValidatedSupabaseConfiguration
 
     func testEdgeFunctionURLFollowsSupabasePattern() {
-        let config = ValidatedSupabaseConfiguration.makeForTesting(
+        let config = ValidatedSupabaseConfiguration(
             projectURL: URL(string: "https://xyz789.supabase.co")!,
-            generationEdgeFunctionPath: "generate"
+            anonKey: "test-anon-key",
+            generationEdgeFunctionPath: "generate",
+            sharingEdgeFunctionPath: "share-output",
+            creditStateEdgeFunctionPath: "get-credit-state",
+            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement",
+            storeKitValidateEdgeFunctionPath: "sync-storekit-entitlement"
         )
         let url = config.edgeFunctionURL(path: "generate")
         XCTAssertEqual(
@@ -88,9 +93,14 @@ final class BackendClientTests: XCTestCase {
     }
 
     func testEdgeFunctionURLDoesNotContainAnonKey() {
-        let config = ValidatedSupabaseConfiguration.makeForTesting(
+        let config = ValidatedSupabaseConfiguration(
             projectURL: URL(string: "https://xyz789.supabase.co")!,
-            anonKey: "do-not-embed-me"
+            anonKey: "do-not-embed-me",
+            generationEdgeFunctionPath: "generate-story",
+            sharingEdgeFunctionPath: "share-output",
+            creditStateEdgeFunctionPath: "get-credit-state",
+            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement",
+            storeKitValidateEdgeFunctionPath: "sync-storekit-entitlement"
         )
         let url = config.edgeFunctionURL(path: "generate")
         XCTAssertFalse(
