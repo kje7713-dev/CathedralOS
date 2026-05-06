@@ -121,6 +121,35 @@ platform :ios do
       export_xcargs:    "-allowProvisioningUpdates"
     )
 
+    # --- Verify built IPA contains runtime Supabase keys ---
+    ipa_path = "./build/CathedralOSApp.ipa"
+    verify_dir = File.join(Dir.pwd, "build", "ipa_verify")
+    sh("rm", "-rf", verify_dir)
+    sh("mkdir", "-p", verify_dir)
+    sh("unzip", "-q", ipa_path, "-d", verify_dir)
+
+    plist_path = File.join(verify_dir, "Payload", "CathedralOSApp.app", "Info.plist")
+
+    read_plist_value = lambda do |key|
+      sh(
+        "/usr/libexec/PlistBuddy",
+        "-c",
+        "Print :#{key}",
+        plist_path,
+        log: false,
+        error_callback: proc { "" }
+      ).to_s.strip
+    end
+
+    url_present = !read_plist_value.call("SupabaseProjectURL").empty?
+    anon_present = !read_plist_value.call("SupabaseAnonKey").empty?
+
+    UI.message("Built IPA SupabaseProjectURL present: #{url_present ? 'yes' : 'no'}")
+    UI.message("Built IPA SupabaseAnonKey present: #{anon_present ? 'yes' : 'no'}")
+
+    UI.user_error!("Built IPA is missing SupabaseProjectURL") unless url_present
+    UI.user_error!("Built IPA is missing SupabaseAnonKey") unless anon_present
+
     # --- Upload to TestFlight ---
     upload_to_testflight(
       skip_waiting_for_build_processing: true
