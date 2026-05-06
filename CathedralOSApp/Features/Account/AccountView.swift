@@ -445,7 +445,22 @@ struct AccountView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            HStack {
+                Text("App build")
+                Spacer()
+                Text(appVersionBuildLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
+    }
+
+    private var appVersionBuildLabel: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (\(build))"
     }
 
     // MARK: - Diagnostics section
