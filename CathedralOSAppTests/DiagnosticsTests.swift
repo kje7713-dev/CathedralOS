@@ -52,6 +52,7 @@ private final class DiagnosticsStubAuthService: AuthService {
 
 // MARK: - DiagnosticsSnapshotRedactionTests
 
+@MainActor
 final class DiagnosticsSnapshotRedactionTests: XCTestCase {
 
     /// The snapshot should truncate the user ID to 8 chars maximum.
@@ -152,6 +153,7 @@ final class DiagnosticsSnapshotRedactionTests: XCTestCase {
 
 // MARK: - DiagnosticsMissingConfigTests
 
+@MainActor
 final class DiagnosticsMissingConfigTests: XCTestCase {
 
     /// When backend is not configured, the snapshot should report clearly.
@@ -220,6 +222,7 @@ final class DiagnosticsMissingConfigTests: XCTestCase {
 
 // MARK: - DiagnosticsPreflightTests
 
+@MainActor
 final class DiagnosticsPreflightTests: XCTestCase {
 
     /// When signed out, preflight should include a sign-in required item.
@@ -308,6 +311,7 @@ final class DiagnosticsPreflightTests: XCTestCase {
 
 // MARK: - DiagnosticsStoreKitTests
 
+@MainActor
 final class DiagnosticsStoreKitTests: XCTestCase {
 
     /// When StoreKit products fail to load (empty array), snapshot reflects this.
@@ -396,6 +400,7 @@ final class DiagnosticsStoreKitTests: XCTestCase {
 
 // MARK: - DiagnosticsBackendHealthTests
 
+@MainActor
 final class DiagnosticsBackendHealthTests: XCTestCase {
 
     /// When health returns notImplemented, snapshot status reflects it.
@@ -491,6 +496,7 @@ final class DiagnosticsBackendHealthTests: XCTestCase {
 
 // MARK: - DiagnosticsCopyTextTests
 
+@MainActor
 final class DiagnosticsCopyTextTests: XCTestCase {
 
     /// Copy text includes key diagnostic sections.

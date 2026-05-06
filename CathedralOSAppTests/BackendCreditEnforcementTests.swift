@@ -293,6 +293,8 @@ final class BackendCreditStateStubTests: XCTestCase {
             if case .notSignedIn = error { /* expected */ } else {
                 XCTFail("Expected .notSignedIn, got \(error)")
             }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
         }
     }
 }
