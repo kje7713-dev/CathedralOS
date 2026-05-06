@@ -35,8 +35,8 @@ jobs:
 
       - name: Verify Supabase runtime key presence
         env:
-          SUPABASE_PROJECT_URL:  ${{ secrets.SUPABASE_PROJECT_URL }}
-          SUPABASE_ANON_KEY:     ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_PROJECT_URL: ${{ secrets.SUPABASE_PROJECT_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           echo "SUPABASE_PROJECT_URL present: $([[ -n "$SUPABASE_PROJECT_URL" ]] && echo yes || echo no)"
           echo "SUPABASE_ANON_KEY present: $([[ -n "$SUPABASE_ANON_KEY" ]] && echo yes || echo no)"
