@@ -105,6 +105,22 @@ platform :ios do
       "SUPABASE_ANON_KEY=#{ENV['SUPABASE_ANON_KEY'].to_s.shellescape}"
     ].join(" ")
 
+    release_build_settings = sh(
+      "xcodebuild",
+      "-project", "CathedralOSApp.xcodeproj",
+      "-scheme", "CathedralOSApp",
+      "-configuration", "Release",
+      "-showBuildSettings",
+      log: false
+    ).to_s
+
+    release_has_supabase_url_key = release_build_settings.include?("INFOPLIST_KEY_SupabaseProjectURL")
+    release_has_supabase_anon_key = release_build_settings.include?("INFOPLIST_KEY_SupabaseAnonKey")
+    UI.message("Active Release INFOPLIST_KEY_SupabaseProjectURL present: #{release_has_supabase_url_key ? 'yes' : 'no'}")
+    UI.message("Active Release INFOPLIST_KEY_SupabaseAnonKey present: #{release_has_supabase_anon_key ? 'yes' : 'no'}")
+    UI.user_error!("Active Release build settings are missing INFOPLIST_KEY_SupabaseProjectURL") unless release_has_supabase_url_key
+    UI.user_error!("Active Release build settings are missing INFOPLIST_KEY_SupabaseAnonKey") unless release_has_supabase_anon_key
+
     gym(
       project:          "CathedralOSApp.xcodeproj",
       scheme:           "CathedralOSApp",
