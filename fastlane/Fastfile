@@ -100,10 +100,33 @@ platform :ios do
     # the generated Info.plist (used when GENERATE_INFOPLIST_FILE=YES). Only the
     # public anon key and project URL are injected here — no service-role keys
     # or DB passwords.
-    xcargs = [
+    xcargs_parts = [
       "SUPABASE_PROJECT_URL=#{ENV['SUPABASE_PROJECT_URL'].to_s.shellescape}",
       "SUPABASE_ANON_KEY=#{ENV['SUPABASE_ANON_KEY'].to_s.shellescape}"
-    ].join(" ")
+    ]
+    xcargs = xcargs_parts.join(" ")
+
+    build_settings_output = sh(
+      "xcodebuild",
+      "-project",
+      "CathedralOSApp.xcodeproj",
+      "-scheme",
+      "CathedralOSApp",
+      "-configuration",
+      "Release",
+      "-showBuildSettings",
+      *xcargs_parts,
+      log: false
+    ).to_s
+
+    release_url_setting_present = build_settings_output.match?(/^\s*INFOPLIST_KEY_SupabaseProjectURL\s*=/)
+    release_anon_setting_present = build_settings_output.match?(/^\s*INFOPLIST_KEY_SupabaseAnonKey\s*=/)
+
+    UI.message("Active Release INFOPLIST_KEY_SupabaseProjectURL present: #{release_url_setting_present ? 'yes' : 'no'}")
+    UI.message("Active Release INFOPLIST_KEY_SupabaseAnonKey present: #{release_anon_setting_present ? 'yes' : 'no'}")
+
+    UI.user_error!("Active Release build settings are missing INFOPLIST_KEY_SupabaseProjectURL") unless release_url_setting_present
+    UI.user_error!("Active Release build settings are missing INFOPLIST_KEY_SupabaseAnonKey") unless release_anon_setting_present
 
     gym(
       project:          "CathedralOSApp.xcodeproj",
