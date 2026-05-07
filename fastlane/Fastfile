@@ -146,9 +146,12 @@ platform :ios do
     read_plist_value = lambda do |plist_key|
       begin
         sh(
-          "/usr/libexec/PlistBuddy",
-          "-c",
-          "Print :#{plist_key}",
+          "/usr/bin/plutil",
+          "-extract",
+          plist_key,
+          "raw",
+          "-o",
+          "-",
           plist_path,
           log: false
         ).to_s.strip
