@@ -870,6 +870,8 @@
 				DEVELOPMENT_TEAM = "$(APPLE_TEAM_ID)";
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_SupabaseAnonKey = "$(SUPABASE_ANON_KEY)";
+				INFOPLIST_KEY_SupabaseProjectURL = "$(SUPABASE_PROJECT_URL)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -896,6 +898,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "$(APPLE_TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_SupabaseAnonKey = "$(SUPABASE_ANON_KEY)";
+				INFOPLIST_KEY_SupabaseProjectURL = "$(SUPABASE_PROJECT_URL)";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
