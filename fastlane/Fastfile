@@ -123,14 +123,15 @@ platform :ios do
     )
 
     # --- Verify built IPA contains runtime Supabase keys ---
-    ipa_path = "./build/CathedralOSApp.ipa"
-    verify_dir = File.join(Dir.pwd, "build", "ipa_verify")
-    expected_verify_prefix = File.join(Dir.pwd, "build") + File::SEPARATOR
+    ipa_path = lane_context[SharedValues::IPA_OUTPUT_PATH].to_s
+    UI.user_error!("IPA_OUTPUT_PATH was empty after gym") if ipa_path.empty?
+    UI.user_error!("Expected IPA not found at #{ipa_path}") unless File.exist?(ipa_path)
+
+    verify_dir = File.join(File.dirname(ipa_path), "ipa_verify")
+    expected_verify_prefix = File.dirname(ipa_path) + File::SEPARATOR
     unless verify_dir.start_with?(expected_verify_prefix)
       UI.user_error!("Refusing to clear unexpected verify directory path: #{verify_dir}")
     end
-
-    UI.user_error!("Expected IPA not found at #{ipa_path}") unless File.exist?(ipa_path)
 
     FileUtils.rm_rf(verify_dir) if File.exist?(verify_dir)
     FileUtils.mkdir_p(verify_dir)
