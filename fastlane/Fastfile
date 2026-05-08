@@ -338,7 +338,7 @@ platform :ios do
     )
 
     app_identifier = ENV["APP_IDENTIFIER"].to_s.strip
-    profiles_pattern = File.expand_path("~/Library/Developer/Xcode/UserData/Provisioning Profiles/*.mobileprovision")
+    profiles_pattern = File.join(Dir.home, "Library", "Developer", "Xcode", "UserData", "Provisioning Profiles", "*.mobileprovision")
     profile_paths = Dir[profiles_pattern]
     UI.user_error!("No installed provisioning profiles found at #{profiles_pattern}") if profile_paths.empty?
 
@@ -367,7 +367,8 @@ platform :ios do
         end
 
         FileUtils.rm_f(candidate_plist)
-      rescue StandardError
+      rescue StandardError => e
+        UI.verbose("Skipping profile #{profile_path}: #{e.message}")
         FileUtils.rm_f("#{profile_path}.plist")
       end
     end
@@ -388,7 +389,8 @@ platform :ios do
     end
 
     unless has_sign_in_with_apple
-      UI.user_error!("BLOCKER: Identifier #{app_identifier} does not have Sign in with Apple enabled in the Apple Developer portal.")
+      UI.user_error!("BLOCKER: Identifier #{app_identifier} does not have Sign in with Apple enabled in the Apple Developer portal. " \
+                     "Enable Sign in with Apple for this identifier, run `fastlane refresh_profiles`, then run `fastlane verify_profile_entitlements`.")
     end
 
     UI.success("✅ Verified provisioning profile entitlement: com.apple.developer.applesignin present.")
