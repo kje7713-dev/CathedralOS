@@ -702,6 +702,7 @@
 		00000000000000000000019B /* Inject Supabase keys into Info.plist */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
+			name = "Inject Supabase keys into Info.plist";
 			files = (
 			);
 			inputFileListPaths = (
