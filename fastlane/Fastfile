@@ -1,6 +1,5 @@
 require "shellwords"
 require "fileutils"
-require "open3"
 
 default_platform(:ios)
 
@@ -107,32 +106,7 @@ platform :ios do
     ]
     xcargs = xcargs_parts.join(" ")
 
-    build_settings_cmd = [
-      "xcodebuild",
-      "-project", File.join(project_root, "CathedralOSApp.xcodeproj"),
-      "-scheme", "CathedralOSApp",
-      "-configuration", "Release",
-      "-showBuildSettings"
-    ] + xcargs_parts
-
-    stdout, stderr, status = Dir.chdir(project_root) do
-      Open3.capture3(*build_settings_cmd)
-    end
-
-    if status.success?
-      release_url_setting_present = stdout.match?(/^\s*INFOPLIST_KEY_SupabaseProjectURL\s*=/)
-      release_anon_setting_present = stdout.match?(/^\s*INFOPLIST_KEY_SupabaseAnonKey\s*=/)
-
-      UI.message("Active Release INFOPLIST_KEY_SupabaseProjectURL present: #{release_url_setting_present ? 'yes' : 'no'}")
-      UI.message("Active Release INFOPLIST_KEY_SupabaseAnonKey present: #{release_anon_setting_present ? 'yes' : 'no'}")
-
-      UI.user_error!("Active Release build settings are missing INFOPLIST_KEY_SupabaseProjectURL") unless release_url_setting_present
-      UI.user_error!("Active Release build settings are missing INFOPLIST_KEY_SupabaseAnonKey") unless release_anon_setting_present
-    else
-      UI.important("Release build-settings diagnostic failed with status #{status.exitstatus}; continuing to gym.")
-      stderr_preview = stderr.to_s.lines.first(20).join
-      UI.important(stderr_preview.empty? ? "No stderr output available from build-settings diagnostic." : stderr_preview)
-    end
+    UI.message("Skipping Active Release INFOPLIST_KEY_* diagnostic; built IPA Info.plist verification is the source of truth.")
 
     gym(
       project:          "CathedralOSApp.xcodeproj",

@@ -621,6 +621,7 @@
 				000000000000000000000011 /* Sources */,
 				000000000000000000000012 /* Frameworks */,
 				000000000000000000000013 /* Resources */,
+				00000000000000000000019B /* Inject Supabase keys into Info.plist */,
 			);
 			buildRules = (
 			);
@@ -696,6 +697,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		00000000000000000000019B /* Inject Supabase keys into Info.plist */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			name = "Inject Supabase keys into Info.plist";
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\n\nINFO_PLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\n\nif [ ! -f \"$INFO_PLIST\" ]; then\n  echo \"Supabase plist injection failed: Info.plist not found at expected build path\"\n  exit 1\nfi\n\nif [ -z \"${SUPABASE_PROJECT_URL:-}\" ]; then\n  echo \"Supabase plist injection failed: SUPABASE_PROJECT_URL is empty\"\n  exit 1\nfi\n\nif [ -z \"${SUPABASE_ANON_KEY:-}\" ]; then\n  echo \"Supabase plist injection failed: SUPABASE_ANON_KEY is empty\"\n  exit 1\nfi\n\n/usr/libexec/PlistBuddy -c \"Set :SupabaseProjectURL ${SUPABASE_PROJECT_URL}\" \"$INFO_PLIST\" 2>/dev/null || \\\n/usr/libexec/PlistBuddy -c \"Add :SupabaseProjectURL string ${SUPABASE_PROJECT_URL}\" \"$INFO_PLIST\"\n\n/usr/libexec/PlistBuddy -c \"Set :SupabaseAnonKey ${SUPABASE_ANON_KEY}\" \"$INFO_PLIST\" 2>/dev/null || \\\n/usr/libexec/PlistBuddy -c \"Add :SupabaseAnonKey string ${SUPABASE_ANON_KEY}\" \"$INFO_PLIST\"\n\necho \"Supabase plist injection completed: keys present\"";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		000000000000000000000011 /* Sources */ = {
