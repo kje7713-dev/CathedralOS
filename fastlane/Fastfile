@@ -173,6 +173,23 @@ platform :ios do
     UI.user_error!("Built IPA is missing SupabaseProjectURL") unless url_present
     UI.user_error!("Built IPA is missing SupabaseAnonKey") unless anon_present
 
+    # --- Verify built IPA is signed with the Sign in with Apple entitlement ---
+    app_bundle_path = File.join(verify_dir, "Payload", "CathedralOSApp.app")
+    UI.user_error!("App bundle not found in IPA at #{app_bundle_path}") unless File.exist?(app_bundle_path)
+
+    entitlements_xml = begin
+      sh("/usr/bin/codesign", "-d", "--entitlements", ":-", app_bundle_path, log: false).to_s
+    rescue StandardError => e
+      UI.user_error!("codesign --entitlements failed for #{app_bundle_path}: #{e.message}")
+    end
+
+    unless entitlements_xml.include?("com.apple.developer.applesignin")
+      UI.user_error!("Built IPA is missing the com.apple.developer.applesignin entitlement. " \
+                     "Regenerate the App Store provisioning profile with Sign in with Apple " \
+                     "enabled (run the refresh_profiles lane with MATCH_READONLY=false).")
+    end
+    UI.message("Built IPA com.apple.developer.applesignin entitlement present: yes")
+
     # --- Upload to TestFlight ---
     upload_to_testflight(
       skip_waiting_for_build_processing: true
@@ -247,6 +264,70 @@ platform :ios do
   ensure
     # Cleanup: remove the CI keychain so it doesn't persist between runs.
     # Guard with rescue in case create_keychain was never reached.
+    begin
+      delete_keychain(name: "ci_keychain") if ci_environment
+    rescue => e
+      UI.important("⚠️  Could not delete CI keychain: #{e.message}")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # refresh_profiles — re-create the App Store provisioning profile from scratch
+  # so that newly enabled capabilities (e.g. Sign in with Apple) are included.
+  #
+  # Run via GitHub Actions → Bootstrap Signing → Run workflow, or locally:
+  #   bundle exec fastlane refresh_profiles
+  #
+  # Set MATCH_READONLY=false (or omit it) before running this lane.
+  # MATCH_GIT_TOKEN must have *write* access to the Match certificates repo.
+  #
+  # After a successful refresh, the next beta build will pick up the updated
+  # profile automatically (MATCH_READONLY can be set back to "true").
+  # ---------------------------------------------------------------------------
+  lane :refresh_profiles do
+    preflight_checks(%w[
+      ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY
+      APPLE_TEAM_ID APP_IDENTIFIER
+      MATCH_GIT_URL MATCH_PASSWORD MATCH_GIT_TOKEN
+    ])
+
+    ci_environment = is_ci
+
+    app_store_connect_api_key(
+      key_id:                ENV["ASC_KEY_ID"],
+      issuer_id:             ENV["ASC_ISSUER_ID"],
+      key_content:           ENV["ASC_API_KEY"],
+      is_key_content_base64: true,
+      in_house:              false
+    )
+
+    create_keychain(
+      name:             "ci_keychain",
+      password:         ENV["MATCH_PASSWORD"],
+      default_keychain: true,
+      unlock:           true,
+      timeout:          3600,
+      lock_when_sleeps: false
+    )
+
+    UI.message("🔄 Regenerating App Store provisioning profile (readonly: false) …")
+    UI.message("   This ensures capabilities such as Sign in with Apple are included.")
+    UI.message("   App identifier : #{ENV['APP_IDENTIFIER']}")
+    UI.message("   Match repo     : #{ENV['MATCH_GIT_URL']}")
+
+    # force_for_new_devices: true forces Match to re-generate the profile even
+    # when the existing cert is still valid, picking up any new entitlements.
+    match(
+      type:                    "appstore",
+      readonly:                false,
+      force_for_new_devices:   true,
+      keychain_name:           "ci_keychain",
+      keychain_password:       ENV["MATCH_PASSWORD"],
+      git_basic_authorization: Base64.strict_encode64("x-access-token:#{ENV['MATCH_GIT_TOKEN']}")
+    )
+
+    UI.success("✅ Profile refresh complete. The next beta build will use the updated profile.")
+  ensure
     begin
       delete_keychain(name: "ci_keychain") if ci_environment
     rescue => e
