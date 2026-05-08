@@ -300,7 +300,7 @@
 		000000000000000000000195 /* DiagnosticsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsViewModel.swift; sourceTree = "<group>"; };
 		000000000000000000000197 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		000000000000000000000199 /* DiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsTests.swift; sourceTree = "<group>"; };
-		00000000000000000000019A /* CathedralOSApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CathedralOSApp.entitlements; sourceTree = "<group>"; };
+		0000000000000000000001A1 /* CathedralOSApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CathedralOSApp.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -350,7 +350,7 @@
 				000000000000000000000093 /* Services */,
 				0000000000000000000000A9 /* Templates */,
 				0000000000000000000000B0 /* Assets.xcassets */,
-				00000000000000000000019A /* CathedralOSApp.entitlements */,
+				0000000000000000000001A1 /* CathedralOSApp.entitlements */,
 			);
 			path = CathedralOSApp;
 			sourceTree = "<group>";
