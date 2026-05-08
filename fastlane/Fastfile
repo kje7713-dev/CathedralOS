@@ -1,5 +1,6 @@
 require "shellwords"
 require "fileutils"
+require "tempfile"
 
 default_platform(:ios)
 
@@ -173,23 +174,6 @@ platform :ios do
     UI.user_error!("Built IPA is missing SupabaseProjectURL") unless url_present
     UI.user_error!("Built IPA is missing SupabaseAnonKey") unless anon_present
 
-    # --- Verify built IPA is signed with the Sign in with Apple entitlement ---
-    app_bundle_path = File.join(verify_dir, "Payload", "CathedralOSApp.app")
-    UI.user_error!("App bundle not found in IPA at #{app_bundle_path}") unless File.exist?(app_bundle_path)
-
-    entitlements_xml = begin
-      sh("/usr/bin/codesign", "-d", "--entitlements", ":-", app_bundle_path, log: false).to_s
-    rescue StandardError => e
-      UI.user_error!("codesign --entitlements failed for #{app_bundle_path}: #{e.message}")
-    end
-
-    unless entitlements_xml.include?("com.apple.developer.applesignin")
-      UI.user_error!("Built IPA is missing the com.apple.developer.applesignin entitlement. " \
-                     "Regenerate the App Store provisioning profile with Sign in with Apple " \
-                     "enabled (run the refresh_profiles lane with MATCH_READONLY=false).")
-    end
-    UI.message("Built IPA com.apple.developer.applesignin entitlement present: yes")
-
     # --- Upload to TestFlight ---
     upload_to_testflight(
       skip_waiting_for_build_processing: true
@@ -315,12 +299,12 @@ platform :ios do
     UI.message("   App identifier : #{ENV['APP_IDENTIFIER']}")
     UI.message("   Match repo     : #{ENV['MATCH_GIT_URL']}")
 
-    # force_for_new_devices: true forces Match to re-generate the profile even
-    # when the existing cert is still valid, picking up any new entitlements.
+    # force: true re-generates the profile so newly enabled capabilities
+    # (such as Sign in with Apple) are included.
     match(
       type:                    "appstore",
       readonly:                false,
-      force_for_new_devices:   true,
+      force:                   true,
       keychain_name:           "ci_keychain",
       keychain_password:       ENV["MATCH_PASSWORD"],
       git_basic_authorization: Base64.strict_encode64("x-access-token:#{ENV['MATCH_GIT_TOKEN']}")
@@ -333,5 +317,105 @@ platform :ios do
     rescue => e
       UI.important("⚠️  Could not delete CI keychain: #{e.message}")
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # verify_profile_entitlements — verify the installed App Store provisioning
+  # profile includes the Sign in with Apple entitlement.
+  #
+  # This lane is intentionally separate from `beta` so profile/capability issues
+  # fail fast as signing configuration blockers.
+  # ---------------------------------------------------------------------------
+  lane :verify_profile_entitlements do
+    preflight_checks(%w[
+      APP_IDENTIFIER
+      MATCH_GIT_URL MATCH_PASSWORD MATCH_GIT_TOKEN
+    ])
+
+    match(
+      type:                    "appstore",
+      readonly:                true,
+      git_basic_authorization: Base64.strict_encode64("x-access-token:#{ENV['MATCH_GIT_TOKEN']}")
+    )
+
+    app_identifier = ENV["APP_IDENTIFIER"].to_s.strip
+    profiles_pattern = File.join(Dir.home, "Library", "Developer", "Xcode", "UserData", "Provisioning Profiles", "*.mobileprovision")
+    profile_paths = Dir[profiles_pattern].sort_by { |path| File.mtime(path) }.reverse
+    UI.user_error!("No installed provisioning profiles found at #{profiles_pattern}") if profile_paths.empty?
+
+    matching_profile = nil
+    has_sign_in_with_apple = false
+
+    profile_paths.each do |profile_path|
+      begin
+        decoded_xml = begin
+          sh("/usr/bin/security", "cms", "-D", "-i", profile_path, log: false).to_s
+        rescue StandardError => e
+          UI.verbose("Skipping profile #{profile_path}: unable to decode mobileprovision (#{e.message})")
+          next
+        end
+
+        if decoded_xml.strip.empty? || !decoded_xml.include?("<plist")
+          UI.verbose("Skipping profile #{profile_path}: decoded profile is empty or invalid plist.")
+          next
+        end
+
+        Tempfile.create(["profile-entitlements-", ".plist"]) do |tmp|
+          tmp.write(decoded_xml)
+          tmp.flush
+          candidate_app_identifier = begin
+            sh(
+              "/usr/libexec/PlistBuddy",
+              "-c",
+              "Print :Entitlements:application-identifier",
+              tmp.path,
+              log: false
+            ).to_s.strip
+          rescue StandardError
+            UI.verbose("Skipping profile #{profile_path}: missing Entitlements:application-identifier.")
+            next
+          end
+
+          # application-identifier format is expected to be "TeamID.BundleID".
+          candidate_parts = candidate_app_identifier.split(".", 2)
+          if candidate_parts.length < 2 || candidate_parts[1].to_s.strip.empty?
+            UI.verbose("Skipping profile #{profile_path}: invalid application-identifier #{candidate_app_identifier.inspect}.")
+            next
+          end
+          candidate_bundle_identifier = candidate_parts[1].to_s
+          next unless candidate_bundle_identifier == app_identifier
+
+          matching_profile = profile_path
+          entitlement_value = begin
+            sh(
+              "/usr/libexec/PlistBuddy",
+              "-c",
+              "Print :Entitlements:com.apple.developer.applesignin:0",
+              tmp.path,
+              log: false
+            ).to_s.strip
+          rescue StandardError
+            ""
+          end
+          has_sign_in_with_apple = !entitlement_value.empty?
+        end
+
+        break if matching_profile
+      rescue StandardError => e
+        UI.verbose("Skipping profile #{profile_path}: #{e.message}")
+      end
+    end
+
+    if matching_profile.nil?
+      UI.user_error!("No installed App Store provisioning profile matched #{app_identifier}. " \
+                     "Run `fastlane refresh_profiles` first, then re-run `fastlane verify_profile_entitlements`.")
+    end
+
+    unless has_sign_in_with_apple
+      UI.user_error!("BLOCKER: Identifier #{app_identifier} does not have Sign in with Apple enabled in the Apple Developer portal. " \
+                     "Enable Sign in with Apple for this identifier and run `fastlane refresh_profiles` to regenerate the profile.")
+    end
+
+    UI.success("✅ Verified provisioning profile entitlement: com.apple.developer.applesignin present.")
   end
 end
