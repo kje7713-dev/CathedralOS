@@ -130,7 +130,8 @@ platform :ios do
       UI.user_error!("Active Release build settings are missing INFOPLIST_KEY_SupabaseAnonKey") unless release_anon_setting_present
     else
       UI.important("Release build-settings diagnostic failed with status #{status.exitstatus}; continuing to gym.")
-      UI.important(stderr.lines.first(20).join)
+      diagnostic_stderr = stderr.to_s.lines.first(20).join
+      UI.important(diagnostic_stderr.empty? ? "No stderr output available from build-settings diagnostic." : diagnostic_stderr)
     end
 
     gym(
