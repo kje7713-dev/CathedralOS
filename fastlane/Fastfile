@@ -346,11 +346,11 @@ platform :ios do
     decoded_plist_path = nil
 
     profile_paths.each do |profile_path|
+      candidate_plist = "#{profile_path}.plist"
       begin
         decoded_xml = sh("/usr/bin/security", "cms", "-D", "-i", profile_path, log: false).to_s
-        next if decoded_xml.strip.empty?
+        next if decoded_xml.strip.empty? || !decoded_xml.include?("<plist")
 
-        candidate_plist = "#{profile_path}.plist"
         File.write(candidate_plist, decoded_xml)
         candidate_app_identifier = sh(
           "/usr/libexec/PlistBuddy",
@@ -369,11 +369,14 @@ platform :ios do
         FileUtils.rm_f(candidate_plist)
       rescue StandardError => e
         UI.verbose("Skipping profile #{profile_path}: #{e.message}")
-        FileUtils.rm_f("#{profile_path}.plist")
+        FileUtils.rm_f(candidate_plist)
       end
     end
 
-    UI.user_error!("No installed App Store provisioning profile matched #{app_identifier}") if matching_profile.nil? || decoded_plist_path.nil?
+    if matching_profile.nil? || decoded_plist_path.nil?
+      UI.user_error!("No installed App Store provisioning profile matched #{app_identifier}. " \
+                     "Run `fastlane refresh_profiles` first, then re-run `fastlane verify_profile_entitlements`.")
+    end
 
     has_sign_in_with_apple = begin
       entitlement_value = sh(
