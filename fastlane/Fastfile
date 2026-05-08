@@ -388,11 +388,11 @@ platform :ios do
     end
 
     unless has_sign_in_with_apple
-      UI.user_error!("BLOCKER: Identifier com.savagesbydesign.CathedralOS does not have Sign in with Apple enabled in the Apple Developer portal.")
+      UI.user_error!("BLOCKER: Identifier #{app_identifier} does not have Sign in with Apple enabled in the Apple Developer portal.")
     end
 
     UI.success("✅ Verified provisioning profile entitlement: com.apple.developer.applesignin present.")
   ensure
-    FileUtils.rm_f(decoded_plist_path) if defined?(decoded_plist_path) && decoded_plist_path
+    FileUtils.rm_f(decoded_plist_path) if decoded_plist_path
   end
 end
