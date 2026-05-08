@@ -1,5 +1,6 @@
 require "shellwords"
 require "fileutils"
+require "tempfile"
 
 default_platform(:ios)
 
@@ -343,61 +344,57 @@ platform :ios do
     UI.user_error!("No installed provisioning profiles found at #{profiles_pattern}") if profile_paths.empty?
 
     matching_profile = nil
-    decoded_plist_path = nil
+    has_sign_in_with_apple = false
 
     profile_paths.each do |profile_path|
-      candidate_plist = "#{profile_path}.plist"
       begin
         decoded_xml = sh("/usr/bin/security", "cms", "-D", "-i", profile_path, log: false).to_s
-        next if decoded_xml.strip.empty? || !decoded_xml.include?("<plist")
-
-        File.write(candidate_plist, decoded_xml)
-        candidate_app_identifier = sh(
-          "/usr/libexec/PlistBuddy",
-          "-c",
-          "Print :Entitlements:application-identifier",
-          candidate_plist,
-          log: false
-        ).to_s.strip
-
-        if candidate_app_identifier.end_with?(".#{app_identifier}")
-          matching_profile = profile_path
-          decoded_plist_path = candidate_plist
-          break
+        if decoded_xml.strip.empty? || !decoded_xml.include?("<plist")
+          UI.verbose("Skipping profile #{profile_path}: decoded profile is empty or invalid plist.")
+          next
         end
 
-        FileUtils.rm_f(candidate_plist)
+        Tempfile.create(["profile-entitlements-", ".plist"]) do |tmp|
+          tmp.write(decoded_xml)
+          tmp.flush
+          candidate_app_identifier = sh(
+            "/usr/libexec/PlistBuddy",
+            "-c",
+            "Print :Entitlements:application-identifier",
+            tmp.path,
+            log: false
+          ).to_s.strip
+
+          candidate_bundle_identifier = candidate_app_identifier.split(".", 2)[1].to_s
+          next unless candidate_bundle_identifier == app_identifier
+
+          matching_profile = profile_path
+          entitlement_value = sh(
+            "/usr/libexec/PlistBuddy",
+            "-c",
+            "Print :Entitlements:com.apple.developer.applesignin:0",
+            tmp.path,
+            log: false
+          ).to_s.strip
+          has_sign_in_with_apple = !entitlement_value.empty?
+        end
+
+        break if matching_profile
       rescue StandardError => e
         UI.verbose("Skipping profile #{profile_path}: #{e.message}")
-        FileUtils.rm_f(candidate_plist)
       end
     end
 
-    if matching_profile.nil? || decoded_plist_path.nil?
+    if matching_profile.nil?
       UI.user_error!("No installed App Store provisioning profile matched #{app_identifier}. " \
                      "Run `fastlane refresh_profiles` first, then re-run `fastlane verify_profile_entitlements`.")
     end
 
-    has_sign_in_with_apple = begin
-      entitlement_value = sh(
-        "/usr/libexec/PlistBuddy",
-        "-c",
-        "Print :Entitlements:com.apple.developer.applesignin:0",
-        decoded_plist_path,
-        log: false
-      ).to_s.strip
-      !entitlement_value.empty?
-    rescue StandardError
-      false
-    end
-
     unless has_sign_in_with_apple
       UI.user_error!("BLOCKER: Identifier #{app_identifier} does not have Sign in with Apple enabled in the Apple Developer portal. " \
-                     "Enable Sign in with Apple for this identifier, run `fastlane refresh_profiles`, then run `fastlane verify_profile_entitlements`.")
+                     "Enable Sign in with Apple for this identifier and run `fastlane refresh_profiles` to regenerate the profile.")
     end
 
     UI.success("✅ Verified provisioning profile entitlement: com.apple.developer.applesignin present.")
-  ensure
-    FileUtils.rm_f(decoded_plist_path) if decoded_plist_path
   end
 end
