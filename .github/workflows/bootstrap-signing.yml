@@ -47,7 +47,7 @@ jobs:
           MATCH_GIT_TOKEN: ${{ secrets.MATCH_GIT_TOKEN }}
         run: |
           set -o pipefail
-          fastlane bootstrap_signing 2>&1 | tee fastlane_bootstrap_output.txt
+          fastlane refresh_profiles 2>&1 | tee fastlane_refresh_profiles_output.txt
 
       - name: Upload Fastlane logs on failure
         if: failure()
@@ -55,6 +55,6 @@ jobs:
         with:
           name: fastlane-bootstrap-logs
           path: |
-            fastlane_bootstrap_output.txt
+            fastlane_refresh_profiles_output.txt
             fastlane/report.xml
           retention-days: 7
