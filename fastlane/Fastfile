@@ -180,7 +180,7 @@ platform :ios do
     entitlements_xml = begin
       sh("/usr/bin/codesign", "-d", "--entitlements", ":-", app_bundle_path, log: false).to_s
     rescue StandardError => e
-      UI.user_error!("codesign --entitlements failed: #{e.message}")
+      UI.user_error!("codesign --entitlements failed for #{app_bundle_path}: #{e.message}")
     end
 
     unless entitlements_xml.include?("com.apple.developer.applesignin")
