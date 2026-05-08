@@ -348,7 +348,13 @@ platform :ios do
 
     profile_paths.each do |profile_path|
       begin
-        decoded_xml = sh("/usr/bin/security", "cms", "-D", "-i", profile_path, log: false).to_s
+        decoded_xml = begin
+          sh("/usr/bin/security", "cms", "-D", "-i", profile_path, log: false).to_s
+        rescue StandardError => e
+          UI.verbose("Skipping profile #{profile_path}: unable to decode mobileprovision (#{e.message})")
+          next
+        end
+
         if decoded_xml.strip.empty? || !decoded_xml.include?("<plist")
           UI.verbose("Skipping profile #{profile_path}: decoded profile is empty or invalid plist.")
           next
@@ -365,17 +371,26 @@ platform :ios do
             log: false
           ).to_s.strip
 
-          candidate_bundle_identifier = candidate_app_identifier.split(".", 2)[1].to_s
+          candidate_parts = candidate_app_identifier.split(".", 2)
+          if candidate_parts.length < 2 || candidate_parts[1].to_s.strip.empty?
+            UI.verbose("Skipping profile #{profile_path}: invalid application-identifier #{candidate_app_identifier.inspect}.")
+            next
+          end
+          candidate_bundle_identifier = candidate_parts[1].to_s
           next unless candidate_bundle_identifier == app_identifier
 
           matching_profile = profile_path
-          entitlement_value = sh(
-            "/usr/libexec/PlistBuddy",
-            "-c",
-            "Print :Entitlements:com.apple.developer.applesignin:0",
-            tmp.path,
-            log: false
-          ).to_s.strip
+          entitlement_value = begin
+            sh(
+              "/usr/libexec/PlistBuddy",
+              "-c",
+              "Print :Entitlements:com.apple.developer.applesignin:0",
+              tmp.path,
+              log: false
+            ).to_s.strip
+          rescue StandardError
+            ""
+          end
           has_sign_in_with_apple = !entitlement_value.empty?
         end
 
