@@ -340,7 +340,7 @@ platform :ios do
 
     app_identifier = ENV["APP_IDENTIFIER"].to_s.strip
     profiles_pattern = File.join(Dir.home, "Library", "Developer", "Xcode", "UserData", "Provisioning Profiles", "*.mobileprovision")
-    profile_paths = Dir[profiles_pattern]
+    profile_paths = Dir[profiles_pattern].sort_by { |path| File.mtime(path) }.reverse
     UI.user_error!("No installed provisioning profiles found at #{profiles_pattern}") if profile_paths.empty?
 
     matching_profile = nil
@@ -363,14 +363,20 @@ platform :ios do
         Tempfile.create(["profile-entitlements-", ".plist"]) do |tmp|
           tmp.write(decoded_xml)
           tmp.flush
-          candidate_app_identifier = sh(
-            "/usr/libexec/PlistBuddy",
-            "-c",
-            "Print :Entitlements:application-identifier",
-            tmp.path,
-            log: false
-          ).to_s.strip
+          candidate_app_identifier = begin
+            sh(
+              "/usr/libexec/PlistBuddy",
+              "-c",
+              "Print :Entitlements:application-identifier",
+              tmp.path,
+              log: false
+            ).to_s.strip
+          rescue StandardError
+            UI.verbose("Skipping profile #{profile_path}: missing Entitlements:application-identifier.")
+            next
+          end
 
+          # application-identifier format is expected to be "TeamID.BundleID".
           candidate_parts = candidate_app_identifier.split(".", 2)
           if candidate_parts.length < 2 || candidate_parts[1].to_s.strip.empty?
             UI.verbose("Skipping profile #{profile_path}: invalid application-identifier #{candidate_app_identifier.inspect}.")
