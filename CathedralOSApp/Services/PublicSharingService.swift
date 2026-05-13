@@ -83,7 +83,7 @@ final class BackendPublicSharingService: PublicSharingService {
     private let session: URLSession
 
     init(
-        authService: AuthService = BackendAuthService(),
+        authService: AuthService = BackendAuthService.shared,
         syncService: GenerationOutputSyncServiceProtocol? = nil,
         session: URLSession = .shared
     ) {

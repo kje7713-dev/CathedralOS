@@ -98,7 +98,7 @@ final class BackendCreditStateService: CreditStateServiceProtocol {
     private let session: URLSession
 
     init(
-        authService: AuthService = BackendAuthService(),
+        authService: AuthService = BackendAuthService.shared,
         session: URLSession = .shared
     ) {
         self.authService = authService

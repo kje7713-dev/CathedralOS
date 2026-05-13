@@ -17,7 +17,7 @@ struct SharedOutputDetailView: View {
     init(sharedOutputID: String,
          sharingService: PublicSharingService = BackendPublicSharingService(),
          remixEventService: RemixEventServiceProtocol = BackendRemixEventService(),
-         authService: AuthService = BackendAuthService(),
+         authService: AuthService = BackendAuthService.shared,
          hiddenService: HiddenSharedOutputsService = UserDefaultsHiddenSharedOutputsService()) {
         self.sharedOutputID = sharedOutputID
         self.sharingService = sharingService
