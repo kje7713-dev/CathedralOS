@@ -32,6 +32,8 @@
 import {
   assertEquals,
   assertExists,
+  assertRejects,
+  assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { handler } from "./index.ts";
@@ -45,6 +47,7 @@ import {
 } from "./_credits.ts";
 import {
   classifyOpenAIStatus,
+  OpenAIProvider,
   ProviderError,
   PROVIDER_TIMEOUT_MS,
 } from "./_provider.ts";
@@ -488,6 +491,82 @@ Deno.test("ProviderError: provider_overloaded is retryable", () => {
   const err = new ProviderError("rate limit", "provider_overloaded", true);
   assertEquals(err.errorCode, "provider_overloaded");
   assertEquals(err.retryable, true);
+});
+
+Deno.test("OpenAIProvider: uses max_completion_tokens in request body", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, unknown> | null = null;
+
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    requestBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: "Generated story" } }],
+      model: "gpt-4o-mini",
+      usage: { prompt_tokens: 12, completion_tokens: 34 },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const provider = new OpenAIProvider("test-key", "gpt-4o-mini");
+    await provider.complete([{ role: "user", content: "Tell a story" }], 800);
+
+    assertExists(requestBody);
+    assertEquals(requestBody?.max_completion_tokens, 800);
+    assertEquals("max_tokens" in requestBody!, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAIProvider: logs OpenAI rejection details for 400 responses", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+  const logged: unknown[][] = [];
+
+  globalThis.fetch = (async (): Promise<Response> =>
+    new Response(JSON.stringify({
+      error: {
+        message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+        code: "unsupported_parameter",
+        param: "max_tokens",
+      },
+    }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    })) as typeof fetch;
+
+  console.error = (...args: unknown[]) => {
+    logged.push(args);
+  };
+
+  try {
+    const provider = new OpenAIProvider("test-key", "gpt-4o-mini");
+    const err = await assertRejects(
+      () => provider.complete([{ role: "user", content: "Tell a story" }], 800),
+      ProviderError,
+    );
+
+    assertEquals(err.errorCode, "invalid_request");
+    assertStringIncludes(err.message, "status=400");
+    assertStringIncludes(err.message, "code=unsupported_parameter");
+    assertStringIncludes(err.message, "message=Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.");
+    assertStringIncludes(err.message, "param=max_tokens");
+
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0][0], "[generate-story] OpenAI request failed");
+    assertEquals(logged[0][1], {
+      status: 400,
+      code: "unsupported_parameter",
+      message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+      param: "max_tokens",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalConsoleError;
+  }
 });
 
 // =============================================================================
