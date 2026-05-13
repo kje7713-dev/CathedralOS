@@ -26,6 +26,7 @@ struct PromptPackPreviewView: View {
     // Generation state
     @State private var isGenerating = false
     @State private var generationError: String?
+    @State private var generationDiagnostics: String?
     @State private var lastGeneratedOutput: GenerationOutput?
     @State private var selectedLengthMode: GenerationLengthMode = .defaultMode
     @State private var showChapterConfirm = false
@@ -307,6 +308,28 @@ struct PromptPackPreviewView: View {
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
 
+            if let diagnostics = generationDiagnostics,
+               generationError == nil,
+               GenerationRequestDiagnosticsSnapshot.shouldDisplayInCurrentBuild {
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                    Label("Backend Diagnostics", systemImage: "antennaradiowaves.left.and.right")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    Text(diagnostics)
+                        .font(CathedralTheme.Typography.mono(12))
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .padding(CathedralTheme.Spacing.sm)
+                .background(CathedralTheme.Colors.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                        .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+
             // Generate button
             CathedralPrimaryButton(
                 isGenerating ? "Generating…" : "Generate",
@@ -374,6 +397,7 @@ struct PromptPackPreviewView: View {
 
     private func startGeneration() async {
         generationError = nil
+        generationDiagnostics = nil
         let mode = selectedLengthMode
 
         // Resolve auth state at tap time — if the session hasn't been checked yet
@@ -444,6 +468,7 @@ struct PromptPackPreviewView: View {
                 requestedOutputType: .story,
                 lengthMode: mode
             )
+            generationDiagnostics = await GenerationRequestDiagnosticsStore.shared.latestVisibleText()
 
             gen.outputText = response.generatedText
             gen.modelName = response.modelName
@@ -466,12 +491,18 @@ struct PromptPackPreviewView: View {
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
 
         } catch {
+            generationDiagnostics = await GenerationRequestDiagnosticsStore.shared.latestVisibleText()
             gen.status = GenerationStatus.failed.rawValue
-            gen.notes = error.localizedDescription
+            gen.notes = generationDiagnostics ?? error.localizedDescription
             gen.updatedAt = Date()
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
             // MVP policy: do not charge credits on generation failure.
-            generationError = localizedGenerationError(error)
+            if GenerationRequestDiagnosticsSnapshot.shouldDisplayInCurrentBuild,
+               let generationDiagnostics {
+                generationError = generationDiagnostics
+            } else {
+                generationError = localizedGenerationError(error)
+            }
         }
     }
 

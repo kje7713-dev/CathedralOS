@@ -1,5 +1,80 @@
 import Foundation
 
+// MARK: - GenerationRequestDiagnostics
+
+struct GenerationRequestDiagnosticsSnapshot {
+    let timestamp: Date
+    let supabaseProjectURL: String
+    let edgeFunctionName: String
+    let edgeFunctionURL: String
+    let hasUserAccessToken: Bool
+    let accessTokenPrefix: String?
+    let generationAction: String
+    let requestOutcome: String
+    let httpStatusCode: Int?
+    let rawResponseBody: String?
+    let underlyingSwiftError: String?
+
+    static var shouldDisplayInCurrentBuild: Bool {
+        #if DEBUG
+        true
+        #else
+        Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+        #endif
+    }
+
+    static func truncatedTokenPrefix(from token: String?) -> String? {
+        guard let token else {
+            return nil
+        }
+        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedToken.isEmpty else {
+            return nil
+        }
+        return String(trimmedToken.prefix(12))
+    }
+
+    var formattedText: String {
+        let formatter = ISO8601DateFormatter()
+        var lines = [
+            "Timestamp: \(formatter.string(from: timestamp))",
+            "Supabase project URL: \(supabaseProjectURL)",
+            "Edge Function name: \(edgeFunctionName)",
+            "Edge Function URL: \(edgeFunctionURL)",
+            "User access token exists: \(hasUserAccessToken ? "Yes" : "No")",
+            "Access token prefix: \(accessTokenPrefix ?? "None")",
+            "Generation action: \(generationAction)",
+            requestOutcome
+        ]
+        if let httpStatusCode {
+            lines.append("HTTP status code: \(httpStatusCode)")
+        }
+        lines.append("Raw response body: \(rawResponseBody ?? "None")")
+        if let underlyingSwiftError {
+            lines.append("Underlying Swift error: \(underlyingSwiftError)")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+actor GenerationRequestDiagnosticsStore {
+    static let shared = GenerationRequestDiagnosticsStore()
+
+    private(set) var latestSnapshot: GenerationRequestDiagnosticsSnapshot?
+
+    func record(_ snapshot: GenerationRequestDiagnosticsSnapshot) {
+        latestSnapshot = snapshot
+        NSLog("Generation backend diagnostics:\n%@", snapshot.formattedText)
+    }
+
+    func latestVisibleText() -> String? {
+        guard GenerationRequestDiagnosticsSnapshot.shouldDisplayInCurrentBuild else {
+            return nil
+        }
+        return latestSnapshot?.formattedText
+    }
+}
+
 // MARK: - GenerationBackendService
 //
 // SupabaseGenerationService: production backend-backed generation via the
@@ -154,8 +229,12 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         requestedOutputType: GenerationOutputType = .story,
         lengthMode: GenerationLengthMode = .defaultMode
     ) async throws -> GenerationResponse {
-
-        try await validateConfigAndAuth()
+        do {
+            try await validateConfigAndAuth()
+        } catch {
+            await recordNoRequestSent(action: "generate", underlyingError: error)
+            throw error
+        }
 
         // Build the canonical frozen payload — snapshot taken here, not earlier.
         let payload = PromptPackExportBuilder.build(pack: pack, project: project)
@@ -187,8 +266,12 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode = .defaultMode
     ) async throws -> GenerationResponse {
-
-        try await validateConfigAndAuth()
+        do {
+            try await validateConfigAndAuth()
+        } catch {
+            await recordNoRequestSent(action: action, underlyingError: error)
+            throw error
+        }
 
         // Decode the frozen payload.
         let decoder = JSONDecoder()
@@ -199,6 +282,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
                 from: Data(sourcePayloadJSON.utf8)
             )
         } catch {
+            await recordNoRequestSent(action: action, underlyingError: error)
             throw GenerationBackendServiceError.decodingError(error)
         }
 
@@ -249,6 +333,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         do {
             client = try SupabaseBackendClient()
         } catch {
+            await recordNoRequestSent(action: requestBody.action ?? "generate", underlyingError: error)
             throw GenerationBackendServiceError.notConfigured
         }
 
@@ -261,6 +346,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         do {
             urlRequest.httpBody = try encoder.encode(requestBody)
         } catch {
+            await recordNoRequestSent(action: requestBody.action ?? "generate", underlyingError: error)
             throw GenerationBackendServiceError.encodingError(error)
         }
 
@@ -269,11 +355,24 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         do {
             (data, urlResponse) = try await session.data(for: urlRequest)
         } catch {
+            await recordNetworkFailure(
+                action: requestBody.action ?? "generate",
+                edgeFunctionURL: url,
+                underlyingError: error
+            )
             throw GenerationBackendServiceError.networkError(error)
         }
 
+        let rawResponseBody = responseBodyString(from: data)
         if let httpResponse = urlResponse as? HTTPURLResponse,
            !(200..<300).contains(httpResponse.statusCode) {
+            await recordHTTPResponse(
+                action: requestBody.action ?? "generate",
+                edgeFunctionURL: url,
+                statusCode: httpResponse.statusCode,
+                rawResponseBody: rawResponseBody,
+                underlyingError: nil
+            )
             // Attempt to decode a structured error response first.
             // The backend returns stable errorCode values for all known failure modes.
             if let decoded = try? JSONDecoder().decode(GenerationResponse.self, from: data) {
@@ -301,10 +400,19 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
                     break
                 }
             }
-            let msg = String(data: data, encoding: .utf8)
             throw GenerationBackendServiceError.serverError(
                 statusCode: httpResponse.statusCode,
-                message: msg
+                message: rawResponseBody
+            )
+        }
+
+        if let httpResponse = urlResponse as? HTTPURLResponse {
+            await recordHTTPResponse(
+                action: requestBody.action ?? "generate",
+                edgeFunctionURL: url,
+                statusCode: httpResponse.statusCode,
+                rawResponseBody: rawResponseBody,
+                underlyingError: nil
             )
         }
 
@@ -313,6 +421,103 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         } catch {
             throw GenerationBackendServiceError.decodingError(error)
         }
+    }
+
+    private func recordNoRequestSent(action: String, underlyingError: Error) async {
+        await GenerationRequestDiagnosticsStore.shared.record(
+            buildDiagnosticsSnapshot(
+                action: action,
+                requestOutcome: "No request sent",
+                httpStatusCode: nil,
+                rawResponseBody: nil,
+                underlyingError: underlyingError
+            )
+        )
+    }
+
+    private func recordNetworkFailure(
+        action: String,
+        edgeFunctionURL: URL,
+        underlyingError: Error
+    ) async {
+        await GenerationRequestDiagnosticsStore.shared.record(
+            buildDiagnosticsSnapshot(
+                action: action,
+                requestOutcome: "Network request failed before response",
+                edgeFunctionURL: edgeFunctionURL.absoluteString,
+                httpStatusCode: nil,
+                rawResponseBody: nil,
+                underlyingError: underlyingError
+            )
+        )
+    }
+
+    private func recordHTTPResponse(
+        action: String,
+        edgeFunctionURL: URL,
+        statusCode: Int,
+        rawResponseBody: String?,
+        underlyingError: Error?
+    ) async {
+        await GenerationRequestDiagnosticsStore.shared.record(
+            buildDiagnosticsSnapshot(
+                action: action,
+                requestOutcome: "Received HTTP \(statusCode)",
+                edgeFunctionURL: edgeFunctionURL.absoluteString,
+                httpStatusCode: statusCode,
+                rawResponseBody: rawResponseBody,
+                underlyingError: underlyingError
+            )
+        )
+    }
+
+    private func buildDiagnosticsSnapshot(
+        action: String,
+        requestOutcome: String,
+        edgeFunctionURL: String? = nil,
+        httpStatusCode: Int?,
+        rawResponseBody: String?,
+        underlyingError: Error?
+    ) -> GenerationRequestDiagnosticsSnapshot {
+        let rawProjectURL = (Bundle.main.infoDictionary?["SupabaseProjectURL"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let projectURL = (rawProjectURL?.isEmpty == false)
+            ? (rawProjectURL ?? "Not configured")
+            : "Not configured"
+        let tokenPrefix = GenerationRequestDiagnosticsSnapshot.truncatedTokenPrefix(
+            from: authService.currentAccessToken
+        )
+        let fallbackEdgeFunctionURL: String
+        if let configuredURL = SupabaseConfiguration.projectURL {
+            fallbackEdgeFunctionURL = configuredURL
+                .appendingPathComponent("functions")
+                .appendingPathComponent("v1")
+                .appendingPathComponent(SupabaseConfiguration.generationEdgeFunctionPath)
+                .absoluteString
+        } else {
+            fallbackEdgeFunctionURL = "Unavailable"
+        }
+
+        return GenerationRequestDiagnosticsSnapshot(
+            timestamp: Date(),
+            supabaseProjectURL: projectURL,
+            edgeFunctionName: SupabaseConfiguration.generationEdgeFunctionPath,
+            edgeFunctionURL: edgeFunctionURL ?? fallbackEdgeFunctionURL,
+            hasUserAccessToken: tokenPrefix != nil,
+            accessTokenPrefix: tokenPrefix,
+            generationAction: action,
+            requestOutcome: requestOutcome,
+            httpStatusCode: httpStatusCode,
+            rawResponseBody: rawResponseBody,
+            underlyingSwiftError: underlyingError.map { String(describing: $0) }
+        )
+    }
+
+    private func responseBodyString(from data: Data) -> String {
+        guard !data.isEmpty else {
+            return ""
+        }
+        return String(data: data, encoding: .utf8) ?? "<non-UTF8 response body (\(data.count) bytes)>"
     }
 }
 
