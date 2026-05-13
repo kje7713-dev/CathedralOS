@@ -68,19 +68,26 @@ final class SupabaseBackendClient: BackendClient {
         }
     }
 
+    /// Creates a client from an already-validated configuration.
+    /// Intended for tests and dependency injection.
+    init(configuration: ValidatedSupabaseConfiguration) {
+        self.configuration = configuration
+    }
+
     /// Returns a URLRequest pre-set with Supabase auth headers for an Edge Function call.
     ///
     /// - Parameters:
     ///   - url: The endpoint URL.
-    ///   - userAccessToken: The signed-in user's JWT access token. When provided,
-    ///     it is used as the `Authorization: Bearer` value so that Supabase can
-    ///     verify the caller's identity and apply RLS policies. When `nil`, the
-    ///     anon key is used as the bearer token (suitable only for public/anonymous
-    ///     endpoints that do not require JWT verification).
+    ///   - userAccessToken: The signed-in user's JWT access token. When provided
+    ///     and non-empty, it is used as the `Authorization: Bearer` value so that
+    ///     Supabase can verify the caller's identity and apply RLS policies. When
+    ///     missing or empty, no `Authorization` header is sent.
     func authorizedRequest(for url: URL, userAccessToken: String? = nil) -> URLRequest {
         var request = URLRequest(url: url)
-        let bearerToken = userAccessToken.flatMap { $0.isEmpty ? nil : $0 } ?? configuration.anonKey
-        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        let bearerToken = userAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let bearerToken, !bearerToken.isEmpty {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
         request.setValue(configuration.anonKey, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         return request
