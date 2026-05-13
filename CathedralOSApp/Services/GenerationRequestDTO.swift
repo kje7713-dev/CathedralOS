@@ -22,6 +22,7 @@ struct GenerationRequest: Codable {
     /// The fully serialized `PromptPackExportPayload` captured at request time.
     /// Stored as a structured payload rather than a raw JSON string so the
     /// backend can inspect individual fields without double-parsing.
+    /// Encodes as "sourcePayloadJSON" to match the Edge Function contract.
     let sourcePayload: PromptPackExportPayload
 
     // MARK: Audience controls
@@ -37,10 +38,12 @@ struct GenerationRequest: Codable {
     let generationLengthMode: String
     /// Approximate maximum output tokens for this request.
     /// Derived from `GenerationLengthMode.outputBudget`; centralized there.
+    /// Encodes as "outputBudget" to match the Edge Function contract.
     let approximateMaxOutputTokens: Int
 
     // MARK: Action controls
     /// The generation action: "generate" | "regenerate" | "continue" | "remix".
+    /// Encodes as "generationAction" to match the Edge Function contract.
     let action: String
     /// UUID string of the parent `GenerationOutput`, present for derived actions.
     let parentGenerationID: String?
@@ -51,6 +54,28 @@ struct GenerationRequest: Codable {
     /// UUID string of the local `GenerationOutput` record created before the network call.
     /// Sent so the backend can correlate and optionally echo it back in the response.
     let localGenerationID: String?
+
+    // MARK: CodingKeys
+    // Maps Swift property names to the JSON keys expected by the Edge Function.
+    enum CodingKeys: String, CodingKey {
+        case schema
+        case version
+        case projectID
+        case projectName
+        case promptPackID
+        case promptPackName
+        case sourcePayload            = "sourcePayloadJSON"
+        case readingLevel
+        case contentRating
+        case audienceNotes
+        case requestedOutputType
+        case generationLengthMode
+        case approximateMaxOutputTokens = "outputBudget"
+        case action                   = "generationAction"
+        case parentGenerationID
+        case previousOutputText
+        case localGenerationID
+    }
 
     init(
         schema: String,
