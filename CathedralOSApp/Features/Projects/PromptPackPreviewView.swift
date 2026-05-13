@@ -309,8 +309,7 @@ struct PromptPackPreviewView: View {
             }
 
             if let diagnostics = generationDiagnostics,
-               generationError == nil,
-               GenerationRequestDiagnosticsSnapshot.shouldDisplayInCurrentBuild {
+               generationError == nil {
                 VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
                     Label("Backend Diagnostics", systemImage: "antennaradiowaves.left.and.right")
                         .font(CathedralTheme.Typography.caption())
@@ -497,8 +496,7 @@ struct PromptPackPreviewView: View {
             gen.updatedAt = Date()
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
             // MVP policy: do not charge credits on generation failure.
-            if GenerationRequestDiagnosticsSnapshot.shouldDisplayInCurrentBuild,
-               let generationDiagnostics {
+            if let generationDiagnostics {
                 generationError = generationDiagnostics
             } else {
                 generationError = localizedGenerationError(error)

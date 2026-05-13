@@ -517,9 +517,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         )
     }
 
-    private func responseBodyString(from data: Data) -> String {
+    private func responseBodyString(from data: Data) -> String? {
         guard !data.isEmpty else {
-            return ""
+            return nil
         }
         return String(data: data, encoding: .utf8) ?? "<non-UTF8 response body (\(data.count) bytes)>"
     }
