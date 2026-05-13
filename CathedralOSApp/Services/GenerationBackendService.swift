@@ -371,7 +371,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
 
         if let httpResponse = urlResponse as? HTTPURLResponse,
            !(200..<300).contains(httpResponse.statusCode) {
-            let rawResponseBody = responseBodyString(from: data)
+            let rawResponseBody = Self.responseBodyString(from: data)
             await recordHTTPResponse(
                 action: requestBody.action ?? "generate",
                 edgeFunctionURL: url,
@@ -413,7 +413,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         }
 
         if let httpResponse = urlResponse as? HTTPURLResponse {
-            let rawResponseBody = responseBodyString(from: data)
+            let rawResponseBody = Self.responseBodyString(from: data)
             await recordHTTPResponse(
                 action: requestBody.action ?? "generate",
                 edgeFunctionURL: url,
@@ -488,7 +488,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
     ) -> GenerationRequestDiagnosticsSnapshot {
         let rawProjectURL = (Bundle.main.infoDictionary?["SupabaseProjectURL"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let projectURL = (rawProjectURL?.isEmpty == false ? rawProjectURL : nil) ?? "Not configured"
+        let projectURL = !(rawProjectURL?.isEmpty ?? true) ? (rawProjectURL ?? "Not configured") : "Not configured"
         let rawAccessToken = authService.currentAccessToken
         let tokenPrefix = GenerationRequestDiagnosticsSnapshot.truncatedTokenPrefix(from: rawAccessToken)
         let fallbackEdgeFunctionURL: String
@@ -517,7 +517,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         )
     }
 
-    private func responseBodyString(from data: Data) -> String? {
+    static func responseBodyString(from data: Data) -> String? {
         guard !data.isEmpty else {
             return nil
         }

@@ -125,6 +125,12 @@ final class GenerationBackendServiceTests: XCTestCase {
         XCTAssertTrue(text.contains("Underlying Swift error: Error Domain=NSURLErrorDomain Code=-1009"))
     }
 
+    func testResponseBodyStringReturnsFallbackForNonUTF8Data() {
+        let data = Data([0xFF, 0xD8, 0xFF, 0xE0])
+        let text = SupabaseGenerationService.responseBodyString(from: data)
+        XCTAssertEqual(text, "<non-UTF-8 response body (4 bytes)>")
+    }
+
     // MARK: - notConfigured error
 
     func testMissingSupabaseConfigThrowsNotConfigured() async {
