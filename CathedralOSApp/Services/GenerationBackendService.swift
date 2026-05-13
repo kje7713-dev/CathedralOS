@@ -425,6 +425,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             buildDiagnosticsSnapshot(
                 action: action,
                 requestOutcome: "No request sent",
+                edgeFunctionURL: nil,
                 httpStatusCode: nil,
                 rawResponseBody: nil,
                 underlyingError: underlyingError
@@ -505,7 +506,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         )
     }
 
-    static func responseBodyString(from data: Data) -> String {
+    internal static func responseBodyString(from data: Data) -> String {
         guard !data.isEmpty else {
             return "<empty response body>"
         }
