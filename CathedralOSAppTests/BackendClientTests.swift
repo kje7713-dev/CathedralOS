@@ -108,4 +108,42 @@ final class BackendClientTests: XCTestCase {
             "The URL must not embed the anon key in its string"
         )
     }
+
+    // MARK: - SupabaseBackendClient auth headers
+
+    func testAuthorizedRequestUsesUserAccessTokenWhenProvided() {
+        let config = ValidatedSupabaseConfiguration.makeForTesting(anonKey: "anon-key")
+        let client = SupabaseBackendClient(configuration: config)
+        let request = client.authorizedRequest(
+            for: URL(string: "https://xyz789.supabase.co/functions/v1/generate-story")!,
+            userAccessToken: "user-jwt-token"
+        )
+
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt-token")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "anon-key")
+    }
+
+    func testAuthorizedRequestOmitsAuthorizationHeaderWhenTokenMissing() {
+        let config = ValidatedSupabaseConfiguration.makeForTesting(anonKey: "anon-key")
+        let client = SupabaseBackendClient(configuration: config)
+        let request = client.authorizedRequest(
+            for: URL(string: "https://xyz789.supabase.co/functions/v1/generate-story")!,
+            userAccessToken: nil
+        )
+
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "anon-key")
+    }
+
+    func testAuthorizedRequestOmitsAuthorizationHeaderWhenTokenIsWhitespace() {
+        let config = ValidatedSupabaseConfiguration.makeForTesting(anonKey: "anon-key")
+        let client = SupabaseBackendClient(configuration: config)
+        let request = client.authorizedRequest(
+            for: URL(string: "https://xyz789.supabase.co/functions/v1/generate-story")!,
+            userAccessToken: " \n\t "
+        )
+
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "anon-key")
+    }
 }
