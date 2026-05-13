@@ -56,6 +56,65 @@ export function classifyOpenAIStatus(status: number): ProviderErrorCode {
   return "unknown";
 }
 
+interface OpenAIErrorDetails {
+  status: number;
+  code?: string;
+  message: string;
+  param?: string;
+}
+
+export function extractOpenAIErrorDetails(
+  status: number,
+  responseText: string,
+): OpenAIErrorDetails {
+  let code: string | undefined;
+  let message = responseText.trim() || "Unknown OpenAI error";
+  let param: string | undefined;
+
+  try {
+    const parsed = JSON.parse(responseText) as {
+      error?: {
+        code?: unknown;
+        message?: unknown;
+        param?: unknown;
+        type?: unknown;
+      };
+    };
+    const error = parsed?.error;
+    if (error) {
+      if (typeof error.code === "string" && error.code.length > 0) {
+        code = error.code;
+      } else if (typeof error.type === "string" && error.type.length > 0) {
+        code = error.type;
+      }
+
+      if (typeof error.message === "string" && error.message.length > 0) {
+        message = error.message;
+      }
+
+      if (typeof error.param === "string" && error.param.length > 0) {
+        param = error.param;
+      }
+    }
+  } catch {
+    // Non-JSON responses keep the raw text fallback.
+  }
+
+  return { status, code, message, param };
+}
+
+export function formatOpenAIError(details: OpenAIErrorDetails): string {
+  const parts = [
+    `status=${details.status}`,
+    `code=${details.code ?? "unknown"}`,
+    `message=${details.message}`,
+  ];
+  if (details.param) {
+    parts.push(`param=${details.param}`);
+  }
+  return `OpenAI error (${parts.join(", ")})`;
+}
+
 // ---------------------------------------------------------------------------
 // LLM interface types
 // ---------------------------------------------------------------------------
@@ -88,13 +147,20 @@ export class OpenAIProvider implements LLMProvider {
   private readonly model: string;
   private readonly timeoutMs: number;
 
-  constructor(apiKey: string, model: string, timeoutMs: number = PROVIDER_TIMEOUT_MS) {
+  constructor(
+    apiKey: string,
+    model: string,
+    timeoutMs: number = PROVIDER_TIMEOUT_MS,
+  ) {
     this.apiKey = apiKey;
     this.model = model;
     this.timeoutMs = timeoutMs;
   }
 
-  async complete(messages: LLMMessage[], maxTokens: number): Promise<LLMResponse> {
+  async complete(
+    messages: LLMMessage[],
+    maxTokens: number,
+  ): Promise<LLMResponse> {
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(),
@@ -112,7 +178,7 @@ export class OpenAIProvider implements LLMProvider {
         body: JSON.stringify({
           model: this.model,
           messages,
-          max_tokens: maxTokens,
+          max_completion_tokens: maxTokens,
         }),
         signal: controller.signal,
       });
@@ -127,7 +193,9 @@ export class OpenAIProvider implements LLMProvider {
         );
       }
       throw new ProviderError(
-        `OpenAI network error: ${err instanceof Error ? err.message : String(err)}`,
+        `OpenAI network error: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
         "unknown",
         true,
       );
@@ -138,8 +206,10 @@ export class OpenAIProvider implements LLMProvider {
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
       const code = classifyOpenAIStatus(resp.status);
+      const details = extractOpenAIErrorDetails(resp.status, text);
+      console.error("[generate-story] OpenAI request failed", details);
       throw new ProviderError(
-        `OpenAI error ${resp.status}: ${text}`,
+        formatOpenAIError(details),
         code,
         code === "provider_overloaded",
       );
@@ -170,7 +240,6 @@ export function buildProviderFromEnv(): OpenAIProvider {
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not set");
   }
-  const model =
-    Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini";
+  const model = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini";
   return new OpenAIProvider(apiKey, model);
 }

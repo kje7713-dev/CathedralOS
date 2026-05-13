@@ -32,33 +32,36 @@
 import {
   assertEquals,
   assertExists,
+  assertRejects,
+  assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { handler } from "./index.ts";
 import {
-  CREDIT_COST,
-  getCreditCost,
   checkCredits,
   computeCharge,
+  CREDIT_COST,
   type CreditStore,
+  getCreditCost,
   type UserEntitlement,
 } from "./_credits.ts";
 import {
   classifyOpenAIStatus,
-  ProviderError,
+  OpenAIProvider,
   PROVIDER_TIMEOUT_MS,
+  ProviderError,
 } from "./_provider.ts";
 import {
   RATE_LIMITS,
-  type RateLimitStore,
   type RateLimitResult,
+  type RateLimitStore,
   type RequestLogParams,
 } from "./_rate_limiter.ts";
 import {
-  MAX_SOURCE_PAYLOAD_CHARS,
   MAX_PREVIOUS_OUTPUT_CHARS,
+  MAX_SOURCE_PAYLOAD_CHARS,
 } from "./index.ts";
-import type { LLMProvider, LLMMessage } from "./_provider.ts";
+import type { LLMMessage, LLMProvider } from "./_provider.ts";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -98,28 +101,36 @@ function makeAuthRequest(body: Record<string, unknown>): Request {
 }
 
 // Mock LLM provider -- returns a fixed successful response.
-const mockSuccessProvider: LLMProvider = {
-  async complete(_messages: LLMMessage[], _maxTokens: number) {
-    return {
+const _mockSuccessProvider: LLMProvider = {
+  complete(_messages: LLMMessage[], _maxTokens: number) {
+    return Promise.resolve({
       content: "Once upon a time in a land far away...",
       modelName: "mock-model",
       inputTokens: 10,
       outputTokens: 25,
-    };
+    });
   },
 };
 
 // Mock LLM provider -- always fails with a ProviderError.
-const mockTimeoutProvider: LLMProvider = {
-  async complete(_messages: LLMMessage[], _maxTokens: number): Promise<never> {
-    throw new ProviderError("Mock provider timeout", "provider_timeout", false);
+const _mockTimeoutProvider: LLMProvider = {
+  complete(_messages: LLMMessage[], _maxTokens: number): Promise<never> {
+    return Promise.reject(
+      new ProviderError("Mock provider timeout", "provider_timeout", false),
+    );
   },
 };
 
 // Mock LLM provider -- always fails with a provider_overloaded error.
-const mockOverloadedProvider: LLMProvider = {
-  async complete(_messages: LLMMessage[], _maxTokens: number): Promise<never> {
-    throw new ProviderError("Mock provider overloaded", "provider_overloaded", true);
+const _mockOverloadedProvider: LLMProvider = {
+  complete(_messages: LLMMessage[], _maxTokens: number): Promise<never> {
+    return Promise.reject(
+      new ProviderError(
+        "Mock provider overloaded",
+        "provider_overloaded",
+        true,
+      ),
+    );
   },
 };
 
@@ -164,11 +175,11 @@ function makeMockCreditStore(
   };
 
   const store: CreditStore = {
-    async loadOrDefault(_userId: string): Promise<UserEntitlement> {
+    loadOrDefault(_userId: string): Promise<UserEntitlement> {
       state.loadOrDefaultCalls++;
-      return state.entitlement;
+      return Promise.resolve(state.entitlement);
     },
-    async charge(
+    charge(
       userId: string,
       cost: number,
       ent: UserEntitlement,
@@ -176,7 +187,7 @@ function makeMockCreditStore(
     ): Promise<UserEntitlement> {
       state.chargeCalls.push({ userId, cost, relatedOutputId });
       const newMonthly = Math.max(0, ent.monthly_credit_allowance - cost);
-      return { ...ent, monthly_credit_allowance: newMonthly };
+      return Promise.resolve({ ...ent, monthly_credit_allowance: newMonthly });
     },
   };
 
@@ -203,12 +214,13 @@ function makeMockRateLimitStore(
   };
 
   const store: RateLimitStore = {
-    async checkLimits(_userId: string): Promise<RateLimitResult> {
+    checkLimits(_userId: string): Promise<RateLimitResult> {
       state.checkLimitsCalls++;
-      return state.limitResult;
+      return Promise.resolve(state.limitResult);
     },
-    async recordRequest(_userId: string, params: RequestLogParams): Promise<void> {
+    recordRequest(_userId: string, params: RequestLogParams): Promise<void> {
       state.recordRequestCalls.push(params);
+      return Promise.resolve();
     },
   };
 
@@ -236,9 +248,9 @@ Deno.test("CREDIT_COST: chapter = 8", () => {
 });
 
 Deno.test("getCreditCost returns correct value for each mode", () => {
-  assertEquals(getCreditCost("short"),   1);
-  assertEquals(getCreditCost("medium"),  2);
-  assertEquals(getCreditCost("long"),    4);
+  assertEquals(getCreditCost("short"), 1);
+  assertEquals(getCreditCost("medium"), 2);
+  assertEquals(getCreditCost("long"), 4);
   assertEquals(getCreditCost("chapter"), 8);
 });
 
@@ -247,7 +259,10 @@ Deno.test("getCreditCost returns correct value for each mode", () => {
 // =============================================================================
 
 Deno.test("checkCredits: allowed when monthly covers cost", () => {
-  const ent = makeEntitlement({ monthly_credit_allowance: 5, purchased_credit_balance: 0 });
+  const ent = makeEntitlement({
+    monthly_credit_allowance: 5,
+    purchased_credit_balance: 0,
+  });
   const result = checkCredits(ent, 2);
   assertEquals(result.allowed, true);
   assertEquals(result.requiredCredits, 2);
@@ -255,21 +270,30 @@ Deno.test("checkCredits: allowed when monthly covers cost", () => {
 });
 
 Deno.test("checkCredits: allowed when purchased covers cost", () => {
-  const ent = makeEntitlement({ monthly_credit_allowance: 0, purchased_credit_balance: 10 });
+  const ent = makeEntitlement({
+    monthly_credit_allowance: 0,
+    purchased_credit_balance: 10,
+  });
   const result = checkCredits(ent, 8);
   assertEquals(result.allowed, true);
   assertEquals(result.availableCredits, 10);
 });
 
 Deno.test("checkCredits: allowed when combined covers cost", () => {
-  const ent = makeEntitlement({ monthly_credit_allowance: 3, purchased_credit_balance: 5 });
+  const ent = makeEntitlement({
+    monthly_credit_allowance: 3,
+    purchased_credit_balance: 5,
+  });
   const result = checkCredits(ent, 8);
   assertEquals(result.allowed, true);
   assertEquals(result.availableCredits, 8);
 });
 
 Deno.test("checkCredits: not allowed when insufficient (both zero)", () => {
-  const ent = makeEntitlement({ monthly_credit_allowance: 0, purchased_credit_balance: 0 });
+  const ent = makeEntitlement({
+    monthly_credit_allowance: 0,
+    purchased_credit_balance: 0,
+  });
   const result = checkCredits(ent, 1);
   assertEquals(result.allowed, false);
   assertEquals(result.requiredCredits, 1);
@@ -277,7 +301,10 @@ Deno.test("checkCredits: not allowed when insufficient (both zero)", () => {
 });
 
 Deno.test("checkCredits: not allowed when monthly < cost and no purchased", () => {
-  const ent = makeEntitlement({ monthly_credit_allowance: 1, purchased_credit_balance: 0 });
+  const ent = makeEntitlement({
+    monthly_credit_allowance: 1,
+    purchased_credit_balance: 0,
+  });
   const result = checkCredits(ent, 8);
   assertEquals(result.allowed, false);
   assertEquals(result.requiredCredits, 8);
@@ -289,28 +316,40 @@ Deno.test("checkCredits: not allowed when monthly < cost and no purchased", () =
 // =============================================================================
 
 Deno.test("computeCharge: drains monthly first", () => {
-  const ent = makeEntitlement({ monthly_credit_allowance: 5, purchased_credit_balance: 3 });
+  const ent = makeEntitlement({
+    monthly_credit_allowance: 5,
+    purchased_credit_balance: 3,
+  });
   const result = computeCharge(ent, 3);
   assertEquals(result.newMonthlyAllowance, 2);
   assertEquals(result.newPurchasedBalance, 3);
 });
 
 Deno.test("computeCharge: drains into purchased when monthly exhausted", () => {
-  const ent = makeEntitlement({ monthly_credit_allowance: 2, purchased_credit_balance: 6 });
+  const ent = makeEntitlement({
+    monthly_credit_allowance: 2,
+    purchased_credit_balance: 6,
+  });
   const result = computeCharge(ent, 4);
   assertEquals(result.newMonthlyAllowance, 0);
   assertEquals(result.newPurchasedBalance, 4);
 });
 
 Deno.test("computeCharge: exact deduction from monthly only", () => {
-  const ent = makeEntitlement({ monthly_credit_allowance: 8, purchased_credit_balance: 0 });
+  const ent = makeEntitlement({
+    monthly_credit_allowance: 8,
+    purchased_credit_balance: 0,
+  });
   const result = computeCharge(ent, 8);
   assertEquals(result.newMonthlyAllowance, 0);
   assertEquals(result.newPurchasedBalance, 0);
 });
 
 Deno.test("computeCharge: purchased not touched when monthly sufficient", () => {
-  const ent = makeEntitlement({ monthly_credit_allowance: 10, purchased_credit_balance: 20 });
+  const ent = makeEntitlement({
+    monthly_credit_allowance: 10,
+    purchased_credit_balance: 20,
+  });
   const result = computeCharge(ent, 4);
   assertEquals(result.newMonthlyAllowance, 6);
   assertEquals(result.newPurchasedBalance, 20);
@@ -321,7 +360,9 @@ Deno.test("computeCharge: purchased not touched when monthly sufficient", () => 
 // =============================================================================
 
 Deno.test("MockCreditStore: charge records call", async () => {
-  const { store, state } = makeMockCreditStore(makeEntitlement({ monthly_credit_allowance: 10 }));
+  const { store, state } = makeMockCreditStore(
+    makeEntitlement({ monthly_credit_allowance: 10 }),
+  );
   await store.charge(FAKE_USER_ID, 2, state.entitlement, FAKE_OUTPUT_ID);
   assertEquals(state.chargeCalls.length, 1);
   assertEquals(state.chargeCalls[0].cost, 2);
@@ -377,7 +418,10 @@ Deno.test("handler: missing auth header -> 401", async () => {
 // =============================================================================
 
 Deno.test("checkCredits: insufficient returns correct error fields", () => {
-  const ent = makeEntitlement({ monthly_credit_allowance: 0, purchased_credit_balance: 0 });
+  const ent = makeEntitlement({
+    monthly_credit_allowance: 0,
+    purchased_credit_balance: 0,
+  });
   const cost = getCreditCost("chapter");
   const result = checkCredits(ent, cost);
   assertEquals(result.allowed, false);
@@ -404,7 +448,9 @@ Deno.test("getCreditCost: ignores any client value -- always uses mode mapping",
 // =============================================================================
 
 Deno.test("charge is only called after provider success (logic check)", async () => {
-  const { store, state } = makeMockCreditStore(makeEntitlement({ monthly_credit_allowance: 10 }));
+  const { store, state } = makeMockCreditStore(
+    makeEntitlement({ monthly_credit_allowance: 10 }),
+  );
 
   // Charge must not have been called yet.
   assertEquals(state.chargeCalls.length, 0);
@@ -490,6 +536,100 @@ Deno.test("ProviderError: provider_overloaded is retryable", () => {
   assertEquals(err.retryable, true);
 });
 
+Deno.test("OpenAIProvider: uses max_completion_tokens in request body", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, unknown> | null = null;
+
+  globalThis.fetch = ((
+    _input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    requestBody = JSON.parse(String(init?.body));
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "Generated story" } }],
+          model: "gpt-4o-mini",
+          usage: { prompt_tokens: 12, completion_tokens: 34 },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+  }) as typeof fetch;
+
+  try {
+    const provider = new OpenAIProvider("test-key", "gpt-4o-mini");
+    await provider.complete([{ role: "user", content: "Tell a story" }], 800);
+
+    assertExists(requestBody);
+    assertEquals(requestBody?.max_completion_tokens, 800);
+    assertEquals("max_tokens" in requestBody!, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAIProvider: logs OpenAI rejection details for 400 responses", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+  const logged: unknown[][] = [];
+
+  globalThis.fetch = ((): Promise<Response> =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          error: {
+            message:
+              "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+            code: "unsupported_parameter",
+            param: "max_tokens",
+          },
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    )) as typeof fetch;
+
+  console.error = (...args: unknown[]) => {
+    logged.push(args);
+  };
+
+  try {
+    const provider = new OpenAIProvider("test-key", "gpt-4o-mini");
+    const err = await assertRejects(
+      () => provider.complete([{ role: "user", content: "Tell a story" }], 800),
+      ProviderError,
+    );
+
+    assertEquals(err.errorCode, "invalid_request");
+    assertStringIncludes(err.message, "status=400");
+    assertStringIncludes(err.message, "code=unsupported_parameter");
+    assertStringIncludes(
+      err.message,
+      "message=Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+    );
+    assertStringIncludes(err.message, "param=max_tokens");
+
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0][0], "[generate-story] OpenAI request failed");
+    assertEquals(logged[0][1], {
+      status: 400,
+      code: "unsupported_parameter",
+      message:
+        "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+      param: "max_tokens",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalConsoleError;
+  }
+});
+
 // =============================================================================
 // 13. Rate limit store -- MockRateLimitStore logic
 // =============================================================================
@@ -502,7 +642,10 @@ Deno.test("MockRateLimitStore: checkLimits allowed increments call count", async
 });
 
 Deno.test("MockRateLimitStore: checkLimits returns configured result", async () => {
-  const { store } = makeMockRateLimitStore({ allowed: false, retryAfterSeconds: 60 });
+  const { store } = makeMockRateLimitStore({
+    allowed: false,
+    retryAfterSeconds: 60,
+  });
   const result = await store.checkLimits(FAKE_USER_ID);
   assertEquals(result.allowed, false);
   assertEquals(result.retryAfterSeconds, 60);
@@ -530,14 +673,20 @@ Deno.test("MockRateLimitStore: recordRequest captures params", async () => {
 // 14. Rate limit returns retryAfterSeconds
 // =============================================================================
 
-Deno.test("rate limit: retryAfterSeconds is present when not allowed", async () => {
-  const rateLimitResult: RateLimitResult = { allowed: false, retryAfterSeconds: 60 };
+Deno.test("rate limit: retryAfterSeconds is present when not allowed", () => {
+  const rateLimitResult: RateLimitResult = {
+    allowed: false,
+    retryAfterSeconds: 60,
+  };
   assertExists(rateLimitResult.retryAfterSeconds);
   assertEquals(rateLimitResult.retryAfterSeconds, 60);
 });
 
-Deno.test("rate limit: hour limit returns retryAfterSeconds of 3600", async () => {
-  const rateLimitResult: RateLimitResult = { allowed: false, retryAfterSeconds: 3600 };
+Deno.test("rate limit: hour limit returns retryAfterSeconds of 3600", () => {
+  const rateLimitResult: RateLimitResult = {
+    allowed: false,
+    retryAfterSeconds: 3600,
+  };
   assertEquals(rateLimitResult.retryAfterSeconds, 3600);
 });
 
@@ -642,7 +791,10 @@ Deno.test("MockRateLimitStore: recordRequest called with failed status on provid
 // =============================================================================
 
 Deno.test("rate limit: blocked request records rate_limited status", async () => {
-  const { store, state } = makeMockRateLimitStore({ allowed: false, retryAfterSeconds: 60 });
+  const { store, state } = makeMockRateLimitStore({
+    allowed: false,
+    retryAfterSeconds: 60,
+  });
 
   // Simulate what the handler does when rate limited.
   await store.recordRequest(FAKE_USER_ID, {
@@ -694,7 +846,11 @@ Deno.test("insufficient credits: log entry has insufficient_credits errorCode", 
 // =============================================================================
 
 Deno.test("ProviderError provider_timeout: not retryable, correct code", () => {
-  const err = new ProviderError("timed out after 30000ms", "provider_timeout", false);
+  const err = new ProviderError(
+    "timed out after 30000ms",
+    "provider_timeout",
+    false,
+  );
   assertEquals(err.errorCode, "provider_timeout");
   assertEquals(err.retryable, false);
 });
