@@ -113,7 +113,8 @@ final class GenerationServiceTests: XCTestCase {
         XCTAssertEqual(obj["promptPackID"] as? String, pack.id.uuidString)
         XCTAssertEqual(obj["promptPackName"] as? String, "Rainy Night Pack")
         XCTAssertEqual(obj["requestedOutputType"] as? String, "story")
-        XCTAssertNotNil(obj["sourcePayload"], "sourcePayload must be present in request JSON")
+        XCTAssertNotNil(obj["sourcePayloadJSON"], "sourcePayloadJSON must be present in request JSON")
+        XCTAssertNil(obj["sourcePayload"], "old key 'sourcePayload' must not appear — use 'sourcePayloadJSON'")
     }
 
     func testRequestDTOIncludesAudienceFields() throws {
@@ -173,6 +174,82 @@ final class GenerationServiceTests: XCTestCase {
         XCTAssertNil(obj["api_key"],      "api_key must never appear in the request")
         XCTAssertNil(obj["openaiKey"],    "openaiKey must never appear in the request")
         XCTAssertNil(obj["authorization"],"authorization must never appear in the request")
+    }
+
+    // MARK: Backend contract key names
+
+    func testRequestDTOEncodesBackendContractKeys() throws {
+        // Verifies that the JSON keys match what the Edge Function expects:
+        // - "sourcePayloadJSON" (not "sourcePayload")
+        // - "generationAction"  (not "action")
+        // - "outputBudget"      (not "approximateMaxOutputTokens")
+        let project = makeProject()
+        let pack = makePack()
+        let payload = PromptPackExportBuilder.build(pack: pack, project: project)
+
+        let request = GenerationRequest(
+            schema: StoryGenerationService.requestSchema,
+            version: StoryGenerationService.requestVersion,
+            projectID: project.id.uuidString,
+            projectName: project.name,
+            promptPackID: pack.id.uuidString,
+            promptPackName: pack.name,
+            sourcePayload: payload,
+            readingLevel: "",
+            contentRating: "",
+            audienceNotes: "",
+            requestedOutputType: GenerationOutputType.story.rawValue
+        )
+
+        let data = try JSONEncoder().encode(request)
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        // Correct backend keys must be present.
+        XCTAssertNotNil(obj["sourcePayloadJSON"],
+                        "sourcePayloadJSON must be present — backend validates this key")
+        XCTAssertEqual(obj["generationAction"] as? String, "generate",
+                       "generationAction must encode as 'generate' for a normal Generate request")
+        XCTAssertNotNil(obj["outputBudget"],
+                        "outputBudget must be present — backend uses this to cap token output")
+
+        // Old / wrong key names must NOT appear.
+        XCTAssertNil(obj["sourcePayload"],
+                     "old key 'sourcePayload' must not appear in request JSON")
+        XCTAssertNil(obj["action"],
+                     "old key 'action' must not appear — use 'generationAction'")
+        XCTAssertNil(obj["approximateMaxOutputTokens"],
+                     "old key 'approximateMaxOutputTokens' must not appear — use 'outputBudget'")
+    }
+
+    func testRequestDTOEncodesGenerationActionForDerivedActions() throws {
+        // Verifies that continue/remix/regenerate encode as the correct generationAction value.
+        let project = makeProject()
+        let pack = makePack()
+        let payload = PromptPackExportBuilder.build(pack: pack, project: project)
+
+        for expectedAction in ["regenerate", "continue", "remix"] {
+            let request = GenerationRequest(
+                schema: StoryGenerationService.requestSchema,
+                version: StoryGenerationService.requestVersion,
+                projectID: project.id.uuidString,
+                projectName: project.name,
+                promptPackID: pack.id.uuidString,
+                promptPackName: pack.name,
+                sourcePayload: payload,
+                readingLevel: "",
+                contentRating: "",
+                audienceNotes: "",
+                requestedOutputType: GenerationOutputType.story.rawValue,
+                action: expectedAction,
+                previousOutputText: expectedAction == "continue" ? "Previous text." : nil
+            )
+
+            let data = try JSONEncoder().encode(request)
+            let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+            XCTAssertEqual(obj["generationAction"] as? String, expectedAction,
+                           "generationAction must encode as '\(expectedAction)'")
+        }
     }
 
     // MARK: Response DTO decoding
