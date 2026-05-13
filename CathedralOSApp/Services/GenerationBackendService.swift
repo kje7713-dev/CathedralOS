@@ -369,49 +369,6 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             throw GenerationBackendServiceError.networkError(error)
         }
 
-        if let httpResponse = urlResponse as? HTTPURLResponse,
-           !(200..<300).contains(httpResponse.statusCode) {
-            let rawResponseBody = Self.responseBodyString(from: data)
-            await recordHTTPResponse(
-                action: requestBody.action ?? "generate",
-                edgeFunctionURL: url,
-                statusCode: httpResponse.statusCode,
-                rawResponseBody: rawResponseBody,
-                underlyingError: nil
-            )
-            // Attempt to decode a structured error response first.
-            // The backend returns stable errorCode values for all known failure modes.
-            if let decoded = try? JSONDecoder().decode(GenerationResponse.self, from: data) {
-                switch decoded.errorCode {
-                case "insufficient_credits":
-                    let required = decoded.requiredCredits ?? 0
-                    let available = decoded.availableCredits ?? 0
-                    throw GenerationBackendServiceError.insufficientCredits(
-                        required: required,
-                        available: available
-                    )
-                case "rate_limited":
-                    throw GenerationBackendServiceError.rateLimited(
-                        retryAfterSeconds: decoded.retryAfterSeconds
-                    )
-                case "provider_timeout":
-                    throw GenerationBackendServiceError.providerTimeout
-                case "provider_overloaded":
-                    throw GenerationBackendServiceError.providerOverloaded
-                case "invalid_request":
-                    throw GenerationBackendServiceError.invalidRequest(
-                        decoded.errorMessage ?? "Invalid request"
-                    )
-                default:
-                    break
-                }
-            }
-            throw GenerationBackendServiceError.serverError(
-                statusCode: httpResponse.statusCode,
-                message: rawResponseBody
-            )
-        }
-
         if let httpResponse = urlResponse as? HTTPURLResponse {
             let rawResponseBody = Self.responseBodyString(from: data)
             await recordHTTPResponse(
@@ -421,6 +378,39 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
                 rawResponseBody: rawResponseBody,
                 underlyingError: nil
             )
+            if !(200..<300).contains(httpResponse.statusCode) {
+                // Attempt to decode a structured error response first.
+                // The backend returns stable errorCode values for all known failure modes.
+                if let decoded = try? JSONDecoder().decode(GenerationResponse.self, from: data) {
+                    switch decoded.errorCode {
+                    case "insufficient_credits":
+                        let required = decoded.requiredCredits ?? 0
+                        let available = decoded.availableCredits ?? 0
+                        throw GenerationBackendServiceError.insufficientCredits(
+                            required: required,
+                            available: available
+                        )
+                    case "rate_limited":
+                        throw GenerationBackendServiceError.rateLimited(
+                            retryAfterSeconds: decoded.retryAfterSeconds
+                        )
+                    case "provider_timeout":
+                        throw GenerationBackendServiceError.providerTimeout
+                    case "provider_overloaded":
+                        throw GenerationBackendServiceError.providerOverloaded
+                    case "invalid_request":
+                        throw GenerationBackendServiceError.invalidRequest(
+                            decoded.errorMessage ?? "Invalid request"
+                        )
+                    default:
+                        break
+                    }
+                }
+                throw GenerationBackendServiceError.serverError(
+                    statusCode: httpResponse.statusCode,
+                    message: rawResponseBody
+                )
+            }
         }
 
         do {
@@ -486,9 +476,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         rawResponseBody: String?,
         underlyingError: Error?
     ) -> GenerationRequestDiagnosticsSnapshot {
-        let rawProjectURL = (Bundle.main.infoDictionary?["SupabaseProjectURL"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let projectURL = rawProjectURL.flatMap { $0.isEmpty ? nil : $0 } ?? "Not configured"
+        let projectURL = SupabaseConfiguration.projectURL?.absoluteString ?? "Not configured"
         let rawAccessToken = authService.currentAccessToken
         let tokenPrefix = GenerationRequestDiagnosticsSnapshot.truncatedTokenPrefix(from: rawAccessToken)
         let fallbackEdgeFunctionURL: String
