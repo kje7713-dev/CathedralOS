@@ -71,14 +71,9 @@ protocol GenerationOutputSyncServiceProtocol {
 /// Production implementation — calls the Supabase REST API for `generation_outputs`.
 ///
 /// Auth: requires a signed-in session (`authService.authState.isSignedIn`).
-/// The user's identity is asserted via the Authorization header; Supabase RLS
-/// ensures each user can only read and write their own rows.
-///
-/// Note: Full JWT-based auth is required for RLS to correctly scope requests.
-/// Until `BackendAuthService` is wired to a real Supabase Auth session (sign-in
-/// returns a JWT stored in the Keychain), pull/push operations will be rejected
-/// by the server-side RLS policies.  The service architecture is complete and
-/// ready to activate once real auth is in place.
+/// The user's JWT access token is sent as the `Authorization: Bearer` header so that
+/// Supabase can verify the caller's identity and apply RLS policies, ensuring each
+/// user can only read and write their own rows.
 final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProtocol {
 
     private let authService: AuthService
@@ -97,7 +92,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     func pullOutputs(into context: ModelContext) async throws {
         let (client, _) = try await validatedClientAndUser()
         let url = restURL(client: client, path: "generation_outputs")
-        var request = client.authorizedRequest(for: url)
+        var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
         request.httpMethod = "GET"
 
         let records = try await fetch([GenerationOutputCloudRecord].self, request: request)
@@ -109,7 +104,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     func pushOutput(_ output: GenerationOutput) async throws {
         let (client, _) = try await validatedClientAndUser()
         let url = restURL(client: client, path: "generation_outputs")
-        var request = client.authorizedRequest(for: url)
+        var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
         request.httpMethod = "POST"
         // Ask Supabase to return the created row so we can read the cloud-assigned ID.
         request.setValue("return=representation", forHTTPHeaderField: "Prefer")

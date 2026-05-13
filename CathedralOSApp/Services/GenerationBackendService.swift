@@ -9,8 +9,10 @@ import Foundation
 //   - If the Supabase backend is not configured (missing Info.plist keys),
 //     generation throws `GenerationBackendServiceError.notConfigured`.
 //   - If the user is not signed in, generation throws `notSignedIn`.
-//   - No API keys are ever sent from the client; the anon key is the
-//     only credential embedded in the app.
+//   - The signed-in user's JWT access token is sent as the Authorization bearer
+//     so the Edge Function can verify the caller's identity. The anon key is
+//     included in the `apikey` header for project identification only.
+//   - No service-role or other API secrets are ever sent from the client.
 
 // MARK: - GenerationBackendServiceError
 
@@ -251,7 +253,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         }
 
         let url = client.edgeFunctionURL(path: SupabaseConfiguration.generationEdgeFunctionPath)
-        var urlRequest = client.authorizedRequest(for: url)
+        var urlRequest = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
         urlRequest.httpMethod = "POST"
 
         let encoder = JSONEncoder()

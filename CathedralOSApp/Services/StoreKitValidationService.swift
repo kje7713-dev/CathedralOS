@@ -223,10 +223,8 @@ final class BackendStoreKitValidationService: StoreKitValidationServiceProtocol 
             path: SupabaseConfiguration.storeKitValidateEdgeFunctionPath
         )
 
-        var request = client.authorizedRequest(for: url)
+        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
         request.httpMethod = "POST"
-        // Override Authorization to use the user JWT (not the anon key).
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         do {
             request.httpBody = try JSONEncoder().encode(body)
