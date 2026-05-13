@@ -493,7 +493,7 @@ struct PromptPackPreviewView: View {
         } catch {
             generationDiagnostics = await GenerationRequestDiagnosticsStore.shared.latestVisibleText()
             gen.status = GenerationStatus.failed.rawValue
-            gen.notes = generationDiagnostics ?? error.localizedDescription
+            gen.notes = error.localizedDescription
             gen.updatedAt = Date()
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
             // MVP policy: do not charge credits on generation failure.

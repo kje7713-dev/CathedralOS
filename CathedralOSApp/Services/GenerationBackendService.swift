@@ -23,6 +23,9 @@ struct GenerationRequestDiagnosticsSnapshot {
         #endif
     }
 
+    /// Returns only the first 12 characters of the user JWT for diagnostics.
+    /// This is intentionally short so request traces can confirm which session
+    /// was used without ever logging or displaying the full token value.
     static func truncatedTokenPrefix(from token: String?) -> String? {
         guard let token else {
             return nil
@@ -64,6 +67,9 @@ actor GenerationRequestDiagnosticsStore {
 
     func record(_ snapshot: GenerationRequestDiagnosticsSnapshot) {
         latestSnapshot = snapshot
+        guard GenerationRequestDiagnosticsSnapshot.shouldDisplayInCurrentBuild else {
+            return
+        }
         NSLog("Generation backend diagnostics:\n%@", snapshot.formattedText)
     }
 
@@ -481,9 +487,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
     ) -> GenerationRequestDiagnosticsSnapshot {
         let rawProjectURL = (Bundle.main.infoDictionary?["SupabaseProjectURL"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let projectURL = (rawProjectURL?.isEmpty == false)
-            ? (rawProjectURL ?? "Not configured")
-            : "Not configured"
+        let projectURL = (rawProjectURL?.isEmpty == false ? rawProjectURL : nil) ?? "Not configured"
         let tokenPrefix = GenerationRequestDiagnosticsSnapshot.truncatedTokenPrefix(
             from: authService.currentAccessToken
         )
