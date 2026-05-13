@@ -68,14 +68,14 @@ final class SupabaseBackendClient: BackendClient {
         }
     }
 
-    /// Returns a URLRequest pre-set with Supabase auth headers for an Edge Function call.
-    ///
     /// Creates a client from an already-validated configuration.
     /// Intended for tests and dependency injection.
     init(configuration: ValidatedSupabaseConfiguration) {
         self.configuration = configuration
     }
 
+    /// Returns a URLRequest pre-set with Supabase auth headers for an Edge Function call.
+    ///
     /// - Parameters:
     ///   - url: The endpoint URL.
     ///   - userAccessToken: The signed-in user's JWT access token. When provided
