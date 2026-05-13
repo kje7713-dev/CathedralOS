@@ -206,7 +206,15 @@ private final class AppleSignInHandler: NSObject,
 /// Production auth service. Persists session credentials via `KeychainService`.
 /// Sign in with Apple exchanges the Apple identity token for a Supabase JWT via the
 /// Supabase Auth REST endpoint.
+///
+/// Use `BackendAuthService.shared` throughout the app so that a single session check
+/// (e.g. from `AccountView.task`) is visible to all screens — including the Generate
+/// screen — without each view maintaining its own stale copy of auth state.
 final class BackendAuthService: AuthService {
+
+    /// App-wide singleton. All views and services that need the current auth state
+    /// should reference this instance rather than creating `BackendAuthService()`.
+    static let shared = BackendAuthService()
 
     private(set) var authState: AuthState = .unknown
     private(set) var currentAccessToken: String?

@@ -39,7 +39,7 @@ struct PromptPackPreviewView: View {
         pack: PromptPack,
         generationService: GenerationService = SupabaseGenerationService(),
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
-        authService: any AuthService = BackendAuthService()
+        authService: any AuthService = BackendAuthService.shared
     ) {
         self.project = project
         self.pack = pack
@@ -375,6 +375,13 @@ struct PromptPackPreviewView: View {
     private func startGeneration() async {
         generationError = nil
         let mode = selectedLengthMode
+
+        // Resolve auth state at tap time — if the session hasn't been checked yet
+        // (e.g. the Account tab was never visited this launch), check it now so the
+        // preflight sees the real signed-in state rather than the initial .unknown.
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
 
         // Preflight: check credits and auth before making any network call.
         let preflight = usageLimitService.checkPreflight(

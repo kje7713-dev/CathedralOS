@@ -137,7 +137,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
 
     /// Designated init — injects dependencies for testability.
     init(
-        authService: AuthService = BackendAuthService(),
+        authService: AuthService = BackendAuthService.shared,
         session: URLSession = .shared
     ) {
         self.authService = authService

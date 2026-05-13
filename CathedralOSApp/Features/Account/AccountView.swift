@@ -23,7 +23,7 @@ struct AccountView: View {
     @Environment(\.modelContext) private var modelContext
 
     init(
-        authService: any AuthService = BackendAuthService(),
+        authService: any AuthService = BackendAuthService.shared,
         syncService: any GenerationOutputSyncServiceProtocol = StubGenerationOutputSyncService(),
         profileBootstrapService: (any ProfileBootstrapServiceProtocol)? = nil,
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
