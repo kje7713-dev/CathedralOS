@@ -488,7 +488,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
     ) -> GenerationRequestDiagnosticsSnapshot {
         let rawProjectURL = (Bundle.main.infoDictionary?["SupabaseProjectURL"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let projectURL = !(rawProjectURL?.isEmpty ?? true) ? (rawProjectURL ?? "Not configured") : "Not configured"
+        let projectURL = rawProjectURL.flatMap { $0.isEmpty ? nil : $0 } ?? "Not configured"
         let rawAccessToken = authService.currentAccessToken
         let tokenPrefix = GenerationRequestDiagnosticsSnapshot.truncatedTokenPrefix(from: rawAccessToken)
         let fallbackEdgeFunctionURL: String
@@ -517,9 +517,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         )
     }
 
-    static func responseBodyString(from data: Data) -> String? {
+    static func responseBodyString(from data: Data) -> String {
         guard !data.isEmpty else {
-            return nil
+            return "<empty response body>"
         }
         return String(data: data, encoding: .utf8) ?? "<non-UTF-8 response body (\(data.count) bytes)>"
     }
