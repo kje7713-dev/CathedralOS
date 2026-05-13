@@ -53,7 +53,6 @@ extension BackendClient {
 // MARK: - SupabaseBackendClient
 
 /// Production implementation that reads configuration from `SupabaseConfiguration`.
-/// Exposes the anon key as an Authorization header value for Edge Function calls.
 /// API secrets are **never** stored in this client — service-role auth is server-side only.
 final class SupabaseBackendClient: BackendClient {
 
@@ -70,9 +69,18 @@ final class SupabaseBackendClient: BackendClient {
     }
 
     /// Returns a URLRequest pre-set with Supabase auth headers for an Edge Function call.
-    func authorizedRequest(for url: URL) -> URLRequest {
+    ///
+    /// - Parameters:
+    ///   - url: The endpoint URL.
+    ///   - userAccessToken: The signed-in user's JWT access token. When provided,
+    ///     it is used as the `Authorization: Bearer` value so that Supabase can
+    ///     verify the caller's identity and apply RLS policies. When `nil`, the
+    ///     anon key is used as the bearer token (suitable only for public/anonymous
+    ///     endpoints that do not require JWT verification).
+    func authorizedRequest(for url: URL, userAccessToken: String? = nil) -> URLRequest {
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(configuration.anonKey)", forHTTPHeaderField: "Authorization")
+        let bearerToken = userAccessToken.flatMap { $0.isEmpty ? nil : $0 } ?? configuration.anonKey
+        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         request.setValue(configuration.anonKey, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         return request
