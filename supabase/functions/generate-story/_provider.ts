@@ -63,7 +63,10 @@ interface OpenAIErrorDetails {
   param?: string;
 }
 
-export function extractOpenAIErrorDetails(status: number, responseText: string): OpenAIErrorDetails {
+export function extractOpenAIErrorDetails(
+  status: number,
+  responseText: string,
+): OpenAIErrorDetails {
   let code: string | undefined;
   let message = responseText.trim() || "Unknown OpenAI error";
   let param: string | undefined;
@@ -144,13 +147,20 @@ export class OpenAIProvider implements LLMProvider {
   private readonly model: string;
   private readonly timeoutMs: number;
 
-  constructor(apiKey: string, model: string, timeoutMs: number = PROVIDER_TIMEOUT_MS) {
+  constructor(
+    apiKey: string,
+    model: string,
+    timeoutMs: number = PROVIDER_TIMEOUT_MS,
+  ) {
     this.apiKey = apiKey;
     this.model = model;
     this.timeoutMs = timeoutMs;
   }
 
-  async complete(messages: LLMMessage[], maxTokens: number): Promise<LLMResponse> {
+  async complete(
+    messages: LLMMessage[],
+    maxTokens: number,
+  ): Promise<LLMResponse> {
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(),
@@ -183,7 +193,9 @@ export class OpenAIProvider implements LLMProvider {
         );
       }
       throw new ProviderError(
-        `OpenAI network error: ${err instanceof Error ? err.message : String(err)}`,
+        `OpenAI network error: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
         "unknown",
         true,
       );
@@ -228,7 +240,6 @@ export function buildProviderFromEnv(): OpenAIProvider {
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not set");
   }
-  const model =
-    Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini";
+  const model = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini";
   return new OpenAIProvider(apiKey, model);
 }
