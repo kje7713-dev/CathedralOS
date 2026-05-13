@@ -308,8 +308,7 @@ struct PromptPackPreviewView: View {
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
 
-            if let diagnostics = generationDiagnostics,
-               generationError == nil {
+            if let diagnostics = generationDiagnostics {
                 VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
                     Label("Backend Diagnostics", systemImage: "antennaradiowaves.left.and.right")
                         .font(CathedralTheme.Typography.caption())
@@ -496,11 +495,7 @@ struct PromptPackPreviewView: View {
             gen.updatedAt = Date()
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
             // MVP policy: do not charge credits on generation failure.
-            if let generationDiagnostics {
-                generationError = generationDiagnostics
-            } else {
-                generationError = localizedGenerationError(error)
-            }
+            generationError = localizedGenerationError(error)
         }
     }
 

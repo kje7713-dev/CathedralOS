@@ -369,9 +369,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             throw GenerationBackendServiceError.networkError(error)
         }
 
-        let rawResponseBody = responseBodyString(from: data)
         if let httpResponse = urlResponse as? HTTPURLResponse,
            !(200..<300).contains(httpResponse.statusCode) {
+            let rawResponseBody = responseBodyString(from: data)
             await recordHTTPResponse(
                 action: requestBody.action ?? "generate",
                 edgeFunctionURL: url,
@@ -413,6 +413,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         }
 
         if let httpResponse = urlResponse as? HTTPURLResponse {
+            let rawResponseBody = responseBodyString(from: data)
             await recordHTTPResponse(
                 action: requestBody.action ?? "generate",
                 edgeFunctionURL: url,
