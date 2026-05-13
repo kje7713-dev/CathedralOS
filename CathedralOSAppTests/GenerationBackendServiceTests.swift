@@ -93,6 +93,44 @@ private func makeErrorResponseJSON(message: String = "Internal server error") ->
 
 final class GenerationBackendServiceTests: XCTestCase {
 
+    func testDiagnosticsTokenPrefixIsTruncatedToTwelveCharacters() {
+        let prefix = GenerationRequestDiagnosticsSnapshot.truncatedTokenPrefix(
+            from: "1234567890abcdefghijklmnop"
+        )
+        XCTAssertEqual(prefix, "1234567890ab")
+    }
+
+    func testDiagnosticsSnapshotFormatsHTTPResponseDetails() {
+        let snapshot = GenerationRequestDiagnosticsSnapshot(
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            supabaseProjectURL: "https://example.supabase.co",
+            edgeFunctionName: "generate-story",
+            edgeFunctionURL: "https://example.supabase.co/functions/v1/generate-story",
+            hasUserAccessToken: true,
+            accessTokenPrefix: "tokenprefix12",
+            generationAction: "generate",
+            requestOutcome: "Received HTTP 503",
+            httpStatusCode: 503,
+            rawResponseBody: #"{"error":"provider_overloaded"}"#,
+            underlyingSwiftError: "Error Domain=NSURLErrorDomain Code=-1009"
+        )
+
+        let text = snapshot.formattedText
+        XCTAssertTrue(text.contains("Supabase project URL: https://example.supabase.co"))
+        XCTAssertTrue(text.contains("Edge Function URL: https://example.supabase.co/functions/v1/generate-story"))
+        XCTAssertTrue(text.contains("Generation action: generate"))
+        XCTAssertTrue(text.contains("Received HTTP 503"))
+        XCTAssertTrue(text.contains("HTTP status code: 503"))
+        XCTAssertTrue(text.contains(#"Raw response body: {"error":"provider_overloaded"}"#))
+        XCTAssertTrue(text.contains("Underlying Swift error: Error Domain=NSURLErrorDomain Code=-1009"))
+    }
+
+    func testResponseBodyStringReturnsFallbackForNonUTF8Data() {
+        let data = Data([0xFF, 0xD8, 0xFF, 0xE0])
+        let text = SupabaseGenerationService.responseBodyString(from: data)
+        XCTAssertEqual(text, "<non-UTF-8 response body (4 bytes)>")
+    }
+
     // MARK: - notConfigured error
 
     func testMissingSupabaseConfigThrowsNotConfigured() async {
