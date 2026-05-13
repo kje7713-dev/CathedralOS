@@ -489,9 +489,8 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         let rawProjectURL = (Bundle.main.infoDictionary?["SupabaseProjectURL"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let projectURL = (rawProjectURL?.isEmpty == false ? rawProjectURL : nil) ?? "Not configured"
-        let tokenPrefix = GenerationRequestDiagnosticsSnapshot.truncatedTokenPrefix(
-            from: authService.currentAccessToken
-        )
+        let rawAccessToken = authService.currentAccessToken
+        let tokenPrefix = GenerationRequestDiagnosticsSnapshot.truncatedTokenPrefix(from: rawAccessToken)
         let fallbackEdgeFunctionURL: String
         if let configuredURL = SupabaseConfiguration.projectURL {
             fallbackEdgeFunctionURL = configuredURL
@@ -508,7 +507,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             supabaseProjectURL: projectURL,
             edgeFunctionName: SupabaseConfiguration.generationEdgeFunctionPath,
             edgeFunctionURL: edgeFunctionURL ?? fallbackEdgeFunctionURL,
-            hasUserAccessToken: tokenPrefix != nil,
+            hasUserAccessToken: rawAccessToken != nil,
             accessTokenPrefix: tokenPrefix,
             generationAction: action,
             requestOutcome: requestOutcome,
@@ -522,7 +521,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         guard !data.isEmpty else {
             return nil
         }
-        return String(data: data, encoding: .utf8) ?? "<non-UTF8 response body (\(data.count) bytes)>"
+        return String(data: data, encoding: .utf8) ?? "<non-UTF-8 response body (\(data.count) bytes)>"
     }
 }
 
