@@ -23,6 +23,7 @@ export const PROVIDER_TIMEOUT_MS = 90_000;
 
 export type ProviderErrorCode =
   | "provider_timeout"
+  | "provider_insufficient_quota"
   | "provider_rate_limited"
   | "provider_overloaded"
   | "provider_rejected"
@@ -49,8 +50,16 @@ export class ProviderError extends Error {
  * Maps an OpenAI HTTP status code to a stable ProviderErrorCode.
  * Exported for unit testing.
  */
-export function classifyOpenAIStatus(status: number): ProviderErrorCode {
-  if (status === 429) return "provider_rate_limited";
+export function classifyOpenAIStatus(
+  status: number,
+  openAIErrorCode?: string,
+): ProviderErrorCode {
+  if (status === 429) {
+    if (openAIErrorCode === "insufficient_quota") {
+      return "provider_insufficient_quota";
+    }
+    return "provider_rate_limited";
+  }
   if (status === 401 || status === 403) return "provider_rejected";
   if (status === 400 || status === 422) return "invalid_request";
   if (status >= 500) return "provider_overloaded";
@@ -210,8 +219,8 @@ export class OpenAIProvider implements LLMProvider {
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
-      const code = classifyOpenAIStatus(resp.status);
       const details = extractOpenAIErrorDetails(resp.status, text);
+      const code = classifyOpenAIStatus(resp.status, details.code);
       console.error("[generate-story] OpenAI request failed", details);
       throw new ProviderError(
         formatOpenAIError(details),

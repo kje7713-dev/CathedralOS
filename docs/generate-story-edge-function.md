@@ -209,7 +209,7 @@ Exceeding any limit returns `429` with `errorCode: "rate_limited"` and
 
 ### Provider timeout
 
-The backend aborts OpenAI calls that do not respond within 30 seconds.
+The backend aborts OpenAI calls that do not respond within 90 seconds.
 A timed-out call returns `errorCode: "provider_timeout"` and does NOT charge
 credits.
 
@@ -258,6 +258,38 @@ credits.
 }
 ```
 
+### Error — provider insufficient quota (`402`)
+
+```json
+{
+  "status": "failed",
+  "errorCode": "provider_insufficient_quota",
+  "errorMessage": "The generation provider account has no available API quota. Check OpenAI billing, usage limits, or project budget.",
+  "retryAfterSeconds": null
+}
+```
+
+### Error — provider rate limited (`429`)
+
+```json
+{
+  "status": "failed",
+  "errorCode": "provider_rate_limited",
+  "errorMessage": "The generation provider is rate limited. Please try again shortly.",
+  "retryAfterSeconds": 60
+}
+```
+
+### Error — provider timeout (`504`)
+
+```json
+{
+  "status": "failed",
+  "errorCode": "provider_timeout",
+  "errorMessage": "The generation service took too long to respond. Please try again."
+}
+```
+
 ### Error — other failures
 
 ```json
@@ -272,9 +304,11 @@ credits.
 | `401` | Missing or invalid JWT (`errorCode: "unauthenticated"`) |
 | `400` | Malformed JSON body (`errorCode: "invalid_request"`) |
 | `402` | Insufficient credits (`errorCode: "insufficient_credits"`) |
+| `402` | OpenAI quota/billing exhausted (`errorCode: "provider_insufficient_quota"`) |
 | `405` | Wrong HTTP method |
 | `422` | Validation error — invalid enum value, missing required field, or oversized payload (`errorCode: "invalid_request"`) |
 | `429` | Rate limit exceeded (`errorCode: "rate_limited"`, includes `retryAfterSeconds`) |
+| `429` | OpenAI rate limit exceeded (`errorCode: "provider_rate_limited"`, includes `retryAfterSeconds`) |
 | `500` | Server configuration error (`errorCode: "backend_config_missing"`) or output persistence failure (`errorCode: "persistence_failed"`) |
 | `502` | LLM provider call failed (`errorCode: "provider_rejected"` or `"provider_overloaded"`) |
 | `504` | LLM provider timed out (`errorCode: "provider_timeout"`) |

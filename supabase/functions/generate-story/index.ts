@@ -111,6 +111,57 @@ function corsResponse(body: string, init: ResponseInit = {}): Response {
   });
 }
 
+function providerErrorResponse(providerErrorCode: string, fallbackMessage: string): {
+  httpStatus: number;
+  body: Record<string, string | number | null>;
+  headers?: Record<string, string>;
+} {
+  switch (providerErrorCode) {
+    case "provider_insufficient_quota":
+      return {
+        httpStatus: 402,
+        body: {
+          status: "failed",
+          errorCode: "provider_insufficient_quota",
+          errorMessage:
+            "The generation provider account has no available API quota. Check OpenAI billing, usage limits, or project budget.",
+          retryAfterSeconds: null,
+        },
+      };
+    case "provider_rate_limited":
+      return {
+        httpStatus: 429,
+        body: {
+          status: "failed",
+          errorCode: "provider_rate_limited",
+          errorMessage:
+            "The generation provider is rate limited. Please try again shortly.",
+          retryAfterSeconds: 60,
+        },
+        headers: { "Retry-After": "60" },
+      };
+    case "provider_timeout":
+      return {
+        httpStatus: 504,
+        body: {
+          status: "failed",
+          errorCode: "provider_timeout",
+          errorMessage:
+            "The generation service took too long to respond. Please try again.",
+        },
+      };
+    default:
+      return {
+        httpStatus: 502,
+        body: {
+          status: "failed",
+          errorCode: providerErrorCode,
+          errorMessage: `Generation failed: ${fallbackMessage}`,
+        },
+      };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Request body type
 // ---------------------------------------------------------------------------
@@ -727,16 +778,16 @@ async function handler(
     // Classify provider errors into stable error codes.
     // Credits are NOT charged on provider failure.
     let providerErrorCode = "unknown";
-    let httpStatus = 502;
     const isTimeout = err instanceof ProviderError && err.errorCode === "provider_timeout";
+    const isInsufficientQuota = err instanceof ProviderError &&
+      err.errorCode === "provider_insufficient_quota";
 
     if (err instanceof ProviderError) {
       providerErrorCode = err.errorCode;
-      if (isTimeout) httpStatus = 504;
-      if (providerErrorCode === "provider_rate_limited") httpStatus = 429;
     }
 
     const providerErrorMessage = err instanceof Error ? err.message : "LLM provider error";
+    const failureResponse = providerErrorResponse(providerErrorCode, providerErrorMessage);
 
     if (isTimeout) {
       // Structured log so operators can confirm timeoutMs in logs.
@@ -749,8 +800,9 @@ async function handler(
     }
 
     // Best-effort: record a failed usage event for audit purposes.
-    // Skipped on provider_timeout — no output was produced and credits are not charged.
-    if (!isTimeout) {
+    // Skipped on provider_timeout / provider_insufficient_quota — no output was
+    // produced and credits are not charged.
+    if (!isTimeout && !isInsufficientQuota) {
       const { error: usageInsertError } = await persistence.insertUsageEvent({
         user_id: userId,
         generation_output_id: null,
@@ -786,17 +838,10 @@ async function handler(
     });
 
     return corsResponse(
-      JSON.stringify({
-        status: "failed",
-        errorCode: providerErrorCode,
-        errorMessage: `Generation failed: ${providerErrorMessage}`,
-        ...(providerErrorCode === "provider_rate_limited" ? { retryAfterSeconds: 60 } : {}),
-      }),
+      JSON.stringify(failureResponse.body),
       {
-        status: httpStatus,
-        ...(providerErrorCode === "provider_rate_limited"
-          ? { headers: { "Retry-After": "60" } }
-          : {}),
+        status: failureResponse.httpStatus,
+        ...(failureResponse.headers ? { headers: failureResponse.headers } : {}),
       },
     );
   }

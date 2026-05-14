@@ -597,8 +597,22 @@ Deno.test("expected credit state shape matches iOS DTO field names", () => {
 // 11. Provider error classification (classifyOpenAIStatus)
 // =============================================================================
 
-Deno.test("classifyOpenAIStatus: 429 -> provider_rate_limited", () => {
+Deno.test("classifyOpenAIStatus: 429 without OpenAI code -> provider_rate_limited", () => {
   assertEquals(classifyOpenAIStatus(429), "provider_rate_limited");
+});
+
+Deno.test("classifyOpenAIStatus: 429 insufficient_quota -> provider_insufficient_quota", () => {
+  assertEquals(
+    classifyOpenAIStatus(429, "insufficient_quota"),
+    "provider_insufficient_quota",
+  );
+});
+
+Deno.test("classifyOpenAIStatus: 429 rate_limit_exceeded -> provider_rate_limited", () => {
+  assertEquals(
+    classifyOpenAIStatus(429, "rate_limit_exceeded"),
+    "provider_rate_limited",
+  );
 });
 
 Deno.test("classifyOpenAIStatus: 401 -> provider_rejected", () => {
@@ -651,6 +665,39 @@ Deno.test("ProviderError: provider_rate_limited is retryable", () => {
   const err = new ProviderError("rate limit", "provider_rate_limited", true);
   assertEquals(err.errorCode, "provider_rate_limited");
   assertEquals(err.retryable, true);
+});
+
+Deno.test("OpenAIProvider: 429 insufficient_quota maps to provider_insufficient_quota", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = ((): Promise<Response> =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "You exceeded your current quota, please check your plan and billing details.",
+            code: "insufficient_quota",
+          },
+        }),
+        {
+          status: 429,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    )) as typeof fetch;
+
+  try {
+    const provider = new OpenAIProvider("test-key", "gpt-4o-mini");
+    const err = await assertRejects(
+      () => provider.complete([{ role: "user", content: "Tell a story" }], 800),
+      ProviderError,
+    );
+
+    assertEquals(err.errorCode, "provider_insufficient_quota");
+    assertStringIncludes(err.message, "code=insufficient_quota");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 Deno.test("OpenAIProvider: uses max_completion_tokens in request body", async () => {
@@ -1319,7 +1366,54 @@ Deno.test("handler: provider 429 maps to provider_rate_limited and charges 0", a
   const body = await resp.json();
   assertEquals(resp.status, 429);
   assertEquals(body.errorCode, "provider_rate_limited");
+  assertEquals(
+    body.errorMessage,
+    "The generation provider is rate limited. Please try again shortly.",
+  );
+  assertEquals(body.retryAfterSeconds, 60);
   assertEquals(creditState.chargeCalls.length, 0);
+});
+
+Deno.test("handler: provider insufficient quota returns billing message and charges 0", async () => {
+  const { store: creditStore, state: creditState } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+
+  const provider: LLMProvider = {
+    complete() {
+      return Promise.reject(
+        new ProviderError(
+          "quota exceeded",
+          "provider_insufficient_quota",
+          false,
+        ),
+      );
+    },
+  };
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest()), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+  assertEquals(resp.status, 402);
+  assertEquals(body.status, "failed");
+  assertEquals(body.errorCode, "provider_insufficient_quota");
+  assertEquals(
+    body.errorMessage,
+    "The generation provider account has no available API quota. Check OpenAI billing, usage limits, or project budget.",
+  );
+  assertEquals(body.retryAfterSeconds, null);
+  assertEquals(creditState.chargeCalls.length, 0);
+  assertEquals(persistenceState.outputInsertCalls.length, 0);
+  assertEquals(persistenceState.usageInsertCalls.length, 0);
+  assertEquals(rateLimitState.recordRequestCalls.length, 1);
+  assertEquals(rateLimitState.recordRequestCalls[0].errorCode, "provider_insufficient_quota");
 });
 
 Deno.test("handler: insufficient credits blocks before provider call", async () => {

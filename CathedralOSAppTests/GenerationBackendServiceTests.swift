@@ -359,6 +359,7 @@ final class GenerationBackendServiceTests: XCTestCase {
             .rateLimited(retryAfterSeconds: 60),
             .rateLimited(retryAfterSeconds: nil),
             .providerTimeout,
+            .providerInsufficientQuota,
             .providerRateLimited(retryAfterSeconds: 60),
             .providerOverloaded,
             .providerRejected,
@@ -430,6 +431,28 @@ final class GenerationBackendServiceTests: XCTestCase {
         )
     }
 
+    func testProviderInsufficientQuotaMessages() {
+        let error = GenerationBackendServiceError.providerInsufficientQuota
+        let desc = error.errorDescription ?? ""
+        XCTAssertEqual(
+            desc,
+            "The generation provider account has no available API quota. Check OpenAI billing, usage limits, or project budget."
+        )
+        XCTAssertEqual(desc, error.userFacingMessage)
+    }
+
+    func testProviderRateLimitedUsesShortRetryMessage() {
+        let error = GenerationBackendServiceError.providerRateLimited(retryAfterSeconds: 60)
+        XCTAssertEqual(
+            error.errorDescription,
+            "The generation provider is rate limited. Please try again shortly."
+        )
+        XCTAssertEqual(
+            error.userFacingMessage,
+            "The generation provider is rate limited. Please try again shortly."
+        )
+    }
+
     func testProviderOverloadedErrorHasDescription() {
         let error = GenerationBackendServiceError.providerOverloaded
         let desc = error.errorDescription ?? ""
@@ -455,6 +478,7 @@ final class GenerationBackendServiceTests: XCTestCase {
             .rateLimited(retryAfterSeconds: 60),
             .rateLimited(retryAfterSeconds: nil),
             .providerTimeout,
+            .providerInsufficientQuota,
             .providerRateLimited(retryAfterSeconds: 30),
             .providerOverloaded,
             .providerRejected,
@@ -493,6 +517,20 @@ final class GenerationBackendServiceTests: XCTestCase {
         let response = try JSONDecoder().decode(GenerationResponse.self, from: Data(json.utf8))
         XCTAssertNil(response.retryAfterSeconds,
                      "retryAfterSeconds should be nil when absent from JSON")
+    }
+
+    func testResponseDTODecodesNullRetryAfterSeconds() throws {
+        let json = """
+        {
+          "status": "failed",
+          "errorCode": "provider_insufficient_quota",
+          "errorMessage": "The generation provider account has no available API quota. Check OpenAI billing, usage limits, or project budget.",
+          "retryAfterSeconds": null
+        }
+        """
+        let response = try JSONDecoder().decode(GenerationResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(response.errorCode, "provider_insufficient_quota")
+        XCTAssertNil(response.retryAfterSeconds)
     }
 
     // MARK: - StubGenerationBackendService
