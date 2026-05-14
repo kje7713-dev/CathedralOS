@@ -388,7 +388,7 @@ async function handler(
 
   let store: CreditStore;
   let limiter: RateLimitStore;
-  const needsAdminClient =
+  const requiresAdminClient =
     creditStore === undefined ||
     rateLimitStore === undefined ||
     injectedPersistenceStore === undefined;
@@ -396,7 +396,7 @@ async function handler(
     // deno-lint-ignore no-explicit-any
     any | null = null;
 
-  if (needsAdminClient) {
+  if (requiresAdminClient) {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!supabaseURL || !serviceRoleKey) {
       return corsResponse(
@@ -415,9 +415,6 @@ async function handler(
     store = creditStore;
     limiter = rateLimitStore;
   } else {
-    if (!adminClient) {
-      throw new Error("adminClient is required for credit and rate-limit persistence");
-    }
     store = new SupabaseCreditStore(adminClient);
     limiter = new SupabaseRateLimitStore(adminClient);
   }
@@ -426,9 +423,6 @@ async function handler(
   if (injectedPersistenceStore !== undefined) {
     persistence = injectedPersistenceStore;
   } else {
-    if (!adminClient) {
-      throw new Error("adminClient is required for generation persistence");
-    }
     persistence = new SupabaseGenerationPersistenceStore(adminClient);
   }
 
