@@ -115,6 +115,7 @@ enum GenerationBackendServiceError: Error, LocalizedError {
     /// The LLM provider did not respond within the allowed time window.
     /// Credits are not charged when this error occurs.
     case providerTimeout
+    case providerInsufficientQuota
     case providerRateLimited(retryAfterSeconds: Int?)
     /// The LLM provider is temporarily overloaded or returned a server error.
     /// Credits are not charged when this error occurs.
@@ -154,10 +155,9 @@ enum GenerationBackendServiceError: Error, LocalizedError {
             return "Too many requests. Please wait a moment before generating again."
         case .providerTimeout:
             return "The generation service took too long to respond. Please try again."
-        case .providerRateLimited(let retryAfter):
-            if let retryAfter {
-                return "The generation provider is rate limited. Please retry in \(retryAfter) second\(retryAfter == 1 ? "" : "s")."
-            }
+        case .providerInsufficientQuota:
+            return "The generation provider account has no available API quota. Check OpenAI billing, usage limits, or project budget."
+        case .providerRateLimited:
             return "The generation provider is rate limited. Please try again shortly."
         case .providerOverloaded:
             return "The generation service is temporarily busy. Please try again in a moment."
@@ -192,12 +192,11 @@ enum GenerationBackendServiceError: Error, LocalizedError {
             }
             return "You're generating too quickly. Please wait a moment."
         case .providerTimeout:
-            return "Generation timed out. Please try again."
-        case .providerRateLimited(let retryAfter):
-            if let retryAfter {
-                return "Provider rate limited. Try again in \(retryAfter) second\(retryAfter == 1 ? "" : "s")."
-            }
-            return "Provider rate limited. Please try again shortly."
+            return "The generation service took too long to respond. Please try again."
+        case .providerInsufficientQuota:
+            return "The generation provider account has no available API quota. Check OpenAI billing, usage limits, or project budget."
+        case .providerRateLimited:
+            return "The generation provider is rate limited. Please try again shortly."
         case .providerOverloaded:
             return "Generation service is busy. Please try again in a moment."
         case .providerRejected:
@@ -430,6 +429,8 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
                         )
                     case "provider_timeout":
                         throw GenerationBackendServiceError.providerTimeout
+                    case "provider_insufficient_quota":
+                        throw GenerationBackendServiceError.providerInsufficientQuota
                     case "provider_rate_limited":
                         throw GenerationBackendServiceError.providerRateLimited(
                             retryAfterSeconds: decoded.retryAfterSeconds

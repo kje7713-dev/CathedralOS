@@ -159,6 +159,7 @@ struct GenerationResponse: Codable {
     // MARK: Credit enforcement fields
     /// Machine-readable error code for structured error handling.
     /// Defined values: "insufficient_credits" | "rate_limited" | "provider_timeout"
+    ///                 | "provider_insufficient_quota" | "provider_rate_limited"
     ///                 | "provider_overloaded" | "provider_rejected" | "invalid_request"
     ///                 | "unauthenticated" | "backend_config_missing" | "unknown"
     let errorCode: String?
