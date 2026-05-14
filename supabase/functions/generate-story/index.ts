@@ -19,8 +19,9 @@
 //   Credit cost is computed server-side from generationLengthMode.
 //   Client-submitted cost values are IGNORED.
 //   Insufficient credits → 402 with errorCode "insufficient_credits".
-//   Credits are charged ONLY after a successful LLM response.
-//   A failed LLM call does NOT charge credits.
+//   Credits are charged ONLY after a successful LLM response has been
+//   persisted to generation_outputs.
+//   A failed LLM call or persistence error does NOT charge credits.
 //
 // Rate limiting (per user, rolling windows):
 //   5  requests / minute
@@ -121,6 +122,78 @@ interface GenerateStoryRequest {
   localGenerationID?: string;
 }
 
+interface GenerationOutputInsert {
+  user_id: string;
+  local_generation_id: string | null;
+  project_name: string;
+  prompt_pack_name: string;
+  title: string;
+  output_text: string;
+  source_payload_json: unknown;
+  model_name: string;
+  generation_action: GenerationAction;
+  generation_length_mode: LengthMode;
+  output_budget: number;
+  status: "complete";
+  visibility: "private";
+}
+
+interface GenerationUsageEventInsert {
+  user_id: string;
+  generation_output_id: string | null;
+  action: GenerationAction;
+  model_name: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  generation_length_mode: LengthMode;
+  output_budget: number;
+  status: "complete" | "failed";
+}
+
+interface GenerationPersistenceStore {
+  insertOutput(
+    row: GenerationOutputInsert,
+  ): Promise<{ data: { id: string } | null; error: unknown | null }>;
+  insertUsageEvent(
+    row: GenerationUsageEventInsert,
+  ): Promise<{ error: unknown | null }>;
+}
+
+class SupabaseGenerationPersistenceStore implements GenerationPersistenceStore {
+  // deno-lint-ignore no-explicit-any
+  private readonly db: any;
+
+  // deno-lint-ignore no-explicit-any
+  constructor(adminClient: any) {
+    this.db = adminClient;
+  }
+
+  insertOutput(
+    row: GenerationOutputInsert,
+  ): Promise<{ data: { id: string } | null; error: unknown | null }> {
+    return this.db
+      .from("generation_outputs")
+      .insert(row)
+      .select("id")
+      .single();
+  }
+
+  async insertUsageEvent(
+    row: GenerationUsageEventInsert,
+  ): Promise<{ error: unknown | null }> {
+    const { error } = await this.db.from("generation_usage_events").insert(row);
+    return { error };
+  }
+}
+
+interface HandlerDependencies {
+  provider?: LLMProvider;
+  creditStore?: CreditStore;
+  rateLimitStore?: RateLimitStore;
+  authenticatedUserId?: string;
+  persistenceStore?: GenerationPersistenceStore;
+}
+
 // ---------------------------------------------------------------------------
 // Prompt builder
 // ---------------------------------------------------------------------------
@@ -207,20 +280,37 @@ function extractTitle(text: string, fallback: string): string {
   return fallback || "";
 }
 
+function describeError(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error.length > 0) return error;
+
+  try {
+    const serialized = JSON.stringify(error);
+    if (serialized && serialized !== "{}") return serialized;
+  } catch {
+    // Ignore serialization failures and fall back to the supplied message.
+  }
+
+  return fallback;
+}
+
 // ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
 
 async function handler(
   req: Request,
-  // provider, creditStore, rateLimitStore are for test injection only.
-  // In production these are resolved from env vars.
-  provider?: LLMProvider,
-  creditStore?: CreditStore,
-  rateLimitStore?: RateLimitStore,
+  deps: HandlerDependencies = {},
 ): Promise<Response> {
   const requestStartMs = Date.now();
   const requestId = crypto.randomUUID();
+  const {
+    provider,
+    creditStore,
+    rateLimitStore,
+    authenticatedUserId,
+    persistenceStore: injectedPersistenceStore,
+  } = deps;
 
   // Preflight
   if (req.method === "OPTIONS") {
@@ -238,52 +328,56 @@ async function handler(
   // Auth -- reject unauthenticated requests; derive user_id from JWT
   // -------------------------------------------------------------------------
 
-  const authHeader = req.headers.get("Authorization");
-  if (!authHeader) {
-    return corsResponse(
-      JSON.stringify({
-        status: "failed",
-        errorCode: "unauthenticated",
-        errorMessage: "Unauthorized",
-      }),
-      { status: 401 },
-    );
-  }
-
   const supabaseURL = Deno.env.get("SUPABASE_URL");
-  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
-  if (!supabaseURL || !supabaseAnonKey) {
-    return corsResponse(
-      JSON.stringify({
-        status: "failed",
-        errorCode: "backend_config_missing",
-        errorMessage: "Server configuration error",
-      }),
-      { status: 500 },
-    );
+  let userId = authenticatedUserId;
+
+  if (!userId) {
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return corsResponse(
+        JSON.stringify({
+          status: "failed",
+          errorCode: "unauthenticated",
+          errorMessage: "Unauthorized",
+        }),
+        { status: 401 },
+      );
+    }
+
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
+    if (!supabaseURL || !supabaseAnonKey) {
+      return corsResponse(
+        JSON.stringify({
+          status: "failed",
+          errorCode: "backend_config_missing",
+          errorMessage: "Server configuration error",
+        }),
+        { status: 500 },
+      );
+    }
+
+    const userClient = createClient(supabaseURL, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const {
+      data: { user },
+      error: authError,
+    } = await userClient.auth.getUser();
+
+    if (authError || !user) {
+      return corsResponse(
+        JSON.stringify({
+          status: "failed",
+          errorCode: "unauthenticated",
+          errorMessage: "Unauthorized",
+        }),
+        { status: 401 },
+      );
+    }
+
+    userId = user.id;
   }
-
-  const userClient = createClient(supabaseURL, supabaseAnonKey, {
-    global: { headers: { Authorization: authHeader } },
-  });
-
-  const {
-    data: { user },
-    error: authError,
-  } = await userClient.auth.getUser();
-
-  if (authError || !user) {
-    return corsResponse(
-      JSON.stringify({
-        status: "failed",
-        errorCode: "unauthenticated",
-        errorMessage: "Unauthorized",
-      }),
-      { status: 401 },
-    );
-  }
-
-  const userId = user.id;
 
   // -------------------------------------------------------------------------
   // Build service-role client for credit and rate-limit operations.
@@ -294,13 +388,18 @@ async function handler(
 
   let store: CreditStore;
   let limiter: RateLimitStore;
+  let persistence: GenerationPersistenceStore;
+  const needsAdminClient =
+    creditStore === undefined ||
+    rateLimitStore === undefined ||
+    injectedPersistenceStore === undefined;
+  let adminClient:
+    // deno-lint-ignore no-explicit-any
+    any | undefined;
 
-  if (creditStore !== undefined && rateLimitStore !== undefined) {
-    store = creditStore;
-    limiter = rateLimitStore;
-  } else {
+  if (needsAdminClient) {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (!serviceRoleKey) {
+    if (!supabaseURL || !serviceRoleKey) {
       return corsResponse(
         JSON.stringify({
           status: "failed",
@@ -310,10 +409,18 @@ async function handler(
         { status: 500 },
       );
     }
-    const adminClient = createClient(supabaseURL, serviceRoleKey);
+    adminClient = createClient(supabaseURL, serviceRoleKey);
+  }
+
+  if (creditStore !== undefined && rateLimitStore !== undefined) {
+    store = creditStore;
+    limiter = rateLimitStore;
+  } else {
     store = new SupabaseCreditStore(adminClient);
     limiter = new SupabaseRateLimitStore(adminClient);
   }
+
+  persistence = injectedPersistenceStore ?? new SupabaseGenerationPersistenceStore(adminClient);
 
   // -------------------------------------------------------------------------
   // Parse request body
@@ -563,7 +670,7 @@ async function handler(
     const providerErrorMessage = err instanceof Error ? err.message : "LLM provider error";
 
     // Best-effort: record a failed usage event for audit purposes.
-    await userClient.from("generation_usage_events").insert({
+    const { error: usageInsertError } = await persistence.insertUsageEvent({
       user_id: userId,
       generation_output_id: null,
       action: generationAction,
@@ -574,6 +681,10 @@ async function handler(
       output_budget: outputBudget,
       status: "failed",
     });
+
+    if (usageInsertError) {
+      console.error("[generate-story] generation_usage_events insert failed", usageInsertError);
+    }
 
     // Log the failed request.
     await limiter.recordRequest(userId, {
@@ -611,59 +722,87 @@ async function handler(
       ? JSON.parse(body.sourcePayloadJSON)
       : body.sourcePayloadJSON;
 
-  const { data: outputRow, error: outputInsertError } = await userClient
-    .from("generation_outputs")
-    .insert({
-      user_id: userId,
-      local_generation_id: body.localGenerationID ?? null,
-      project_name: projectName,
-      prompt_pack_name: promptPackName,
-      title,
-      output_text: generatedText,
-      source_payload_json: sourcePayloadForDB,
-      model_name: llmResult.modelName,
-      generation_action: generationAction,
-      generation_length_mode: generationLengthMode,
-      output_budget: outputBudget,
-      status: "complete",
-      visibility: "private",
-    })
-    .select("id")
-    .single();
+  const { data: outputRow, error: outputInsertError } = await persistence.insertOutput({
+    user_id: userId,
+    local_generation_id: body.localGenerationID ?? null,
+    project_name: projectName,
+    prompt_pack_name: promptPackName,
+    title,
+    output_text: generatedText,
+    source_payload_json: sourcePayloadForDB,
+    model_name: llmResult.modelName,
+    generation_action: generationAction,
+    generation_length_mode: generationLengthMode,
+    output_budget: outputBudget,
+    status: "complete",
+    visibility: "private",
+  });
 
-  if (outputInsertError) {
-    console.error("generation_outputs insert error:", outputInsertError);
+  if (outputInsertError || !outputRow?.id) {
+    const persistenceFailure =
+      outputInsertError ?? { message: "generation_outputs insert returned no row", outputRow };
+    console.error("[generate-story] generation_outputs insert failed", {
+      requestId,
+      userId,
+      error: outputInsertError ?? null,
+      outputRow: outputRow ?? null,
+    });
+
+    await limiter.recordRequest(userId, {
+      requestId,
+      action: generationAction,
+      generationLengthMode,
+      outputBudget,
+      status: "failed",
+      errorCode: "persistence_failed",
+      errorMessage: describeError(
+        persistenceFailure,
+        "Failed to persist generation output.",
+      ),
+      modelName: llmResult.modelName,
+      inputTokens: llmResult.inputTokens,
+      outputTokens: llmResult.outputTokens,
+      durationMs: Date.now() - requestStartMs,
+    });
+
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "persistence_failed",
+        errorMessage: "Failed to save generated output.",
+      }),
+      { status: 500 },
+    );
   }
 
-  const generationOutputId = outputRow?.id ?? null;
+  const generationOutputId = outputRow.id;
 
   // -------------------------------------------------------------------------
   // Persist generation_usage_events row
   // -------------------------------------------------------------------------
 
-  const { error: usageInsertError } = await userClient
-    .from("generation_usage_events")
-    .insert({
-      user_id: userId,
-      generation_output_id: generationOutputId,
-      action: generationAction,
-      model_name: llmResult.modelName,
-      input_tokens: llmResult.inputTokens ?? null,
-      output_tokens: llmResult.outputTokens ?? null,
-      generation_length_mode: generationLengthMode,
-      output_budget: outputBudget,
-      status: "complete",
-    });
+  const { error: usageInsertError } = await persistence.insertUsageEvent({
+    user_id: userId,
+    generation_output_id: generationOutputId,
+    action: generationAction,
+    model_name: llmResult.modelName,
+    input_tokens: llmResult.inputTokens ?? null,
+    output_tokens: llmResult.outputTokens ?? null,
+    generation_length_mode: generationLengthMode,
+    output_budget: outputBudget,
+    status: "complete",
+  });
 
   if (usageInsertError) {
-    console.error("generation_usage_events insert error:", usageInsertError);
+    console.error("[generate-story] generation_usage_events insert failed", usageInsertError);
   }
 
   // -------------------------------------------------------------------------
   // Charge credits -- only after successful generation
   //
-  // Credits are charged AFTER the LLM provider returns successfully.
-  // A failed LLM call (handled in the catch block above) does NOT charge.
+  // Credits are charged AFTER the LLM provider returns successfully and the
+  // output row is persisted.
+  // A failed LLM call or output persistence failure does NOT charge.
   // Monthly allowance is drained first; purchased balance is used second.
   // -------------------------------------------------------------------------
 

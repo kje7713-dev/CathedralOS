@@ -41,11 +41,12 @@ Supabase Edge Function (generate-story/index.ts)
     │  8. Build prompt from sourcePayloadJSON
     │  9. Call OpenAI via _provider.ts (secret key — never touches client, 30 s timeout)
     │  10. If provider fails: record usage event (failed), log request, return classified error
-    │  11. Insert generation_outputs row
-    │  12. Insert generation_usage_events row
-    │  13. Charge credits: update user_entitlements, insert user_credit_ledger row
-    │  14. Log request metadata to generation_request_logs
-    │  15. Return generated text + creditCostCharged + remainingCredits
+    │  11. Insert generation_outputs row with the service-role client
+    │  12. If generation_outputs insert fails: log full DB error, record failed request, return 500
+    │  13. Insert generation_usage_events row
+    │  14. Charge credits: update user_entitlements, insert user_credit_ledger row
+    │  15. Log request metadata to generation_request_logs
+    │  16. Return generated text + creditCostCharged + remainingCredits
     ▼
 Postgres (generation_outputs + generation_usage_events + user_entitlements +
           user_credit_ledger + generation_request_logs)
@@ -274,7 +275,7 @@ credits.
 | `405` | Wrong HTTP method |
 | `422` | Validation error — invalid enum value, missing required field, or oversized payload (`errorCode: "invalid_request"`) |
 | `429` | Rate limit exceeded (`errorCode: "rate_limited"`, includes `retryAfterSeconds`) |
-| `500` | Server configuration error (`errorCode: "backend_config_missing"`) |
+| `500` | Server configuration error (`errorCode: "backend_config_missing"`) or output persistence failure (`errorCode: "persistence_failed"`) |
 | `502` | LLM provider call failed (`errorCode: "provider_rejected"` or `"provider_overloaded"`) |
 | `504` | LLM provider timed out (`errorCode: "provider_timeout"`) |
 
@@ -352,7 +353,7 @@ On a successful generation the function inserts:
 | Column | Value |
 |---|---|
 | `user_id` | From JWT |
-| `generation_output_id` | UUID of the inserted output row (nullable on insert failure) |
+| `generation_output_id` | UUID of the inserted output row (nullable on provider failure) |
 | `action` | `generationAction` |
 | `model_name` | Model name |
 | `input_tokens` | Reported by provider (nullable) |
@@ -361,9 +362,10 @@ On a successful generation the function inserts:
 | `output_budget` | Server-capped budget |
 | `status` | `"complete"` or `"failed"` |
 
-A `generation_usage_events` row with `status: "failed"` is inserted even when
-the LLM provider call fails, so usage anomalies can be audited. No
-`generation_outputs` row is inserted on failure.
+A `generation_usage_events` row with `status: "failed"` is inserted when the
+LLM provider call fails, so usage anomalies can be audited. If
+`generation_outputs` persistence fails after generation, the request returns
+`500`, no usage event is inserted, and credits are not charged.
 
 ---
 
