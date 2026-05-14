@@ -50,3 +50,7 @@ jobs:
       - name: Deploy Edge Function - backend-health
         if: ${{ hashFiles('supabase/functions/backend-health/index.ts') != '' }}
         run: supabase functions deploy backend-health --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy Edge Function - generation-models
+        if: ${{ hashFiles('supabase/functions/generation-models/index.ts') != '' }}
+        run: supabase functions deploy generation-models --project-ref "$SUPABASE_PROJECT_REF"
