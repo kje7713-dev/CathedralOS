@@ -133,6 +133,7 @@ final class BackendPublicSharingService: PublicSharingService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
+        decorateRequestHeaders(&request)
 
         let (data, urlResponse) = try await performRequest(request)
         try validateResponse(urlResponse, data: data)
@@ -158,6 +159,7 @@ final class BackendPublicSharingService: PublicSharingService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        decorateRequestHeaders(&request)
 
         let (data, urlResponse) = try await performRequest(request)
         try validateResponse(urlResponse, data: data)
@@ -172,6 +174,7 @@ final class BackendPublicSharingService: PublicSharingService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        decorateRequestHeaders(&request)
 
         let (data, urlResponse) = try await performRequest(request)
         try validateResponse(urlResponse, data: data)
@@ -195,6 +198,7 @@ final class BackendPublicSharingService: PublicSharingService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        decorateRequestHeaders(&request)
 
         let (data, urlResponse) = try await performRequest(request)
         try validateResponse(urlResponse, data: data)
@@ -239,6 +243,7 @@ final class BackendPublicSharingService: PublicSharingService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
+        decorateRequestHeaders(&request)
 
         let (data, urlResponse) = try await performRequest(request)
         try validateResponse(urlResponse, data: data)
@@ -262,6 +267,16 @@ final class BackendPublicSharingService: PublicSharingService {
             return try await session.data(for: request)
         } catch {
             throw PublicSharingServiceError.networkError(error)
+        }
+    }
+
+    private func decorateRequestHeaders(_ request: inout URLRequest) {
+        if let anonKey = SupabaseConfiguration.anonKey, !anonKey.isEmpty {
+            request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        }
+        if let token = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
     }
 
