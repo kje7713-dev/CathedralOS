@@ -119,6 +119,10 @@ function buildShareURL(baseURL: string | null, sharedOutputID: string): string |
   return `${trimmed}/shared/${sharedOutputID}`;
 }
 
+function asISOString(value: unknown): string {
+  return typeof value === "string" && value ? value : new Date().toISOString();
+}
+
 export async function handler(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -191,7 +195,7 @@ export async function handler(req: Request): Promise<Response> {
         shareTitle: typeof row.share_title === "string" ? row.share_title : "",
         shareExcerpt: typeof row.share_excerpt === "string" ? row.share_excerpt : "",
         authorDisplayName: displayNameByUserId.get(ownerUserID) ?? null,
-        createdAt: typeof row.published_at === "string" ? row.published_at : row.created_at,
+        createdAt: typeof row.published_at === "string" ? row.published_at : asISOString(row.created_at),
         allowRemix: Boolean(row.allow_remix),
         generationLengthMode: typeof row.generation_length_mode === "string" ? row.generation_length_mode : null,
         contentRating: audience.contentRating,
@@ -268,7 +272,9 @@ export async function handler(req: Request): Promise<Response> {
           ? (data as Record<string, unknown>).generation_length_mode
           : null,
         allowRemix,
-        createdAt: (data as Record<string, unknown>).published_at ?? (data as Record<string, unknown>).created_at,
+        createdAt: asISOString(
+          (data as Record<string, unknown>).published_at ?? (data as Record<string, unknown>).created_at,
+        ),
         shareURL: buildShareURL(publicShareBaseURL, sharedOutputID),
         readingLevel: audience.readingLevel,
         contentRating: audience.contentRating,
