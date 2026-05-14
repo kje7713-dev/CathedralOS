@@ -377,9 +377,13 @@ struct PromptPackPreviewView: View {
                 }
                 .pickerStyle(.menu)
                 if let selectedModel {
-                    Text("\(selectedModel.description ?? "No description.") • Relative cost \(selectedModel.relativeCostLabel) • Minimum \(selectedModel.minimumChargeCredits) \(selectedModel.minimumChargeCredits == 1 ? "credit" : "credits")")
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(selectedModel.description ?? "No description.")
+                        Text("Relative cost: \(selectedModel.relativeCostLabel)")
+                        Text("Minimum: \(selectedModel.minimumChargeCredits) \(selectedModel.minimumChargeCredits == 1 ? "credit" : "credits")")
+                    }
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
             }
         }
