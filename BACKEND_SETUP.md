@@ -61,12 +61,12 @@ the `INFOPLIST_KEY_` prefix):
    <key>SupabaseProjectURL</key>
    <string>$(SUPABASE_PROJECT_URL)</string>
 
-    <key>SupabaseAnonKey</key>
-    <string>$(SUPABASE_ANON_KEY)</string>
+   <key>SupabaseAnonKey</key>
+   <string>$(SUPABASE_ANON_KEY)</string>
 
-    <key>PublicSharingBaseURL</key>
-    <string>$(PUBLIC_SHARING_BASE_URL)</string>
-    ```
+   <key>PublicSharingBaseURL</key>
+   <string>$(PUBLIC_SHARING_BASE_URL)</string>
+   ```
 
 4. Assign each `.xcconfig` file to the corresponding build configuration in
    Xcode → Project → Info → Configurations.
