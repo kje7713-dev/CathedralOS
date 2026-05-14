@@ -394,7 +394,7 @@ async function handler(
     injectedPersistenceStore === undefined;
   let adminClient:
     // deno-lint-ignore no-explicit-any
-    any | undefined;
+    any | null = null;
 
   if (needsAdminClient) {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -415,11 +415,20 @@ async function handler(
     store = creditStore;
     limiter = rateLimitStore;
   } else {
+    if (!adminClient) {
+      throw new Error("adminClient is required for credit and rate-limit persistence");
+    }
     store = new SupabaseCreditStore(adminClient);
     limiter = new SupabaseRateLimitStore(adminClient);
   }
 
-  const persistence = injectedPersistenceStore ?? new SupabaseGenerationPersistenceStore(adminClient);
+  const persistence = injectedPersistenceStore ??
+    (() => {
+      if (!adminClient) {
+        throw new Error("adminClient is required for generation persistence");
+      }
+      return new SupabaseGenerationPersistenceStore(adminClient);
+    })();
 
   // -------------------------------------------------------------------------
   // Parse request body
@@ -739,7 +748,7 @@ async function handler(
 
   if (outputInsertError || !outputRow?.id) {
     const persistenceFailure =
-      outputInsertError ?? { message: "generation_outputs insert returned no row", outputRow };
+      outputInsertError ?? new Error("generation_outputs insert returned no row");
     console.error("[generate-story] generation_outputs insert failed", {
       requestId,
       userId,
