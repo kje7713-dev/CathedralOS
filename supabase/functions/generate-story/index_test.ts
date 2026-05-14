@@ -25,6 +25,8 @@
 //   21. Provider timeout mapped to provider_timeout error code
 //   22. RATE_LIMITS constants are present and positive
 //   23. PROVIDER_TIMEOUT_MS is defined and positive
+//   24. generation_outputs insert failure returns 500 and does not charge credits
+//   25. Missing generation_outputs row is treated as a failed persistence result
 //
 // All tests use mocks. No live OpenAI calls. No live Supabase calls.
 // =============================================================================
@@ -221,6 +223,56 @@ function makeMockRateLimitStore(
     recordRequest(_userId: string, params: RequestLogParams): Promise<void> {
       state.recordRequestCalls.push(params);
       return Promise.resolve();
+    },
+  };
+
+  return { store, state };
+}
+
+// ---------------------------------------------------------------------------
+// Mock persistence store
+// ---------------------------------------------------------------------------
+
+interface MockPersistenceStoreState {
+  outputInsertCalls: Array<Record<string, unknown>>;
+  usageInsertCalls: Array<Record<string, unknown>>;
+  outputInsertResult: {
+    data: { id: string } | null;
+    error: unknown | null;
+  };
+  usageInsertError: unknown | null;
+}
+
+function makeMockPersistenceStore(
+  overrides: Partial<MockPersistenceStoreState["outputInsertResult"]> = {},
+): {
+  store: {
+    insertOutput(row: Record<string, unknown>): Promise<{ data: { id: string } | null; error: unknown | null }>;
+    insertUsageEvent(row: Record<string, unknown>): Promise<{ error: unknown | null }>;
+  };
+  state: MockPersistenceStoreState;
+} {
+  const state: MockPersistenceStoreState = {
+    outputInsertCalls: [],
+    usageInsertCalls: [],
+    outputInsertResult: {
+      data: { id: FAKE_OUTPUT_ID },
+      error: null,
+      ...overrides,
+    },
+    usageInsertError: null,
+  };
+
+  const store = {
+    insertOutput(
+      row: Record<string, unknown>,
+    ): Promise<{ data: { id: string } | null; error: unknown | null }> {
+      state.outputInsertCalls.push(row);
+      return Promise.resolve(state.outputInsertResult);
+    },
+    insertUsageEvent(row: Record<string, unknown>): Promise<{ error: unknown | null }> {
+      state.usageInsertCalls.push(row);
+      return Promise.resolve({ error: state.usageInsertError });
     },
   };
 
@@ -784,6 +836,73 @@ Deno.test("MockRateLimitStore: recordRequest called with failed status on provid
   assertEquals(state.recordRequestCalls.length, 1);
   assertEquals(state.recordRequestCalls[0].status, "failed");
   assertEquals(state.recordRequestCalls[0].errorCode, "provider_timeout");
+});
+
+Deno.test("handler: generation_outputs insert failure returns failed response and does not charge credits", async () => {
+  const { store: creditStore, state: creditState } = makeMockCreditStore(
+    makeEntitlement({ monthly_credit_allowance: 10 }),
+  );
+  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore({
+    data: null,
+    error: {
+      code: "23505",
+      message: "duplicate key value violates unique constraint",
+      details: "Key (local_generation_id) already exists.",
+    },
+  });
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest()), {
+    provider: _mockSuccessProvider,
+    creditStore,
+    rateLimitStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+
+  const body = await resp.json();
+  assertEquals(resp.status, 500);
+  assertEquals(body.status, "failed");
+  assertEquals(body.errorCode, "persistence_failed");
+  assertEquals(creditState.chargeCalls.length, 0);
+  assertEquals(persistenceState.outputInsertCalls.length, 1);
+  assertEquals(persistenceState.usageInsertCalls.length, 0);
+  assertEquals(rateLimitState.recordRequestCalls.length, 1);
+  assertEquals(rateLimitState.recordRequestCalls[0].status, "failed");
+  assertEquals(rateLimitState.recordRequestCalls[0].errorCode, "persistence_failed");
+});
+
+Deno.test("handler: missing generation_outputs row is treated as persistence failure", async () => {
+  const { store: creditStore, state: creditState } = makeMockCreditStore(
+    makeEntitlement({ monthly_credit_allowance: 10 }),
+  );
+  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore({
+    data: null,
+    error: null,
+  });
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest()), {
+    provider: _mockSuccessProvider,
+    creditStore,
+    rateLimitStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+
+  const body = await resp.json();
+  assertEquals(resp.status, 500);
+  assertEquals(body.status, "failed");
+  assertEquals(body.errorCode, "persistence_failed");
+  assertEquals(creditState.chargeCalls.length, 0);
+  assertEquals(persistenceState.outputInsertCalls.length, 1);
+  assertEquals(persistenceState.usageInsertCalls.length, 0);
+  assertEquals(rateLimitState.recordRequestCalls.length, 1);
+  assertEquals(rateLimitState.recordRequestCalls[0].status, "failed");
+  assertStringIncludes(
+    String(rateLimitState.recordRequestCalls[0].errorMessage),
+    "generation_outputs insert returned no row",
+  );
 });
 
 // =============================================================================
