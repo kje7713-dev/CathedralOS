@@ -277,6 +277,8 @@ final class BackendPublicSharingService: PublicSharingService {
         if let token = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        } else if let anonKey = SupabaseConfiguration.anonKey, !anonKey.isEmpty {
+            request.setValue("Bearer \(anonKey)", forHTTPHeaderField: "Authorization")
         }
     }
 
