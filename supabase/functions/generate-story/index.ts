@@ -30,7 +30,7 @@
 //   Exceeded limit → 429 with errorCode "rate_limited" + retryAfterSeconds.
 //
 // Provider timeout:
-//   OpenAI calls are aborted after PROVIDER_TIMEOUT_MS (30 s). A timed-out
+//   OpenAI calls are aborted after PROVIDER_TIMEOUT_MS (90 s). A timed-out
 //   request returns errorCode "provider_timeout" and does NOT charge credits.
 //
 // Observability:
@@ -48,7 +48,7 @@
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { buildProviderFromEnv, LLMProvider, ProviderError } from "./_provider.ts";
+import { buildProviderFromEnv, LLMProvider, ProviderError, PROVIDER_TIMEOUT_MS } from "./_provider.ts";
 import {
   ALLOWED_LENGTH_MODES,
   type LengthMode,
@@ -665,29 +665,43 @@ async function handler(
     // Credits are NOT charged on provider failure.
     let providerErrorCode = "unknown";
     let httpStatus = 502;
+    const isTimeout = err instanceof ProviderError && err.errorCode === "provider_timeout";
 
     if (err instanceof ProviderError) {
       providerErrorCode = err.errorCode;
-      if (err.errorCode === "provider_timeout") httpStatus = 504;
+      if (isTimeout) httpStatus = 504;
     }
 
     const providerErrorMessage = err instanceof Error ? err.message : "LLM provider error";
 
-    // Best-effort: record a failed usage event for audit purposes.
-    const { error: usageInsertError } = await persistence.insertUsageEvent({
-      user_id: userId,
-      generation_output_id: null,
-      action: generationAction,
-      model_name: modelDefault,
-      input_tokens: null,
-      output_tokens: null,
-      generation_length_mode: generationLengthMode,
-      output_budget: outputBudget,
-      status: "failed",
-    });
+    if (isTimeout) {
+      // Structured log so operators can confirm timeoutMs in logs.
+      console.error("[generate-story] provider_timeout", {
+        action: generationAction,
+        lengthMode: generationLengthMode,
+        timeoutMs: PROVIDER_TIMEOUT_MS,
+        model: modelDefault,
+      });
+    }
 
-    if (usageInsertError) {
-      console.error("[generate-story] generation_usage_events insert failed", usageInsertError);
+    // Best-effort: record a failed usage event for audit purposes.
+    // Skipped on provider_timeout — no output was produced and credits are not charged.
+    if (!isTimeout) {
+      const { error: usageInsertError } = await persistence.insertUsageEvent({
+        user_id: userId,
+        generation_output_id: null,
+        action: generationAction,
+        model_name: modelDefault,
+        input_tokens: null,
+        output_tokens: null,
+        generation_length_mode: generationLengthMode,
+        output_budget: outputBudget,
+        status: "failed",
+      });
+
+      if (usageInsertError) {
+        console.error("[generate-story] generation_usage_events insert failed", usageInsertError);
+      }
     }
 
     // Log the failed request.
