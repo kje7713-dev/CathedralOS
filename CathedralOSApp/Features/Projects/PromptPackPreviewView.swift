@@ -408,7 +408,7 @@ struct PromptPackPreviewView: View {
                 Image(systemName: "bolt.circle")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                Text("Estimated minimum \(selectedCreditCost) \(selectedCreditCost == 1 ? "credit" : "credits")")
+                Text("Absolute minimum \(selectedCreditCost) \(selectedCreditCost == 1 ? "credit" : "credits")")
                     .font(CathedralTheme.Typography.label(11, weight: .regular))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 Spacer()

@@ -111,7 +111,10 @@ export function normalizedModelId(selectedModelId: unknown): string {
 
 export function estimateTokensFromText(text: string): number {
   if (!text.trim()) return 0;
-  return Math.max(1, Math.ceil(text.length / 4));
+  // Conservative heuristic to avoid under-estimating preflight charge.
+  // Uses ~3 chars/token plus 25% safety headroom.
+  const baseEstimate = Math.ceil(text.length / 3);
+  return Math.max(1, Math.ceil(baseEstimate * 1.25));
 }
 
 export function computeEstimatedCharge(
