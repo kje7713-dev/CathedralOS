@@ -388,7 +388,6 @@ async function handler(
 
   let store: CreditStore;
   let limiter: RateLimitStore;
-  let persistence: GenerationPersistenceStore;
   const needsAdminClient =
     creditStore === undefined ||
     rateLimitStore === undefined ||
@@ -420,7 +419,7 @@ async function handler(
     limiter = new SupabaseRateLimitStore(adminClient);
   }
 
-  persistence = injectedPersistenceStore ?? new SupabaseGenerationPersistenceStore(adminClient);
+  const persistence = injectedPersistenceStore ?? new SupabaseGenerationPersistenceStore(adminClient);
 
   // -------------------------------------------------------------------------
   // Parse request body
