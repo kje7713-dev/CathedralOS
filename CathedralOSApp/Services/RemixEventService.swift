@@ -129,6 +129,7 @@ final class BackendRemixEventService: RemixEventServiceProtocol {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
+        decorateRequestHeaders(&request)
 
         let (data, urlResponse): (Data, URLResponse)
         do {
@@ -141,6 +142,16 @@ final class BackendRemixEventService: RemixEventServiceProtocol {
            !(200..<300).contains(http.statusCode) {
             let message = String(data: data, encoding: .utf8)
             throw RemixEventServiceError.serverError(statusCode: http.statusCode, message: message)
+        }
+    }
+
+    private func decorateRequestHeaders(_ request: inout URLRequest) {
+        if let anonKey = SupabaseConfiguration.anonKey, !anonKey.isEmpty {
+            request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        }
+        if let token = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
     }
 }

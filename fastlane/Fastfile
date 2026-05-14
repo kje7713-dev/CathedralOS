@@ -42,13 +42,14 @@ platform :ios do
   #                       certs/profiles; defaults to "true" (readonly)
   #   SUPABASE_PROJECT_URL — Supabase project URL (public, injected into Info.plist)
   #   SUPABASE_ANON_KEY    — Supabase anon/public key (injected into Info.plist)
+  #   PUBLIC_SHARING_BASE_URL — Public sharing API base URL (injected into Info.plist)
   # ---------------------------------------------------------------------------
   lane :beta do
     preflight_checks(%w[
       ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY
       APPLE_TEAM_ID APP_IDENTIFIER
       MATCH_GIT_URL MATCH_PASSWORD MATCH_GIT_TOKEN
-      SUPABASE_PROJECT_URL SUPABASE_ANON_KEY
+      SUPABASE_PROJECT_URL SUPABASE_ANON_KEY PUBLIC_SHARING_BASE_URL
     ])
 
     ci_environment = is_ci
@@ -103,7 +104,8 @@ platform :ios do
     # or DB passwords.
     xcargs_parts = [
       "SUPABASE_PROJECT_URL=#{ENV['SUPABASE_PROJECT_URL'].to_s.shellescape}",
-      "SUPABASE_ANON_KEY=#{ENV['SUPABASE_ANON_KEY'].to_s.shellescape}"
+      "SUPABASE_ANON_KEY=#{ENV['SUPABASE_ANON_KEY'].to_s.shellescape}",
+      "PUBLIC_SHARING_BASE_URL=#{ENV['PUBLIC_SHARING_BASE_URL'].to_s.shellescape}"
     ]
     xcargs = xcargs_parts.join(" ")
 
@@ -167,12 +169,15 @@ platform :ios do
 
     url_present = !read_plist_value.call("SupabaseProjectURL").empty?
     anon_present = !read_plist_value.call("SupabaseAnonKey").empty?
+    public_sharing_present = !read_plist_value.call("PublicSharingBaseURL").empty?
 
     UI.message("Built IPA SupabaseProjectURL present: #{url_present ? 'yes' : 'no'}")
     UI.message("Built IPA SupabaseAnonKey present: #{anon_present ? 'yes' : 'no'}")
+    UI.message("Built IPA PublicSharingBaseURL present: #{public_sharing_present ? 'yes' : 'no'}")
 
     UI.user_error!("Built IPA is missing SupabaseProjectURL") unless url_present
     UI.user_error!("Built IPA is missing SupabaseAnonKey") unless anon_present
+    UI.user_error!("Built IPA is missing PublicSharingBaseURL") unless public_sharing_present
 
     # --- Upload to TestFlight ---
     upload_to_testflight(

@@ -149,7 +149,7 @@ xcodebuild build \
 
 See [`BACKEND_SETUP.md`](BACKEND_SETUP.md) for full instructions. Summary:
 
-1. Add `SupabaseProjectURL` and `SupabaseAnonKey` to `Info.plist` (or a `.xcconfig` file).
+1. Add `SupabaseProjectURL`, `SupabaseAnonKey`, and `PublicSharingBaseURL` to `Info.plist` (or a `.xcconfig` file).
 2. Do **not** commit these values to source control.
 3. If the keys are absent, the app runs in local-only mode and shows a "Backend not configured" warning in the Account tab.
 
@@ -239,6 +239,9 @@ Add these in **Settings → Secrets and variables → Actions → Repository sec
 | `MATCH_GIT_URL` | HTTPS URL of your private Match certificates repository |
 | `MATCH_PASSWORD` | Passphrase used to encrypt/decrypt Match assets |
 | `MATCH_GIT_TOKEN` | GitHub Personal Access Token (or equivalent) with read access to the Match repo; **write access required during bootstrap** |
+| `SUPABASE_PROJECT_URL` | Supabase project URL injected into the app Info.plist at build time |
+| `SUPABASE_ANON_KEY` | Supabase anon/public key injected into the app Info.plist at build time |
+| `PUBLIC_SHARING_BASE_URL` | Public sharing API base URL (e.g. `https://<project-ref>.supabase.co/functions/v1/public-sharing`) injected into Info.plist |
 
 **Encode the `.p8` key for `ASC_API_KEY`:**
 

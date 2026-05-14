@@ -54,3 +54,7 @@ jobs:
       - name: Deploy Edge Function - generation-models
         if: ${{ hashFiles('supabase/functions/generation-models/index.ts') != '' }}
         run: supabase functions deploy generation-models --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy Edge Function - public-sharing
+        if: ${{ hashFiles('supabase/functions/public-sharing/index.ts') != '' }}
+        run: supabase functions deploy public-sharing --project-ref "$SUPABASE_PROJECT_REF"

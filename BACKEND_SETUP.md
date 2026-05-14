@@ -13,6 +13,7 @@ stored in the app binary.
 |-----|-------------|
 | `SupabaseProjectURL` | Your Supabase project URL, e.g. `https://abcdef.supabase.co` |
 | `SupabaseAnonKey` | Your Supabase **public** anon key (safe to embed in the client) |
+| `PublicSharingBaseURL` | Public sharing API base URL, e.g. `https://abcdef.supabase.co/functions/v1/public-sharing` |
 
 ---
 
@@ -37,6 +38,9 @@ the `INFOPLIST_KEY_` prefix):
 
 <key>SupabaseAnonKey</key>
 <string>YOUR_ANON_PUBLIC_KEY</string>
+
+<key>PublicSharingBaseURL</key>
+<string>https://YOUR_PROJECT_REF.supabase.co/functions/v1/public-sharing</string>
 ```
 
 ### Option B — Per-scheme `.xcconfig` (recommended for dev / staging / prod)
@@ -48,6 +52,7 @@ the `INFOPLIST_KEY_` prefix):
    ```
    SUPABASE_PROJECT_URL = https://YOUR_PROJECT_REF.supabase.co
    SUPABASE_ANON_KEY = YOUR_ANON_PUBLIC_KEY
+   PUBLIC_SHARING_BASE_URL = https://YOUR_PROJECT_REF.supabase.co/functions/v1/public-sharing
    ```
 
 3. Reference the variables in `Info.plist`:
@@ -56,9 +61,12 @@ the `INFOPLIST_KEY_` prefix):
    <key>SupabaseProjectURL</key>
    <string>$(SUPABASE_PROJECT_URL)</string>
 
-   <key>SupabaseAnonKey</key>
-   <string>$(SUPABASE_ANON_KEY)</string>
-   ```
+    <key>SupabaseAnonKey</key>
+    <string>$(SUPABASE_ANON_KEY)</string>
+
+    <key>PublicSharingBaseURL</key>
+    <string>$(PUBLIC_SHARING_BASE_URL)</string>
+    ```
 
 4. Assign each `.xcconfig` file to the corresponding build configuration in
    Xcode → Project → Info → Configurations.
@@ -73,6 +81,7 @@ Set the following secrets in your CI environment (e.g. GitHub Actions secrets):
 
 - `SUPABASE_PROJECT_URL`
 - `SUPABASE_ANON_KEY`
+- `PUBLIC_SHARING_BASE_URL`
 
 Inject them into the build using `-xcconfig` or `INFOPLIST_FILE_KEY` arguments:
 
@@ -82,7 +91,8 @@ Inject them into the build using `-xcconfig` or `INFOPLIST_FILE_KEY` arguments:
     xcodebuild \
       -scheme CathedralOSApp \
       SUPABASE_PROJECT_URL="${{ secrets.SUPABASE_PROJECT_URL }}" \
-      SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}"
+      SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}" \
+      PUBLIC_SHARING_BASE_URL="${{ secrets.PUBLIC_SHARING_BASE_URL }}"
 ```
 
 ---
