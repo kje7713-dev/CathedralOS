@@ -344,7 +344,15 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         }
 
         let url = client.edgeFunctionURL(path: SupabaseConfiguration.generationEdgeFunctionPath)
-        var urlRequest = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
+        let userAccessToken: String
+        do {
+            userAccessToken = try await resolveAccessTokenForRequest()
+        } catch {
+            await recordNoRequestSent(action: requestBody.action ?? "generate", underlyingError: error)
+            throw error
+        }
+
+        var urlRequest = client.authorizedRequest(for: url, userAccessToken: userAccessToken)
         urlRequest.httpMethod = "POST"
 
         let encoder = JSONEncoder()
@@ -504,6 +512,36 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             rawResponseBody: rawResponseBody,
             underlyingSwiftError: underlyingError.map { String(describing: $0) }
         )
+    }
+
+    /// Retrieves a fresh session immediately before each backend request and returns
+    /// the current non-empty access token for Authorization.
+    private func resolveAccessTokenForRequest() async throws -> String {
+        await authService.checkSession()
+        guard authService.authState.isSignedIn else {
+            throw GenerationBackendServiceError.notSignedIn
+        }
+
+        do {
+            try await authService.refreshSession()
+        } catch AuthServiceError.sessionExpired {
+            throw GenerationBackendServiceError.notSignedIn
+        } catch AuthServiceError.notConfigured {
+            throw GenerationBackendServiceError.notConfigured
+        } catch {
+            throw GenerationBackendServiceError.networkError(error)
+        }
+
+        await authService.checkSession()
+        guard authService.authState.isSignedIn else {
+            throw GenerationBackendServiceError.notSignedIn
+        }
+
+        let token = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let token, !token.isEmpty else {
+            throw GenerationBackendServiceError.notSignedIn
+        }
+        return token
     }
 
     internal static func responseBodyString(from data: Data) -> String {
