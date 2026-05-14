@@ -27,7 +27,8 @@ final class MockGenerationService: GenerationService {
         project: StoryProject,
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String?
     ) async throws -> GenerationResponse {
         callCount += 1
         lastProject = project

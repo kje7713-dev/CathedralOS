@@ -38,7 +38,8 @@ protocol GenerationService {
         project: StoryProject,
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String?
     ) async throws -> GenerationResponse
 
     /// Submits a derived generation action (regenerate / continue / remix) using
@@ -50,14 +51,42 @@ protocol GenerationService {
         previousOutputText: String?,
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String?
     ) async throws -> GenerationResponse
 }
 
 // MARK: - Default implementation
 
 extension GenerationService {
+    func generate(
+        project: StoryProject,
+        pack: PromptPack,
+        requestedOutputType: GenerationOutputType,
+        lengthMode: GenerationLengthMode
+    ) async throws -> GenerationResponse {
+        try await generate(
+            project: project,
+            pack: pack,
+            requestedOutputType: requestedOutputType,
+            lengthMode: lengthMode,
+            selectedModelId: nil
+        )
+    }
+
     /// Default no-op so conformers that only need `generate` don't break.
+    func generateAction(
+        action: String,
+        sourcePayloadJSON: String,
+        previousOutputText: String?,
+        parentGenerationID: UUID?,
+        requestedOutputType: GenerationOutputType,
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String? = nil
+    ) async throws -> GenerationResponse {
+        throw GenerationServiceError.endpointNotConfigured
+    }
+
     func generateAction(
         action: String,
         sourcePayloadJSON: String,
@@ -66,7 +95,15 @@ extension GenerationService {
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode
     ) async throws -> GenerationResponse {
-        throw GenerationServiceError.endpointNotConfigured
+        try await generateAction(
+            action: action,
+            sourcePayloadJSON: sourcePayloadJSON,
+            previousOutputText: previousOutputText,
+            parentGenerationID: parentGenerationID,
+            requestedOutputType: requestedOutputType,
+            lengthMode: lengthMode,
+            selectedModelId: nil
+        )
     }
 }
 
@@ -91,7 +128,8 @@ final class StoryGenerationService: GenerationService {
         project: StoryProject,
         pack: PromptPack,
         requestedOutputType: GenerationOutputType = .story,
-        lengthMode: GenerationLengthMode = .defaultMode
+        lengthMode: GenerationLengthMode = .defaultMode,
+        selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
 
         // Build canonical frozen payload.
@@ -110,7 +148,8 @@ final class StoryGenerationService: GenerationService {
             audienceNotes: project.audienceNotes,
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
-            approximateMaxOutputTokens: lengthMode.outputBudget
+            approximateMaxOutputTokens: lengthMode.outputBudget,
+            selectedModelId: selectedModelId
         )
 
         return try await post(requestBody)
@@ -122,7 +161,8 @@ final class StoryGenerationService: GenerationService {
         previousOutputText: String?,
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode = .defaultMode
+        lengthMode: GenerationLengthMode = .defaultMode,
+        selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
 
         // Decode the frozen payload to reconstruct the full request.
@@ -151,6 +191,7 @@ final class StoryGenerationService: GenerationService {
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
             approximateMaxOutputTokens: lengthMode.outputBudget,
+            selectedModelId: selectedModelId,
             action: action,
             parentGenerationID: parentGenerationID?.uuidString,
             previousOutputText: previousOutputText

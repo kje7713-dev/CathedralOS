@@ -43,12 +43,17 @@ export interface RequestLogParams {
   action: string;
   generationLengthMode: string;
   outputBudget: number;
+  selectedModelId?: string;
+  providerModel?: string;
+  maxCompletionTokens?: number;
   status: string;
   errorCode?: string;
   errorMessage?: string;
   modelName?: string;
   inputTokens?: number;
   outputTokens?: number;
+  totalTokens?: number;
+  actualCharge?: number;
   durationMs?: number;
 }
 
@@ -154,12 +159,17 @@ export class SupabaseRateLimitStore implements RateLimitStore {
         action: params.action,
         generation_length_mode: params.generationLengthMode,
         output_budget: params.outputBudget,
+        selected_model_id: params.selectedModelId ?? null,
+        provider_model: params.providerModel ?? null,
+        max_completion_tokens: params.maxCompletionTokens ?? null,
         status: params.status,
         error_code: params.errorCode ?? null,
         error_message: params.errorMessage ?? null,
         model_name: params.modelName ?? null,
         input_tokens: params.inputTokens ?? null,
         output_tokens: params.outputTokens ?? null,
+        total_tokens: params.totalTokens ?? null,
+        actual_charge: params.actualCharge ?? null,
         duration_ms: params.durationMs ?? null,
       });
 

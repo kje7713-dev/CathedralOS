@@ -40,6 +40,8 @@ struct GenerationRequest: Codable {
     /// Derived from `GenerationLengthMode.outputBudget`; centralized there.
     /// Encodes as "outputBudget" to match the Edge Function contract.
     let approximateMaxOutputTokens: Int
+    /// Backend catalog model ID chosen by the user.
+    let selectedModelId: String?
 
     // MARK: Action controls
     /// The generation action: "generate" | "regenerate" | "continue" | "remix".
@@ -71,6 +73,7 @@ struct GenerationRequest: Codable {
         case requestedOutputType
         case generationLengthMode
         case approximateMaxOutputTokens = "outputBudget"
+        case selectedModelId
         case action                   = "generationAction"
         case parentGenerationID
         case previousOutputText
@@ -91,6 +94,7 @@ struct GenerationRequest: Codable {
         requestedOutputType: String,
         generationLengthMode: String = GenerationLengthMode.defaultMode.rawValue,
         approximateMaxOutputTokens: Int = GenerationLengthMode.defaultMode.outputBudget,
+        selectedModelId: String? = nil,
         action: String = "generate",
         parentGenerationID: String? = nil,
         previousOutputText: String? = nil,
@@ -109,6 +113,7 @@ struct GenerationRequest: Codable {
         self.requestedOutputType = requestedOutputType
         self.generationLengthMode = generationLengthMode
         self.approximateMaxOutputTokens = approximateMaxOutputTokens
+        self.selectedModelId = selectedModelId
         self.action = action
         self.parentGenerationID = parentGenerationID
         self.previousOutputText = previousOutputText
@@ -135,6 +140,7 @@ struct GenerationResponse: Codable {
     let generationLengthMode: String?
     /// Output token budget echoed back by the backend.
     let outputBudget: Int?
+    let selectedModelId: String?
 
     // MARK: Token usage (optional — may be omitted by the backend)
     let inputTokens: Int?
@@ -183,6 +189,7 @@ struct GenerationResponse: Codable {
         generationAction    = try c.decodeIfPresent(String.self, forKey: .generationAction)
         generationLengthMode = try c.decodeIfPresent(String.self, forKey: .generationLengthMode)
         outputBudget        = try c.decodeIfPresent(Int.self, forKey: .outputBudget)
+        selectedModelId     = try c.decodeIfPresent(String.self, forKey: .selectedModelId)
         inputTokens         = try c.decodeIfPresent(Int.self, forKey: .inputTokens)
         outputTokens        = try c.decodeIfPresent(Int.self, forKey: .outputTokens)
         localGenerationID   = try c.decodeIfPresent(String.self, forKey: .localGenerationID)

@@ -23,6 +23,7 @@ export const PROVIDER_TIMEOUT_MS = 90_000;
 
 export type ProviderErrorCode =
   | "provider_timeout"
+  | "provider_rate_limited"
   | "provider_overloaded"
   | "provider_rejected"
   | "invalid_request"
@@ -49,7 +50,7 @@ export class ProviderError extends Error {
  * Exported for unit testing.
  */
 export function classifyOpenAIStatus(status: number): ProviderErrorCode {
-  if (status === 429) return "provider_overloaded";
+  if (status === 429) return "provider_rate_limited";
   if (status === 401 || status === 403) return "provider_rejected";
   if (status === 400 || status === 422) return "invalid_request";
   if (status >= 500) return "provider_overloaded";
@@ -129,12 +130,14 @@ export interface LLMResponse {
   modelName: string;
   inputTokens?: number;
   outputTokens?: number;
+  totalTokens?: number;
 }
 
 export interface LLMProvider {
   complete(
     messages: LLMMessage[],
     maxTokens: number,
+    providerModel?: string,
   ): Promise<LLMResponse>;
 }
 
@@ -160,7 +163,9 @@ export class OpenAIProvider implements LLMProvider {
   async complete(
     messages: LLMMessage[],
     maxTokens: number,
+    providerModel?: string,
   ): Promise<LLMResponse> {
+    const resolvedModel = providerModel ?? this.model;
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(),
@@ -176,7 +181,7 @@ export class OpenAIProvider implements LLMProvider {
           Authorization: `Bearer ${this.apiKey}`,
         },
         body: JSON.stringify({
-          model: this.model,
+          model: resolvedModel,
           messages,
           max_completion_tokens: maxTokens,
         }),
@@ -187,7 +192,7 @@ export class OpenAIProvider implements LLMProvider {
       // AbortError → timeout; everything else is a network-level failure.
       if (err instanceof Error && err.name === "AbortError") {
         throw new ProviderError(
-          `OpenAI request timed out after ${this.timeoutMs}ms (model=${this.model})`,
+          `OpenAI request timed out after ${this.timeoutMs}ms (model=${resolvedModel})`,
           "provider_timeout",
           false,
         );
@@ -224,9 +229,10 @@ export class OpenAIProvider implements LLMProvider {
 
     return {
       content: choice.message?.content ?? "",
-      modelName: json.model ?? this.model,
+      modelName: json.model ?? resolvedModel,
       inputTokens: json.usage?.prompt_tokens,
       outputTokens: json.usage?.completion_tokens,
+      totalTokens: json.usage?.total_tokens,
     };
   }
 }

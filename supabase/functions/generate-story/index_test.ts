@@ -47,6 +47,7 @@ import {
   getCreditCost,
   type UserEntitlement,
 } from "./_credits.ts";
+import type { GenerationModelStore } from "./_generation_models.ts";
 import {
   classifyOpenAIStatus,
   OpenAIProvider,
@@ -147,7 +148,7 @@ function makeEntitlement(
     user_id: FAKE_USER_ID,
     plan_name: "free",
     is_pro: false,
-    monthly_credit_allowance: 10,
+      monthly_credit_allowance: 100_000,
     purchased_credit_balance: 0,
     current_period_start: null,
     current_period_end: null,
@@ -204,6 +205,64 @@ interface MockRateLimitStoreState {
   checkLimitsCalls: number;
   recordRequestCalls: RequestLogParams[];
   limitResult: RateLimitResult;
+}
+
+interface MockGenerationModelStoreState {
+  getEnabledModelByIdCalls: string[];
+  listEnabledModelsCalls: number;
+}
+
+function makeMockGenerationModelStore(
+  models: Array<{
+    id: string;
+    provider_model: string;
+    input_credit_rate?: number;
+    output_credit_rate?: number;
+    minimum_charge_credits?: number;
+    max_output_tokens?: number | null;
+    enabled?: boolean;
+  }> = [{
+    id: "gpt-4o-mini",
+    provider_model: "gpt-4o-mini",
+    input_credit_rate: 1,
+    output_credit_rate: 1,
+    minimum_charge_credits: 1,
+    max_output_tokens: null,
+    enabled: true,
+  }],
+): { store: GenerationModelStore; state: MockGenerationModelStoreState } {
+  const byId = new Map(models.map((model) => [model.id, model]));
+  const state: MockGenerationModelStoreState = {
+    getEnabledModelByIdCalls: [],
+    listEnabledModelsCalls: 0,
+  };
+  const store: GenerationModelStore = {
+    getEnabledModelById(modelId: string) {
+      state.getEnabledModelByIdCalls.push(modelId);
+      const row = byId.get(modelId);
+      if (!row || row.enabled === false) {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve({
+        id: row.id,
+        provider: "openai",
+        provider_model: row.provider_model,
+        display_name: row.id,
+        description: null,
+        input_credit_rate: row.input_credit_rate ?? 1,
+        output_credit_rate: row.output_credit_rate ?? 1,
+        minimum_charge_credits: row.minimum_charge_credits ?? 1,
+        max_output_tokens: row.max_output_tokens ?? null,
+        enabled: true,
+        sort_order: 0,
+      });
+    },
+    listEnabledModels() {
+      state.listEnabledModelsCalls += 1;
+      return Promise.resolve([]);
+    },
+  };
+  return { store, state };
 }
 
 function makeMockRateLimitStore(
@@ -538,8 +597,8 @@ Deno.test("expected credit state shape matches iOS DTO field names", () => {
 // 11. Provider error classification (classifyOpenAIStatus)
 // =============================================================================
 
-Deno.test("classifyOpenAIStatus: 429 -> provider_overloaded", () => {
-  assertEquals(classifyOpenAIStatus(429), "provider_overloaded");
+Deno.test("classifyOpenAIStatus: 429 -> provider_rate_limited", () => {
+  assertEquals(classifyOpenAIStatus(429), "provider_rate_limited");
 });
 
 Deno.test("classifyOpenAIStatus: 401 -> provider_rejected", () => {
@@ -585,6 +644,12 @@ Deno.test("ProviderError: carries errorCode and retryable flag", () => {
 Deno.test("ProviderError: provider_overloaded is retryable", () => {
   const err = new ProviderError("rate limit", "provider_overloaded", true);
   assertEquals(err.errorCode, "provider_overloaded");
+  assertEquals(err.retryable, true);
+});
+
+Deno.test("ProviderError: provider_rate_limited is retryable", () => {
+  const err = new ProviderError("rate limit", "provider_rate_limited", true);
+  assertEquals(err.errorCode, "provider_rate_limited");
   assertEquals(err.retryable, true);
 });
 
@@ -843,6 +908,7 @@ Deno.test("handler: generation_outputs insert failure returns failed response an
     makeEntitlement({ monthly_credit_allowance: 10 }),
   );
   const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
   const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore({
     data: null,
     error: {
@@ -856,6 +922,7 @@ Deno.test("handler: generation_outputs insert failure returns failed response an
     provider: _mockSuccessProvider,
     creditStore,
     rateLimitStore,
+    generationModelStore,
     authenticatedUserId: FAKE_USER_ID,
     persistenceStore,
   });
@@ -877,6 +944,7 @@ Deno.test("handler: missing generation_outputs row is treated as persistence fai
     makeEntitlement({ monthly_credit_allowance: 10 }),
   );
   const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
   const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore({
     data: null,
     error: null,
@@ -886,6 +954,7 @@ Deno.test("handler: missing generation_outputs row is treated as persistence fai
     provider: _mockSuccessProvider,
     creditStore,
     rateLimitStore,
+    generationModelStore,
     authenticatedUserId: FAKE_USER_ID,
     persistenceStore,
   });
@@ -1021,12 +1090,14 @@ Deno.test("handler: provider_timeout returns 504 and does not insert usage event
     makeEntitlement({ monthly_credit_allowance: 10 }),
   );
   const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
   const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
 
   const resp = await handler(makeAuthRequest(makeBaseRequest()), {
     provider: _mockTimeoutProvider,
     creditStore,
     rateLimitStore,
+    generationModelStore,
     authenticatedUserId: FAKE_USER_ID,
     persistenceStore,
   });
@@ -1045,4 +1116,244 @@ Deno.test("handler: provider_timeout returns 504 and does not insert usage event
   assertEquals(rateLimitState.recordRequestCalls.length, 1);
   assertEquals(rateLimitState.recordRequestCalls[0].status, "failed");
   assertEquals(rateLimitState.recordRequestCalls[0].errorCode, "provider_timeout");
+});
+
+Deno.test("handler: missing selectedModelId defaults to gpt-4o-mini", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore, state: modelState } = makeMockGenerationModelStore();
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest({ selectedModelId: undefined })), {
+    provider: _mockSuccessProvider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+  assertEquals(resp.status, 200);
+  assertEquals(body.selectedModelId, "gpt-4o-mini");
+  assertEquals(modelState.getEnabledModelByIdCalls[0], "gpt-4o-mini");
+});
+
+Deno.test("handler: valid selectedModelId routes to provider_model", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore([{
+    id: "gpt-4.1-mini",
+    provider_model: "gpt-4.1-mini",
+    input_credit_rate: 1,
+    output_credit_rate: 1,
+    minimum_charge_credits: 1,
+  }]);
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  let providerModelSeen: string | undefined;
+  const provider: LLMProvider = {
+    complete(_messages, _maxTokens, providerModel) {
+      providerModelSeen = providerModel;
+      return Promise.resolve({
+        content: "ok",
+        modelName: providerModel ?? "none",
+        inputTokens: 10,
+        outputTokens: 10,
+        totalTokens: 20,
+      });
+    },
+  };
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest({ selectedModelId: "gpt-4.1-mini" })), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  assertEquals(resp.status, 200);
+  assertEquals(providerModelSeen, "gpt-4.1-mini");
+});
+
+Deno.test("handler: disabled selectedModelId returns invalid_model", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore([{
+    id: "gpt-4.1-mini",
+    provider_model: "gpt-4.1-mini",
+    enabled: false,
+  }]);
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest({ selectedModelId: "gpt-4.1-mini" })), {
+    provider: _mockSuccessProvider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+  assertEquals(resp.status, 400);
+  assertEquals(body.errorCode, "invalid_model");
+});
+
+Deno.test("handler: unknown selectedModelId returns invalid_model", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest({ selectedModelId: "unknown-model-id" })), {
+    provider: _mockSuccessProvider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+  assertEquals(resp.status, 400);
+  assertEquals(body.errorCode, "invalid_model");
+});
+
+Deno.test("handler: raw model override fields are ignored", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore([{
+    id: "gpt-4.1-mini",
+    provider_model: "gpt-4.1-mini",
+  }]);
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  let providerModelSeen: string | undefined;
+  const provider: LLMProvider = {
+    complete(_messages, _maxTokens, providerModel) {
+      providerModelSeen = providerModel;
+      return Promise.resolve({
+        content: "ok",
+        modelName: providerModel ?? "none",
+        inputTokens: 5,
+        outputTokens: 5,
+      });
+    },
+  };
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest({
+    selectedModelId: "gpt-4.1-mini",
+    model: "hacked-model",
+    modelName: "hacked-model",
+    providerModel: "hacked-model",
+  })), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  assertEquals(resp.status, 200);
+  assertEquals(providerModelSeen, "gpt-4.1-mini");
+});
+
+Deno.test("handler: successful generation charges from actual usage and model rates", async () => {
+  const { store: creditStore, state: creditState } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore([{
+    id: "gpt-4.1-mini",
+    provider_model: "gpt-4.1-mini",
+    input_credit_rate: 2,
+    output_credit_rate: 2,
+    minimum_charge_credits: 1,
+  }]);
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const provider: LLMProvider = {
+    complete() {
+      return Promise.resolve({
+        content: "ok",
+        modelName: "gpt-4.1-mini",
+        inputTokens: 10,
+        outputTokens: 25,
+        totalTokens: 35,
+      });
+    },
+  };
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest({ selectedModelId: "gpt-4.1-mini" })), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+  assertEquals(resp.status, 200);
+  assertEquals(body.creditCostCharged, 70);
+  assertEquals(creditState.chargeCalls.length, 1);
+  assertEquals(creditState.chargeCalls[0].cost, 70);
+});
+
+Deno.test("handler: provider 429 maps to provider_rate_limited and charges 0", async () => {
+  const { store: creditStore, state: creditState } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const provider: LLMProvider = {
+    complete() {
+      return Promise.reject(new ProviderError("rate limited", "provider_rate_limited", true));
+    },
+  };
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest()), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+  assertEquals(resp.status, 429);
+  assertEquals(body.errorCode, "provider_rate_limited");
+  assertEquals(creditState.chargeCalls.length, 0);
+});
+
+Deno.test("handler: insufficient credits blocks before provider call", async () => {
+  const { store: creditStore } = makeMockCreditStore(
+    makeEntitlement({ monthly_credit_allowance: 0, purchased_credit_balance: 0 }),
+  );
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore([{
+    id: "gpt-4o-mini",
+    provider_model: "gpt-4o-mini",
+    input_credit_rate: 10,
+    output_credit_rate: 10,
+    minimum_charge_credits: 1,
+  }]);
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  let providerCalled = false;
+  const provider: LLMProvider = {
+    complete() {
+      providerCalled = true;
+      return Promise.resolve({ content: "ok", modelName: "gpt-4o-mini" });
+    },
+  };
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest()), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+  assertEquals(resp.status, 402);
+  assertEquals(body.errorCode, "insufficient_credits");
+  assertEquals(providerCalled, false);
 });

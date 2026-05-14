@@ -22,7 +22,8 @@ final class MockOutputActionService: GenerationService {
         project: StoryProject,
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String?
     ) async throws -> GenerationResponse {
         throw GenerationServiceError.endpointNotConfigured
     }
@@ -33,7 +34,8 @@ final class MockOutputActionService: GenerationService {
         previousOutputText: String?,
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String?
     ) async throws -> GenerationResponse {
         actionCallCount += 1
         lastAction = action

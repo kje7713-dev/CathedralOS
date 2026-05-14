@@ -318,6 +318,31 @@ final class GenerationBackendServiceTests: XCTestCase {
                      "localGenerationID should be absent from JSON when nil")
     }
 
+    func testRequestDTOEncodesSelectedModelID() throws {
+        let project = makeProject()
+        let pack = makePack()
+        let payload = PromptPackExportBuilder.build(pack: pack, project: project)
+
+        let request = GenerationRequest(
+            schema: StoryGenerationService.requestSchema,
+            version: StoryGenerationService.requestVersion,
+            projectID: project.id.uuidString,
+            projectName: project.name,
+            promptPackID: pack.id.uuidString,
+            promptPackName: pack.name,
+            sourcePayload: payload,
+            readingLevel: "",
+            contentRating: "",
+            audienceNotes: "",
+            requestedOutputType: GenerationOutputType.story.rawValue,
+            selectedModelId: "gpt-4.1-mini"
+        )
+
+        let data = try JSONEncoder().encode(request)
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(obj["selectedModelId"] as? String, "gpt-4.1-mini")
+    }
+
     // MARK: - GenerationBackendServiceError error descriptions
 
     func testAllErrorCasesHaveNonEmptyDescriptions() {
@@ -334,8 +359,11 @@ final class GenerationBackendServiceTests: XCTestCase {
             .rateLimited(retryAfterSeconds: 60),
             .rateLimited(retryAfterSeconds: nil),
             .providerTimeout,
+            .providerRateLimited(retryAfterSeconds: 60),
             .providerOverloaded,
+            .providerRejected,
             .invalidRequest("bad mode"),
+            .invalidModel,
         ]
         for error in errors {
             let desc = error.errorDescription ?? ""
@@ -427,8 +455,11 @@ final class GenerationBackendServiceTests: XCTestCase {
             .rateLimited(retryAfterSeconds: 60),
             .rateLimited(retryAfterSeconds: nil),
             .providerTimeout,
+            .providerRateLimited(retryAfterSeconds: 30),
             .providerOverloaded,
+            .providerRejected,
             .invalidRequest("bad value"),
+            .invalidModel,
         ]
         for error in errors {
             let msg = error.userFacingMessage

@@ -50,6 +50,7 @@ struct ValidatedSupabaseConfiguration {
     let generationEdgeFunctionPath: String
     let sharingEdgeFunctionPath: String
     let creditStateEdgeFunctionPath: String
+    let generationModelsEdgeFunctionPath: String
     let storeKitSyncEdgeFunctionPath: String
     let storeKitValidateEdgeFunctionPath: String
 
@@ -108,6 +109,7 @@ enum SupabaseConfiguration {
 
     /// Supabase Edge Function path for fetching the backend-authoritative credit state.
     static let creditStateEdgeFunctionPath = "get-credit-state"
+    static let generationModelsEdgeFunctionPath = "generation-models"
 
     /// Supabase Edge Function path for syncing StoreKit entitlements.
     /// ⚠️ Admin/server-side use only — not callable from the iOS client.
@@ -143,6 +145,7 @@ enum SupabaseConfiguration {
             generationEdgeFunctionPath: generationEdgeFunctionPath,
             sharingEdgeFunctionPath: sharingEdgeFunctionPath,
             creditStateEdgeFunctionPath: creditStateEdgeFunctionPath,
+            generationModelsEdgeFunctionPath: generationModelsEdgeFunctionPath,
             storeKitSyncEdgeFunctionPath: storeKitSyncEdgeFunctionPath,
             storeKitValidateEdgeFunctionPath: storeKitValidateEdgeFunctionPath
         )
