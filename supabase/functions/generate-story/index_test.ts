@@ -870,10 +870,6 @@ Deno.test("handler: generation_outputs insert failure returns failed response an
   assertEquals(rateLimitState.recordRequestCalls.length, 1);
   assertEquals(rateLimitState.recordRequestCalls[0].status, "failed");
   assertEquals(rateLimitState.recordRequestCalls[0].errorCode, "persistence_failed");
-  assertEquals(
-    rateLimitState.recordRequestCalls.some((call) => call.status === "success"),
-    false,
-  );
 });
 
 Deno.test("handler: missing generation_outputs row is treated as persistence failure", async () => {

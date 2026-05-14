@@ -422,13 +422,15 @@ async function handler(
     limiter = new SupabaseRateLimitStore(adminClient);
   }
 
-  const persistence = injectedPersistenceStore ??
-    (() => {
-      if (!adminClient) {
-        throw new Error("adminClient is required for generation persistence");
-      }
-      return new SupabaseGenerationPersistenceStore(adminClient);
-    })();
+  let persistence: GenerationPersistenceStore;
+  if (injectedPersistenceStore !== undefined) {
+    persistence = injectedPersistenceStore;
+  } else {
+    if (!adminClient) {
+      throw new Error("adminClient is required for generation persistence");
+    }
+    persistence = new SupabaseGenerationPersistenceStore(adminClient);
+  }
 
   // -------------------------------------------------------------------------
   // Parse request body
