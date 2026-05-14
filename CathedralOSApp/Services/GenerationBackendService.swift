@@ -517,6 +517,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
     /// Retrieves a fresh session immediately before each backend request and returns
     /// the current non-empty access token for Authorization.
     private func resolveAccessTokenForRequest() async throws -> String {
+        // Requirement: always resolve the current session immediately before request dispatch.
         await authService.checkSession()
         do {
             try await authService.refreshSession()
@@ -529,12 +530,8 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         }
 
         await authService.checkSession()
-        guard authService.authState.isSignedIn else {
-            throw GenerationBackendServiceError.notSignedIn
-        }
-
         let token = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let token, !token.isEmpty else {
+        guard authService.authState.isSignedIn, let token, !token.isEmpty else {
             throw GenerationBackendServiceError.notSignedIn
         }
         return token
