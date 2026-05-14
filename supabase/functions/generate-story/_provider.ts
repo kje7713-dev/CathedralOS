@@ -15,7 +15,7 @@
 // =============================================================================
 
 /** Milliseconds before an OpenAI request is aborted with provider_timeout. */
-export const PROVIDER_TIMEOUT_MS = 30_000;
+export const PROVIDER_TIMEOUT_MS = 90_000;
 
 // ---------------------------------------------------------------------------
 // Stable provider error codes
@@ -187,7 +187,7 @@ export class OpenAIProvider implements LLMProvider {
       // AbortError → timeout; everything else is a network-level failure.
       if (err instanceof Error && err.name === "AbortError") {
         throw new ProviderError(
-          `OpenAI request timed out after ${this.timeoutMs}ms`,
+          `OpenAI request timed out after ${this.timeoutMs}ms (model=${this.model})`,
           "provider_timeout",
           false,
         );

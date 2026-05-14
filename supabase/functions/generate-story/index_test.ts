@@ -1007,3 +1007,42 @@ Deno.test("PROVIDER_TIMEOUT_MS: is defined and positive", () => {
 Deno.test("PROVIDER_TIMEOUT_MS: is at least 10 seconds", () => {
   assertEquals(PROVIDER_TIMEOUT_MS >= 10_000, true);
 });
+
+Deno.test("PROVIDER_TIMEOUT_MS: is at least 90 seconds", () => {
+  assertEquals(PROVIDER_TIMEOUT_MS >= 90_000, true);
+});
+
+// =============================================================================
+// 26. Provider timeout does not insert a failed usage event
+// =============================================================================
+
+Deno.test("handler: provider_timeout returns 504 and does not insert usage event", async () => {
+  const { store: creditStore, state: creditState } = makeMockCreditStore(
+    makeEntitlement({ monthly_credit_allowance: 10 }),
+  );
+  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest()), {
+    provider: _mockTimeoutProvider,
+    creditStore,
+    rateLimitStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+
+  const body = await resp.json();
+  assertEquals(resp.status, 504);
+  assertEquals(body.status, "failed");
+  assertEquals(body.errorCode, "provider_timeout");
+  // Credits must not be charged.
+  assertEquals(creditState.chargeCalls.length, 0);
+  // No generation_outputs row should be attempted.
+  assertEquals(persistenceState.outputInsertCalls.length, 0);
+  // No failed usage event should be inserted on timeout.
+  assertEquals(persistenceState.usageInsertCalls.length, 0);
+  // The failed request must still be logged.
+  assertEquals(rateLimitState.recordRequestCalls.length, 1);
+  assertEquals(rateLimitState.recordRequestCalls[0].status, "failed");
+  assertEquals(rateLimitState.recordRequestCalls[0].errorCode, "provider_timeout");
+});
