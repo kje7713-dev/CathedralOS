@@ -82,6 +82,7 @@ final class BackendClientTests: XCTestCase {
             generationEdgeFunctionPath: "generate",
             sharingEdgeFunctionPath: "share-output",
             creditStateEdgeFunctionPath: "get-credit-state",
+            generationModelsEdgeFunctionPath: "generation-models",
             storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement",
             storeKitValidateEdgeFunctionPath: "sync-storekit-entitlement"
         )
@@ -99,6 +100,7 @@ final class BackendClientTests: XCTestCase {
             generationEdgeFunctionPath: "generate-story",
             sharingEdgeFunctionPath: "share-output",
             creditStateEdgeFunctionPath: "get-credit-state",
+            generationModelsEdgeFunctionPath: "generation-models",
             storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement",
             storeKitValidateEdgeFunctionPath: "sync-storekit-entitlement"
         )

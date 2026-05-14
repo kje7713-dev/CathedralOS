@@ -287,7 +287,8 @@ private final class SpyGenerationService: GenerationService {
         project: StoryProject,
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String?
     ) async throws -> GenerationResponse {
         generateCallCount += 1
         if shouldThrow {

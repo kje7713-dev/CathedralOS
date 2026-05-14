@@ -144,6 +144,7 @@
 		000000000000000000000192 /* StoreKitServerValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000191 /* StoreKitServerValidationTests.swift */; };
 		000000000000000000000194 /* BackendHealthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000193 /* BackendHealthService.swift */; };
 		000000000000000000000196 /* DiagnosticsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000195 /* DiagnosticsViewModel.swift */; };
+		00000000000000000000019D /* GenerationModelService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000019C /* GenerationModelService.swift */; };
 		000000000000000000000198 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000197 /* DiagnosticsView.swift */; };
 		00000000000000000000019A /* DiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000199 /* DiagnosticsTests.swift */; };
 /* End PBXBuildFile section */
@@ -298,6 +299,7 @@
 		000000000000000000000191 /* StoreKitServerValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitServerValidationTests.swift; sourceTree = "<group>"; };
 		000000000000000000000193 /* BackendHealthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendHealthService.swift; sourceTree = "<group>"; };
 		000000000000000000000195 /* DiagnosticsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsViewModel.swift; sourceTree = "<group>"; };
+		00000000000000000000019C /* GenerationModelService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationModelService.swift; sourceTree = "<group>"; };
 		000000000000000000000197 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		000000000000000000000199 /* DiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsTests.swift; sourceTree = "<group>"; };
 		0000000000000000000001A1 /* CathedralOSApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CathedralOSApp.entitlements; sourceTree = "<group>"; };
@@ -551,6 +553,7 @@
 				00000000000000000000018B /* CreditStateService.swift */,
 				000000000000000000000193 /* BackendHealthService.swift */,
 				000000000000000000000195 /* DiagnosticsViewModel.swift */,
+				00000000000000000000019C /* GenerationModelService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -827,6 +830,7 @@
 				00000000000000000000018C /* CreditStateService.swift in Sources */,
 				000000000000000000000194 /* BackendHealthService.swift in Sources */,
 				000000000000000000000196 /* DiagnosticsViewModel.swift in Sources */,
+				00000000000000000000019D /* GenerationModelService.swift in Sources */,
 				000000000000000000000198 /* DiagnosticsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

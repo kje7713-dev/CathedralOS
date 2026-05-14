@@ -52,7 +52,6 @@ import { buildProviderFromEnv, LLMProvider, ProviderError, PROVIDER_TIMEOUT_MS }
 import {
   ALLOWED_LENGTH_MODES,
   type LengthMode,
-  getCreditCost,
   checkCredits,
   SupabaseCreditStore,
   type CreditStore,
@@ -61,6 +60,14 @@ import {
   SupabaseRateLimitStore,
   type RateLimitStore,
 } from "./_rate_limiter.ts";
+import {
+  computeActualCharge,
+  computeEstimatedCharge,
+  estimateTokensFromText,
+  normalizedModelId,
+  SupabaseGenerationModelStore,
+  type GenerationModelStore,
+} from "./_generation_models.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -115,6 +122,7 @@ interface GenerateStoryRequest {
   generationAction: string;
   generationLengthMode: string;
   outputBudget: number;
+  selectedModelId?: string;
   previousOutputText?: string;
   readingLevel?: string;
   contentRating?: string;
@@ -190,6 +198,7 @@ interface HandlerDependencies {
   provider?: LLMProvider;
   creditStore?: CreditStore;
   rateLimitStore?: RateLimitStore;
+  generationModelStore?: GenerationModelStore;
   authenticatedUserId?: string;
   persistenceStore?: GenerationPersistenceStore;
 }
@@ -308,6 +317,7 @@ async function handler(
     provider,
     creditStore,
     rateLimitStore,
+    generationModelStore,
     authenticatedUserId,
     persistenceStore: injectedPersistenceStore,
   } = deps;
@@ -391,7 +401,8 @@ async function handler(
   const requiresAdminClient =
     creditStore === undefined ||
     rateLimitStore === undefined ||
-    injectedPersistenceStore === undefined;
+    injectedPersistenceStore === undefined ||
+    generationModelStore === undefined;
   let adminClient:
     // deno-lint-ignore no-explicit-any
     any | null = null;
@@ -420,10 +431,16 @@ async function handler(
   }
 
   let persistence: GenerationPersistenceStore;
+  let modelStore: GenerationModelStore;
   if (injectedPersistenceStore !== undefined) {
     persistence = injectedPersistenceStore;
   } else {
     persistence = new SupabaseGenerationPersistenceStore(adminClient);
+  }
+  if (generationModelStore !== undefined) {
+    modelStore = generationModelStore;
+  } else {
+    modelStore = new SupabaseGenerationModelStore(adminClient);
   }
 
   // -------------------------------------------------------------------------
@@ -517,6 +534,33 @@ async function handler(
     Math.max(1, Math.round(body.outputBudget ?? serverMax)),
     serverMax,
   );
+  const selectedModelId = normalizedModelId(body.selectedModelId);
+  const selectedModel = await modelStore.getEnabledModelById(selectedModelId);
+  if (!selectedModel) {
+    await limiter.recordRequest(userId, {
+      requestId,
+      action: generationAction,
+      generationLengthMode,
+      outputBudget,
+      selectedModelId,
+      status: "failed",
+      errorCode: "invalid_model",
+      errorMessage: "Selected model is invalid or disabled.",
+      durationMs: Date.now() - requestStartMs,
+    });
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "invalid_model",
+        errorMessage: "Selected model is invalid or disabled.",
+      }),
+      { status: 400 },
+    );
+  }
+  const maxCompletionTokens = Math.min(
+    outputBudget,
+    selectedModel.max_output_tokens ?? outputBudget,
+  );
 
   // previousOutputText is required for "continue" to avoid a no-op generation.
   if (generationAction === "continue" && !body.previousOutputText) {
@@ -549,6 +593,9 @@ async function handler(
       action: generationAction,
       generationLengthMode,
       outputBudget,
+      selectedModelId,
+      providerModel: selectedModel.provider_model,
+      maxCompletionTokens,
       status: "rate_limited",
       errorCode: "rate_limited",
       errorMessage: "Rate limit exceeded",
@@ -574,11 +621,28 @@ async function handler(
   // -------------------------------------------------------------------------
   // Credit enforcement -- must happen BEFORE the LLM provider call
   //
-  // Credit cost is computed server-side from generationLengthMode.
-  // The client-submitted cost (if any) is IGNORED.
+  // Credit check is computed server-side from selected model rates and estimated
+  // input/output tokens. The client cannot override model rates.
   // -------------------------------------------------------------------------
 
-  const requiredCredits = getCreditCost(generationLengthMode);
+  const systemPrompt = buildPrompt({
+    sourcePayloadJSON: body.sourcePayloadJSON,
+    generationAction,
+    generationLengthMode,
+    outputBudget: maxCompletionTokens,
+    previousOutputText: body.previousOutputText,
+    readingLevel: body.readingLevel,
+    contentRating: body.contentRating,
+    audienceNotes: body.audienceNotes,
+    projectName,
+    promptPackName,
+  });
+  const estimatedInputTokens = estimateTokensFromText(systemPrompt);
+  const requiredCredits = computeEstimatedCharge(
+    estimatedInputTokens,
+    maxCompletionTokens,
+    selectedModel,
+  );
   const entitlement = await store.loadOrDefault(userId);
   const creditCheck = checkCredits(entitlement, requiredCredits);
 
@@ -587,7 +651,10 @@ async function handler(
       requestId,
       action: generationAction,
       generationLengthMode,
-      outputBudget,
+      outputBudget: maxCompletionTokens,
+      selectedModelId,
+      providerModel: selectedModel.provider_model,
+      maxCompletionTokens,
       status: "insufficient_credits",
       errorCode: "insufficient_credits",
       errorMessage: "Insufficient credits for this generation.",
@@ -619,7 +686,10 @@ async function handler(
       requestId,
       action: generationAction,
       generationLengthMode,
-      outputBudget,
+      outputBudget: maxCompletionTokens,
+      selectedModelId,
+      providerModel: selectedModel.provider_model,
+      maxCompletionTokens,
       status: "failed",
       errorCode: "backend_config_missing",
       errorMessage: msg,
@@ -639,26 +709,19 @@ async function handler(
   // Build prompt and call LLM
   // -------------------------------------------------------------------------
 
-  const systemPrompt = buildPrompt({
-    sourcePayloadJSON: body.sourcePayloadJSON,
-    generationAction,
-    generationLengthMode,
-    outputBudget,
-    previousOutputText: body.previousOutputText,
-    readingLevel: body.readingLevel,
-    contentRating: body.contentRating,
-    audienceNotes: body.audienceNotes,
-    projectName,
-    promptPackName,
-  });
-
-  let llmResult: { content: string; modelName: string; inputTokens?: number; outputTokens?: number };
-  const modelDefault = Deno.env.get("OPENAI_MODEL_DEFAULT") || "gpt-4o-mini";
+  let llmResult: {
+    content: string;
+    modelName: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
 
   try {
     llmResult = await llm.complete(
       [{ role: "user", content: systemPrompt }],
-      outputBudget,
+      maxCompletionTokens,
+      selectedModel.provider_model,
     );
   } catch (err) {
     // Classify provider errors into stable error codes.
@@ -670,6 +733,7 @@ async function handler(
     if (err instanceof ProviderError) {
       providerErrorCode = err.errorCode;
       if (isTimeout) httpStatus = 504;
+      if (providerErrorCode === "provider_rate_limited") httpStatus = 429;
     }
 
     const providerErrorMessage = err instanceof Error ? err.message : "LLM provider error";
@@ -680,7 +744,7 @@ async function handler(
         action: generationAction,
         lengthMode: generationLengthMode,
         timeoutMs: PROVIDER_TIMEOUT_MS,
-        model: modelDefault,
+        model: selectedModel.provider_model,
       });
     }
 
@@ -691,11 +755,11 @@ async function handler(
         user_id: userId,
         generation_output_id: null,
         action: generationAction,
-        model_name: modelDefault,
+        model_name: selectedModel.provider_model,
         input_tokens: null,
         output_tokens: null,
         generation_length_mode: generationLengthMode,
-        output_budget: outputBudget,
+        output_budget: maxCompletionTokens,
         status: "failed",
       });
 
@@ -709,11 +773,15 @@ async function handler(
       requestId,
       action: generationAction,
       generationLengthMode,
-      outputBudget,
+      outputBudget: maxCompletionTokens,
+      selectedModelId,
+      providerModel: selectedModel.provider_model,
+      maxCompletionTokens,
       status: "failed",
       errorCode: providerErrorCode,
       errorMessage: providerErrorMessage,
-      modelName: modelDefault,
+      modelName: selectedModel.provider_model,
+      actualCharge: 0,
       durationMs: Date.now() - requestStartMs,
     });
 
@@ -722,8 +790,14 @@ async function handler(
         status: "failed",
         errorCode: providerErrorCode,
         errorMessage: `Generation failed: ${providerErrorMessage}`,
+        ...(providerErrorCode === "provider_rate_limited" ? { retryAfterSeconds: 60 } : {}),
       }),
-      { status: httpStatus },
+      {
+        status: httpStatus,
+        ...(providerErrorCode === "provider_rate_limited"
+          ? { headers: { "Retry-After": "60" } }
+          : {}),
+      },
     );
   }
 
@@ -751,7 +825,7 @@ async function handler(
     model_name: llmResult.modelName,
     generation_action: generationAction,
     generation_length_mode: generationLengthMode,
-    output_budget: outputBudget,
+    output_budget: maxCompletionTokens,
     status: "complete",
     visibility: "private",
   });
@@ -770,7 +844,10 @@ async function handler(
       requestId,
       action: generationAction,
       generationLengthMode,
-      outputBudget,
+      outputBudget: maxCompletionTokens,
+      selectedModelId,
+      providerModel: selectedModel.provider_model,
+      maxCompletionTokens,
       status: "failed",
       errorCode: "persistence_failed",
       errorMessage: describeError(
@@ -780,6 +857,8 @@ async function handler(
       modelName: llmResult.modelName,
       inputTokens: llmResult.inputTokens,
       outputTokens: llmResult.outputTokens,
+      totalTokens: llmResult.totalTokens,
+      actualCharge: 0,
       durationMs: Date.now() - requestStartMs,
     });
 
@@ -807,7 +886,7 @@ async function handler(
     input_tokens: llmResult.inputTokens ?? null,
     output_tokens: llmResult.outputTokens ?? null,
     generation_length_mode: generationLengthMode,
-    output_budget: outputBudget,
+    output_budget: maxCompletionTokens,
     status: "complete",
   });
 
@@ -824,9 +903,16 @@ async function handler(
   // Monthly allowance is drained first; purchased balance is used second.
   // -------------------------------------------------------------------------
 
+  const actualInputTokens = llmResult.inputTokens ?? 0;
+  const actualOutputTokens = llmResult.outputTokens ?? 0;
+  const actualCharge = computeActualCharge(
+    actualInputTokens,
+    actualOutputTokens,
+    selectedModel,
+  );
   const updatedEntitlement = await store.charge(
     userId,
-    requiredCredits,
+    actualCharge,
     entitlement,
     generationOutputId,
   );
@@ -843,11 +929,16 @@ async function handler(
     requestId,
     action: generationAction,
     generationLengthMode,
-    outputBudget,
+    outputBudget: maxCompletionTokens,
+    selectedModelId,
+    providerModel: selectedModel.provider_model,
+    maxCompletionTokens,
     status: "success",
     modelName: llmResult.modelName,
     inputTokens: llmResult.inputTokens,
     outputTokens: llmResult.outputTokens,
+    totalTokens: llmResult.totalTokens,
+    actualCharge,
     durationMs: Date.now() - requestStartMs,
   });
 
@@ -862,10 +953,12 @@ async function handler(
       modelName: llmResult.modelName,
       generationAction,
       generationLengthMode,
-      outputBudget,
+      selectedModelId,
+      outputBudget: maxCompletionTokens,
       inputTokens: llmResult.inputTokens,
       outputTokens: llmResult.outputTokens,
-      creditCostCharged: requiredCredits,
+      totalTokens: llmResult.totalTokens,
+      creditCostCharged: actualCharge,
       remainingCredits,
       status: "complete",
     }),
@@ -877,6 +970,7 @@ Deno.serve((req) => handler(req));
 
 // Export handler and helpers for testing.
 export { handler };
-export { CREDIT_COST, getCreditCost, checkCredits, computeCharge } from "./_credits.ts";
+export { checkCredits, computeCharge } from "./_credits.ts";
 export { RATE_LIMITS } from "./_rate_limiter.ts";
 export { classifyOpenAIStatus, ProviderError, PROVIDER_TIMEOUT_MS } from "./_provider.ts";
+export { computeActualCharge, computeEstimatedCharge, DEFAULT_GENERATION_MODEL_ID } from "./_generation_models.ts";

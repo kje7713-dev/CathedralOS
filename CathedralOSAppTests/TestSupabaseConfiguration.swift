@@ -15,6 +15,7 @@ extension ValidatedSupabaseConfiguration {
         generationEdgeFunctionPath: String = "generate-story",
         sharingEdgeFunctionPath: String = "shared-outputs",
         creditStateEdgeFunctionPath: String = "get-credit-state",
+        generationModelsEdgeFunctionPath: String = "generation-models",
         storeKitSyncEdgeFunctionPath: String = "sync-storekit-entitlement",
         storeKitValidateEdgeFunctionPath: String = "sync-storekit-entitlement"
     ) -> ValidatedSupabaseConfiguration {
@@ -24,6 +25,7 @@ extension ValidatedSupabaseConfiguration {
             generationEdgeFunctionPath: generationEdgeFunctionPath,
             sharingEdgeFunctionPath: sharingEdgeFunctionPath,
             creditStateEdgeFunctionPath: creditStateEdgeFunctionPath,
+            generationModelsEdgeFunctionPath: generationModelsEdgeFunctionPath,
             storeKitSyncEdgeFunctionPath: storeKitSyncEdgeFunctionPath,
             storeKitValidateEdgeFunctionPath: storeKitValidateEdgeFunctionPath
         )

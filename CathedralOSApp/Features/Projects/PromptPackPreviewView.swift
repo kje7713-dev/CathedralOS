@@ -29,9 +29,13 @@ struct PromptPackPreviewView: View {
     @State private var generationDiagnostics: String?
     @State private var lastGeneratedOutput: GenerationOutput?
     @State private var selectedLengthMode: GenerationLengthMode = .defaultMode
+    @State private var generationModels: [GenerationModelOption] = []
     @State private var showChapterConfirm = false
+    @AppStorage("cathedralos.generation.selectedModelID")
+    private var selectedModelId: String = "gpt-4o-mini"
 
     let generationService: GenerationService
+    let generationModelService: GenerationModelServiceProtocol
     let usageLimitService: any UsageLimitServiceProtocol
     let authService: any AuthService
 
@@ -39,12 +43,14 @@ struct PromptPackPreviewView: View {
         project: StoryProject,
         pack: PromptPack,
         generationService: GenerationService = SupabaseGenerationService(),
+        generationModelService: GenerationModelServiceProtocol = BackendGenerationModelService(),
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
         authService: any AuthService = BackendAuthService.shared
     ) {
         self.project = project
         self.pack = pack
         self.generationService = generationService
+        self.generationModelService = generationModelService
         self.usageLimitService = usageLimitService
         self.authService = authService
     }
@@ -55,12 +61,12 @@ struct PromptPackPreviewView: View {
         usageLimitService.currentState
     }
 
-    private var selectedCreditCost: Int {
-        selectedLengthMode.creditCost
+    private var selectedModel: GenerationModelOption? {
+        generationModels.first(where: { $0.id == selectedModelId })
     }
 
-    private var hasSufficientCredits: Bool {
-        creditState.availableCredits >= selectedCreditCost
+    private var selectedCreditCost: Int {
+        selectedModel?.minimumChargeCredits ?? 1
     }
 
     private var exportPayload: PromptPackExportPayload {
@@ -136,6 +142,9 @@ struct PromptPackPreviewView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Chapter mode requests up to \(GenerationLengthMode.chapter.outputBudget) output tokens and may take longer.")
+        }
+        .task {
+            await loadGenerationModels()
         }
     }
 
@@ -264,6 +273,7 @@ struct PromptPackPreviewView: View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
 
             // Output length picker
+            modelPicker
             lengthModePicker
 
             // Error banner
@@ -339,20 +349,42 @@ struct PromptPackPreviewView: View {
                     Task { await startGeneration() }
                 }
             }
-            .disabled(isGenerating || !hasSufficientCredits)
+            .disabled(isGenerating)
 
-            if !hasSufficientCredits {
-                Text("Not enough credits for \(selectedLengthMode.displayName) generation (\(selectedCreditCost) required, \(creditState.availableCredits) available).")
+            Text("Sends the current pack payload to your generation backend. The result is saved to Generated Outputs.")
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var modelPicker: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("MODEL".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            if generationModels.isEmpty {
+                Text("Loading models…")
                     .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.destructive)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
             } else {
-                Text("Sends the current pack payload to your generation backend. The result is saved to Generated Outputs.")
+                Picker("Model", selection: $selectedModelId) {
+                    ForEach(generationModels) { model in
+                        Text(model.displayName).tag(model.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                if let selectedModel {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(selectedModel.description ?? "No description.")
+                        Text("Relative cost: \(selectedModel.relativeCostLabel)")
+                        Text("Minimum: \(selectedModel.minimumChargeCredits) \(selectedModel.minimumChargeCredits == 1 ? "credit" : "credits")")
+                    }
                     .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
             }
         }
     }
@@ -376,17 +408,13 @@ struct PromptPackPreviewView: View {
                 Image(systemName: "bolt.circle")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                Text("\(selectedCreditCost) \(selectedCreditCost == 1 ? "credit" : "credits")")
+                Text("Base minimum \(selectedCreditCost) \(selectedCreditCost == 1 ? "credit" : "credits")")
                     .font(CathedralTheme.Typography.label(11, weight: .regular))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 Spacer()
                 Text("\(creditState.availableCredits) remaining")
                     .font(CathedralTheme.Typography.label(11, weight: .regular))
-                    .foregroundStyle(
-                        hasSufficientCredits
-                            ? CathedralTheme.Colors.secondaryText
-                            : CathedralTheme.Colors.destructive
-                    )
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
         }
     }
@@ -409,14 +437,8 @@ struct PromptPackPreviewView: View {
         }
 
         // Preflight: check credits and auth before making any network call.
-        let preflight = usageLimitService.checkPreflight(
-            lengthMode: mode,
-            authState: authService.authState
-        )
+        let preflight = usageLimitService.checkPreflight(lengthMode: mode, authState: authService.authState)
         switch preflight {
-        case .insufficientCredits(let available, let required):
-            generationError = "Not enough credits. Need \(required), have \(available)."
-            return
         case .signedOut:
             generationError = GenerationBackendServiceError.notSignedIn.errorDescription
             return
@@ -424,7 +446,7 @@ struct PromptPackPreviewView: View {
             // Backend not configured — fall through and let the service throw .notConfigured
             // so the existing error path handles it consistently.
             break
-        case .allowed, .unknown:
+        case .allowed, .unknown, .insufficientCredits:
             break
         }
 
@@ -464,7 +486,8 @@ struct PromptPackPreviewView: View {
                 project: project,
                 pack: pack,
                 requestedOutputType: .story,
-                lengthMode: mode
+                lengthMode: mode,
+                selectedModelId: selectedModelId
             )
             generationDiagnostics = await GenerationRequestDiagnosticsStore.shared.latestVisibleText()
 
@@ -483,7 +506,7 @@ struct PromptPackPreviewView: View {
             // On success: decrement local credits.
             // MVP policy: failed generation does not consume credits.
             usageLimitService.recordSuccessfulGeneration(
-                creditCost: mode.creditCost,
+                creditCost: response.creditCostCharged ?? 0,
                 lengthMode: mode
             )
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
@@ -508,5 +531,19 @@ struct PromptPackPreviewView: View {
             return serviceError.errorDescription ?? serviceError.localizedDescription
         }
         return error.localizedDescription
+    }
+
+    @MainActor
+    private func loadGenerationModels() async {
+        do {
+            let models = try await generationModelService.fetchEnabledModels()
+            generationModels = models
+            if !models.contains(where: { $0.id == selectedModelId }) {
+                selectedModelId = models.first?.id ?? "gpt-4o-mini"
+            }
+        } catch {
+            generationModels = []
+            generationError = (error as? GenerationModelServiceError)?.errorDescription ?? error.localizedDescription
+        }
     }
 }

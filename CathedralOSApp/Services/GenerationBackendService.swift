@@ -115,12 +115,15 @@ enum GenerationBackendServiceError: Error, LocalizedError {
     /// The LLM provider did not respond within the allowed time window.
     /// Credits are not charged when this error occurs.
     case providerTimeout
+    case providerRateLimited(retryAfterSeconds: Int?)
     /// The LLM provider is temporarily overloaded or returned a server error.
     /// Credits are not charged when this error occurs.
     case providerOverloaded
+    case providerRejected
     /// The backend request was syntactically invalid. This typically indicates a
     /// client bug (e.g. unsupported field value) rather than a transient error.
     case invalidRequest(String)
+    case invalidModel
 
     var errorDescription: String? {
         switch self {
@@ -151,10 +154,19 @@ enum GenerationBackendServiceError: Error, LocalizedError {
             return "Too many requests. Please wait a moment before generating again."
         case .providerTimeout:
             return "The generation service took too long to respond. Please try again."
+        case .providerRateLimited(let retryAfter):
+            if let retryAfter {
+                return "The generation provider is rate limited. Please retry in \(retryAfter) second\(retryAfter == 1 ? "" : "s")."
+            }
+            return "The generation provider is rate limited. Please try again shortly."
         case .providerOverloaded:
             return "The generation service is temporarily busy. Please try again in a moment."
+        case .providerRejected:
+            return "The generation provider rejected the request. Please try again."
         case .invalidRequest(let detail):
             return "The request could not be processed: \(detail)"
+        case .invalidModel:
+            return "The selected model is unavailable. Please pick a different model."
         }
     }
 
@@ -181,10 +193,19 @@ enum GenerationBackendServiceError: Error, LocalizedError {
             return "You're generating too quickly. Please wait a moment."
         case .providerTimeout:
             return "Generation timed out. Please try again."
+        case .providerRateLimited(let retryAfter):
+            if let retryAfter {
+                return "Provider rate limited. Try again in \(retryAfter) second\(retryAfter == 1 ? "" : "s")."
+            }
+            return "Provider rate limited. Please try again shortly."
         case .providerOverloaded:
             return "Generation service is busy. Please try again in a moment."
+        case .providerRejected:
+            return "Generation provider rejected this request. Please try again."
         case .invalidRequest:
             return "This request cannot be processed. Please try a different setting."
+        case .invalidModel:
+            return "This model is unavailable. Please choose another model."
         }
     }
 }
@@ -201,7 +222,8 @@ protocol GenerationBackendServiceProtocol {
         project: StoryProject,
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String?
     ) async throws -> GenerationResponse
 }
 
@@ -233,7 +255,8 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         project: StoryProject,
         pack: PromptPack,
         requestedOutputType: GenerationOutputType = .story,
-        lengthMode: GenerationLengthMode = .defaultMode
+        lengthMode: GenerationLengthMode = .defaultMode,
+        selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
         do {
             try await validateConfigAndAuth()
@@ -258,7 +281,8 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             audienceNotes: project.audienceNotes,
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
-            approximateMaxOutputTokens: lengthMode.outputBudget
+            approximateMaxOutputTokens: lengthMode.outputBudget,
+            selectedModelId: selectedModelId
         )
 
         return try await post(requestBody)
@@ -270,7 +294,8 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         previousOutputText: String?,
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode = .defaultMode
+        lengthMode: GenerationLengthMode = .defaultMode,
+        selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
         do {
             try await validateConfigAndAuth()
@@ -306,6 +331,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
             approximateMaxOutputTokens: lengthMode.outputBudget,
+            selectedModelId: selectedModelId,
             action: action,
             parentGenerationID: parentGenerationID?.uuidString,
             previousOutputText: previousOutputText
@@ -404,12 +430,20 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
                         )
                     case "provider_timeout":
                         throw GenerationBackendServiceError.providerTimeout
+                    case "provider_rate_limited":
+                        throw GenerationBackendServiceError.providerRateLimited(
+                            retryAfterSeconds: decoded.retryAfterSeconds
+                        )
                     case "provider_overloaded":
                         throw GenerationBackendServiceError.providerOverloaded
+                    case "provider_rejected":
+                        throw GenerationBackendServiceError.providerRejected
                     case "invalid_request":
                         throw GenerationBackendServiceError.invalidRequest(
                             decoded.errorMessage ?? "Invalid request"
                         )
+                    case "invalid_model":
+                        throw GenerationBackendServiceError.invalidModel
                     default:
                         break
                     }
@@ -552,7 +586,8 @@ final class StubGenerationBackendService: GenerationBackendServiceProtocol, Gene
         project: StoryProject,
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String?
     ) async throws -> GenerationResponse {
         throw GenerationBackendServiceError.notImplemented
     }
