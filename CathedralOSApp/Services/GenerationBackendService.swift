@@ -518,10 +518,6 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
     /// the current non-empty access token for Authorization.
     private func resolveAccessTokenForRequest() async throws -> String {
         await authService.checkSession()
-        guard authService.authState.isSignedIn else {
-            throw GenerationBackendServiceError.notSignedIn
-        }
-
         do {
             try await authService.refreshSession()
         } catch AuthServiceError.sessionExpired {
