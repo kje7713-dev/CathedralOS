@@ -22,6 +22,7 @@ struct PromptPackPreviewView: View {
     @State private var copiedPrompt    = false
     @State private var copiedJSON      = false
     @State private var showEditPack    = false
+    @State private var isPromptPreviewExpanded = false
 
     // Generation state
     @State private var isGenerating = false
@@ -101,11 +102,8 @@ struct PromptPackPreviewView: View {
                     sparsePackNotice
                 }
 
-                // Mode picker — Prompt / JSON
-                modePicker
-
-                // Content block
-                contentBlock
+                // Prompt preview
+                promptPreviewSection
 
                 // Export actions
                 exportActions
@@ -158,6 +156,62 @@ struct PromptPackPreviewView: View {
         }
         .pickerStyle(.segmented)
         .padding(.vertical, CathedralTheme.Spacing.xs)
+    }
+
+    // MARK: Prompt Preview Section
+
+    private var promptPreviewSection: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isPromptPreviewExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Prompt Preview")
+                            .font(CathedralTheme.Typography.label(12, weight: .semibold))
+                            .foregroundStyle(CathedralTheme.Colors.primaryText)
+
+                        HStack(spacing: CathedralTheme.Spacing.xs) {
+                            Text(viewMode.rawValue)
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                            if previewCharacterCount > 0 {
+                                Text("•")
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                                Text("\(previewCharacterCount.formatted()) chars")
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                            }
+                        }
+                    }
+                    Spacer()
+                    Image(systemName: isPromptPreviewExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                .padding(CathedralTheme.Spacing.base)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(CathedralTheme.Colors.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                        .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+            .buttonStyle(.plain)
+
+            if isPromptPreviewExpanded {
+                modePicker
+                contentBlock
+            }
+        }
+    }
+
+    private var previewCharacterCount: Int {
+        activeText.count
     }
 
     // MARK: Content Block
