@@ -113,6 +113,8 @@ export function estimateTokensFromText(text: string): number {
   if (!text.trim()) return 0;
   // Conservative heuristic to avoid under-estimating preflight charge.
   // Uses ~3 chars/token plus 25% safety headroom.
+  // This is intentionally dependency-free for Edge runtime portability; switch
+  // to a provider-specific tokenizer if exact preflight estimates are required.
   const baseEstimate = Math.ceil(text.length / 3);
   return Math.max(1, Math.ceil(baseEstimate * 1.25));
 }
