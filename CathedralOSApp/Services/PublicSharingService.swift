@@ -180,8 +180,8 @@ final class BackendPublicSharingService: PublicSharingService {
             throw PublicSharingServiceError.notSignedIn
         }
 
-        let fileName = "\(UUID().uuidString.lowercased()).jpg"
-        let objectPath = "\(userID)/\(sharedOutputID)/\(fileName)"
+        let coverImageFileName = "\(UUID().uuidString.lowercased()).jpg"
+        let objectPath = "\(userID)/\(sharedOutputID)/\(coverImageFileName)"
 
         var uploadURL = projectURL
             .appendingPathComponent("storage")

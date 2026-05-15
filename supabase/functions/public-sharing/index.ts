@@ -258,59 +258,60 @@ export async function handler(req: Request): Promise<Response> {
 
     const sourcePayload = (data as Record<string, unknown>).source_payload_json;
     const audience = deriveAudienceFields(sourcePayload);
-    const allowRemix = Boolean((data as Record<string, unknown>).allow_remix);
+    const sharedOutputRecord = data as Record<string, unknown>;
+    const allowRemix = Boolean(sharedOutputRecord.allow_remix);
 
     return jsonResponse(
       {
-        sharedOutputID: String((data as Record<string, unknown>).id ?? ""),
-        shareTitle: typeof (data as Record<string, unknown>).share_title === "string"
-          ? (data as Record<string, unknown>).share_title
+        sharedOutputID: String(sharedOutputRecord.id ?? ""),
+        shareTitle: typeof sharedOutputRecord.share_title === "string"
+          ? sharedOutputRecord.share_title
           : "",
-        shareExcerpt: typeof (data as Record<string, unknown>).share_excerpt === "string"
-          ? (data as Record<string, unknown>).share_excerpt
+        shareExcerpt: typeof sharedOutputRecord.share_excerpt === "string"
+          ? sharedOutputRecord.share_excerpt
           : "",
-        outputText: typeof (data as Record<string, unknown>).output_text === "string"
-          ? (data as Record<string, unknown>).output_text
+        outputText: typeof sharedOutputRecord.output_text === "string"
+          ? sharedOutputRecord.output_text
           : "",
         authorDisplayName: typeof (profileData as Record<string, unknown> | null)?.display_name === "string"
           ? (profileData as Record<string, unknown>).display_name
           : null,
         ownerUserID,
-        sourcePromptPackName: typeof (data as Record<string, unknown>).source_prompt_pack_name === "string"
-          ? (data as Record<string, unknown>).source_prompt_pack_name
+        sourcePromptPackName: typeof sharedOutputRecord.source_prompt_pack_name === "string"
+          ? sharedOutputRecord.source_prompt_pack_name
           : null,
-        modelName: typeof (data as Record<string, unknown>).model_name === "string"
-          ? (data as Record<string, unknown>).model_name
+        modelName: typeof sharedOutputRecord.model_name === "string"
+          ? sharedOutputRecord.model_name
           : null,
-        generationAction: typeof (data as Record<string, unknown>).generation_action === "string"
-          ? (data as Record<string, unknown>).generation_action
+        generationAction: typeof sharedOutputRecord.generation_action === "string"
+          ? sharedOutputRecord.generation_action
           : null,
-        generationLengthMode: typeof (data as Record<string, unknown>).generation_length_mode === "string"
-          ? (data as Record<string, unknown>).generation_length_mode
+        generationLengthMode: typeof sharedOutputRecord.generation_length_mode === "string"
+          ? sharedOutputRecord.generation_length_mode
           : null,
         allowRemix,
         createdAt: asISOString(
-          (data as Record<string, unknown>).published_at ?? (data as Record<string, unknown>).created_at,
+          sharedOutputRecord.published_at ?? sharedOutputRecord.created_at,
         ),
         shareURL: buildShareURL(publicShareBaseURL, sharedOutputID),
         readingLevel: audience.readingLevel,
         contentRating: audience.contentRating,
         audienceNotes: audience.audienceNotes,
         sourcePayloadJSON: allowRemix ? JSON.stringify(sourcePayload ?? {}) : null,
-        coverImagePath: typeof (data as Record<string, unknown>).cover_image_path === "string"
-          ? (data as Record<string, unknown>).cover_image_path
+        coverImagePath: typeof sharedOutputRecord.cover_image_path === "string"
+          ? sharedOutputRecord.cover_image_path
           : null,
-        coverImageURL: typeof (data as Record<string, unknown>).cover_image_url === "string"
-          ? (data as Record<string, unknown>).cover_image_url
+        coverImageURL: typeof sharedOutputRecord.cover_image_url === "string"
+          ? sharedOutputRecord.cover_image_url
           : null,
-        coverImageWidth: typeof (data as Record<string, unknown>).cover_image_width === "number"
-          ? (data as Record<string, unknown>).cover_image_width
+        coverImageWidth: typeof sharedOutputRecord.cover_image_width === "number"
+          ? sharedOutputRecord.cover_image_width
           : null,
-        coverImageHeight: typeof (data as Record<string, unknown>).cover_image_height === "number"
-          ? (data as Record<string, unknown>).cover_image_height
+        coverImageHeight: typeof sharedOutputRecord.cover_image_height === "number"
+          ? sharedOutputRecord.cover_image_height
           : null,
-        coverImageContentType: typeof (data as Record<string, unknown>).cover_image_content_type === "string"
-          ? (data as Record<string, unknown>).cover_image_content_type
+        coverImageContentType: typeof sharedOutputRecord.cover_image_content_type === "string"
+          ? sharedOutputRecord.cover_image_content_type
           : null,
       },
       200,
