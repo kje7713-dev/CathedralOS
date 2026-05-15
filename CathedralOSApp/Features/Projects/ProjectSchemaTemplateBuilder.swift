@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import os
 
 // MARK: - Schema Template Modes
 
@@ -816,9 +817,12 @@ final class LocalProjectBackupService {
 
     static let shared = LocalProjectBackupService()
 
+    // Retain only the newest 10 backups per project to cap local storage growth
+    // while still keeping enough history for practical recovery.
     private let maxBackupsPerProject = 10
     private let backupDirectoryName = "ProjectBackups"
     private let fileManager = FileManager.default
+    private let logger = Logger(subsystem: "CathedralOS", category: "ProjectBackup")
 
     private init() {}
 
@@ -826,8 +830,12 @@ final class LocalProjectBackupService {
     func backup(project: StoryProject) -> URL? {
         let payload = ProjectSchemaTemplateBuilder.build(project: project)
         let json = ProjectSchemaTemplateBuilder.encodePayload(payload)
-        guard let data = json.data(using: .utf8),
-              let directory = ensureBackupDirectory() else {
+        guard let data = json.data(using: .utf8) else {
+            logger.error("Backup skipped: JSON encoding failed for project \(project.id.uuidString, privacy: .public)")
+            return nil
+        }
+        guard let directory = ensureBackupDirectory() else {
+            logger.error("Backup skipped: could not create/open backup directory for project \(project.id.uuidString, privacy: .public)")
             return nil
         }
 
@@ -840,6 +848,7 @@ final class LocalProjectBackupService {
             pruneBackups(forProjectID: project.id.uuidString)
             return url
         } catch {
+            logger.error("Backup write failed for project \(project.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
