@@ -530,6 +530,7 @@ struct PromptPackPreviewView: View {
         )
         gen.project = project
         modelContext.insert(gen)
+        _ = LocalProjectBackupService.shared.backup(project: project)
         lastGeneratedOutput = gen
 
         isGenerating = true
@@ -574,6 +575,7 @@ struct PromptPackPreviewView: View {
             // MVP policy: do not charge credits on generation failure.
             generationError = localizedGenerationError(error)
         }
+        _ = LocalProjectBackupService.shared.backup(project: project)
     }
 
     /// Returns a human-readable error string, with special handling for auth and config errors.

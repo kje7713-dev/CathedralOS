@@ -98,6 +98,9 @@ struct ProjectDetailView: View {
         .navigationDestination(item: $generationToView) { g in
             GenerationOutputDetailView(output: g)
         }
+        .onDisappear {
+            _ = LocalProjectBackupService.shared.backup(project: project)
+        }
     }
 
     // MARK: Summary Section

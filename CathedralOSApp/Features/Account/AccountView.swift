@@ -21,6 +21,8 @@ struct AccountView: View {
     let entitlementService: any StoreKitEntitlementServiceProtocol
 
     @Environment(\.modelContext) private var modelContext
+    @Query private var localProjects: [StoryProject]
+    @Query private var localGenerations: [GenerationOutput]
 
     init(
         authService: any AuthService = BackendAuthService.shared,
@@ -52,11 +54,15 @@ struct AccountView: View {
     @State private var restoreError: String?
     @State private var restoreSuccess: String?
     @State private var showPaywall = false
+    @State private var copiedRecoverySummary = false
 
     var body: some View {
         NavigationStack {
             List {
                 accountSection
+                if shouldShowRecoveryPanel {
+                    recoverySection
+                }
                 cloudFeaturesSection
                 subscriptionSection
                 usageSection
@@ -364,6 +370,56 @@ struct AccountView: View {
         "Record remix events"
     ]
 
+    private var recoverySection: some View {
+        Section("Recovery (TestFlight)") {
+            HStack {
+                Text("Local projects")
+                Spacer()
+                Text("\(localProjects.count)")
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            HStack {
+                Text("Local generations")
+                Spacer()
+                Text("\(localGenerations.count)")
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            HStack {
+                Text("Current user ID")
+                Spacer()
+                Text(authState.currentUser?.id ?? "Signed out")
+                    .font(.caption)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .multilineTextAlignment(.trailing)
+            }
+            HStack {
+                Text("App build")
+                Spacer()
+                Text(appVersionBuildLabel)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            HStack {
+                Text("Local backups")
+                Spacer()
+                Text("\(LocalProjectBackupService.shared.backupCount())")
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            Button {
+                UIPasteboard.general.string = recoveryDiagnosticSummary
+                copiedRecoverySummary = true
+                Task {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    copiedRecoverySummary = false
+                }
+            } label: {
+                Label(
+                    copiedRecoverySummary ? "Recovery Summary Copied" : "Export Local DB Diagnostic Summary",
+                    systemImage: copiedRecoverySummary ? "checkmark.circle.fill" : "doc.on.doc"
+                )
+            }
+        }
+    }
+
     // MARK: - Sync section
 
     private var syncSection: some View {
@@ -461,6 +517,44 @@ struct AccountView: View {
         let version = info?["CFBundleShortVersionString"] as? String ?? "?"
         let build = info?["CFBundleVersion"] as? String ?? "?"
         return "\(version) (\(build))"
+    }
+
+    private var recoveryDiagnosticSummary: String {
+        let launch = PersistenceLaunchDiagnosticsStore.shared.latest
+        let firstLaunch = launch.firstLaunchAfterUpdate ? "yes" : "no"
+        let storeURL = launch.swiftDataStoreURL ?? "unavailable"
+        let projectCount = launch.projectCount.map(String.init) ?? "unavailable"
+        let generationCount = launch.generationCount.map(String.init) ?? "unavailable"
+        let userID = authState.currentUser?.id ?? "signed_out"
+        let loadStatus = launch.failedToLoadStore ? "failed" : "ok"
+        var lines = [
+            "=== CathedralOS Recovery Diagnostics ===",
+            "App: \(launch.appVersion) (\(launch.appBuild))",
+            "Current build label: \(appVersionBuildLabel)",
+            "First launch after update: \(firstLaunch)",
+            "Store load status: \(loadStatus)",
+            "SwiftData store URL: \(storeURL)",
+            "Launch StoryProject count: \(projectCount)",
+            "Launch GenerationOutput count: \(generationCount)",
+            "Current StoryProject count: \(localProjects.count)",
+            "Current GenerationOutput count: \(localGenerations.count)",
+            "Current signed-in user ID: \(userID)",
+            "Local backup file count: \(LocalProjectBackupService.shared.backupCount())"
+        ]
+        if let error = launch.storeLoadErrorMessage, !error.isEmpty {
+            lines.append("Store load error: \(error)")
+        }
+        lines.append("=== End Recovery Diagnostics ===")
+        return lines.joined(separator: "\n")
+    }
+
+    private var shouldShowRecoveryPanel: Bool {
+        #if DEBUG
+        true
+        #else
+        guard let receiptURL = Bundle.main.appStoreReceiptURL else { return false }
+        return receiptURL.lastPathComponent == "sandboxReceipt"
+        #endif
     }
 
     // MARK: - Diagnostics section
