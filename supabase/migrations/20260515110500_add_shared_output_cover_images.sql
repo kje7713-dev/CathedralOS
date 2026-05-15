@@ -21,6 +21,7 @@ create policy "shared-output-images: authenticated can upload own paths"
   with check (
     bucket_id = 'shared-output-images'
     and (storage.foldername(name))[1] = auth.uid()::text
+    and coalesce((storage.foldername(name))[2], '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
   );
 
 create policy "shared-output-images: authenticated can update own paths"
@@ -29,10 +30,12 @@ create policy "shared-output-images: authenticated can update own paths"
   using (
     bucket_id = 'shared-output-images'
     and (storage.foldername(name))[1] = auth.uid()::text
+    and coalesce((storage.foldername(name))[2], '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
   )
   with check (
     bucket_id = 'shared-output-images'
     and (storage.foldername(name))[1] = auth.uid()::text
+    and coalesce((storage.foldername(name))[2], '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
   );
 
 create policy "shared-output-images: authenticated can delete own paths"
@@ -41,4 +44,5 @@ create policy "shared-output-images: authenticated can delete own paths"
   using (
     bucket_id = 'shared-output-images'
     and (storage.foldername(name))[1] = auth.uid()::text
+    and coalesce((storage.foldername(name))[2], '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
   );

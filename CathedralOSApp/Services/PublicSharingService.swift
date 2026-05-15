@@ -5,6 +5,7 @@ import Foundation
 enum PublicSharingServiceError: Error, LocalizedError {
     case endpointNotConfigured
     case backendNotConfigured
+    case invalidSharedOutputID
     case encodingError(Error)
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
@@ -23,6 +24,8 @@ enum PublicSharingServiceError: Error, LocalizedError {
             return "Public sharing endpoint is not configured. Set PublicSharingBaseURL in Info.plist."
         case .backendNotConfigured:
             return "Supabase backend is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist."
+        case .invalidSharedOutputID:
+            return "Invalid shared output ID."
         case .encodingError(let underlying):
             return "Could not encode request: \(underlying.localizedDescription)"
         case .networkError(let underlying):
@@ -178,6 +181,9 @@ final class BackendPublicSharingService: PublicSharingService {
               let userID = authService.currentUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
               !userID.isEmpty else {
             throw PublicSharingServiceError.notSignedIn
+        }
+        guard UUID(uuidString: sharedOutputID) != nil else {
+            throw PublicSharingServiceError.invalidSharedOutputID
         }
 
         let fileExtension = Self.fileExtension(for: contentType)

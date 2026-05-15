@@ -581,7 +581,8 @@ struct GenerationOutputDetailView: View {
         let previousCoverImageWidth = output.coverImageWidth
         let previousCoverImageHeight = output.coverImageHeight
         let previousCoverImageContentType = output.coverImageContentType
-        let stagedSharedOutputID = UUID().uuidString.lowercased()
+        let stagedSharedOutputID = UUID(uuidString: previousSharedOutputID)?.uuidString.lowercased()
+            ?? UUID().uuidString.lowercased()
 
         do {
             if let pendingCoverImageData,
@@ -700,6 +701,7 @@ struct GenerationOutputDetailView: View {
     }
 
     private func compressCoverImage(_ image: UIImage) -> (data: Data, preview: UIImage, width: Int, height: Int)? {
+        // 1600px max width balances readable image quality and upload/storage size.
         let maxWidth: CGFloat = 1600
         let originalSize = image.size
         guard originalSize.width > 0, originalSize.height > 0 else { return nil }
