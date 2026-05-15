@@ -182,6 +182,32 @@ analytics, and optionally notifying the original author.
 
 ---
 
+### `project_snapshots`
+
+Recovery snapshots of local `StoryProject` data, stored as the same JSON schema
+used by the app's import/export flow so signed-in users can restore projects
+from Supabase when local data is unavailable.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | `gen_random_uuid()` |
+| `user_id` | uuid FK | References `auth.users(id)` |
+| `local_project_id` | text | Client-side project UUID used for dedup/upsert |
+| `schema` | text | Snapshot schema identifier |
+| `version` | integer | Snapshot schema version |
+| `snapshot_json` | jsonb | Serialized `ProjectImportExportPayload` |
+| `source` | text | `client_backup` / `manual_export` / `sync` |
+| `created_at` | timestamptz | |
+| `updated_at` | timestamptz | Auto-updated by trigger |
+
+**RLS assumptions**
+- Users can read, insert, update, and delete only their own rows.
+- Explicit grants allow `authenticated` and `service_role` to use CRUD through
+  the Supabase Data API / PostgREST while RLS stays enabled.
+- Unique index on `(user_id, local_project_id)` enables authenticated upserts.
+
+---
+
 ## updated_at trigger
 
 A shared PostgreSQL function `public.set_updated_at()` is registered as a
@@ -190,6 +216,7 @@ A shared PostgreSQL function `public.set_updated_at()` is registered as a
 - `profiles`
 - `generation_outputs`
 - `shared_outputs`
+- `project_snapshots`
 
 This ensures `updated_at` is always accurate without requiring the caller to
 set it explicitly.
@@ -206,6 +233,8 @@ set it explicitly.
 | `idx_shared_outputs_visibility_published` | `shared_outputs` | `(visibility, published_at DESC)` |
 | `idx_shared_outputs_owner_published` | `shared_outputs` | `(owner_user_id, published_at DESC)` |
 | `idx_remix_events_user_created` | `remix_events` | `(user_id, created_at DESC)` |
+| `idx_project_snapshots_user_created` | `project_snapshots` | `(user_id, created_at DESC)` |
+| `project_snapshots_user_local_project_unique` | `project_snapshots` | `(user_id, local_project_id)` |
 
 ---
 

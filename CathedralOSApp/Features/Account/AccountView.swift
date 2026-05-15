@@ -600,6 +600,7 @@ struct AccountView: View {
             try await authService.signInWithApple()
             authState = authService.authState
             await attemptProfileBootstrap()
+            try? await ProjectCloudSyncService.shared.syncAllProjects(in: modelContext)
         } catch AuthServiceError.cancelled {
             // User tapped cancel — not an error worth surfacing.
         } catch {

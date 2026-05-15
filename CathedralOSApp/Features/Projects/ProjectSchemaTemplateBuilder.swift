@@ -751,8 +751,7 @@ enum ProjectSchemaTemplateBuilder {
             project: .init(
                 name: project.name,
                 summary: project.summary,
-                // notes and tags are reserved fields not stored on StoryProject
-                notes: "",
+                notes: project.notes,
                 tags: [],
                 readingLevel: project.readingLevel,
                 contentRating: project.contentRating,
@@ -846,6 +845,13 @@ final class LocalProjectBackupService {
         do {
             try data.write(to: url, options: [.atomic])
             pruneBackups(forProjectID: project.id.uuidString)
+            let localProjectID = project.id.uuidString
+            Task {
+                try? await ProjectCloudSyncService.shared.syncProjectSnapshot(
+                    localProjectID: localProjectID,
+                    payload: payload
+                )
+            }
             return url
         } catch {
             logger.error("Backup write failed for project \(project.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")

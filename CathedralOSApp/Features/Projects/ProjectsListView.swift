@@ -16,8 +16,9 @@ struct ProjectsListView: View {
     private let schemaExampleJSON = ProjectSchemaTemplateBuilder.buildExampleJSON()
     @State private var showCopiedLLMPrompt = false
     @State private var hasLocalBackups = false
+    @State private var hasCloudSnapshots = false
     @State private var restoreErrorMessage: String?
-    @State private var showRestoreSuccess = false
+    @State private var restoreSuccessMessage: String?
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -97,9 +98,15 @@ struct ProjectsListView: View {
         )) {
             Button("Delete", role: .destructive) {
                 if let p = projectToDelete {
+                    let deletedProjectID = p.id.uuidString
                     modelContext.delete(p)
+                    Task {
+                        try? await ProjectCloudSyncService.shared.deleteSnapshot(forLocalProjectID: deletedProjectID)
+                        await refreshCloudBackupAvailability()
+                    }
                 }
                 projectToDelete = nil
+                refreshBackupAvailability()
             }
             Button("Cancel", role: .cancel) { projectToDelete = nil }
         } message: {
@@ -118,14 +125,17 @@ struct ProjectsListView: View {
         } message: {
             Text(restoreErrorMessage ?? "The local backup could not be restored.")
         }
-        .alert("Backup Restored", isPresented: $showRestoreSuccess) {
-            Button("OK", role: .cancel) {}
+        .alert("Backup Restored", isPresented: Binding(
+            get: { restoreSuccessMessage != nil },
+            set: { if !$0 { restoreSuccessMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { restoreSuccessMessage = nil }
         } message: {
-            Text("A local backup was restored successfully.")
+            Text(restoreSuccessMessage ?? "A backup was restored successfully.")
         }
         .task {
             LocalProjectBackupService.shared.backupAllProjects(in: modelContext)
-            refreshBackupAvailability()
+            await refreshRecoveryAvailability()
         }
     }
 
@@ -161,6 +171,17 @@ struct ProjectsListView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(CathedralTheme.Colors.secondaryText.opacity(0.8))
+                .padding(.horizontal, CathedralTheme.Spacing.xxl)
+            }
+
+            if hasCloudSnapshots {
+                Button {
+                    Task { await restoreFromCloud() }
+                } label: {
+                    Label("Restore from Cloud", systemImage: "icloud.and.arrow.down")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(CathedralTheme.Colors.accent)
                 .padding(.horizontal, CathedralTheme.Spacing.xxl)
             }
             Spacer()
@@ -311,14 +332,40 @@ struct ProjectsListView: View {
         hasLocalBackups = LocalProjectBackupService.shared.hasBackups()
     }
 
+    private func refreshCloudBackupAvailability() async {
+        hasCloudSnapshots = await ProjectCloudSyncService.shared.hasCloudSnapshots()
+    }
+
+    private func refreshRecoveryAvailability() async {
+        refreshBackupAvailability()
+        await refreshCloudBackupAvailability()
+    }
+
     private func restoreFromLatestBackup() {
         do {
             let restored = try LocalProjectBackupService.shared.restoreLatestProject(into: modelContext)
             navigationPath.append(restored)
-            refreshBackupAvailability()
-            showRestoreSuccess = true
+            Task { await refreshRecoveryAvailability() }
+            restoreSuccessMessage = "A local backup was restored successfully."
         } catch {
             restoreErrorMessage = (error as? LocalProjectBackupError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func restoreFromCloud() async {
+        do {
+            let restoredProjects = try await ProjectCloudSyncService.shared.restoreAllProjects(into: modelContext)
+            await refreshRecoveryAvailability()
+            guard let firstProject = restoredProjects.first else {
+                restoreErrorMessage = "No cloud snapshots were available to restore."
+                return
+            }
+            navigationPath.append(firstProject)
+            restoreSuccessMessage = restoredProjects.count == 1
+                ? "A cloud snapshot was restored successfully."
+                : "\(restoredProjects.count) cloud projects were restored successfully."
+        } catch {
+            restoreErrorMessage = (error as? ProjectCloudSyncError)?.errorDescription ?? error.localizedDescription
         }
     }
 }
