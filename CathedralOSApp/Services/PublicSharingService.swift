@@ -188,15 +188,16 @@ final class BackendPublicSharingService: PublicSharingService {
 
         let fileExtension = Self.fileExtension(for: contentType)
         let coverImageFileName = "\(UUID().uuidString.lowercased()).\(fileExtension)"
-        let objectPath = "\(userID)/\(sharedOutputID)/\(coverImageFileName)"
+        let objectPathSegments = [userID, sharedOutputID, coverImageFileName]
+        let objectPath = objectPathSegments.joined(separator: "/")
 
         var uploadURL = projectURL
             .appendingPathComponent("storage")
             .appendingPathComponent("v1")
             .appendingPathComponent("object")
             .appendingPathComponent("shared-output-images")
-        objectPath.split(separator: "/").forEach { segment in
-            uploadURL.appendPathComponent(String(segment))
+        objectPathSegments.forEach { segment in
+            uploadURL.appendPathComponent(segment)
         }
 
         var request = URLRequest(url: uploadURL)
@@ -216,8 +217,8 @@ final class BackendPublicSharingService: PublicSharingService {
             .appendingPathComponent("object")
             .appendingPathComponent("public")
             .appendingPathComponent("shared-output-images")
-        objectPath.split(separator: "/").forEach { segment in
-            publicURL.appendPathComponent(String(segment))
+        objectPathSegments.forEach { segment in
+            publicURL.appendPathComponent(segment)
         }
 
         return OutputCoverImageUploadMetadata(

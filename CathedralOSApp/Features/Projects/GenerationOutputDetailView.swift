@@ -73,6 +73,7 @@ struct GenerationOutputDetailView: View {
         f.timeStyle = .short
         return f
     }()
+    private static let maxCoverImageWidth: CGFloat = 1600
 
     var body: some View {
         ScrollView {
@@ -581,6 +582,8 @@ struct GenerationOutputDetailView: View {
         let previousCoverImageWidth = output.coverImageWidth
         let previousCoverImageHeight = output.coverImageHeight
         let previousCoverImageContentType = output.coverImageContentType
+        // Reuse a previously-assigned UUID when available; otherwise mint a new ID
+        // so storage uploads and publish payloads stay tied to the same record key.
         let stagedSharedOutputID = UUID(uuidString: previousSharedOutputID)?.uuidString.lowercased()
             ?? UUID().uuidString.lowercased()
 
@@ -701,8 +704,8 @@ struct GenerationOutputDetailView: View {
     }
 
     private func compressCoverImage(_ image: UIImage) -> (data: Data, preview: UIImage, width: Int, height: Int)? {
-        // 1600px max width balances readable image quality and upload/storage size.
-        let maxWidth: CGFloat = 1600
+        // Max width balances readable image quality and upload/storage size.
+        let maxWidth: CGFloat = Self.maxCoverImageWidth
         let originalSize = image.size
         guard originalSize.width > 0, originalSize.height > 0 else { return nil }
 

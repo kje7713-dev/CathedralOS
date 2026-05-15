@@ -428,6 +428,9 @@ export async function handler(req: Request): Promise<Response> {
           422,
         );
       }
+      if (coverImagePath.includes("..")) {
+        return jsonResponse({ status: "failed", error: "coverImagePath contains invalid path traversal segments" }, 422);
+      }
       const normalizedSupabaseURL = supabaseURL.trim().replace(/\/+$/, "");
       const expectedCoverImageURL =
         `${normalizedSupabaseURL}/storage/v1/object/public/shared-output-images/${coverImagePath}`;
