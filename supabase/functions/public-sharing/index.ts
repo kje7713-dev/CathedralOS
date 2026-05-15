@@ -21,6 +21,7 @@ const ALLOWED_REPORT_REASONS = new Set([
 ]);
 
 interface PublishRequestBody {
+  sharedOutputID?: string;
   cloudGenerationOutputID?: string;
   shareTitle?: string;
   shareExcerpt?: string;
@@ -31,6 +32,11 @@ interface PublishRequestBody {
   modelName?: string;
   generationAction?: string;
   generationLengthMode?: string;
+  coverImagePath?: string;
+  coverImageURL?: string;
+  coverImageWidth?: number;
+  coverImageHeight?: number;
+  coverImageContentType?: string;
 }
 
 interface RemixRequestBody {
@@ -123,6 +129,12 @@ function asISOString(value: unknown): string {
   return typeof value === "string" && value ? value : new Date().toISOString();
 }
 
+function normalizeOptionalString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 export async function handler(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -158,7 +170,7 @@ export async function handler(req: Request): Promise<Response> {
     const { data, error } = await adminClient
       .from("shared_outputs")
       .select(
-        "id, owner_user_id, share_title, share_excerpt, allow_remix, source_payload_json, generation_length_mode, published_at, created_at",
+        "id, owner_user_id, share_title, share_excerpt, allow_remix, source_payload_json, generation_length_mode, published_at, created_at, cover_image_path, cover_image_url, cover_image_width, cover_image_height, cover_image_content_type",
       )
       .in("visibility", ["shared", "unlisted"])
       .is("unpublished_at", null)
@@ -200,6 +212,11 @@ export async function handler(req: Request): Promise<Response> {
         generationLengthMode: typeof row.generation_length_mode === "string" ? row.generation_length_mode : null,
         contentRating: audience.contentRating,
         readingLevel: audience.readingLevel,
+        coverImagePath: typeof row.cover_image_path === "string" ? row.cover_image_path : null,
+        coverImageURL: typeof row.cover_image_url === "string" ? row.cover_image_url : null,
+        coverImageWidth: typeof row.cover_image_width === "number" ? row.cover_image_width : null,
+        coverImageHeight: typeof row.cover_image_height === "number" ? row.cover_image_height : null,
+        coverImageContentType: typeof row.cover_image_content_type === "string" ? row.cover_image_content_type : null,
       };
     });
 
@@ -280,6 +297,21 @@ export async function handler(req: Request): Promise<Response> {
         contentRating: audience.contentRating,
         audienceNotes: audience.audienceNotes,
         sourcePayloadJSON: allowRemix ? JSON.stringify(sourcePayload ?? {}) : null,
+        coverImagePath: typeof (data as Record<string, unknown>).cover_image_path === "string"
+          ? (data as Record<string, unknown>).cover_image_path
+          : null,
+        coverImageURL: typeof (data as Record<string, unknown>).cover_image_url === "string"
+          ? (data as Record<string, unknown>).cover_image_url
+          : null,
+        coverImageWidth: typeof (data as Record<string, unknown>).cover_image_width === "number"
+          ? (data as Record<string, unknown>).cover_image_width
+          : null,
+        coverImageHeight: typeof (data as Record<string, unknown>).cover_image_height === "number"
+          ? (data as Record<string, unknown>).cover_image_height
+          : null,
+        coverImageContentType: typeof (data as Record<string, unknown>).cover_image_content_type === "string"
+          ? (data as Record<string, unknown>).cover_image_content_type
+          : null,
       },
       200,
     );
@@ -302,10 +334,66 @@ export async function handler(req: Request): Promise<Response> {
       return jsonResponse({ status: "failed", error: "outputText must not be empty" }, 422);
     }
 
-    const cloudGenerationOutputID = typeof body.cloudGenerationOutputID === "string"
-      ? body.cloudGenerationOutputID.trim()
-      : "";
-    const generationOutputID = isUUID(cloudGenerationOutputID) ? cloudGenerationOutputID : null;
+    const requestedSharedOutputID = normalizeOptionalString(body.sharedOutputID);
+    if (body.sharedOutputID !== undefined && !requestedSharedOutputID) {
+      return jsonResponse({ status: "failed", error: "sharedOutputID must be a non-empty UUID" }, 422);
+    }
+    if (requestedSharedOutputID && !isUUID(requestedSharedOutputID)) {
+      return jsonResponse({ status: "failed", error: "sharedOutputID must be a UUID" }, 422);
+    }
+
+    const cloudGenerationOutputID = normalizeOptionalString(body.cloudGenerationOutputID);
+    if (!cloudGenerationOutputID || !isUUID(cloudGenerationOutputID)) {
+      return jsonResponse({ status: "failed", error: "cloudGenerationOutputID must be a UUID" }, 422);
+    }
+    const generationOutputID = cloudGenerationOutputID;
+
+    const { data: generationOutput, error: generationLookupError } = await adminClient
+      .from("generation_outputs")
+      .select("id, user_id")
+      .eq("id", generationOutputID)
+      .maybeSingle();
+    if (generationLookupError) {
+      console.error("[public-sharing] generation ownership lookup error:", generationLookupError);
+      return jsonResponse({ status: "failed", error: "Could not validate generation output ownership" }, 500);
+    }
+    if (!generationOutput) {
+      return jsonResponse({ status: "failed", error: "Generation output not found" }, 404);
+    }
+    if (String((generationOutput as Record<string, unknown>).user_id ?? "") !== userID) {
+      return jsonResponse({ status: "failed", error: "You do not own this generation output" }, 403);
+    }
+
+    const coverImagePath = normalizeOptionalString(body.coverImagePath);
+    const coverImageURL = normalizeOptionalString(body.coverImageURL);
+    const rawCoverImageWidth = body.coverImageWidth;
+    const rawCoverImageHeight = body.coverImageHeight;
+    const coverImageWidth = typeof rawCoverImageWidth === "number" && Number.isInteger(rawCoverImageWidth) &&
+        rawCoverImageWidth > 0
+      ? rawCoverImageWidth
+      : null;
+    const coverImageHeight = typeof rawCoverImageHeight === "number" && Number.isInteger(rawCoverImageHeight) &&
+        rawCoverImageHeight > 0
+      ? rawCoverImageHeight
+      : null;
+    const coverImageContentType = normalizeOptionalString(body.coverImageContentType);
+    const hasAnyCoverField = Boolean(
+      coverImagePath || coverImageURL || rawCoverImageWidth !== undefined || rawCoverImageHeight !== undefined ||
+        coverImageContentType,
+    );
+    if (hasAnyCoverField && !coverImagePath) {
+      return jsonResponse({ status: "failed", error: "coverImagePath is required when cover image metadata is provided" }, 422);
+    }
+    if (rawCoverImageWidth !== undefined && coverImageWidth === null) {
+      return jsonResponse({ status: "failed", error: "coverImageWidth must be a positive integer" }, 422);
+    }
+    if (rawCoverImageHeight !== undefined && coverImageHeight === null) {
+      return jsonResponse({ status: "failed", error: "coverImageHeight must be a positive integer" }, 422);
+    }
+    if (coverImageContentType && !coverImageContentType.startsWith("image/")) {
+      return jsonResponse({ status: "failed", error: "coverImageContentType must be an image MIME type" }, 422);
+    }
+
     const sourcePayloadJSON = parsePayloadJSON(body.sourcePayloadJSON, {});
 
     const generationAction = ALLOWED_ACTIONS.has(String(body.generationAction))
@@ -318,6 +406,7 @@ export async function handler(req: Request): Promise<Response> {
     const { data, error } = await adminClient
       .from("shared_outputs")
       .insert({
+        ...(requestedSharedOutputID ? { id: requestedSharedOutputID } : {}),
         owner_user_id: userID,
         generation_output_id: generationOutputID,
         share_title: typeof body.shareTitle === "string" ? body.shareTitle.trim() : "",
@@ -331,6 +420,11 @@ export async function handler(req: Request): Promise<Response> {
         generation_length_mode: generationLengthMode,
         visibility: "shared",
         unpublished_at: null,
+        cover_image_path: coverImagePath,
+        cover_image_url: coverImageURL,
+        cover_image_width: coverImageWidth,
+        cover_image_height: coverImageHeight,
+        cover_image_content_type: coverImageContentType,
       })
       .select("id, visibility, published_at")
       .single();

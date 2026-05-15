@@ -24,10 +24,12 @@ final class MockPublicSharingService: PublicSharingService {
     private(set) var publishCallCount = 0
     private(set) var unpublishCallCount = 0
     private(set) var reportCallCount = 0
+    private(set) var uploadCoverImageCallCount = 0
     private(set) var lastUnpublishedID: String?
     private(set) var lastReportedID: String?
     private(set) var lastReportReason: ReportReason?
     private(set) var lastReportDetails: String?
+    private(set) var lastUploadedCoverSharedOutputID: String?
 
     func publish(output: GenerationOutput) async throws -> PublishResponse {
         publishCallCount += 1
@@ -54,6 +56,25 @@ final class MockPublicSharingService: PublicSharingService {
         lastReportReason = reason
         lastReportDetails = details
         return try reportResult.get()
+    }
+
+    func uploadCoverImage(
+        sharedOutputID: String,
+        imageData: Data,
+        width: Int,
+        height: Int,
+        contentType: String
+    ) async throws -> OutputCoverImageUploadMetadata {
+        uploadCoverImageCallCount += 1
+        lastUploadedCoverSharedOutputID = sharedOutputID
+        return OutputCoverImageUploadMetadata(
+            sharedOutputID: sharedOutputID,
+            coverImagePath: "\(sharedOutputID)/mock.jpg",
+            coverImageURL: "https://example.com/\(sharedOutputID)/mock.jpg",
+            coverImageWidth: width,
+            coverImageHeight: height,
+            coverImageContentType: contentType
+        )
     }
 }
 
@@ -190,6 +211,11 @@ final class PublicSharingTests: XCTestCase {
 
     func testPublishRequestDTOEncodesRequiredFields() throws {
         let gen = makeOutput(title: "Encode Test")
+        gen.coverImagePath = "uid/shared/cover.jpg"
+        gen.coverImageURL = "https://example.com/uid/shared/cover.jpg"
+        gen.coverImageWidth = 1200
+        gen.coverImageHeight = 800
+        gen.coverImageContentType = "image/jpeg"
         let dto = OutputPublishingDTO(output: gen)
 
         let encoder = JSONEncoder()
@@ -205,6 +231,11 @@ final class PublicSharingTests: XCTestCase {
         XCTAssertEqual(obj["outputText"] as? String, "Sample text.")
         XCTAssertEqual(obj["modelName"] as? String, "gpt-4o")
         XCTAssertEqual(obj["generationAction"] as? String, "generate")
+        XCTAssertEqual(obj["coverImagePath"] as? String, "uid/shared/cover.jpg")
+        XCTAssertEqual(obj["coverImageURL"] as? String, "https://example.com/uid/shared/cover.jpg")
+        XCTAssertEqual(obj["coverImageWidth"] as? Int, 1200)
+        XCTAssertEqual(obj["coverImageHeight"] as? Int, 800)
+        XCTAssertEqual(obj["coverImageContentType"] as? String, "image/jpeg")
         XCTAssertNotNil(obj["createdAt"], "createdAt must be present in request JSON")
     }
 
@@ -225,7 +256,7 @@ final class PublicSharingTests: XCTestCase {
 
     func testPublishRequestDTORoundTrip() throws {
         let gen = makeOutput()
-        let dto = OutputPublishingDTO(output: gen)
+        let dto = OutputPublishingDTO(output: gen, sharedOutputID: "11111111-1111-1111-1111-111111111111")
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -241,6 +272,7 @@ final class PublicSharingTests: XCTestCase {
         XCTAssertEqual(decoded.outputText, dto.outputText)
         XCTAssertEqual(decoded.modelName, dto.modelName)
         XCTAssertEqual(decoded.generationAction, dto.generationAction)
+        XCTAssertEqual(decoded.sharedOutputID, dto.sharedOutputID)
     }
 
     // MARK: Publish response decoding

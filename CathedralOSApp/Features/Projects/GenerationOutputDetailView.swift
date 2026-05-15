@@ -1,5 +1,7 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
+import UIKit
 
 // MARK: - GenerationOutputDetailView
 
@@ -37,6 +39,13 @@ struct GenerationOutputDetailView: View {
     @State private var isUnpublishing    = false
     @State private var publishError: String?
     @State private var showPublishConfirm = false
+    @State private var coverPickerItem: PhotosPickerItem?
+    @State private var pendingCoverImagePreview: UIImage?
+    @State private var pendingCoverImageData: Data?
+    @State private var pendingCoverImageWidth: Int?
+    @State private var pendingCoverImageHeight: Int?
+    @State private var removeCoverImageOnPublish = false
+    @State private var isProcessingCoverImage = false
 
     // MARK: Action state
     @State private var isActioning  = false
@@ -120,6 +129,9 @@ struct GenerationOutputDetailView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: buildShareItems())
+        }
+        .onChange(of: coverPickerItem) { _, _ in
+            Task { await loadSelectedCoverImage() }
         }
     }
 
@@ -329,6 +341,10 @@ struct GenerationOutputDetailView: View {
 
                     Divider()
 
+                    coverImageSection
+
+                    Divider()
+
                     // Allow remix toggle
                     HStack {
                         Text("Allow Remix")
@@ -469,6 +485,89 @@ struct GenerationOutputDetailView: View {
         }
     }
 
+    private var coverImageSection: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            Text("Cover Image")
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+
+            Group {
+                if let pendingCoverImagePreview {
+                    Image(uiImage: pendingCoverImagePreview)
+                        .resizable()
+                        .scaledToFill()
+                } else if !removeCoverImageOnPublish,
+                          let url = URL(string: output.coverImageURL),
+                          !output.coverImageURL.isEmpty {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .empty:
+                            ProgressView()
+                                .frame(maxWidth: .infinity, minHeight: 120)
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        case .failure:
+                            Text("Cover image unavailable.")
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                                .frame(maxWidth: .infinity, minHeight: 120)
+                        @unknown default:
+                            EmptyView()
+                        }
+                    }
+                } else {
+                    Text("No cover image selected.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 180)
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+
+            HStack(spacing: CathedralTheme.Spacing.sm) {
+                PhotosPicker(
+                    selection: $coverPickerItem,
+                    matching: .images
+                ) {
+                    Label(hasCoverImage ? "Replace Image" : "Add Image", systemImage: "photo")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+                }
+
+                if hasCoverImage {
+                    Button {
+                        clearPendingCoverSelection()
+                        removeCoverImageOnPublish = true
+                    } label: {
+                        Label("Remove Image", systemImage: "trash")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if isProcessingCoverImage {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    ProgressView()
+                    Text("Processing image…")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+            }
+        }
+    }
+
+    private var hasCoverImage: Bool {
+        pendingCoverImageData != nil
+            || pendingCoverImagePreview != nil
+            || (!output.coverImageURL.isEmpty && !removeCoverImageOnPublish)
+            || (!output.coverImagePath.isEmpty && !removeCoverImageOnPublish)
+    }
+
     // MARK: Publish / Unpublish Logic
 
     private func performPublish() async {
@@ -476,7 +575,39 @@ struct GenerationOutputDetailView: View {
         publishError = nil
         defer { isPublishing = false }
 
+        let previousSharedOutputID = output.sharedOutputID
+        let previousCoverImagePath = output.coverImagePath
+        let previousCoverImageURL = output.coverImageURL
+        let previousCoverImageWidth = output.coverImageWidth
+        let previousCoverImageHeight = output.coverImageHeight
+        let previousCoverImageContentType = output.coverImageContentType
+        let stagedSharedOutputID = UUID().uuidString.lowercased()
+
         do {
+            if let pendingCoverImageData,
+               let width = pendingCoverImageWidth,
+               let height = pendingCoverImageHeight {
+                let upload = try await sharingService.uploadCoverImage(
+                    sharedOutputID: stagedSharedOutputID,
+                    imageData: pendingCoverImageData,
+                    width: width,
+                    height: height,
+                    contentType: "image/jpeg"
+                )
+                output.coverImagePath = upload.coverImagePath
+                output.coverImageURL = upload.coverImageURL
+                output.coverImageWidth = upload.coverImageWidth
+                output.coverImageHeight = upload.coverImageHeight
+                output.coverImageContentType = upload.coverImageContentType
+            } else if removeCoverImageOnPublish {
+                output.coverImagePath = ""
+                output.coverImageURL = ""
+                output.coverImageWidth = nil
+                output.coverImageHeight = nil
+                output.coverImageContentType = nil
+            }
+
+            output.sharedOutputID = stagedSharedOutputID
             let response = try await sharingService.publish(output: output)
             let now = Date()
             if output.publishedAt == nil {
@@ -488,7 +619,16 @@ struct GenerationOutputDetailView: View {
             output.lastPublishedAt = now
             output.publishErrorMessage = nil
             output.updatedAt = now
+            coverPickerItem = nil
+            clearPendingCoverSelection()
+            removeCoverImageOnPublish = false
         } catch {
+            output.sharedOutputID = previousSharedOutputID
+            output.coverImagePath = previousCoverImagePath
+            output.coverImageURL = previousCoverImageURL
+            output.coverImageWidth = previousCoverImageWidth
+            output.coverImageHeight = previousCoverImageHeight
+            output.coverImageContentType = previousCoverImageContentType
             let message = Self.sharingErrorMessage(error)
             publishError = message
             // Persist the error message so it survives navigation and re-display.
@@ -525,6 +665,65 @@ struct GenerationOutputDetailView: View {
 
     private static func sharingErrorMessage(_ error: Error) -> String {
         PublicSharingServiceError.displayMessage(from: error)
+    }
+
+    private func clearPendingCoverSelection() {
+        coverPickerItem = nil
+        pendingCoverImagePreview = nil
+        pendingCoverImageData = nil
+        pendingCoverImageWidth = nil
+        pendingCoverImageHeight = nil
+    }
+
+    @MainActor
+    private func loadSelectedCoverImage() async {
+        guard let coverPickerItem else { return }
+        isProcessingCoverImage = true
+        defer { isProcessingCoverImage = false }
+
+        do {
+            guard let rawData = try await coverPickerItem.loadTransferable(type: Data.self),
+                  let image = UIImage(data: rawData),
+                  let compressed = compressCoverImage(image) else {
+                publishError = "Could not load the selected image."
+                return
+            }
+
+            pendingCoverImagePreview = compressed.preview
+            pendingCoverImageData = compressed.data
+            pendingCoverImageWidth = compressed.width
+            pendingCoverImageHeight = compressed.height
+            removeCoverImageOnPublish = false
+        } catch {
+            publishError = "Could not load the selected image: \(error.localizedDescription)"
+        }
+    }
+
+    private func compressCoverImage(_ image: UIImage) -> (data: Data, preview: UIImage, width: Int, height: Int)? {
+        let maxWidth: CGFloat = 1600
+        let originalSize = image.size
+        guard originalSize.width > 0, originalSize.height > 0 else { return nil }
+
+        let scale = min(1, maxWidth / originalSize.width)
+        let targetSize = CGSize(
+            width: max(1, floor(originalSize.width * scale)),
+            height: max(1, floor(originalSize.height * scale))
+        )
+
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        let rendered = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+
+        guard let jpegData = rendered.jpegData(compressionQuality: 0.75) else {
+            return nil
+        }
+        return (
+            data: jpegData,
+            preview: rendered,
+            width: Int(targetSize.width),
+            height: Int(targetSize.height)
+        )
     }
 
     // MARK: Share Sheet helpers

@@ -140,6 +140,16 @@ class GenerationOutput {
     /// Timestamp of the most-recent successful publish to the backend.
     /// Distinct from `publishedAt` (first-publish timestamp) so re-publishes are tracked.
     var lastPublishedAt: Date?
+    /// Storage path of the optional cover image attached at publish time.
+    var coverImagePath: String
+    /// Public URL of the optional cover image attached at publish time.
+    var coverImageURL: String
+    /// Pixel width of the stored cover image.
+    var coverImageWidth: Int?
+    /// Pixel height of the stored cover image.
+    var coverImageHeight: Int?
+    /// MIME content type of the stored cover image.
+    var coverImageContentType: String?
 
     // MARK: Publish error metadata
     /// Human-readable description of the last publish or unpublish error.
@@ -199,6 +209,11 @@ class GenerationOutput {
         self.sharedOutputID = ""
         self.shareURL = ""
         self.lastPublishedAt = nil
+        self.coverImagePath = ""
+        self.coverImageURL = ""
+        self.coverImageWidth = nil
+        self.coverImageHeight = nil
+        self.coverImageContentType = nil
         self.publishErrorMessage = nil
         self.cloudGenerationOutputID = ""
         self.syncStatus = SyncStatus.localOnly.rawValue

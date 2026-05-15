@@ -133,6 +133,11 @@ accidental data leaks when a private output is later modified.
 | `generation_action` | text | |
 | `generation_length_mode` | text | |
 | `allow_remix` | boolean | Whether others may fork this output |
+| `cover_image_path` | text nullable | Storage path in `shared-output-images/{user_id}/{shared_output_id}/{uuid}.jpg` |
+| `cover_image_url` | text nullable | Public URL for rendering |
+| `cover_image_width` | integer nullable | Stored image pixel width |
+| `cover_image_height` | integer nullable | Stored image pixel height |
+| `cover_image_content_type` | text nullable | MIME type (for now `image/jpeg`) |
 | `visibility` | text | `shared` / `unlisted` / `private` |
 | `published_at` | timestamptz | When first published |
 | `unpublished_at` | timestamptz | Set when owner unpublishes |
@@ -142,10 +147,18 @@ accidental data leaks when a private output is later modified.
 **RLS assumptions**
 - Authenticated users can read rows where `visibility in ('shared','unlisted')`
   and `unpublished_at is null`.
+- Anonymous users can read the same public rows (for signed-out browse).
 - The owner can read, insert, update, and delete their own rows regardless of
   visibility or unpublished state.
-- Anonymous (unauthenticated) reads are not enabled by default; add a separate
-  policy with `to anon` if a public browse-without-login feature is needed.
+
+### `storage.objects` (`shared-output-images` bucket)
+
+Optional cover images are stored in the `shared-output-images` bucket.
+
+- Bucket visibility: public (MVP for simple signed-out read access).
+- Object path format: `{user_id}/{shared_output_id}/{uuid}.jpg`.
+- Authenticated users may insert/update/delete only objects under their own
+  user-id prefix.
 
 ---
 

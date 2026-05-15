@@ -33,12 +33,20 @@ struct OutputPublishingDTO: Codable {
     /// Raw value of `GenerationLengthMode`: "short" | "medium" | "long" | "chapter".
     let generationLengthMode: String
 
+    // MARK: Optional cover image metadata
+    let sharedOutputID: String?
+    let coverImagePath: String?
+    let coverImageURL: String?
+    let coverImageWidth: Int?
+    let coverImageHeight: Int?
+    let coverImageContentType: String?
+
     // MARK: Timestamps
     let createdAt: Date
 
     // MARK: Init from model
 
-    init(output: GenerationOutput) {
+    init(output: GenerationOutput, sharedOutputID: String? = nil) {
         self.localGenerationOutputID = output.id.uuidString
         self.cloudGenerationOutputID = output.cloudGenerationOutputID
         self.shareTitle = output.shareTitle
@@ -50,8 +58,23 @@ struct OutputPublishingDTO: Codable {
         self.modelName = output.modelName
         self.generationAction = output.generationAction
         self.generationLengthMode = output.generationLengthMode
+        self.sharedOutputID = sharedOutputID
+        self.coverImagePath = output.coverImagePath.nilIfEmpty
+        self.coverImageURL = output.coverImageURL.nilIfEmpty
+        self.coverImageWidth = output.coverImageWidth
+        self.coverImageHeight = output.coverImageHeight
+        self.coverImageContentType = output.coverImageContentType
         self.createdAt = output.createdAt
     }
+}
+
+struct OutputCoverImageUploadMetadata: Codable {
+    let sharedOutputID: String
+    let coverImagePath: String
+    let coverImageURL: String
+    let coverImageWidth: Int
+    let coverImageHeight: Int
+    let coverImageContentType: String
 }
 
 // MARK: - PublishResponse
@@ -94,6 +117,11 @@ struct SharedOutputListItem: Codable, Identifiable {
     let contentRating: String?
     /// Raw reading-level tag assigned by the publisher (e.g. "middle-grade" | "ya" | "adult").
     let readingLevel: String?
+    let coverImagePath: String?
+    let coverImageURL: String?
+    let coverImageWidth: Int?
+    let coverImageHeight: Int?
+    let coverImageContentType: String?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -106,6 +134,11 @@ struct SharedOutputListItem: Codable, Identifiable {
         generationLengthMode = try c.decodeIfPresent(String.self, forKey: .generationLengthMode)
         contentRating        = try c.decodeIfPresent(String.self, forKey: .contentRating)
         readingLevel         = try c.decodeIfPresent(String.self, forKey: .readingLevel)
+        coverImagePath       = try c.decodeIfPresent(String.self, forKey: .coverImagePath)
+        coverImageURL        = try c.decodeIfPresent(String.self, forKey: .coverImageURL)
+        coverImageWidth      = try c.decodeIfPresent(Int.self, forKey: .coverImageWidth)
+        coverImageHeight     = try c.decodeIfPresent(Int.self, forKey: .coverImageHeight)
+        coverImageContentType = try c.decodeIfPresent(String.self, forKey: .coverImageContentType)
     }
 }
 
@@ -138,6 +171,11 @@ struct SharedOutputDetail: Codable {
     /// Frozen JSON snapshot of the `PromptPackExportPayload` included when `allowRemix` is true.
     /// Present only when the publisher explicitly permits remixing.
     let sourcePayloadJSON: String?
+    let coverImagePath: String?
+    let coverImageURL: String?
+    let coverImageWidth: Int?
+    let coverImageHeight: Int?
+    let coverImageContentType: String?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -158,6 +196,11 @@ struct SharedOutputDetail: Codable {
         contentRating        = try c.decodeIfPresent(String.self, forKey: .contentRating)
         audienceNotes        = try c.decodeIfPresent(String.self, forKey: .audienceNotes)
         sourcePayloadJSON    = try c.decodeIfPresent(String.self, forKey: .sourcePayloadJSON)
+        coverImagePath       = try c.decodeIfPresent(String.self, forKey: .coverImagePath)
+        coverImageURL        = try c.decodeIfPresent(String.self, forKey: .coverImageURL)
+        coverImageWidth      = try c.decodeIfPresent(Int.self, forKey: .coverImageWidth)
+        coverImageHeight     = try c.decodeIfPresent(Int.self, forKey: .coverImageHeight)
+        coverImageContentType = try c.decodeIfPresent(String.self, forKey: .coverImageContentType)
     }
 }
 
@@ -172,4 +215,3 @@ struct SharedOutputListResponse: Codable {
         items = try c.decodeIfPresent([SharedOutputListItem].self, forKey: .items) ?? []
     }
 }
-

@@ -246,6 +246,28 @@ struct SharedOutputDetailView: View {
 
     private func outputSection(_ detail: SharedOutputDetail) -> some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            if let coverURL = detail.coverImageURL,
+               let url = URL(string: coverURL),
+               !coverURL.isEmpty {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .empty:
+                        ProgressView()
+                            .frame(maxWidth: .infinity, minHeight: 160)
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure:
+                        EmptyView()
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 160, maxHeight: 260)
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+
             Text("OUTPUT".uppercased())
                 .font(CathedralTheme.Typography.label(10, weight: .semibold))
                 .tracking(1.5)
@@ -521,4 +543,3 @@ struct SharedOutputDetailView: View {
         }
     }
 }
-

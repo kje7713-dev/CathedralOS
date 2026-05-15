@@ -412,6 +412,15 @@ final class GenerationOutputTests: XCTestCase {
         XCTAssertNil(gen.lastPublishedAt)
     }
 
+    func testCoverImageMetadataDefaults() {
+        let gen = makeOutput()
+        XCTAssertEqual(gen.coverImagePath, "")
+        XCTAssertEqual(gen.coverImageURL, "")
+        XCTAssertNil(gen.coverImageWidth)
+        XCTAssertNil(gen.coverImageHeight)
+        XCTAssertNil(gen.coverImageContentType)
+    }
+
     func testSharedOutputIDPersists() {
         let gen = makeOutput()
         gen.sharedOutputID = "abc-123"
@@ -429,6 +438,21 @@ final class GenerationOutputTests: XCTestCase {
         let now = Date()
         gen.lastPublishedAt = now
         XCTAssertEqual(gen.lastPublishedAt, now)
+    }
+
+    func testCoverImageMetadataPersists() {
+        let gen = makeOutput()
+        gen.coverImagePath = "user/output/image.jpg"
+        gen.coverImageURL = "https://example.com/image.jpg"
+        gen.coverImageWidth = 1000
+        gen.coverImageHeight = 600
+        gen.coverImageContentType = "image/jpeg"
+
+        XCTAssertEqual(gen.coverImagePath, "user/output/image.jpg")
+        XCTAssertEqual(gen.coverImageURL, "https://example.com/image.jpg")
+        XCTAssertEqual(gen.coverImageWidth, 1000)
+        XCTAssertEqual(gen.coverImageHeight, 600)
+        XCTAssertEqual(gen.coverImageContentType, "image/jpeg")
     }
 
     // MARK: OutputPublishingDTO encoding
