@@ -163,6 +163,28 @@ private struct SharedOutputRowView: View {
     var body: some View {
         CathedralCard {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                if let coverURL = item.coverImageURL,
+                   let url = URL(string: coverURL),
+                   !coverURL.isEmpty {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .empty:
+                            ProgressView()
+                                .frame(maxWidth: .infinity, minHeight: 120)
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        case .failure:
+                            EmptyView()
+                        @unknown default:
+                            EmptyView()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 160)
+                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+                }
+
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
                         Text(item.shareTitle.isEmpty ? "Untitled" : item.shareTitle)

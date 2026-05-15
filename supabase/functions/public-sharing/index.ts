@@ -19,8 +19,11 @@ const ALLOWED_REPORT_REASONS = new Set([
   "spam",
   "other",
 ]);
+const SHARED_OUTPUT_LIST_SELECT =
+  "id, owner_user_id, share_title, share_excerpt, allow_remix, source_payload_json, generation_length_mode, published_at, created_at, cover_image_path, cover_image_url, cover_image_width, cover_image_height, cover_image_content_type";
 
 interface PublishRequestBody {
+  sharedOutputID?: string;
   cloudGenerationOutputID?: string;
   shareTitle?: string;
   shareExcerpt?: string;
@@ -31,6 +34,11 @@ interface PublishRequestBody {
   modelName?: string;
   generationAction?: string;
   generationLengthMode?: string;
+  coverImagePath?: string;
+  coverImageURL?: string;
+  coverImageWidth?: number;
+  coverImageHeight?: number;
+  coverImageContentType?: string;
 }
 
 interface RemixRequestBody {
@@ -123,6 +131,12 @@ function asISOString(value: unknown): string {
   return typeof value === "string" && value ? value : new Date().toISOString();
 }
 
+function normalizeOptionalString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 export async function handler(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -157,9 +171,7 @@ export async function handler(req: Request): Promise<Response> {
   if (req.method === "GET" && routePath === "/shared-outputs") {
     const { data, error } = await adminClient
       .from("shared_outputs")
-      .select(
-        "id, owner_user_id, share_title, share_excerpt, allow_remix, source_payload_json, generation_length_mode, published_at, created_at",
-      )
+      .select(SHARED_OUTPUT_LIST_SELECT)
       .in("visibility", ["shared", "unlisted"])
       .is("unpublished_at", null)
       .order("published_at", { ascending: false })
@@ -200,6 +212,11 @@ export async function handler(req: Request): Promise<Response> {
         generationLengthMode: typeof row.generation_length_mode === "string" ? row.generation_length_mode : null,
         contentRating: audience.contentRating,
         readingLevel: audience.readingLevel,
+        coverImagePath: typeof row.cover_image_path === "string" ? row.cover_image_path : null,
+        coverImageURL: typeof row.cover_image_url === "string" ? row.cover_image_url : null,
+        coverImageWidth: typeof row.cover_image_width === "number" ? row.cover_image_width : null,
+        coverImageHeight: typeof row.cover_image_height === "number" ? row.cover_image_height : null,
+        coverImageContentType: typeof row.cover_image_content_type === "string" ? row.cover_image_content_type : null,
       };
     });
 
@@ -241,45 +258,61 @@ export async function handler(req: Request): Promise<Response> {
 
     const sourcePayload = (data as Record<string, unknown>).source_payload_json;
     const audience = deriveAudienceFields(sourcePayload);
-    const allowRemix = Boolean((data as Record<string, unknown>).allow_remix);
+    const sharedOutputRecord = data as Record<string, unknown>;
+    const allowRemix = Boolean(sharedOutputRecord.allow_remix);
 
     return jsonResponse(
       {
-        sharedOutputID: String((data as Record<string, unknown>).id ?? ""),
-        shareTitle: typeof (data as Record<string, unknown>).share_title === "string"
-          ? (data as Record<string, unknown>).share_title
+        sharedOutputID: String(sharedOutputRecord.id ?? ""),
+        shareTitle: typeof sharedOutputRecord.share_title === "string"
+          ? sharedOutputRecord.share_title
           : "",
-        shareExcerpt: typeof (data as Record<string, unknown>).share_excerpt === "string"
-          ? (data as Record<string, unknown>).share_excerpt
+        shareExcerpt: typeof sharedOutputRecord.share_excerpt === "string"
+          ? sharedOutputRecord.share_excerpt
           : "",
-        outputText: typeof (data as Record<string, unknown>).output_text === "string"
-          ? (data as Record<string, unknown>).output_text
+        outputText: typeof sharedOutputRecord.output_text === "string"
+          ? sharedOutputRecord.output_text
           : "",
         authorDisplayName: typeof (profileData as Record<string, unknown> | null)?.display_name === "string"
           ? (profileData as Record<string, unknown>).display_name
           : null,
         ownerUserID,
-        sourcePromptPackName: typeof (data as Record<string, unknown>).source_prompt_pack_name === "string"
-          ? (data as Record<string, unknown>).source_prompt_pack_name
+        sourcePromptPackName: typeof sharedOutputRecord.source_prompt_pack_name === "string"
+          ? sharedOutputRecord.source_prompt_pack_name
           : null,
-        modelName: typeof (data as Record<string, unknown>).model_name === "string"
-          ? (data as Record<string, unknown>).model_name
+        modelName: typeof sharedOutputRecord.model_name === "string"
+          ? sharedOutputRecord.model_name
           : null,
-        generationAction: typeof (data as Record<string, unknown>).generation_action === "string"
-          ? (data as Record<string, unknown>).generation_action
+        generationAction: typeof sharedOutputRecord.generation_action === "string"
+          ? sharedOutputRecord.generation_action
           : null,
-        generationLengthMode: typeof (data as Record<string, unknown>).generation_length_mode === "string"
-          ? (data as Record<string, unknown>).generation_length_mode
+        generationLengthMode: typeof sharedOutputRecord.generation_length_mode === "string"
+          ? sharedOutputRecord.generation_length_mode
           : null,
         allowRemix,
         createdAt: asISOString(
-          (data as Record<string, unknown>).published_at ?? (data as Record<string, unknown>).created_at,
+          sharedOutputRecord.published_at ?? sharedOutputRecord.created_at,
         ),
         shareURL: buildShareURL(publicShareBaseURL, sharedOutputID),
         readingLevel: audience.readingLevel,
         contentRating: audience.contentRating,
         audienceNotes: audience.audienceNotes,
         sourcePayloadJSON: allowRemix ? JSON.stringify(sourcePayload ?? {}) : null,
+        coverImagePath: typeof sharedOutputRecord.cover_image_path === "string"
+          ? sharedOutputRecord.cover_image_path
+          : null,
+        coverImageURL: typeof sharedOutputRecord.cover_image_url === "string"
+          ? sharedOutputRecord.cover_image_url
+          : null,
+        coverImageWidth: typeof sharedOutputRecord.cover_image_width === "number"
+          ? sharedOutputRecord.cover_image_width
+          : null,
+        coverImageHeight: typeof sharedOutputRecord.cover_image_height === "number"
+          ? sharedOutputRecord.cover_image_height
+          : null,
+        coverImageContentType: typeof sharedOutputRecord.cover_image_content_type === "string"
+          ? sharedOutputRecord.cover_image_content_type
+          : null,
       },
       200,
     );
@@ -302,10 +335,110 @@ export async function handler(req: Request): Promise<Response> {
       return jsonResponse({ status: "failed", error: "outputText must not be empty" }, 422);
     }
 
-    const cloudGenerationOutputID = typeof body.cloudGenerationOutputID === "string"
-      ? body.cloudGenerationOutputID.trim()
-      : "";
-    const generationOutputID = isUUID(cloudGenerationOutputID) ? cloudGenerationOutputID : null;
+    const requestedSharedOutputID = normalizeOptionalString(body.sharedOutputID);
+    if (body.sharedOutputID !== undefined && !requestedSharedOutputID) {
+      return jsonResponse({ status: "failed", error: "sharedOutputID must be a non-empty UUID" }, 422);
+    }
+    if (requestedSharedOutputID && !isUUID(requestedSharedOutputID)) {
+      return jsonResponse({ status: "failed", error: "sharedOutputID must be a UUID" }, 422);
+    }
+
+    const cloudGenerationOutputID = normalizeOptionalString(body.cloudGenerationOutputID);
+    if (!cloudGenerationOutputID || !isUUID(cloudGenerationOutputID)) {
+      return jsonResponse({ status: "failed", error: "cloudGenerationOutputID must be a UUID" }, 422);
+    }
+    const generationOutputID = cloudGenerationOutputID;
+
+    const { data: generationOutput, error: generationLookupError } = await adminClient
+      .from("generation_outputs")
+      .select("id, user_id")
+      .eq("id", generationOutputID)
+      .maybeSingle();
+    if (generationLookupError) {
+      console.error("[public-sharing] generation ownership lookup error:", generationLookupError);
+      return jsonResponse({ status: "failed", error: "Could not validate generation output ownership" }, 500);
+    }
+    if (!generationOutput) {
+      return jsonResponse({ status: "failed", error: "Generation output not found" }, 404);
+    }
+    if (String((generationOutput as Record<string, unknown>).user_id ?? "") !== userID) {
+      return jsonResponse({ status: "failed", error: "You do not own this generation output" }, 403);
+    }
+
+    const { data: existingSharedOutput, error: existingSharedOutputLookupError } = requestedSharedOutputID
+      ? await adminClient
+        .from("shared_outputs")
+        .select("id, owner_user_id")
+        .eq("id", requestedSharedOutputID)
+        .maybeSingle()
+      : { data: null, error: null };
+    if (existingSharedOutputLookupError) {
+      console.error("[public-sharing] shared output lookup error:", existingSharedOutputLookupError);
+      return jsonResponse({ status: "failed", error: "Could not validate shared output ownership" }, 500);
+    }
+    if (
+      existingSharedOutput &&
+      String((existingSharedOutput as Record<string, unknown>).owner_user_id ?? "") !== userID
+    ) {
+      return jsonResponse({ status: "failed", error: "You do not own this shared output" }, 403);
+    }
+
+    const coverImagePath = normalizeOptionalString(body.coverImagePath);
+    const coverImageURL = normalizeOptionalString(body.coverImageURL);
+    const rawCoverImageWidth = body.coverImageWidth;
+    const rawCoverImageHeight = body.coverImageHeight;
+    const coverImageWidth = typeof rawCoverImageWidth === "number" && Number.isInteger(rawCoverImageWidth) &&
+        rawCoverImageWidth > 0
+      ? rawCoverImageWidth
+      : null;
+    const coverImageHeight = typeof rawCoverImageHeight === "number" && Number.isInteger(rawCoverImageHeight) &&
+        rawCoverImageHeight > 0
+      ? rawCoverImageHeight
+      : null;
+    const coverImageContentType = normalizeOptionalString(body.coverImageContentType);
+    const hasAnyCoverField = body.coverImagePath !== undefined || body.coverImageURL !== undefined ||
+      body.coverImageWidth !== undefined || body.coverImageHeight !== undefined ||
+      body.coverImageContentType !== undefined;
+    if (rawCoverImageWidth !== undefined && coverImageWidth === null) {
+      return jsonResponse({ status: "failed", error: "coverImageWidth must be a positive integer" }, 422);
+    }
+    if (rawCoverImageHeight !== undefined && coverImageHeight === null) {
+      return jsonResponse({ status: "failed", error: "coverImageHeight must be a positive integer" }, 422);
+    }
+    if (
+      hasAnyCoverField &&
+      (!coverImagePath || !coverImageURL || !coverImageWidth || !coverImageHeight || !coverImageContentType)
+    ) {
+      return jsonResponse(
+        { status: "failed", error: "cover image metadata must include path, URL, width, height, and content type" },
+        422,
+      );
+    }
+    if (coverImageContentType && !coverImageContentType.startsWith("image/")) {
+      return jsonResponse({ status: "failed", error: "coverImageContentType must be an image MIME type" }, 422);
+    }
+    if (hasAnyCoverField) {
+      if (!requestedSharedOutputID) {
+        return jsonResponse({ status: "failed", error: "sharedOutputID is required when cover image metadata is provided" }, 422);
+      }
+      const expectedCoverPrefix = `${userID}/${requestedSharedOutputID}/`;
+      if (!coverImagePath?.startsWith(expectedCoverPrefix)) {
+        return jsonResponse(
+          { status: "failed", error: "coverImagePath must match user and shared output ownership path" },
+          422,
+        );
+      }
+      if (coverImagePath.includes("..")) {
+        return jsonResponse({ status: "failed", error: "coverImagePath contains invalid path traversal segments" }, 422);
+      }
+      const normalizedSupabaseURL = supabaseURL.trim().replace(/\/+$/, "");
+      const expectedCoverImageURL =
+        `${normalizedSupabaseURL}/storage/v1/object/public/shared-output-images/${coverImagePath}`;
+      if (coverImageURL !== expectedCoverImageURL) {
+        return jsonResponse({ status: "failed", error: "coverImageURL does not match expected public storage URL" }, 422);
+      }
+    }
+
     const sourcePayloadJSON = parsePayloadJSON(body.sourcePayloadJSON, {});
 
     const generationAction = ALLOWED_ACTIONS.has(String(body.generationAction))
@@ -315,25 +448,44 @@ export async function handler(req: Request): Promise<Response> {
       ? String(body.generationLengthMode)
       : "medium";
 
-    const { data, error } = await adminClient
-      .from("shared_outputs")
-      .insert({
-        owner_user_id: userID,
-        generation_output_id: generationOutputID,
-        share_title: typeof body.shareTitle === "string" ? body.shareTitle.trim() : "",
-        share_excerpt: typeof body.shareExcerpt === "string" ? body.shareExcerpt.trim() : "",
-        allow_remix: Boolean(body.allowRemix),
-        output_text: outputText,
-        source_payload_json: sourcePayloadJSON,
-        source_prompt_pack_name: typeof body.sourcePromptPackName === "string" ? body.sourcePromptPackName : "",
-        model_name: typeof body.modelName === "string" ? body.modelName : "",
-        generation_action: generationAction,
-        generation_length_mode: generationLengthMode,
-        visibility: "shared",
-        unpublished_at: null,
-      })
-      .select("id, visibility, published_at")
-      .single();
+    const sharedOutputWritePayload = {
+      owner_user_id: userID,
+      generation_output_id: generationOutputID,
+      share_title: typeof body.shareTitle === "string" ? body.shareTitle.trim() : "",
+      share_excerpt: typeof body.shareExcerpt === "string" ? body.shareExcerpt.trim() : "",
+      allow_remix: Boolean(body.allowRemix),
+      output_text: outputText,
+      source_payload_json: sourcePayloadJSON,
+      source_prompt_pack_name: typeof body.sourcePromptPackName === "string" ? body.sourcePromptPackName : "",
+      model_name: typeof body.modelName === "string" ? body.modelName : "",
+      generation_action: generationAction,
+      generation_length_mode: generationLengthMode,
+      visibility: "shared",
+      unpublished_at: null,
+      published_at: new Date().toISOString(),
+      cover_image_path: coverImagePath,
+      cover_image_url: coverImageURL,
+      cover_image_width: coverImageWidth,
+      cover_image_height: coverImageHeight,
+      cover_image_content_type: coverImageContentType,
+    };
+
+    const { data, error } = existingSharedOutput
+      ? await adminClient
+        .from("shared_outputs")
+        .update(sharedOutputWritePayload)
+        .eq("id", requestedSharedOutputID as string)
+        .eq("owner_user_id", userID)
+        .select("id, visibility, published_at")
+        .single()
+      : await adminClient
+        .from("shared_outputs")
+        .insert({
+          ...(requestedSharedOutputID ? { id: requestedSharedOutputID } : {}),
+          ...sharedOutputWritePayload,
+        })
+        .select("id, visibility, published_at")
+        .single();
 
     if (error || !data) {
       console.error("[public-sharing] publish error:", error);

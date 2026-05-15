@@ -4,6 +4,8 @@ import Foundation
 
 enum PublicSharingServiceError: Error, LocalizedError {
     case endpointNotConfigured
+    case backendNotConfigured
+    case invalidSharedOutputID
     case encodingError(Error)
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
@@ -20,6 +22,10 @@ enum PublicSharingServiceError: Error, LocalizedError {
         switch self {
         case .endpointNotConfigured:
             return "Public sharing endpoint is not configured. Set PublicSharingBaseURL in Info.plist."
+        case .backendNotConfigured:
+            return "Supabase backend is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist."
+        case .invalidSharedOutputID:
+            return "Invalid shared output ID."
         case .encodingError(let underlying):
             return "Could not encode request: \(underlying.localizedDescription)"
         case .networkError(let underlying):
@@ -65,6 +71,15 @@ protocol PublicSharingService {
     /// Requires a signed-in user.
     /// Throws `PublicSharingServiceError` on failure.
     func reportSharedOutput(sharedOutputID: String, reason: ReportReason, details: String) async throws
+
+    /// Uploads a cover image for a pending shared output and returns persisted metadata.
+    func uploadCoverImage(
+        sharedOutputID: String,
+        imageData: Data,
+        width: Int,
+        height: Int,
+        contentType: String
+    ) async throws -> OutputCoverImageUploadMetadata
 }
 
 // MARK: - BackendPublicSharingService
@@ -117,7 +132,7 @@ final class BackendPublicSharingService: PublicSharingService {
         guard let url = PublicSharingServiceConfiguration.publishURL else {
             throw PublicSharingServiceError.endpointNotConfigured
         }
-        let dto = OutputPublishingDTO(output: output)
+        let dto = OutputPublishingDTO(output: output, sharedOutputID: output.sharedOutputID.nilIfEmpty)
         let encoder = JSONEncoder()
         // sortedKeys ensures deterministic JSON for consistent request bodies.
         encoder.outputFormatting = [.sortedKeys]
@@ -145,6 +160,75 @@ final class BackendPublicSharingService: PublicSharingService {
         } catch {
             throw PublicSharingServiceError.decodingError(error)
         }
+    }
+
+    // MARK: Cover image upload
+
+    func uploadCoverImage(
+        sharedOutputID: String,
+        imageData: Data,
+        width: Int,
+        height: Int,
+        contentType: String = "image/jpeg"
+    ) async throws -> OutputCoverImageUploadMetadata {
+        try await requireSignedIn()
+        guard let projectURL = SupabaseConfiguration.projectURL,
+              let anonKey = SupabaseConfiguration.anonKey else {
+            throw PublicSharingServiceError.backendNotConfigured
+        }
+        guard let token = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty,
+              let userID = authService.currentUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userID.isEmpty else {
+            throw PublicSharingServiceError.notSignedIn
+        }
+        guard UUID(uuidString: sharedOutputID) != nil else {
+            throw PublicSharingServiceError.invalidSharedOutputID
+        }
+
+        let fileExtension = Self.fileExtension(for: contentType)
+        let coverImageFileName = "\(UUID().uuidString.lowercased()).\(fileExtension)"
+        let objectPathSegments = [userID, sharedOutputID, coverImageFileName]
+        let objectPath = objectPathSegments.joined(separator: "/")
+
+        var uploadURL = projectURL
+            .appendingPathComponent("storage")
+            .appendingPathComponent("v1")
+            .appendingPathComponent("object")
+            .appendingPathComponent("shared-output-images")
+        objectPathSegments.forEach { segment in
+            uploadURL.appendPathComponent(segment)
+        }
+
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "POST"
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.setValue("false", forHTTPHeaderField: "x-upsert")
+        request.httpBody = imageData
+
+        let (data, urlResponse) = try await performRequest(request)
+        try validateResponse(urlResponse, data: data)
+
+        var publicURL = projectURL
+            .appendingPathComponent("storage")
+            .appendingPathComponent("v1")
+            .appendingPathComponent("object")
+            .appendingPathComponent("public")
+            .appendingPathComponent("shared-output-images")
+        objectPathSegments.forEach { segment in
+            publicURL.appendPathComponent(segment)
+        }
+
+        return OutputCoverImageUploadMetadata(
+            sharedOutputID: sharedOutputID,
+            coverImagePath: objectPath,
+            coverImageURL: publicURL.absoluteString,
+            coverImageWidth: width,
+            coverImageHeight: height,
+            coverImageContentType: contentType
+        )
     }
 
     // MARK: Unpublish
@@ -287,6 +371,17 @@ final class BackendPublicSharingService: PublicSharingService {
         guard (200..<300).contains(http.statusCode) else {
             let message = String(data: data, encoding: .utf8)
             throw PublicSharingServiceError.serverError(statusCode: http.statusCode, message: message)
+        }
+    }
+
+    private static func fileExtension(for contentType: String) -> String {
+        switch contentType.lowercased() {
+        case "image/png":
+            return "png"
+        case "image/webp":
+            return "webp"
+        default:
+            return "jpg"
         }
     }
 }
