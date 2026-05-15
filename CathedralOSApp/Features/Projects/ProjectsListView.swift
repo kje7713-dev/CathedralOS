@@ -15,6 +15,9 @@ struct ProjectsListView: View {
     @State private var pendingNavigationProject: StoryProject?
     private let schemaExampleJSON = ProjectSchemaTemplateBuilder.buildExampleJSON()
     @State private var showCopiedLLMPrompt = false
+    @State private var hasLocalBackups = false
+    @State private var restoreErrorMessage: String?
+    @State private var showRestoreSuccess = false
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -107,6 +110,23 @@ struct ProjectsListView: View {
         } message: {
             Text("LLM prompt copied to clipboard.")
         }
+        .alert("Restore Failed", isPresented: Binding(
+            get: { restoreErrorMessage != nil },
+            set: { if !$0 { restoreErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { restoreErrorMessage = nil }
+        } message: {
+            Text(restoreErrorMessage ?? "The local backup could not be restored.")
+        }
+        .alert("Backup Restored", isPresented: $showRestoreSuccess) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("A local backup was restored successfully.")
+        }
+        .task {
+            LocalProjectBackupService.shared.backupAllProjects(in: modelContext)
+            refreshBackupAvailability()
+        }
     }
 
     // MARK: Empty State
@@ -132,6 +152,17 @@ struct ProjectsListView: View {
                 showAddProject = true
             }
             .padding(.horizontal, CathedralTheme.Spacing.xxl)
+
+            if hasLocalBackups {
+                Button {
+                    restoreFromLatestBackup()
+                } label: {
+                    Label("Restore from Local Backup", systemImage: "clock.arrow.circlepath")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(CathedralTheme.Colors.secondaryText.opacity(0.8))
+                .padding(.horizontal, CathedralTheme.Spacing.xxl)
+            }
             Spacer()
         }
         .padding(CathedralTheme.Spacing.xl)
@@ -251,6 +282,8 @@ struct ProjectsListView: View {
                         let trimmed = renameText.trimmingCharacters(in: .whitespaces)
                         guard !trimmed.isEmpty else { return }
                         project.name = trimmed
+                        _ = LocalProjectBackupService.shared.backup(project: project)
+                        refreshBackupAvailability()
                         projectToRename = nil
                     }
                     .disabled(renameText.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -267,8 +300,25 @@ struct ProjectsListView: View {
         guard !trimmed.isEmpty else { return }
         let p = StoryProject(name: trimmed)
         modelContext.insert(p)
+        _ = LocalProjectBackupService.shared.backup(project: p)
+        refreshBackupAvailability()
         pendingNavigationProject = p
         newProjectName = ""
         showAddProject = false
+    }
+
+    private func refreshBackupAvailability() {
+        hasLocalBackups = LocalProjectBackupService.shared.hasBackups()
+    }
+
+    private func restoreFromLatestBackup() {
+        do {
+            let restored = try LocalProjectBackupService.shared.restoreLatestProject(into: modelContext)
+            navigationPath.append(restored)
+            refreshBackupAvailability()
+            showRestoreSuccess = true
+        } catch {
+            restoreErrorMessage = (error as? LocalProjectBackupError)?.errorDescription ?? error.localizedDescription
+        }
     }
 }

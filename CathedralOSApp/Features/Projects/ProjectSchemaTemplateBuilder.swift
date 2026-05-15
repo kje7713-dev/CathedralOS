@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 // MARK: - Schema Template Modes
 
@@ -768,6 +769,10 @@ enum ProjectSchemaTemplateBuilder {
 
     // MARK: - Encoding Helper
 
+    static func encodePayload(_ payload: ProjectImportExportPayload) -> String {
+        encode(payload)
+    }
+
     private static func encode(_ payload: ProjectImportExportPayload) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -777,4 +782,175 @@ enum ProjectSchemaTemplateBuilder {
         }
         return json
     }
+}
+
+// MARK: - LocalProjectBackupService
+
+struct LocalProjectBackupMetadata: Identifiable {
+    let id = UUID()
+    let url: URL
+    let createdAt: Date
+}
+
+enum LocalProjectBackupError: LocalizedError {
+    case noBackups
+    case unreadableBackup
+    case invalidBackup([ImportValidationIssue])
+
+    var errorDescription: String? {
+        switch self {
+        case .noBackups:
+            return "No local project backups were found."
+        case .unreadableBackup:
+            return "The latest backup file could not be read."
+        case .invalidBackup(let issues):
+            if let first = issues.first?.message {
+                return "The latest backup is invalid: \(first)"
+            }
+            return "The latest backup is invalid."
+        }
+    }
+}
+
+final class LocalProjectBackupService {
+
+    static let shared = LocalProjectBackupService()
+
+    private let maxBackupsPerProject = 10
+    private let backupDirectoryName = "ProjectBackups"
+    private let fileManager = FileManager.default
+
+    private init() {}
+
+    @discardableResult
+    func backup(project: StoryProject) -> URL? {
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let json = ProjectSchemaTemplateBuilder.encodePayload(payload)
+        guard let data = json.data(using: .utf8),
+              let directory = ensureBackupDirectory() else {
+            return nil
+        }
+
+        let timestamp = Self.timestampFormatter.string(from: Date())
+        let filename = "project-\(project.id.uuidString)-\(timestamp).json"
+        let url = directory.appendingPathComponent(filename)
+
+        do {
+            try data.write(to: url, options: [.atomic])
+            pruneBackups(forProjectID: project.id.uuidString)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    func backupAllProjects(in modelContext: ModelContext) {
+        let descriptor = FetchDescriptor<StoryProject>()
+        guard let projects = try? modelContext.fetch(descriptor) else { return }
+        for project in projects {
+            _ = backup(project: project)
+        }
+    }
+
+    func backupCount() -> Int {
+        guard let directory = ensureBackupDirectory(),
+              let urls = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.creationDateKey],
+                options: [.skipsHiddenFiles]
+              ) else {
+            return 0
+        }
+        return urls.filter { $0.pathExtension.lowercased() == "json" }.count
+    }
+
+    func hasBackups() -> Bool {
+        backupCount() > 0
+    }
+
+    func latestBackup() -> LocalProjectBackupMetadata? {
+        sortedBackupURLs().first
+    }
+
+    func restoreLatestProject(into modelContext: ModelContext) throws -> StoryProject {
+        guard let latest = latestBackup() else {
+            throw LocalProjectBackupError.noBackups
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: latest.url)
+        } catch {
+            throw LocalProjectBackupError.unreadableBackup
+        }
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw LocalProjectBackupError.unreadableBackup
+        }
+        switch ProjectImportValidator.validate(jsonString: json) {
+        case .success(let (payload, _)):
+            let project = ProjectImportMapper.map(payload)
+            modelContext.insert(project)
+            _ = backup(project: project)
+            return project
+        case .failure(let error):
+            throw LocalProjectBackupError.invalidBackup(error.issues)
+        }
+    }
+
+    private func sortedBackupURLs() -> [LocalProjectBackupMetadata] {
+        guard let directory = ensureBackupDirectory(),
+              let urls = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.creationDateKey],
+                options: [.skipsHiddenFiles]
+              ) else {
+            return []
+        }
+
+        return urls
+            .filter { $0.pathExtension.lowercased() == "json" }
+            .compactMap { url -> LocalProjectBackupMetadata? in
+                let values = try? url.resourceValues(forKeys: [.creationDateKey])
+                return LocalProjectBackupMetadata(
+                    url: url,
+                    createdAt: values?.creationDate ?? .distantPast
+                )
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func pruneBackups(forProjectID projectID: String) {
+        let matching = sortedBackupURLs().filter {
+            $0.url.lastPathComponent.hasPrefix("project-\(projectID)-")
+        }
+        guard matching.count > maxBackupsPerProject else { return }
+        for backup in matching.dropFirst(maxBackupsPerProject) {
+            try? fileManager.removeItem(at: backup.url)
+        }
+    }
+
+    private func ensureBackupDirectory() -> URL? {
+        do {
+            let appSupport = try fileManager.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+            let directory = appSupport.appendingPathComponent(backupDirectoryName, isDirectory: true)
+            if !fileManager.fileExists(atPath: directory.path) {
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            return directory
+        } catch {
+            return nil
+        }
+    }
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd-HHmmssSSS"
+        return formatter
+    }()
 }

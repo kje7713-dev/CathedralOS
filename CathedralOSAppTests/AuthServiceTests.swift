@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import CathedralOSApp
 
 // MARK: - AuthServiceTests
@@ -204,5 +205,69 @@ final class AuthServiceTests: XCTestCase {
         let desc = error.errorDescription ?? ""
         XCTAssertTrue(desc.contains("Keychain unavailable"),
                       "Description must include the failure reason: \(desc)")
+    }
+
+    func testBackendSignOutDoesNotDeleteSwiftDataProjectRows() async throws {
+        let schema = Schema([
+            StoryProject.self,
+            PromptPack.self,
+            StoryCharacter.self,
+            GenerationOutput.self
+        ])
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: config)
+        let context = ModelContext(container)
+
+        let project = StoryProject(name: "Retention Test")
+        let character = StoryCharacter(name: "Rook")
+        character.project = project
+        project.characters.append(character)
+
+        let pack = PromptPack(name: "Starter Pack")
+        pack.project = project
+        project.promptPacks.append(pack)
+
+        let output = GenerationOutput(title: "Generated Scene")
+        output.project = project
+        project.generations.append(output)
+
+        context.insert(project)
+
+        let projectCountBefore = try context.fetchCount(FetchDescriptor<StoryProject>())
+        let packCountBefore = try context.fetchCount(FetchDescriptor<PromptPack>())
+        let characterCountBefore = try context.fetchCount(FetchDescriptor<StoryCharacter>())
+        let generationCountBefore = try context.fetchCount(FetchDescriptor<GenerationOutput>())
+
+        let userIDKey = "supabase.session.user_id"
+        let accessTokenKey = "supabase.session.access_token"
+        let emailKey = "supabase.session.user_email"
+        let refreshTokenKey = "supabase.session.refresh_token"
+        try? KeychainService.saveString(key: userIDKey, value: "test-user-id")
+        try? KeychainService.saveString(key: accessTokenKey, value: "test-access-token")
+        try? KeychainService.saveString(key: emailKey, value: "test@example.com")
+        try? KeychainService.saveString(key: refreshTokenKey, value: "test-refresh-token")
+        defer {
+            try? KeychainService.delete(key: userIDKey)
+            try? KeychainService.delete(key: accessTokenKey)
+            try? KeychainService.delete(key: emailKey)
+            try? KeychainService.delete(key: refreshTokenKey)
+        }
+
+        let service = BackendAuthService()
+        await service.checkSession()
+        XCTAssertTrue(service.isSignedIn, "Precondition failed: service should be signed in before signOut")
+
+        try await service.signOut()
+        XCTAssertFalse(service.isSignedIn, "Service should be signed out after signOut")
+
+        let projectCountAfter = try context.fetchCount(FetchDescriptor<StoryProject>())
+        let packCountAfter = try context.fetchCount(FetchDescriptor<PromptPack>())
+        let characterCountAfter = try context.fetchCount(FetchDescriptor<StoryCharacter>())
+        let generationCountAfter = try context.fetchCount(FetchDescriptor<GenerationOutput>())
+
+        XCTAssertEqual(projectCountAfter, projectCountBefore, "signOut must not delete StoryProject rows")
+        XCTAssertEqual(packCountAfter, packCountBefore, "signOut must not delete PromptPack rows")
+        XCTAssertEqual(characterCountAfter, characterCountBefore, "signOut must not delete StoryCharacter rows")
+        XCTAssertEqual(generationCountAfter, generationCountBefore, "signOut must not delete GenerationOutput rows")
     }
 }
