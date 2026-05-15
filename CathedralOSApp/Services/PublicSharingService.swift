@@ -180,7 +180,8 @@ final class BackendPublicSharingService: PublicSharingService {
             throw PublicSharingServiceError.notSignedIn
         }
 
-        let coverImageFileName = "\(UUID().uuidString.lowercased()).jpg"
+        let fileExtension = Self.fileExtension(for: contentType)
+        let coverImageFileName = "\(UUID().uuidString.lowercased()).\(fileExtension)"
         let objectPath = "\(userID)/\(sharedOutputID)/\(coverImageFileName)"
 
         var uploadURL = projectURL
@@ -363,6 +364,17 @@ final class BackendPublicSharingService: PublicSharingService {
         guard (200..<300).contains(http.statusCode) else {
             let message = String(data: data, encoding: .utf8)
             throw PublicSharingServiceError.serverError(statusCode: http.statusCode, message: message)
+        }
+    }
+
+    private static func fileExtension(for contentType: String) -> String {
+        switch contentType.lowercased() {
+        case "image/png":
+            return "png"
+        case "image/webp":
+            return "webp"
+        default:
+            return "jpg"
         }
     }
 }

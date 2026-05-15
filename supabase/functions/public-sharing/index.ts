@@ -19,6 +19,8 @@ const ALLOWED_REPORT_REASONS = new Set([
   "spam",
   "other",
 ]);
+const SHARED_OUTPUT_LIST_SELECT =
+  "id, owner_user_id, share_title, share_excerpt, allow_remix, source_payload_json, generation_length_mode, published_at, created_at, cover_image_path, cover_image_url, cover_image_width, cover_image_height, cover_image_content_type";
 
 interface PublishRequestBody {
   sharedOutputID?: string;
@@ -169,9 +171,7 @@ export async function handler(req: Request): Promise<Response> {
   if (req.method === "GET" && routePath === "/shared-outputs") {
     const { data, error } = await adminClient
       .from("shared_outputs")
-      .select(
-        "id, owner_user_id, share_title, share_excerpt, allow_remix, source_payload_json, generation_length_mode, published_at, created_at, cover_image_path, cover_image_url, cover_image_width, cover_image_height, cover_image_content_type",
-      )
+      .select(SHARED_OUTPUT_LIST_SELECT)
       .in("visibility", ["shared", "unlisted"])
       .is("unpublished_at", null)
       .order("published_at", { ascending: false })
@@ -378,10 +378,9 @@ export async function handler(req: Request): Promise<Response> {
       ? rawCoverImageHeight
       : null;
     const coverImageContentType = normalizeOptionalString(body.coverImageContentType);
-    const hasAnyCoverField = Boolean(
-      coverImagePath || coverImageURL || rawCoverImageWidth !== undefined || rawCoverImageHeight !== undefined ||
-        coverImageContentType,
-    );
+    const hasAnyCoverField = body.coverImagePath !== undefined || body.coverImageURL !== undefined ||
+      body.coverImageWidth !== undefined || body.coverImageHeight !== undefined ||
+      body.coverImageContentType !== undefined;
     if (hasAnyCoverField && !coverImagePath) {
       return jsonResponse({ status: "failed", error: "coverImagePath is required when cover image metadata is provided" }, 422);
     }
