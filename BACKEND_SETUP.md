@@ -157,6 +157,7 @@ The following actions require an active signed-in session:
 | Action | Gating mechanism |
 |--------|-----------------|
 | Generate via backend | `SupabaseGenerationService.validateConfigAndAuth()` |
+| Sync / restore project snapshots | `ProjectCloudSyncService` signed-in auth check |
 | Sync outputs | `SupabaseGenerationOutputSyncService.requireSignedIn()` |
 | Publish / unpublish | `BackendPublicSharingService.requireSignedIn()` |
 | Report shared content | `BackendPublicSharingService.requireSignedIn()` |
