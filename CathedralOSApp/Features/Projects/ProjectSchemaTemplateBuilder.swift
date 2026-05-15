@@ -898,7 +898,6 @@ final class LocalProjectBackupService {
         case .success(let (payload, _)):
             let project = ProjectImportMapper.map(payload)
             modelContext.insert(project)
-            _ = backup(project: project)
             return project
         case .failure(let error):
             throw LocalProjectBackupError.invalidBackup(error.issues)

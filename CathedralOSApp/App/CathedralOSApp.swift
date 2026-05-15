@@ -106,7 +106,7 @@ enum PersistenceBootstrap {
 
         let storeURL = defaultStoreURL()
         let blockingMessageHeader = "Your local project database could not be opened."
-        let blockingMessageBody = "Do not reinstall the app. Use Diagnostics in Account to export recovery details and contact support."
+        let blockingMessageBody = "Do not reinstall the app. Capture this error message and contact support for recovery guidance."
 
         let schema = Schema([
             Role.self, Domain.self, Goal.self, Constraint.self,
