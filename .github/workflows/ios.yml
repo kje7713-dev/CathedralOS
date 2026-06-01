@@ -43,6 +43,16 @@ jobs:
           echo "DESTINATION=$DEST" >> "$GITHUB_ENV"
           echo "Selected destination: $DEST"
 
+      - name: Set runtime config defaults
+        env:
+          SECRET_SUPABASE_PROJECT_URL: ${{ secrets.SUPABASE_PROJECT_URL }}
+          SECRET_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SECRET_PUBLIC_SHARING_BASE_URL: ${{ secrets.PUBLIC_SHARING_BASE_URL }}
+        run: |
+          echo "SUPABASE_PROJECT_URL=${SECRET_SUPABASE_PROJECT_URL:-https://example.supabase.co}" >> "$GITHUB_ENV"
+          echo "SUPABASE_ANON_KEY=${SECRET_SUPABASE_ANON_KEY:-ci-anon-key}" >> "$GITHUB_ENV"
+          echo "PUBLIC_SHARING_BASE_URL=${SECRET_PUBLIC_SHARING_BASE_URL:-https://example.com}" >> "$GITHUB_ENV"
+
       - name: Build
         run: |
           set -o pipefail
