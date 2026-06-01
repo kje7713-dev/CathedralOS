@@ -19,6 +19,7 @@ struct AccountView: View {
     let profileBootstrapService: (any ProfileBootstrapServiceProtocol)?
     let usageLimitService: any UsageLimitServiceProtocol
     let entitlementService: any StoreKitEntitlementServiceProtocol
+    let creditStateService: any CreditStateServiceProtocol
 
     @Environment(\.modelContext) private var modelContext
     @Query private var localProjects: [StoryProject]
@@ -29,13 +30,15 @@ struct AccountView: View {
         syncService: any GenerationOutputSyncServiceProtocol = StubGenerationOutputSyncService(),
         profileBootstrapService: (any ProfileBootstrapServiceProtocol)? = nil,
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
-        entitlementService: any StoreKitEntitlementServiceProtocol = StoreKitEntitlementService.shared
+        entitlementService: any StoreKitEntitlementServiceProtocol = StoreKitEntitlementService.shared,
+        creditStateService: any CreditStateServiceProtocol = BackendCreditStateService()
     ) {
         self.authService = authService
         self.syncService = syncService
         self.profileBootstrapService = profileBootstrapService
         self.usageLimitService = usageLimitService
         self.entitlementService = entitlementService
+        self.creditStateService = creditStateService
     }
 
     @State private var authState: AuthState = .unknown
@@ -80,6 +83,8 @@ struct AccountView: View {
                 await entitlementService.refreshEntitlement()
                 entitlementState = entitlementService.entitlementState
                 usageLimitService.applyEntitlement(entitlementState)
+                // Overlay with backend-authoritative balance when signed in.
+                await refreshBackendCreditState()
             }
             .sheet(isPresented: $showPaywall) {
                 PaywallView(
@@ -584,6 +589,8 @@ struct AccountView: View {
             try await entitlementService.restorePurchases()
             entitlementState = entitlementService.entitlementState
             usageLimitService.applyEntitlement(entitlementState)
+            // Overlay with backend-authoritative balance after purchase restore.
+            await refreshBackendCreditState()
             restoreSuccess = "Purchases restored successfully."
         } catch {
             restoreError = (error as? StoreKitEntitlementError)?.errorDescription
@@ -601,6 +608,8 @@ struct AccountView: View {
             authState = authService.authState
             await attemptProfileBootstrap()
             try? await ProjectCloudSyncService.shared.syncAllProjects(in: modelContext)
+            // Fetch backend-authoritative credit balance after sign-in.
+            await refreshBackendCreditState()
         } catch AuthServiceError.cancelled {
             // User tapped cancel — not an error worth surfacing.
         } catch {
@@ -652,6 +661,19 @@ struct AccountView: View {
         } catch {
             // Non-fatal: show a warning but do not fail sign-in.
             profileBootstrapWarning = "Profile sync encountered an issue. Cloud features may be limited."
+        }
+    }
+
+    /// Fetches the backend-authoritative credit state and applies it to the local service.
+    /// Silently ignores errors so that the UI remains functional when the backend is unavailable.
+    private func refreshBackendCreditState() async {
+        guard SupabaseConfiguration.isConfigured else { return }
+        guard authService.authState.isSignedIn else { return }
+        do {
+            let state = try await creditStateService.fetchCreditState()
+            usageLimitService.applyBackendCreditState(state)
+        } catch {
+            // Non-fatal: local state remains in use when backend is unavailable.
         }
     }
 }

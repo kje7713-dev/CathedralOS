@@ -353,6 +353,18 @@ private final class ControllableUsageLimitService: UsageLimitServiceProtocol {
             source: currentState.source
         )
     }
+
+    func applyBackendCreditState(_ state: BackendCreditState) {
+        currentState = GenerationCreditState(
+            availableCredits: state.availableCredits,
+            monthlyGenerationCount: currentState.monthlyGenerationCount,
+            monthlyOutputBudgetUsed: currentState.monthlyOutputBudgetUsed,
+            resetDate: currentState.resetDate,
+            planName: state.planName,
+            lastUpdatedAt: Date(),
+            source: .backend
+        )
+    }
 }
 
 final class BackendNotCalledWhenBlockedTests: XCTestCase {
@@ -409,5 +421,76 @@ final class BackendNotCalledWhenBlockedTests: XCTestCase {
         // Simulate failure: recordSuccessfulGeneration is never called.
         XCTAssertEqual(usageService.recordCallCount, 0)
         XCTAssertEqual(usageService.currentState.availableCredits, 10)
+    }
+}
+
+// MARK: - ApplyBackendCreditStateTests
+
+final class ApplyBackendCreditStateTests: XCTestCase {
+
+    func testApplyBackendCreditStateUpdatesAvailableCredits() {
+        let service = makeService(availableCredits: 10)
+        let backendState = BackendCreditState.stub(availableCredits: 4)
+        service.applyBackendCreditState(backendState)
+        XCTAssertEqual(service.currentState.availableCredits, 4)
+    }
+
+    func testApplyBackendCreditStateSetsPlanName() {
+        let service = makeService()
+        let backendState = BackendCreditState.stub(planName: "pro", isPro: true, availableCredits: 100)
+        service.applyBackendCreditState(backendState)
+        XCTAssertEqual(service.currentState.planName, "pro")
+    }
+
+    func testApplyBackendCreditStateSetsSourceToBackend() {
+        let service = makeService(availableCredits: 10)
+        XCTAssertEqual(service.currentState.source, .local,
+                       "Source must start as .local before backend fetch")
+        let backendState = BackendCreditState.stub(availableCredits: 7)
+        service.applyBackendCreditState(backendState)
+        XCTAssertEqual(service.currentState.source, .backend)
+    }
+
+    func testApplyBackendCreditStatePreservesMonthlyCount() {
+        let service = makeService(availableCredits: 10)
+        service.recordSuccessfulGeneration(creditCost: 1, lengthMode: .short)
+        XCTAssertEqual(service.currentState.monthlyGenerationCount, 1)
+
+        let backendState = BackendCreditState.stub(availableCredits: 9)
+        service.applyBackendCreditState(backendState)
+        XCTAssertEqual(service.currentState.monthlyGenerationCount, 1,
+                       "Monthly count must be preserved after backend refresh")
+    }
+
+    func testApplyBackendCreditStateParsesPeriodEnd() {
+        let service = makeService(availableCredits: 10)
+        let backendState = BackendCreditState.stub(
+            availableCredits: 10,
+            currentPeriodEnd: "2027-01-01T00:00:00Z"
+        )
+        service.applyBackendCreditState(backendState)
+        // Reset date should be updated to the parsed period end.
+        let expected = ISO8601DateFormatter().date(from: "2027-01-01T00:00:00Z")!
+        XCTAssertEqual(service.currentState.resetDate, expected)
+    }
+
+    func testApplyBackendCreditStatePreservesExistingResetDateWhenNoPeriodEnd() {
+        let service = makeService(availableCredits: 10)
+        let originalResetDate = service.currentState.resetDate
+        let backendState = BackendCreditState.stub(availableCredits: 10, currentPeriodEnd: nil)
+        service.applyBackendCreditState(backendState)
+        XCTAssertEqual(service.currentState.resetDate, originalResetDate,
+                       "Reset date must be preserved when backend returns no currentPeriodEnd")
+    }
+
+    func testStubUsageLimitServiceApplyBackendCreditState() {
+        let stub = StubUsageLimitService()
+        stub.applyBackendCreditState(BackendCreditState.stub(
+            planName: "pro",
+            availableCredits: 42
+        ))
+        XCTAssertEqual(stub.currentState.availableCredits, 42)
+        XCTAssertEqual(stub.currentState.planName, "pro")
+        XCTAssertEqual(stub.currentState.source, .backend)
     }
 }
