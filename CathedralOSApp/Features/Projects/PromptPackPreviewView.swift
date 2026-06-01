@@ -39,6 +39,7 @@ struct PromptPackPreviewView: View {
     let generationModelService: GenerationModelServiceProtocol
     let usageLimitService: any UsageLimitServiceProtocol
     let authService: any AuthService
+    let creditStateService: any CreditStateServiceProtocol
 
     init(
         project: StoryProject,
@@ -46,7 +47,8 @@ struct PromptPackPreviewView: View {
         generationService: GenerationService = SupabaseGenerationService(),
         generationModelService: GenerationModelServiceProtocol = BackendGenerationModelService(),
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
-        authService: any AuthService = BackendAuthService.shared
+        authService: any AuthService = BackendAuthService.shared,
+        creditStateService: any CreditStateServiceProtocol = BackendCreditStateService()
     ) {
         self.project = project
         self.pack = pack
@@ -54,6 +56,7 @@ struct PromptPackPreviewView: View {
         self.generationModelService = generationModelService
         self.usageLimitService = usageLimitService
         self.authService = authService
+        self.creditStateService = creditStateService
     }
 
     // MARK: Credit state
@@ -143,6 +146,7 @@ struct PromptPackPreviewView: View {
         }
         .task {
             await loadGenerationModels()
+            await refreshBackendCreditState()
         }
     }
 
@@ -558,12 +562,15 @@ struct PromptPackPreviewView: View {
                 gen.lastSyncedAt = Date()
             }
 
-            // On success: decrement local credits.
-            // MVP policy: failed generation does not consume credits.
+            // On success: refresh backend-authoritative credit balance.
+            // The backend is the source of truth for credits consumed and remaining.
+            // Decrement locally first so the UI updates immediately, then overwrite
+            // with the authoritative backend balance.
             usageLimitService.recordSuccessfulGeneration(
                 creditCost: response.creditCostCharged ?? 0,
                 lengthMode: mode
             )
+            await refreshBackendCreditState()
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
 
         } catch {
@@ -600,6 +607,24 @@ struct PromptPackPreviewView: View {
         } catch {
             generationModels = []
             generationError = (error as? GenerationModelServiceError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Fetches the backend-authoritative credit state and applies it to the local service.
+    /// Silently ignores errors (network unavailable, not signed in) so that the UI
+    /// remains functional with stale local values when the backend is unreachable.
+    @MainActor
+    private func refreshBackendCreditState() async {
+        guard SupabaseConfiguration.isConfigured else { return }
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard authService.authState.isSignedIn else { return }
+        do {
+            let state = try await creditStateService.fetchCreditState()
+            usageLimitService.applyBackendCreditState(state)
+        } catch {
+            // Non-fatal: local state remains in use when backend is unavailable.
         }
     }
 }

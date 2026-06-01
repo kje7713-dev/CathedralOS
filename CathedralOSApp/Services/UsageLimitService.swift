@@ -57,6 +57,14 @@ protocol UsageLimitServiceProtocol: AnyObject {
     /// ⚠️ This is client-side convenience only — the backend must independently
     /// validate entitlement before honoring credits in a monetized release.
     func applyEntitlement(_ entitlement: StoreKitEntitlementState)
+
+    /// Replaces local credit state with the backend-authoritative values.
+    ///
+    /// Call this after fetching from `get-credit-state` (sign-in, restore purchase,
+    /// app foreground, and post-generation refresh). Existing usage counters
+    /// (monthlyGenerationCount, monthlyOutputBudgetUsed) are preserved so local
+    /// session stats remain accurate.
+    func applyBackendCreditState(_ state: BackendCreditState)
 }
 
 // MARK: - LocalUsageLimitService
@@ -84,6 +92,7 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
         static let resetDate              = "cathedralos.credits.resetDate"
         static let planName               = "cathedralos.credits.planName"
         static let lastUpdatedAt          = "cathedralos.credits.lastUpdatedAt"
+        static let source                 = "cathedralos.credits.source"
     }
 
     // MARK: Dependencies
@@ -140,7 +149,36 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
             monthlyCount: newCount,
             monthlyBudgetUsed: newBudget,
             resetDate: state.resetDate,
-            planName: state.planName
+            planName: state.planName,
+            source: state.source
+        )
+    }
+
+    func applyBackendCreditState(_ state: BackendCreditState) {
+        resetIfNeeded()
+        let existing = load()
+        // Parse currentPeriodEnd as a Date for the reset date, preserving the
+        // existing reset date when the backend does not return one.
+        var resetDate = existing.resetDate
+        if let periodEndString = state.currentPeriodEnd {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = iso.date(from: periodEndString) {
+                resetDate = date
+            } else {
+                let basic = ISO8601DateFormatter()
+                if let date = basic.date(from: periodEndString) {
+                    resetDate = date
+                }
+            }
+        }
+        save(
+            availableCredits: state.availableCredits,
+            monthlyCount: existing.monthlyGenerationCount,
+            monthlyBudgetUsed: existing.monthlyOutputBudgetUsed,
+            resetDate: resetDate,
+            planName: state.planName,
+            source: .backend
         )
     }
 
@@ -156,7 +194,8 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
             monthlyCount: existing.monthlyGenerationCount,
             monthlyBudgetUsed: existing.monthlyOutputBudgetUsed,
             resetDate: existing.resetDate,
-            planName: entitlement.plan.displayName
+            planName: entitlement.plan.displayName,
+            source: existing.source
         )
     }
 
@@ -171,7 +210,8 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
             monthlyCount: initial.monthlyGenerationCount,
             monthlyBudgetUsed: initial.monthlyOutputBudgetUsed,
             resetDate: initial.resetDate,
-            planName: initial.planName
+            planName: initial.planName,
+            source: initial.source
         )
     }
 
@@ -187,7 +227,8 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
             monthlyCount: 0,
             monthlyBudgetUsed: 0,
             resetDate: fresh.resetDate,
-            planName: planName
+            planName: planName,
+            source: .local
         )
     }
 
@@ -199,6 +240,8 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
         let resetDate   = defaults.object(forKey: Key.resetDate) as? Date ?? now
         let planName    = defaults.string(forKey: Key.planName) ?? "Free"
         let updatedAt   = defaults.object(forKey: Key.lastUpdatedAt) as? Date ?? now
+        let sourceRaw   = defaults.string(forKey: Key.source) ?? CreditStateSource.local.rawValue
+        let source      = CreditStateSource(rawValue: sourceRaw) ?? .local
 
         return GenerationCreditState(
             availableCredits: credits,
@@ -207,7 +250,7 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
             resetDate: resetDate,
             planName: planName,
             lastUpdatedAt: updatedAt,
-            source: .local
+            source: source
         )
     }
 
@@ -216,13 +259,15 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
         monthlyCount: Int,
         monthlyBudgetUsed: Int,
         resetDate: Date,
-        planName: String
+        planName: String,
+        source: CreditStateSource = .local
     ) {
         defaults.set(availableCredits, forKey: Key.availableCredits)
         defaults.set(monthlyCount,     forKey: Key.monthlyCount)
         defaults.set(monthlyBudgetUsed, forKey: Key.monthlyBudgetUsed)
         defaults.set(resetDate,         forKey: Key.resetDate)
         defaults.set(planName,          forKey: Key.planName)
+        defaults.set(source.rawValue,   forKey: Key.source)
         defaults.set(Date(),            forKey: Key.lastUpdatedAt)
     }
 }
@@ -257,6 +302,18 @@ final class StubUsageLimitService: UsageLimitServiceProtocol {
             planName: entitlement.plan.displayName,
             lastUpdatedAt: Date(),
             source: .local
+        )
+    }
+
+    func applyBackendCreditState(_ state: BackendCreditState) {
+        currentState = GenerationCreditState(
+            availableCredits: state.availableCredits,
+            monthlyGenerationCount: currentState.monthlyGenerationCount,
+            monthlyOutputBudgetUsed: currentState.monthlyOutputBudgetUsed,
+            resetDate: currentState.resetDate,
+            planName: state.planName,
+            lastUpdatedAt: Date(),
+            source: .backend
         )
     }
 }
