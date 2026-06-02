@@ -27,6 +27,8 @@ enum GenerationOutputSyncError: Error, LocalizedError {
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
     case decodingError(Error)
+    case persistenceError(stage: String, error: Error)
+    case partialFailure([String])
 
     var errorDescription: String? {
         switch self {
@@ -44,7 +46,66 @@ enum GenerationOutputSyncError: Error, LocalizedError {
             return base
         case .decodingError(let underlying):
             return "Could not parse sync response: \(underlying.localizedDescription)"
+        case .persistenceError(let stage, let underlying):
+            return "Could not save synced outputs after \(stage): \(underlying.localizedDescription)"
+        case .partialFailure(let messages):
+            return messages.joined(separator: "\n")
         }
+    }
+}
+
+enum OutputSyncActivityState: String {
+    case idle
+    case synced
+    case failed
+
+    var displayName: String {
+        switch self {
+        case .idle:
+            return "Idle"
+        case .synced:
+            return "Synced"
+        case .failed:
+            return "Failed"
+        }
+    }
+}
+
+struct OutputSyncActivitySnapshot {
+    let state: OutputSyncActivityState
+    let message: String?
+    let updatedAt: Date?
+}
+
+final class OutputSyncActivityStore {
+    static let shared = OutputSyncActivityStore()
+
+    private let defaults = UserDefaults.standard
+    private let stateKey = "cathedralos.output_sync.last_state"
+    private let messageKey = "cathedralos.output_sync.last_message"
+    private let dateKey = "cathedralos.output_sync.last_updated_at"
+
+    private init() {}
+
+    var snapshot: OutputSyncActivitySnapshot {
+        let state = OutputSyncActivityState(rawValue: defaults.string(forKey: stateKey) ?? "") ?? .idle
+        let message = defaults.string(forKey: messageKey)
+        let updatedAt = defaults.object(forKey: dateKey) as? Date
+        return OutputSyncActivitySnapshot(state: state, message: message, updatedAt: updatedAt)
+    }
+
+    func recordSuccess(_ message: String) {
+        record(state: .synced, message: message)
+    }
+
+    func recordFailure(_ message: String) {
+        record(state: .failed, message: message)
+    }
+
+    private func record(state: OutputSyncActivityState, message: String) {
+        defaults.set(state.rawValue, forKey: stateKey)
+        defaults.set(message, forKey: messageKey)
+        defaults.set(Date(), forKey: dateKey)
     }
 }
 
@@ -61,6 +122,9 @@ protocol GenerationOutputSyncServiceProtocol {
     /// Uploads a single local-only `GenerationOutput` to Supabase and records the
     /// returned cloud ID.  On failure the local record is preserved and marked `failed`.
     func pushOutput(_ output: GenerationOutput) async throws
+
+    /// Returns the current cloud row count for the signed-in user's `generation_outputs`.
+    func fetchCloudOutputCount() async throws -> Int
 
     /// Convenience: pushes all `local_only` outputs, then pulls from the cloud.
     func syncAll(in context: ModelContext) async throws
@@ -92,13 +156,20 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     // MARK: - Pull
 
     func pullOutputs(into context: ModelContext) async throws {
-        let (client, _) = try await validatedClientAndUser()
-        let url = restURL(client: client, path: "generation_outputs")
-        var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
-        request.httpMethod = "GET"
+        do {
+            let (client, _) = try await validatedClientAndUser()
+            let url = restURL(client: client, path: "generation_outputs")
+            var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
+            request.httpMethod = "GET"
 
-        let records = try await fetch([GenerationOutputCloudRecord].self, request: request)
-        reconcile(records, into: context)
+            let records = try await fetch([GenerationOutputCloudRecord].self, request: request)
+            reconcile(records, into: context)
+            try persistContext(context, stage: "cloud restore")
+            OutputSyncActivityStore.shared.recordSuccess("Restored \(records.count) cloud outputs.")
+        } catch {
+            OutputSyncActivityStore.shared.recordFailure(localizedMessage(for: error))
+            throw error
+        }
     }
 
     // MARK: - Push
@@ -120,6 +191,8 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         } catch {
             output.syncStatus = SyncStatus.failed.rawValue
             output.syncErrorMessage = "Encoding failed: \(error.localizedDescription)"
+            persistIfPossible(for: output)
+            OutputSyncActivityStore.shared.recordFailure(output.syncErrorMessage ?? error.localizedDescription)
             throw GenerationOutputSyncError.encodingError(error)
         }
 
@@ -132,27 +205,69 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
                 output.lastSyncedAt = Date()
                 output.syncErrorMessage = nil
             }
+            try persistContextIfPossible(for: output, stage: "upload")
+            OutputSyncActivityStore.shared.recordSuccess("Output synced successfully.")
         } catch {
             output.syncStatus = SyncStatus.failed.rawValue
-            output.syncErrorMessage = error.localizedDescription
+            output.syncErrorMessage = localizedMessage(for: error)
+            persistIfPossible(for: output)
+            OutputSyncActivityStore.shared.recordFailure(output.syncErrorMessage ?? error.localizedDescription)
             throw error
         }
+    }
+
+    func fetchCloudOutputCount() async throws -> Int {
+        let (client, _) = try await validatedClientAndUser()
+        var components = URLComponents(url: restURL(client: client, path: "generation_outputs"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "select", value: "id")]
+        guard let url = components?.url else {
+            throw GenerationOutputSyncError.notConfigured
+        }
+        var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
+        request.httpMethod = "GET"
+        let records = try await fetch([GenerationOutputCountRecord].self, request: request)
+        return records.count
     }
 
     // MARK: - Sync All
 
     func syncAll(in context: ModelContext) async throws {
-        // Push local-only outputs first so cloud is up to date before we pull.
-        let descriptor = FetchDescriptor<GenerationOutput>(
-            predicate: #Predicate { $0.syncStatus == "local_only" }
-        )
-        let localOnly = (try? context.fetch(descriptor)) ?? []
-        for output in localOnly {
-            // Push each independently; a single failure does not abort the others.
-            try? await pushOutput(output)
+        let outputsNeedingUpload = ((try? context.fetch(FetchDescriptor<GenerationOutput>())) ?? [])
+            .filter {
+                $0.cloudGenerationOutputID.isEmpty &&
+                ($0.syncStatus == SyncStatus.localOnly.rawValue
+                    || $0.syncStatus == SyncStatus.pendingUpload.rawValue
+                    || $0.syncStatus == SyncStatus.failed.rawValue)
+            }
+
+        var failures: [String] = []
+        for output in outputsNeedingUpload {
+            do {
+                try await pushOutput(output)
+            } catch {
+                failures.append(localizedMessage(for: error))
+            }
         }
 
-        try await pullOutputs(into: context)
+        do {
+            try await pullOutputs(into: context)
+        } catch {
+            let message = localizedMessage(for: error)
+            OutputSyncActivityStore.shared.recordFailure(message)
+            throw error
+        }
+
+        if !failures.isEmpty {
+            let message = failures.joined(separator: "\n")
+            OutputSyncActivityStore.shared.recordFailure(message)
+            throw GenerationOutputSyncError.partialFailure(failures)
+        }
+
+        OutputSyncActivityStore.shared.recordSuccess(
+            outputsNeedingUpload.isEmpty
+                ? "Cloud outputs restored successfully."
+                : "Synced \(outputsNeedingUpload.count) local outputs and refreshed cloud outputs."
+        )
     }
 
     // MARK: - Private helpers
@@ -216,13 +331,20 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             let existing = findLocal(cloudID: record.id, localID: record.localGenerationId, in: context)
 
             if let local = existing {
+                if local.project == nil {
+                    local.project = GenerationOutputRecoveryProjectResolver.resolveProject(
+                        projectName: record.projectName,
+                        in: context,
+                        recoverySource: "cloud recovery"
+                    )
+                }
                 // Update only if the cloud record is strictly newer.
                 if record.updatedAt > local.updatedAt {
-                    applyCloudUpdate(record, to: local)
+                    applyCloudUpdate(record, to: local, in: context)
                 }
             } else {
                 // No matching local record — create one.
-                let newOutput = makeLocalOutput(from: record)
+                let newOutput = makeLocalOutput(from: record, in: context)
                 context.insert(newOutput)
             }
         }
@@ -246,7 +368,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         return nil
     }
 
-    private func applyCloudUpdate(_ record: GenerationOutputCloudRecord, to output: GenerationOutput) {
+    private func applyCloudUpdate(_ record: GenerationOutputCloudRecord, to output: GenerationOutput, in context: ModelContext) {
         output.cloudGenerationOutputID = record.id
         output.title               = record.title
         output.outputText          = record.outputText
@@ -261,9 +383,16 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         output.syncStatus          = SyncStatus.synced.rawValue
         output.lastSyncedAt        = Date()
         output.syncErrorMessage    = nil
+        if output.project == nil {
+            output.project = GenerationOutputRecoveryProjectResolver.resolveProject(
+                projectName: record.projectName,
+                in: context,
+                recoverySource: "cloud recovery"
+            )
+        }
     }
 
-    private func makeLocalOutput(from record: GenerationOutputCloudRecord) -> GenerationOutput {
+    private func makeLocalOutput(from record: GenerationOutputCloudRecord, in context: ModelContext) -> GenerationOutput {
         let output = GenerationOutput(
             title: record.title,
             outputText: record.outputText,
@@ -281,8 +410,43 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         output.updatedAt     = record.updatedAt
         output.syncStatus    = SyncStatus.synced.rawValue
         output.lastSyncedAt  = Date()
+        output.project = GenerationOutputRecoveryProjectResolver.resolveProject(
+            projectName: record.projectName,
+            in: context,
+            recoverySource: "cloud recovery"
+        )
         return output
     }
+
+    private func localizedMessage(for error: Error) -> String {
+        (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+    }
+
+    private func persistContext(_ context: ModelContext, stage: String) throws {
+        do {
+            try context.save()
+        } catch {
+            throw GenerationOutputSyncError.persistenceError(stage: stage, error: error)
+        }
+    }
+
+    private func persistContextIfPossible(for output: GenerationOutput, stage: String) throws {
+        if let context = output.modelContext {
+            try persistContext(context, stage: stage)
+        }
+    }
+
+    private func persistIfPossible(for output: GenerationOutput) {
+        guard let context = output.modelContext else { return }
+        try? context.save()
+        if let errorMessage = output.syncErrorMessage, !errorMessage.isEmpty {
+            OutputSyncActivityStore.shared.recordFailure(errorMessage)
+        }
+    }
+}
+
+private struct GenerationOutputCountRecord: Decodable {
+    let id: String
 }
 
 // MARK: - StubGenerationOutputSyncService
@@ -296,6 +460,10 @@ final class StubGenerationOutputSyncService: GenerationOutputSyncServiceProtocol
 
     func pushOutput(_ output: GenerationOutput) async throws {
         // No-op stub: no network calls.
+    }
+
+    func fetchCloudOutputCount() async throws -> Int {
+        0
     }
 
     func syncAll(in context: ModelContext) async throws {

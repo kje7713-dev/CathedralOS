@@ -93,6 +93,11 @@ private final class MockGenerationOutputSyncService: GenerationOutputSyncService
         output.syncErrorMessage = nil
     }
 
+    func fetchCloudOutputCount() async throws -> Int {
+        if let error = errorToThrow { throw error }
+        return recordsToInject.count
+    }
+
     func syncAll(in context: ModelContext) async throws {
         if let error = errorToThrow { throw error }
     }
@@ -349,6 +354,18 @@ final class GenerationOutputSyncPullTests: XCTestCase {
         XCTAssertEqual(outputs.first?.title, "Updated Title")
     }
 
+    func testReconcileCreatesRecoveryProjectWhenCloudProjectMissingLocally() throws {
+        let realService = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+
+        let record = makeCloudRecord(title: "Recovered Story")
+        realService.reconcile([record], into: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertEqual(outputs.first?.project?.name, "Test Project")
+    }
+
     func testCloudRecordDTODecoding() throws {
         let cloudID = UUID().uuidString
         let localID = UUID().uuidString
@@ -357,6 +374,69 @@ final class GenerationOutputSyncPullTests: XCTestCase {
         XCTAssertEqual(record.localGenerationId, localID)
         XCTAssertEqual(record.title, "Decoded Story")
         XCTAssertEqual(record.generationAction, "generate")
+    }
+}
+
+final class LocalGenerationOutputBackupServiceTests: XCTestCase {
+
+    private var container: ModelContainer!
+    private var tempDirectory: URL!
+    private var backupService: LocalGenerationOutputBackupService!
+
+    override func setUpWithError() throws {
+        let schema = Schema([GenerationOutput.self, StoryProject.self])
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        container = try ModelContainer(for: schema, configurations: config)
+        tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        backupService = LocalGenerationOutputBackupService(baseDirectory: tempDirectory)
+    }
+
+    override func tearDownWithError() throws {
+        if let tempDirectory {
+            try? FileManager.default.removeItem(at: tempDirectory)
+        }
+        container = nil
+        tempDirectory = nil
+        backupService = nil
+    }
+
+    func testBackupAndRestoreRecreatesOutputAndProject() throws {
+        let context = ModelContext(container)
+        let project = StoryProject(name: "Backup Project")
+        context.insert(project)
+
+        let output = GenerationOutput(
+            title: "Restorable Output",
+            outputText: "Recovered text",
+            status: GenerationStatus.complete.rawValue,
+            modelName: "gpt-4o",
+            sourcePromptPackName: "Pack",
+            sourcePayloadJSON: "{\"hello\":\"world\"}",
+            generationAction: "generate",
+            generationLengthMode: GenerationLengthMode.medium.rawValue,
+            outputBudget: 1600
+        )
+        output.project = project
+        output.cloudGenerationOutputID = UUID().uuidString
+        output.syncStatus = SyncStatus.failed.rawValue
+        output.syncErrorMessage = "RLS denied"
+        context.insert(output)
+
+        XCTAssertNotNil(backupService.backup(output: output))
+
+        context.delete(output)
+        context.delete(project)
+        try context.save()
+
+        let restoredCount = try backupService.restoreLatestOutputs(into: context)
+        XCTAssertEqual(restoredCount, 1)
+
+        let restoredOutputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(restoredOutputs.count, 1)
+        XCTAssertEqual(restoredOutputs.first?.title, "Restorable Output")
+        XCTAssertEqual(restoredOutputs.first?.project?.name, "Backup Project")
+        XCTAssertEqual(restoredOutputs.first?.syncErrorMessage, "RLS denied")
     }
 }
 

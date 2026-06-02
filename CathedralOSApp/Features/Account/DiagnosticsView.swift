@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 // MARK: - DiagnosticsView
 //
@@ -18,6 +19,7 @@ import SwiftUI
 
 struct DiagnosticsView: View {
 
+    @Environment(\.modelContext) private var modelContext
     @StateObject private var viewModel: DiagnosticsViewModel
     @State private var copyConfirmation = false
 
@@ -26,14 +28,16 @@ struct DiagnosticsView: View {
         usageLimitService: any UsageLimitServiceProtocol,
         entitlementService: any StoreKitEntitlementServiceProtocol,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
-        healthService: any BackendHealthServiceProtocol = BackendHealthService.shared
+        healthService: any BackendHealthServiceProtocol = BackendHealthService.shared,
+        syncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
     ) {
         _viewModel = StateObject(wrappedValue: DiagnosticsViewModel(
             authService: authService,
             usageLimitService: usageLimitService,
             entitlementService: entitlementService,
             creditStateService: creditStateService,
-            healthService: healthService
+            healthService: healthService,
+            syncService: syncService
         ))
     }
 
@@ -48,6 +52,7 @@ struct DiagnosticsView: View {
                 developerCreditsSection
                 backendHealthSection
                 preflightSection
+                outputRecoverySection
                 lastErrorsSection
                 copySection
             }
@@ -55,12 +60,14 @@ struct DiagnosticsView: View {
             .navigationBarTitleDisplayMode(.large)
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .task {
-                viewModel.refresh()
+                viewModel.refresh(modelContext: modelContext)
                 await viewModel.refreshCreditStateIfPossible()
+                await viewModel.refreshCloudOutputCountIfPossible()
             }
             .refreshable {
-                viewModel.refresh()
+                viewModel.refresh(modelContext: modelContext)
                 await viewModel.refreshCreditStateIfPossible()
+                await viewModel.refreshCloudOutputCountIfPossible()
             }
         }
     }
@@ -303,6 +310,63 @@ struct DiagnosticsView: View {
     }
 
     // MARK: - Last Errors
+
+    private var outputRecoverySection: some View {
+        Section("Generated Outputs Recovery") {
+            if let snap = viewModel.snapshot {
+                row(label: "Local generated outputs", value: "\(snap.localGeneratedOutputCount)")
+                row(label: "Local output backups", value: "\(snap.localGeneratedOutputBackupCount)")
+                row(label: "Cloud generated outputs", value: snap.cloudGeneratedOutputCount.map(String.init) ?? "Unavailable")
+                row(label: "Last output sync status", value: snap.lastOutputSyncStatus)
+                if let message = snap.lastOutputSyncMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+            }
+
+            Button {
+                Task { await viewModel.syncAllOutputs(in: modelContext) }
+            } label: {
+                Label(
+                    viewModel.isSyncingOutputs ? "Syncing…" : "Sync All Outputs",
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
+            }
+            .disabled(viewModel.isSyncingOutputs || viewModel.isRefreshingCloudOutputs || viewModel.isRestoringLocalOutputs)
+
+            Button {
+                Task { await viewModel.restoreOutputsFromCloud(into: modelContext) }
+            } label: {
+                Label(
+                    viewModel.isRefreshingCloudOutputs ? "Restoring…" : "Restore Outputs from Cloud",
+                    systemImage: "icloud.and.arrow.down"
+                )
+            }
+            .disabled(viewModel.isSyncingOutputs || viewModel.isRefreshingCloudOutputs || viewModel.isRestoringLocalOutputs)
+
+            Button {
+                Task { await viewModel.restoreOutputsFromLocalBackup(into: modelContext) }
+            } label: {
+                Label(
+                    viewModel.isRestoringLocalOutputs ? "Restoring…" : "Restore Outputs from Local Backup",
+                    systemImage: "externaldrive.badge.timemachine"
+                )
+            }
+            .disabled(viewModel.isSyncingOutputs || viewModel.isRefreshingCloudOutputs || viewModel.isRestoringLocalOutputs)
+
+            if let message = viewModel.outputRecoveryMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(CathedralTheme.Colors.accent)
+            }
+            if let error = viewModel.outputRecoveryError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+            }
+        }
+    }
 
     private var lastErrorsSection: some View {
         Section("Last Cloud Errors") {

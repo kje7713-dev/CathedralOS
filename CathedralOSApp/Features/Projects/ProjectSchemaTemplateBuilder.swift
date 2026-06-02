@@ -968,3 +968,346 @@ final class LocalProjectBackupService {
         return formatter
     }()
 }
+
+enum GenerationOutputRecoveryProjectResolver {
+    static func resolveProject(
+        projectID: UUID? = nil,
+        projectName: String,
+        in context: ModelContext,
+        recoverySource: String
+    ) -> StoryProject {
+        if let existing = existingProject(projectID: projectID, projectName: projectName, in: context) {
+            return existing
+        }
+
+        let resolvedName = projectName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            ?? "Recovered Outputs"
+        let project = StoryProject(name: resolvedName)
+        if let projectID {
+            project.id = projectID
+        }
+        project.notes = "Recovered generated outputs from \(recoverySource)."
+        context.insert(project)
+        return project
+    }
+
+    static func existingProject(
+        projectID: UUID? = nil,
+        projectName: String,
+        in context: ModelContext
+    ) -> StoryProject? {
+        let projects = (try? context.fetch(FetchDescriptor<StoryProject>())) ?? []
+        if let projectID, let byID = projects.first(where: { $0.id == projectID }) {
+            return byID
+        }
+
+        let trimmedName = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return nil }
+        return projects.first {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .localizedCaseInsensitiveCompare(trimmedName) == .orderedSame
+        }
+    }
+}
+
+struct LocalGenerationOutputBackupPayload: Codable {
+    let localOutputID: String
+    let projectID: String?
+    let projectName: String
+    let promptPackName: String
+    let title: String
+    let outputText: String
+    let sourcePayloadJSON: String
+    let model: String
+    let generationAction: String
+    let lengthMode: String
+    let outputBudget: Int
+    let status: String
+    let syncStatus: String
+    let syncErrorMessage: String?
+    let createdAt: Date
+    let updatedAt: Date
+    let cloudGenerationOutputID: String?
+
+    init(output: GenerationOutput) {
+        self.localOutputID = output.id.uuidString
+        self.projectID = output.project?.id.uuidString
+        self.projectName = output.project?.name ?? ""
+        self.promptPackName = output.sourcePromptPackName
+        self.title = output.title
+        self.outputText = output.outputText
+        self.sourcePayloadJSON = output.sourcePayloadJSON
+        self.model = output.modelName
+        self.generationAction = output.generationAction
+        self.lengthMode = output.generationLengthMode
+        self.outputBudget = output.outputBudget
+        self.status = output.status
+        self.syncStatus = output.syncStatus
+        self.syncErrorMessage = output.syncErrorMessage
+        self.createdAt = output.createdAt
+        self.updatedAt = output.updatedAt
+        self.cloudGenerationOutputID = output.cloudGenerationOutputID.nilIfEmpty
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case localOutputID = "local_output_id"
+        case projectID = "project_id"
+        case projectName = "project_name"
+        case promptPackName = "prompt_pack_name"
+        case title
+        case outputText = "output_text"
+        case sourcePayloadJSON = "source_payload_json"
+        case model
+        case generationAction = "generation_action"
+        case lengthMode = "length_mode"
+        case outputBudget = "output_budget"
+        case status
+        case syncStatus = "sync_status"
+        case syncErrorMessage = "sync_error_message"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case cloudGenerationOutputID = "cloud_generation_output_id"
+    }
+}
+
+enum LocalGenerationOutputBackupError: LocalizedError {
+    case noBackups
+    case invalidBackup(URL)
+    case persistenceFailed(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .noBackups:
+            return "No local generated-output backups were found."
+        case .invalidBackup(let url):
+            return "The generated-output backup at \(url.lastPathComponent) could not be restored."
+        case .persistenceFailed(let error):
+            return "Generated outputs were restored but could not be saved locally: \(error.localizedDescription)"
+        }
+    }
+}
+
+final class LocalGenerationOutputBackupService {
+    static let shared = LocalGenerationOutputBackupService()
+
+    private let backupDirectoryName = "GenerationOutputBackups"
+    private let maxBackupsPerOutput = 10
+    private let fileManager: FileManager
+    private let baseDirectory: URL?
+    private let logger = Logger(subsystem: "CathedralOS", category: "GenerationOutputBackup")
+
+    init(baseDirectory: URL? = nil, fileManager: FileManager = .default) {
+        self.baseDirectory = baseDirectory
+        self.fileManager = fileManager
+    }
+
+    @discardableResult
+    func backup(output: GenerationOutput) -> URL? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+
+        guard let directory = ensureBackupDirectory() else {
+            logger.error("Output backup skipped: could not create/open backup directory for output \(output.id.uuidString, privacy: .public)")
+            return nil
+        }
+
+        do {
+            let payload = LocalGenerationOutputBackupPayload(output: output)
+            let data = try encoder.encode(payload)
+            let filename = backupFileName(projectID: payload.projectID, outputID: payload.localOutputID)
+            let url = directory.appendingPathComponent(filename)
+            try data.write(to: url, options: [.atomic])
+            pruneBackups(projectID: payload.projectID, outputID: payload.localOutputID)
+            return url
+        } catch {
+            logger.error("Output backup write failed for output \(output.id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    func backupAllOutputs(in modelContext: ModelContext) {
+        let outputs = (try? modelContext.fetch(FetchDescriptor<GenerationOutput>())) ?? []
+        for output in outputs {
+            _ = backup(output: output)
+        }
+    }
+
+    func backupCount() -> Int {
+        guard let directory = ensureBackupDirectory(),
+              let urls = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+            return 0
+        }
+        return urls.filter { $0.pathExtension.lowercased() == "json" }.count
+    }
+
+    func restoreLatestOutputs(into modelContext: ModelContext) throws -> Int {
+        let latestBackupURLs = latestBackupsByOutput()
+        guard !latestBackupURLs.isEmpty else {
+            throw LocalGenerationOutputBackupError.noBackups
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        var restoredCount = 0
+        for metadata in latestBackupURLs {
+            let data: Data
+            do {
+                data = try Data(contentsOf: metadata.url)
+            } catch {
+                throw LocalGenerationOutputBackupError.invalidBackup(metadata.url)
+            }
+
+            let payload: LocalGenerationOutputBackupPayload
+            do {
+                payload = try decoder.decode(LocalGenerationOutputBackupPayload.self, from: data)
+            } catch {
+                throw LocalGenerationOutputBackupError.invalidBackup(metadata.url)
+            }
+
+            let projectID = payload.projectID.flatMap(UUID.init(uuidString:))
+            let project = GenerationOutputRecoveryProjectResolver.resolveProject(
+                projectID: projectID,
+                projectName: payload.projectName,
+                in: modelContext,
+                recoverySource: "local backup"
+            )
+
+            let output = existingOutput(for: payload, in: modelContext) ?? GenerationOutput()
+            apply(payload: payload, to: output, project: project)
+            if output.modelContext == nil {
+                modelContext.insert(output)
+            }
+            restoredCount += 1
+        }
+
+        do {
+            try modelContext.save()
+        } catch {
+            throw LocalGenerationOutputBackupError.persistenceFailed(error)
+        }
+
+        return restoredCount
+    }
+
+    private func existingOutput(for payload: LocalGenerationOutputBackupPayload, in context: ModelContext) -> GenerationOutput? {
+        let outputs = (try? context.fetch(FetchDescriptor<GenerationOutput>())) ?? []
+        if let localID = UUID(uuidString: payload.localOutputID),
+           let byLocalID = outputs.first(where: { $0.id == localID }) {
+            return byLocalID
+        }
+
+        if let cloudID = payload.cloudGenerationOutputID, !cloudID.isEmpty,
+           let byCloudID = outputs.first(where: { $0.cloudGenerationOutputID == cloudID }) {
+            return byCloudID
+        }
+
+        return nil
+    }
+
+    private func apply(payload: LocalGenerationOutputBackupPayload, to output: GenerationOutput, project: StoryProject) {
+        if let localID = UUID(uuidString: payload.localOutputID) {
+            output.id = localID
+        }
+        output.project = project
+        output.title = payload.title
+        output.outputText = payload.outputText
+        output.sourcePromptPackName = payload.promptPackName
+        output.sourcePayloadJSON = payload.sourcePayloadJSON
+        output.modelName = payload.model
+        output.generationAction = payload.generationAction
+        output.generationLengthMode = payload.lengthMode
+        output.outputBudget = payload.outputBudget
+        output.status = payload.status
+        output.syncStatus = payload.syncStatus
+        output.syncErrorMessage = payload.syncErrorMessage
+        output.createdAt = payload.createdAt
+        output.updatedAt = payload.updatedAt
+        output.cloudGenerationOutputID = payload.cloudGenerationOutputID ?? ""
+        output.lastSyncedAt = payload.syncStatus == SyncStatus.synced.rawValue ? payload.updatedAt : output.lastSyncedAt
+    }
+
+    private func latestBackupsByOutput() -> [LocalProjectBackupMetadata] {
+        Dictionary(grouping: sortedBackupURLs(), by: { outputBackupKey(from: $0.url) })
+            .values
+            .compactMap { $0.first }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func outputBackupKey(from url: URL) -> String {
+        let fileName = url.lastPathComponent
+        guard let range = fileName.range(
+            of: "-\\d{8}-\\d{9}\\.json$",
+            options: .regularExpression
+        ) else {
+            return fileName
+        }
+        return String(fileName[..<range.lowerBound])
+    }
+
+    private func sortedBackupURLs() -> [LocalProjectBackupMetadata] {
+        guard let directory = ensureBackupDirectory(),
+              let urls = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.creationDateKey],
+                options: [.skipsHiddenFiles]
+              ) else {
+            return []
+        }
+
+        return urls
+            .filter { $0.pathExtension.lowercased() == "json" }
+            .compactMap { url -> LocalProjectBackupMetadata? in
+                let values = try? url.resourceValues(forKeys: [.creationDateKey])
+                return LocalProjectBackupMetadata(url: url, createdAt: values?.creationDate ?? .distantPast)
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func pruneBackups(projectID: String?, outputID: String) {
+        let matching = sortedBackupURLs().filter {
+            $0.url.lastPathComponent.hasPrefix("generation-output-\(projectID ?? "unassigned")-\(outputID)-")
+        }
+        guard matching.count > maxBackupsPerOutput else { return }
+        for backup in matching.dropFirst(maxBackupsPerOutput) {
+            try? fileManager.removeItem(at: backup.url)
+        }
+    }
+
+    private func ensureBackupDirectory() -> URL? {
+        do {
+            let appSupport: URL
+            if let baseDirectory {
+                appSupport = baseDirectory
+            } else {
+                appSupport = try fileManager.url(
+                    for: .applicationSupportDirectory,
+                    in: .userDomainMask,
+                    appropriateFor: nil,
+                    create: true
+                )
+            }
+            let directory = appSupport.appendingPathComponent(backupDirectoryName, isDirectory: true)
+            if !fileManager.fileExists(atPath: directory.path) {
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            return directory
+        } catch {
+            return nil
+        }
+    }
+
+    private func backupFileName(projectID: String?, outputID: String) -> String {
+        let timestamp = Self.timestampFormatter.string(from: Date())
+        return "generation-output-\(projectID ?? "unassigned")-\(outputID)-\(timestamp).json"
+    }
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd-HHmmssSSS"
+        return formatter
+    }()
+}
