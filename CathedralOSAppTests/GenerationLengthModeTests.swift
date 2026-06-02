@@ -29,6 +29,13 @@ final class GenerationLengthModeTests: XCTestCase {
         XCTAssertEqual(GenerationLengthMode.chapter.displayName, "Chapter")
     }
 
+    func testStoryUnitHints() {
+        XCTAssertEqual(GenerationLengthMode.short.storyUnitHint, "Complete short scene")
+        XCTAssertEqual(GenerationLengthMode.medium.storyUnitHint, "Complete scene")
+        XCTAssertEqual(GenerationLengthMode.long.storyUnitHint, "Extended scene")
+        XCTAssertEqual(GenerationLengthMode.chapter.storyUnitHint, "Full chapter section")
+    }
+
     // MARK: Output budget mapping
 
     func testOutputBudgetMapping() {
