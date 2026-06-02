@@ -40,6 +40,7 @@ struct PromptPackPreviewView: View {
     let usageLimitService: any UsageLimitServiceProtocol
     let authService: any AuthService
     let creditStateService: any CreditStateServiceProtocol
+    let outputSyncService: any GenerationOutputSyncServiceProtocol
 
     init(
         project: StoryProject,
@@ -48,7 +49,8 @@ struct PromptPackPreviewView: View {
         generationModelService: GenerationModelServiceProtocol = BackendGenerationModelService(),
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
         authService: any AuthService = BackendAuthService.shared,
-        creditStateService: any CreditStateServiceProtocol = BackendCreditStateService()
+        creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
+        outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
     ) {
         self.project = project
         self.pack = pack
@@ -57,6 +59,7 @@ struct PromptPackPreviewView: View {
         self.usageLimitService = usageLimitService
         self.authService = authService
         self.creditStateService = creditStateService
+        self.outputSyncService = outputSyncService
     }
 
     // MARK: Credit state
@@ -357,28 +360,43 @@ struct PromptPackPreviewView: View {
             // Success banner with link to generated output
             if let output = lastGeneratedOutput,
                output.status == GenerationStatus.complete.rawValue {
-                HStack(spacing: CathedralTheme.Spacing.sm) {
-                    Image(systemName: "checkmark.circle")
+                HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: output.syncStatus == SyncStatus.failed.rawValue ? "exclamationmark.triangle" : "checkmark.circle")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                    Text("Generation complete — \(output.title)")
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .lineLimit(2)
+                        .foregroundStyle(output.syncStatus == SyncStatus.failed.rawValue
+                            ? CathedralTheme.Colors.destructive
+                            : CathedralTheme.Colors.accent)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Generation complete — \(output.title)")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineLimit(2)
+                        if output.syncStatus == SyncStatus.failed.rawValue {
+                            Text("Output Sync: Failed\(output.syncErrorMessage.flatMap { $0.nilIfEmpty }.map { " — \($0)" } ?? "")")
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.destructive)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
                 }
                 .padding(CathedralTheme.Spacing.sm)
                 .background(CathedralTheme.Colors.surface)
                 .overlay(
                     RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                        .stroke(CathedralTheme.Colors.accent.opacity(0.4), lineWidth: 1)
+                        .stroke(
+                            (output.syncStatus == SyncStatus.failed.rawValue
+                                ? CathedralTheme.Colors.destructive
+                                : CathedralTheme.Colors.accent).opacity(0.4),
+                            lineWidth: 1
+                        )
                 )
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
 
             if let diagnostics = generationDiagnostics {
                 VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-                    Label("Backend Diagnostics", systemImage: "antennaradiowaves.left.and.right")
+                    Label("Diagnostics", systemImage: "antennaradiowaves.left.and.right")
                         .font(CathedralTheme.Typography.caption())
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                     Text(diagnostics)
@@ -534,6 +552,14 @@ struct PromptPackPreviewView: View {
         )
         gen.project = project
         modelContext.insert(gen)
+        do {
+            try modelContext.save()
+        } catch {
+            appendGenerationDiagnostic("SwiftData save failed after creating the output: \(error.localizedDescription)")
+            generationError = "Could not save the new output locally."
+            modelContext.delete(gen)
+            return
+        }
         _ = LocalProjectBackupService.shared.backup(project: project)
         lastGeneratedOutput = gen
 
@@ -548,19 +574,29 @@ struct PromptPackPreviewView: View {
                 lengthMode: mode,
                 selectedModelId: selectedModelId
             )
-            generationDiagnostics = await GenerationRequestDiagnosticsStore.shared.latestVisibleText()
+            mergeGenerationDiagnostics(await GenerationRequestDiagnosticsStore.shared.latestVisibleText())
 
             gen.outputText = response.generatedText
             gen.modelName = response.modelName
             gen.title = response.title ?? "\(pack.name) — \(project.name)"
             gen.status = GenerationStatus.complete.rawValue
             gen.updatedAt = Date()
+            gen.syncErrorMessage = nil
             // If the backend returned a cloud generation output ID, record it and mark synced.
             if let cloudID = response.cloudGenerationOutputID, !cloudID.isEmpty {
                 gen.cloudGenerationOutputID = cloudID
                 gen.syncStatus = SyncStatus.synced.rawValue
                 gen.lastSyncedAt = Date()
+                OutputSyncActivityStore.shared.recordSuccess("Output synced during generation.")
+            } else {
+                do {
+                    try await outputSyncService.pushOutput(gen)
+                } catch {
+                    appendGenerationDiagnostic("Output sync failed: \(localizedSyncError(error))")
+                }
             }
+            try? persistGeneration(stage: "saving the completed output")
+            _ = LocalGenerationOutputBackupService.shared.backup(output: gen)
 
             // On success: refresh backend-authoritative credit balance.
             // The backend is the source of truth for credits consumed and remaining.
@@ -574,10 +610,11 @@ struct PromptPackPreviewView: View {
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
 
         } catch {
-            generationDiagnostics = await GenerationRequestDiagnosticsStore.shared.latestVisibleText()
+            mergeGenerationDiagnostics(await GenerationRequestDiagnosticsStore.shared.latestVisibleText())
             gen.status = GenerationStatus.failed.rawValue
             gen.notes = error.localizedDescription
             gen.updatedAt = Date()
+            try? persistGeneration(stage: "saving the failed output")
             // sourcePayloadJSON is never overwritten — snapshot is preserved.
             // MVP policy: do not charge credits on generation failure.
             generationError = localizedGenerationError(error)
@@ -594,6 +631,30 @@ struct PromptPackPreviewView: View {
             return serviceError.errorDescription ?? serviceError.localizedDescription
         }
         return error.localizedDescription
+    }
+
+    private func localizedSyncError(_ error: Error) -> String {
+        (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+    }
+
+    private func mergeGenerationDiagnostics(_ diagnostics: String?) {
+        let trimmed = diagnostics?.trimmingCharacters(in: .whitespacesAndNewlines)
+        generationDiagnostics = trimmed?.isEmpty == true ? nil : trimmed
+    }
+
+    private func appendGenerationDiagnostic(_ message: String) {
+        let existing = generationDiagnostics?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = [existing?.isEmpty == false ? existing : nil, message.nilIfEmpty].compactMap { $0 }
+        generationDiagnostics = parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    private func persistGeneration(stage: String) throws {
+        do {
+            try modelContext.save()
+        } catch {
+            appendGenerationDiagnostic("SwiftData save failed after \(stage): \(error.localizedDescription)")
+            throw error
+        }
     }
 
     @MainActor

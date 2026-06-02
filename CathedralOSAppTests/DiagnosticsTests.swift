@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import CathedralOSApp
 
 // MARK: - DiagnosticsTests
@@ -591,6 +592,36 @@ final class DiagnosticsCopyTextTests: XCTestCase {
             "Copy text should include last generation error")
         XCTAssertTrue(copy.contains("Not signed in"),
             "Copy text should include last sync error")
+    }
+
+    func testCopyTextIncludesOutputRecoverySection() throws {
+        let auth = DiagnosticsStubAuthService(state: signedInState())
+        let usage = makeUsageService()
+        let entitlement = StubStoreKitEntitlementService()
+        let health = StubBackendHealthService()
+        let schema = Schema([GenerationOutput.self, StoryProject.self])
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let context = ModelContext(container)
+        context.insert(GenerationOutput(title: "Recovered"))
+        OutputSyncActivityStore.shared.recordFailure("RLS denied")
+
+        let vm = DiagnosticsViewModel(
+            authService: auth,
+            usageLimitService: usage,
+            entitlementService: entitlement,
+            healthService: health
+        )
+        vm.refresh(modelContext: context)
+
+        guard let copy = vm.snapshot?.copyText() else {
+            XCTFail("Copy text should not be nil")
+            return
+        }
+
+        XCTAssertTrue(copy.contains("--- Output Recovery ---"))
+        XCTAssertTrue(copy.contains("Local generated outputs: 1"))
+        XCTAssertTrue(copy.contains("Last output sync status: Failed"))
+        XCTAssertTrue(copy.contains("Last output sync detail: RLS denied"))
     }
 }
 

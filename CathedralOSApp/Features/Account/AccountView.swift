@@ -27,7 +27,7 @@ struct AccountView: View {
 
     init(
         authService: any AuthService = BackendAuthService.shared,
-        syncService: any GenerationOutputSyncServiceProtocol = StubGenerationOutputSyncService(),
+        syncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
         profileBootstrapService: (any ProfileBootstrapServiceProtocol)? = nil,
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
         entitlementService: any StoreKitEntitlementServiceProtocol = StoreKitEntitlementService.shared,
@@ -544,7 +544,8 @@ struct AccountView: View {
             "Current StoryProject count: \(localProjects.count)",
             "Current GenerationOutput count: \(localGenerations.count)",
             "Current signed-in user ID: \(userID)",
-            "Local backup file count: \(LocalProjectBackupService.shared.backupCount())"
+            "Local project backup file count: \(LocalProjectBackupService.shared.backupCount())",
+            "Local generated-output backup file count: \(LocalGenerationOutputBackupService.shared.backupCount())"
         ]
         if let error = launch.storeLoadErrorMessage, !error.isEmpty {
             lines.append("Store load error: \(error)")
@@ -571,7 +572,8 @@ struct AccountView: View {
                     authService: authService,
                     usageLimitService: usageLimitService,
                     entitlementService: entitlementService,
-                    creditStateService: creditStateService
+                    creditStateService: creditStateService,
+                    syncService: syncService
                 )
             } label: {
                 Label("Diagnostics", systemImage: "stethoscope")
@@ -609,6 +611,15 @@ struct AccountView: View {
             authState = authService.authState
             await attemptProfileBootstrap()
             try? await ProjectCloudSyncService.shared.syncAllProjects(in: modelContext)
+            do {
+                try await syncService.pullOutputs(into: modelContext)
+                let formatter = DateFormatter()
+                formatter.timeStyle = .short
+                lastSyncMessage = "Last synced at \(formatter.string(from: Date()))"
+                syncError = nil
+            } catch {
+                syncError = (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+            }
             // Fetch backend-authoritative credit balance after sign-in.
             await refreshBackendCreditState()
         } catch AuthServiceError.cancelled {

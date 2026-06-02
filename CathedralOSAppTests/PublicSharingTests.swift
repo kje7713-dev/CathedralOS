@@ -119,6 +119,11 @@ private final class MockSyncServiceForPublishing: GenerationOutputSyncServicePro
         output.syncErrorMessage = nil
     }
 
+    func fetchCloudOutputCount() async throws -> Int {
+        if let error = errorToThrow { throw error }
+        return pushedOutputs.count
+    }
+
     func syncAll(in context: ModelContext) async throws {
         if let error = errorToThrow { throw error }
     }

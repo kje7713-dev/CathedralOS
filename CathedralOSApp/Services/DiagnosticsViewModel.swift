@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 import UIKit
 
 // MARK: - GenerationPreflightItem
@@ -60,6 +61,13 @@ struct DiagnosticsSnapshot {
 
     // MARK: Generation preflight
     let preflightItems: [GenerationPreflightItem]
+
+    // MARK: Output recovery
+    let localGeneratedOutputCount: Int
+    let localGeneratedOutputBackupCount: Int
+    let cloudGeneratedOutputCount: Int?
+    let lastOutputSyncStatus: String
+    let lastOutputSyncMessage: String?
 
     // MARK: Timestamp
     let capturedAt: Date
@@ -139,6 +147,17 @@ struct DiagnosticsSnapshot {
                 lines.append("\(status) \(item.label)")
             }
         }
+        lines += [
+            "",
+            "--- Output Recovery ---",
+            "Local generated outputs: \(localGeneratedOutputCount)",
+            "Local generated-output backups: \(localGeneratedOutputBackupCount)",
+            "Cloud generated outputs: \(cloudGeneratedOutputCount.map(String.init) ?? "Unavailable")",
+            "Last output sync status: \(lastOutputSyncStatus)"
+        ]
+        if let lastOutputSyncMessage {
+            lines.append("Last output sync detail: \(lastOutputSyncMessage)")
+        }
         lines.append("=== End Diagnostics ===")
         return lines.joined(separator: "\n")
     }
@@ -159,7 +178,11 @@ final class DiagnosticsViewModel: ObservableObject {
     private let entitlementService: any StoreKitEntitlementServiceProtocol
     private let creditStateService: any CreditStateServiceProtocol
     private let healthService: any BackendHealthServiceProtocol
+    private let syncService: any GenerationOutputSyncServiceProtocol
     private var lastFetchedCreditState: BackendCreditState?
+    private var localGeneratedOutputCount = 0
+    private var localGeneratedOutputBackupCount = 0
+    private var cloudGeneratedOutputCount: Int?
 
     // MARK: Published state
 
@@ -169,6 +192,11 @@ final class DiagnosticsViewModel: ObservableObject {
     @Published private(set) var isGrantingCredits = false
     @Published private(set) var developerCreditsMessage: String?
     @Published private(set) var developerCreditsError: String?
+    @Published private(set) var isRefreshingCloudOutputs = false
+    @Published private(set) var isSyncingOutputs = false
+    @Published private(set) var isRestoringLocalOutputs = false
+    @Published private(set) var outputRecoveryMessage: String?
+    @Published private(set) var outputRecoveryError: String?
 
     // MARK: Last-error storage
     // These are set externally by views that observe errors from cloud actions.
@@ -184,20 +212,26 @@ final class DiagnosticsViewModel: ObservableObject {
         usageLimitService: any UsageLimitServiceProtocol,
         entitlementService: any StoreKitEntitlementServiceProtocol,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
-        healthService: any BackendHealthServiceProtocol = BackendHealthService.shared
+        healthService: any BackendHealthServiceProtocol = BackendHealthService.shared,
+        syncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
     ) {
         self.authService = authService
         self.usageLimitService = usageLimitService
         self.entitlementService = entitlementService
         self.creditStateService = creditStateService
         self.healthService = healthService
+        self.syncService = syncService
     }
 
     // MARK: - Public API
 
     /// Rebuilds the diagnostic snapshot from current service state.
     /// Call on appear and after any relevant state change.
-    func refresh() {
+    func refresh(modelContext: ModelContext? = nil) {
+        if let modelContext {
+            localGeneratedOutputCount = (try? modelContext.fetchCount(FetchDescriptor<GenerationOutput>())) ?? 0
+        }
+        localGeneratedOutputBackupCount = LocalGenerationOutputBackupService.shared.backupCount()
         snapshot = buildSnapshot()
     }
 
@@ -278,6 +312,84 @@ final class DiagnosticsViewModel: ObservableObject {
             || lastFetchedCreditState?.isAdmin == true
     }
 
+    func refreshCloudOutputCountIfPossible() async {
+        guard SupabaseConfiguration.isConfigured else {
+            cloudGeneratedOutputCount = nil
+            snapshot = buildSnapshot()
+            return
+        }
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard authService.authState.isSignedIn else {
+            cloudGeneratedOutputCount = nil
+            snapshot = buildSnapshot()
+            return
+        }
+
+        isRefreshingCloudOutputs = true
+        outputRecoveryError = nil
+        defer { isRefreshingCloudOutputs = false }
+        do {
+            cloudGeneratedOutputCount = try await syncService.fetchCloudOutputCount()
+        } catch {
+            outputRecoveryError = (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+        }
+        snapshot = buildSnapshot()
+    }
+
+    func syncAllOutputs(in modelContext: ModelContext) async {
+        isSyncingOutputs = true
+        outputRecoveryMessage = nil
+        outputRecoveryError = nil
+        defer { isSyncingOutputs = false }
+
+        do {
+            try await syncService.syncAll(in: modelContext)
+            refresh(modelContext: modelContext)
+            await refreshCloudOutputCountIfPossible()
+            outputRecoveryMessage = "All outputs synced."
+        } catch {
+            outputRecoveryError = (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+            refresh(modelContext: modelContext)
+        }
+    }
+
+    func restoreOutputsFromCloud(into modelContext: ModelContext) async {
+        isRefreshingCloudOutputs = true
+        outputRecoveryMessage = nil
+        outputRecoveryError = nil
+        defer { isRefreshingCloudOutputs = false }
+
+        do {
+            try await syncService.pullOutputs(into: modelContext)
+            refresh(modelContext: modelContext)
+            await refreshCloudOutputCountIfPossible()
+            outputRecoveryMessage = "Cloud outputs restored."
+        } catch {
+            outputRecoveryError = (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+            refresh(modelContext: modelContext)
+        }
+    }
+
+    func restoreOutputsFromLocalBackup(into modelContext: ModelContext) async {
+        isRestoringLocalOutputs = true
+        outputRecoveryMessage = nil
+        outputRecoveryError = nil
+        defer { isRestoringLocalOutputs = false }
+
+        do {
+            let restoredCount = try LocalGenerationOutputBackupService.shared.restoreLatestOutputs(into: modelContext)
+            refresh(modelContext: modelContext)
+            outputRecoveryMessage = restoredCount == 1
+                ? "Restored 1 output from local backup."
+                : "Restored \(restoredCount) outputs from local backup."
+        } catch {
+            outputRecoveryError = (error as? LocalGenerationOutputBackupError)?.errorDescription ?? error.localizedDescription
+            refresh(modelContext: modelContext)
+        }
+    }
+
     // MARK: - Snapshot assembly
 
     private func buildSnapshot() -> DiagnosticsSnapshot {
@@ -313,6 +425,7 @@ final class DiagnosticsViewModel: ObservableObject {
 
         // Preflight
         let preflightItems = buildPreflightItems(authState: authState)
+        let outputSyncActivity = OutputSyncActivityStore.shared.snapshot
 
         return DiagnosticsSnapshot(
             appVersion: version,
@@ -340,6 +453,11 @@ final class DiagnosticsViewModel: ObservableObject {
             lastSyncError: lastSyncError,
             lastPublishError: lastPublishError,
             preflightItems: preflightItems,
+            localGeneratedOutputCount: localGeneratedOutputCount,
+            localGeneratedOutputBackupCount: localGeneratedOutputBackupCount,
+            cloudGeneratedOutputCount: cloudGeneratedOutputCount,
+            lastOutputSyncStatus: outputSyncActivity.state.displayName,
+            lastOutputSyncMessage: outputSyncActivity.message,
             capturedAt: Date()
         )
     }
