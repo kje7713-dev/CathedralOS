@@ -72,6 +72,19 @@ Immutable audit log of every credit movement.
 | `generation_refund` | Credits restored for a failed generation |
 | `admin_adjustment` | Manual operational correction |
 
+### `credit_grants`
+
+Immutable audit log of developer/admin test-credit grants.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | Auto-generated |
+| `user_id` | uuid | Target user receiving credits |
+| `granted_by` | uuid | Admin/dev user who issued the grant (nullable) |
+| `amount` | integer | Positive granted amount |
+| `reason` | text | Defaults to `developer_test_grant` |
+| `created_at` | timestamptz | Immutable creation timestamp |
+
 ### `app_store_transactions`
 
 Idempotency and audit log for every validated App Store transaction.
@@ -99,8 +112,10 @@ Idempotency and audit log for every validated App Store transaction.
 | `user_entitlements` | INSERT / UPDATE / DELETE | **None** — service-role only |
 | `user_credit_ledger` | SELECT | Own rows only (`auth.uid() = user_id`) |
 | `user_credit_ledger` | INSERT / UPDATE / DELETE | **None** — service-role only |
+| `credit_grants` | SELECT | Own rows only (`auth.uid() = user_id`) |
+| `credit_grants` | INSERT / UPDATE / DELETE | **None** — service-role only |
 
-All writes to `user_entitlements` and `user_credit_ledger` must go through
+All writes to `user_entitlements`, `user_credit_ledger`, and `credit_grants` must go through
 Edge Functions using the `SUPABASE_SERVICE_ROLE_KEY`. The iOS client **cannot**
 directly mutate either table.
 
@@ -219,6 +234,7 @@ Returns the backend-authoritative credit state for the authenticated user.
   "monthlyCreditAllowance": 10,
   "purchasedCreditBalance": 0,
   "availableCredits": 10,
+  "isAdmin": false,
   "currentPeriodEnd": null,
   "recentLedger": [
     {
@@ -232,6 +248,35 @@ Returns the backend-authoritative credit state for the authenticated user.
 ```
 
 Use this from `AccountView` to display accurate credit state.
+
+### `admin-grant-credits`
+
+Admin/dev-only endpoint for TestFlight and internal credit grants.
+
+**Method:** `POST`  
+**Authorization:** user JWT bearer  
+**Secret env:** `ADMIN_USER_IDS=uuid1,uuid2`
+
+**Request body:**
+
+```json
+{
+  "targetUserID": "00000000-0000-0000-0000-000000000001",
+  "amount": 100,
+  "reason": "testflight_dev_grant"
+}
+```
+
+**Behavior:**
+
+1. Verifies the caller's JWT.
+2. Requires the caller ID to be present in `ADMIN_USER_IDS`.
+3. Inserts a `credit_grants` row.
+4. Increments `user_entitlements.purchased_credit_balance`.
+5. Inserts a positive `user_credit_ledger` entry for auditability.
+6. Returns the updated credit-state payload (same shape as `get-credit-state`).
+
+Non-admin callers receive `403 Forbidden`.
 
 ### `sync-storekit-entitlement`
 
@@ -417,10 +462,12 @@ limits reliably, because:
 | File | Change |
 |---|---|
 | `supabase/migrations/20260430000000_add_credit_tables.sql` | **New** — `user_entitlements` + `user_credit_ledger` tables and RLS |
+| `supabase/migrations/20260602181000_add_credit_grants.sql` | **New** — `credit_grants` audit table and RLS |
 | `supabase/functions/generate-story/_credits.ts` | **New** — credit cost mapping, CreditStore interface, SupabaseCreditStore |
 | `supabase/functions/generate-story/index.ts` | **Updated** — credit preflight + post-success charge |
 | `supabase/functions/generate-story/index_test.ts` | **New** — TypeScript unit tests (mock-based) |
 | `supabase/functions/get-credit-state/index.ts` | **New** — credit state endpoint |
+| `supabase/functions/admin-grant-credits/index.ts` | **New** — admin/dev credit grant endpoint |
 | `supabase/functions/sync-storekit-entitlement/index.ts` | **New** — StoreKit sync placeholder |
 
 ### iOS

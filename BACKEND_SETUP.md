@@ -83,6 +83,12 @@ Set the following secrets in your CI environment (e.g. GitHub Actions secrets):
 - `SUPABASE_ANON_KEY`
 - `PUBLIC_SHARING_BASE_URL`
 
+For the admin/dev TestFlight credit-grant flow, also configure this Supabase
+Edge Function secret server-side (never in the iOS app):
+
+- `ADMIN_USER_IDS` — comma-separated Supabase user UUIDs allowed to call
+  `admin-grant-credits`
+
 Inject them into the build using `-xcconfig` or `INFOPLIST_FILE_KEY` arguments:
 
 ```yaml
@@ -174,6 +180,9 @@ a clear message directing them to the Account tab. No action silently fails.
   The iOS app uses only the anon key.
 - **OpenAI API key** — held server-side only, inside Edge Functions.
   Never sent from the client.
+- **ADMIN_USER_IDS** — server-side Edge Function secret used to gate the
+  developer/TestFlight credit-grant endpoint. Never embed this allowlist in a
+  production client build.
 - **Anon key** — the public Supabase key. Safe to embed in the app binary.
   Used in the `apikey` header for Edge Function and REST API calls.
 - **User JWT** — the Supabase access token issued at sign-in. Stored in the
@@ -183,3 +192,10 @@ a clear message directing them to the Account tab. No action silently fails.
   token without requiring the user to sign in again.
 - **Do not commit** any of the above to version control. Use `.xcconfig` files
   (gitignored) or CI secrets for build-time injection.
+
+### Optional debug/TestFlight UI allowlist
+
+If you want the app to show the Developer Credits section before backend
+confirmation returns, you may add an optional `DeveloperAdminUserIDs` Info.plist
+entry (comma-separated string or string array). Leave it unset for production
+App Store builds.

@@ -41,6 +41,15 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Methods": "GET, OPTIONS",
 };
 
+function parseAdminUserIDs(raw: string | undefined): Set<string> {
+  return new Set(
+    (raw ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
+  );
+}
+
 function corsResponse(body: string, init: ResponseInit = {}): Response {
   return new Response(body, {
     ...init,
@@ -109,6 +118,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const userId = user.id;
+  const adminUserIDs = parseAdminUserIDs(Deno.env.get("ADMIN_USER_IDS"));
 
   // -------------------------------------------------------------------------
   // Load entitlement via service-role client
@@ -174,8 +184,8 @@ Deno.serve(async (req: Request) => {
   // Build response
   // -------------------------------------------------------------------------
 
-  const availableCredits =
-    entitlement.monthly_credit_allowance + entitlement.purchased_credit_balance;
+  const availableCredits = entitlement.monthly_credit_allowance +
+    entitlement.purchased_credit_balance;
 
   return corsResponse(
     JSON.stringify({
@@ -184,6 +194,7 @@ Deno.serve(async (req: Request) => {
       monthlyCreditAllowance: entitlement.monthly_credit_allowance,
       purchasedCreditBalance: entitlement.purchased_credit_balance,
       availableCredits,
+      isAdmin: adminUserIDs.has(userId),
       currentPeriodEnd: entitlement.current_period_end,
       recentLedger: ledger ?? [],
     }),

@@ -25,6 +25,9 @@ struct BackendCreditState: Codable, Equatable {
     /// Total available credits = monthlyCreditAllowance + purchasedCreditBalance.
     let availableCredits: Int
 
+    /// Whether the signed-in user is allowed to use admin/dev grant tools.
+    let isAdmin: Bool
+
     // MARK: Period info
 
     /// ISO-8601 string of when the current credit period ends. Nil if not set.
@@ -48,6 +51,49 @@ struct BackendCreditState: Codable, Equatable {
             case reason
             case createdAt = "created_at"
         }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case planName
+        case isPro
+        case monthlyCreditAllowance
+        case purchasedCreditBalance
+        case availableCredits
+        case isAdmin
+        case currentPeriodEnd
+        case recentLedger
+    }
+
+    init(
+        planName: String,
+        isPro: Bool,
+        monthlyCreditAllowance: Int,
+        purchasedCreditBalance: Int,
+        availableCredits: Int,
+        isAdmin: Bool,
+        currentPeriodEnd: String?,
+        recentLedger: [CreditLedgerEntry]
+    ) {
+        self.planName = planName
+        self.isPro = isPro
+        self.monthlyCreditAllowance = monthlyCreditAllowance
+        self.purchasedCreditBalance = purchasedCreditBalance
+        self.availableCredits = availableCredits
+        self.isAdmin = isAdmin
+        self.currentPeriodEnd = currentPeriodEnd
+        self.recentLedger = recentLedger
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        planName = try container.decode(String.self, forKey: .planName)
+        isPro = try container.decode(Bool.self, forKey: .isPro)
+        monthlyCreditAllowance = try container.decode(Int.self, forKey: .monthlyCreditAllowance)
+        purchasedCreditBalance = try container.decode(Int.self, forKey: .purchasedCreditBalance)
+        availableCredits = try container.decode(Int.self, forKey: .availableCredits)
+        isAdmin = try container.decodeIfPresent(Bool.self, forKey: .isAdmin) ?? false
+        currentPeriodEnd = try container.decodeIfPresent(String.self, forKey: .currentPeriodEnd)
+        recentLedger = try container.decodeIfPresent([CreditLedgerEntry].self, forKey: .recentLedger) ?? []
     }
 }
 
@@ -87,6 +133,13 @@ protocol CreditStateServiceProtocol: AnyObject {
     /// - Returns: A `BackendCreditState` reflecting the authoritative server state.
     /// - Throws: `CreditStateServiceError` on failure.
     func fetchCreditState() async throws -> BackendCreditState
+
+    /// Grants developer/test credits to the target user via the admin-only Edge Function.
+    func grantCredits(
+        targetUserID: String,
+        amount: Int,
+        reason: String
+    ) async throws -> BackendCreditState
 }
 
 // MARK: - BackendCreditStateService
@@ -96,17 +149,54 @@ final class BackendCreditStateService: CreditStateServiceProtocol {
 
     private let authService: AuthService
     private let session: URLSession
+    private let configuration: ValidatedSupabaseConfiguration?
 
     init(
         authService: AuthService = BackendAuthService.shared,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        configuration: ValidatedSupabaseConfiguration? = nil
     ) {
         self.authService = authService
         self.session = session
+        self.configuration = configuration
     }
 
     func fetchCreditState() async throws -> BackendCreditState {
-        guard SupabaseConfiguration.isConfigured else {
+        try await sendRequest(
+            path: SupabaseConfiguration.creditStateEdgeFunctionPath,
+            method: "GET",
+            body: Optional<GrantCreditsRequest>.none
+        )
+    }
+
+    func grantCredits(
+        targetUserID: String,
+        amount: Int,
+        reason: String
+    ) async throws -> BackendCreditState {
+        try await sendRequest(
+            path: SupabaseConfiguration.adminGrantCreditsEdgeFunctionPath,
+            method: "POST",
+            body: GrantCreditsRequest(
+                targetUserID: targetUserID,
+                amount: amount,
+                reason: reason
+            )
+        )
+    }
+
+    private struct GrantCreditsRequest: Encodable {
+        let targetUserID: String
+        let amount: Int
+        let reason: String
+    }
+
+    private func sendRequest<Body: Encodable>(
+        path: String,
+        method: String,
+        body: Body?
+    ) async throws -> BackendCreditState {
+        guard configuration != nil || SupabaseConfiguration.isConfigured else {
             throw CreditStateServiceError.notConfigured
         }
         if case .unknown = authService.authState {
@@ -118,16 +208,27 @@ final class BackendCreditStateService: CreditStateServiceProtocol {
 
         let client: SupabaseBackendClient
         do {
-            client = try SupabaseBackendClient()
+            if let configuration {
+                client = SupabaseBackendClient(configuration: configuration)
+            } else {
+                client = try SupabaseBackendClient()
+            }
         } catch {
             throw CreditStateServiceError.notConfigured
         }
 
-        let url = client.edgeFunctionURL(path: SupabaseConfiguration.creditStateEdgeFunctionPath)
+        let url = client.edgeFunctionURL(path: path)
         // `authorizedRequest` sets Authorization/apikey/Content-Type headers.
         // Pass the user JWT so Supabase can verify the caller's identity.
         var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
-        request.httpMethod = "GET"
+        request.httpMethod = method
+        if let body {
+            do {
+                request.httpBody = try JSONEncoder().encode(body)
+            } catch {
+                throw CreditStateServiceError.networkError(error)
+            }
+        }
 
         let data: Data
         let urlResponse: URLResponse
@@ -160,13 +261,26 @@ final class BackendCreditStateService: CreditStateServiceProtocol {
 final class StubCreditStateService: CreditStateServiceProtocol {
 
     var result: Result<BackendCreditState, Error>
+    var grantResult: Result<BackendCreditState, Error>
 
-    init(result: Result<BackendCreditState, Error> = .success(.stub())) {
+    init(
+        result: Result<BackendCreditState, Error> = .success(.stub()),
+        grantResult: Result<BackendCreditState, Error>? = nil
+    ) {
         self.result = result
+        self.grantResult = grantResult ?? result
     }
 
     func fetchCreditState() async throws -> BackendCreditState {
         try result.get()
+    }
+
+    func grantCredits(
+        targetUserID: String,
+        amount: Int,
+        reason: String
+    ) async throws -> BackendCreditState {
+        try grantResult.get()
     }
 }
 
@@ -180,6 +294,7 @@ extension BackendCreditState {
         monthlyCreditAllowance: Int = 10,
         purchasedCreditBalance: Int = 0,
         availableCredits: Int = 10,
+        isAdmin: Bool = false,
         currentPeriodEnd: String? = nil,
         recentLedger: [CreditLedgerEntry] = []
     ) -> BackendCreditState {
@@ -189,6 +304,7 @@ extension BackendCreditState {
             monthlyCreditAllowance: monthlyCreditAllowance,
             purchasedCreditBalance: purchasedCreditBalance,
             availableCredits: availableCredits,
+            isAdmin: isAdmin,
             currentPeriodEnd: currentPeriodEnd,
             recentLedger: recentLedger
         )

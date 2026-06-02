@@ -570,7 +570,8 @@ struct AccountView: View {
                 DiagnosticsView(
                     authService: authService,
                     usageLimitService: usageLimitService,
-                    entitlementService: entitlementService
+                    entitlementService: entitlementService,
+                    creditStateService: creditStateService
                 )
             } label: {
                 Label("Diagnostics", systemImage: "stethoscope")

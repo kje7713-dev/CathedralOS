@@ -50,6 +50,7 @@ struct ValidatedSupabaseConfiguration {
     let generationEdgeFunctionPath: String
     let sharingEdgeFunctionPath: String
     let creditStateEdgeFunctionPath: String
+    let adminGrantCreditsEdgeFunctionPath: String
     let generationModelsEdgeFunctionPath: String
     let storeKitSyncEdgeFunctionPath: String
     let storeKitValidateEdgeFunctionPath: String
@@ -109,6 +110,7 @@ enum SupabaseConfiguration {
 
     /// Supabase Edge Function path for fetching the backend-authoritative credit state.
     static let creditStateEdgeFunctionPath = "get-credit-state"
+    static let adminGrantCreditsEdgeFunctionPath = "admin-grant-credits"
     static let generationModelsEdgeFunctionPath = "generation-models"
 
     /// Supabase Edge Function path for syncing StoreKit entitlements.
@@ -145,9 +147,31 @@ enum SupabaseConfiguration {
             generationEdgeFunctionPath: generationEdgeFunctionPath,
             sharingEdgeFunctionPath: sharingEdgeFunctionPath,
             creditStateEdgeFunctionPath: creditStateEdgeFunctionPath,
+            adminGrantCreditsEdgeFunctionPath: adminGrantCreditsEdgeFunctionPath,
             generationModelsEdgeFunctionPath: generationModelsEdgeFunctionPath,
             storeKitSyncEdgeFunctionPath: storeKitSyncEdgeFunctionPath,
             storeKitValidateEdgeFunctionPath: storeKitValidateEdgeFunctionPath
         )
+    }
+
+    /// Optional comma-separated or array-based admin allowlist for debug/TestFlight UI.
+    static var developerAdminUserIDs: Set<String> {
+        let info = Bundle.main.infoDictionary ?? [:]
+        if let ids = info["DeveloperAdminUserIDs"] as? [String] {
+            return Set(
+                ids
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+        }
+        if let raw = info["DeveloperAdminUserIDs"] as? String {
+            return Set(
+                raw
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+        }
+        return []
     }
 }

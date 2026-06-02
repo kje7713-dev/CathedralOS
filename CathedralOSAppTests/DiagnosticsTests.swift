@@ -593,3 +593,64 @@ final class DiagnosticsCopyTextTests: XCTestCase {
             "Copy text should include last sync error")
     }
 }
+
+// MARK: - DiagnosticsDeveloperCreditsTests
+
+@MainActor
+final class DiagnosticsDeveloperCreditsTests: XCTestCase {
+
+    func testRefreshCreditStateEnablesDeveloperCreditsForBackendAdmin() async {
+        let auth = DiagnosticsStubAuthService(
+            state: signedInState(id: "11111111-1111-1111-1111-111111111111")
+        )
+        let usage = makeUsageService(availableCredits: 1)
+        let entitlement = StubStoreKitEntitlementService()
+        let health = StubBackendHealthService()
+        let creditState = StubCreditStateService(
+            result: .success(.stub(availableCredits: 25, isAdmin: true))
+        )
+
+        let vm = DiagnosticsViewModel(
+            authService: auth,
+            usageLimitService: usage,
+            entitlementService: entitlement,
+            creditStateService: creditState,
+            healthService: health
+        )
+
+        vm.refresh()
+        await vm.refreshCreditStateIfPossible()
+
+        XCTAssertTrue(vm.snapshot?.backendConfirmedAdmin == true)
+        XCTAssertEqual(vm.snapshot?.availableCredits, 25)
+        XCTAssertTrue(vm.canShowDeveloperCredits)
+    }
+
+    func testGrantDeveloperCreditsUpdatesMessageAndBalance() async {
+        let auth = DiagnosticsStubAuthService(
+            state: signedInState(id: "11111111-1111-1111-1111-111111111111")
+        )
+        let usage = makeUsageService(availableCredits: 10)
+        let entitlement = StubStoreKitEntitlementService()
+        let health = StubBackendHealthService()
+        let creditState = StubCreditStateService(
+            result: .success(.stub(availableCredits: 10, isAdmin: true)),
+            grantResult: .success(.stub(availableCredits: 110, purchasedCreditBalance: 100, isAdmin: true))
+        )
+
+        let vm = DiagnosticsViewModel(
+            authService: auth,
+            usageLimitService: usage,
+            entitlementService: entitlement,
+            creditStateService: creditState,
+            healthService: health
+        )
+
+        vm.refresh()
+        await vm.grantDeveloperCredits(amount: 100)
+
+        XCTAssertEqual(vm.developerCreditsMessage, "Granted 100 test credits")
+        XCTAssertEqual(vm.snapshot?.availableCredits, 110)
+        XCTAssertTrue(vm.canShowDeveloperCredits)
+    }
+}
