@@ -76,6 +76,8 @@ protocol GenerationOutputSyncServiceProtocol {
 /// user can only read and write their own rows.
 final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProtocol {
 
+    static let shared = SupabaseGenerationOutputSyncService()
+
     private let authService: AuthService
     private let session: URLSession
 

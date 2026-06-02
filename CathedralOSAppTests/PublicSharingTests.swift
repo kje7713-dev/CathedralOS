@@ -30,9 +30,14 @@ final class MockPublicSharingService: PublicSharingService {
     private(set) var lastReportReason: ReportReason?
     private(set) var lastReportDetails: String?
     private(set) var lastUploadedCoverSharedOutputID: String?
+    private(set) var lastPublishedOutput: GenerationOutput?
+    var onPublish: ((GenerationOutput) -> Void)?
+    var onUploadCoverImage: ((String, Data, Int, Int, String) -> Void)?
 
     func publish(output: GenerationOutput) async throws -> PublishResponse {
         publishCallCount += 1
+        lastPublishedOutput = output
+        onPublish?(output)
         return try publishResult.get()
     }
 
@@ -67,6 +72,7 @@ final class MockPublicSharingService: PublicSharingService {
     ) async throws -> OutputCoverImageUploadMetadata {
         uploadCoverImageCallCount += 1
         lastUploadedCoverSharedOutputID = sharedOutputID
+        onUploadCoverImage?(sharedOutputID, imageData, width, height, contentType)
         return OutputCoverImageUploadMetadata(
             sharedOutputID: sharedOutputID,
             coverImagePath: "\(sharedOutputID)/mock.jpg",
@@ -738,6 +744,15 @@ final class PublicSharingTests: XCTestCase {
 
     // MARK: Sync-first — BackendPublicSharingService
 
+    func testGenerationOutputDetailDefaultSharingServiceHasOutputSyncServiceWired() {
+        let output = makeOutput()
+        let view = GenerationOutputDetailView(output: output)
+
+        let backendService = view.sharingService as? BackendPublicSharingService
+        XCTAssertNotNil(backendService)
+        XCTAssertEqual(backendService?.hasOutputSyncService, true)
+    }
+
     func testPublishSyncsLocalOnlyOutputFirstWhenCloudIDIsEmpty() async {
         // Output with no cloud generation ID should trigger a sync attempt before publish.
         // The publish will then fail with endpointNotConfigured (no Info.plist URL in tests),
@@ -805,6 +820,28 @@ final class PublicSharingTests: XCTestCase {
         } catch {
             XCTFail("Expected missingCloudGenerationOutputID, got: \(error)")
         }
+    }
+
+    func testPublishCoordinatorAttemptsOutputSyncWhenCloudGenerationOutputIDIsMissing() async throws {
+        let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
+        let sync = MockSyncServiceForPublishing()
+        let expectedCloudID = UUID().uuidString
+        sync.cloudIDToReturn = expectedCloudID
+        let sharing = MockPublicSharingService()
+        sharing.publishResult = .success(makePublishResponse())
+
+        let coordinator = GenerationOutputPublishCoordinator(
+            authService: auth,
+            sharingService: sharing,
+            syncService: sync
+        )
+        let gen = makeOutput()
+        gen.cloudGenerationOutputID = ""
+
+        _ = try await coordinator.publish(output: gen, pendingCoverImage: nil, removeCoverImageOnPublish: false)
+
+        XCTAssertEqual(sync.pushedOutputs.count, 1)
+        XCTAssertEqual(gen.cloudGenerationOutputID, expectedCloudID)
     }
 
     // MARK: cloudGenerationOutputID validation — BackendPublicSharingService
@@ -893,6 +930,97 @@ final class PublicSharingTests: XCTestCase {
         XCTAssertFalse(coverImageUploadAttempted, "Cover image upload must not be attempted when publish fails")
         XCTAssertEqual(mock.uploadCoverImageCallCount, 0,
                        "uploadCoverImage must not be called when cloudGenerationOutputID is invalid")
+    }
+
+    func testPublishCoordinatorDoesNotUploadCoverUntilCloudGenerationOutputIDIsValid() async throws {
+        let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
+        let sync = MockSyncServiceForPublishing()
+        let expectedCloudID = UUID().uuidString
+        sync.cloudIDToReturn = expectedCloudID
+        let sharing = MockPublicSharingService()
+        sharing.publishResult = .success(makePublishResponse())
+        let gen = makeOutput()
+        gen.cloudGenerationOutputID = ""
+
+        sharing.onUploadCoverImage = { _, _, _, _, _ in
+            XCTAssertEqual(gen.cloudGenerationOutputID, expectedCloudID)
+            XCTAssertEqual(sharing.publishCallCount, 0)
+        }
+
+        let coordinator = GenerationOutputPublishCoordinator(
+            authService: auth,
+            sharingService: sharing,
+            syncService: sync
+        )
+
+        _ = try await coordinator.publish(
+            output: gen,
+            pendingCoverImage: PendingOutputCoverImage(
+                imageData: Data("cover".utf8),
+                width: 1200,
+                height: 800,
+                contentType: "image/jpeg"
+            ),
+            removeCoverImageOnPublish: false
+        )
+
+        XCTAssertEqual(sharing.uploadCoverImageCallCount, 1)
+        XCTAssertEqual(sharing.publishCallCount, 1)
+    }
+
+    func testPublishCoordinatorFailedSyncShowsLocalErrorAndSkipsBackendPublish() async {
+        let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
+        let sync = MockSyncServiceForPublishing()
+        sync.errorToThrow = GenerationOutputSyncError.networkError(URLError(.notConnectedToInternet))
+        let sharing = MockPublicSharingService()
+        let coordinator = GenerationOutputPublishCoordinator(
+            authService: auth,
+            sharingService: sharing,
+            syncService: sync
+        )
+        let gen = makeOutput()
+
+        do {
+            _ = try await coordinator.publish(
+                output: gen,
+                pendingCoverImage: PendingOutputCoverImage(
+                    imageData: Data("cover".utf8),
+                    width: 1200,
+                    height: 800,
+                    contentType: "image/jpeg"
+                ),
+                removeCoverImageOnPublish: false
+            )
+            XCTFail("Expected sync failure")
+        } catch {
+            let message = PublicSharingServiceError.displayMessage(from: error)
+            XCTAssertEqual(message, "Could not sync this output before publishing. Try again, or use Sync Output.")
+        }
+
+        XCTAssertEqual(sharing.uploadCoverImageCallCount, 0)
+        XCTAssertEqual(sharing.publishCallCount, 0)
+    }
+
+    func testPublishCoordinatorPublishesWithSyncedCloudGenerationOutputIDUUID() async throws {
+        let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
+        let sync = MockSyncServiceForPublishing()
+        let expectedCloudID = UUID().uuidString
+        sync.cloudIDToReturn = expectedCloudID
+        let sharing = MockPublicSharingService()
+        sharing.publishResult = .success(makePublishResponse())
+
+        let coordinator = GenerationOutputPublishCoordinator(
+            authService: auth,
+            sharingService: sharing,
+            syncService: sync
+        )
+        let gen = makeOutput()
+        gen.cloudGenerationOutputID = ""
+
+        _ = try await coordinator.publish(output: gen, pendingCoverImage: nil, removeCoverImageOnPublish: false)
+
+        XCTAssertEqual(sharing.lastPublishedOutput?.cloudGenerationOutputID, expectedCloudID)
+        XCTAssertNotNil(UUID(uuidString: sharing.lastPublishedOutput?.cloudGenerationOutputID ?? ""))
     }
 
     // MARK: cloudGenerationOutputID included in publish DTO
