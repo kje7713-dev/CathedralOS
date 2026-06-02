@@ -449,6 +449,151 @@ private struct GenerationOutputCountRecord: Decodable {
     let id: String
 }
 
+// MARK: - GenerationOutputDeletionService
+
+enum GenerationOutputDeletionError: Error, LocalizedError {
+    case notConfigured
+    case notSignedIn
+    case invalidCloudGenerationOutputID
+    case networkError(Error)
+    case serverError(statusCode: Int, message: String?)
+    case persistenceError(stage: String, error: Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .notConfigured:
+            return "Output deletion is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist."
+        case .notSignedIn:
+            return "You must be signed in to delete cloud output data."
+        case .invalidCloudGenerationOutputID:
+            return "This output has an invalid cloud record ID and cannot be deleted from the cloud."
+        case .networkError(let error):
+            return "Network error during deletion: \(error.localizedDescription)"
+        case .serverError(let statusCode, let message):
+            let base = "Server returned status \(statusCode)."
+            if let message, !message.isEmpty {
+                return "\(base) \(message)"
+            }
+            return base
+        case .persistenceError(let stage, let error):
+            return "Could not save output deletion (\(stage)): \(error.localizedDescription)"
+        }
+    }
+}
+
+extension GenerationOutputDeletionError {
+    static func displayMessage(from error: Error) -> String {
+        (error as? GenerationOutputDeletionError)?.errorDescription
+            ?? (error as? PublicSharingServiceError)?.errorDescription
+            ?? error.localizedDescription
+    }
+}
+
+protocol GenerationOutputDeletionServiceProtocol {
+    func deleteLocal(output: GenerationOutput, context: ModelContext) async throws
+    func deleteCloud(output: GenerationOutput) async throws
+    func deleteEverywhere(output: GenerationOutput, context: ModelContext) async throws
+}
+
+final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProtocol {
+    static let shared = GenerationOutputDeletionService()
+
+    private let authService: any AuthService
+    private let sharingService: any PublicSharingService
+    private let backupService: LocalGenerationOutputBackupService
+    private let session: URLSession
+    private let clientFactory: () throws -> SupabaseBackendClient
+
+    init(
+        authService: any AuthService = BackendAuthService.shared,
+        sharingService: any PublicSharingService = BackendPublicSharingService(
+            syncService: SupabaseGenerationOutputSyncService.shared
+        ),
+        backupService: LocalGenerationOutputBackupService = .shared,
+        session: URLSession = .shared,
+        clientFactory: @escaping () throws -> SupabaseBackendClient = { try SupabaseBackendClient() }
+    ) {
+        self.authService = authService
+        self.sharingService = sharingService
+        self.backupService = backupService
+        self.session = session
+        self.clientFactory = clientFactory
+    }
+
+    func deleteLocal(output: GenerationOutput, context: ModelContext) async throws {
+        let outputID = output.id
+        context.delete(output)
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw GenerationOutputDeletionError.persistenceError(stage: "local delete", error: error)
+        }
+        _ = backupService.deleteBackups(outputID: outputID)
+    }
+
+    func deleteCloud(output: GenerationOutput) async throws {
+        let sharedOutputID = output.sharedOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !sharedOutputID.isEmpty {
+            try await sharingService.unpublish(sharedOutputID: sharedOutputID)
+        }
+
+        let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cloudID.isEmpty else { return }
+        guard UUID(uuidString: cloudID) != nil else {
+            throw GenerationOutputDeletionError.invalidCloudGenerationOutputID
+        }
+
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        let accessToken = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !accessToken.isEmpty else {
+            throw GenerationOutputDeletionError.notSignedIn
+        }
+
+        let client: SupabaseBackendClient
+        do {
+            client = try clientFactory()
+        } catch {
+            throw GenerationOutputDeletionError.notConfigured
+        }
+
+        var components = URLComponents(
+            url: client.configuration.projectURL
+                .appendingPathComponent("rest")
+                .appendingPathComponent("v1")
+                .appendingPathComponent("generation_outputs"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "id", value: "eq.\(cloudID)")]
+        guard let url = components?.url else {
+            throw GenerationOutputDeletionError.notConfigured
+        }
+
+        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
+        request.httpMethod = "DELETE"
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw GenerationOutputDeletionError.networkError(error)
+        }
+
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            let message = String(data: data, encoding: .utf8)
+            throw GenerationOutputDeletionError.serverError(statusCode: http.statusCode, message: message)
+        }
+    }
+
+    func deleteEverywhere(output: GenerationOutput, context: ModelContext) async throws {
+        try await deleteCloud(output: output)
+        try await deleteLocal(output: output, context: context)
+    }
+}
+
 // MARK: - StubGenerationOutputSyncService
 
 /// No-op implementation for use when Supabase is not configured or in previews/tests.
