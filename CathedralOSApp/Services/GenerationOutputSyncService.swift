@@ -104,7 +104,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     // MARK: - Push
 
     func pushOutput(_ output: GenerationOutput) async throws {
-        let (client, _) = try await validatedClientAndUser()
+        let (client, user) = try await validatedClientAndUser()
         let url = restURL(client: client, path: "generation_outputs")
         var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
         request.httpMethod = "POST"
@@ -114,7 +114,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let uploadDTO = GenerationOutputUploadRequest(output: output)
+        let uploadDTO = GenerationOutputUploadRequest(output: output, userID: user.id)
         do {
             request.httpBody = try encoder.encode(uploadDTO)
         } catch {
