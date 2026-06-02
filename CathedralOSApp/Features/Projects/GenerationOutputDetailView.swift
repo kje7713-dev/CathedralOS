@@ -435,6 +435,14 @@ struct GenerationOutputDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
 
+            CathedralSecondaryButton(
+                isSyncingOutput ? "Syncing…" : "Sync Output",
+                systemImage: "arrow.triangle.2.circlepath"
+            ) {
+                Task { await performSyncOutput() }
+            }
+            .disabled(isSyncingOutput || isPublishing || isUnpublishing)
+
             // Publish / Unpublish buttons
             if isPublished {
                 HStack(spacing: CathedralTheme.Spacing.sm) {
@@ -484,24 +492,14 @@ struct GenerationOutputDetailView: View {
                     }
                 }
 
-                HStack(spacing: CathedralTheme.Spacing.sm) {
-                    CathedralSecondaryButton(
-                        isSyncingOutput ? "Syncing…" : "Sync Output",
-                        systemImage: "arrow.triangle.2.circlepath"
-                    ) {
-                        Task { await performSyncOutput() }
-                    }
-                    .disabled(isSyncingOutput || isPublishing || isUnpublishing)
-
-                    CathedralPrimaryButton(
-                        isPublishing ? "Publishing…" : "Publish",
-                        systemImage: "globe"
-                    ) {
-                        publishError = nil
-                        showPublishConfirm = true
-                    }
-                    .disabled(output.outputText.isEmpty || isPublishing || isSyncingOutput)
+                CathedralPrimaryButton(
+                    isPublishing ? "Publishing…" : "Publish",
+                    systemImage: "globe"
+                ) {
+                    publishError = nil
+                    showPublishConfirm = true
                 }
+                .disabled(output.outputText.isEmpty || isPublishing || isSyncingOutput)
             }
         }
     }
