@@ -184,8 +184,8 @@ Deno.serve(async (req: Request) => {
   // Build response
   // -------------------------------------------------------------------------
 
-  const availableCredits =
-    entitlement.monthly_credit_allowance + entitlement.purchased_credit_balance;
+  const availableCredits = entitlement.monthly_credit_allowance +
+    entitlement.purchased_credit_balance;
 
   return corsResponse(
     JSON.stringify({

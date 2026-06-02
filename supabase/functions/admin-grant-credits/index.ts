@@ -75,7 +75,8 @@ async function loadOrCreateEntitlement(
 
   if (upsertError || !upserted) {
     throw new Error(
-      upsertError?.message ?? "Could not create default entitlement for target user.",
+      upsertError?.message ??
+        "Could not create default entitlement for target user.",
     );
   }
 
@@ -100,8 +101,8 @@ async function buildCreditStateResponse(
       isPro: entitlement.is_pro,
       monthlyCreditAllowance: entitlement.monthly_credit_allowance,
       purchasedCreditBalance: entitlement.purchased_credit_balance,
-      availableCredits:
-        entitlement.monthly_credit_allowance + entitlement.purchased_credit_balance,
+      availableCredits: entitlement.monthly_credit_allowance +
+        entitlement.purchased_credit_balance,
       isAdmin,
       currentPeriodEnd: entitlement.current_period_end,
       recentLedger: ledger ?? [],
