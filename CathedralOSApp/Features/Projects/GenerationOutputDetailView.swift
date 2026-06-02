@@ -3,6 +3,8 @@ import SwiftData
 import PhotosUI
 import UIKit
 
+let sharedOutputCoverAspectRatio: CGFloat = 16.0 / 9.0
+
 // MARK: - GenerationOutputDetailView
 
 struct GenerationOutputDetailView: View {
@@ -49,6 +51,7 @@ struct GenerationOutputDetailView: View {
     @State private var pendingCoverImageData: Data?
     @State private var pendingCoverImageWidth: Int?
     @State private var pendingCoverImageHeight: Int?
+    @State private var pendingCoverImageContentType: String?
     @State private var removeCoverImageOnPublish = false
     @State private var isProcessingCoverImage = false
     @State private var isSyncingOutput = false
@@ -79,7 +82,6 @@ struct GenerationOutputDetailView: View {
         f.timeStyle = .short
         return f
     }()
-    private static let maxCoverImageWidth: CGFloat = 1600
 
     var body: some View {
         ScrollView {
@@ -564,7 +566,9 @@ struct GenerationOutputDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 180)
+            .frame(maxWidth: .infinity)
+            .aspectRatio(sharedOutputCoverAspectRatio, contentMode: .fit)
+            .clipped()
             .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
 
             HStack(spacing: CathedralTheme.Spacing.sm) {
@@ -728,7 +732,7 @@ struct GenerationOutputDetailView: View {
             imageData: imageData,
             width: width,
             height: height,
-            contentType: "image/jpeg"
+            contentType: pendingCoverImageContentType ?? "image/jpeg"
         )
     }
 
@@ -746,6 +750,7 @@ struct GenerationOutputDetailView: View {
         pendingCoverImageData = nil
         pendingCoverImageWidth = nil
         pendingCoverImageHeight = nil
+        pendingCoverImageContentType = nil
     }
 
     @MainActor
@@ -756,48 +761,23 @@ struct GenerationOutputDetailView: View {
 
         do {
             guard let rawData = try await coverPickerItem.loadTransferable(type: Data.self),
-                  let image = UIImage(data: rawData),
-                  let compressed = compressCoverImage(image) else {
-                publishError = "Could not load the selected image."
+                  let _ = UIImage(data: rawData) else {
+                clearPendingCoverSelection()
+                publishError = "Could not prepare cover image."
                 return
             }
 
-            pendingCoverImagePreview = compressed.preview
-            pendingCoverImageData = compressed.data
-            pendingCoverImageWidth = compressed.width
-            pendingCoverImageHeight = compressed.height
+            let processed = try CoverImageProcessor().normalizeCoverImage(data: rawData)
+            pendingCoverImagePreview = processed.previewImage
+            pendingCoverImageData = processed.data
+            pendingCoverImageWidth = processed.width
+            pendingCoverImageHeight = processed.height
+            pendingCoverImageContentType = processed.contentType
             removeCoverImageOnPublish = false
         } catch {
-            publishError = "Could not load the selected image: \(error.localizedDescription)"
+            clearPendingCoverSelection()
+            publishError = "Could not prepare cover image."
         }
-    }
-
-    private func compressCoverImage(_ image: UIImage) -> (data: Data, preview: UIImage, width: Int, height: Int)? {
-        // Max width balances readable image quality and upload/storage size.
-        let maxWidth: CGFloat = Self.maxCoverImageWidth
-        let originalSize = image.size
-        guard originalSize.width > 0, originalSize.height > 0 else { return nil }
-
-        let scale = min(1, maxWidth / originalSize.width)
-        let targetSize = CGSize(
-            width: max(1, floor(originalSize.width * scale)),
-            height: max(1, floor(originalSize.height * scale))
-        )
-
-        let renderer = UIGraphicsImageRenderer(size: targetSize)
-        let rendered = renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: targetSize))
-        }
-
-        guard let jpegData = rendered.jpegData(compressionQuality: 0.75) else {
-            return nil
-        }
-        return (
-            data: jpegData,
-            preview: rendered,
-            width: Int(targetSize.width),
-            height: Int(targetSize.height)
-        )
     }
 
     // MARK: Share Sheet helpers
@@ -1136,5 +1116,102 @@ struct GenerationOutputDetailView: View {
                 ?? error.localizedDescription
             _ = LocalProjectBackupService.shared.backup(project: project)
         }
+    }
+}
+
+struct ProcessedCoverImage {
+    let data: Data
+    let previewImage: UIImage
+    let width: Int
+    let height: Int
+    let contentType: String
+}
+
+enum CoverImageProcessorError: Error {
+    case invalidImageData
+    case invalidImageDimensions
+    case encodingFailed
+}
+
+struct CoverImageProcessor {
+    private static let maxWidth: CGFloat = 1600
+    private static let maxHeight: CGFloat = 900
+    private static let jpegQuality: CGFloat = 0.75
+    private static let contentType = "image/jpeg"
+
+    func normalizeCoverImage(data: Data) throws -> ProcessedCoverImage {
+        guard let source = UIImage(data: data) else {
+            throw CoverImageProcessorError.invalidImageData
+        }
+        guard source.size.width > 0, source.size.height > 0 else {
+            throw CoverImageProcessorError.invalidImageDimensions
+        }
+
+        let cropped = centerCropToAspectRatio(source, aspectRatio: sharedOutputCoverAspectRatio)
+        let targetSize = resizeMax(width: cropped.size.width, height: cropped.size.height)
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        let normalized = renderer.image { _ in
+            cropped.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+        guard let jpegData = normalized.jpegData(compressionQuality: Self.jpegQuality) else {
+            throw CoverImageProcessorError.encodingFailed
+        }
+
+        return ProcessedCoverImage(
+            data: jpegData,
+            previewImage: normalized,
+            width: Int(targetSize.width),
+            height: Int(targetSize.height),
+            contentType: Self.contentType
+        )
+    }
+
+    func centerCropToAspectRatio(_ image: UIImage, aspectRatio: CGFloat) -> UIImage {
+        let imageSize = image.size
+        guard imageSize.width > 0, imageSize.height > 0, aspectRatio > 0 else {
+            return image
+        }
+
+        let currentAspectRatio = imageSize.width / imageSize.height
+        let cropRect: CGRect
+        if currentAspectRatio > aspectRatio {
+            let cropWidth = imageSize.height * aspectRatio
+            cropRect = CGRect(
+                x: (imageSize.width - cropWidth) / 2,
+                y: 0,
+                width: cropWidth,
+                height: imageSize.height
+            )
+        } else {
+            let cropHeight = imageSize.width / aspectRatio
+            cropRect = CGRect(
+                x: 0,
+                y: (imageSize.height - cropHeight) / 2,
+                width: imageSize.width,
+                height: cropHeight
+            )
+        }
+
+        let renderer = UIGraphicsImageRenderer(size: cropRect.size)
+        return renderer.image { _ in
+            image.draw(
+                in: CGRect(
+                    x: -cropRect.origin.x,
+                    y: -cropRect.origin.y,
+                    width: imageSize.width,
+                    height: imageSize.height
+                )
+            )
+        }
+    }
+
+    func resizeMax(width: CGFloat, height: CGFloat) -> CGSize {
+        guard width > 0, height > 0 else { return CGSize(width: 1, height: 1) }
+
+        let scale = min(1, min(Self.maxWidth / width, Self.maxHeight / height))
+        return CGSize(
+            width: max(1, floor(width * scale)),
+            height: max(1, floor(height * scale))
+        )
     }
 }

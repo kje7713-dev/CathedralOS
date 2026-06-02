@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import UIKit
 @testable import CathedralOSApp
 
 // MARK: - PublicSharingTests
@@ -212,6 +213,15 @@ private func makeDetail(
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
     return try! decoder.decode(SharedOutputDetail.self, from: Data(json.utf8))
+}
+
+private func makeTestImage(width: CGFloat, height: CGFloat, color: UIColor = .systemBlue) -> UIImage {
+    let size = CGSize(width: width, height: height)
+    let renderer = UIGraphicsImageRenderer(size: size)
+    return renderer.image { context in
+        context.cgContext.setFillColor(color.cgColor)
+        context.cgContext.fill(CGRect(origin: .zero, size: size))
+    }
 }
 
 // MARK: - PublicSharingTests
@@ -1346,5 +1356,38 @@ final class PublicSharingTests: XCTestCase {
         } catch {
             XCTFail("Expected PublicSharingServiceError.endpointNotConfigured, got: \(error)")
         }
+    }
+
+    // MARK: CoverImageProcessor normalization
+
+    func testCoverImageProcessorNormalizesSquareImageTo16By9JPEG() throws {
+        let image = makeTestImage(width: 1200, height: 1200)
+        let imageData = try XCTUnwrap(image.pngData())
+        let processed = try CoverImageProcessor().normalizeCoverImage(data: imageData)
+
+        XCTAssertEqual(processed.contentType, "image/jpeg")
+        XCTAssertEqual(processed.width, 1200)
+        XCTAssertEqual(processed.height, 675)
+        XCTAssertNotNil(UIImage(data: processed.data))
+    }
+
+    func testCoverImageProcessorNormalizesPortraitImageTo16By9() throws {
+        let image = makeTestImage(width: 900, height: 1600)
+        let imageData = try XCTUnwrap(image.pngData())
+        let processed = try CoverImageProcessor().normalizeCoverImage(data: imageData)
+
+        XCTAssertEqual(processed.width, 900)
+        XCTAssertEqual(processed.height, 506)
+        XCTAssertLessThanOrEqual(processed.width, 1600)
+        XCTAssertLessThanOrEqual(processed.height, 900)
+    }
+
+    func testCoverImageProcessorResizesWideImageTo1600By900() throws {
+        let image = makeTestImage(width: 3000, height: 1000)
+        let imageData = try XCTUnwrap(image.pngData())
+        let processed = try CoverImageProcessor().normalizeCoverImage(data: imageData)
+
+        XCTAssertEqual(processed.width, 1600)
+        XCTAssertEqual(processed.height, 900)
     }
 }
