@@ -140,11 +140,17 @@ struct GenerationResponse: Codable {
     let generationLengthMode: String?
     /// Output token budget echoed back by the backend.
     let outputBudget: Int?
+    /// Canonical requested length mode echoed by the backend.
+    let requestedLengthMode: String?
+    /// Maximum completion tokens enforced by the backend for this generation.
+    let maxCompletionTokens: Int?
     let selectedModelId: String?
 
     // MARK: Token usage (optional — may be omitted by the backend)
     let inputTokens: Int?
     let outputTokens: Int?
+    let finishReason: String?
+    let wasTruncated: Bool?
 
     // MARK: Client-side record linkage
     /// Echoed back by the backend when the request included `localGenerationID`.
@@ -189,10 +195,14 @@ struct GenerationResponse: Codable {
         modelName           = try c.decodeIfPresent(String.self, forKey: .modelName) ?? ""
         generationAction    = try c.decodeIfPresent(String.self, forKey: .generationAction)
         generationLengthMode = try c.decodeIfPresent(String.self, forKey: .generationLengthMode)
+        requestedLengthMode = try c.decodeIfPresent(String.self, forKey: .requestedLengthMode)
         outputBudget        = try c.decodeIfPresent(Int.self, forKey: .outputBudget)
+        maxCompletionTokens = try c.decodeIfPresent(Int.self, forKey: .maxCompletionTokens)
         selectedModelId     = try c.decodeIfPresent(String.self, forKey: .selectedModelId)
         inputTokens         = try c.decodeIfPresent(Int.self, forKey: .inputTokens)
         outputTokens        = try c.decodeIfPresent(Int.self, forKey: .outputTokens)
+        finishReason        = try c.decodeIfPresent(String.self, forKey: .finishReason)
+        wasTruncated        = try c.decodeIfPresent(Bool.self, forKey: .wasTruncated)
         localGenerationID   = try c.decodeIfPresent(String.self, forKey: .localGenerationID)
         cloudGenerationOutputID = try c.decodeIfPresent(String.self, forKey: .cloudGenerationOutputID)
         errorCode           = try c.decodeIfPresent(String.self, forKey: .errorCode)

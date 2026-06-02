@@ -193,7 +193,7 @@ interface GenerationOutputInsert {
   generation_action: GenerationAction;
   generation_length_mode: LengthMode;
   output_budget: number;
-  status: "complete";
+  status: "complete" | "draft";
   visibility: "private";
 }
 
@@ -276,10 +276,14 @@ function buildPrompt(req: {
       : JSON.stringify(req.sourcePayloadJSON, null, 2);
 
   const lengthGuidance: Record<LengthMode, string> = {
-    short: "Write a short passage (roughly 300-500 words).",
-    medium: "Write a medium-length passage (roughly 600-1000 words).",
-    long: "Write a longer passage (roughly 1200-2000 words).",
-    chapter: "Write a full chapter-length passage (roughly 2500-4000 words).",
+    short:
+      "Write one complete short scene or vignette with a clear beginning, middle, and end (roughly 300-500 words).",
+    medium:
+      "Write one complete scene with a full dramatic beat and a clean ending (roughly 600-1000 words).",
+    long:
+      "Write a complete extended multi-beat scene sequence that lands on a clear closing beat (roughly 1200-2000 words).",
+    chapter:
+      "Write one complete chapter-shaped section with progression and a clear closing beat (roughly 2500-4000 words).",
   };
 
   const actionGuidance: Record<GenerationAction, string> = {
@@ -325,6 +329,7 @@ function buildPrompt(req: {
     "",
     "Write only the story content. Do not include meta-commentary, titles, or headings unless the prompt pack explicitly requests them.",
     "Respect the reading level, content rating, and audience notes above at all times.",
+    "End cleanly within the requested length. Do not stop mid-sentence. If you cannot cover everything, narrow the scope rather than continuing until cut off.",
   );
 
   return lines.join("\n");
@@ -763,6 +768,7 @@ async function handler(
   let llmResult: {
     content: string;
     modelName: string;
+    finishReason?: string;
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
@@ -851,6 +857,8 @@ async function handler(
   // -------------------------------------------------------------------------
 
   const generatedText = llmResult.content.trim();
+  const wasTruncated = llmResult.finishReason === "length";
+  const outputStatus: GenerationOutputInsert["status"] = wasTruncated ? "draft" : "complete";
   const title = extractTitle(generatedText, promptPackName || projectName);
 
   // Normalize sourcePayloadJSON for storage -- always persist as an object.
@@ -871,7 +879,7 @@ async function handler(
     generation_action: generationAction,
     generation_length_mode: generationLengthMode,
     output_budget: maxCompletionTokens,
-    status: "complete",
+    status: outputStatus,
     visibility: "private",
   });
 
@@ -978,7 +986,11 @@ async function handler(
     selectedModelId,
     providerModel: selectedModel.provider_model,
     maxCompletionTokens,
-    status: "success",
+    status: wasTruncated ? "incomplete" : "success",
+    errorCode: wasTruncated ? "output_truncated" : undefined,
+    errorMessage: wasTruncated
+      ? "The generation hit the model length limit and may be incomplete."
+      : undefined,
     modelName: llmResult.modelName,
     inputTokens: llmResult.inputTokens,
     outputTokens: llmResult.outputTokens,
@@ -998,14 +1010,22 @@ async function handler(
       modelName: llmResult.modelName,
       generationAction,
       generationLengthMode,
+      requestedLengthMode: generationLengthMode,
       selectedModelId,
       outputBudget: maxCompletionTokens,
+      maxCompletionTokens,
+      finishReason: llmResult.finishReason ?? null,
+      wasTruncated,
       inputTokens: llmResult.inputTokens,
       outputTokens: llmResult.outputTokens,
       totalTokens: llmResult.totalTokens,
       creditCostCharged: actualCharge,
       remainingCredits,
-      status: "complete",
+      status: wasTruncated ? "incomplete" : "complete",
+      errorCode: wasTruncated ? "output_truncated" : null,
+      errorMessage: wasTruncated
+        ? "This output hit the model length limit and may be incomplete."
+        : null,
     }),
     { status: 200 },
   );

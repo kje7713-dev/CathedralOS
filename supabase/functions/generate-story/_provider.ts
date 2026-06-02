@@ -137,6 +137,7 @@ export interface LLMMessage {
 export interface LLMResponse {
   content: string;
   modelName: string;
+  finishReason?: string;
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
@@ -239,6 +240,9 @@ export class OpenAIProvider implements LLMProvider {
     return {
       content: choice.message?.content ?? "",
       modelName: json.model ?? resolvedModel,
+      finishReason: typeof choice.finish_reason === "string"
+        ? choice.finish_reason
+        : undefined,
       inputTokens: json.usage?.prompt_tokens,
       outputTokens: json.usage?.completion_tokens,
       totalTokens: json.usage?.total_tokens,

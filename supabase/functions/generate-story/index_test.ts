@@ -712,7 +712,7 @@ Deno.test("OpenAIProvider: uses max_completion_tokens in request body", async ()
     return Promise.resolve(
       new Response(
         JSON.stringify({
-          choices: [{ message: { content: "Generated story" } }],
+          choices: [{ message: { content: "Generated story" }, finish_reason: "stop" }],
           model: "gpt-4o-mini",
           usage: { prompt_tokens: 12, completion_tokens: 34 },
         }),
@@ -726,11 +726,39 @@ Deno.test("OpenAIProvider: uses max_completion_tokens in request body", async ()
 
   try {
     const provider = new OpenAIProvider("test-key", "gpt-4o-mini");
-    await provider.complete([{ role: "user", content: "Tell a story" }], 800);
+    const result = await provider.complete([{ role: "user", content: "Tell a story" }], 800);
 
     assertExists(requestBody);
     assertEquals(requestBody?.max_completion_tokens, 800);
     assertEquals("max_tokens" in requestBody!, false);
+    assertEquals(result.finishReason, "stop");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAIProvider: parses finish_reason length", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = ((): Promise<Response> =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "Partial story" }, finish_reason: "length" }],
+          model: "gpt-4o-mini",
+          usage: { prompt_tokens: 12, completion_tokens: 800 },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    )) as typeof fetch;
+
+  try {
+    const provider = new OpenAIProvider("test-key", "gpt-4o-mini");
+    const result = await provider.complete([{ role: "user", content: "Tell a story" }], 800);
+    assertEquals(result.finishReason, "length");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1450,4 +1478,162 @@ Deno.test("handler: insufficient credits blocks before provider call", async () 
   assertEquals(resp.status, 402);
   assertEquals(body.errorCode, "insufficient_credits");
   assertEquals(providerCalled, false);
+});
+
+Deno.test("handler: finish_reason length marks output incomplete and truncated", async () => {
+  const { store: creditStore, state: creditState } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+
+  const provider: LLMProvider = {
+    complete() {
+      return Promise.resolve({
+        content: "Story that hits token limit",
+        modelName: "gpt-4o-mini",
+        finishReason: "length",
+        inputTokens: 100,
+        outputTokens: 800,
+        totalTokens: 900,
+      });
+    },
+  };
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest()), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+
+  assertEquals(resp.status, 200);
+  assertEquals(body.status, "incomplete");
+  assertEquals(body.errorCode, "output_truncated");
+  assertEquals(body.finishReason, "length");
+  assertEquals(body.wasTruncated, true);
+  assertEquals(body.maxCompletionTokens, 800);
+  assertEquals(body.outputTokens, 800);
+  assertEquals(body.requestedLengthMode, "short");
+  assertEquals(creditState.chargeCalls.length, 1);
+  assertEquals(
+    (persistenceState.outputInsertCalls[0] as { status?: string }).status,
+    "draft",
+  );
+  assertEquals(rateLimitState.recordRequestCalls[0].status, "incomplete");
+});
+
+Deno.test("handler: finish_reason stop remains complete", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+
+  const provider: LLMProvider = {
+    complete() {
+      return Promise.resolve({
+        content: "Complete story",
+        modelName: "gpt-4o-mini",
+        finishReason: "stop",
+        inputTokens: 100,
+        outputTokens: 200,
+      });
+    },
+  };
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest()), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+
+  assertEquals(resp.status, 200);
+  assertEquals(body.status, "complete");
+  assertEquals(body.wasTruncated, false);
+  assertEquals(body.finishReason, "stop");
+  assertEquals(
+    (persistenceState.outputInsertCalls[0] as { status?: string }).status,
+    "complete",
+  );
+});
+
+Deno.test("handler: prompt includes anti-truncation instruction and short guidance", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  let prompt = "";
+  const provider: LLMProvider = {
+    complete(messages) {
+      prompt = messages[0]?.content ?? "";
+      return Promise.resolve({
+        content: "ok",
+        modelName: "gpt-4o-mini",
+        finishReason: "stop",
+      });
+    },
+  };
+
+  await handler(makeAuthRequest(makeBaseRequest({ generationLengthMode: "short" })), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+
+  assertStringIncludes(
+    prompt,
+    "End cleanly within the requested length. Do not stop mid-sentence. If you cannot cover everything, narrow the scope rather than continuing until cut off.",
+  );
+  assertStringIncludes(prompt, "one complete short scene or vignette");
+});
+
+Deno.test("handler: each length mode has distinct story-unit guidance", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const prompts = new Map<string, string>();
+  const provider: LLMProvider = {
+    complete(messages) {
+      const prompt = messages[0]?.content ?? "";
+      const modeLine = prompt.split("\n").find((line) => line.startsWith("Length:"));
+      if (modeLine) {
+        prompts.set(modeLine, prompt);
+      }
+      return Promise.resolve({
+        content: "ok",
+        modelName: "gpt-4o-mini",
+        finishReason: "stop",
+      });
+    },
+  };
+
+  const modes = ["short", "medium", "long", "chapter"] as const;
+  for (const mode of modes) {
+    await handler(makeAuthRequest(makeBaseRequest({ generationLengthMode: mode })), {
+      provider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    });
+  }
+
+  const combined = Array.from(prompts.values()).join("\n\n");
+  assertStringIncludes(combined, "one complete short scene or vignette");
+  assertStringIncludes(combined, "one complete scene with a full dramatic beat");
+  assertStringIncludes(combined, "complete extended multi-beat scene sequence");
+  assertStringIncludes(combined, "complete chapter-shaped section");
 });

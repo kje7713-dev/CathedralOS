@@ -58,8 +58,12 @@ private func makeSuccessResponseJSON(
     generationAction: String = "generate",
     generationLengthMode: String = "medium",
     outputBudget: Int = 1600,
+    requestedLengthMode: String = "medium",
+    maxCompletionTokens: Int = 1600,
     inputTokens: Int = 300,
-    outputTokens: Int = 800
+    outputTokens: Int = 800,
+    finishReason: String = "stop",
+    wasTruncated: Bool = false
 ) -> Data {
     let json = """
     {
@@ -68,9 +72,13 @@ private func makeSuccessResponseJSON(
       "modelName": "\(modelName)",
       "generationAction": "\(generationAction)",
       "generationLengthMode": "\(generationLengthMode)",
+      "requestedLengthMode": "\(requestedLengthMode)",
       "outputBudget": \(outputBudget),
+      "maxCompletionTokens": \(maxCompletionTokens),
       "inputTokens": \(inputTokens),
       "outputTokens": \(outputTokens),
+      "finishReason": "\(finishReason)",
+      "wasTruncated": \(wasTruncated),
       "status": "success"
     }
     """
@@ -238,9 +246,13 @@ final class GenerationBackendServiceTests: XCTestCase {
         XCTAssertEqual(response.modelName, "gpt-4o")
         XCTAssertEqual(response.generationAction, "generate")
         XCTAssertEqual(response.generationLengthMode, "medium")
+        XCTAssertEqual(response.requestedLengthMode, "medium")
         XCTAssertEqual(response.outputBudget, 1600)
+        XCTAssertEqual(response.maxCompletionTokens, 1600)
         XCTAssertEqual(response.inputTokens, 250)
         XCTAssertEqual(response.outputTokens, 700)
+        XCTAssertEqual(response.finishReason, "stop")
+        XCTAssertEqual(response.wasTruncated, false)
         XCTAssertEqual(response.status, "success")
         XCTAssertNil(response.errorMessage)
     }
@@ -257,9 +269,13 @@ final class GenerationBackendServiceTests: XCTestCase {
         XCTAssertEqual(response.generatedText, "Some text.")
         XCTAssertNil(response.generationAction)
         XCTAssertNil(response.generationLengthMode)
+        XCTAssertNil(response.requestedLengthMode)
         XCTAssertNil(response.outputBudget)
+        XCTAssertNil(response.maxCompletionTokens)
         XCTAssertNil(response.inputTokens)
         XCTAssertNil(response.outputTokens)
+        XCTAssertNil(response.finishReason)
+        XCTAssertNil(response.wasTruncated)
     }
 
     // MARK: - Request DTO localGenerationID field
@@ -594,6 +610,48 @@ final class GenerationBackendServiceTests: XCTestCase {
         XCTAssertEqual(gen.generationLengthMode, "medium")
         XCTAssertEqual(gen.outputBudget, 1600)
         // sourcePayloadJSON must remain unchanged.
+        XCTAssertEqual(gen.sourcePayloadJSON, frozenJSON)
+    }
+
+    func testTruncatedResponseUpdatesGenerationOutputToDraft() async throws {
+        let project = makeProject()
+        let pack = makePack()
+        let frozenJSON = PromptPackJSONAssembler.jsonString(pack: pack, project: project)
+
+        let gen = GenerationOutput(
+            title: "\(pack.name) — \(project.name)",
+            outputText: "",
+            status: GenerationStatus.generating.rawValue,
+            modelName: "",
+            sourcePromptPackID: pack.id,
+            sourcePromptPackName: pack.name,
+            sourcePayloadJSON: frozenJSON,
+            outputType: GenerationOutputType.story.rawValue
+        )
+
+        let response = try JSONDecoder().decode(
+            GenerationResponse.self,
+            from: makeSuccessResponseJSON(
+                generatedText: "Partial chapter.",
+                title: "Partial",
+                modelName: "gpt-4o",
+                finishReason: "length",
+                wasTruncated: true
+            )
+        )
+
+        gen.outputText = response.generatedText
+        gen.modelName = response.modelName
+        gen.title = response.title ?? "\(pack.name) — \(project.name)"
+        gen.finishReason = response.finishReason
+        gen.wasTruncated = response.wasTruncated ?? false
+        gen.status = gen.wasTruncated ? GenerationStatus.draft.rawValue : GenerationStatus.complete.rawValue
+        gen.notes = gen.wasTruncated ? "This output hit the model length limit and may be incomplete." : nil
+
+        XCTAssertEqual(gen.status, GenerationStatus.draft.rawValue)
+        XCTAssertEqual(gen.finishReason, "length")
+        XCTAssertTrue(gen.wasTruncated)
+        XCTAssertEqual(gen.notes, "This output hit the model length limit and may be incomplete.")
         XCTAssertEqual(gen.sourcePayloadJSON, frozenJSON)
     }
 

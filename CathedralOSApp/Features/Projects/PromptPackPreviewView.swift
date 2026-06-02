@@ -359,19 +359,29 @@ struct PromptPackPreviewView: View {
 
             // Success banner with link to generated output
             if let output = lastGeneratedOutput,
-               output.status == GenerationStatus.complete.rawValue {
+               output.status == GenerationStatus.complete.rawValue || (output.status == GenerationStatus.draft.rawValue && output.wasTruncated) {
                 HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
-                    Image(systemName: output.syncStatus == SyncStatus.failed.rawValue ? "exclamationmark.triangle" : "checkmark.circle")
+                    Image(systemName: output.wasTruncated
+                        ? "exclamationmark.triangle"
+                        : (output.syncStatus == SyncStatus.failed.rawValue ? "exclamationmark.triangle" : "checkmark.circle"))
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(output.syncStatus == SyncStatus.failed.rawValue
+                        .foregroundStyle(output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
                             ? CathedralTheme.Colors.destructive
                             : CathedralTheme.Colors.accent)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Generation complete — \(output.title)")
+                        Text(output.wasTruncated
+                            ? "Generation saved as incomplete — \(output.title)"
+                            : "Generation complete — \(output.title)")
                             .font(CathedralTheme.Typography.caption())
                             .foregroundStyle(CathedralTheme.Colors.secondaryText)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .lineLimit(2)
+                        if output.wasTruncated {
+                            Text("This output hit the model length limit and may be incomplete.")
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.destructive)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                         if output.syncStatus == SyncStatus.failed.rawValue {
                             Text("Output Sync: Failed\(output.syncErrorMessage.flatMap { $0.nilIfEmpty }.map { " — \($0)" } ?? "")")
                                 .font(CathedralTheme.Typography.caption())
@@ -385,7 +395,7 @@ struct PromptPackPreviewView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
                         .stroke(
-                            (output.syncStatus == SyncStatus.failed.rawValue
+                            (output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
                                 ? CathedralTheme.Colors.destructive
                                 : CathedralTheme.Colors.accent).opacity(0.4),
                             lineWidth: 1
@@ -492,6 +502,9 @@ struct PromptPackPreviewView: View {
                     .font(CathedralTheme.Typography.label(11, weight: .regular))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
+            Text("\(selectedLengthMode.displayName): \(selectedLengthMode.storyUnitHint)")
+                .font(CathedralTheme.Typography.label(11, weight: .regular))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
         }
     }
 
@@ -579,7 +592,15 @@ struct PromptPackPreviewView: View {
             gen.outputText = response.generatedText
             gen.modelName = response.modelName
             gen.title = response.title ?? "\(pack.name) — \(project.name)"
-            gen.status = GenerationStatus.complete.rawValue
+            gen.finishReason = response.finishReason
+            gen.wasTruncated = response.wasTruncated ?? false
+            if gen.wasTruncated {
+                gen.status = GenerationStatus.draft.rawValue
+                gen.notes = "This output hit the model length limit and may be incomplete."
+            } else {
+                gen.status = GenerationStatus.complete.rawValue
+                gen.notes = nil
+            }
             gen.updatedAt = Date()
             gen.syncErrorMessage = nil
             // If the backend returned a cloud generation output ID, record it and mark synced.

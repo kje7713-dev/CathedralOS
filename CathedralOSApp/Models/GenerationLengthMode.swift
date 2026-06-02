@@ -22,6 +22,15 @@ enum GenerationLengthMode: String, CaseIterable, Codable {
         }
     }
 
+    var storyUnitHint: String {
+        switch self {
+        case .short:   return "Complete short scene"
+        case .medium:  return "Complete scene"
+        case .long:    return "Extended scene"
+        case .chapter: return "Full chapter section"
+        }
+    }
+
     // MARK: Output budget
     // Approximate maximum output tokens sent to the backend.
     // Centralized here so no view or service hard-codes provider token policy.

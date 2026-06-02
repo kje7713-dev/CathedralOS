@@ -280,6 +280,24 @@ struct GenerationOutputDetailView: View {
                         .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                 }
             } else {
+                if output.wasTruncated {
+                    HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                        Text("This output hit the model length limit and may be incomplete.")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(CathedralTheme.Spacing.sm)
+                    .background(CathedralTheme.Colors.surface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                            .stroke(CathedralTheme.Colors.destructive.opacity(0.4), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+                }
                 Text(output.outputText)
                     .font(CathedralTheme.Typography.body())
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
@@ -972,6 +990,9 @@ struct GenerationOutputDetailView: View {
                                 : CathedralTheme.Colors.destructive
                         )
                 }
+                Text("\(selectedLengthMode.displayName): \(selectedLengthMode.storyUnitHint)")
+                    .font(CathedralTheme.Typography.label(11, weight: .regular))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
 
             // Error banner
@@ -996,12 +1017,12 @@ struct GenerationOutputDetailView: View {
 
             // Success banner
             if let created = newOutput,
-               created.status == GenerationStatus.complete.rawValue {
+               created.status == GenerationStatus.complete.rawValue || (created.status == GenerationStatus.draft.rawValue && created.wasTruncated) {
                 HStack(spacing: CathedralTheme.Spacing.sm) {
-                    Image(systemName: "checkmark.circle")
+                    Image(systemName: created.wasTruncated ? "exclamationmark.triangle" : "checkmark.circle")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                    Text("Saved — \(created.title)")
+                        .foregroundStyle(created.wasTruncated ? CathedralTheme.Colors.destructive : CathedralTheme.Colors.accent)
+                    Text(created.wasTruncated ? "Saved as incomplete — \(created.title)" : "Saved — \(created.title)")
                         .font(CathedralTheme.Typography.caption())
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1011,9 +1032,16 @@ struct GenerationOutputDetailView: View {
                 .background(CathedralTheme.Colors.surface)
                 .overlay(
                     RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                        .stroke(CathedralTheme.Colors.accent.opacity(0.4), lineWidth: 1)
+                        .stroke((created.wasTruncated ? CathedralTheme.Colors.destructive : CathedralTheme.Colors.accent).opacity(0.4), lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+
+            if output.wasTruncated && !output.outputText.isEmpty {
+                CathedralPrimaryButton("Continue", systemImage: "text.append") {
+                    Task { await performAction("continue") }
+                }
+                .disabled(isActioning || !hasSufficientCredits)
             }
 
             // Regenerate
@@ -1026,7 +1054,7 @@ struct GenerationOutputDetailView: View {
             .disabled(isActioning || !hasSufficientCredits)
 
             // Continue — only meaningful when there is prior output text
-            if !output.outputText.isEmpty {
+            if !output.outputText.isEmpty && !output.wasTruncated {
                 CathedralSecondaryButton("Continue", systemImage: "text.append") {
                     Task { await performAction("continue") }
                 }
@@ -1135,7 +1163,15 @@ struct GenerationOutputDetailView: View {
             newGen.outputText = response.generatedText
             newGen.modelName = response.modelName
             newGen.title = response.title ?? "\(actionLabel): \(output.title)"
-            newGen.status = GenerationStatus.complete.rawValue
+            newGen.finishReason = response.finishReason
+            newGen.wasTruncated = response.wasTruncated ?? false
+            if newGen.wasTruncated {
+                newGen.status = GenerationStatus.draft.rawValue
+                newGen.notes = "This output hit the model length limit and may be incomplete."
+            } else {
+                newGen.status = GenerationStatus.complete.rawValue
+                newGen.notes = nil
+            }
             newGen.updatedAt = Date()
 
             // On success: decrement local credits.

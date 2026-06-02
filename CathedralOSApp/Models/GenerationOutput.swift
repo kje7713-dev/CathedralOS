@@ -117,6 +117,10 @@ class GenerationOutput {
     var generationLengthMode: String
     /// Approximate maximum output tokens that were requested for this output.
     var outputBudget: Int
+    /// LLM provider finish reason returned by the backend (for example: "stop" or "length").
+    var finishReason: String?
+    /// True when the provider stopped due to token-length limit and output may be incomplete.
+    var wasTruncated: Bool
 
     // MARK: Publishing metadata
     /// Raw value of `OutputVisibility`: "private" | "shared" | "unlisted".
@@ -181,7 +185,9 @@ class GenerationOutput {
         generationAction: String = "generate",
         parentGenerationID: UUID? = nil,
         generationLengthMode: String = GenerationLengthMode.defaultMode.rawValue,
-        outputBudget: Int = GenerationLengthMode.defaultMode.outputBudget
+        outputBudget: Int = GenerationLengthMode.defaultMode.outputBudget,
+        finishReason: String? = nil,
+        wasTruncated: Bool = false
     ) {
         self.id = UUID()
         self.title = title
@@ -201,6 +207,8 @@ class GenerationOutput {
         self.parentGenerationID = parentGenerationID
         self.generationLengthMode = generationLengthMode
         self.outputBudget = outputBudget
+        self.finishReason = finishReason
+        self.wasTruncated = wasTruncated
         self.visibility = OutputVisibility.private.rawValue
         self.shareTitle = ""
         self.shareExcerpt = ""
