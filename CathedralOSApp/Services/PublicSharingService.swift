@@ -17,6 +17,9 @@ enum PublicSharingServiceError: Error, LocalizedError {
     case emptyOutputText
     /// The report reason is empty; a reason must be chosen before submitting.
     case missingReportReason
+    /// The output does not have a valid `cloudGenerationOutputID` and cannot be published.
+    /// `syncAttempted` is `true` when a sync was tried (and failed) immediately before this error.
+    case missingCloudGenerationOutputID(syncAttempted: Bool)
 
     var errorDescription: String? {
         switch self {
@@ -46,6 +49,11 @@ enum PublicSharingServiceError: Error, LocalizedError {
             return "Cannot publish an output with no text."
         case .missingReportReason:
             return "Please choose a reason before submitting the report."
+        case .missingCloudGenerationOutputID(let syncAttempted):
+            if syncAttempted {
+                return "Could not sync this output before publishing. Check your connection and try again."
+            }
+            return "Publish requires this output to be synced first. Try Sync Project, then publish again."
         }
     }
 }
@@ -91,9 +99,9 @@ final class BackendPublicSharingService: PublicSharingService {
     private let authService: AuthService
     /// Optional sync service used to upload a local-only output before publishing.
     /// When provided and the output has no `cloudGenerationOutputID`, `publish` will
-    /// attempt a push sync first.  A sync failure is treated as non-fatal: the publish
-    /// continues even if the sync could not complete, allowing the backend to create a
-    /// shared record with an empty `cloudGenerationOutputID` link.
+    /// attempt a push sync first.  A sync failure is fatal: `publish` throws
+    /// `missingCloudGenerationOutputID(syncAttempted: true)` and does not contact the
+    /// public-sharing backend.
     private let syncService: GenerationOutputSyncServiceProtocol?
     private let session: URLSession
 
@@ -120,15 +128,24 @@ final class BackendPublicSharingService: PublicSharingService {
 
         // 3. If the output has never been synced, attempt to push it first so the
         //    backend can link the shared record to the cloud generation record.
-        //    Performed before the URL check so it can be tested without a configured
-        //    publish endpoint.  A sync failure is non-fatal: the publish continues
-        //    regardless, allowing the backend to create a shared record with an empty
-        //    `cloudGenerationOutputID` link.
+        //    A sync failure is fatal: the backend requires a valid cloudGenerationOutputID
+        //    and will reject the request with a 422 if it is missing.
         if output.cloudGenerationOutputID.isEmpty, let syncService {
-            try? await syncService.pushOutput(output)
+            do {
+                try await syncService.pushOutput(output)
+            } catch {
+                throw PublicSharingServiceError.missingCloudGenerationOutputID(syncAttempted: true)
+            }
         }
 
-        // 4. Confirm backend is configured.
+        // 4. Validate that cloudGenerationOutputID is a non-empty, well-formed UUID.
+        //    If the output is still local-only (no sync service, or sync did not assign an ID),
+        //    abort before contacting the backend.
+        guard UUID(uuidString: output.cloudGenerationOutputID) != nil else {
+            throw PublicSharingServiceError.missingCloudGenerationOutputID(syncAttempted: syncService != nil)
+        }
+
+        // 5. Confirm backend is configured.
         guard let url = PublicSharingServiceConfiguration.publishURL else {
             throw PublicSharingServiceError.endpointNotConfigured
         }
