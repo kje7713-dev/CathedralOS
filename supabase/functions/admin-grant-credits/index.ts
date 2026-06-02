@@ -199,9 +199,10 @@ export async function handler(req: Request): Promise<Response> {
   try {
     entitlement = await loadOrCreateEntitlement(adminClient, targetUserID);
   } catch (error) {
+    console.error("loadOrCreateEntitlement error:", error);
     return corsResponse(
       JSON.stringify({
-        error: error instanceof Error ? error.message : String(error),
+        error: "Target user was not found or could not be prepared.",
       }),
       { status: 400 },
     );
