@@ -253,7 +253,7 @@ struct SharedOutputDetailView: View {
                     switch phase {
                     case .empty:
                         ProgressView()
-                            .frame(maxWidth: .infinity, minHeight: 160)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     case .success(let image):
                         image
                             .resizable()
@@ -264,7 +264,9 @@ struct SharedOutputDetailView: View {
                         EmptyView()
                     }
                 }
-                .frame(maxWidth: .infinity, minHeight: 160, maxHeight: 260)
+                .frame(maxWidth: .infinity)
+                .aspectRatio(sharedOutputCoverAspectRatio, contentMode: .fit)
+                .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
 

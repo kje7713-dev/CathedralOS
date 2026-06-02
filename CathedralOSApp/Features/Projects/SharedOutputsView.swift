@@ -170,7 +170,7 @@ private struct SharedOutputRowView: View {
                         switch phase {
                         case .empty:
                             ProgressView()
-                                .frame(maxWidth: .infinity, minHeight: 120)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                         case .success(let image):
                             image
                                 .resizable()
@@ -181,7 +181,9 @@ private struct SharedOutputRowView: View {
                             EmptyView()
                         }
                     }
-                    .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 160)
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(sharedOutputCoverAspectRatio, contentMode: .fit)
+                    .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
                 }
 
