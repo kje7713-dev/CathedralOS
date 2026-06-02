@@ -17,6 +17,7 @@ struct GenerationOutputDetailView: View {
     let usageLimitService: any UsageLimitServiceProtocol
     let authService: any AuthService
     let outputSyncService: any GenerationOutputSyncServiceProtocol
+    let outputDeletionService: any GenerationOutputDeletionServiceProtocol
 
     init(output: GenerationOutput,
          generationService: GenerationService = StoryGenerationService(),
@@ -25,13 +26,15 @@ struct GenerationOutputDetailView: View {
          ),
          usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
          authService: any AuthService = BackendAuthService.shared,
-         outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared) {
+         outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
+         outputDeletionService: any GenerationOutputDeletionServiceProtocol = GenerationOutputDeletionService.shared) {
         self._output = Bindable(output)
         self.generationService = generationService
         self.sharingService = sharingService
         self.usageLimitService = usageLimitService
         self.authService = authService
         self.outputSyncService = outputSyncService
+        self.outputDeletionService = outputDeletionService
     }
 
     @State private var copiedOutput      = false
@@ -40,6 +43,7 @@ struct GenerationOutputDetailView: View {
     @State private var showPayloadJSON   = false
     @State private var showDeleteConfirm = false
     @State private var showShareSheet    = false
+    @State private var isDeletingOutput  = false
 
     // MARK: Publish / unpublish state
     @State private var isPublishing      = false
@@ -116,13 +120,15 @@ struct GenerationOutputDetailView: View {
             isPresented: $showDeleteConfirm,
             titleVisibility: .visible
         ) {
-            Button("Delete", role: .destructive) {
-                modelContext.delete(output)
-                dismiss()
+            Button("Delete Local Only", role: .destructive) {
+                Task { await performDeleteLocalOnly() }
+            }
+            Button("Delete Everywhere", role: .destructive) {
+                Task { await performDeleteEverywhere() }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This action cannot be undone.")
+            Text("Delete this generated output from this device only, or from both this device and the cloud.")
         }
         .confirmationDialog(
             "Publish this output?",
@@ -721,6 +727,38 @@ struct GenerationOutputDetailView: View {
         PublicSharingServiceError.displayMessage(from: error)
     }
 
+    private static func deletionErrorMessage(_ error: Error) -> String {
+        GenerationOutputDeletionError.displayMessage(from: error)
+    }
+
+    @MainActor
+    private func performDeleteLocalOnly() async {
+        isDeletingOutput = true
+        publishError = nil
+        defer { isDeletingOutput = false }
+
+        do {
+            try await outputDeletionService.deleteLocal(output: output, context: modelContext)
+            dismiss()
+        } catch {
+            publishError = Self.deletionErrorMessage(error)
+        }
+    }
+
+    @MainActor
+    private func performDeleteEverywhere() async {
+        isDeletingOutput = true
+        publishError = nil
+        defer { isDeletingOutput = false }
+
+        do {
+            try await outputDeletionService.deleteEverywhere(output: output, context: modelContext)
+            dismiss()
+        } catch {
+            publishError = Self.deletionErrorMessage(error)
+        }
+    }
+
     private var pendingOutputCoverImage: PendingOutputCoverImage? {
         guard let imageData = pendingCoverImageData,
               let width = pendingCoverImageWidth,
@@ -889,9 +927,10 @@ struct GenerationOutputDetailView: View {
                 }
             }
 
-            CathedralSecondaryButton("Delete Output", systemImage: "trash") {
+            CathedralSecondaryButton(isDeletingOutput ? "Deleting…" : "Delete Output", systemImage: "trash") {
                 showDeleteConfirm = true
             }
+            .disabled(isDeletingOutput)
         }
     }
 

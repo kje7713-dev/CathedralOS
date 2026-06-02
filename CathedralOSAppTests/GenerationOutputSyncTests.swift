@@ -438,6 +438,171 @@ final class LocalGenerationOutputBackupServiceTests: XCTestCase {
         XCTAssertEqual(restoredOutputs.first?.project?.name, "Backup Project")
         XCTAssertEqual(restoredOutputs.first?.syncErrorMessage, "RLS denied")
     }
+
+    func testDeleteBackupsRemovesOutputBackupFiles() throws {
+        let context = ModelContext(container)
+        let project = StoryProject(name: "Cleanup Project")
+        context.insert(project)
+
+        let output = GenerationOutput(title: "Delete Me")
+        output.project = project
+        context.insert(output)
+
+        XCTAssertNotNil(backupService.backup(output: output))
+        XCTAssertGreaterThan(backupService.backupCount(), 0)
+
+        let deletedCount = backupService.deleteBackups(outputID: output.id)
+        XCTAssertGreaterThan(deletedCount, 0)
+        XCTAssertEqual(backupService.backupCount(), 0)
+    }
+}
+
+private final class MockDeletionSharingService: PublicSharingService {
+    private(set) var unpublishCallCount = 0
+    private(set) var lastUnpublishedID: String?
+
+    func publish(output: GenerationOutput) async throws -> PublishResponse {
+        fatalError("Not used in GenerationOutputDeletionService tests.")
+    }
+
+    func unpublish(sharedOutputID: String) async throws {
+        unpublishCallCount += 1
+        lastUnpublishedID = sharedOutputID
+    }
+
+    func fetchPublicList() async throws -> [SharedOutputListItem] {
+        []
+    }
+
+    func fetchDetail(sharedOutputID: String) async throws -> SharedOutputDetail {
+        fatalError("Not used in GenerationOutputDeletionService tests.")
+    }
+
+    func reportSharedOutput(sharedOutputID: String, reason: ReportReason, details: String) async throws {}
+
+    func uploadCoverImage(
+        sharedOutputID: String,
+        imageData: Data,
+        width: Int,
+        height: Int,
+        contentType: String
+    ) async throws -> OutputCoverImageUploadMetadata {
+        fatalError("Not used in GenerationOutputDeletionService tests.")
+    }
+}
+
+final class GenerationOutputDeletionServiceTests: XCTestCase {
+    private var container: ModelContainer!
+    private var tempDirectory: URL!
+
+    override func setUpWithError() throws {
+        let schema = Schema([GenerationOutput.self, StoryProject.self])
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        container = try ModelContainer(for: schema, configurations: config)
+        tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        GenerationOutputSyncURLProtocol.requestHandler = nil
+        if let tempDirectory {
+            try? FileManager.default.removeItem(at: tempDirectory)
+        }
+        container = nil
+        tempDirectory = nil
+    }
+
+    func testDeleteLocalDeletesModelAndBackups() async throws {
+        let context = ModelContext(container)
+        let backupService = LocalGenerationOutputBackupService(baseDirectory: tempDirectory)
+        let output = GenerationOutput(title: "Local Delete")
+        context.insert(output)
+        try context.save()
+        XCTAssertNotNil(backupService.backup(output: output))
+        XCTAssertEqual(backupService.backupCount(), 1)
+
+        let service = GenerationOutputDeletionService(
+            authService: MockSyncAuthService(authState: .signedOut),
+            sharingService: MockDeletionSharingService(),
+            backupService: backupService,
+            session: makeSession(),
+            clientFactory: {
+                throw BackendClientError.notConfigured
+            }
+        )
+
+        try await service.deleteLocal(output: output, context: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 0)
+        XCTAssertEqual(backupService.backupCount(), 0)
+    }
+
+    func testDeleteEverywhereUnpublishesCloudAndDeletesLocalRow() async throws {
+        let cloudID = "11111111-1111-1111-1111-111111111111"
+        let sharedOutputID = "22222222-2222-2222-2222-222222222222"
+        let auth = MockSyncAuthService(
+            authState: .signedIn(AuthUser(id: "33333333-3333-3333-3333-333333333333", email: "user@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let sharing = MockDeletionSharingService()
+        let backupService = LocalGenerationOutputBackupService(baseDirectory: tempDirectory)
+        let validatedConfig = ValidatedSupabaseConfiguration(
+            projectURL: URL(string: "https://example.supabase.co")!,
+            anonKey: "anon-key",
+            generationEdgeFunctionPath: "generate-story",
+            sharingEdgeFunctionPath: "shared-outputs",
+            creditStateEdgeFunctionPath: "get-credit-state",
+            adminGrantCreditsEdgeFunctionPath: "admin-grant-credits",
+            generationModelsEdgeFunctionPath: "generation-models",
+            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement",
+            storeKitValidateEdgeFunctionPath: "sync-storekit-entitlement"
+        )
+
+        GenerationOutputSyncURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            let expectedAuthorization = ["Bearer", auth.currentAccessToken ?? ""].joined(separator: " ")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), expectedAuthorization)
+            XCTAssertEqual(request.url?.absoluteString, "https://example.supabase.co/rest/v1/generation_outputs?id=eq.\(cloudID)")
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 204,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data())
+        }
+
+        let service = GenerationOutputDeletionService(
+            authService: auth,
+            sharingService: sharing,
+            backupService: backupService,
+            session: makeSession(),
+            clientFactory: {
+                SupabaseBackendClient(configuration: validatedConfig)
+            }
+        )
+
+        let context = ModelContext(container)
+        let output = GenerationOutput(title: "Delete Everywhere")
+        output.cloudGenerationOutputID = cloudID
+        output.sharedOutputID = sharedOutputID
+        context.insert(output)
+        try context.save()
+
+        try await service.deleteEverywhere(output: output, context: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 0)
+        XCTAssertEqual(sharing.unpublishCallCount, 1)
+        XCTAssertEqual(sharing.lastUnpublishedID, sharedOutputID)
+    }
+
+    private func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GenerationOutputSyncURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
 }
 
 // MARK: - Cloud push tests

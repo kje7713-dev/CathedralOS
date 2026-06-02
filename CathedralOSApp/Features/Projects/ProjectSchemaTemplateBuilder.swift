@@ -1141,6 +1141,21 @@ final class LocalGenerationOutputBackupService {
         return urls.filter { $0.pathExtension.lowercased() == "json" }.count
     }
 
+    @discardableResult
+    func deleteBackups(outputID: UUID) -> Int {
+        let marker = "-\(outputID.uuidString)-"
+        let matchingBackups = sortedBackupURLs().filter { metadata in
+            let filename = metadata.url.lastPathComponent
+            return filename.hasPrefix("generation-output-")
+                && filename.pathExtension.lowercased() == "json"
+                && filename.contains(marker)
+        }
+        for backup in matchingBackups {
+            try? fileManager.removeItem(at: backup.url)
+        }
+        return matchingBackups.count
+    }
+
     func restoreLatestOutputs(into modelContext: ModelContext) throws -> Int {
         let latestBackupURLs = latestBackupsByOutput()
         guard !latestBackupURLs.isEmpty else {
