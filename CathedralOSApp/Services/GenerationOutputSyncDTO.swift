@@ -10,6 +10,8 @@ import Foundation
 struct GenerationOutputUploadRequest: Codable {
 
     // MARK: Identity
+    /// Authenticated Supabase user UUID. Maps to `generation_outputs.user_id`.
+    let userID: String
     /// UUID string of the local `GenerationOutput`. Stored as `local_generation_id` for correlation.
     let localGenerationId: String
 
@@ -40,7 +42,8 @@ struct GenerationOutputUploadRequest: Codable {
 
     // MARK: Init from model
 
-    init(output: GenerationOutput) {
+    init(output: GenerationOutput, userID: String) {
+        self.userID               = userID
         self.localGenerationId    = output.id.uuidString
         self.projectName          = output.project?.name ?? ""
         self.promptPackName       = output.sourcePromptPackName
@@ -59,6 +62,7 @@ struct GenerationOutputUploadRequest: Codable {
 
     // MARK: - CodingKeys (camelCase → snake_case for Supabase REST API)
     enum CodingKeys: String, CodingKey {
+        case userID               = "user_id"
         case localGenerationId    = "local_generation_id"
         case projectName          = "project_name"
         case promptPackName       = "prompt_pack_name"

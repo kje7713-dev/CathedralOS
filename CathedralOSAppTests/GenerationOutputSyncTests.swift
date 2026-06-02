@@ -11,10 +11,39 @@ import SwiftData
 
 private final class MockSyncAuthService: AuthService {
     var authState: AuthState
-    init(authState: AuthState = .signedOut) { self.authState = authState }
+    var currentAccessToken: String?
+    init(authState: AuthState = .signedOut, accessToken: String? = nil) {
+        self.authState = authState
+        self.currentAccessToken = accessToken
+    }
     func checkSession() async {}
     func signIn() async throws {}
     func signOut() async throws { authState = .signedOut }
+}
+
+private final class GenerationOutputSyncURLProtocol: URLProtocol {
+    static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = Self.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }
 
 // MARK: - MockGenerationOutputSyncService
@@ -385,6 +414,56 @@ final class GenerationOutputSyncPushTests: XCTestCase {
     }
 }
 
+final class SupabaseGenerationOutputSyncServiceRequestTests: XCTestCase {
+
+    override func tearDown() {
+        GenerationOutputSyncURLProtocol.requestHandler = nil
+        super.tearDown()
+    }
+
+    func testPushOutputIncludesAuthenticatedUserIDAndBearerToken() async throws {
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let authService = MockSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: "user@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let service = SupabaseGenerationOutputSyncService(
+            authService: authService,
+            session: makeSession()
+        )
+        let output = GenerationOutput(title: "Local Story")
+        output.outputText = "Story body"
+        output.status = GenerationStatus.complete.rawValue
+
+        GenerationOutputSyncURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            let authorization = request.value(forHTTPHeaderField: "Authorization")
+            XCTAssertEqual(authorization, "Bearer " + "user-jwt-token")
+
+            let body = try XCTUnwrap(request.httpBody)
+            let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(payload["user_id"] as? String, userID)
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 201,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = Data(#"[{"id":"11111111-1111-1111-1111-111111111112"}]"#.utf8)
+            return (response, data)
+        }
+
+        try await service.pushOutput(output)
+    }
+
+    private func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GenerationOutputSyncURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+}
+
 // MARK: - Signed-out guard tests
 
 final class GenerationOutputSyncAuthTests: XCTestCase {
@@ -438,6 +517,7 @@ final class GenerationOutputSyncAuthTests: XCTestCase {
 final class GenerationOutputUploadRequestTests: XCTestCase {
 
     func testUploadRequestEncodesSnakeCaseKeys() throws {
+        let userID = "11111111-1111-1111-1111-111111111111"
         let gen = GenerationOutput(
             title: "Upload Test",
             outputText: "Content here.",
@@ -449,12 +529,13 @@ final class GenerationOutputUploadRequestTests: XCTestCase {
             outputBudget: 1600
         )
 
-        let dto = GenerationOutputUploadRequest(output: gen)
+        let dto = GenerationOutputUploadRequest(output: gen, userID: userID)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(dto)
         let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
+        XCTAssertEqual(obj["user_id"] as? String, userID)
         XCTAssertEqual(obj["local_generation_id"] as? String, gen.id.uuidString)
         XCTAssertEqual(obj["title"] as? String, "Upload Test")
         XCTAssertEqual(obj["output_text"] as? String, "Content here.")
