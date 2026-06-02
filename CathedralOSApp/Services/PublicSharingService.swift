@@ -51,9 +51,9 @@ enum PublicSharingServiceError: Error, LocalizedError {
             return "Please choose a reason before submitting the report."
         case .missingCloudGenerationOutputID(let syncAttempted):
             if syncAttempted {
-                return "Could not sync this output before publishing. Check your connection and try again."
+                return "Could not sync this output before publishing. Try again, or use Sync Output."
             }
-            return "Publish requires this output to be synced first. Try Sync Project, then publish again."
+            return "Publish requires this output to be synced first. Use Sync Output, then publish again."
         }
     }
 }
@@ -104,6 +104,10 @@ final class BackendPublicSharingService: PublicSharingService {
     /// public-sharing backend.
     private let syncService: GenerationOutputSyncServiceProtocol?
     private let session: URLSession
+
+    var hasOutputSyncService: Bool {
+        syncService != nil
+    }
 
     init(
         authService: AuthService = BackendAuthService.shared,

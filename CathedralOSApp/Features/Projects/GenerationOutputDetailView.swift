@@ -14,17 +14,22 @@ struct GenerationOutputDetailView: View {
     let sharingService: PublicSharingService
     let usageLimitService: any UsageLimitServiceProtocol
     let authService: any AuthService
+    let outputSyncService: any GenerationOutputSyncServiceProtocol
 
     init(output: GenerationOutput,
          generationService: GenerationService = StoryGenerationService(),
-         sharingService: PublicSharingService = BackendPublicSharingService(),
+         sharingService: PublicSharingService = BackendPublicSharingService(
+            syncService: SupabaseGenerationOutputSyncService.shared
+         ),
          usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
-         authService: any AuthService = BackendAuthService.shared) {
+         authService: any AuthService = BackendAuthService.shared,
+         outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared) {
         self._output = Bindable(output)
         self.generationService = generationService
         self.sharingService = sharingService
         self.usageLimitService = usageLimitService
         self.authService = authService
+        self.outputSyncService = outputSyncService
     }
 
     @State private var copiedOutput      = false
@@ -46,6 +51,7 @@ struct GenerationOutputDetailView: View {
     @State private var pendingCoverImageHeight: Int?
     @State private var removeCoverImageOnPublish = false
     @State private var isProcessingCoverImage = false
+    @State private var isSyncingOutput = false
 
     // MARK: Action state
     @State private var isActioning  = false
@@ -342,6 +348,10 @@ struct GenerationOutputDetailView: View {
 
                     Divider()
 
+                    outputSyncSection
+
+                    Divider()
+
                     coverImageSection
 
                     Divider()
@@ -425,6 +435,14 @@ struct GenerationOutputDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
 
+            CathedralSecondaryButton(
+                isSyncingOutput ? "Syncing…" : "Sync Output",
+                systemImage: "arrow.triangle.2.circlepath"
+            ) {
+                Task { await performSyncOutput() }
+            }
+            .disabled(isSyncingOutput || isPublishing || isUnpublishing)
+
             // Publish / Unpublish buttons
             if isPublished {
                 HStack(spacing: CathedralTheme.Spacing.sm) {
@@ -481,7 +499,28 @@ struct GenerationOutputDetailView: View {
                     publishError = nil
                     showPublishConfirm = true
                 }
-                .disabled(output.outputText.isEmpty || isPublishing)
+                .disabled(output.outputText.isEmpty || isPublishing || isSyncingOutput)
+            }
+        }
+    }
+
+    private var outputSyncSection: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            HStack {
+                Text("Output Sync")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Spacer()
+                Text(displaySyncStatus)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(syncStatusColor)
+            }
+
+            if let syncMessage = syncStatusMessage {
+                Text(syncMessage)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -569,6 +608,34 @@ struct GenerationOutputDetailView: View {
             || (!output.coverImagePath.isEmpty && !removeCoverImageOnPublish)
     }
 
+    private var displaySyncStatus: String {
+        SyncStatus(rawValue: output.syncStatus)?.displayName ?? output.syncStatus
+    }
+
+    private var syncStatusColor: Color {
+        switch SyncStatus(rawValue: output.syncStatus) {
+        case .synced:
+            return CathedralTheme.Colors.accent
+        case .failed:
+            return CathedralTheme.Colors.destructive
+        default:
+            return CathedralTheme.Colors.primaryText
+        }
+    }
+
+    private var syncStatusMessage: String? {
+        if let message = output.syncErrorMessage?.nilIfEmpty {
+            return message
+        }
+        if let lastSyncedAt = output.lastSyncedAt {
+            return "Last synced \(Self.dateFormatter.string(from: lastSyncedAt))"
+        }
+        if output.cloudGenerationOutputID.isEmpty {
+            return "This output has not been synced to generation_outputs yet."
+        }
+        return nil
+    }
+
     // MARK: Publish / Unpublish Logic
 
     private func performPublish() async {
@@ -576,43 +643,13 @@ struct GenerationOutputDetailView: View {
         publishError = nil
         defer { isPublishing = false }
 
-        let previousSharedOutputID = output.sharedOutputID
-        let previousCoverImagePath = output.coverImagePath
-        let previousCoverImageURL = output.coverImageURL
-        let previousCoverImageWidth = output.coverImageWidth
-        let previousCoverImageHeight = output.coverImageHeight
-        let previousCoverImageContentType = output.coverImageContentType
-        // Reuse a previously-assigned UUID when available; otherwise mint a new ID
-        // so storage uploads and publish payloads stay tied to the same record key.
-        let stagedSharedOutputID = UUID(uuidString: previousSharedOutputID)?.uuidString.lowercased()
-            ?? UUID().uuidString.lowercased()
-
         do {
-            if let pendingCoverImageData,
-               let width = pendingCoverImageWidth,
-               let height = pendingCoverImageHeight {
-                let upload = try await sharingService.uploadCoverImage(
-                    sharedOutputID: stagedSharedOutputID,
-                    imageData: pendingCoverImageData,
-                    width: width,
-                    height: height,
-                    contentType: "image/jpeg"
-                )
-                output.coverImagePath = upload.coverImagePath
-                output.coverImageURL = upload.coverImageURL
-                output.coverImageWidth = upload.coverImageWidth
-                output.coverImageHeight = upload.coverImageHeight
-                output.coverImageContentType = upload.coverImageContentType
-            } else if removeCoverImageOnPublish {
-                output.coverImagePath = ""
-                output.coverImageURL = ""
-                output.coverImageWidth = nil
-                output.coverImageHeight = nil
-                output.coverImageContentType = nil
-            }
-
-            output.sharedOutputID = stagedSharedOutputID
-            let response = try await sharingService.publish(output: output)
+            let pendingCoverImage = pendingOutputCoverImage
+            let response = try await publishCoordinator.publish(
+                output: output,
+                pendingCoverImage: pendingCoverImage,
+                removeCoverImageOnPublish: removeCoverImageOnPublish
+            )
             let now = Date()
             if output.publishedAt == nil {
                 output.publishedAt = now
@@ -627,15 +664,24 @@ struct GenerationOutputDetailView: View {
             clearPendingCoverSelection()
             removeCoverImageOnPublish = false
         } catch {
-            output.sharedOutputID = previousSharedOutputID
-            output.coverImagePath = previousCoverImagePath
-            output.coverImageURL = previousCoverImageURL
-            output.coverImageWidth = previousCoverImageWidth
-            output.coverImageHeight = previousCoverImageHeight
-            output.coverImageContentType = previousCoverImageContentType
             let message = Self.sharingErrorMessage(error)
             publishError = message
             // Persist the error message so it survives navigation and re-display.
+            output.publishErrorMessage = message
+        }
+    }
+
+    private func performSyncOutput() async {
+        isSyncingOutput = true
+        publishError = nil
+        defer { isSyncingOutput = false }
+
+        do {
+            try await publishCoordinator.syncOutput(output)
+            output.publishErrorMessage = nil
+        } catch {
+            let message = Self.sharingErrorMessage(error)
+            publishError = message
             output.publishErrorMessage = message
         }
     }
@@ -669,6 +715,29 @@ struct GenerationOutputDetailView: View {
 
     private static func sharingErrorMessage(_ error: Error) -> String {
         PublicSharingServiceError.displayMessage(from: error)
+    }
+
+    private var pendingOutputCoverImage: PendingOutputCoverImage? {
+        guard let imageData = pendingCoverImageData,
+              let width = pendingCoverImageWidth,
+              let height = pendingCoverImageHeight else {
+            return nil
+        }
+
+        return PendingOutputCoverImage(
+            imageData: imageData,
+            width: width,
+            height: height,
+            contentType: "image/jpeg"
+        )
+    }
+
+    private var publishCoordinator: GenerationOutputPublishCoordinator {
+        GenerationOutputPublishCoordinator(
+            authService: authService,
+            sharingService: sharingService,
+            syncService: outputSyncService
+        )
     }
 
     private func clearPendingCoverSelection() {
