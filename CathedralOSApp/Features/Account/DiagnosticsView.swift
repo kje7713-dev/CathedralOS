@@ -25,12 +25,14 @@ struct DiagnosticsView: View {
         authService: any AuthService,
         usageLimitService: any UsageLimitServiceProtocol,
         entitlementService: any StoreKitEntitlementServiceProtocol,
+        creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
         healthService: any BackendHealthServiceProtocol = BackendHealthService.shared
     ) {
         _viewModel = StateObject(wrappedValue: DiagnosticsViewModel(
             authService: authService,
             usageLimitService: usageLimitService,
             entitlementService: entitlementService,
+            creditStateService: creditStateService,
             healthService: healthService
         ))
     }
@@ -43,6 +45,7 @@ struct DiagnosticsView: View {
                 authSection
                 storeKitSection
                 creditsSection
+                developerCreditsSection
                 backendHealthSection
                 preflightSection
                 lastErrorsSection
@@ -53,9 +56,11 @@ struct DiagnosticsView: View {
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .task {
                 viewModel.refresh()
+                await viewModel.refreshCreditStateIfPossible()
             }
             .refreshable {
                 viewModel.refresh()
+                await viewModel.refreshCreditStateIfPossible()
             }
         }
     }
@@ -157,6 +162,62 @@ struct DiagnosticsView: View {
                 row(label: "Available", value: "\(snap.availableCredits)")
                 row(label: "Plan", value: snap.creditPlanName)
                 row(label: "Source", value: snap.creditSource)
+                row(label: "Backend admin", value: snap.backendConfirmedAdmin ? "Yes" : "No")
+            }
+        }
+    }
+
+    private var developerCreditsSection: some View {
+        Group {
+            if viewModel.canShowDeveloperCredits {
+                Section("Developer Credits") {
+                    Button {
+                        Task { await viewModel.grantDeveloperCredits(amount: 10) }
+                    } label: {
+                        Label(
+                            viewModel.isGrantingCredits
+                                ? "Granting…"
+                                : "Grant 10 test credits",
+                            systemImage: "plus.circle"
+                        )
+                    }
+                    .disabled(viewModel.isGrantingCredits || viewModel.isRefreshingCredits)
+
+                    Button {
+                        Task { await viewModel.grantDeveloperCredits(amount: 100) }
+                    } label: {
+                        Label(
+                            viewModel.isGrantingCredits
+                                ? "Granting…"
+                                : "Grant 100 test credits",
+                            systemImage: "plus.circle.fill"
+                        )
+                    }
+                    .disabled(viewModel.isGrantingCredits || viewModel.isRefreshingCredits)
+
+                    Button {
+                        Task { await viewModel.refreshCreditStateIfPossible() }
+                    } label: {
+                        Label(
+                            viewModel.isRefreshingCredits
+                                ? "Refreshing…"
+                                : "Refresh credits",
+                            systemImage: "arrow.clockwise"
+                        )
+                    }
+                    .disabled(viewModel.isGrantingCredits || viewModel.isRefreshingCredits)
+
+                    if let message = viewModel.developerCreditsMessage {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(CathedralTheme.Colors.accent)
+                    }
+                    if let error = viewModel.developerCreditsError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                    }
+                }
             }
         }
     }

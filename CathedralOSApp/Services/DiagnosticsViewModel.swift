@@ -46,6 +46,7 @@ struct DiagnosticsSnapshot {
     let availableCredits: Int
     let creditPlanName: String
     let creditSource: String
+    let backendConfirmedAdmin: Bool
 
     // MARK: Backend health
     let healthStatus: String?
@@ -110,6 +111,7 @@ struct DiagnosticsSnapshot {
             "Available: \(availableCredits)",
             "Plan: \(creditPlanName)",
             "Source: \(creditSource)",
+            "Backend admin: \(backendConfirmedAdmin ? "Yes" : "No")",
             "",
             "--- Backend Health ---",
             "Status: \(healthStatus ?? "Not checked")",
@@ -155,12 +157,18 @@ final class DiagnosticsViewModel: ObservableObject {
     private let authService: any AuthService
     private let usageLimitService: any UsageLimitServiceProtocol
     private let entitlementService: any StoreKitEntitlementServiceProtocol
+    private let creditStateService: any CreditStateServiceProtocol
     private let healthService: any BackendHealthServiceProtocol
+    private var lastFetchedCreditState: BackendCreditState?
 
     // MARK: Published state
 
     @Published private(set) var snapshot: DiagnosticsSnapshot?
     @Published private(set) var isCheckingHealth = false
+    @Published private(set) var isRefreshingCredits = false
+    @Published private(set) var isGrantingCredits = false
+    @Published private(set) var developerCreditsMessage: String?
+    @Published private(set) var developerCreditsError: String?
 
     // MARK: Last-error storage
     // These are set externally by views that observe errors from cloud actions.
@@ -175,11 +183,13 @@ final class DiagnosticsViewModel: ObservableObject {
         authService: any AuthService,
         usageLimitService: any UsageLimitServiceProtocol,
         entitlementService: any StoreKitEntitlementServiceProtocol,
+        creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
         healthService: any BackendHealthServiceProtocol = BackendHealthService.shared
     ) {
         self.authService = authService
         self.usageLimitService = usageLimitService
         self.entitlementService = entitlementService
+        self.creditStateService = creditStateService
         self.healthService = healthService
     }
 
@@ -197,6 +207,75 @@ final class DiagnosticsViewModel: ObservableObject {
         defer { isCheckingHealth = false }
         await healthService.check()
         snapshot = buildSnapshot()
+    }
+
+    func refreshCreditStateIfPossible() async {
+        let requiresSupabaseConfiguration = creditStateService is BackendCreditStateService
+        guard !requiresSupabaseConfiguration || SupabaseConfiguration.isConfigured else {
+            snapshot = buildSnapshot()
+            return
+        }
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard authService.authState.isSignedIn else {
+            lastFetchedCreditState = nil
+            snapshot = buildSnapshot()
+            return
+        }
+
+        isRefreshingCredits = true
+        developerCreditsError = nil
+        defer { isRefreshingCredits = false }
+        do {
+            let state = try await creditStateService.fetchCreditState()
+            lastFetchedCreditState = state
+            usageLimitService.applyBackendCreditState(state)
+            developerCreditsMessage = "Credits refreshed."
+            snapshot = buildSnapshot()
+        } catch {
+            developerCreditsError = (error as? CreditStateServiceError)?.errorDescription
+                ?? error.localizedDescription
+            snapshot = buildSnapshot()
+        }
+    }
+
+    func grantDeveloperCredits(amount: Int) async {
+        guard amount > 0 else { return }
+        guard let userID = authService.currentUserID else {
+            developerCreditsError = "You must be signed in to grant developer credits."
+            snapshot = buildSnapshot()
+            return
+        }
+        isGrantingCredits = true
+        developerCreditsError = nil
+        developerCreditsMessage = nil
+        defer { isGrantingCredits = false }
+        do {
+            let state = try await creditStateService.grantCredits(
+                targetUserID: userID,
+                amount: amount,
+                reason: "testflight_dev_grant"
+            )
+            lastFetchedCreditState = state
+            usageLimitService.applyBackendCreditState(state)
+            developerCreditsMessage = "Granted \(amount) test credits"
+            snapshot = buildSnapshot()
+        } catch {
+            developerCreditsError = (error as? CreditStateServiceError)?.errorDescription
+                ?? error.localizedDescription
+            snapshot = buildSnapshot()
+        }
+    }
+
+    var canShowDeveloperCredits: Bool {
+        guard isDeveloperBuildEligible else { return false }
+        guard SupabaseConfiguration.isConfigured || !(creditStateService is BackendCreditStateService) else {
+            return false
+        }
+        guard let userID = authService.currentUserID else { return false }
+        return SupabaseConfiguration.developerAdminUserIDs.contains(userID)
+            || lastFetchedCreditState?.isAdmin == true
     }
 
     // MARK: - Snapshot assembly
@@ -253,6 +332,7 @@ final class DiagnosticsViewModel: ObservableObject {
             availableCredits: creditState.availableCredits,
             creditPlanName: creditState.planName,
             creditSource: creditState.source.rawValue,
+            backendConfirmedAdmin: lastFetchedCreditState?.isAdmin ?? false,
             healthStatus: health?.displayStatus,
             healthCheckedAt: health?.checkedAt,
             healthMissingHints: health?.missingConfigHints ?? [],
@@ -262,6 +342,14 @@ final class DiagnosticsViewModel: ObservableObject {
             preflightItems: preflightItems,
             capturedAt: Date()
         )
+    }
+
+    private var isDeveloperBuildEligible: Bool {
+        #if DEBUG
+        true
+        #else
+        Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+        #endif
     }
 
     // MARK: - Generation preflight (non-costly, no OpenAI/backend call)

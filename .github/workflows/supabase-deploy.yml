@@ -47,6 +47,10 @@ jobs:
         if: ${{ hashFiles('supabase/functions/get-credit-state/index.ts') != '' }}
         run: supabase functions deploy get-credit-state --project-ref "$SUPABASE_PROJECT_REF"
 
+      - name: Deploy Edge Function - admin-grant-credits
+        if: ${{ hashFiles('supabase/functions/admin-grant-credits/index.ts') != '' }}
+        run: supabase functions deploy admin-grant-credits --project-ref "$SUPABASE_PROJECT_REF"
+
       - name: Deploy Edge Function - backend-health
         if: ${{ hashFiles('supabase/functions/backend-health/index.ts') != '' }}
         run: supabase functions deploy backend-health --project-ref "$SUPABASE_PROJECT_REF"

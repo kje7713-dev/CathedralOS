@@ -188,6 +188,7 @@ final class BackendCreditStateDecodingTests: XCTestCase {
         XCTAssertEqual(state.monthlyCreditAllowance, 10)
         XCTAssertEqual(state.purchasedCreditBalance, 0)
         XCTAssertEqual(state.availableCredits, 10)
+        XCTAssertFalse(state.isAdmin)
         XCTAssertNil(state.currentPeriodEnd)
         XCTAssertTrue(state.recentLedger.isEmpty)
     }
@@ -210,7 +211,25 @@ final class BackendCreditStateDecodingTests: XCTestCase {
         XCTAssertEqual(state.monthlyCreditAllowance, 100)
         XCTAssertEqual(state.purchasedCreditBalance, 60)
         XCTAssertEqual(state.availableCredits, 160)
+        XCTAssertFalse(state.isAdmin)
         XCTAssertEqual(state.currentPeriodEnd, "2026-05-30T00:00:00Z")
+    }
+
+    func testDecodesAdminFlagWhenPresent() throws {
+        let json = """
+        {
+            "planName": "free",
+            "isPro": false,
+            "monthlyCreditAllowance": 10,
+            "purchasedCreditBalance": 25,
+            "availableCredits": 35,
+            "isAdmin": true,
+            "currentPeriodEnd": null,
+            "recentLedger": []
+        }
+        """
+        let state = try decode(json)
+        XCTAssertTrue(state.isAdmin)
     }
 
     func testDecodesRecentLedgerEntries() throws {
@@ -260,6 +279,7 @@ final class BackendCreditStateStubTests: XCTestCase {
         XCTAssertEqual(state.monthlyCreditAllowance, 10)
         XCTAssertEqual(state.purchasedCreditBalance, 0)
         XCTAssertEqual(state.availableCredits, 10)
+        XCTAssertFalse(state.isAdmin)
         XCTAssertNil(state.currentPeriodEnd)
         XCTAssertTrue(state.recentLedger.isEmpty)
     }
@@ -309,6 +329,10 @@ final class SupabaseConfigurationCreditPathsTests: XCTestCase {
 
     func testStoreKitSyncEdgeFunctionPathIsNonEmpty() {
         XCTAssertFalse(SupabaseConfiguration.storeKitSyncEdgeFunctionPath.isEmpty)
+    }
+
+    func testAdminGrantCreditsEdgeFunctionPathIsNonEmpty() {
+        XCTAssertFalse(SupabaseConfiguration.adminGrantCreditsEdgeFunctionPath.isEmpty)
     }
 
     func testCreditStatePathDoesNotEqualGenerationPath() {

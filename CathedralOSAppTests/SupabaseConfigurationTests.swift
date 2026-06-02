@@ -93,6 +93,7 @@ final class SupabaseConfigurationTests: XCTestCase {
             generationEdgeFunctionPath: "generate",
             sharingEdgeFunctionPath: "share-output",
             creditStateEdgeFunctionPath: "get-credit-state",
+            adminGrantCreditsEdgeFunctionPath: "admin-grant-credits",
             generationModelsEdgeFunctionPath: "generation-models",
             storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement",
             storeKitValidateEdgeFunctionPath: "sync-storekit-entitlement"
@@ -112,6 +113,7 @@ final class SupabaseConfigurationTests: XCTestCase {
             generationEdgeFunctionPath: "generate-story",
             sharingEdgeFunctionPath: "shared-outputs",
             creditStateEdgeFunctionPath: "get-credit-state",
+            adminGrantCreditsEdgeFunctionPath: "admin-grant-credits",
             generationModelsEdgeFunctionPath: "generation-models",
             storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement",
             storeKitValidateEdgeFunctionPath: "sync-storekit-entitlement"
@@ -130,6 +132,7 @@ final class SupabaseConfigurationTests: XCTestCase {
             generationEdgeFunctionPath: "generate-story",
             sharingEdgeFunctionPath: "share-output",
             creditStateEdgeFunctionPath: "get-credit-state",
+            adminGrantCreditsEdgeFunctionPath: "admin-grant-credits",
             generationModelsEdgeFunctionPath: "generation-models",
             storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement",
             storeKitValidateEdgeFunctionPath: "sync-storekit-entitlement"

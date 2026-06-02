@@ -80,6 +80,10 @@ The `generate-story` Edge Function now enforces credits before calling OpenAI:
 3. Rejects with `402` if insufficient.
 4. Charges after successful generation; inserts ledger row.
 
+For TestFlight and internal testing, admins/devs can also use the
+`admin-grant-credits` Edge Function to add non-StoreKit test credits to
+`purchased_credit_balance` without changing OpenAI billing.
+
 The client local check (`LocalUsageLimitService.checkPreflight`) is now a
 **fast-fail optimization** — it provides immediate UI feedback but is no longer
 the enforcement gate.
