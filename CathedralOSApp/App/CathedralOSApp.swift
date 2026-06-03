@@ -25,7 +25,8 @@ struct CathedralOSApp: App {
         WindowGroup {
             if let container = persistenceBootstrap.container {
                 AppRootView(
-                    firstLaunchAfterUpdate: persistenceBootstrap.diagnostics.firstLaunchAfterUpdate
+                    firstLaunchAfterUpdate: persistenceBootstrap.firstLaunchAfterUpdate,
+                    recoveryContext: persistenceBootstrap.recoveryContext
                 )
                 .modelContainer(container)
             } else {
@@ -39,6 +40,7 @@ private struct AppRootView: View {
     @Environment(\.modelContext) private var modelContext
 
     let firstLaunchAfterUpdate: Bool
+    let recoveryContext: PersistenceRecoveryContext?
 
     @State private var hasRunLaunchTasks = false
 
@@ -48,6 +50,12 @@ private struct AppRootView: View {
 
     var body: some View {
         TabView {
+            if let recoveryContext {
+                RecoveryModeView(context: recoveryContext)
+                    .tabItem {
+                        Label("Recovery", systemImage: "externaldrive.badge.exclamationmark")
+                    }
+            }
             ProjectsListView()
                 .tabItem {
                     Label("Projects", systemImage: "books.vertical")
@@ -149,9 +157,61 @@ final class PersistenceLaunchDiagnosticsStore {
 }
 
 struct PersistenceBootstrapResult {
+    enum Mode {
+        case normal
+        case recovery(primaryStoreFailed: Bool)
+    }
+
+    let mode: Mode
     let container: ModelContainer?
-    let diagnostics: PersistenceLaunchDiagnostics
-    let blockingMessage: String
+    let primaryStoreURL: URL
+    let recoveryStoreURL: URL?
+    let preservedArtifactDirectory: URL?
+    let storeLoadErrorMessage: String?
+    let firstLaunchAfterUpdate: Bool
+    let appVersion: String
+    let appBuild: String
+    let projectCount: Int?
+    let generationCount: Int?
+
+    var recoveryContext: PersistenceRecoveryContext? {
+        guard case .recovery = mode else { return nil }
+        return PersistenceRecoveryContext(
+            primaryStoreURL: primaryStoreURL,
+            recoveryStoreURL: recoveryStoreURL,
+            preservedArtifactDirectory: preservedArtifactDirectory,
+            storeLoadErrorMessage: storeLoadErrorMessage
+        )
+    }
+
+    var diagnostics: PersistenceLaunchDiagnostics {
+        let failedToLoadStore: Bool
+        switch mode {
+        case .normal:
+            failedToLoadStore = false
+        case .recovery(let primaryStoreFailed):
+            failedToLoadStore = primaryStoreFailed
+        }
+        return PersistenceLaunchDiagnostics(
+            projectCount: projectCount,
+            generationCount: generationCount,
+            swiftDataStoreURL: primaryStoreURL.path,
+            appVersion: appVersion,
+            appBuild: appBuild,
+            firstLaunchAfterUpdate: firstLaunchAfterUpdate,
+            failedToLoadStore: failedToLoadStore,
+            storeLoadErrorMessage: storeLoadErrorMessage
+        )
+    }
+
+    var blockingMessage: String {
+        let header = "Your local project database could not be opened."
+        let body = "Do not reinstall the app. Capture this error message and contact support for recovery guidance."
+        if let storeLoadErrorMessage {
+            return "\(header)\n\(body)\nError: \(storeLoadErrorMessage)"
+        }
+        return "\(header)\n\(body)"
+    }
 }
 
 enum PersistenceBootstrap {
@@ -169,9 +229,6 @@ enum PersistenceBootstrap {
         defaults.set(appBuild, forKey: lastSeenBuildDefaultsKey)
 
         let storeURL = defaultStoreURL()
-        let blockingMessageHeader = "Your local project database could not be opened."
-        let blockingMessageBody = "Do not reinstall the app. Capture this error message and contact support for recovery guidance."
-
         let schema = Schema([
             Role.self, Domain.self, Goal.self, Constraint.self,
             CathedralProfile.self, Secret.self,
@@ -188,46 +245,67 @@ enum PersistenceBootstrap {
             let projectCount = try? context.fetchCount(FetchDescriptor<StoryProject>())
             let generationCount = try? context.fetchCount(FetchDescriptor<GenerationOutput>())
 
-            let diagnostics = PersistenceLaunchDiagnostics(
-                projectCount: projectCount,
-                generationCount: generationCount,
-                swiftDataStoreURL: storeURL.path,
-                appVersion: appVersion,
-                appBuild: appBuild,
-                firstLaunchAfterUpdate: firstLaunchAfterUpdate,
-                failedToLoadStore: false,
-                storeLoadErrorMessage: nil
-            )
-
             logger.log(
                 "Persistence diagnostics: version=\(appVersion, privacy: .public) build=\(appBuild, privacy: .public) firstLaunchAfterUpdate=\(firstLaunchAfterUpdate, privacy: .public) projects=\(projectCount ?? -1, privacy: .public) generations=\(generationCount ?? -1, privacy: .public) storeURL=\(storeURL.path, privacy: .public)"
             )
 
             return PersistenceBootstrapResult(
+                mode: .normal,
                 container: container,
-                diagnostics: diagnostics,
-                blockingMessage: "\(blockingMessageHeader)\n\(blockingMessageBody)"
-            )
-        } catch {
-            preserveStoreArtifacts(storeURL: storeURL)
-            let diagnostics = PersistenceLaunchDiagnostics(
-                projectCount: nil,
-                generationCount: nil,
-                swiftDataStoreURL: storeURL.path,
+                primaryStoreURL: storeURL,
+                recoveryStoreURL: nil,
+                preservedArtifactDirectory: nil,
+                storeLoadErrorMessage: nil,
+                firstLaunchAfterUpdate: firstLaunchAfterUpdate,
                 appVersion: appVersion,
                 appBuild: appBuild,
-                firstLaunchAfterUpdate: firstLaunchAfterUpdate,
-                failedToLoadStore: true,
-                storeLoadErrorMessage: error.localizedDescription
+                projectCount: projectCount,
+                generationCount: generationCount
             )
+        } catch {
+            let preservedArtifactDirectory = preserveStoreArtifacts(storeURL: storeURL)
             logger.error(
                 "SwiftData store failed to load at \(storeURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
             )
-            let blockingMessage = "\(blockingMessageHeader)\n\(blockingMessageBody)\nError: \(error.localizedDescription)"
+
+            let fallbackStoreURL = recoveryStoreURL(primaryStoreURL: storeURL)
+            do {
+                let fallbackConfiguration = ModelConfiguration(url: fallbackStoreURL)
+                let fallbackContainer = try ModelContainer(for: schema, configurations: fallbackConfiguration)
+                logger.log(
+                    "Loaded fallback SwiftData recovery store at \(fallbackStoreURL.path, privacy: .public)"
+                )
+                return PersistenceBootstrapResult(
+                    mode: .recovery(primaryStoreFailed: true),
+                    container: fallbackContainer,
+                    primaryStoreURL: storeURL,
+                    recoveryStoreURL: fallbackStoreURL,
+                    preservedArtifactDirectory: preservedArtifactDirectory,
+                    storeLoadErrorMessage: error.localizedDescription,
+                    firstLaunchAfterUpdate: firstLaunchAfterUpdate,
+                    appVersion: appVersion,
+                    appBuild: appBuild,
+                    projectCount: nil,
+                    generationCount: nil
+                )
+            } catch {
+                logger.error(
+                    "SwiftData fallback recovery store failed to load at \(fallbackStoreURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+            }
+
             return PersistenceBootstrapResult(
+                mode: .recovery(primaryStoreFailed: true),
                 container: nil,
-                diagnostics: diagnostics,
-                blockingMessage: blockingMessage
+                primaryStoreURL: storeURL,
+                recoveryStoreURL: fallbackStoreURL,
+                preservedArtifactDirectory: preservedArtifactDirectory,
+                storeLoadErrorMessage: error.localizedDescription,
+                firstLaunchAfterUpdate: firstLaunchAfterUpdate,
+                appVersion: appVersion,
+                appBuild: appBuild,
+                projectCount: nil,
+                generationCount: nil
             )
         }
     }
@@ -243,7 +321,7 @@ enum PersistenceBootstrap {
         return appSupport.appendingPathComponent("CathedralOS.sqlite")
     }
 
-    private static func preserveStoreArtifacts(storeURL: URL) {
+    private static func preserveStoreArtifacts(storeURL: URL) -> URL {
         let fileManager = FileManager.default
         let timestamp = Int(Date().timeIntervalSince1970)
         let recoveryDirectory = storeURL.deletingLastPathComponent().appendingPathComponent(recoveryFolderName, isDirectory: true)
@@ -257,6 +335,18 @@ enum PersistenceBootstrap {
             guard !fileManager.fileExists(atPath: destination.path) else { continue }
             try? fileManager.copyItem(at: source, to: destination)
         }
+        return recoveryDirectory
+    }
+
+    private static func recoveryStoreURL(primaryStoreURL: URL) -> URL {
+        let fileManager = FileManager.default
+        let baseDirectory = primaryStoreURL.deletingLastPathComponent()
+        let preferred = baseDirectory.appendingPathComponent("CathedralOS-Recovery.sqlite")
+        if !fileManager.fileExists(atPath: preferred.path) {
+            return preferred
+        }
+        let timestamp = Int(Date().timeIntervalSince1970)
+        return baseDirectory.appendingPathComponent("CathedralOS-Recovered-\(timestamp).sqlite")
     }
 
     private static func sidecarURLs(for storeURL: URL) -> [URL] {
@@ -264,6 +354,205 @@ enum PersistenceBootstrap {
             URL(fileURLWithPath: storeURL.path + "-shm"),
             URL(fileURLWithPath: storeURL.path + "-wal")
         ]
+    }
+}
+
+struct PersistenceRecoveryContext {
+    let primaryStoreURL: URL
+    let recoveryStoreURL: URL?
+    let preservedArtifactDirectory: URL?
+    let storeLoadErrorMessage: String?
+}
+
+private struct RecoveryModeView: View {
+    @Environment(\.modelContext) private var modelContext
+
+    let context: PersistenceRecoveryContext
+
+    @State private var authState: AuthState = .unknown
+    @State private var statusMessage: String?
+    @State private var errorMessage: String?
+    @State private var isWorking = false
+
+    private let authService: any AuthService = BackendAuthService.shared
+    private let outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Recovery Mode") {
+                    Text("Your original SwiftData store could not be opened, so CathedralOS started with a clean recovery database.")
+                        .font(.caption)
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    if let recoveryStoreURL = context.recoveryStoreURL {
+                        Text("Recovery store: \(recoveryStoreURL.lastPathComponent)")
+                            .font(.caption)
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
+                    if let preservedArtifactDirectory = context.preservedArtifactDirectory {
+                        Text("Preserved artifacts: \(preservedArtifactDirectory.path)")
+                            .font(.caption2)
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
+                    if let storeLoadErrorMessage = context.storeLoadErrorMessage {
+                        Text("Original load error: \(storeLoadErrorMessage)")
+                            .font(.caption2)
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
+                }
+
+                Section("Account") {
+                    if authState.isSignedIn {
+                        Label("Signed in", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(CathedralTheme.Colors.accent)
+                    } else {
+                        Button {
+                            Task { await signInWithApple() }
+                        } label: {
+                            Label("Sign in with Apple", systemImage: "applelogo")
+                        }
+                        .disabled(isWorking || !SupabaseConfiguration.isConfigured)
+                    }
+                }
+
+                Section("Restore Projects") {
+                    Button {
+                        restoreProjectsFromLocalBackup()
+                    } label: {
+                        Label("Restore Latest Local Project Backup", systemImage: "clock.arrow.circlepath")
+                    }
+                    .disabled(isWorking)
+
+                    Button {
+                        Task { await restoreProjectsFromCloud() }
+                    } label: {
+                        Label("Restore Projects from Cloud", systemImage: "icloud.and.arrow.down")
+                    }
+                    .disabled(isWorking)
+                }
+
+                Section("Restore Generated Outputs") {
+                    Button {
+                        restoreOutputsFromLocalBackup()
+                    } label: {
+                        Label("Restore Outputs from Local Backup", systemImage: "externaldrive.badge.timemachine")
+                    }
+                    .disabled(isWorking)
+
+                    Button {
+                        Task { await restoreOutputsFromCloud() }
+                    } label: {
+                        Label("Restore Outputs from Cloud", systemImage: "icloud.and.arrow.down")
+                    }
+                    .disabled(isWorking)
+                }
+
+                if let statusMessage {
+                    Section("Status") {
+                        Text(statusMessage)
+                            .font(.caption)
+                            .foregroundStyle(CathedralTheme.Colors.accent)
+                    }
+                }
+                if let errorMessage {
+                    Section("Error") {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                    }
+                }
+            }
+            .navigationTitle("Recovery")
+            .navigationBarTitleDisplayMode(.large)
+            .task {
+                await authService.checkSession()
+                authState = authService.authState
+            }
+        }
+    }
+
+    private func signInWithApple() async {
+        statusMessage = nil
+        errorMessage = nil
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            try await authService.signInWithApple()
+            authState = authService.authState
+            statusMessage = "Signed in. You can now restore cloud data."
+        } catch AuthServiceError.cancelled {
+            statusMessage = "Sign in cancelled."
+        } catch {
+            errorMessage = (error as? AuthServiceError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func restoreProjectsFromLocalBackup() {
+        statusMessage = nil
+        errorMessage = nil
+        do {
+            _ = try LocalProjectBackupService.shared.restoreLatestProject(into: modelContext)
+            statusMessage = "A local project backup was restored."
+        } catch {
+            errorMessage = (error as? LocalProjectBackupError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func restoreOutputsFromLocalBackup() {
+        statusMessage = nil
+        errorMessage = nil
+        do {
+            let restoredCount = try LocalGenerationOutputBackupService.shared.restoreLatestOutputs(into: modelContext)
+            statusMessage = restoredCount == 1
+                ? "Restored 1 generated output from local backup."
+                : "Restored \(restoredCount) generated outputs from local backup."
+        } catch {
+            errorMessage = (error as? LocalGenerationOutputBackupError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func restoreProjectsFromCloud() async {
+        statusMessage = nil
+        errorMessage = nil
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            guard await ensureSignedIn() else {
+                errorMessage = "Sign in is required to restore cloud projects."
+                return
+            }
+            let restoredProjects = try await ProjectCloudSyncService.shared.restoreAllProjects(into: modelContext)
+            statusMessage = restoredProjects.count == 1
+                ? "Restored 1 project from cloud."
+                : "Restored \(restoredProjects.count) projects from cloud."
+        } catch {
+            errorMessage = (error as? ProjectCloudSyncError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func restoreOutputsFromCloud() async {
+        statusMessage = nil
+        errorMessage = nil
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            guard await ensureSignedIn() else {
+                errorMessage = "Sign in is required to restore cloud outputs."
+                return
+            }
+            try await outputSyncService.pullOutputs(into: modelContext)
+            statusMessage = "Generated outputs restored from cloud."
+        } catch {
+            errorMessage = (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func ensureSignedIn() async -> Bool {
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        authState = authService.authState
+        return authState.isSignedIn
     }
 }
 
