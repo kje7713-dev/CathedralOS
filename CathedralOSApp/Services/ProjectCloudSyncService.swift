@@ -31,12 +31,32 @@ enum ProjectCloudSyncError: Error, LocalizedError {
     }
 }
 
+// MARK: - CloudSnapshotPresence
+
+/// The result of checking whether the signed-in user has project snapshots in the cloud.
+enum CloudSnapshotPresence {
+    /// At least one cloud snapshot found; count is the total number of rows.
+    case available(count: Int)
+    /// Authenticated but no cloud snapshots exist yet.
+    case none
+    /// The user is not signed in; cloud checks cannot be performed.
+    case signedOut
+    /// An error occurred while checking; see the associated error for details.
+    case failed(Error)
+
+    /// Convenience: true only when `.available`.
+    var hasSnapshots: Bool {
+        if case .available = self { return true }
+        return false
+    }
+}
+
 protocol ProjectCloudSyncServiceProtocol {
     func syncProject(_ project: StoryProject) async throws
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws
     func syncAllProjects(in context: ModelContext) async throws
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws
-    func hasCloudSnapshots() async -> Bool
+    func cloudSnapshotPresence() async -> CloudSnapshotPresence
     func restoreAllProjects(into context: ModelContext) async throws -> [StoryProject]
 }
 
@@ -99,23 +119,28 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         try await send(request)
     }
 
-    func hasCloudSnapshots() async -> Bool {
+    func cloudSnapshotPresence() async -> CloudSnapshotPresence {
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard authService.authState.isSignedIn else {
+            return .signedOut
+        }
         do {
             let (client, _, accessToken) = try await validatedClientAndSession()
             var components = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
             components?.queryItems = [
-                URLQueryItem(name: "select", value: "local_project_id"),
-                URLQueryItem(name: "limit", value: "1")
+                URLQueryItem(name: "select", value: "local_project_id")
             ]
-            guard let url = components?.url else { return false }
+            guard let url = components?.url else { return .failed(ProjectCloudSyncError.notConfigured) }
 
             var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
             request.httpMethod = "GET"
 
             let rows = try await fetch([ProjectSnapshotPresenceRow].self, request: request)
-            return !rows.isEmpty
+            return rows.isEmpty ? .none : .available(count: rows.count)
         } catch {
-            return false
+            return .failed(error)
         }
     }
 
@@ -149,6 +174,10 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             context.insert(project)
             existingIDs.insert(project.id)
             restoredProjects.append(project)
+        }
+
+        if !restoredProjects.isEmpty {
+            try context.save()
         }
 
         return restoredProjects

@@ -154,7 +154,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(storedProjects.first?.id, localProjectID)
     }
 
-    func testHasCloudSnapshotsReturnsTrueWhenCloudRowsExist() async {
+    func testCloudSnapshotPresenceReturnsAvailableWhenCloudRowsExist() async {
         let session = makeSession()
         let authService = MockProjectCloudSyncAuthService(
             authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: nil)),
@@ -177,8 +177,54 @@ final class ProjectCloudSyncTests: XCTestCase {
             return (response, Data(#"[{"local_project_id":"abc"}]"#.utf8))
         }
 
-        let hasSnapshots = await service.hasCloudSnapshots()
-        XCTAssertTrue(hasSnapshots)
+        let presence = await service.cloudSnapshotPresence()
+        guard case .available(let count) = presence else {
+            XCTFail("Expected .available, got \(presence)")
+            return
+        }
+        XCTAssertEqual(count, 1)
+    }
+
+    func testCloudSnapshotPresenceReturnsSignedOutWhenNotAuthenticated() async {
+        let service = ProjectCloudSyncService(
+            authService: MockProjectCloudSyncAuthService(authState: .signedOut),
+            session: makeSession(),
+            configuration: .makeForTesting()
+        )
+        let presence = await service.cloudSnapshotPresence()
+        guard case .signedOut = presence else {
+            XCTFail("Expected .signedOut, got \(presence)")
+            return
+        }
+    }
+
+    func testCloudSnapshotPresenceReturnsNoneWhenNoRows() async {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: nil)),
+            accessToken: "user-jwt-token"
+        )
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data("[]".utf8))
+        }
+
+        let presence = await service.cloudSnapshotPresence()
+        guard case .none = presence else {
+            XCTFail("Expected .none, got \(presence)")
+            return
+        }
     }
 
     func testSyncProjectThrowsWhenSignedOut() async {

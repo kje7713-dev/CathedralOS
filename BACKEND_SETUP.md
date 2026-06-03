@@ -199,3 +199,91 @@ If you want the app to show the Developer Credits section before backend
 confirmation returns, you may add an optional `DeveloperAdminUserIDs` Info.plist
 entry (comma-separated string or string array). Leave it unset for production
 App Store builds.
+
+---
+
+## Cloud-first data lifecycle
+
+As of the `fix/cloud-first-data-recovery` change, CathedralOS enforces a
+single cloud-first data policy for signed-in users.
+
+### Policy summary
+
+| Store | Role |
+|-------|------|
+| **Supabase** (`project_snapshots`, `generation_outputs`) | Durable source of truth for signed-in users |
+| **SwiftData** (local SQLite) | Local cache / editing store |
+| **Local JSON backups** | Emergency fallback only (third priority) |
+
+Data is never silently lost: if the primary SwiftData store fails, the app
+enters **Recovery Mode** using a clean recovery SQLite store and offers
+cloud restore.
+
+### Lifecycle events
+
+#### App launch (normal)
+1. Open primary SwiftData store.
+2. If signed in: pull `project_snapshots` and `generation_outputs`, push dirty/local-only rows, save context.
+3. If store fails: copy SQLite artefacts to a timestamped `SwiftDataRecovery` folder, open a clean recovery store, show Recovery tab.
+
+#### App update
+1. Before sync: back up all local projects and outputs to JSON.
+2. Pull cloud data and push dirty rows.
+3. Log before/after counts.
+
+#### Sign-in
+1. Refresh session.
+2. Pull `project_snapshots` and `generation_outputs`.
+3. Merge into local store (cloud wins if `updated_at` is newer; never resurrect tombstoned rows).
+4. Push local-only rows.
+
+#### Sign-out
+- Local projects, outputs, and JSON backups are **not deleted**.
+- Only auth/session state is cleared.
+
+#### App reinstall
+- After sign-in, the app detects an empty local store and offers **Restore From Cloud**.
+
+### Deletion policy
+
+Each deletion action shows an explicit choice:
+
+| Action | Effect |
+|--------|--------|
+| **Delete Local Only** | Deletes SwiftData row, writes `sync_tombstones` row with `deletion_scope = local_only`. Cloud row is preserved. Row will not be re-imported on next pull. |
+| **Delete Everywhere** | Unpublishes shared output (if applicable), deletes `generation_outputs` / `project_snapshots` cloud row, writes tombstone with `deletion_scope = everywhere`, deletes SwiftData row. |
+| **Cancel** | No changes. |
+
+### Tombstone table
+
+`public.sync_tombstones` prevents deleted rows from being resurrected on
+subsequent cloud pulls. The iOS `SyncTombstoneService` fetches tombstones
+before each reconcile pass and skips any cloud rows whose `cloud_entity_id`
+or `local_entity_id` matches a tombstone.
+
+### Coordinator
+
+`DataDurabilityCoordinator` is the single entry-point for all lifecycle
+events. Views call:
+
+```swift
+DataDurabilityCoordinator.shared.performAppLaunch(context:isFirstLaunchAfterUpdate:recoveryContext:)
+DataDurabilityCoordinator.shared.performSignInSync(context:)
+DataDurabilityCoordinator.shared.performSignOut(context:)
+DataDurabilityCoordinator.shared.performManualSyncAll(context:)
+```
+
+Individual services (`ProjectCloudSyncService`, `SupabaseGenerationOutputSyncService`,
+`LocalProjectBackupService`, `LocalGenerationOutputBackupService`) remain
+responsible for their own domain logic; the coordinator owns call order and
+error aggregation.
+
+### Required Supabase objects
+
+The migration `20260603000000_cloud_first_data_durability.sql` adds:
+
+- Explicit `GRANT` statements for `generation_outputs` and `shared_outputs`.
+- Unique partial index `generation_outputs(user_id, local_generation_id) WHERE local_generation_id IS NOT NULL` for safe upsert deduplication.
+- `public.sync_tombstones` table with RLS (users can only access their own rows).
+
+All existing RLS policies remain enabled.

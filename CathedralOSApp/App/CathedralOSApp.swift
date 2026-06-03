@@ -44,10 +44,6 @@ private struct AppRootView: View {
 
     @State private var hasRunLaunchTasks = false
 
-    private let authService: any AuthService = BackendAuthService.shared
-    private let outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
-    private let logger = Logger(subsystem: "CathedralOS", category: "LaunchRecovery")
-
     var body: some View {
         TabView {
             if let recoveryContext {
@@ -82,44 +78,11 @@ private struct AppRootView: View {
     }
 
     private func performLaunchRecoveryTasks() async {
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-
-        let beforeProjects = (try? modelContext.fetchCount(FetchDescriptor<StoryProject>())) ?? 0
-        let beforeOutputs = (try? modelContext.fetchCount(FetchDescriptor<GenerationOutput>())) ?? 0
-        let beforeProjectBackups = LocalProjectBackupService.shared.backupCount()
-        let beforeOutputBackups = LocalGenerationOutputBackupService.shared.backupCount()
-
-        if firstLaunchAfterUpdate {
-            logger.log(
-                "Launch recovery before update tasks: projects=\(beforeProjects, privacy: .public) outputs=\(beforeOutputs, privacy: .public) projectBackups=\(beforeProjectBackups, privacy: .public) outputBackups=\(beforeOutputBackups, privacy: .public)"
-            )
-            LocalProjectBackupService.shared.backupAllProjects(in: modelContext)
-            LocalGenerationOutputBackupService.shared.backupAllOutputs(in: modelContext)
-        }
-
-        if authService.authState.isSignedIn {
-            do {
-                if firstLaunchAfterUpdate {
-                    try await outputSyncService.syncAll(in: modelContext)
-                } else {
-                    try await outputSyncService.pullOutputs(into: modelContext)
-                }
-            } catch {
-                logger.error("Launch output sync failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
-        if firstLaunchAfterUpdate {
-            let afterProjects = (try? modelContext.fetchCount(FetchDescriptor<StoryProject>())) ?? 0
-            let afterOutputs = (try? modelContext.fetchCount(FetchDescriptor<GenerationOutput>())) ?? 0
-            let afterProjectBackups = LocalProjectBackupService.shared.backupCount()
-            let afterOutputBackups = LocalGenerationOutputBackupService.shared.backupCount()
-            logger.log(
-                "Launch recovery after update tasks: projects=\(afterProjects, privacy: .public) outputs=\(afterOutputs, privacy: .public) projectBackups=\(afterProjectBackups, privacy: .public) outputBackups=\(afterOutputBackups, privacy: .public)"
-            )
-        }
+        await DataDurabilityCoordinator.shared.performAppLaunch(
+            context: modelContext,
+            isFirstLaunchAfterUpdate: firstLaunchAfterUpdate,
+            recoveryContext: recoveryContext
+        )
     }
 }
 
