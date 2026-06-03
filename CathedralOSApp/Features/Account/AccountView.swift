@@ -428,21 +428,35 @@ struct AccountView: View {
     // MARK: - Sync section
 
     private var syncSection: some View {
-        Section("Outputs") {
+        Section("Sync") {
             VStack(alignment: .leading, spacing: 8) {
                 syncStatusRow
                 Button {
-                    Task { await attemptSync() }
+                    Task { await attemptSyncEverything() }
                 } label: {
                     Label(
-                        isSyncing ? "Syncing…" : "Sync Outputs",
+                        isSyncing ? "Syncing…" : "Sync Everything",
                         systemImage: isSyncing ? "arrow.trianglehead.2.clockwise" : "arrow.triangle.2.circlepath"
                     )
                 }
                 .disabled(isSyncing || !authState.isSignedIn)
 
+                Button {
+                    Task { await attemptSync() }
+                } label: {
+                    Label("Sync Outputs", systemImage: "square.and.arrow.up")
+                }
+                .disabled(isSyncing || !authState.isSignedIn)
+
+                Button {
+                    Task { await attemptRestoreFromCloud() }
+                } label: {
+                    Label("Restore Everything From Cloud", systemImage: "icloud.and.arrow.down")
+                }
+                .disabled(isSyncing || !authState.isSignedIn)
+
                 if !authState.isSignedIn {
-                    Text("Sign in to sync outputs between devices.")
+                    Text("Sign in to sync data between devices.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -659,6 +673,45 @@ struct AccountView: View {
         } catch {
             syncError = (error as? GenerationOutputSyncError)?.errorDescription
                 ?? error.localizedDescription
+        }
+    }
+
+    private func attemptSyncEverything() async {
+        guard authState.isSignedIn else {
+            syncError = GenerationOutputSyncError.notSignedIn.errorDescription
+            return
+        }
+        isSyncing = true
+        syncError = nil
+        lastSyncMessage = nil
+        defer { isSyncing = false }
+        await DataDurabilityCoordinator.shared.performManualSyncAll(context: modelContext)
+        if let err = DataDurabilityCoordinator.shared.lastSyncError {
+            syncError = err
+        } else {
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            lastSyncMessage = "All data synced at \(formatter.string(from: Date()))"
+        }
+    }
+
+    private func attemptRestoreFromCloud() async {
+        guard authState.isSignedIn else {
+            syncError = GenerationOutputSyncError.notSignedIn.errorDescription
+            return
+        }
+        isSyncing = true
+        syncError = nil
+        lastSyncMessage = nil
+        defer { isSyncing = false }
+        do {
+            try await ProjectCloudSyncService.shared.restoreAllProjects(into: modelContext)
+            try await syncService.pullOutputs(into: modelContext)
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            lastSyncMessage = "Restored from cloud at \(formatter.string(from: Date()))"
+        } catch {
+            syncError = error.localizedDescription
         }
     }
 

@@ -145,12 +145,16 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     private let authService: AuthService
     private let session: URLSession
 
+    private let tombstoneService: any SyncTombstoneServiceProtocol
+
     init(
         authService: AuthService = BackendAuthService.shared,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        tombstoneService: any SyncTombstoneServiceProtocol = SupabaseSyncTombstoneService.shared
     ) {
         self.authService = authService
         self.session = session
+        self.tombstoneService = tombstoneService
     }
 
     // MARK: - Pull
@@ -163,7 +167,8 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             request.httpMethod = "GET"
 
             let records = try await fetch([GenerationOutputCloudRecord].self, request: request)
-            reconcile(records, into: context)
+            let tombstones = (try? await tombstoneService.fetchGenerationOutputTombstones()) ?? SyncTombstoneSet(records: [])
+            reconcile(records, tombstones: tombstones, into: context)
             try persistContext(context, stage: "cloud restore")
             OutputSyncActivityStore.shared.recordSuccess("Restored \(records.count) cloud outputs.")
         } catch {
@@ -325,8 +330,13 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     /// - Creates a new local `GenerationOutput` for any cloud record with no local match.
     /// - Updates an existing local output when the cloud `updatedAt` is newer.
     /// - Preserves local-only fields (`isFavorite`, `notes`) during updates.
-    func reconcile(_ records: [GenerationOutputCloudRecord], into context: ModelContext) {
+    /// - Skips rows that are covered by a tombstone (intentionally deleted by the user).
+    func reconcile(_ records: [GenerationOutputCloudRecord], tombstones: SyncTombstoneSet = SyncTombstoneSet(records: []), into context: ModelContext) {
         for record in records {
+            // Skip if the user intentionally deleted this row.
+            if tombstones.isTombstoned(cloudID: record.id) { continue }
+            if let localID = record.localGenerationId, tombstones.isTombstoned(localID: localID) { continue }
+
             // First try to match by cloudGenerationOutputID, then by localGenerationId.
             let existing = findLocal(cloudID: record.id, localID: record.localGenerationId, in: context)
 
@@ -501,6 +511,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     private let authService: any AuthService
     private let sharingService: any PublicSharingService
     private let backupService: LocalGenerationOutputBackupService
+    private let tombstoneService: any SyncTombstoneServiceProtocol
     private let session: URLSession
     private let clientFactory: () throws -> SupabaseBackendClient
 
@@ -510,18 +521,23 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             syncService: SupabaseGenerationOutputSyncService.shared
         ),
         backupService: LocalGenerationOutputBackupService = .shared,
+        tombstoneService: any SyncTombstoneServiceProtocol = SupabaseSyncTombstoneService.shared,
         session: URLSession = .shared,
         clientFactory: @escaping () throws -> SupabaseBackendClient = { try SupabaseBackendClient() }
     ) {
         self.authService = authService
         self.sharingService = sharingService
         self.backupService = backupService
+        self.tombstoneService = tombstoneService
         self.session = session
         self.clientFactory = clientFactory
     }
 
     func deleteLocal(output: GenerationOutput, context: ModelContext) async throws {
         let outputID = output.id
+        let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userID = authService.authState.currentUser?.id
+
         context.delete(output)
         do {
             try context.save()
@@ -530,6 +546,18 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             throw GenerationOutputDeletionError.persistenceError(stage: "local delete", error: error)
         }
         _ = backupService.deleteBackups(outputID: outputID)
+
+        // Write tombstone so cloud pull does not resurrect this row.
+        if let userID {
+            await tombstoneService.record(SyncTombstone(
+                userID: userID,
+                entityType: .generationOutput,
+                localEntityID: outputID.uuidString,
+                cloudEntityID: UUID(uuidString: cloudID)?.uuidString,
+                deletionScope: .localOnly,
+                reason: nil
+            ))
+        }
     }
 
     func deleteCloud(output: GenerationOutput) async throws {
@@ -589,8 +617,31 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     }
 
     func deleteEverywhere(output: GenerationOutput, context: ModelContext) async throws {
+        let outputID = output.id
+        let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userID = authService.authState.currentUser?.id
+
         try await deleteCloud(output: output)
-        try await deleteLocal(output: output, context: context)
+        context.delete(output)
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw GenerationOutputDeletionError.persistenceError(stage: "local delete after cloud delete", error: error)
+        }
+        _ = backupService.deleteBackups(outputID: outputID)
+
+        // Write tombstone so subsequent pulls do not restore this row.
+        if let userID {
+            await tombstoneService.record(SyncTombstone(
+                userID: userID,
+                entityType: .generationOutput,
+                localEntityID: outputID.uuidString,
+                cloudEntityID: UUID(uuidString: cloudID)?.uuidString,
+                deletionScope: .everywhere,
+                reason: nil
+            ))
+        }
     }
 }
 

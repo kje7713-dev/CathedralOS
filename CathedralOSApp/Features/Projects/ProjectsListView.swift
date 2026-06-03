@@ -333,7 +333,8 @@ struct ProjectsListView: View {
     }
 
     private func refreshCloudBackupAvailability() async {
-        hasCloudSnapshots = await ProjectCloudSyncService.shared.hasCloudSnapshots()
+        let presence = await ProjectCloudSyncService.shared.cloudSnapshotPresence()
+        hasCloudSnapshots = presence.hasSnapshots
     }
 
     private func refreshRecoveryAvailability() async {

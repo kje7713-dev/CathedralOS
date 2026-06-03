@@ -345,3 +345,64 @@ Edge Functions) before writing user-supplied JSON to backend tables.
 | Usage quota enforcement | Future PR |
 | iOS backend sync service | Future PR (after Edge Function layer) |
 | Public anonymous browse | Add `to anon` policy on `shared_outputs` when needed |
+
+---
+
+## sync_tombstones
+
+Added in migration `20260603000000_cloud_first_data_durability.sql`.
+
+Tombstone rows prevent cloud pull from resurrecting entities that a user has
+explicitly deleted. The iOS app writes a tombstone on deletion and fetches all
+tombstones before each reconcile pass.
+
+```sql
+create table public.sync_tombstones (
+    id               uuid primary key default gen_random_uuid(),
+    user_id          uuid not null references auth.users(id) on delete cascade,
+    entity_type      text not null check (entity_type in ('project', 'generation_output', 'shared_output')),
+    local_entity_id  text,
+    cloud_entity_id  text,
+    deleted_at       timestamptz not null default now(),
+    deletion_scope   text not null check (deletion_scope in ('local_only', 'cloud', 'everywhere')),
+    reason           text
+);
+```
+
+### Indexes
+
+```sql
+create index on public.sync_tombstones (user_id, entity_type);
+create index on public.sync_tombstones (user_id, local_entity_id) where local_entity_id is not null;
+create index on public.sync_tombstones (user_id, cloud_entity_id) where cloud_entity_id is not null;
+```
+
+### RLS
+
+- Enabled.
+- Authenticated users can `SELECT`, `INSERT`, `UPDATE`, `DELETE` only rows where `user_id = auth.uid()`.
+- Anon users have no access.
+
+### deletion_scope values
+
+| Value | Meaning |
+|-------|---------|
+| `local_only` | Row was deleted locally. Cloud row is preserved. Pull will not re-import the row. |
+| `cloud` | Cloud row was deleted. Local row may still exist (rare; normally followed by a local delete). |
+| `everywhere` | Both local and cloud rows deleted. Row will never be re-imported. |
+
+---
+
+## generation_outputs — unique partial index
+
+Added in the same migration:
+
+```sql
+create unique index if not exists generation_outputs_user_local_id_key
+    on public.generation_outputs (user_id, local_generation_id)
+    where local_generation_id is not null;
+```
+
+This allows the iOS app to safely upsert (insert-or-update) generation outputs
+using `local_generation_id` as the deduplication key without creating duplicate
+rows for the same local generation.

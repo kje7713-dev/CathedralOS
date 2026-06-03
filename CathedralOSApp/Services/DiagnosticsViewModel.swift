@@ -17,7 +17,7 @@ struct GenerationPreflightItem: Identifiable {
 
 /// A point-in-time snapshot of all non-secret diagnostic state.
 /// Safe for display, logging, and copying to clipboard.
-/// Never contains API keys, tokens, or service-role credentials.
+/// Never contains API keys, tokens, or private keys.
 struct DiagnosticsSnapshot {
 
     // MARK: App info
@@ -29,6 +29,7 @@ struct DiagnosticsSnapshot {
     let backendConfigured: Bool
     let supabaseURLPresent: Bool
     let supabaseAnonKeyPresent: Bool
+    let publicSharingBaseURLPresent: Bool
 
     // MARK: Auth
     let authSignedIn: Bool
@@ -62,12 +63,21 @@ struct DiagnosticsSnapshot {
     // MARK: Generation preflight
     let preflightItems: [GenerationPreflightItem]
 
+    // MARK: Project recovery
+    let localProjectCount: Int
+    let localProjectBackupCount: Int
+    let cloudProjectSnapshotCount: Int?
+
     // MARK: Output recovery
     let localGeneratedOutputCount: Int
     let localGeneratedOutputBackupCount: Int
     let cloudGeneratedOutputCount: Int?
     let lastOutputSyncStatus: String
     let lastOutputSyncMessage: String?
+
+    // MARK: Store diagnostics
+    let storeMode: String
+    let storePath: String?
 
     // MARK: Timestamp
     let capturedAt: Date
@@ -92,6 +102,7 @@ struct DiagnosticsSnapshot {
             "Configured: \(backendConfigured ? "Yes" : "No")",
             "URL present: \(supabaseURLPresent ? "Yes" : "No")",
             "Anon key present: \(supabaseAnonKeyPresent ? "Yes" : "No")",
+            "Public sharing URL present: \(publicSharingBaseURLPresent ? "Yes" : "No")",
             "",
             "--- Auth ---",
             "Signed in: \(authSignedIn ? "Yes" : "No")",
@@ -149,14 +160,27 @@ struct DiagnosticsSnapshot {
         }
         lines += [
             "",
+            "--- Project Recovery ---",
+            "Local projects: \(localProjectCount)",
+            "Local project backups: \(localProjectBackupCount)",
+            "Cloud project snapshots: \(cloudProjectSnapshotCount.map(String.init) ?? "Unavailable")",
+            "",
             "--- Output Recovery ---",
             "Local generated outputs: \(localGeneratedOutputCount)",
             "Local generated-output backups: \(localGeneratedOutputBackupCount)",
             "Cloud generated outputs: \(cloudGeneratedOutputCount.map(String.init) ?? "Unavailable")",
-            "Last output sync status: \(lastOutputSyncStatus)"
+            "Last output sync status: \(lastOutputSyncStatus)",
         ]
         if let lastOutputSyncMessage {
             lines.append("Last output sync detail: \(lastOutputSyncMessage)")
+        }
+        lines += [
+            "",
+            "--- Store ---",
+            "Mode: \(storeMode)",
+        ]
+        if let path = storePath {
+            lines.append("Path: \(path)")
         }
         lines.append("=== End Diagnostics ===")
         return lines.joined(separator: "\n")
@@ -180,9 +204,14 @@ final class DiagnosticsViewModel: ObservableObject {
     private let healthService: any BackendHealthServiceProtocol
     private let syncService: any GenerationOutputSyncServiceProtocol
     private var lastFetchedCreditState: BackendCreditState?
+    private var localProjectCount = 0
+    private var localProjectBackupCount = 0
+    private var cloudProjectSnapshotCount: Int?
     private var localGeneratedOutputCount = 0
     private var localGeneratedOutputBackupCount = 0
     private var cloudGeneratedOutputCount: Int?
+    private var storeMode: String = "normal"
+    private var storePath: String?
 
     // MARK: Published state
 
@@ -229,9 +258,14 @@ final class DiagnosticsViewModel: ObservableObject {
     /// Call on appear and after any relevant state change.
     func refresh(modelContext: ModelContext? = nil) {
         if let modelContext {
+            localProjectCount = (try? modelContext.fetchCount(FetchDescriptor<StoryProject>())) ?? 0
             localGeneratedOutputCount = (try? modelContext.fetchCount(FetchDescriptor<GenerationOutput>())) ?? 0
         }
+        localProjectBackupCount = LocalProjectBackupService.shared.backupCount()
         localGeneratedOutputBackupCount = LocalGenerationOutputBackupService.shared.backupCount()
+        let coordinator = DataDurabilityCoordinator.shared
+        storeMode = coordinator.storeMode == .recovery ? "recovery" : "normal"
+        storePath = coordinator.storePath
         snapshot = buildSnapshot()
     }
 
@@ -434,6 +468,7 @@ final class DiagnosticsViewModel: ObservableObject {
             backendConfigured: configured,
             supabaseURLPresent: urlPresent,
             supabaseAnonKeyPresent: keyPresent,
+            publicSharingBaseURLPresent: PublicSharingServiceConfiguration.baseURL != nil,
             authSignedIn: signedIn,
             truncatedUserID: truncatedID,
             storeKitProductsLoaded: storeKitLoaded,
@@ -453,11 +488,16 @@ final class DiagnosticsViewModel: ObservableObject {
             lastSyncError: lastSyncError,
             lastPublishError: lastPublishError,
             preflightItems: preflightItems,
+            localProjectCount: localProjectCount,
+            localProjectBackupCount: localProjectBackupCount,
+            cloudProjectSnapshotCount: cloudProjectSnapshotCount,
             localGeneratedOutputCount: localGeneratedOutputCount,
             localGeneratedOutputBackupCount: localGeneratedOutputBackupCount,
             cloudGeneratedOutputCount: cloudGeneratedOutputCount,
             lastOutputSyncStatus: outputSyncActivity.state.displayName,
             lastOutputSyncMessage: outputSyncActivity.message,
+            storeMode: storeMode,
+            storePath: storePath,
             capturedAt: Date()
         )
     }
