@@ -5,6 +5,82 @@ import UIKit
 
 let sharedOutputCoverAspectRatio: CGFloat = 16.0 / 9.0
 
+struct SharedOutputCoverImage: View {
+    let url: URL
+    let metadataWidth: Int?
+    let metadataHeight: Int?
+    let showDebugMetadata: Bool
+
+    init(url: URL,
+         metadataWidth: Int? = nil,
+         metadataHeight: Int? = nil,
+         showDebugMetadata: Bool = Self.shouldShowDebugMetadata) {
+        self.url = url
+        self.metadataWidth = metadataWidth
+        self.metadataHeight = metadataHeight
+        self.showDebugMetadata = showDebugMetadata
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                let height = width / sharedOutputCoverAspectRatio
+
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .empty:
+                        ZStack {
+                            Rectangle()
+                                .fill(CathedralTheme.Colors.surface)
+                            ProgressView()
+                        }
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure:
+                        fallbackPlaceholder
+                    @unknown default:
+                        fallbackPlaceholder
+                    }
+                }
+                .frame(width: width, height: height)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+            .frame(maxWidth: .infinity)
+            .aspectRatio(sharedOutputCoverAspectRatio, contentMode: .fit)
+
+            if showDebugMetadata, let metadataWidth, let metadataHeight, metadataHeight > 0 {
+                let aspect = Double(metadataWidth) / Double(metadataHeight)
+                Text("Cover \(metadataWidth)×\(metadataHeight) (\(aspect.formatted(.number.precision(.fractionLength(3)))):1)")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+            }
+        }
+    }
+
+    private var fallbackPlaceholder: some View {
+        ZStack {
+            Rectangle()
+                .fill(CathedralTheme.Colors.surface)
+            Image(systemName: "photo")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+        }
+    }
+
+    private static var shouldShowDebugMetadata: Bool {
+#if DEBUG
+        true
+#else
+        guard let receiptURL = Bundle.main.appStoreReceiptURL else { return false }
+        return receiptURL.lastPathComponent == "sandboxReceipt"
+#endif
+    }
+}
+
 // MARK: - GenerationOutputDetailView
 
 struct GenerationOutputDetailView: View {
@@ -557,43 +633,28 @@ struct GenerationOutputDetailView: View {
                 .font(CathedralTheme.Typography.caption())
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
 
-            Group {
-                if let pendingCoverImagePreview {
-                    Image(uiImage: pendingCoverImagePreview)
-                        .resizable()
-                        .scaledToFill()
-                } else if !removeCoverImageOnPublish,
-                          let url = URL(string: output.coverImageURL),
-                          !output.coverImageURL.isEmpty {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .empty:
-                            ProgressView()
-                                .frame(maxWidth: .infinity, minHeight: 120)
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        case .failure:
-                            Text("Cover image unavailable.")
-                                .font(CathedralTheme.Typography.caption())
-                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-                                .frame(maxWidth: .infinity, minHeight: 120)
-                        @unknown default:
-                            EmptyView()
-                        }
-                    }
-                } else {
-                    Text("No cover image selected.")
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+            if let pendingCoverImagePreview {
+                Image(uiImage: pendingCoverImagePreview)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(sharedOutputCoverAspectRatio, contentMode: .fit)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            } else if !removeCoverImageOnPublish,
+                      let url = URL(string: output.coverImageURL),
+                      !output.coverImageURL.isEmpty {
+                SharedOutputCoverImage(
+                    url: url,
+                    metadataWidth: output.coverImageWidth,
+                    metadataHeight: output.coverImageHeight
+                )
+            } else {
+                Text("No cover image selected.")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(sharedOutputCoverAspectRatio, contentMode: .fit)
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
 
             HStack(spacing: CathedralTheme.Spacing.sm) {
                 PhotosPicker(

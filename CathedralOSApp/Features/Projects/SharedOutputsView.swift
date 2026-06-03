@@ -166,25 +166,11 @@ private struct SharedOutputRowView: View {
                 if let coverURL = item.coverImageURL,
                    let url = URL(string: coverURL),
                    !coverURL.isEmpty {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .empty:
-                            ProgressView()
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        case .failure:
-                            EmptyView()
-                        @unknown default:
-                            EmptyView()
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(sharedOutputCoverAspectRatio, contentMode: .fit)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+                    SharedOutputCoverImage(
+                        url: url,
+                        metadataWidth: item.coverImageWidth,
+                        metadataHeight: item.coverImageHeight
+                    )
                 }
 
                 HStack(alignment: .top) {
