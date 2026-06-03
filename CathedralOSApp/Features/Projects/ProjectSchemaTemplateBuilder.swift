@@ -1147,7 +1147,7 @@ final class LocalGenerationOutputBackupService {
         let matchingBackups = sortedBackupURLs().filter { metadata in
             let filename = metadata.url.lastPathComponent
             return filename.hasPrefix("generation-output-")
-                && filename.pathExtension.lowercased() == "json"
+                && metadata.url.pathExtension.lowercased() == "json"
                 && filename.contains(marker)
         }
         for backup in matchingBackups {
