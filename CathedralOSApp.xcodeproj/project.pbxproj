@@ -118,6 +118,7 @@
 		00000000000000000000015C /* SharedOutputRemixMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000015B /* SharedOutputRemixMapper.swift */; };
 000000000000000000000160 /* GenerationOutputSyncDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000015F /* GenerationOutputSyncDTO.swift */; };
 000000000000000000000162 /* GenerationOutputSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000161 /* GenerationOutputSyncService.swift */; };
+0000000000000000000001A9 /* SyncTombstoneService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001A8 /* SyncTombstoneService.swift */; };
 000000000000000000000164 /* RemixEventService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000163 /* RemixEventService.swift */; };
 000000000000000000000166 /* AudienceControlsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000165 /* AudienceControlsTests.swift */; };
 000000000000000000000168 /* GenerationOutputSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000167 /* GenerationOutputSyncTests.swift */; };
@@ -276,6 +277,7 @@
 		00000000000000000000015B /* SharedOutputRemixMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedOutputRemixMapper.swift; sourceTree = "<group>"; };
 000000000000000000000015F /* GenerationOutputSyncDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputSyncDTO.swift; sourceTree = "<group>"; };
 000000000000000000000161 /* GenerationOutputSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputSyncService.swift; sourceTree = "<group>"; };
+0000000000000000000001A8 /* SyncTombstoneService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTombstoneService.swift; sourceTree = "<group>"; };
 000000000000000000000163 /* RemixEventService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemixEventService.swift; sourceTree = "<group>"; };
 000000000000000000000165 /* AudienceControlsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudienceControlsTests.swift; sourceTree = "<group>"; };
 000000000000000000000167 /* GenerationOutputSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputSyncTests.swift; sourceTree = "<group>"; };
@@ -548,6 +550,7 @@
 				00000000000000000000015B /* SharedOutputRemixMapper.swift */,
 				000000000000000000000015F /* GenerationOutputSyncDTO.swift */,
 				000000000000000000000161 /* GenerationOutputSyncService.swift */,
+				0000000000000000000001A8 /* SyncTombstoneService.swift */,
 				000000000000000000000163 /* RemixEventService.swift */,
 				00000000000000000000016F /* HiddenSharedOutputsService.swift */,
 				000000000000000000000171 /* SharedOutputReportDTO.swift */,
@@ -825,6 +828,7 @@
 				00000000000000000000015C /* SharedOutputRemixMapper.swift in Sources */,
 				000000000000000000000160 /* GenerationOutputSyncDTO.swift in Sources */,
 				000000000000000000000162 /* GenerationOutputSyncService.swift in Sources */,
+				0000000000000000000001A9 /* SyncTombstoneService.swift in Sources */,
 				000000000000000000000164 /* RemixEventService.swift in Sources */,
 				000000000000000000000170 /* HiddenSharedOutputsService.swift in Sources */,
 				000000000000000000000172 /* SharedOutputReportDTO.swift in Sources */,
