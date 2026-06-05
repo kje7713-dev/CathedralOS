@@ -64,7 +64,7 @@ struct SyncTombstoneSet {
             if let lid = record.localEntityID?.trimmingCharacters(in: .whitespacesAndNewlines), !lid.isEmpty {
                 localIDs.insert(lid)
             }
-            if let cid = record.cloudEntityID?.uuidString ?? record.cloudEntityID {
+            if let cid = record.cloudEntityID?.trimmingCharacters(in: .whitespacesAndNewlines), !cid.isEmpty {
                 cloudIDs.insert(cid)
             }
         }
