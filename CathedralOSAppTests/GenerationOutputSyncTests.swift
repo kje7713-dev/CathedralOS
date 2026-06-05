@@ -12,6 +12,9 @@ import SwiftData
 private final class MockSyncAuthService: AuthService {
     var authState: AuthState
     var currentAccessToken: String?
+    var refreshedAccessToken: String?
+    var shouldFailRefresh = false
+    private(set) var refreshSessionCallCount = 0
     init(authState: AuthState = .signedOut, accessToken: String? = nil) {
         self.authState = authState
         self.currentAccessToken = accessToken
@@ -19,6 +22,15 @@ private final class MockSyncAuthService: AuthService {
     func checkSession() async {}
     func signIn() async throws {}
     func signOut() async throws { authState = .signedOut }
+    func refreshSession() async throws {
+        refreshSessionCallCount += 1
+        if shouldFailRefresh {
+            throw AuthServiceError.sessionExpired
+        }
+        if let refreshedAccessToken {
+            currentAccessToken = refreshedAccessToken
+        }
+    }
 }
 
 private final class GenerationOutputSyncURLProtocol: URLProtocol {
@@ -702,10 +714,88 @@ final class SupabaseGenerationOutputSyncServiceRequestTests: XCTestCase {
         try await service.pushOutput(output)
     }
 
+    func testPullOutputsRetriesAfterExpiredJWTWithRefreshedAuthorizationHeader() async throws {
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let authService = MockSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: "user@example.com")),
+            accessToken: "expired-token"
+        )
+        authService.refreshedAccessToken = "fresh-token"
+        let service = SupabaseGenerationOutputSyncService(
+            authService: authService,
+            session: makeSession()
+        )
+
+        var requestCount = 0
+        GenerationOutputSyncURLProtocol.requestHandler = { request in
+            requestCount += 1
+            let authHeader = request.value(forHTTPHeaderField: "Authorization")
+            if requestCount == 1 {
+                XCTAssertEqual(authHeader, ["Bearer", "expired-token"].joined(separator: " "))
+                let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 401, httpVersion: nil, headerFields: nil)!
+                return (response, Data(#"{"code":"PGRST303","message":"JWT expired"}"#.utf8))
+            }
+            XCTAssertEqual(authHeader, ["Bearer", "fresh-token"].joined(separator: " "))
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data("[]".utf8))
+        }
+
+        let context = try makeEmptyContext()
+        try await service.pullOutputs(into: context)
+        XCTAssertEqual(authService.refreshSessionCallCount, 1)
+        XCTAssertEqual(requestCount, 2)
+    }
+
+    func testPullOutputsRefreshFailureDoesNotChangeLocalData() async throws {
+        let authService = MockSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "user@example.com")),
+            accessToken: "expired-token"
+        )
+        authService.shouldFailRefresh = true
+        let service = SupabaseGenerationOutputSyncService(
+            authService: authService,
+            session: makeSession()
+        )
+
+        GenerationOutputSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"code":"PGRST303","message":"JWT expired"}"#.utf8))
+        }
+
+        let context = try makeEmptyContext()
+        let output = GenerationOutput(title: "Local")
+        output.outputText = "Keep me"
+        context.insert(output)
+        try context.save()
+
+        do {
+            try await service.pullOutputs(into: context)
+            XCTFail("Expected sessionExpired")
+        } catch let error as GenerationOutputSyncError {
+            guard case .sessionExpired = error else {
+                XCTFail("Expected sessionExpired, got \(error)")
+                return
+            }
+        }
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertEqual(outputs.first?.outputText, "Keep me")
+    }
+
     private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GenerationOutputSyncURLProtocol.self]
         return URLSession(configuration: configuration)
+    }
+
+    private func makeEmptyContext() throws -> ModelContext {
+        let schema = Schema([GenerationOutput.self, StoryProject.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        return ModelContext(container)
     }
 }
 

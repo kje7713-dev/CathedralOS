@@ -13,6 +13,7 @@ enum PublicSharingServiceError: Error, LocalizedError {
     case missingSharedOutputID
     /// The user must be signed in to publish, unpublish, or report.
     case notSignedIn
+    case sessionExpired
     /// The output text is empty; there is nothing to publish.
     case emptyOutputText
     /// The report reason is empty; a reason must be chosen before submitting.
@@ -45,6 +46,8 @@ enum PublicSharingServiceError: Error, LocalizedError {
             return "Cannot unpublish: this output has not been published to the backend yet."
         case .notSignedIn:
             return "You must be signed in to publish, unpublish, or report content."
+        case .sessionExpired:
+            return "Session expired. Please sign out and sign back in."
         case .emptyOutputText:
             return "Cannot publish an output with no text."
         case .missingReportReason:
@@ -96,7 +99,7 @@ protocol PublicSharingService {
 /// API keys are **never** sent from the client — secrets are held server-side.
 final class BackendPublicSharingService: PublicSharingService {
 
-    private let authService: AuthService
+    private let sessionProvider: SupabaseSessionProvider
     /// Optional sync service used to upload a local-only output before publishing.
     /// When provided and the output has no `cloudGenerationOutputID`, `publish` will
     /// attempt a push sync first.  A sync failure is fatal: `publish` throws
@@ -111,10 +114,11 @@ final class BackendPublicSharingService: PublicSharingService {
 
     init(
         authService: AuthService = BackendAuthService.shared,
+        sessionProvider: SupabaseSessionProvider? = nil,
         syncService: GenerationOutputSyncServiceProtocol? = nil,
         session: URLSession = .shared
     ) {
-        self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.syncService = syncService
         self.session = session
     }
@@ -123,7 +127,8 @@ final class BackendPublicSharingService: PublicSharingService {
 
     func publish(output: GenerationOutput) async throws -> PublishResponse {
         // 1. Require a signed-in session before anything else.
-        try await requireSignedIn()
+        _ = try await requireSignedIn()
+        let accessToken = try await resolvedAccessToken()
 
         // 2. Output must have text to publish.
         guard !output.outputText.isEmpty else {
@@ -169,9 +174,9 @@ final class BackendPublicSharingService: PublicSharingService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
-        decorateRequestHeaders(&request)
+        decorateRequestHeaders(&request, accessToken: accessToken)
 
-        let (data, urlResponse) = try await performRequest(request)
+        let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: true)
         try validateResponse(urlResponse, data: data)
 
         let decoder = JSONDecoder()
@@ -192,17 +197,14 @@ final class BackendPublicSharingService: PublicSharingService {
         height: Int,
         contentType: String = "image/jpeg"
     ) async throws -> OutputCoverImageUploadMetadata {
-        try await requireSignedIn()
+        let user = try await requireSignedIn()
+        let token = try await resolvedAccessToken()
         guard let projectURL = SupabaseConfiguration.projectURL,
               let anonKey = SupabaseConfiguration.anonKey else {
             throw PublicSharingServiceError.backendNotConfigured
         }
-        guard let token = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !token.isEmpty,
-              let userID = authService.currentUserID?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !userID.isEmpty else {
-            throw PublicSharingServiceError.notSignedIn
-        }
+        let userID = user.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !userID.isEmpty else { throw PublicSharingServiceError.notSignedIn }
         guard UUID(uuidString: sharedOutputID) != nil else {
             throw PublicSharingServiceError.invalidSharedOutputID
         }
@@ -229,7 +231,7 @@ final class BackendPublicSharingService: PublicSharingService {
         request.setValue("false", forHTTPHeaderField: "x-upsert")
         request.httpBody = imageData
 
-        let (data, urlResponse) = try await performRequest(request)
+        let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: true)
         try validateResponse(urlResponse, data: data)
 
         var publicURL = projectURL
@@ -256,7 +258,8 @@ final class BackendPublicSharingService: PublicSharingService {
 
     func unpublish(sharedOutputID: String) async throws {
         // Require a signed-in session.
-        try await requireSignedIn()
+        _ = try await requireSignedIn()
+        let accessToken = try await resolvedAccessToken()
 
         guard let url = PublicSharingServiceConfiguration.unpublishURL(sharedOutputID: sharedOutputID) else {
             throw PublicSharingServiceError.endpointNotConfigured
@@ -264,9 +267,9 @@ final class BackendPublicSharingService: PublicSharingService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        decorateRequestHeaders(&request)
+        decorateRequestHeaders(&request, accessToken: accessToken)
 
-        let (data, urlResponse) = try await performRequest(request)
+        let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: true)
         try validateResponse(urlResponse, data: data)
     }
 
@@ -281,7 +284,7 @@ final class BackendPublicSharingService: PublicSharingService {
         request.httpMethod = "GET"
         decorateRequestHeaders(&request)
 
-        let (data, urlResponse) = try await performRequest(request)
+        let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: false)
         try validateResponse(urlResponse, data: data)
 
         let decoder = JSONDecoder()
@@ -305,7 +308,7 @@ final class BackendPublicSharingService: PublicSharingService {
         request.httpMethod = "GET"
         decorateRequestHeaders(&request)
 
-        let (data, urlResponse) = try await performRequest(request)
+        let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: false)
         try validateResponse(urlResponse, data: data)
 
         let decoder = JSONDecoder()
@@ -321,7 +324,8 @@ final class BackendPublicSharingService: PublicSharingService {
 
     func reportSharedOutput(sharedOutputID: String, reason: ReportReason, details: String) async throws {
         // Require a signed-in session.
-        try await requireSignedIn()
+        _ = try await requireSignedIn()
+        let accessToken = try await resolvedAccessToken()
 
         guard let url = PublicSharingServiceConfiguration.reportURL(sharedOutputID: sharedOutputID) else {
             throw PublicSharingServiceError.endpointNotConfigured
@@ -348,42 +352,71 @@ final class BackendPublicSharingService: PublicSharingService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
-        decorateRequestHeaders(&request)
+        decorateRequestHeaders(&request, accessToken: accessToken)
 
-        let (data, urlResponse) = try await performRequest(request)
+        let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: true)
         try validateResponse(urlResponse, data: data)
     }
 
     // MARK: - Private helpers
 
-    /// Checks auth state, resolving `.unknown` via `checkSession()` first.
-    /// Throws `.notSignedIn` when no active session is found.
-    private func requireSignedIn() async throws {
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        guard authService.authState.isSignedIn else {
-            throw PublicSharingServiceError.notSignedIn
+    /// Checks auth state and returns the signed-in user.
+    private func requireSignedIn() async throws -> AuthUser {
+        do {
+            return try await sessionProvider.ensureSignedInUser()
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw PublicSharingServiceError.notSignedIn
+            case .sessionExpired:
+                throw PublicSharingServiceError.sessionExpired
+            }
         }
     }
 
-    private func performRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+    private func resolvedAccessToken() async throws -> String {
         do {
+            return try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw PublicSharingServiceError.notSignedIn
+            case .sessionExpired:
+                throw PublicSharingServiceError.sessionExpired
+            }
+        }
+    }
+
+    private func performRequest(_ request: URLRequest, retryOnExpiredJWT: Bool) async throws -> (Data, URLResponse) {
+        do {
+            if retryOnExpiredJWT {
+                return try await sessionProvider.retryOnceAfterExpiredJWT(
+                    request: request,
+                    session: session
+                )
+            }
             return try await session.data(for: request)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw PublicSharingServiceError.notSignedIn
+            case .sessionExpired:
+                throw PublicSharingServiceError.sessionExpired
+            }
         } catch {
             throw PublicSharingServiceError.networkError(error)
         }
     }
 
-    private func decorateRequestHeaders(_ request: inout URLRequest) {
+    private func decorateRequestHeaders(_ request: inout URLRequest, accessToken: String? = nil) {
         if let anonKey = SupabaseConfiguration.anonKey, !anonKey.isEmpty {
             request.setValue(anonKey, forHTTPHeaderField: "apikey")
         }
-        if let token = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let token = accessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue(["Bearer", token].joined(separator: " "), forHTTPHeaderField: "Authorization")
         } else if let anonKey = SupabaseConfiguration.anonKey, !anonKey.isEmpty {
-            request.setValue("Bearer \(anonKey)", forHTTPHeaderField: "Authorization")
+            request.setValue(["Bearer", anonKey].joined(separator: " "), forHTTPHeaderField: "Authorization")
         }
     }
 

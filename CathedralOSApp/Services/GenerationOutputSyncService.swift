@@ -23,6 +23,7 @@ import SwiftData
 enum GenerationOutputSyncError: Error, LocalizedError {
     case notConfigured
     case notSignedIn
+    case sessionExpired
     case encodingError(Error)
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
@@ -36,6 +37,8 @@ enum GenerationOutputSyncError: Error, LocalizedError {
             return "Output sync is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist."
         case .notSignedIn:
             return "Sign in to sync your generated outputs across devices."
+        case .sessionExpired:
+            return "Session expired. Please sign out and sign back in."
         case .encodingError(let underlying):
             return "Could not encode sync request: \(underlying.localizedDescription)"
         case .networkError(let underlying):
@@ -142,17 +145,18 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
 
     static let shared = SupabaseGenerationOutputSyncService()
 
-    private let authService: AuthService
+    private let sessionProvider: SupabaseSessionProvider
     private let session: URLSession
 
     private let tombstoneService: any SyncTombstoneServiceProtocol
 
     init(
         authService: AuthService = BackendAuthService.shared,
+        sessionProvider: SupabaseSessionProvider? = nil,
         session: URLSession = .shared,
         tombstoneService: any SyncTombstoneServiceProtocol = SupabaseSyncTombstoneService.shared
     ) {
-        self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.session = session
         self.tombstoneService = tombstoneService
     }
@@ -161,9 +165,9 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
 
     func pullOutputs(into context: ModelContext) async throws {
         do {
-            let (client, _) = try await validatedClientAndUser()
+            let (client, _, accessToken) = try await validatedClientAndUser()
             let url = restURL(client: client, path: "generation_outputs")
-            var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
+            var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
             request.httpMethod = "GET"
 
             let records = try await fetch([GenerationOutputCloudRecord].self, request: request)
@@ -180,9 +184,9 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     // MARK: - Push
 
     func pushOutput(_ output: GenerationOutput) async throws {
-        let (client, user) = try await validatedClientAndUser()
+        let (client, user, accessToken) = try await validatedClientAndUser()
         let url = restURL(client: client, path: "generation_outputs")
-        var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
+        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
         request.httpMethod = "POST"
         // Ask Supabase to return the created row so we can read the cloud-assigned ID.
         request.setValue("return=representation", forHTTPHeaderField: "Prefer")
@@ -222,13 +226,13 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     }
 
     func fetchCloudOutputCount() async throws -> Int {
-        let (client, _) = try await validatedClientAndUser()
+        let (client, _, accessToken) = try await validatedClientAndUser()
         var components = URLComponents(url: restURL(client: client, path: "generation_outputs"), resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "select", value: "id")]
         guard let url = components?.url else {
             throw GenerationOutputSyncError.notConfigured
         }
-        var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
+        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
         request.httpMethod = "GET"
         let records = try await fetch([GenerationOutputCountRecord].self, request: request)
         return records.count
@@ -277,15 +281,22 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
 
     // MARK: - Private helpers
 
-    private func validatedClientAndUser() async throws -> (SupabaseBackendClient, AuthUser) {
+    private func validatedClientAndUser() async throws -> (SupabaseBackendClient, AuthUser, String) {
         guard SupabaseConfiguration.isConfigured else {
             throw GenerationOutputSyncError.notConfigured
         }
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        guard let user = authService.authState.currentUser else {
-            throw GenerationOutputSyncError.notSignedIn
+        let user: AuthUser
+        let accessToken: String
+        do {
+            user = try await sessionProvider.ensureSignedInUser()
+            accessToken = try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw GenerationOutputSyncError.notSignedIn
+            case .sessionExpired:
+                throw GenerationOutputSyncError.sessionExpired
+            }
         }
         let client: SupabaseBackendClient
         do {
@@ -293,7 +304,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         } catch {
             throw GenerationOutputSyncError.notConfigured
         }
-        return (client, user)
+        return (client, user, accessToken)
     }
 
     /// Builds the full URL for a Supabase REST table endpoint.
@@ -308,7 +319,17 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         let data: Data
         let urlResponse: URLResponse
         do {
-            (data, urlResponse) = try await session.data(for: request)
+            (data, urlResponse) = try await sessionProvider.retryOnceAfterExpiredJWT(
+                request: request,
+                session: session
+            )
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw GenerationOutputSyncError.notSignedIn
+            case .sessionExpired:
+                throw GenerationOutputSyncError.sessionExpired
+            }
         } catch {
             throw GenerationOutputSyncError.networkError(error)
         }
@@ -464,6 +485,7 @@ private struct GenerationOutputCountRecord: Decodable {
 enum GenerationOutputDeletionError: Error, LocalizedError {
     case notConfigured
     case notSignedIn
+    case sessionExpired
     case invalidCloudGenerationOutputID
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
@@ -475,6 +497,8 @@ enum GenerationOutputDeletionError: Error, LocalizedError {
             return "Output deletion is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist."
         case .notSignedIn:
             return "You must be signed in to delete cloud output data."
+        case .sessionExpired:
+            return "Session expired. Please sign out and sign back in."
         case .invalidCloudGenerationOutputID:
             return "This output has an invalid cloud record ID and cannot be deleted from the cloud."
         case .networkError(let error):
@@ -509,6 +533,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     static let shared = GenerationOutputDeletionService()
 
     private let authService: any AuthService
+    private let sessionProvider: SupabaseSessionProvider
     private let sharingService: any PublicSharingService
     private let backupService: LocalGenerationOutputBackupService
     private let tombstoneService: any SyncTombstoneServiceProtocol
@@ -517,6 +542,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
 
     init(
         authService: any AuthService = BackendAuthService.shared,
+        sessionProvider: SupabaseSessionProvider? = nil,
         sharingService: any PublicSharingService = BackendPublicSharingService(
             syncService: SupabaseGenerationOutputSyncService.shared
         ),
@@ -526,6 +552,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         clientFactory: @escaping () throws -> SupabaseBackendClient = { try SupabaseBackendClient() }
     ) {
         self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.sharingService = sharingService
         self.backupService = backupService
         self.tombstoneService = tombstoneService
@@ -572,12 +599,17 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             throw GenerationOutputDeletionError.invalidCloudGenerationOutputID
         }
 
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        let accessToken = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !accessToken.isEmpty else {
-            throw GenerationOutputDeletionError.notSignedIn
+        let accessToken: String
+        do {
+            _ = try await sessionProvider.ensureSignedInUser()
+            accessToken = try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw GenerationOutputDeletionError.notSignedIn
+            case .sessionExpired:
+                throw GenerationOutputDeletionError.sessionExpired
+            }
         }
 
         let client: SupabaseBackendClient
@@ -605,7 +637,17 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await sessionProvider.retryOnceAfterExpiredJWT(
+                request: request,
+                session: session
+            )
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw GenerationOutputDeletionError.notSignedIn
+            case .sessionExpired:
+                throw GenerationOutputDeletionError.sessionExpired
+            }
         } catch {
             throw GenerationOutputDeletionError.networkError(error)
         }

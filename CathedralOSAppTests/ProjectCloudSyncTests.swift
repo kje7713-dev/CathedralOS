@@ -5,6 +5,9 @@ import SwiftData
 private final class MockProjectCloudSyncAuthService: AuthService {
     var authState: AuthState
     var currentAccessToken: String?
+    var refreshedAccessToken: String?
+    var shouldFailRefresh = false
+    private(set) var refreshSessionCallCount = 0
 
     init(authState: AuthState = .signedOut, accessToken: String? = nil) {
         self.authState = authState
@@ -14,7 +17,15 @@ private final class MockProjectCloudSyncAuthService: AuthService {
     func checkSession() async {}
     func signIn() async throws {}
     func signOut() async throws { authState = .signedOut }
-    func refreshSession() async throws {}
+    func refreshSession() async throws {
+        refreshSessionCallCount += 1
+        if shouldFailRefresh {
+            throw AuthServiceError.sessionExpired
+        }
+        if let refreshedAccessToken {
+            currentAccessToken = refreshedAccessToken
+        }
+    }
 }
 
 private final class ProjectCloudSyncURLProtocol: URLProtocol {
@@ -256,6 +267,86 @@ final class ProjectCloudSyncTests: XCTestCase {
 
         XCTAssertEqual(payload.project.notes, "Round-trip me")
         XCTAssertEqual(restored.notes, "Round-trip me")
+    }
+
+    func testRestoreAllProjectsRetriesOnceAfterExpiredJWTAndUsesRefreshedHeader() async throws {
+        let session = makeSession()
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
+            accessToken: "expired-token"
+        )
+        authService.refreshedAccessToken = "fresh-token"
+
+        let localProjectID = UUID()
+        let project = StoryProject(name: "Restored Story")
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
+        var requestCount = 0
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            requestCount += 1
+            let auth = request.value(forHTTPHeaderField: "Authorization")
+            if requestCount == 1 {
+                XCTAssertEqual(auth, ["Bearer", "expired-token"].joined(separator: " "))
+                let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 401, httpVersion: nil, headerFields: nil)!
+                return (response, Data(#"{"code":"PGRST303","message":"JWT expired"}"#.utf8))
+            }
+            XCTAssertEqual(auth, ["Bearer", "fresh-token"].joined(separator: " "))
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let container = try makeProjectContainer()
+        let context = ModelContext(container)
+        let restored = try await service.restoreAllProjects(into: context)
+        XCTAssertEqual(restored.count, 1)
+        XCTAssertEqual(authService.refreshSessionCallCount, 1)
+        XCTAssertEqual(requestCount, 2)
+    }
+
+    func testRestoreAllProjectsRefreshFailureThrowsSessionExpiredAndKeepsLocalData() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: nil)),
+            accessToken: "expired-token"
+        )
+        authService.shouldFailRefresh = true
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"code":"PGRST303","message":"JWT expired"}"#.utf8))
+        }
+
+        let container = try makeProjectContainer()
+        let context = ModelContext(container)
+        let existing = StoryProject(name: "Local only")
+        context.insert(existing)
+        try context.save()
+
+        do {
+            _ = try await service.restoreAllProjects(into: context)
+            XCTFail("Expected sessionExpired")
+        } catch let error as ProjectCloudSyncError {
+            guard case .sessionExpired = error else {
+                XCTFail("Expected sessionExpired, got \(error)")
+                return
+            }
+        }
+
+        let storedProjects = try context.fetch(FetchDescriptor<StoryProject>())
+        XCTAssertEqual(storedProjects.count, 1)
+        XCTAssertEqual(storedProjects.first?.name, "Local only")
     }
 
     private func makeSession() -> URLSession {

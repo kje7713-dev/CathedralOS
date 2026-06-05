@@ -366,7 +366,15 @@ struct ProjectsListView: View {
                 ? "A cloud snapshot was restored successfully."
                 : "\(restoredProjects.count) cloud projects were restored successfully."
         } catch {
-            restoreErrorMessage = (error as? ProjectCloudSyncError)?.errorDescription ?? error.localizedDescription
+            let message = (error as? ProjectCloudSyncError)?.errorDescription ?? error.localizedDescription
+            if AuthSessionResolver.isSessionExpiredError(error)
+                || message.localizedCaseInsensitiveContains("jwt expired")
+                || message.localizedCaseInsensitiveContains("pgrst303")
+                || message.localizedCaseInsensitiveContains("session expired") {
+                restoreErrorMessage = "Session expired. Please sign out and sign back in."
+            } else {
+                restoreErrorMessage = message
+            }
         }
     }
 }

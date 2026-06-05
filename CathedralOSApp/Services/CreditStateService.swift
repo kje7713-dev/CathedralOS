@@ -102,6 +102,7 @@ struct BackendCreditState: Codable, Equatable {
 enum CreditStateServiceError: Error, LocalizedError {
     case notConfigured
     case notSignedIn
+    case sessionExpired
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
     case decodingError(Error)
@@ -112,6 +113,8 @@ enum CreditStateServiceError: Error, LocalizedError {
             return "Credit state service is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist."
         case .notSignedIn:
             return "You must be signed in to fetch credit state."
+        case .sessionExpired:
+            return "Session expired. Please sign out and sign back in."
         case .networkError(let underlying):
             return "Network error: \(underlying.localizedDescription)"
         case .serverError(let code, let msg):
@@ -147,16 +150,17 @@ protocol CreditStateServiceProtocol: AnyObject {
 /// Production implementation — calls the `get-credit-state` Supabase Edge Function.
 final class BackendCreditStateService: CreditStateServiceProtocol {
 
-    private let authService: AuthService
+    private let sessionProvider: SupabaseSessionProvider
     private let session: URLSession
     private let configuration: ValidatedSupabaseConfiguration?
 
     init(
         authService: AuthService = BackendAuthService.shared,
+        sessionProvider: SupabaseSessionProvider? = nil,
         session: URLSession = .shared,
         configuration: ValidatedSupabaseConfiguration? = nil
     ) {
-        self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.session = session
         self.configuration = configuration
     }
@@ -199,11 +203,17 @@ final class BackendCreditStateService: CreditStateServiceProtocol {
         guard configuration != nil || SupabaseConfiguration.isConfigured else {
             throw CreditStateServiceError.notConfigured
         }
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        guard authService.authState.isSignedIn else {
-            throw CreditStateServiceError.notSignedIn
+        let accessToken: String
+        do {
+            _ = try await sessionProvider.ensureSignedInUser()
+            accessToken = try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw CreditStateServiceError.notSignedIn
+            case .sessionExpired:
+                throw CreditStateServiceError.sessionExpired
+            }
         }
 
         let client: SupabaseBackendClient
@@ -220,7 +230,7 @@ final class BackendCreditStateService: CreditStateServiceProtocol {
         let url = client.edgeFunctionURL(path: path)
         // `authorizedRequest` sets Authorization/apikey/Content-Type headers.
         // Pass the user JWT so Supabase can verify the caller's identity.
-        var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
+        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
         request.httpMethod = method
         if let body {
             do {
@@ -233,7 +243,17 @@ final class BackendCreditStateService: CreditStateServiceProtocol {
         let data: Data
         let urlResponse: URLResponse
         do {
-            (data, urlResponse) = try await session.data(for: request)
+            (data, urlResponse) = try await sessionProvider.retryOnceAfterExpiredJWT(
+                request: request,
+                session: session
+            )
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw CreditStateServiceError.notSignedIn
+            case .sessionExpired:
+                throw CreditStateServiceError.sessionExpired
+            }
         } catch {
             throw CreditStateServiceError.networkError(error)
         }

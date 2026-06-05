@@ -124,6 +124,16 @@ struct DiagnosticsView: View {
                     okText: "Signed in",
                     failText: "Signed out"
                 )
+                statusRow(
+                    label: "Access token present",
+                    ok: snap.authAccessTokenPresent,
+                    okText: "Yes",
+                    failText: "No"
+                )
+                row(label: "Last auth refresh", value: snap.lastAuthRefreshStatus)
+                if let authError = snap.lastAuthError {
+                    errorRow(label: "Last auth error", message: authError)
+                }
                 if let uid = snap.truncatedUserID {
                     row(label: "User ID (truncated)", value: "\(uid)…")
                 }

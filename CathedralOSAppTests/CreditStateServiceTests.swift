@@ -4,6 +4,9 @@ import XCTest
 private final class CreditStateServiceAuthStub: AuthService {
     var authState: AuthState
     var currentAccessToken: String?
+    var refreshedAccessToken: String?
+    var shouldFailRefresh = false
+    private(set) var refreshSessionCallCount = 0
 
     init(userID: String = "11111111-1111-1111-1111-111111111111", accessToken: String = "user-jwt-token") {
         self.authState = .signedIn(AuthUser(id: userID, email: "tester@example.com"))
@@ -12,6 +15,15 @@ private final class CreditStateServiceAuthStub: AuthService {
 
     func checkSession() async {}
     func signOut() async throws { authState = .signedOut }
+    func refreshSession() async throws {
+        refreshSessionCallCount += 1
+        if shouldFailRefresh {
+            throw AuthServiceError.sessionExpired
+        }
+        if let refreshedAccessToken {
+            currentAccessToken = refreshedAccessToken
+        }
+    }
 }
 
 private final class CreditStateServiceURLProtocol: URLProtocol {
@@ -128,12 +140,48 @@ final class CreditStateServiceTests: XCTestCase {
         XCTAssertTrue(state.isAdmin)
     }
 
-    private func makeService() -> BackendCreditStateService {
+    func testFetchCreditStateRetriesAfterExpiredJWTWithRefreshedToken() async throws {
+        let auth = CreditStateServiceAuthStub(accessToken: "expired-token")
+        auth.refreshedAccessToken = "fresh-token"
+        let service = makeService(authService: auth)
+        var requestCount = 0
+
+        CreditStateServiceURLProtocol.requestHandler = { request in
+            requestCount += 1
+            if requestCount == 1 {
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), ["Bearer", "expired-token"].joined(separator: " "))
+                let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 401, httpVersion: nil, headerFields: nil)!
+                return (response, Data(#"{"code":"PGRST303","message":"JWT expired"}"#.utf8))
+            }
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), ["Bearer", "fresh-token"].joined(separator: " "))
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let body = """
+            {
+              "planName": "free",
+              "isPro": false,
+              "monthlyCreditAllowance": 10,
+              "purchasedCreditBalance": 5,
+              "availableCredits": 15,
+              "isAdmin": true,
+              "currentPeriodEnd": null,
+              "recentLedger": []
+            }
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let state = try await service.fetchCreditState()
+        XCTAssertEqual(state.availableCredits, 15)
+        XCTAssertEqual(auth.refreshSessionCallCount, 1)
+        XCTAssertEqual(requestCount, 2)
+    }
+
+    private func makeService(authService: CreditStateServiceAuthStub = CreditStateServiceAuthStub()) -> BackendCreditStateService {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [CreditStateServiceURLProtocol.self]
         let session = URLSession(configuration: configuration)
         return BackendCreditStateService(
-            authService: CreditStateServiceAuthStub(),
+            authService: authService,
             session: session,
             configuration: .makeForTesting(
                 projectURL: URL(string: "https://example.supabase.co")!,

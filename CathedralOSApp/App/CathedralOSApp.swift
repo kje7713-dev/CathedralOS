@@ -489,7 +489,15 @@ private struct RecoveryModeView: View {
                 ? "Restored 1 project from cloud."
                 : "Restored \(restoredProjects.count) projects from cloud."
         } catch {
-            errorMessage = (error as? ProjectCloudSyncError)?.errorDescription ?? error.localizedDescription
+            let message = (error as? ProjectCloudSyncError)?.errorDescription ?? error.localizedDescription
+            if AuthSessionResolver.isSessionExpiredError(error)
+                || message.localizedCaseInsensitiveContains("jwt expired")
+                || message.localizedCaseInsensitiveContains("pgrst303")
+                || message.localizedCaseInsensitiveContains("session expired") {
+                errorMessage = "Session expired. Please sign out and sign back in."
+            } else {
+                errorMessage = message
+            }
         }
     }
 
@@ -506,7 +514,15 @@ private struct RecoveryModeView: View {
             try await outputSyncService.pullOutputs(into: modelContext)
             statusMessage = "Generated outputs restored from cloud."
         } catch {
-            errorMessage = (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+            let message = (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+            if AuthSessionResolver.isSessionExpiredError(error)
+                || message.localizedCaseInsensitiveContains("jwt expired")
+                || message.localizedCaseInsensitiveContains("pgrst303")
+                || message.localizedCaseInsensitiveContains("session expired") {
+                errorMessage = "Session expired. Please sign out and sign back in."
+            } else {
+                errorMessage = message
+            }
         }
     }
 

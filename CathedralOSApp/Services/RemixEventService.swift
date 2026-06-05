@@ -7,6 +7,7 @@ enum RemixEventServiceError: Error, LocalizedError {
     case endpointNotConfigured
     /// The user must be signed in to record a remix event.
     case notSignedIn
+    case sessionExpired
     /// A transport-level error occurred.
     case networkError(Error)
     /// The server returned a non-2xx status code.
@@ -18,6 +19,8 @@ enum RemixEventServiceError: Error, LocalizedError {
             return "Remix event endpoint is not configured. Set PublicSharingBaseURL in Info.plist."
         case .notSignedIn:
             return "You must be signed in to record a remix event."
+        case .sessionExpired:
+            return "Session expired. Please sign out and sign back in."
         case .networkError(let underlying):
             return "Network error while recording remix event: \(underlying.localizedDescription)"
         case .serverError(let code, let msg):
@@ -78,14 +81,15 @@ protocol RemixEventServiceProtocol {
 /// Requires an active user session (auth token expected server-side via cookie/header).
 final class BackendRemixEventService: RemixEventServiceProtocol {
 
-    private let authService: AuthService
+    private let sessionProvider: SupabaseSessionProvider
     private let session: URLSession
 
     init(
         authService: AuthService = BackendAuthService.shared,
+        sessionProvider: SupabaseSessionProvider? = nil,
         session: URLSession = .shared
     ) {
-        self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.session = session
     }
 
@@ -94,12 +98,17 @@ final class BackendRemixEventService: RemixEventServiceProtocol {
         createdProjectLocalID: String,
         sourcePayloadJSON: String?
     ) async throws {
-        // Resolve unknown auth state first, then enforce sign-in.
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        guard authService.authState.isSignedIn else {
-            throw RemixEventServiceError.notSignedIn
+        let accessToken: String
+        do {
+            _ = try await sessionProvider.ensureSignedInUser()
+            accessToken = try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw RemixEventServiceError.notSignedIn
+            case .sessionExpired:
+                throw RemixEventServiceError.sessionExpired
+            }
         }
 
         guard let url = PublicSharingServiceConfiguration.remixEventsURL else {
@@ -129,11 +138,21 @@ final class BackendRemixEventService: RemixEventServiceProtocol {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
-        decorateRequestHeaders(&request)
+        decorateRequestHeaders(&request, accessToken: accessToken)
 
         let (data, urlResponse): (Data, URLResponse)
         do {
-            (data, urlResponse) = try await session.data(for: request)
+            (data, urlResponse) = try await sessionProvider.retryOnceAfterExpiredJWT(
+                request: request,
+                session: session
+            )
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw RemixEventServiceError.notSignedIn
+            case .sessionExpired:
+                throw RemixEventServiceError.sessionExpired
+            }
         } catch {
             throw RemixEventServiceError.networkError(error)
         }
@@ -145,14 +164,11 @@ final class BackendRemixEventService: RemixEventServiceProtocol {
         }
     }
 
-    private func decorateRequestHeaders(_ request: inout URLRequest) {
+    private func decorateRequestHeaders(_ request: inout URLRequest, accessToken: String) {
         if let anonKey = SupabaseConfiguration.anonKey, !anonKey.isEmpty {
             request.setValue(anonKey, forHTTPHeaderField: "apikey")
         }
-        if let token = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        request.setValue(["Bearer", accessToken].joined(separator: " "), forHTTPHeaderField: "Authorization")
     }
 }
 
