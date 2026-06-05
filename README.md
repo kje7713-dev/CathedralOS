@@ -221,6 +221,8 @@ The Supabase backend is partially scaffolded. The following remain to be complet
 
 GitHub Actions runs build and unit tests on every pull request and push to `main`. Workflow: `.github/workflows/ios.yml`.
 
+If a new Swift service compiles locally in Xcode but CI fails with `cannot find type ... in scope`, verify the file was added to `CathedralOSApp.xcodeproj/project.pbxproj` under both the `Services` group and the app target `Sources` build phase.
+
 ## TestFlight CI/CD Setup
 
 A separate workflow (`.github/workflows/testflight.yml`) builds a signed archive and uploads it to TestFlight. It is triggered manually (`workflow_dispatch`) or automatically on pushes to `main`.
