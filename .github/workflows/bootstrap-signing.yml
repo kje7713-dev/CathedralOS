@@ -30,10 +30,7 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.3'
-          bundler-cache: false
-
-      - name: Install Fastlane
-        run: gem install fastlane --no-document
+          bundler-cache: true
 
       - name: Bootstrap signing assets
         env:
@@ -47,7 +44,7 @@ jobs:
           MATCH_GIT_TOKEN: ${{ secrets.MATCH_GIT_TOKEN }}
         run: |
           set -o pipefail
-          fastlane bootstrap_signing 2>&1 | tee fastlane_bootstrap_output.txt
+          bundle exec fastlane bootstrap_signing 2>&1 | tee fastlane_bootstrap_output.txt
 
       - name: Upload Fastlane logs on failure
         if: failure()

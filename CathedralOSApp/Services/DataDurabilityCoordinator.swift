@@ -74,7 +74,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         guard !isRunning else { return }
 
         storeMode = recoveryContext != nil ? .recovery : .normal
-        storePath = context.container.configurations.first?.url?.path
+        storePath = context.container.configurations.first?.url.path
         isRunning = true
         lastSyncStartedAt = Date()
         defer {
