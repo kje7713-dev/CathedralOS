@@ -280,6 +280,7 @@ enum ProjectSchemaTemplateBuilder {
         )
 
         let setting = ProjectImportExportPayload.SettingPayload(
+            id: "setting_1",
             summary: "(fill: describe the world, time period, geography)",
             domains: ["(fill: domain such as Politics or Magic)"],
             constraints: ["(fill: a rule or limitation of this world)"],
@@ -307,6 +308,7 @@ enum ProjectSchemaTemplateBuilder {
             schema: schemaIdentifier,
             version: schemaVersion,
             project: .init(
+                id: "project_1",
                 name: "(fill: your story project title)",
                 summary: "(fill: a one-paragraph summary of your story)",
                 notes: "",
@@ -489,6 +491,7 @@ enum ProjectSchemaTemplateBuilder {
         )
 
         let setting = ProjectImportExportPayload.SettingPayload(
+            id: UUID().uuidString,
             summary: "A near-future surveillance state where military intelligence and civilian research overlap uncomfortably. Cold, bureaucratic, technically advanced.",
             domains: ["Military Intelligence", "Signal Research", "Surveillance Infrastructure"],
             constraints: ["All civilian research is subject to military review", "Signal frequencies above a certain range require clearance"],
@@ -516,6 +519,7 @@ enum ProjectSchemaTemplateBuilder {
             schema: schemaIdentifier,
             version: schemaVersion,
             project: .init(
+                id: UUID().uuidString,
                 name: "The Signal",
                 summary: "A suspended researcher races to decode a reactivated military signal before the man who shut down her lab buries it permanently — and discovers the signal has been responding to her all along.",
                 notes: "",
@@ -551,6 +555,7 @@ enum ProjectSchemaTemplateBuilder {
             let religiousPressure: String = s.religiousPressure ?? ""
             let economicPressure: String = s.economicPressure ?? ""
             settingPayload = ProjectImportExportPayload.SettingPayload(
+                id: s.id.uuidString,
                 summary: s.summary,
                 domains: s.domains,
                 constraints: s.constraints,
@@ -749,6 +754,7 @@ enum ProjectSchemaTemplateBuilder {
             schema: schemaIdentifier,
             version: schemaVersion,
             project: .init(
+                id: project.id.uuidString,
                 name: project.name,
                 summary: project.summary,
                 notes: project.notes,

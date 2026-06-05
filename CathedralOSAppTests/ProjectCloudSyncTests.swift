@@ -53,6 +53,46 @@ private final class ProjectCloudSyncURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private final class MockProjectTombstoneService: SyncTombstoneServiceProtocol {
+    var projectTombstones = SyncTombstoneSet(records: [])
+    private(set) var recordedTombstones: [SyncTombstone] = []
+
+    func record(_ tombstone: SyncTombstone) async {
+        recordedTombstones.append(tombstone)
+    }
+
+    func fetchGenerationOutputTombstones() async throws -> SyncTombstoneSet {
+        SyncTombstoneSet(records: [])
+    }
+
+    func fetchProjectTombstones() async throws -> SyncTombstoneSet {
+        projectTombstones
+    }
+}
+
+private final class SpyProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
+    private(set) var deletedLocalProjectIDs: [String] = []
+
+    func syncProject(_ project: StoryProject) async throws {}
+    func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {}
+    func syncAllProjects(in context: ModelContext) async throws {}
+    func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {
+        deletedLocalProjectIDs.append(localProjectID)
+    }
+    func cloudSnapshotPresence() async -> CloudSnapshotPresence { .none }
+    func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
+        ProjectRestoreReport(
+            projects: [],
+            localProjectCountBefore: 0,
+            cloudProjectCountBefore: 0,
+            insertedCount: 0,
+            updatedCount: 0,
+            skippedTombstonedCount: 0,
+            duplicateWarnings: []
+        )
+    }
+}
+
 final class ProjectCloudSyncTests: XCTestCase {
 
     override func tearDown() {
@@ -154,15 +194,213 @@ final class ProjectCloudSyncTests: XCTestCase {
 
         let container = try makeProjectContainer()
         let context = ModelContext(container)
-        let restoredProjects = try await service.restoreAllProjects(into: context)
+        let report = try await service.restoreAllProjects(into: context)
 
-        XCTAssertEqual(restoredProjects.count, 1)
-        XCTAssertEqual(restoredProjects.first?.id, localProjectID)
-        XCTAssertEqual(restoredProjects.first?.notes, "Recovered from cloud")
+        XCTAssertEqual(report.insertedCount, 1)
+        XCTAssertEqual(report.updatedCount, 0)
+        XCTAssertEqual(report.projects.count, 1)
+        XCTAssertEqual(report.projects.first?.id, localProjectID)
+        XCTAssertEqual(report.projects.first?.notes, "Recovered from cloud")
 
         let storedProjects = try context.fetch(FetchDescriptor<StoryProject>())
         XCTAssertEqual(storedProjects.count, 1)
         XCTAssertEqual(storedProjects.first?.id, localProjectID)
+    }
+
+    func testRestoreAllProjectsIsIdempotentAcrossRepeatedRuns() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let project = StoryProject(name: "Restored Story")
+        project.notes = "Recovered once"
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        let firstRestore = try await service.restoreAllProjects(into: context)
+        let secondRestore = try await service.restoreAllProjects(into: context)
+
+        XCTAssertEqual(firstRestore.insertedCount, 1)
+        XCTAssertEqual(firstRestore.updatedCount, 0)
+        XCTAssertEqual(secondRestore.insertedCount, 0)
+        XCTAssertEqual(secondRestore.updatedCount, 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 1)
+    }
+
+    func testRestoreAllProjectsDeduplicatesCloudRowsByLocalProjectID() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let original = StoryProject(name: "Story")
+        original.notes = "Newest"
+        let newerPayload = ProjectSchemaTemplateBuilder.build(project: original)
+
+        let older = StoryProject(name: "Story")
+        older.notes = "Older"
+        let olderPayload = ProjectSchemaTemplateBuilder.build(project: older)
+
+        let responseData = try makeRestoreResponse(rows: [
+            (localProjectID, newerPayload, "2026-05-16T14:00:00Z"),
+            (localProjectID, olderPayload, "2026-05-15T14:00:00Z")
+        ])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        let report = try await service.restoreAllProjects(into: context)
+        let storedProjects = try context.fetch(FetchDescriptor<StoryProject>())
+
+        XCTAssertEqual(report.insertedCount, 1)
+        XCTAssertEqual(report.updatedCount, 0)
+        XCTAssertEqual(report.duplicateWarnings.count, 1)
+        XCTAssertEqual(storedProjects.count, 1)
+        XCTAssertEqual(storedProjects.first?.notes, "Newest")
+    }
+
+    func testRestoreAllProjectsSkipsTombstonedProjectsDuringNormalRestore() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let project = StoryProject(name: "Deleted locally")
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
+        let tombstoneService = MockProjectTombstoneService()
+        tombstoneService.projectTombstones = try makeProjectTombstoneSet(localProjectID: localProjectID.uuidString)
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting(),
+            tombstoneService: tombstoneService
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        let report = try await service.restoreAllProjects(into: context)
+
+        XCTAssertEqual(report.insertedCount, 0)
+        XCTAssertEqual(report.updatedCount, 0)
+        XCTAssertEqual(report.skippedTombstonedCount, 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
+    }
+
+    func testRestoreAllProjectsDoesNotDuplicateNestedChildrenOnRepeatedRestore() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let project = StoryProject(name: "Nested Story")
+        let character = StoryCharacter(name: "Hero")
+        character.notes = "Updated note"
+        let spark = StorySpark(title: "Inciting incident")
+        let relationship = StoryRelationship(name: "Bond", sourceCharacterID: character.id, targetCharacterID: character.id, relationshipType: "self")
+        let motif = Motif(label: "Mirror", category: "symbol")
+        project.characters = [character]
+        project.storySparks = [spark]
+        project.relationships = [relationship]
+        project.motifs = [motif]
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        _ = try await service.restoreAllProjects(into: context)
+        let secondRestore = try await service.restoreAllProjects(into: context)
+        let storedProject = try XCTUnwrap(try context.fetch(FetchDescriptor<StoryProject>()).first)
+
+        XCTAssertEqual(secondRestore.updatedCount, 1)
+        XCTAssertEqual(storedProject.characters.count, 1)
+        XCTAssertEqual(storedProject.storySparks.count, 1)
+        XCTAssertEqual(storedProject.relationships.count, 1)
+        XCTAssertEqual(storedProject.motifs.count, 1)
+        XCTAssertEqual(storedProject.characters.first?.notes, "Updated note")
+    }
+
+    func testRestoreAllProjectsDeduplicatesExistingLocalProjectsBeforeReconcile() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let payloadProject = StoryProject(name: "Canonical")
+        payloadProject.notes = "Cloud truth"
+        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject)
+        let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+        let sparse = StoryProject(name: "")
+        sparse.id = localProjectID
+        let richer = StoryProject(name: "Local richer")
+        richer.id = localProjectID
+        richer.notes = "keep me"
+        richer.characters = [StoryCharacter(name: "Existing child")]
+        context.insert(sparse)
+        context.insert(richer)
+        try context.save()
+
+        let report = try await service.restoreAllProjects(into: context)
+        let storedProjects = try context.fetch(FetchDescriptor<StoryProject>())
+
+        XCTAssertEqual(storedProjects.count, 1)
+        XCTAssertEqual(report.updatedCount, 1)
+        XCTAssertEqual(report.duplicateWarnings.count, 1)
+        XCTAssertEqual(storedProjects.first?.name, "Canonical")
     }
 
     func testCloudSnapshotPresenceReturnsAvailableWhenCloudRowsExist() async {
@@ -305,7 +543,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let container = try makeProjectContainer()
         let context = ModelContext(container)
         let restored = try await service.restoreAllProjects(into: context)
-        XCTAssertEqual(restored.count, 1)
+        XCTAssertEqual(restored.projects.count, 1)
         XCTAssertEqual(authService.refreshSessionCallCount, 1)
         XCTAssertEqual(requestCount, 2)
     }
@@ -349,6 +587,31 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(storedProjects.first?.name, "Local only")
     }
 
+    func testDeleteEverywhereRemovesLocalProjectAndCloudSnapshot() async throws {
+        let context = ModelContext(try makeProjectContainer())
+        let project = StoryProject(name: "Delete me")
+        context.insert(project)
+        try context.save()
+
+        let cloudSyncService = SpyProjectCloudSyncService()
+        let tombstoneService = MockProjectTombstoneService()
+        let deletionService = ProjectDeletionService(
+            authService: MockProjectCloudSyncAuthService(
+                authState: .signedIn(AuthUser(id: "user-123", email: "test@example.com")),
+                accessToken: "user-jwt-token"
+            ),
+            cloudSyncService: cloudSyncService,
+            tombstoneService: tombstoneService
+        )
+
+        try await deletionService.deleteEverywhere(project: project, context: context)
+
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
+        XCTAssertEqual(cloudSyncService.deletedLocalProjectIDs, [project.id.uuidString])
+        XCTAssertEqual(tombstoneService.recordedTombstones.first?.deletionScope, .everywhere)
+        XCTAssertEqual(tombstoneService.recordedTombstones.first?.entityType, .project)
+    }
+
     private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ProjectCloudSyncURLProtocol.self]
@@ -356,18 +619,39 @@ final class ProjectCloudSyncTests: XCTestCase {
     }
 
     private func makeRestoreResponse(localProjectID: UUID, payload: ProjectImportExportPayload) throws -> Data {
+        try makeRestoreResponse(rows: [
+            (localProjectID, payload, "2026-05-15T14:00:00Z")
+        ])
+    }
+
+    private func makeRestoreResponse(rows: [(UUID, ProjectImportExportPayload, String)]) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let payloadData = try encoder.encode(payload)
-        let payloadObject = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
-        )
-        let responseObject: [[String: Any]] = [[
-            "local_project_id": localProjectID.uuidString,
-            "snapshot_json": payloadObject,
-            "updated_at": "2026-05-15T14:00:00Z"
-        ]]
+        let responseObject: [[String: Any]] = try rows.map { localProjectID, payload, updatedAt in
+            let payloadData = try encoder.encode(payload)
+            let payloadObject = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
+            )
+            return [
+                "local_project_id": localProjectID.uuidString,
+                "snapshot_json": payloadObject,
+                "updated_at": updatedAt
+            ]
+        }
         return try JSONSerialization.data(withJSONObject: responseObject, options: [.sortedKeys])
+    }
+
+    private func makeProjectTombstoneSet(localProjectID: String) throws -> SyncTombstoneSet {
+        let tombstoneJSON = """
+        {
+            "entity_type": "project",
+            "local_entity_id": "\(localProjectID)",
+            "cloud_entity_id": null,
+            "deletion_scope": "local_only"
+        }
+        """
+        let record = try JSONDecoder().decode(SyncTombstoneCloudRecord.self, from: Data(tombstoneJSON.utf8))
+        return SyncTombstoneSet(records: [record])
     }
 
     private func makeProjectContainer() throws -> ModelContainer {
