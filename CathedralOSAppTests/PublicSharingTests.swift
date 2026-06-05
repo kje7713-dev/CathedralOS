@@ -733,6 +733,35 @@ final class PublicSharingTests: XCTestCase {
         XCTAssertFalse(desc.isEmpty, "notSignedIn error description must not be empty")
     }
 
+    func testPublicBrowseHeadersOmitAuthorization() {
+        let service = BackendPublicSharingService()
+        var request = URLRequest(url: URL(string: "https://example.com/shared-outputs")!)
+
+        service.decoratePublicRequestHeaders(&request)
+
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    func testAuthenticatedHeadersTrimBearerToken() {
+        let service = BackendPublicSharingService()
+        var request = URLRequest(url: URL(string: "https://example.com/shared-outputs")!)
+
+        service.decorateAuthenticatedRequestHeaders(&request, accessToken: "  user-jwt-token  ")
+
+        let authorization = request.value(forHTTPHeaderField: "Authorization")
+        XCTAssertEqual(authorization?.hasPrefix("Bearer "), true)
+        XCTAssertEqual(authorization?.split(separator: " ").last.map(String.init), "user-jwt-token")
+    }
+
+    func testAuthenticatedHeadersOmitAuthorizationWhenTokenBlank() {
+        let service = BackendPublicSharingService()
+        var request = URLRequest(url: URL(string: "https://example.com/shared-outputs")!)
+
+        service.decorateAuthenticatedRequestHeaders(&request, accessToken: "   ")
+
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+
     // MARK: Output text validation — BackendPublicSharingService
 
     func testPublishFailsWhenOutputTextIsEmpty() async {

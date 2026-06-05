@@ -174,7 +174,7 @@ final class BackendPublicSharingService: PublicSharingService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
-        decorateRequestHeaders(&request, accessToken: accessToken)
+        decorateAuthenticatedRequestHeaders(&request, accessToken: accessToken)
 
         let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: true)
         try validateResponse(urlResponse, data: data)
@@ -267,7 +267,7 @@ final class BackendPublicSharingService: PublicSharingService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        decorateRequestHeaders(&request, accessToken: accessToken)
+        decorateAuthenticatedRequestHeaders(&request, accessToken: accessToken)
 
         let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: true)
         try validateResponse(urlResponse, data: data)
@@ -282,7 +282,7 @@ final class BackendPublicSharingService: PublicSharingService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        decorateRequestHeaders(&request)
+        decoratePublicRequestHeaders(&request)
 
         let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: false)
         try validateResponse(urlResponse, data: data)
@@ -306,7 +306,7 @@ final class BackendPublicSharingService: PublicSharingService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        decorateRequestHeaders(&request)
+        decoratePublicRequestHeaders(&request)
 
         let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: false)
         try validateResponse(urlResponse, data: data)
@@ -352,7 +352,7 @@ final class BackendPublicSharingService: PublicSharingService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
-        decorateRequestHeaders(&request, accessToken: accessToken)
+        decorateAuthenticatedRequestHeaders(&request, accessToken: accessToken)
 
         let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: true)
         try validateResponse(urlResponse, data: data)
@@ -408,15 +408,17 @@ final class BackendPublicSharingService: PublicSharingService {
         }
     }
 
-    private func decorateRequestHeaders(_ request: inout URLRequest, accessToken: String? = nil) {
+    func decoratePublicRequestHeaders(_ request: inout URLRequest) {
         if let anonKey = SupabaseConfiguration.anonKey, !anonKey.isEmpty {
             request.setValue(anonKey, forHTTPHeaderField: "apikey")
         }
+    }
+
+    func decorateAuthenticatedRequestHeaders(_ request: inout URLRequest, accessToken: String?) {
+        decoratePublicRequestHeaders(&request)
         if let token = accessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty {
             request.setValue(["Bearer", token].joined(separator: " "), forHTTPHeaderField: "Authorization")
-        } else if let anonKey = SupabaseConfiguration.anonKey, !anonKey.isEmpty {
-            request.setValue(["Bearer", anonKey].joined(separator: " "), forHTTPHeaderField: "Authorization")
         }
     }
 
