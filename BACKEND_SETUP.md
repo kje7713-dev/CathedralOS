@@ -193,6 +193,18 @@ a clear message directing them to the Account tab. No action silently fails.
 - **Do not commit** any of the above to version control. Use `.xcconfig` files
   (gitignored) or CI secrets for build-time injection.
 
+### Public-sharing Edge Function deployment
+
+- Deploy `public-sharing` with JWT verification disabled:
+  `supabase functions deploy public-sharing --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt`
+- Public shared browse/detail supports signed-out reads, so these requests are
+  intentionally anon-callable.
+- Authenticated operations inside the same function still validate user identity
+  from the user JWT for publish, unpublish, report, and cover-image upload paths.
+- Do not disable JWT verification for other functions (`generate-story`,
+  `admin-grant-credits`, `get-credit-state`, `sync-storekit-entitlement`,
+  `app-store-server-notification`).
+
 ### Optional debug/TestFlight UI allowlist
 
 If you want the app to show the Developer Credits section before backend
