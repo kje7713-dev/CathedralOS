@@ -28,10 +28,7 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.3'
-          bundler-cache: false
-
-      - name: Install Fastlane
-        run: gem install fastlane --no-document
+          bundler-cache: true
 
       - name: Verify Supabase runtime key presence
         env:
@@ -58,7 +55,7 @@ jobs:
           PUBLIC_SHARING_BASE_URL: ${{ secrets.PUBLIC_SHARING_BASE_URL }}
         run: |
           set -o pipefail
-          fastlane beta 2>&1 | tee fastlane_output.txt
+          bundle exec fastlane beta 2>&1 | tee fastlane_output.txt
 
       - name: Upload Fastlane logs on failure
         if: failure()
