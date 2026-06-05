@@ -106,18 +106,26 @@ async function getAuthenticatedUserId(
   supabaseURL: string,
   supabaseAnonKey: string,
 ): Promise<string | null> {
-  const authHeader = req.headers.get("Authorization");
+  const authHeader = req.headers.get("Authorization")?.trim();
   if (!authHeader) return null;
+  const bearerMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!bearerMatch) return null;
+  const bearerToken = bearerMatch[1]?.trim();
+  if (!bearerToken || bearerToken === supabaseAnonKey) return null;
 
-  const userClient = createClient(supabaseURL, supabaseAnonKey, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const {
-    data: { user },
-    error,
-  } = await userClient.auth.getUser();
-  if (error || !user) return null;
-  return user.id;
+  try {
+    const userClient = createClient(supabaseURL, supabaseAnonKey, {
+      global: { headers: { Authorization: "Bearer " + bearerToken } },
+    });
+    const {
+      data: { user },
+      error,
+    } = await userClient.auth.getUser();
+    if (error || !user) return null;
+    return user.id;
+  } catch {
+    return null;
+  }
 }
 
 function buildShareURL(baseURL: string | null, sharedOutputID: string): string | null {
