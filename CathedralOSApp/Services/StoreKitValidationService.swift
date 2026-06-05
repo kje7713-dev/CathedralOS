@@ -59,6 +59,7 @@ struct StoreKitValidationResponse: Decodable, Equatable {
 enum StoreKitValidationError: Error, LocalizedError {
     case notConfigured
     case notSignedIn
+    case sessionExpired
     case noTransactionData
     case unverifiedTransaction
     case networkError(Error)
@@ -72,6 +73,8 @@ enum StoreKitValidationError: Error, LocalizedError {
             return "Backend validation is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist."
         case .notSignedIn:
             return "You must be signed in to validate a purchase."
+        case .sessionExpired:
+            return "Session expired. Please sign out and sign back in."
         case .noTransactionData:
             return "No transaction data available for validation."
         case .unverifiedTransaction:
@@ -134,14 +137,15 @@ protocol StoreKitValidationServiceProtocol: AnyObject {
 
 final class BackendStoreKitValidationService: StoreKitValidationServiceProtocol {
 
-    private let authService: AuthService
+    private let sessionProvider: SupabaseSessionProvider
     private let session: URLSession
 
     init(
         authService: AuthService,
+        sessionProvider: SupabaseSessionProvider? = nil,
         session: URLSession = .shared
     ) {
-        self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.session = session
     }
 
@@ -154,8 +158,17 @@ final class BackendStoreKitValidationService: StoreKitValidationServiceProtocol 
         guard SupabaseConfiguration.isConfigured else {
             throw StoreKitValidationError.notConfigured
         }
-        guard let accessToken = authService.currentAccessToken else {
-            throw StoreKitValidationError.notSignedIn
+        let accessToken: String
+        do {
+            _ = try await sessionProvider.ensureSignedInUser()
+            accessToken = try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw StoreKitValidationError.notSignedIn
+            case .sessionExpired:
+                throw StoreKitValidationError.sessionExpired
+            }
         }
 
         let client = try makeClient()
@@ -235,7 +248,17 @@ final class BackendStoreKitValidationService: StoreKitValidationServiceProtocol 
         let data: Data
         let urlResponse: URLResponse
         do {
-            (data, urlResponse) = try await session.data(for: request)
+            (data, urlResponse) = try await sessionProvider.retryOnceAfterExpiredJWT(
+                request: request,
+                session: session
+            )
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw StoreKitValidationError.notSignedIn
+            case .sessionExpired:
+                throw StoreKitValidationError.sessionExpired
+            }
         } catch {
             throw StoreKitValidationError.networkError(error)
         }

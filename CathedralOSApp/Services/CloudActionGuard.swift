@@ -90,6 +90,8 @@ enum CloudAuthError: Error, LocalizedError {
             switch shareError {
             case .notSignedIn:
                 return .notSignedIn
+            case .sessionExpired:
+                return .sessionExpired
             case .endpointNotConfigured:
                 return .notConfigured
             case .networkError(let e):
@@ -111,6 +113,8 @@ enum CloudAuthError: Error, LocalizedError {
                 return .notConfigured
             case .notSignedIn:
                 return .notSignedIn
+            case .sessionExpired:
+                return .sessionExpired
             case .networkError(let e):
                 return .networkFailure(e.localizedDescription)
             case .serverError(let code, let msg):
@@ -128,6 +132,8 @@ enum CloudAuthError: Error, LocalizedError {
             switch remixError {
             case .notSignedIn:
                 return .notSignedIn
+            case .sessionExpired:
+                return .sessionExpired
             case .endpointNotConfigured:
                 return .notConfigured
             case .networkError(let e):

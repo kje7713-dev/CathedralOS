@@ -455,6 +455,13 @@ struct AccountView: View {
                 }
                 .disabled(isSyncing || !authState.isSignedIn)
 
+                Button {
+                    Task { await attemptRefreshSession() }
+                } label: {
+                    Label("Refresh Session", systemImage: "arrow.clockwise")
+                }
+                .disabled(isSyncing || !authState.isSignedIn)
+
                 if !authState.isSignedIn {
                     Text("Sign in to sync data between devices.")
                         .font(.caption)
@@ -632,7 +639,7 @@ struct AccountView: View {
                 lastSyncMessage = "Last synced at \(formatter.string(from: Date()))"
                 syncError = nil
             } catch {
-                syncError = (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+                syncError = userFacingSyncErrorMessage(error)
             }
             // Fetch backend-authoritative credit balance after sign-in.
             await refreshBackendCreditState()
@@ -671,8 +678,7 @@ struct AccountView: View {
             formatter.timeStyle = .short
             lastSyncMessage = "Last synced at \(formatter.string(from: Date()))"
         } catch {
-            syncError = (error as? GenerationOutputSyncError)?.errorDescription
-                ?? error.localizedDescription
+            syncError = userFacingSyncErrorMessage(error)
         }
     }
 
@@ -687,7 +693,7 @@ struct AccountView: View {
         defer { isSyncing = false }
         await DataDurabilityCoordinator.shared.performManualSyncAll(context: modelContext)
         if let err = DataDurabilityCoordinator.shared.lastSyncError {
-            syncError = err
+            syncError = userFacingSyncErrorMessage(err)
         } else {
             let formatter = DateFormatter()
             formatter.timeStyle = .short
@@ -711,8 +717,44 @@ struct AccountView: View {
             formatter.timeStyle = .short
             lastSyncMessage = "Restored from cloud at \(formatter.string(from: Date()))"
         } catch {
-            syncError = error.localizedDescription
+            syncError = userFacingSyncErrorMessage(error)
         }
+    }
+
+    private func attemptRefreshSession() async {
+        guard authState.isSignedIn else { return }
+        isSyncing = true
+        syncError = nil
+        lastSyncMessage = nil
+        defer { isSyncing = false }
+        do {
+            try await authService.refreshSession()
+            lastSyncMessage = "Session refreshed."
+        } catch {
+            syncError = userFacingSyncErrorMessage(error)
+        }
+    }
+
+    private func userFacingSyncErrorMessage(_ error: Error) -> String {
+        if AuthSessionResolver.isSessionExpiredError(error) {
+            return "Session expired. Sign in again to continue syncing."
+        }
+        let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        if message.localizedCaseInsensitiveContains("jwt expired")
+            || message.localizedCaseInsensitiveContains("pgrst303")
+            || message.localizedCaseInsensitiveContains("session expired") {
+            return "Session expired. Sign in again to continue syncing."
+        }
+        return message
+    }
+
+    private func userFacingSyncErrorMessage(_ message: String) -> String {
+        if message.localizedCaseInsensitiveContains("jwt expired")
+            || message.localizedCaseInsensitiveContains("pgrst303")
+            || message.localizedCaseInsensitiveContains("session expired") {
+            return "Session expired. Sign in again to continue syncing."
+        }
+        return message
     }
 
     /// Attempts to bootstrap a profile row after sign-in.

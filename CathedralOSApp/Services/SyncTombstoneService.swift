@@ -101,15 +101,16 @@ final class SupabaseSyncTombstoneService: SyncTombstoneServiceProtocol {
 
     static let shared = SupabaseSyncTombstoneService()
 
-    private let authService: AuthService
+    private let sessionProvider: SupabaseSessionProvider
     private let session: URLSession
     private let logger = Logger(subsystem: "CathedralOS", category: "SyncTombstone")
 
     init(
         authService: AuthService = BackendAuthService.shared,
+        sessionProvider: SupabaseSessionProvider? = nil,
         session: URLSession = .shared
     ) {
-        self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.session = session
     }
 
@@ -180,18 +181,11 @@ final class SupabaseSyncTombstoneService: SyncTombstoneServiceProtocol {
     }
 
     private func validatedClientAndToken() async throws -> (SupabaseBackendClient, String) {
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        guard authService.authState.isSignedIn else {
-            throw GenerationOutputSyncError.notSignedIn
-        }
-        var accessToken = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if accessToken?.isEmpty != false {
-            try? await authService.refreshSession()
-            accessToken = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        guard let token = accessToken, !token.isEmpty else {
+        let token: String
+        do {
+            _ = try await sessionProvider.ensureSignedInUser()
+            token = try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch {
             throw GenerationOutputSyncError.notSignedIn
         }
         let client = try SupabaseBackendClient()

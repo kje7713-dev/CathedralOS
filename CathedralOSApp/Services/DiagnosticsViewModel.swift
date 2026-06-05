@@ -33,6 +33,9 @@ struct DiagnosticsSnapshot {
 
     // MARK: Auth
     let authSignedIn: Bool
+    let authAccessTokenPresent: Bool
+    let lastAuthRefreshStatus: String
+    let lastAuthError: String?
     /// Truncated user ID — first 8 characters only, never the full value.
     let truncatedUserID: String?
 
@@ -106,7 +109,12 @@ struct DiagnosticsSnapshot {
             "",
             "--- Auth ---",
             "Signed in: \(authSignedIn ? "Yes" : "No")",
+            "Access token present: \(authAccessTokenPresent ? "Yes" : "No")",
+            "Last auth refresh: \(lastAuthRefreshStatus)",
         ]
+        if let authError = lastAuthError {
+            lines.append("Last auth error: \(authError)")
+        }
         if let uid = truncatedUserID {
             lines.append("User ID: \(uid)…")
         }
@@ -198,6 +206,7 @@ final class DiagnosticsViewModel: ObservableObject {
     // MARK: Injected services
 
     private let authService: any AuthService
+    private let sessionProvider: SupabaseSessionProvider
     private let usageLimitService: any UsageLimitServiceProtocol
     private let entitlementService: any StoreKitEntitlementServiceProtocol
     private let creditStateService: any CreditStateServiceProtocol
@@ -238,6 +247,7 @@ final class DiagnosticsViewModel: ObservableObject {
 
     init(
         authService: any AuthService,
+        sessionProvider: SupabaseSessionProvider? = nil,
         usageLimitService: any UsageLimitServiceProtocol,
         entitlementService: any StoreKitEntitlementServiceProtocol,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
@@ -245,6 +255,7 @@ final class DiagnosticsViewModel: ObservableObject {
         syncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
     ) {
         self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.usageLimitService = usageLimitService
         self.entitlementService = entitlementService
         self.creditStateService = creditStateService
@@ -440,6 +451,7 @@ final class DiagnosticsViewModel: ObservableObject {
         // Auth (truncated ID only — never a full token)
         let authState = authService.authState
         let signedIn = authState.isSignedIn
+        let authSessionDiagnostics = sessionProvider.diagnosticsSnapshot()
         let truncatedID: String? = authState.currentUser.map { user in
             let truncateLength = 8
             return String(user.id.prefix(truncateLength))
@@ -470,6 +482,9 @@ final class DiagnosticsViewModel: ObservableObject {
             supabaseAnonKeyPresent: keyPresent,
             publicSharingBaseURLPresent: PublicSharingServiceConfiguration.baseURL != nil,
             authSignedIn: signedIn,
+            authAccessTokenPresent: authSessionDiagnostics.accessTokenPresent,
+            lastAuthRefreshStatus: authRefreshStatusText(authSessionDiagnostics.lastRefreshSucceeded),
+            lastAuthError: authSessionDiagnostics.lastAuthError,
             truncatedUserID: truncatedID,
             storeKitProductsLoaded: storeKitLoaded,
             storeKitConfiguredProductCount: configuredCount,
@@ -500,6 +515,17 @@ final class DiagnosticsViewModel: ObservableObject {
             storePath: storePath,
             capturedAt: Date()
         )
+    }
+
+    private func authRefreshStatusText(_ value: Bool?) -> String {
+        switch value {
+        case .some(true):
+            return "Success"
+        case .some(false):
+            return "Failure"
+        case .none:
+            return "Not attempted"
+        }
     }
 
     private var isDeveloperBuildEligible: Bool {

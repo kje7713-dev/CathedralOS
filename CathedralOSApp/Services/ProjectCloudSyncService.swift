@@ -4,6 +4,7 @@ import SwiftData
 enum ProjectCloudSyncError: Error, LocalizedError {
     case notConfigured
     case notSignedIn
+    case sessionExpired
     case encodingError(Error)
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
@@ -15,6 +16,8 @@ enum ProjectCloudSyncError: Error, LocalizedError {
             return "Project sync is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist."
         case .notSignedIn:
             return "Sign in to back up and restore projects from the cloud."
+        case .sessionExpired:
+            return "Session expired. Please sign out and sign back in."
         case .encodingError(let underlying):
             return "Could not encode the project snapshot: \(underlying.localizedDescription)"
         case .networkError(let underlying):
@@ -65,15 +68,18 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     static let shared = ProjectCloudSyncService()
 
     private let authService: AuthService
+    private let sessionProvider: SupabaseSessionProvider
     private let session: URLSession
     private let configuration: ValidatedSupabaseConfiguration?
 
     init(
         authService: AuthService = BackendAuthService.shared,
+        sessionProvider: SupabaseSessionProvider? = nil,
         session: URLSession = .shared,
         configuration: ValidatedSupabaseConfiguration? = nil
     ) {
         self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.session = session
         self.configuration = configuration
     }
@@ -227,20 +233,18 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             throw ProjectCloudSyncError.notConfigured
         }
 
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        guard let user = authService.authState.currentUser else {
-            throw ProjectCloudSyncError.notSignedIn
-        }
-
-        var accessToken = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if accessToken?.isEmpty != false {
-            try? await authService.refreshSession()
-            accessToken = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        guard let accessToken, !accessToken.isEmpty else {
-            throw ProjectCloudSyncError.notSignedIn
+        let user: AuthUser
+        let accessToken: String
+        do {
+            user = try await sessionProvider.ensureSignedInUser()
+            accessToken = try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw ProjectCloudSyncError.notSignedIn
+            case .sessionExpired:
+                throw ProjectCloudSyncError.sessionExpired
+            }
         }
 
         return (SupabaseBackendClient(configuration: resolvedConfiguration), user, accessToken)
@@ -264,7 +268,17 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await sessionProvider.retryOnceAfterExpiredJWT(
+                request: request,
+                session: session
+            )
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw ProjectCloudSyncError.notSignedIn
+            case .sessionExpired:
+                throw ProjectCloudSyncError.sessionExpired
+            }
         } catch {
             throw ProjectCloudSyncError.networkError(error)
         }
@@ -280,7 +294,17 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await sessionProvider.retryOnceAfterExpiredJWT(
+                request: request,
+                session: session
+            )
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                throw ProjectCloudSyncError.notSignedIn
+            case .sessionExpired:
+                throw ProjectCloudSyncError.sessionExpired
+            }
         } catch {
             throw ProjectCloudSyncError.networkError(error)
         }
