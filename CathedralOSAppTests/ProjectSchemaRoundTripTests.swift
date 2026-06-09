@@ -441,6 +441,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             version: 1,
             project: .init(name: "Minimal", summary: "", notes: "", tags: []),
             setting: .init(
+                id: nil,
                 summary: "", domains: [], constraints: [], themes: [], season: "",
                 worldRules: [], historicalPressure: "", politicalForces: "",
                 socialOrder: "", environmentalPressure: "", technologyLevel: "",

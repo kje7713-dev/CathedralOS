@@ -153,6 +153,7 @@
 		0000000000000000000001A4 /* ProjectCloudSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001A5 /* ProjectCloudSyncTests.swift */; };
 		0000000000000000000001A6 /* GenerationOutputPublishCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001A7 /* GenerationOutputPublishCoordinator.swift */; };
 		0000000000000000000001AD /* AuthSessionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001AC /* AuthSessionResolver.swift */; };
+		0000000000000000000001B0 /* TestSupabaseConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001B1 /* TestSupabaseConfiguration.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -281,6 +282,7 @@
 000000000000000000000161 /* GenerationOutputSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputSyncService.swift; sourceTree = "<group>"; };
 0000000000000000000001A8 /* SyncTombstoneService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTombstoneService.swift; sourceTree = "<group>"; };
 0000000000000000000001AB /* DataDurabilityCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataDurabilityCoordinator.swift; sourceTree = "<group>"; };
+		0000000000000000000001B1 /* TestSupabaseConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupabaseConfiguration.swift; sourceTree = "<group>"; };
 000000000000000000000163 /* RemixEventService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemixEventService.swift; sourceTree = "<group>"; };
 000000000000000000000165 /* AudienceControlsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudienceControlsTests.swift; sourceTree = "<group>"; };
 000000000000000000000167 /* GenerationOutputSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputSyncTests.swift; sourceTree = "<group>"; };
@@ -509,6 +511,7 @@
 				000000000000000000000191 /* StoreKitServerValidationTests.swift */,
 				000000000000000000000199 /* DiagnosticsTests.swift */,
 				0000000000000000000001A5 /* ProjectCloudSyncTests.swift */,
+				0000000000000000000001B1 /* TestSupabaseConfiguration.swift */,
 				000000000000000000000154 /* SupabaseConfigurationTests.swift */,
 				000000000000000000000156 /* BackendClientTests.swift */,
 				000000000000000000000158 /* AuthServiceTests.swift */,
@@ -900,6 +903,7 @@
 				000000000000000000000192 /* StoreKitServerValidationTests.swift in Sources */,
 				00000000000000000000019A /* DiagnosticsTests.swift in Sources */,
 				0000000000000000000001A4 /* ProjectCloudSyncTests.swift in Sources */,
+				0000000000000000000001B0 /* TestSupabaseConfiguration.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -960,7 +960,7 @@ final class PublicSharingTests: XCTestCase {
         let gen = makeOutput()
         gen.cloudGenerationOutputID = ""
 
-        var coverImageUploadAttempted = false
+        let coverImageUploadAttempted = false
         do {
             _ = try await mock.publish(output: gen)
             XCTFail("Expected missingCloudGenerationOutputID error")
