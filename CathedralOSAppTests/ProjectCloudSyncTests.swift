@@ -80,6 +80,7 @@ private final class SpyProjectCloudSyncService: ProjectCloudSyncServiceProtocol 
         deletedLocalProjectIDs.append(localProjectID)
     }
     func cloudSnapshotPresence() async -> CloudSnapshotPresence { .none }
+    @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
         ProjectRestoreReport(
             projects: [],
@@ -610,6 +611,192 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(cloudSyncService.deletedLocalProjectIDs, [project.id.uuidString])
         XCTAssertEqual(tombstoneService.recordedTombstones.first?.deletionScope, .everywhere)
         XCTAssertEqual(tombstoneService.recordedTombstones.first?.entityType, .project)
+    }
+
+    func testRestoreAllProjectsSummaryMessageShowsRestoredUpdatedCounts() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let project = StoryProject(name: "Test Story")
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+        let insertReport = try await service.restoreAllProjects(into: context)
+        XCTAssertTrue(insertReport.summaryMessage.contains("Projects restored: 1"), insertReport.summaryMessage)
+        XCTAssertTrue(insertReport.summaryMessage.contains("Projects updated: 0"), insertReport.summaryMessage)
+
+        let updateReport = try await service.restoreAllProjects(into: context)
+        XCTAssertTrue(updateReport.summaryMessage.contains("Projects restored: 0"), updateReport.summaryMessage)
+        XCTAssertTrue(updateReport.summaryMessage.contains("Projects updated: 1"), updateReport.summaryMessage)
+    }
+
+    func testRestoreCannotRunConcurrentlyThrowsRestoreAlreadyInProgress() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let project = StoryProject(name: "Concurrent Story")
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
+
+        // Semaphores coordinate blocking the URLProtocol background thread until we need it.
+        let requestEntered = DispatchSemaphore(value: 0)
+        let requestPermitted = DispatchSemaphore(value: 0)
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            requestEntered.signal()      // Signal: first request is in flight.
+            requestPermitted.wait()      // Block background thread until permitted.
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        // Start first restore; it will suspend at the network gate.
+        let firstTask = Task { @MainActor in
+            try await service.restoreAllProjects(into: context)
+        }
+
+        // Wait until the first network request is in flight (blocking on its background thread).
+        await withCheckedContinuation { cont in
+            DispatchQueue.global().async {
+                requestEntered.wait()
+                cont.resume()
+            }
+        }
+
+        // isRestoringProjects is now true; second call must throw restoreAlreadyInProgress.
+        var secondError: Error?
+        do {
+            _ = try await service.restoreAllProjects(into: context)
+            XCTFail("Expected restoreAlreadyInProgress to be thrown")
+        } catch {
+            secondError = error
+        }
+
+        // Unblock the first restore and wait for it to finish.
+        requestPermitted.signal()
+        _ = try await firstTask.value
+
+        guard let cloudError = secondError as? ProjectCloudSyncError,
+              case .restoreAlreadyInProgress = cloudError else {
+            XCTFail("Expected restoreAlreadyInProgress, got \(String(describing: secondError))")
+            return
+        }
+
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 1)
+    }
+
+    func testRestoreFailureSurfacesProjectCloudSyncErrorNotCrash() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 500, httpVersion: nil, headerFields: nil)!
+            return (response, Data("Server error".utf8))
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        do {
+            _ = try await service.restoreAllProjects(into: context)
+            XCTFail("Expected error to be thrown")
+        } catch let error as ProjectCloudSyncError {
+            if case .serverError = error {
+                // Expected: surfaced as a typed error, not a crash.
+            } else {
+                XCTFail("Expected serverError, got \(error)")
+            }
+        } catch {
+            XCTFail("Expected ProjectCloudSyncError, got \(error)")
+        }
+    }
+
+    func testDuplicateChildIDsDetectedBeforeSaveSurfacesError() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+
+        let localProjectID = UUID()
+        let project = StoryProject(name: "Dupe Child Story")
+        let sharedCharacterID = UUID()
+        // Two characters with the same stable ID (simulates corrupt local state).
+        let char1 = StoryCharacter(name: "Alice")
+        char1.id = sharedCharacterID
+        let char2 = StoryCharacter(name: "Alice Clone")
+        char2.id = sharedCharacterID
+        project.characters = [char1, char2]
+
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        // Pre-populate context with the duplicate-child project.
+        let context = ModelContext(try makeProjectContainer())
+        let localProject = StoryProject(name: "Existing")
+        localProject.id = localProjectID
+        let localChar1 = StoryCharacter(name: "Alice")
+        localChar1.id = sharedCharacterID
+        let localChar2 = StoryCharacter(name: "Alice Clone")
+        localChar2.id = sharedCharacterID
+        localProject.characters = [localChar1, localChar2]
+        context.insert(localProject)
+        try context.save()
+
+        do {
+            _ = try await service.restoreAllProjects(into: context)
+            XCTFail("Expected duplicateChildIDsDetected error")
+        } catch let error as ProjectCloudSyncError {
+            if case .duplicateChildIDsDetected = error {
+                // Expected: surfaced as a typed error, not a crash.
+            } else {
+                XCTFail("Expected duplicateChildIDsDetected, got \(error)")
+            }
+        } catch {
+            XCTFail("Expected ProjectCloudSyncError, got \(error)")
+        }
     }
 
     private func makeSession() -> URLSession {

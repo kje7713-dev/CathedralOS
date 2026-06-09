@@ -48,6 +48,7 @@ struct AccountView: View {
 
     // MARK: Sync state
     @State private var isSyncing = false
+    @State private var isRestoringFromCloud = false
     @State private var syncError: String?
     @State private var lastSyncMessage: String?
 
@@ -495,7 +496,7 @@ struct AccountView: View {
         if isSyncing {
             HStack(spacing: 8) {
                 ProgressView()
-                Text("Syncing outputs…")
+                Text(isRestoringFromCloud ? "Restoring…" : "Syncing outputs…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -714,15 +715,28 @@ struct AccountView: View {
             return
         }
         isSyncing = true
+        isRestoringFromCloud = true
         syncError = nil
         lastSyncMessage = nil
-        defer { isSyncing = false }
+        defer {
+            isSyncing = false
+            isRestoringFromCloud = false
+        }
         do {
             let report = try await ProjectCloudSyncService.shared.restoreAllProjects(into: modelContext)
             try await syncService.pullOutputs(into: modelContext)
             let formatter = DateFormatter()
             formatter.timeStyle = .short
             lastSyncMessage = "\(report.summaryMessage) (\(formatter.string(from: Date())))"
+        } catch let error as ProjectCloudSyncError {
+            switch error {
+            case .restoreAlreadyInProgress:
+                syncError = error.errorDescription
+            case .saveFailed, .duplicateChildIDsDetected:
+                syncError = (error.errorDescription ?? error.localizedDescription) + " Restore failed before all changes were applied."
+            default:
+                syncError = userFacingSyncErrorMessage(error)
+            }
         } catch {
             syncError = userFacingSyncErrorMessage(error)
         }
@@ -734,9 +748,13 @@ struct AccountView: View {
             return
         }
         isSyncing = true
+        isRestoringFromCloud = true
         syncError = nil
         lastSyncMessage = nil
-        defer { isSyncing = false }
+        defer {
+            isSyncing = false
+            isRestoringFromCloud = false
+        }
         do {
             let report = try await ProjectCloudSyncService.shared.restoreAllProjects(
                 into: modelContext,
@@ -745,6 +763,15 @@ struct AccountView: View {
             let formatter = DateFormatter()
             formatter.timeStyle = .short
             lastSyncMessage = "Restored deleted cloud projects: \(report.summaryMessage) (\(formatter.string(from: Date())))"
+        } catch let error as ProjectCloudSyncError {
+            switch error {
+            case .restoreAlreadyInProgress:
+                syncError = error.errorDescription
+            case .saveFailed, .duplicateChildIDsDetected:
+                syncError = (error.errorDescription ?? error.localizedDescription) + " Restore failed before all changes were applied."
+            default:
+                syncError = userFacingSyncErrorMessage(error)
+            }
         } catch {
             syncError = userFacingSyncErrorMessage(error)
         }
