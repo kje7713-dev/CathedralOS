@@ -258,6 +258,265 @@ interface HandlerDependencies {
 // Prompt builder
 // ---------------------------------------------------------------------------
 
+// Loose structural type for the decoded PromptPackExportPayload.
+// All fields are optional so the prompt builder degrades gracefully if any
+// field is absent (e.g., older payloads, partial data, test stubs).
+interface PromptPackPayloadShape {
+  project?: {
+    name?: string;
+    summary?: string;
+    readingLevel?: string;
+    contentRating?: string;
+    audienceNotes?: string;
+  };
+  setting?: {
+    included?: boolean;
+    summary?: string;
+    worldRules?: string[];
+    constraints?: string[];
+    domains?: string[];
+    themes?: string[];
+    season?: string;
+    historicalPressure?: string;
+    politicalForces?: string;
+    socialOrder?: string;
+    environmentalPressure?: string;
+    technologyLevel?: string;
+    mythicFrame?: string;
+    religiousPressure?: string;
+    economicPressure?: string;
+    taboos?: string[];
+    institutions?: string[];
+    dominantValues?: string[];
+    hiddenTruths?: string[];
+    instructionBias?: string;
+  };
+  selectedCharacters?: Array<{
+    name?: string;
+    roles?: string[];
+    goals?: string[];
+    fears?: string[];
+    flaws?: string[];
+    secrets?: string[];
+    wounds?: string[];
+    coreLie?: string;
+    coreTruth?: string;
+    arcStart?: string;
+    arcEnd?: string;
+    breakingPoints?: string[];
+    moralLines?: string[];
+    selfDeceptions?: string[];
+    identityConflicts?: string[];
+    instructionBias?: string;
+  }>;
+  selectedRelationships?: Array<{
+    name?: string;
+    relationshipType?: string;
+    tension?: string;
+    unspokenTruth?: string;
+    whatEachWantsFromTheOther?: string;
+    whatWouldBreakIt?: string;
+    whatWouldTransformIt?: string;
+  }>;
+  selectedThemeQuestions?: Array<{
+    question?: string;
+    coreTension?: string;
+    moralFaultLine?: string;
+    endingTruth?: string;
+  }>;
+  selectedMotifs?: Array<{
+    label?: string;
+    meaning?: string;
+  }>;
+  selectedStorySpark?: {
+    title?: string;
+    situation?: string;
+    stakes?: string;
+    urgency?: string;
+    threat?: string;
+    twist?: string;
+    opportunity?: string;
+    complication?: string;
+    clock?: string;
+    triggerEvent?: string;
+    initialImbalance?: string;
+    reversalPotential?: string;
+    falseResolution?: string;
+  } | null;
+  selectedAftertaste?: {
+    label?: string;
+    note?: string;
+    emotionalResidue?: string;
+    endingTexture?: string;
+    desiredAmbiguityLevel?: string;
+    readerQuestionLeftOpen?: string;
+    lastImageFeeling?: string;
+  } | null;
+  promptPack?: {
+    notes?: string;
+    instructionBias?: string;
+  };
+}
+
+function join(items: (string | undefined | null)[], sep = "; "): string {
+  return (items.filter(Boolean) as string[]).join(sep);
+}
+
+function nonEmpty(s: string | undefined | null): s is string {
+  return typeof s === "string" && s.trim().length > 0;
+}
+
+function section(header: string, lines: string[]): string[] {
+  const body = lines.filter(Boolean);
+  if (body.length === 0) return [];
+  return [header, ...body, ""];
+}
+
+function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
+  const out: string[] = [];
+
+  // 1. Premise
+  if (nonEmpty(p.project?.summary)) {
+    out.push(...section("## Premise", [p.project!.summary!]));
+  }
+
+  // 2. World & Constraints
+  const s = p.setting;
+  if (s?.included) {
+    const settingLines: string[] = [];
+    if (nonEmpty(s.summary)) settingLines.push(s.summary!);
+    if (s.worldRules?.length)    settingLines.push(`World rules: ${join(s.worldRules)}`);
+    if (s.constraints?.length)   settingLines.push(`Constraints: ${join(s.constraints)}`);
+    if (s.domains?.length)       settingLines.push(`Domains: ${join(s.domains, ", ")}`);
+    if (s.themes?.length)        settingLines.push(`Themes: ${join(s.themes, ", ")}`);
+    if (nonEmpty(s.season))              settingLines.push(`Season / Time: ${s.season}`);
+    if (nonEmpty(s.historicalPressure))  settingLines.push(`Historical pressure: ${s.historicalPressure}`);
+    if (nonEmpty(s.politicalForces))     settingLines.push(`Political forces: ${s.politicalForces}`);
+    if (nonEmpty(s.socialOrder))         settingLines.push(`Social order: ${s.socialOrder}`);
+    if (nonEmpty(s.environmentalPressure)) settingLines.push(`Environmental pressure: ${s.environmentalPressure}`);
+    if (nonEmpty(s.technologyLevel))     settingLines.push(`Technology level: ${s.technologyLevel}`);
+    if (nonEmpty(s.mythicFrame))         settingLines.push(`Mythic frame: ${s.mythicFrame}`);
+    if (nonEmpty(s.religiousPressure))   settingLines.push(`Religious pressure: ${s.religiousPressure}`);
+    if (nonEmpty(s.economicPressure))    settingLines.push(`Economic pressure: ${s.economicPressure}`);
+    if (s.taboos?.length)        settingLines.push(`Taboos: ${join(s.taboos)}`);
+    if (s.institutions?.length)  settingLines.push(`Institutions: ${join(s.institutions, ", ")}`);
+    if (s.dominantValues?.length) settingLines.push(`Dominant values: ${join(s.dominantValues, ", ")}`);
+    if (s.hiddenTruths?.length)  settingLines.push(`Hidden truths: ${join(s.hiddenTruths)}`);
+    if (nonEmpty(s.instructionBias)) settingLines.push(`Setting instruction: ${s.instructionBias}`);
+    out.push(...section("## World & Constraints", settingLines));
+  }
+
+  // 3. Selected Characters (highest priority selected element)
+  const chars = p.selectedCharacters;
+  if (chars?.length) {
+    out.push("## Characters");
+    for (const c of chars) {
+      if (nonEmpty(c.name)) out.push(`### ${c.name}`);
+      if (c.roles?.length)           out.push(`Roles: ${join(c.roles, ", ")}`);
+      if (c.goals?.length)           out.push(`Goals: ${join(c.goals)}`);
+      if (c.fears?.length)           out.push(`Fears: ${join(c.fears)}`);
+      if (c.flaws?.length)           out.push(`Flaws: ${join(c.flaws)}`);
+      if (c.secrets?.length)         out.push(`Secrets: ${join(c.secrets)}`);
+      if (c.wounds?.length)          out.push(`Wounds: ${join(c.wounds)}`);
+      if (nonEmpty(c.coreLie))       out.push(`Core lie: ${c.coreLie}`);
+      if (nonEmpty(c.coreTruth))     out.push(`Core truth: ${c.coreTruth}`);
+      if (nonEmpty(c.arcStart))      out.push(`Arc (start): ${c.arcStart}`);
+      if (nonEmpty(c.arcEnd))        out.push(`Arc (end): ${c.arcEnd}`);
+      if (c.breakingPoints?.length)  out.push(`Breaking points: ${join(c.breakingPoints)}`);
+      if (c.moralLines?.length)      out.push(`Moral lines: ${join(c.moralLines)}`);
+      if (c.selfDeceptions?.length)  out.push(`Self-deceptions: ${join(c.selfDeceptions)}`);
+      if (c.identityConflicts?.length) out.push(`Identity conflicts: ${join(c.identityConflicts)}`);
+      if (nonEmpty(c.instructionBias)) out.push(`Character instruction: ${c.instructionBias}`);
+    }
+    out.push("");
+  }
+
+  // 4. Selected Relationships
+  const rels = p.selectedRelationships;
+  if (rels?.length) {
+    out.push("## Relationships");
+    for (const r of rels) {
+      if (nonEmpty(r.name)) out.push(`### ${r.name}`);
+      if (nonEmpty(r.relationshipType)) out.push(`Type: ${r.relationshipType}`);
+      if (nonEmpty(r.tension))          out.push(`Tension: ${r.tension}`);
+      if (nonEmpty(r.unspokenTruth))    out.push(`Unspoken truth: ${r.unspokenTruth}`);
+      if (nonEmpty(r.whatEachWantsFromTheOther)) out.push(`What each wants: ${r.whatEachWantsFromTheOther}`);
+      if (nonEmpty(r.whatWouldBreakIt)) out.push(`What would break it: ${r.whatWouldBreakIt}`);
+      if (nonEmpty(r.whatWouldTransformIt)) out.push(`What would transform it: ${r.whatWouldTransformIt}`);
+    }
+    out.push("");
+  }
+
+  // 5. Selected Theme Questions
+  const themes = p.selectedThemeQuestions;
+  if (themes?.length) {
+    out.push("## Themes");
+    for (const t of themes) {
+      if (nonEmpty(t.question))      out.push(`- ${t.question}`);
+      if (nonEmpty(t.coreTension))   out.push(`  Core tension: ${t.coreTension}`);
+      if (nonEmpty(t.moralFaultLine)) out.push(`  Moral fault line: ${t.moralFaultLine}`);
+      if (nonEmpty(t.endingTruth))   out.push(`  Ending truth: ${t.endingTruth}`);
+    }
+    out.push("");
+  }
+
+  // 6. Selected Motifs
+  const motifs = p.selectedMotifs;
+  if (motifs?.length) {
+    out.push("## Motifs");
+    for (const m of motifs) {
+      out.push(`- ${m.label ?? ""}${nonEmpty(m.meaning) ? ": " + m.meaning : ""}`);
+    }
+    out.push("");
+  }
+
+  // 7. Dramatic Seed — spark translated into an explicit writing instruction
+  const spark = p.selectedStorySpark;
+  if (spark) {
+    const sparkLines: string[] = [];
+    sparkLines.push(
+      `Bring this dramatic situation directly to life in the writing: "${spark.title ?? ""}"`,
+    );
+    if (nonEmpty(spark.situation))        sparkLines.push(`Situation: ${spark.situation}`);
+    if (nonEmpty(spark.stakes))           sparkLines.push(`Stakes: ${spark.stakes}`);
+    if (nonEmpty(spark.urgency))          sparkLines.push(`Urgency: ${spark.urgency}`);
+    if (nonEmpty(spark.threat))           sparkLines.push(`Threat: ${spark.threat}`);
+    if (nonEmpty(spark.twist))            sparkLines.push(`Twist: ${spark.twist}`);
+    if (nonEmpty(spark.opportunity))      sparkLines.push(`Opportunity: ${spark.opportunity}`);
+    if (nonEmpty(spark.complication))     sparkLines.push(`Complication: ${spark.complication}`);
+    if (nonEmpty(spark.clock))            sparkLines.push(`Clock: ${spark.clock}`);
+    if (nonEmpty(spark.triggerEvent))     sparkLines.push(`Trigger event: ${spark.triggerEvent}`);
+    if (nonEmpty(spark.initialImbalance)) sparkLines.push(`Initial imbalance: ${spark.initialImbalance}`);
+    if (nonEmpty(spark.reversalPotential)) sparkLines.push(`Reversal potential: ${spark.reversalPotential}`);
+    if (nonEmpty(spark.falseResolution))  sparkLines.push(`False resolution: ${spark.falseResolution}`);
+    out.push(...section("## Dramatic Seed", sparkLines));
+  }
+
+  // 8. Ending Instruction — aftertaste translated into a directive for the closing beat
+  const at = p.selectedAftertaste;
+  if (at) {
+    const atLines: string[] = [];
+    atLines.push(`Close the piece so the reader feels: ${at.label ?? ""}`);
+    if (nonEmpty(at.note))                  atLines.push(at.note!);
+    if (nonEmpty(at.emotionalResidue))      atLines.push(`Emotional residue: ${at.emotionalResidue}`);
+    if (nonEmpty(at.endingTexture))         atLines.push(`Ending texture: ${at.endingTexture}`);
+    if (nonEmpty(at.desiredAmbiguityLevel)) atLines.push(`Ambiguity: ${at.desiredAmbiguityLevel}`);
+    if (nonEmpty(at.readerQuestionLeftOpen)) atLines.push(`Leave open: ${at.readerQuestionLeftOpen}`);
+    if (nonEmpty(at.lastImageFeeling))      atLines.push(`Last image: ${at.lastImageFeeling}`);
+    out.push(...section("## Ending Instruction", atLines));
+  }
+
+  // 9. Pack-level notes and instruction bias
+  if (nonEmpty(p.promptPack?.notes)) {
+    out.push(...section("## Notes", [p.promptPack!.notes!]));
+  }
+  if (nonEmpty(p.promptPack?.instructionBias)) {
+    out.push(...section("## Instruction Bias", [p.promptPack!.instructionBias!]));
+  }
+
+  return out;
+}
+
 function buildPrompt(req: {
   sourcePayloadJSON: unknown;
   generationAction: GenerationAction;
@@ -270,66 +529,97 @@ function buildPrompt(req: {
   projectName: string;
   promptPackName: string;
 }): string {
-  const payloadText =
-    typeof req.sourcePayloadJSON === "string"
-      ? req.sourcePayloadJSON
-      : JSON.stringify(req.sourcePayloadJSON, null, 2);
+  // Parse the payload — degrade gracefully if malformed.
+  let payload: PromptPackPayloadShape = {};
+  try {
+    payload = (
+      typeof req.sourcePayloadJSON === "string"
+        ? JSON.parse(req.sourcePayloadJSON)
+        : req.sourcePayloadJSON
+    ) as PromptPackPayloadShape;
+  } catch {
+    // Payload could not be parsed — continue with empty shape so the writing
+    // task and instructions are still emitted.
+  }
+
+  // Resolve audience fields — prefer top-level req fields, fall back to payload.
+  const readingLevel  = req.readingLevel  || payload?.project?.readingLevel  || "";
+  const contentRating = req.contentRating || payload?.project?.contentRating || "";
+  const audienceNotes = req.audienceNotes || payload?.project?.audienceNotes || "";
+
+  const actionTask: Record<GenerationAction, string> = {
+    generate:
+      "Write an opening story scene that brings the premise and selected elements to life.",
+    regenerate:
+      "Write a fresh story scene based on the same premise and selected elements — a new take, not a copy.",
+    continue:
+      "Continue the story directly from where the previous passage ended. Do not repeat or summarize what has already been written.",
+    remix:
+      "Reinterpret the premise and selected elements in a creative new direction while keeping the core characters and world intact.",
+  };
 
   const lengthGuidance: Record<LengthMode, string> = {
     short:
-      "Write one complete short scene or vignette with a clear beginning, middle, and end (roughly 300-500 words).",
+      "Length: one complete short scene or vignette (roughly 300–500 words).",
     medium:
-      "Write one complete scene with a full dramatic beat and a clean ending (roughly 600-1000 words).",
+      "Length: one complete scene with a full dramatic beat (roughly 600–1000 words).",
     long:
-      "Write a complete extended multi-beat scene sequence that lands on a clear closing beat (roughly 1200-2000 words).",
+      "Length: a complete extended multi-beat scene sequence (roughly 1200–2000 words).",
     chapter:
-      "Write one complete chapter-shaped section with progression and a clear closing beat (roughly 2500-4000 words).",
-  };
-
-  const actionGuidance: Record<GenerationAction, string> = {
-    generate:
-      "Generate a brand-new story passage based on the details below.",
-    regenerate:
-      "Regenerate the story passage -- produce a fresh take on the same source material.",
-    continue:
-      "Continue the story from where the previous passage left off. Do not repeat content that has already been written.",
-    remix:
-      "Remix the story -- reinterpret the source material in a creative new direction while respecting the core characters and setting.",
+      "Length: one complete chapter-shaped section with progression (roughly 2500–4000 words).",
   };
 
   const lines: string[] = [
     "You are a creative writing assistant helping authors craft compelling story content.",
     "",
-    `Action: ${actionGuidance[req.generationAction]}`,
-    `Length: ${lengthGuidance[req.generationLengthMode]}`,
-    `Approximate maximum output: ${req.outputBudget} tokens.`,
-    "",
   ];
 
-  if (req.readingLevel) lines.push(`Reading level: ${req.readingLevel}`);
-  if (req.contentRating) lines.push(`Content rating: ${req.contentRating}`);
-  if (req.audienceNotes) lines.push(`Audience notes: ${req.audienceNotes}`);
-  if (req.projectName) lines.push(`Project: ${req.projectName}`);
-  if (req.promptPackName) lines.push(`Prompt pack: ${req.promptPackName}`);
+  // Audience controls (emit early so the model sees them before the content)
+  if (readingLevel || contentRating || audienceNotes) {
+    if (readingLevel)  lines.push(`Reading level: ${readingLevel}`);
+    if (contentRating) lines.push(`Content rating: ${contentRating}`);
+    if (audienceNotes) lines.push(`Audience notes: ${audienceNotes}`);
+    lines.push("");
+  }
 
-  lines.push("", "--- Story context / prompt pack payload ---", payloadText);
+  // Structured story context extracted from payload
+  lines.push(...buildStructuredPromptBody(payload));
 
+  // Previous output for continue / remix
   if (
     (req.generationAction === "continue" || req.generationAction === "remix") &&
     req.previousOutputText
   ) {
     lines.push(
-      "",
-      "--- Previous output (do not repeat verbatim) ---",
+      "## Previous Output",
+      "Do not repeat or closely paraphrase what follows — continue or reinterpret from this point:",
       req.previousOutputText,
+      "",
     );
   }
 
+  // Writing Task — explicit statement of what to produce
   lines.push(
+    "## Writing Task",
+    actionTask[req.generationAction],
+    lengthGuidance[req.generationLengthMode],
+    `Approximate maximum output: ${req.outputBudget} tokens.`,
     "",
-    "Write only the story content. Do not include meta-commentary, titles, or headings unless the prompt pack explicitly requests them.",
-    "Respect the reading level, content rating, and audience notes above at all times.",
-    "End cleanly within the requested length. Do not stop mid-sentence. If you cannot cover everything, narrow the scope rather than continuing until cut off.",
+  );
+
+  // Writing Instructions — stable block
+  lines.push(
+    "## Writing Instructions",
+    "- Write actual story prose, not summary or setup description",
+    "- Use the selected characters, relationships, spark, and motifs directly — put them in the scene",
+    "- Preserve the premise and any world constraints established above",
+    "- Write with tension, movement, and specificity",
+    "- Avoid generic filler and avoid simply restating the setup",
+    "- Close the piece according to the Ending Instruction if one is present",
+    "- Respect the reading level, content rating, and audience notes at all times",
+    "- Do not include meta-commentary, titles, or headings unless explicitly requested",
+    "- End cleanly within the requested length; do not stop mid-sentence",
+    "- If you cannot cover everything, narrow the scope rather than running over",
   );
 
   return lines.join("\n");

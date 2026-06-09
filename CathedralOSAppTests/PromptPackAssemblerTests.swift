@@ -63,7 +63,7 @@ final class PromptPackAssemblerTests: XCTestCase {
 
         let output = PromptPackAssembler.assemble(pack: pack, project: project)
 
-        XCTAssertTrue(output.contains("## Setting"), "Setting section must appear when enabled")
+        XCTAssertTrue(output.contains("## World & Constraints"), "Setting section must appear when enabled")
         XCTAssertTrue(output.contains("Victorian London"))
     }
 
@@ -78,7 +78,7 @@ final class PromptPackAssemblerTests: XCTestCase {
 
         let output = PromptPackAssembler.assemble(pack: pack, project: project)
 
-        XCTAssertFalse(output.contains("## Setting"), "Setting section must not appear when disabled")
+        XCTAssertFalse(output.contains("## World & Constraints"), "Setting section must not appear when disabled")
         XCTAssertFalse(output.contains("Victorian London"))
     }
 
@@ -91,7 +91,7 @@ final class PromptPackAssemblerTests: XCTestCase {
 
         let output = PromptPackAssembler.assemble(pack: pack, project: project)
 
-        XCTAssertFalse(output.contains("## Setting"), "Setting section must not appear when project has no setting object")
+        XCTAssertFalse(output.contains("## World & Constraints"), "Setting section must not appear when project has no setting object")
     }
 
     func testSettingFieldsRendered() {
@@ -206,7 +206,8 @@ final class PromptPackAssemblerTests: XCTestCase {
 
         let output = PromptPackAssembler.assemble(pack: pack, project: project)
 
-        XCTAssertTrue(output.contains("## Story Spark: The Last Train"))
+        XCTAssertTrue(output.contains("## Dramatic Seed"))
+        XCTAssertTrue(output.contains("The Last Train"))
         XCTAssertTrue(output.contains("The station is empty."))
         XCTAssertTrue(output.contains("She might not make it."))
         XCTAssertTrue(output.contains("The conductor is her father."))
@@ -222,7 +223,7 @@ final class PromptPackAssemblerTests: XCTestCase {
 
         let output = PromptPackAssembler.assemble(pack: pack, project: project)
 
-        XCTAssertFalse(output.contains("## Story Spark:"))
+        XCTAssertFalse(output.contains("## Dramatic Seed"))
     }
 
     func testSparkWithNoTwistOmitsTwistLine() {
@@ -252,7 +253,8 @@ final class PromptPackAssemblerTests: XCTestCase {
 
         let output = PromptPackAssembler.assemble(pack: pack, project: project)
 
-        XCTAssertTrue(output.contains("## Aftertaste: Quiet dread"))
+        XCTAssertTrue(output.contains("## Ending Instruction"))
+        XCTAssertTrue(output.contains("Quiet dread"))
         XCTAssertTrue(output.contains("Never fully resolves."))
     }
 
@@ -266,7 +268,7 @@ final class PromptPackAssemblerTests: XCTestCase {
 
         let output = PromptPackAssembler.assemble(pack: pack, project: project)
 
-        XCTAssertFalse(output.contains("## Aftertaste:"))
+        XCTAssertFalse(output.contains("## Ending Instruction"))
     }
 
     func testAftertasteWithNoNoteOmitsNoteLine() {
@@ -280,13 +282,63 @@ final class PromptPackAssemblerTests: XCTestCase {
 
         let output = PromptPackAssembler.assemble(pack: pack, project: project)
 
-        // Header should still appear; no extra line beyond it
-        XCTAssertTrue(output.contains("## Aftertaste: Quiet dread"))
-        let lines = output.components(separatedBy: "\n\n")
-        let aftertasteSection = lines.first(where: { $0.hasPrefix("## Aftertaste:") })
-        XCTAssertEqual(aftertasteSection?.trimmingCharacters(in: .whitespacesAndNewlines),
-                       "## Aftertaste: Quiet dread",
-                       "Aftertaste section should contain only header when note is nil")
+        XCTAssertTrue(output.contains("## Ending Instruction"), "Ending Instruction header must appear")
+        XCTAssertTrue(output.contains("Quiet dread"), "Aftertaste label must appear as feeling directive")
+        // No extra line beyond the directive when note is nil
+        let components = output.components(separatedBy: "\n\n")
+        let endingSection = components.first(where: { $0.hasPrefix("## Ending Instruction") })
+        XCTAssertNotNil(endingSection)
+        let endingLines = endingSection!.components(separatedBy: "\n")
+        // Should be exactly 2 lines: header + directive
+        XCTAssertEqual(endingLines.count, 2,
+                       "Ending Instruction with no note should have only header and directive lines")
+    }
+
+    // MARK: Writing Task and Writing Instructions
+
+    func testWritingTaskAlwaysPresent() {
+        let project = makeProject()
+        let pack = makePack()
+        pack.includeProjectSetting = false
+
+        let output = PromptPackAssembler.assemble(pack: pack, project: project)
+
+        XCTAssertTrue(output.contains("## Writing Task"), "Writing Task section must always be present")
+    }
+
+    func testWritingInstructionsAlwaysPresent() {
+        let project = makeProject()
+        let pack = makePack()
+        pack.includeProjectSetting = false
+
+        let output = PromptPackAssembler.assemble(pack: pack, project: project)
+
+        XCTAssertTrue(output.contains("## Writing Instructions"), "Writing Instructions section must always be present")
+    }
+
+    // MARK: Premise section
+
+    func testPremiseSectionWhenSummaryPresent() {
+        let project = makeProject()
+        project.summary = "A dark Victorian thriller."
+        let pack = makePack()
+        pack.includeProjectSetting = false
+
+        let output = PromptPackAssembler.assemble(pack: pack, project: project)
+
+        XCTAssertTrue(output.contains("## Premise"), "Premise section must appear when summary is present")
+        XCTAssertTrue(output.contains("A dark Victorian thriller."))
+    }
+
+    func testPremiseSectionAbsentWhenNoSummary() {
+        let project = makeProject()
+        project.summary = ""
+        let pack = makePack()
+        pack.includeProjectSetting = false
+
+        let output = PromptPackAssembler.assemble(pack: pack, project: project)
+
+        XCTAssertFalse(output.contains("## Premise"), "Premise section must not appear when summary is empty")
     }
 
     // MARK: Pack notes and instruction bias
@@ -344,20 +396,26 @@ final class PromptPackAssemblerTests: XCTestCase {
 
         let output = PromptPackAssembler.assemble(pack: pack, project: project)
 
-        let headerIdx    = output.range(of: "# Test Project")!.lowerBound
-        let settingIdx   = output.range(of: "## Setting")!.lowerBound
-        let charIdx      = output.range(of: "## Characters")!.lowerBound
-        let sparkIdx     = output.range(of: "## Story Spark:")!.lowerBound
-        let atIdx        = output.range(of: "## Aftertaste:")!.lowerBound
-        let notesIdx     = output.range(of: "## Notes")!.lowerBound
-        let biasIdx      = output.range(of: "## Instruction Bias")!.lowerBound
+        let headerIdx      = output.range(of: "# Test Project")!.lowerBound
+        let premiseIdx     = output.range(of: "## Premise")!.lowerBound
+        let constraintsIdx = output.range(of: "## World & Constraints")!.lowerBound
+        let charIdx        = output.range(of: "## Characters")!.lowerBound
+        let sparkIdx       = output.range(of: "## Dramatic Seed")!.lowerBound
+        let atIdx          = output.range(of: "## Ending Instruction")!.lowerBound
+        let notesIdx       = output.range(of: "## Notes")!.lowerBound
+        let biasIdx        = output.range(of: "## Instruction Bias")!.lowerBound
+        let taskIdx        = output.range(of: "## Writing Task")!.lowerBound
+        let instrIdx       = output.range(of: "## Writing Instructions")!.lowerBound
 
-        XCTAssertLessThan(headerIdx,  settingIdx,  "Header before Setting")
-        XCTAssertLessThan(settingIdx, charIdx,     "Setting before Characters")
-        XCTAssertLessThan(charIdx,    sparkIdx,    "Characters before Story Spark")
-        XCTAssertLessThan(sparkIdx,   atIdx,       "Story Spark before Aftertaste")
-        XCTAssertLessThan(atIdx,      notesIdx,    "Aftertaste before Notes")
-        XCTAssertLessThan(notesIdx,   biasIdx,     "Notes before Instruction Bias")
+        XCTAssertLessThan(headerIdx,      premiseIdx,      "Header before Premise")
+        XCTAssertLessThan(premiseIdx,     constraintsIdx,  "Premise before World & Constraints")
+        XCTAssertLessThan(constraintsIdx, charIdx,         "World & Constraints before Characters")
+        XCTAssertLessThan(charIdx,        sparkIdx,        "Characters before Dramatic Seed")
+        XCTAssertLessThan(sparkIdx,       atIdx,           "Dramatic Seed before Ending Instruction")
+        XCTAssertLessThan(atIdx,          notesIdx,        "Ending Instruction before Notes")
+        XCTAssertLessThan(notesIdx,       biasIdx,         "Notes before Instruction Bias")
+        XCTAssertLessThan(biasIdx,        taskIdx,         "Instruction Bias before Writing Task")
+        XCTAssertLessThan(taskIdx,        instrIdx,        "Writing Task before Writing Instructions")
     }
 
     // MARK: Minimal output
@@ -370,11 +428,14 @@ final class PromptPackAssemblerTests: XCTestCase {
         let output = PromptPackAssembler.assemble(pack: pack, project: project)
 
         XCTAssertTrue(output.contains("# Test Project"))
-        XCTAssertFalse(output.contains("## Setting"))
+        XCTAssertFalse(output.contains("## World & Constraints"))
         XCTAssertFalse(output.contains("## Characters"))
-        XCTAssertFalse(output.contains("## Story Spark:"))
-        XCTAssertFalse(output.contains("## Aftertaste:"))
+        XCTAssertFalse(output.contains("## Dramatic Seed"))
+        XCTAssertFalse(output.contains("## Ending Instruction"))
         XCTAssertFalse(output.contains("## Notes"))
         XCTAssertFalse(output.contains("## Instruction Bias"))
+        // Stable instruction blocks are always present
+        XCTAssertTrue(output.contains("## Writing Task"))
+        XCTAssertTrue(output.contains("## Writing Instructions"))
     }
 }
