@@ -290,16 +290,17 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             }
 
             // Log diagnostics before save.
+            let existingState = existingProject != nil ? "yes" : "no"
+            let nestedSummary = [
+                "chars \(nestedBefore.characters)->\(nestedAfter.characters)",
+                "sparks \(nestedBefore.sparks)->\(nestedAfter.sparks)",
+                "aftertastes \(nestedBefore.aftertastes)->\(nestedAfter.aftertastes)",
+                "relationships \(nestedBefore.relationships)->\(nestedAfter.relationships)",
+                "questions \(nestedBefore.themeQuestions)->\(nestedAfter.themeQuestions)",
+                "motifs \(nestedBefore.motifs)->\(nestedAfter.motifs)"
+            ].joined(separator: " ")
             logger.log(
-                "Restore project \(projectID.uuidString, privacy: .public) " +
-                "existing=\(existingProject != nil ? "yes" : "no", privacy: .public) " +
-                "chars \(nestedBefore.characters, privacy: .public)->\(nestedAfter.characters, privacy: .public) " +
-                "sparks \(nestedBefore.sparks, privacy: .public)->\(nestedAfter.sparks, privacy: .public) " +
-                "aftertastes \(nestedBefore.aftertastes, privacy: .public)->\(nestedAfter.aftertastes, privacy: .public) " +
-                "relationships \(nestedBefore.relationships, privacy: .public)->\(nestedAfter.relationships, privacy: .public) " +
-                "questions \(nestedBefore.themeQuestions, privacy: .public)->\(nestedAfter.themeQuestions, privacy: .public) " +
-                "motifs \(nestedBefore.motifs, privacy: .public)->\(nestedAfter.motifs, privacy: .public) " +
-                "saving..."
+                "Restore project \(projectID.uuidString, privacy: .public) existing=\(existingState, privacy: .public) \(nestedSummary, privacy: .public) saving..."
             )
 
             // Save one project at a time; surface failure with identifying context.
@@ -323,14 +324,15 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             }
         }
 
-        logger.log(
-            "Restore complete: local_before=\(localProjectCountBefore, privacy: .public) " +
-            "cloud_fetched=\(rows.count, privacy: .public) " +
-            "inserted=\(insertedCount, privacy: .public) " +
-            "updated=\(updatedCount, privacy: .public) " +
-            "skipped_tombstoned=\(skippedTombstonedCount, privacy: .public) " +
-            "duplicate_warnings=\(duplicateWarnings.count, privacy: .public)"
-        )
+        let restoreSummary = [
+            "local_before=\(localProjectCountBefore)",
+            "cloud_fetched=\(rows.count)",
+            "inserted=\(insertedCount)",
+            "updated=\(updatedCount)",
+            "skipped_tombstoned=\(skippedTombstonedCount)",
+            "duplicate_warnings=\(duplicateWarnings.count)"
+        ].joined(separator: " ")
+        logger.log("Restore complete: \(restoreSummary, privacy: .public)")
         duplicateWarnings.forEach { warning in
             logger.warning("\(warning, privacy: .public)")
         }
