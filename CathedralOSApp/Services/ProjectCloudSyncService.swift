@@ -10,6 +10,12 @@ enum ProjectCloudSyncError: Error, LocalizedError {
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
     case decodingError(Error)
+    /// A restore is already in progress; the duplicate call was ignored.
+    case restoreAlreadyInProgress
+    /// SwiftData save failed for a specific project during restore.
+    case saveFailed(localProjectID: String, underlying: Error)
+    /// Duplicate stable IDs detected in a project's child entities before save.
+    case duplicateChildIDsDetected(localProjectID: String, detail: String)
 
     var errorDescription: String? {
         switch self {
@@ -31,6 +37,12 @@ enum ProjectCloudSyncError: Error, LocalizedError {
             return base
         case .decodingError(let underlying):
             return "Could not parse the project sync response: \(underlying.localizedDescription)"
+        case .restoreAlreadyInProgress:
+            return "A cloud restore is already in progress. Please wait for it to complete."
+        case .saveFailed(let localProjectID, let underlying):
+            return "Restore save failed for project \(localProjectID): \(underlying.localizedDescription)"
+        case .duplicateChildIDsDetected(let localProjectID, let detail):
+            return "Duplicate child IDs detected in project \(localProjectID) before save. Restore stopped: \(detail)"
         }
     }
 }
@@ -61,10 +73,12 @@ protocol ProjectCloudSyncServiceProtocol {
     func syncAllProjects(in context: ModelContext) async throws
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws
     func cloudSnapshotPresence() async -> CloudSnapshotPresence
+    @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport
 }
 
 extension ProjectCloudSyncServiceProtocol {
+    @MainActor
     func restoreAllProjects(into context: ModelContext) async throws -> ProjectRestoreReport {
         try await restoreAllProjects(into: context, includeTombstoned: false)
     }
@@ -80,7 +94,16 @@ struct ProjectRestoreReport {
     let duplicateWarnings: [String]
 
     var summaryMessage: String {
-        "Restored \(insertedCount) new projects, updated \(updatedCount) existing projects, skipped \(skippedTombstonedCount) tombstoned projects."
+        var parts: [String] = []
+        parts.append("Projects restored: \(insertedCount)")
+        parts.append("Projects updated: \(updatedCount)")
+        if !duplicateWarnings.isEmpty {
+            parts.append("Duplicates repaired: \(duplicateWarnings.count)")
+        }
+        if skippedTombstonedCount > 0 {
+            parts.append("Skipped (deleted): \(skippedTombstonedCount)")
+        }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -94,6 +117,9 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     private let configuration: ValidatedSupabaseConfiguration?
     private let tombstoneService: any SyncTombstoneServiceProtocol
     private let logger = Logger(subsystem: "CathedralOS", category: "ProjectSync")
+
+    /// Guards against concurrent restore calls; isolated to @MainActor.
+    @MainActor private var isRestoringProjects = false
 
     init(
         authService: AuthService = BackendAuthService.shared,
@@ -175,7 +201,17 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         }
     }
 
+    @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
+        // Phase 0: prevent concurrent restores.
+        guard !isRestoringProjects else {
+            logger.info("Restore already in progress; ignoring duplicate call.")
+            throw ProjectCloudSyncError.restoreAlreadyInProgress
+        }
+        isRestoringProjects = true
+        defer { isRestoringProjects = false }
+
+        // Phase A: fetch and decode cloud payloads into plain DTOs.
         let (client, _, accessToken) = try await validatedClientAndSession()
         var components = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
         components?.queryItems = [
@@ -190,8 +226,17 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         request.httpMethod = "GET"
 
         let rows = try await fetch([ProjectSnapshotCloudRecord].self, request: request)
+
+        // Phase B: reconcile DTOs into SwiftData.
         let localProjectCountBefore = try context.fetchCount(FetchDescriptor<StoryProject>())
-        let duplicateWarnings = try deduplicateLocalProjects(in: context) + duplicateWarnings(in: rows)
+        logger.log(
+            "Restore starting: local_before=\(localProjectCountBefore, privacy: .public) cloud_fetched=\(rows.count, privacy: .public)"
+        )
+
+        let dedupeWarnings = try deduplicateLocalProjects(in: context)
+        let cloudWarnings = duplicateWarnings(in: rows)
+        let duplicateWarnings = dedupeWarnings + cloudWarnings
+
         let tombstones = includeTombstoned
             ? SyncTombstoneSet(records: [])
             : ((try? await tombstoneService.fetchProjectTombstones()) ?? SyncTombstoneSet(records: []))
@@ -210,31 +255,81 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             }
             if !includeTombstoned, tombstones.isTombstoned(localID: projectID.uuidString) {
                 skippedTombstonedCount += 1
+                logger.log("Skipped tombstoned project \(projectID.uuidString, privacy: .public)")
                 continue
             }
 
-            if let existing = findLocalProject(projectID: projectID, in: context) {
+            let existingProject = findLocalProject(projectID: projectID, in: context)
+            let nestedBefore = nestedEntityCounts(existingProject)
+
+            let project: StoryProject
+            let isUpdate: Bool
+            if let existing = existingProject {
                 reconcileProject(existing, with: row.snapshotJSON, in: context)
-                if touchedIDs.insert(existing.id).inserted {
-                    touchedProjects.append(existing)
-                    updatedCount += 1
-                }
+                project = existing
+                isUpdate = true
             } else {
-                let project = ProjectImportMapper.map(row.snapshotJSON)
-                project.id = projectID
-                context.insert(project)
+                let newProject = ProjectImportMapper.map(row.snapshotJSON)
+                newProject.id = projectID
+                context.insert(newProject)
+                project = newProject
+                isUpdate = false
+            }
+
+            let nestedAfter = nestedEntityCounts(project)
+
+            // Hard duplicate detection: stop and surface rather than crash.
+            if let duplicateDetail = detectDuplicateChildIDs(in: project) {
+                logger.error(
+                    "Duplicate child IDs detected in project \(projectID.uuidString, privacy: .public): \(duplicateDetail, privacy: .public)"
+                )
+                throw ProjectCloudSyncError.duplicateChildIDsDetected(
+                    localProjectID: projectID.uuidString,
+                    detail: duplicateDetail
+                )
+            }
+
+            // Log diagnostics before save.
+            logger.log(
+                "Restore project \(projectID.uuidString, privacy: .public) " +
+                "existing=\(existingProject != nil ? "yes" : "no", privacy: .public) " +
+                "chars \(nestedBefore.characters, privacy: .public)->\(nestedAfter.characters, privacy: .public) " +
+                "sparks \(nestedBefore.sparks, privacy: .public)->\(nestedAfter.sparks, privacy: .public) " +
+                "aftertastes \(nestedBefore.aftertastes, privacy: .public)->\(nestedAfter.aftertastes, privacy: .public) " +
+                "relationships \(nestedBefore.relationships, privacy: .public)->\(nestedAfter.relationships, privacy: .public) " +
+                "questions \(nestedBefore.themeQuestions, privacy: .public)->\(nestedAfter.themeQuestions, privacy: .public) " +
+                "motifs \(nestedBefore.motifs, privacy: .public)->\(nestedAfter.motifs, privacy: .public) " +
+                "saving..."
+            )
+
+            // Save one project at a time; surface failure with identifying context.
+            do {
+                try context.save()
+                logger.log("Restore save succeeded for project \(projectID.uuidString, privacy: .public)")
+            } catch {
+                logger.error(
+                    "Restore save FAILED for project \(projectID.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+                throw ProjectCloudSyncError.saveFailed(localProjectID: projectID.uuidString, underlying: error)
+            }
+
+            if touchedIDs.insert(project.id).inserted {
                 touchedProjects.append(project)
-                touchedIDs.insert(project.id)
-                insertedCount += 1
+                if isUpdate {
+                    updatedCount += 1
+                } else {
+                    insertedCount += 1
+                }
             }
         }
 
-        if insertedCount > 0 || updatedCount > 0 || !duplicateWarnings.isEmpty {
-            try context.save()
-        }
-
         logger.log(
-            "Project restore diagnostics local_before=\(localProjectCountBefore, privacy: .public) cloud_before=\(rows.count, privacy: .public) inserted=\(insertedCount, privacy: .public) updated=\(updatedCount, privacy: .public) skipped_tombstoned=\(skippedTombstonedCount, privacy: .public) duplicate_warnings=\(duplicateWarnings.count, privacy: .public)"
+            "Restore complete: local_before=\(localProjectCountBefore, privacy: .public) " +
+            "cloud_fetched=\(rows.count, privacy: .public) " +
+            "inserted=\(insertedCount, privacy: .public) " +
+            "updated=\(updatedCount, privacy: .public) " +
+            "skipped_tombstoned=\(skippedTombstonedCount, privacy: .public) " +
+            "duplicate_warnings=\(duplicateWarnings.count, privacy: .public)"
         )
         duplicateWarnings.forEach { warning in
             logger.warning("\(warning, privacy: .public)")
@@ -475,7 +570,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     }
 
     private func mergeCharacters(from sourceCharacters: [StoryCharacter], into destination: StoryProject) {
-        var existing = Dictionary(uniqueKeysWithValues: destination.characters.map { ($0.id, $0) })
+        var existing = Dictionary(destination.characters.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         for character in sourceCharacters {
             if let current = existing[character.id] {
                 if current.name.isEmpty { current.name = character.name }
@@ -518,7 +613,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     }
 
     private func mergeSparks(from sourceSparks: [StorySpark], into destination: StoryProject) {
-        var existing = Dictionary(uniqueKeysWithValues: destination.storySparks.map { ($0.id, $0) })
+        var existing = Dictionary(destination.storySparks.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         for spark in sourceSparks {
             if let current = existing[spark.id] {
                 if current.title.isEmpty { current.title = spark.title }
@@ -544,7 +639,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     }
 
     private func mergeAftertastes(from sourceAftertastes: [Aftertaste], into destination: StoryProject) {
-        var existing = Dictionary(uniqueKeysWithValues: destination.aftertastes.map { ($0.id, $0) })
+        var existing = Dictionary(destination.aftertastes.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         for aftertaste in sourceAftertastes {
             if let current = existing[aftertaste.id] {
                 if current.label.isEmpty { current.label = aftertaste.label }
@@ -564,7 +659,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     }
 
     private func mergeRelationships(from sourceRelationships: [StoryRelationship], into destination: StoryProject) {
-        var existing = Dictionary(uniqueKeysWithValues: destination.relationships.map { ($0.id, $0) })
+        var existing = Dictionary(destination.relationships.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         for relationship in sourceRelationships {
             if let current = existing[relationship.id] {
                 if current.name.isEmpty { current.name = relationship.name }
@@ -593,7 +688,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     }
 
     private func mergeThemeQuestions(from sourceQuestions: [ThemeQuestion], into destination: StoryProject) {
-        var existing = Dictionary(uniqueKeysWithValues: destination.themeQuestions.map { ($0.id, $0) })
+        var existing = Dictionary(destination.themeQuestions.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         for question in sourceQuestions {
             if let current = existing[question.id] {
                 if current.question.isEmpty { current.question = question.question }
@@ -612,7 +707,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     }
 
     private func mergeMotifs(from sourceMotifs: [Motif], into destination: StoryProject) {
-        var existing = Dictionary(uniqueKeysWithValues: destination.motifs.map { ($0.id, $0) })
+        var existing = Dictionary(destination.motifs.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         for motif in sourceMotifs {
             if let current = existing[motif.id] {
                 if current.label.isEmpty { current.label = motif.label }
@@ -644,6 +739,53 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             destination.generations.append(generation)
         }
     }
+
+    // MARK: - Diagnostics helpers
+
+    private struct NestedEntityCounts {
+        var characters = 0
+        var sparks = 0
+        var aftertastes = 0
+        var relationships = 0
+        var themeQuestions = 0
+        var motifs = 0
+    }
+
+    private func nestedEntityCounts(_ project: StoryProject?) -> NestedEntityCounts {
+        guard let project else { return NestedEntityCounts() }
+        return NestedEntityCounts(
+            characters: project.characters.count,
+            sparks: project.storySparks.count,
+            aftertastes: project.aftertastes.count,
+            relationships: project.relationships.count,
+            themeQuestions: project.themeQuestions.count,
+            motifs: project.motifs.count
+        )
+    }
+
+    /// Returns a non-nil description if any child collection contains duplicate stable IDs.
+    private func detectDuplicateChildIDs(in project: StoryProject) -> String? {
+        var issues: [String] = []
+
+        func check<T: Identifiable>(_ items: [T], name: String) where T.ID == UUID {
+            let total = items.count
+            let unique = Set(items.map(\.id)).count
+            if unique < total {
+                issues.append("\(name): \(total - unique) duplicate(s) of \(total)")
+            }
+        }
+
+        check(project.characters, name: "characters")
+        check(project.storySparks, name: "sparks")
+        check(project.aftertastes, name: "aftertastes")
+        check(project.relationships, name: "relationships")
+        check(project.themeQuestions, name: "themeQuestions")
+        check(project.motifs, name: "motifs")
+
+        return issues.isEmpty ? nil : issues.joined(separator: "; ")
+    }
+
+    // MARK: - Reconcile helpers
 
     private func reconcileProject(_ project: StoryProject, with payload: ProjectImportExportPayload, in context: ModelContext) {
         project.name = payload.project.name
@@ -709,7 +851,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         for project: StoryProject,
         in context: ModelContext
     ) -> [String: UUID] {
-        var existingByID = Dictionary(uniqueKeysWithValues: project.characters.map { ($0.id, $0) })
+        var existingByID = Dictionary(project.characters.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         var reconciled: [StoryCharacter] = []
         var characterIDMap: [String: UUID] = [:]
 
@@ -766,7 +908,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         for project: StoryProject,
         in context: ModelContext
     ) {
-        var existingByID = Dictionary(uniqueKeysWithValues: project.storySparks.map { ($0.id, $0) })
+        var existingByID = Dictionary(project.storySparks.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         var reconciled: [StorySpark] = []
 
         for payload in payloads {
@@ -804,7 +946,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         for project: StoryProject,
         in context: ModelContext
     ) {
-        var existingByID = Dictionary(uniqueKeysWithValues: project.aftertastes.map { ($0.id, $0) })
+        var existingByID = Dictionary(project.aftertastes.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         var reconciled: [Aftertaste] = []
 
         for payload in payloads {
@@ -836,7 +978,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         for project: StoryProject,
         in context: ModelContext
     ) {
-        var existingByID = Dictionary(uniqueKeysWithValues: project.relationships.map { ($0.id, $0) })
+        var existingByID = Dictionary(project.relationships.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         var reconciled: [StoryRelationship] = []
 
         for payload in payloads {
@@ -886,7 +1028,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         for project: StoryProject,
         in context: ModelContext
     ) {
-        var existingByID = Dictionary(uniqueKeysWithValues: project.themeQuestions.map { ($0.id, $0) })
+        var existingByID = Dictionary(project.themeQuestions.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         var reconciled: [ThemeQuestion] = []
 
         for payload in payloads {
@@ -916,7 +1058,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         for project: StoryProject,
         in context: ModelContext
     ) {
-        var existingByID = Dictionary(uniqueKeysWithValues: project.motifs.map { ($0.id, $0) })
+        var existingByID = Dictionary(project.motifs.map { ($0.id, $0) }, uniquingKeysWith: { _, later in later })
         var reconciled: [Motif] = []
 
         for payload in payloads {
