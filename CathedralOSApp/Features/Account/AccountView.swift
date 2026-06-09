@@ -456,6 +456,13 @@ struct AccountView: View {
                 .disabled(isSyncing || !authState.isSignedIn)
 
                 Button {
+                    Task { await attemptRestoreDeletedProjectsFromCloud() }
+                } label: {
+                    Label("Restore Deleted Cloud Projects", systemImage: "trash.circle")
+                }
+                .disabled(isSyncing || !authState.isSignedIn)
+
+                Button {
                     Task { await attemptRefreshSession() }
                 } label: {
                     Label("Refresh Session", systemImage: "arrow.clockwise")
@@ -711,11 +718,33 @@ struct AccountView: View {
         lastSyncMessage = nil
         defer { isSyncing = false }
         do {
-            try await ProjectCloudSyncService.shared.restoreAllProjects(into: modelContext)
+            let report = try await ProjectCloudSyncService.shared.restoreAllProjects(into: modelContext)
             try await syncService.pullOutputs(into: modelContext)
             let formatter = DateFormatter()
             formatter.timeStyle = .short
-            lastSyncMessage = "Restored from cloud at \(formatter.string(from: Date()))"
+            lastSyncMessage = "\(report.summaryMessage) (\(formatter.string(from: Date())))"
+        } catch {
+            syncError = userFacingSyncErrorMessage(error)
+        }
+    }
+
+    private func attemptRestoreDeletedProjectsFromCloud() async {
+        guard authState.isSignedIn else {
+            syncError = GenerationOutputSyncError.notSignedIn.errorDescription
+            return
+        }
+        isSyncing = true
+        syncError = nil
+        lastSyncMessage = nil
+        defer { isSyncing = false }
+        do {
+            let report = try await ProjectCloudSyncService.shared.restoreAllProjects(
+                into: modelContext,
+                includeTombstoned: true
+            )
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            lastSyncMessage = "Restored deleted cloud projects: \(report.summaryMessage) (\(formatter.string(from: Date())))"
         } catch {
             syncError = userFacingSyncErrorMessage(error)
         }

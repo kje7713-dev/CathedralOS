@@ -50,7 +50,15 @@ private final class StubAuthSignedOut: AuthService {
 private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     var syncAllCalled = false
     var restoreCalled = false
-    var restoreResult: [StoryProject] = []
+    var restoreResult = ProjectRestoreReport(
+        projects: [],
+        localProjectCountBefore: 0,
+        cloudProjectCountBefore: 0,
+        insertedCount: 0,
+        updatedCount: 0,
+        skippedTombstonedCount: 0,
+        duplicateWarnings: []
+    )
     var saveCalledAfterRestore = false
 
     func syncProject(_ project: StoryProject) async throws {}
@@ -58,7 +66,7 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     func syncAllProjects(in context: ModelContext) async throws { syncAllCalled = true }
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {}
     func cloudSnapshotPresence() async -> CloudSnapshotPresence { .none }
-    func restoreAllProjects(into context: ModelContext) async throws -> [StoryProject] {
+    func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
         restoreCalled = true
         return restoreResult
     }

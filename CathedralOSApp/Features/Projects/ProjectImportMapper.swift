@@ -4,6 +4,9 @@ enum ProjectImportMapper {
 
     static func map(_ payload: ProjectImportExportPayload) -> StoryProject {
         let project = StoryProject(name: payload.project.name)
+        if let projectID = payload.project.id.flatMap(UUID.init(uuidString:)) {
+            project.id = projectID
+        }
         project.summary = payload.project.summary
         project.notes = payload.project.notes
         project.readingLevel = payload.project.readingLevel
@@ -12,6 +15,9 @@ enum ProjectImportMapper {
 
         if let sp = payload.setting {
             let setting = ProjectSetting()
+            if let settingID = sp.id.flatMap(UUID.init(uuidString:)) {
+                setting.id = settingID
+            }
             setting.summary = sp.summary
             setting.domains = sp.domains
             setting.constraints = sp.constraints
@@ -42,6 +48,9 @@ enum ProjectImportMapper {
         var characters: [StoryCharacter] = []
         for cp in payload.characters {
             let char = StoryCharacter(name: cp.name)
+            if let characterID = UUID(uuidString: cp.id) {
+                char.id = characterID
+            }
             charIDMap[cp.id] = char.id
             char.roles = cp.roles
             char.goals = cp.goals
@@ -80,6 +89,9 @@ enum ProjectImportMapper {
 
         let sparks: [StorySpark] = payload.storySparks.map { sp in
             let spark = StorySpark(title: sp.title, situation: sp.situation, stakes: sp.stakes)
+            if let sparkID = UUID(uuidString: sp.id) {
+                spark.id = sparkID
+            }
             spark.twist = sp.twist.nilIfEmpty
             spark.urgency = sp.urgency.nilIfEmpty
             spark.threat = sp.threat.nilIfEmpty
@@ -98,6 +110,9 @@ enum ProjectImportMapper {
 
         let aftertastes: [Aftertaste] = payload.aftertastes.map { ap in
             let at = Aftertaste(label: ap.label)
+            if let aftertasteID = UUID(uuidString: ap.id) {
+                at.id = aftertasteID
+            }
             at.note = ap.note.nilIfEmpty
             at.emotionalResidue = ap.emotionalResidue.nilIfEmpty
             at.endingTexture = ap.endingTexture.nilIfEmpty
@@ -119,6 +134,9 @@ enum ProjectImportMapper {
                 targetCharacterID: resolvedTargetID,
                 relationshipType: rp.relationshipType
             )
+            if let relationshipID = UUID(uuidString: rp.id) {
+                rel.id = relationshipID
+            }
             rel.tension = rp.tension.nilIfEmpty
             rel.loyalty = rp.loyalty.nilIfEmpty
             rel.fear = rp.fear.nilIfEmpty
@@ -141,6 +159,9 @@ enum ProjectImportMapper {
 
         let themeQuestions: [ThemeQuestion] = payload.themeQuestions.map { tp in
             let tq = ThemeQuestion(question: tp.question)
+            if let themeQuestionID = UUID(uuidString: tp.id) {
+                tq.id = themeQuestionID
+            }
             tq.coreTension = tp.coreTension.nilIfEmpty
             tq.valueConflict = tp.valueConflict.nilIfEmpty
             tq.moralFaultLine = tp.moralFaultLine.nilIfEmpty
@@ -154,6 +175,9 @@ enum ProjectImportMapper {
 
         let motifs: [Motif] = payload.motifs.map { mp in
             let motif = Motif(label: mp.label, category: mp.category)
+            if let motifID = UUID(uuidString: mp.id) {
+                motif.id = motifID
+            }
             motif.meaning = mp.meaning.nilIfEmpty
             motif.examples = mp.examples
             motif.notes = mp.notes.nilIfEmpty

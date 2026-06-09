@@ -19,6 +19,8 @@ struct ProjectsListView: View {
     @State private var hasCloudSnapshots = false
     @State private var restoreErrorMessage: String?
     @State private var restoreSuccessMessage: String?
+    @State private var deleteErrorMessage: String?
+    private let projectDeletionService: any ProjectDeletionServiceProtocol = ProjectDeletionService.shared
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -96,21 +98,19 @@ struct ProjectsListView: View {
             get: { projectToDelete != nil },
             set: { if !$0 { projectToDelete = nil } }
         )) {
-            Button("Delete", role: .destructive) {
+            Button("Delete Local Only", role: .destructive) {
                 if let p = projectToDelete {
-                    let deletedProjectID = p.id.uuidString
-                    modelContext.delete(p)
-                    Task {
-                        try? await ProjectCloudSyncService.shared.deleteSnapshot(forLocalProjectID: deletedProjectID)
-                        await refreshCloudBackupAvailability()
-                    }
+                    Task { await deleteProjectLocalOnly(p) }
                 }
-                projectToDelete = nil
-                refreshBackupAvailability()
+            }
+            Button("Delete Everywhere", role: .destructive) {
+                if let p = projectToDelete {
+                    Task { await deleteProjectEverywhere(p) }
+                }
             }
             Button("Cancel", role: .cancel) { projectToDelete = nil }
         } message: {
-            Text("Delete \"\(projectToDelete?.name ?? "this project")\"? This cannot be undone.")
+            Text("Delete \"\(projectToDelete?.name ?? "this project")\" from this device only, or from both this device and the cloud.")
         }
         .alert("Copied", isPresented: $showCopiedLLMPrompt) {
             Button("OK", role: .cancel) {}
@@ -132,6 +132,14 @@ struct ProjectsListView: View {
             Button("OK", role: .cancel) { restoreSuccessMessage = nil }
         } message: {
             Text(restoreSuccessMessage ?? "A backup was restored successfully.")
+        }
+        .alert("Delete Failed", isPresented: Binding(
+            get: { deleteErrorMessage != nil },
+            set: { if !$0 { deleteErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { deleteErrorMessage = nil }
+        } message: {
+            Text(deleteErrorMessage ?? "The project could not be deleted.")
         }
         .task {
             LocalProjectBackupService.shared.backupAllProjects(in: modelContext)
@@ -355,16 +363,18 @@ struct ProjectsListView: View {
 
     private func restoreFromCloud() async {
         do {
-            let restoredProjects = try await ProjectCloudSyncService.shared.restoreAllProjects(into: modelContext)
+            let report = try await ProjectCloudSyncService.shared.restoreAllProjects(into: modelContext)
             await refreshRecoveryAvailability()
-            guard let firstProject = restoredProjects.first else {
+            guard let firstProject = report.projects.first else {
+                if report.cloudProjectCountBefore > 0 {
+                    restoreSuccessMessage = report.summaryMessage
+                    return
+                }
                 restoreErrorMessage = "No cloud snapshots were available to restore."
                 return
             }
             navigationPath.append(firstProject)
-            restoreSuccessMessage = restoredProjects.count == 1
-                ? "A cloud snapshot was restored successfully."
-                : "\(restoredProjects.count) cloud projects were restored successfully."
+            restoreSuccessMessage = report.summaryMessage
         } catch {
             let message = (error as? ProjectCloudSyncError)?.errorDescription ?? error.localizedDescription
             if AuthSessionResolver.isSessionExpiredError(error)
@@ -375,6 +385,28 @@ struct ProjectsListView: View {
             } else {
                 restoreErrorMessage = message
             }
+        }
+    }
+
+    @MainActor
+    private func deleteProjectLocalOnly(_ project: StoryProject) async {
+        do {
+            try await projectDeletionService.deleteLocal(project: project, context: modelContext)
+            projectToDelete = nil
+            await refreshRecoveryAvailability()
+        } catch {
+            deleteErrorMessage = (error as? ProjectDeletionError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func deleteProjectEverywhere(_ project: StoryProject) async {
+        do {
+            try await projectDeletionService.deleteEverywhere(project: project, context: modelContext)
+            projectToDelete = nil
+            await refreshRecoveryAvailability()
+        } catch {
+            deleteErrorMessage = (error as? ProjectDeletionError)?.errorDescription ?? error.localizedDescription
         }
     }
 }

@@ -484,10 +484,8 @@ private struct RecoveryModeView: View {
                 errorMessage = "Sign in is required to restore cloud projects."
                 return
             }
-            let restoredProjects = try await ProjectCloudSyncService.shared.restoreAllProjects(into: modelContext)
-            statusMessage = restoredProjects.count == 1
-                ? "Restored 1 project from cloud."
-                : "Restored \(restoredProjects.count) projects from cloud."
+            let report = try await ProjectCloudSyncService.shared.restoreAllProjects(into: modelContext)
+            statusMessage = report.summaryMessage
         } catch {
             let message = (error as? ProjectCloudSyncError)?.errorDescription ?? error.localizedDescription
             if AuthSessionResolver.isSessionExpiredError(error)
