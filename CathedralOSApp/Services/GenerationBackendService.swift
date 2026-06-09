@@ -364,7 +364,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         do {
             client = try SupabaseBackendClient()
         } catch {
-            await recordNoRequestSent(action: requestBody.action ?? "generate", underlyingError: error)
+            await recordNoRequestSent(action: requestBody.action, underlyingError: error)
             throw GenerationBackendServiceError.notConfigured
         }
 
@@ -373,7 +373,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         do {
             userAccessToken = try await resolveAccessTokenForRequest()
         } catch {
-            await recordNoRequestSent(action: requestBody.action ?? "generate", underlyingError: error)
+            await recordNoRequestSent(action: requestBody.action, underlyingError: error)
             throw error
         }
 
@@ -385,7 +385,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         do {
             urlRequest.httpBody = try encoder.encode(requestBody)
         } catch {
-            await recordNoRequestSent(action: requestBody.action ?? "generate", underlyingError: error)
+            await recordNoRequestSent(action: requestBody.action, underlyingError: error)
             throw GenerationBackendServiceError.encodingError(error)
         }
 
@@ -395,7 +395,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             (data, urlResponse) = try await session.data(for: urlRequest)
         } catch {
             await recordNetworkFailure(
-                action: requestBody.action ?? "generate",
+                action: requestBody.action,
                 edgeFunctionURL: url,
                 underlyingError: error
             )
@@ -405,7 +405,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         if let httpResponse = urlResponse as? HTTPURLResponse {
             let rawResponseBody = Self.responseBodyString(from: data)
             await recordHTTPResponse(
-                action: requestBody.action ?? "generate",
+                action: requestBody.action,
                 edgeFunctionURL: url,
                 statusCode: httpResponse.statusCode,
                 rawResponseBody: rawResponseBody,
