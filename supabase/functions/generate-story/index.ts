@@ -380,7 +380,98 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
     out.push(...section("## Premise", [p.project!.summary!]));
   }
 
-  // 2. World & Constraints
+  // 2. Selected Characters — priority element; rendered before world/setting
+  const chars = p.selectedCharacters;
+  if (chars?.length) {
+    out.push("## Characters");
+    for (const c of chars) {
+      if (nonEmpty(c.name)) out.push(`### ${c.name}`);
+      if (c.roles?.length)           out.push(`Roles: ${join(c.roles, ", ")}`);
+      if (c.goals?.length)           out.push(`Goals: ${join(c.goals)}`);
+      if (c.fears?.length)           out.push(`Fears: ${join(c.fears)}`);
+      if (c.flaws?.length)           out.push(`Flaws: ${join(c.flaws)}`);
+      if (c.secrets?.length)         out.push(`Secrets: ${join(c.secrets)}`);
+      if (c.wounds?.length)          out.push(`Wounds: ${join(c.wounds)}`);
+      if (nonEmpty(c.coreLie))       out.push(`Core lie: ${c.coreLie}`);
+      if (nonEmpty(c.coreTruth))     out.push(`Core truth: ${c.coreTruth}`);
+      if (nonEmpty(c.arcStart))      out.push(`Arc (start): ${c.arcStart}`);
+      if (nonEmpty(c.arcEnd))        out.push(`Arc (end): ${c.arcEnd}`);
+      if (c.breakingPoints?.length)  out.push(`Breaking points: ${join(c.breakingPoints)}`);
+      if (c.moralLines?.length)      out.push(`Moral lines: ${join(c.moralLines)}`);
+      if (c.selfDeceptions?.length)  out.push(`Self-deceptions: ${join(c.selfDeceptions)}`);
+      if (c.identityConflicts?.length) out.push(`Identity conflicts: ${join(c.identityConflicts)}`);
+      if (nonEmpty(c.instructionBias)) out.push(`Character instruction: ${c.instructionBias}`);
+    }
+    out.push("");
+  }
+
+  // 3. Selected Relationships — priority element
+  const rels = p.selectedRelationships;
+  if (rels?.length) {
+    out.push("## Relationships");
+    for (const r of rels) {
+      if (nonEmpty(r.name)) out.push(`### ${r.name}`);
+      if (nonEmpty(r.relationshipType)) out.push(`Type: ${r.relationshipType}`);
+      if (nonEmpty(r.tension))          out.push(`Tension: ${r.tension}`);
+      if (nonEmpty(r.unspokenTruth))    out.push(`Unspoken truth: ${r.unspokenTruth}`);
+      if (nonEmpty(r.whatEachWantsFromTheOther)) out.push(`What each wants: ${r.whatEachWantsFromTheOther}`);
+      if (nonEmpty(r.whatWouldBreakIt)) out.push(`What would break it: ${r.whatWouldBreakIt}`);
+      if (nonEmpty(r.whatWouldTransformIt)) out.push(`What would transform it: ${r.whatWouldTransformIt}`);
+    }
+    out.push("");
+  }
+
+  // 4. Selected Theme Questions — priority element
+  const themes = p.selectedThemeQuestions;
+  if (themes?.length) {
+    out.push("## Themes");
+    for (const t of themes) {
+      if (nonEmpty(t.question))      out.push(`- ${t.question}`);
+      if (nonEmpty(t.coreTension))   out.push(`  Core tension: ${t.coreTension}`);
+      if (nonEmpty(t.moralFaultLine)) out.push(`  Moral fault line: ${t.moralFaultLine}`);
+      if (nonEmpty(t.endingTruth))   out.push(`  Ending truth: ${t.endingTruth}`);
+    }
+    out.push("");
+  }
+
+  // 5. Selected Motifs — priority element
+  const motifs = p.selectedMotifs;
+  if (motifs?.length) {
+    out.push("## Motifs");
+    for (const m of motifs) {
+      out.push(`- ${m.label ?? ""}${nonEmpty(m.meaning) ? ": " + m.meaning : ""}`);
+    }
+    out.push("");
+  }
+
+  // 6. Dramatic Seed — spark is the primary engine; rendered with explicit direction
+  //    so the model knows every line of the scene should serve this conflict/event.
+  const spark = p.selectedStorySpark;
+  if (spark) {
+    const sparkLines: string[] = [];
+    sparkLines.push(
+      `This spark is the primary dramatic engine of the scene: "${spark.title ?? ""}"`,
+    );
+    sparkLines.push(
+      "Express it as the central conflict, event, reveal, or pressure — everything in the scene should serve this.",
+    );
+    if (nonEmpty(spark.situation))        sparkLines.push(`Situation: ${spark.situation}`);
+    if (nonEmpty(spark.stakes))           sparkLines.push(`Stakes: ${spark.stakes}`);
+    if (nonEmpty(spark.urgency))          sparkLines.push(`Urgency: ${spark.urgency}`);
+    if (nonEmpty(spark.threat))           sparkLines.push(`Threat: ${spark.threat}`);
+    if (nonEmpty(spark.twist))            sparkLines.push(`Twist: ${spark.twist}`);
+    if (nonEmpty(spark.opportunity))      sparkLines.push(`Opportunity: ${spark.opportunity}`);
+    if (nonEmpty(spark.complication))     sparkLines.push(`Complication: ${spark.complication}`);
+    if (nonEmpty(spark.clock))            sparkLines.push(`Clock: ${spark.clock}`);
+    if (nonEmpty(spark.triggerEvent))     sparkLines.push(`Trigger event: ${spark.triggerEvent}`);
+    if (nonEmpty(spark.initialImbalance)) sparkLines.push(`Initial imbalance: ${spark.initialImbalance}`);
+    if (nonEmpty(spark.reversalPotential)) sparkLines.push(`Reversal potential: ${spark.reversalPotential}`);
+    if (nonEmpty(spark.falseResolution))  sparkLines.push(`False resolution: ${spark.falseResolution}`);
+    out.push(...section("## Dramatic Seed", sparkLines));
+  }
+
+  // 7. World & Constraints — rendered after selected elements so they read as
+  //    supporting context, not as the primary writing directive.
   const s = p.setting;
   if (s?.included) {
     const settingLines: string[] = [];
@@ -406,97 +497,11 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
     out.push(...section("## World & Constraints", settingLines));
   }
 
-  // 3. Selected Characters (highest priority selected element)
-  const chars = p.selectedCharacters;
-  if (chars?.length) {
-    out.push("## Characters");
-    for (const c of chars) {
-      if (nonEmpty(c.name)) out.push(`### ${c.name}`);
-      if (c.roles?.length)           out.push(`Roles: ${join(c.roles, ", ")}`);
-      if (c.goals?.length)           out.push(`Goals: ${join(c.goals)}`);
-      if (c.fears?.length)           out.push(`Fears: ${join(c.fears)}`);
-      if (c.flaws?.length)           out.push(`Flaws: ${join(c.flaws)}`);
-      if (c.secrets?.length)         out.push(`Secrets: ${join(c.secrets)}`);
-      if (c.wounds?.length)          out.push(`Wounds: ${join(c.wounds)}`);
-      if (nonEmpty(c.coreLie))       out.push(`Core lie: ${c.coreLie}`);
-      if (nonEmpty(c.coreTruth))     out.push(`Core truth: ${c.coreTruth}`);
-      if (nonEmpty(c.arcStart))      out.push(`Arc (start): ${c.arcStart}`);
-      if (nonEmpty(c.arcEnd))        out.push(`Arc (end): ${c.arcEnd}`);
-      if (c.breakingPoints?.length)  out.push(`Breaking points: ${join(c.breakingPoints)}`);
-      if (c.moralLines?.length)      out.push(`Moral lines: ${join(c.moralLines)}`);
-      if (c.selfDeceptions?.length)  out.push(`Self-deceptions: ${join(c.selfDeceptions)}`);
-      if (c.identityConflicts?.length) out.push(`Identity conflicts: ${join(c.identityConflicts)}`);
-      if (nonEmpty(c.instructionBias)) out.push(`Character instruction: ${c.instructionBias}`);
-    }
-    out.push("");
-  }
-
-  // 4. Selected Relationships
-  const rels = p.selectedRelationships;
-  if (rels?.length) {
-    out.push("## Relationships");
-    for (const r of rels) {
-      if (nonEmpty(r.name)) out.push(`### ${r.name}`);
-      if (nonEmpty(r.relationshipType)) out.push(`Type: ${r.relationshipType}`);
-      if (nonEmpty(r.tension))          out.push(`Tension: ${r.tension}`);
-      if (nonEmpty(r.unspokenTruth))    out.push(`Unspoken truth: ${r.unspokenTruth}`);
-      if (nonEmpty(r.whatEachWantsFromTheOther)) out.push(`What each wants: ${r.whatEachWantsFromTheOther}`);
-      if (nonEmpty(r.whatWouldBreakIt)) out.push(`What would break it: ${r.whatWouldBreakIt}`);
-      if (nonEmpty(r.whatWouldTransformIt)) out.push(`What would transform it: ${r.whatWouldTransformIt}`);
-    }
-    out.push("");
-  }
-
-  // 5. Selected Theme Questions
-  const themes = p.selectedThemeQuestions;
-  if (themes?.length) {
-    out.push("## Themes");
-    for (const t of themes) {
-      if (nonEmpty(t.question))      out.push(`- ${t.question}`);
-      if (nonEmpty(t.coreTension))   out.push(`  Core tension: ${t.coreTension}`);
-      if (nonEmpty(t.moralFaultLine)) out.push(`  Moral fault line: ${t.moralFaultLine}`);
-      if (nonEmpty(t.endingTruth))   out.push(`  Ending truth: ${t.endingTruth}`);
-    }
-    out.push("");
-  }
-
-  // 6. Selected Motifs
-  const motifs = p.selectedMotifs;
-  if (motifs?.length) {
-    out.push("## Motifs");
-    for (const m of motifs) {
-      out.push(`- ${m.label ?? ""}${nonEmpty(m.meaning) ? ": " + m.meaning : ""}`);
-    }
-    out.push("");
-  }
-
-  // 7. Dramatic Seed — spark translated into an explicit writing instruction
-  const spark = p.selectedStorySpark;
-  if (spark) {
-    const sparkLines: string[] = [];
-    sparkLines.push(
-      `Bring this dramatic situation directly to life in the writing: "${spark.title ?? ""}"`,
-    );
-    if (nonEmpty(spark.situation))        sparkLines.push(`Situation: ${spark.situation}`);
-    if (nonEmpty(spark.stakes))           sparkLines.push(`Stakes: ${spark.stakes}`);
-    if (nonEmpty(spark.urgency))          sparkLines.push(`Urgency: ${spark.urgency}`);
-    if (nonEmpty(spark.threat))           sparkLines.push(`Threat: ${spark.threat}`);
-    if (nonEmpty(spark.twist))            sparkLines.push(`Twist: ${spark.twist}`);
-    if (nonEmpty(spark.opportunity))      sparkLines.push(`Opportunity: ${spark.opportunity}`);
-    if (nonEmpty(spark.complication))     sparkLines.push(`Complication: ${spark.complication}`);
-    if (nonEmpty(spark.clock))            sparkLines.push(`Clock: ${spark.clock}`);
-    if (nonEmpty(spark.triggerEvent))     sparkLines.push(`Trigger event: ${spark.triggerEvent}`);
-    if (nonEmpty(spark.initialImbalance)) sparkLines.push(`Initial imbalance: ${spark.initialImbalance}`);
-    if (nonEmpty(spark.reversalPotential)) sparkLines.push(`Reversal potential: ${spark.reversalPotential}`);
-    if (nonEmpty(spark.falseResolution))  sparkLines.push(`False resolution: ${spark.falseResolution}`);
-    out.push(...section("## Dramatic Seed", sparkLines));
-  }
-
-  // 8. Ending Instruction — aftertaste translated into a directive for the closing beat
+  // 8. Ending Instruction — aftertaste as a direct emotional residue directive
   const at = p.selectedAftertaste;
   if (at) {
     const atLines: string[] = [];
-    atLines.push(`Close the piece so the reader feels: ${at.label ?? ""}`);
+    atLines.push(`Leave the reader with ${at.label ?? ""} — shape the final image, tone, and consequence to produce this emotional residue.`);
     if (nonEmpty(at.note))                  atLines.push(at.note!);
     if (nonEmpty(at.emotionalResidue))      atLines.push(`Emotional residue: ${at.emotionalResidue}`);
     if (nonEmpty(at.endingTexture))         atLines.push(`Ending texture: ${at.endingTexture}`);
@@ -610,16 +615,16 @@ function buildPrompt(req: {
   // Writing Instructions — stable block
   lines.push(
     "## Writing Instructions",
-    "- Write actual story prose, not summary or setup description",
-    "- Use the selected characters, relationships, spark, and motifs directly — put them in the scene",
+    "- Write a scene, not a synopsis — actual prose with movement, not a description of what happens",
+    "- Use the selected characters, relationships, spark, and motifs directly — they must drive action, dialogue, or consequence on the page",
+    "- Include sensory specificity: concrete detail, not vague abstraction",
+    "- Write with tension, movement, and consequence",
+    "- Do not echo or repeat language from this prompt setup",
     "- Preserve the premise and any world constraints established above",
-    "- Write with tension, movement, and specificity",
-    "- Avoid generic filler and avoid simply restating the setup",
     "- Close the piece according to the Ending Instruction if one is present",
     "- Respect the reading level, content rating, and audience notes at all times",
     "- Do not include meta-commentary, titles, or headings unless explicitly requested",
-    "- End cleanly within the requested length; do not stop mid-sentence",
-    "- If you cannot cover everything, narrow the scope rather than running over",
+    "End cleanly within the requested length. Do not stop mid-sentence. If you cannot cover everything, narrow the scope rather than continuing until cut off.",
   );
 
   return lines.join("\n");
