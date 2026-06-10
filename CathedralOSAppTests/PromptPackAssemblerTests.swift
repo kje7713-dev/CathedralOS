@@ -398,9 +398,9 @@ final class PromptPackAssemblerTests: XCTestCase {
 
         let headerIdx      = output.range(of: "# Test Project")!.lowerBound
         let premiseIdx     = output.range(of: "## Premise")!.lowerBound
-        let constraintsIdx = output.range(of: "## World & Constraints")!.lowerBound
         let charIdx        = output.range(of: "## Characters")!.lowerBound
         let sparkIdx       = output.range(of: "## Dramatic Seed")!.lowerBound
+        let constraintsIdx = output.range(of: "## World & Constraints")!.lowerBound
         let atIdx          = output.range(of: "## Ending Instruction")!.lowerBound
         let notesIdx       = output.range(of: "## Notes")!.lowerBound
         let biasIdx        = output.range(of: "## Instruction Bias")!.lowerBound
@@ -408,10 +408,10 @@ final class PromptPackAssemblerTests: XCTestCase {
         let instrIdx       = output.range(of: "## Writing Instructions")!.lowerBound
 
         XCTAssertLessThan(headerIdx,      premiseIdx,      "Header before Premise")
-        XCTAssertLessThan(premiseIdx,     constraintsIdx,  "Premise before World & Constraints")
-        XCTAssertLessThan(constraintsIdx, charIdx,         "World & Constraints before Characters")
+        XCTAssertLessThan(premiseIdx,     charIdx,         "Premise before Characters")
         XCTAssertLessThan(charIdx,        sparkIdx,        "Characters before Dramatic Seed")
-        XCTAssertLessThan(sparkIdx,       atIdx,           "Dramatic Seed before Ending Instruction")
+        XCTAssertLessThan(sparkIdx,       constraintsIdx,  "Dramatic Seed before World & Constraints")
+        XCTAssertLessThan(constraintsIdx, atIdx,           "World & Constraints before Ending Instruction")
         XCTAssertLessThan(atIdx,          notesIdx,        "Ending Instruction before Notes")
         XCTAssertLessThan(notesIdx,       biasIdx,         "Notes before Instruction Bias")
         XCTAssertLessThan(biasIdx,        taskIdx,         "Instruction Bias before Writing Task")

@@ -20,52 +20,8 @@ enum PromptPackAssembler {
             sections.append("## Premise\n\(payload.project.summary)")
         }
 
-        // 3. World & Constraints (setting) — render only when included AND data exists
-        let setting = payload.setting
-        let settingHasData = !setting.summary.isEmpty
-            || !setting.domains.isEmpty
-            || !setting.themes.isEmpty
-            || !setting.constraints.isEmpty
-            || !setting.season.isEmpty
-            || !setting.instructionBias.isEmpty
-            || !setting.worldRules.isEmpty
-            || !setting.historicalPressure.isEmpty
-            || !setting.politicalForces.isEmpty
-            || !setting.socialOrder.isEmpty
-            || !setting.environmentalPressure.isEmpty
-            || !setting.technologyLevel.isEmpty
-            || !setting.mythicFrame.isEmpty
-            || !setting.religiousPressure.isEmpty
-            || !setting.economicPressure.isEmpty
-            || !setting.taboos.isEmpty
-            || !setting.institutions.isEmpty
-            || !setting.dominantValues.isEmpty
-            || !setting.hiddenTruths.isEmpty
-        if setting.included && settingHasData {
-            var lines: [String] = ["## World & Constraints"]
-            if !setting.summary.isEmpty              { lines.append(setting.summary) }
-            if !setting.worldRules.isEmpty           { lines.append("World rules: \(setting.worldRules.joined(separator: "; "))") }
-            if !setting.constraints.isEmpty          { lines.append("Constraints: \(setting.constraints.joined(separator: "; "))") }
-            if !setting.domains.isEmpty              { lines.append("Domains: \(setting.domains.joined(separator: ", "))") }
-            if !setting.themes.isEmpty               { lines.append("Themes: \(setting.themes.joined(separator: ", "))") }
-            if !setting.season.isEmpty               { lines.append("Season / Time: \(setting.season)") }
-            if !setting.historicalPressure.isEmpty   { lines.append("Historical pressure: \(setting.historicalPressure)") }
-            if !setting.politicalForces.isEmpty      { lines.append("Political forces: \(setting.politicalForces)") }
-            if !setting.socialOrder.isEmpty          { lines.append("Social order: \(setting.socialOrder)") }
-            if !setting.environmentalPressure.isEmpty { lines.append("Environmental pressure: \(setting.environmentalPressure)") }
-            if !setting.technologyLevel.isEmpty      { lines.append("Technology level: \(setting.technologyLevel)") }
-            if !setting.mythicFrame.isEmpty          { lines.append("Mythic frame: \(setting.mythicFrame)") }
-            if !setting.religiousPressure.isEmpty    { lines.append("Religious pressure: \(setting.religiousPressure)") }
-            if !setting.economicPressure.isEmpty     { lines.append("Economic pressure: \(setting.economicPressure)") }
-            if !setting.taboos.isEmpty               { lines.append("Taboos: \(setting.taboos.joined(separator: "; "))") }
-            if !setting.institutions.isEmpty         { lines.append("Institutions: \(setting.institutions.joined(separator: ", "))") }
-            if !setting.dominantValues.isEmpty       { lines.append("Dominant values: \(setting.dominantValues.joined(separator: ", "))") }
-            if !setting.hiddenTruths.isEmpty         { lines.append("Hidden truths: \(setting.hiddenTruths.joined(separator: "; "))") }
-            if !setting.instructionBias.isEmpty      { lines.append("Setting instruction: \(setting.instructionBias)") }
-            sections.append(lines.joined(separator: "\n"))
-        }
-
-        // 4. Selected Story Elements — characters first (highest priority)
+        // 3. Selected Story Elements — priority elements rendered before world/setting
+        //    so the model treats them as the primary writing drivers, not background noise.
         if !payload.selectedCharacters.isEmpty {
             var charSection = "## Characters"
             for c in payload.selectedCharacters {
@@ -154,10 +110,11 @@ enum PromptPackAssembler {
             sections.append(motifSection)
         }
 
-        // 5. Dramatic Seed — spark translated into an explicit writing instruction
+        // 4. Dramatic Seed — spark is the primary engine; every line tells the model to express it
         if let spark = payload.selectedStorySpark {
             var lines = ["## Dramatic Seed"]
-            lines.append("Bring this dramatic situation to life in the writing: \"\(spark.title)\"")
+            lines.append("This spark is the primary dramatic engine of the scene: \"\(spark.title)\"")
+            lines.append("Express it as the central conflict, event, reveal, or pressure — everything in the scene should serve this.")
             if !spark.situation.isEmpty        { lines.append("Situation: \(spark.situation)") }
             if !spark.stakes.isEmpty           { lines.append("Stakes: \(spark.stakes)") }
             if !spark.urgency.isEmpty          { lines.append("Urgency: \(spark.urgency)") }
@@ -173,10 +130,56 @@ enum PromptPackAssembler {
             sections.append(lines.joined(separator: "\n"))
         }
 
-        // 6. Ending Instruction — aftertaste translated into a directive for the closing beat
+        // 5. World & Constraints (setting) — rendered after selected elements so the model
+        //    treats the selected elements as primary drivers and setting as supporting context.
+        let setting = payload.setting
+        let settingHasData = !setting.summary.isEmpty
+            || !setting.domains.isEmpty
+            || !setting.themes.isEmpty
+            || !setting.constraints.isEmpty
+            || !setting.season.isEmpty
+            || !setting.instructionBias.isEmpty
+            || !setting.worldRules.isEmpty
+            || !setting.historicalPressure.isEmpty
+            || !setting.politicalForces.isEmpty
+            || !setting.socialOrder.isEmpty
+            || !setting.environmentalPressure.isEmpty
+            || !setting.technologyLevel.isEmpty
+            || !setting.mythicFrame.isEmpty
+            || !setting.religiousPressure.isEmpty
+            || !setting.economicPressure.isEmpty
+            || !setting.taboos.isEmpty
+            || !setting.institutions.isEmpty
+            || !setting.dominantValues.isEmpty
+            || !setting.hiddenTruths.isEmpty
+        if setting.included && settingHasData {
+            var lines: [String] = ["## World & Constraints"]
+            if !setting.summary.isEmpty              { lines.append(setting.summary) }
+            if !setting.worldRules.isEmpty           { lines.append("World rules: \(setting.worldRules.joined(separator: "; "))") }
+            if !setting.constraints.isEmpty          { lines.append("Constraints: \(setting.constraints.joined(separator: "; "))") }
+            if !setting.domains.isEmpty              { lines.append("Domains: \(setting.domains.joined(separator: ", "))") }
+            if !setting.themes.isEmpty               { lines.append("Themes: \(setting.themes.joined(separator: ", "))") }
+            if !setting.season.isEmpty               { lines.append("Season / Time: \(setting.season)") }
+            if !setting.historicalPressure.isEmpty   { lines.append("Historical pressure: \(setting.historicalPressure)") }
+            if !setting.politicalForces.isEmpty      { lines.append("Political forces: \(setting.politicalForces)") }
+            if !setting.socialOrder.isEmpty          { lines.append("Social order: \(setting.socialOrder)") }
+            if !setting.environmentalPressure.isEmpty { lines.append("Environmental pressure: \(setting.environmentalPressure)") }
+            if !setting.technologyLevel.isEmpty      { lines.append("Technology level: \(setting.technologyLevel)") }
+            if !setting.mythicFrame.isEmpty          { lines.append("Mythic frame: \(setting.mythicFrame)") }
+            if !setting.religiousPressure.isEmpty    { lines.append("Religious pressure: \(setting.religiousPressure)") }
+            if !setting.economicPressure.isEmpty     { lines.append("Economic pressure: \(setting.economicPressure)") }
+            if !setting.taboos.isEmpty               { lines.append("Taboos: \(setting.taboos.joined(separator: "; "))") }
+            if !setting.institutions.isEmpty         { lines.append("Institutions: \(setting.institutions.joined(separator: ", "))") }
+            if !setting.dominantValues.isEmpty       { lines.append("Dominant values: \(setting.dominantValues.joined(separator: ", "))") }
+            if !setting.hiddenTruths.isEmpty         { lines.append("Hidden truths: \(setting.hiddenTruths.joined(separator: "; "))") }
+            if !setting.instructionBias.isEmpty      { lines.append("Setting instruction: \(setting.instructionBias)") }
+            sections.append(lines.joined(separator: "\n"))
+        }
+
+        // 6. Ending Instruction — aftertaste as a direct emotional residue directive
         if let aftertaste = payload.selectedAftertaste {
             var lines = ["## Ending Instruction"]
-            lines.append("Close the piece so the reader feels: \(aftertaste.label)")
+            lines.append("Leave the reader with \(aftertaste.label) — shape the final image, tone, and consequence to produce this emotional residue.")
             if !aftertaste.note.isEmpty                    { lines.append(aftertaste.note) }
             if !aftertaste.emotionalResidue.isEmpty        { lines.append("Emotional residue: \(aftertaste.emotionalResidue)") }
             if !aftertaste.endingTexture.isEmpty           { lines.append("Ending texture: \(aftertaste.endingTexture)") }
@@ -205,11 +208,12 @@ enum PromptPackAssembler {
         // 9. Writing Instructions — stable block telling the model how to write
         sections.append("""
             ## Writing Instructions
-            - Write actual story prose, not summary or setup description
-            - Use the selected characters, relationships, spark, and motifs directly in the scene
+            - Write a scene, not a synopsis — actual prose with movement, not a description of what happens
+            - Use the selected characters, relationships, spark, and motifs directly — they must drive action, dialogue, or consequence on the page
+            - Include sensory specificity: concrete detail, not vague abstraction
+            - Write with tension, movement, and consequence
+            - Do not echo or repeat language from this prompt setup
             - Preserve the premise and any world constraints established above
-            - Write with tension, movement, and specificity
-            - Avoid generic filler and avoid simply restating the setup
             - End the piece according to the Ending Instruction if one is present
             """)
 

@@ -96,43 +96,64 @@ struct PromptPackPreviewView: View {
         viewMode == .json ? CathedralTheme.Typography.mono(12) : CathedralTheme.Typography.body(14)
     }
 
-    /// A quick human-readable summary of what sections will appear in the prompt sent to the model.
-    private var promptBreakdownLines: [String] {
+    /// A quick human-readable summary of what sections will appear in the prompt sent to the model,
+    /// grouped into Context, Priority Elements, and Instructions.
+    private struct BreakdownSection {
+        let title: String
+        let items: [String]
+    }
+
+    private var promptBreakdownSections: [BreakdownSection] {
         let p = exportPayload
-        var lines: [String] = []
+        var contextItems: [String] = []
+        var priorityItems: [String] = []
+
+        // Context: premise and world/setting
         if !p.project.summary.isEmpty {
             let preview = p.project.summary.count > 60
                 ? String(p.project.summary.prefix(60)) + "…"
                 : p.project.summary
-            lines.append("Premise: \"\(preview)\"")
+            contextItems.append("Premise: \"\(preview)\"")
         }
         if p.setting.included && !p.setting.summary.isEmpty {
-            lines.append("World & Constraints: \(p.setting.summary.count > 50 ? String(p.setting.summary.prefix(50)) + "…" : p.setting.summary)")
+            let preview = p.setting.summary.count > 50
+                ? String(p.setting.summary.prefix(50)) + "…"
+                : p.setting.summary
+            contextItems.append("World & Constraints: \(preview)")
         }
+
+        // Priority elements: selected characters, relationships, themes, motifs, spark, aftertaste
         if !p.selectedCharacters.isEmpty {
             let names = p.selectedCharacters.map { $0.name }.joined(separator: ", ")
-            lines.append("Characters: \(names)")
+            priorityItems.append("Characters: \(names)")
         }
         if !p.selectedRelationships.isEmpty {
             let names = p.selectedRelationships.map { $0.name }.joined(separator: ", ")
-            lines.append("Relationships: \(names)")
+            priorityItems.append("Relationships: \(names)")
         }
         if !p.selectedThemeQuestions.isEmpty {
-            lines.append("Themes: \(p.selectedThemeQuestions.count)")
+            priorityItems.append("Themes: \(p.selectedThemeQuestions.count)")
         }
         if !p.selectedMotifs.isEmpty {
             let labels = p.selectedMotifs.map { $0.label }.joined(separator: ", ")
-            lines.append("Motifs: \(labels)")
+            priorityItems.append("Motifs: \(labels)")
         }
         if let spark = p.selectedStorySpark {
-            lines.append("Dramatic seed: \"\(spark.title)\"")
+            priorityItems.append("Spark: \"\(spark.title)\"")
         }
         if let at = p.selectedAftertaste {
-            lines.append("Ending instruction: \(at.label)")
+            priorityItems.append("Ending: \(at.label)")
         }
-        lines.append("Writing task: included")
-        lines.append("Writing instructions: included")
-        return lines
+
+        var sections: [BreakdownSection] = []
+        if !contextItems.isEmpty {
+            sections.append(BreakdownSection(title: "CONTEXT", items: contextItems))
+        }
+        if !priorityItems.isEmpty {
+            sections.append(BreakdownSection(title: "PRIORITY ELEMENTS", items: priorityItems))
+        }
+        sections.append(BreakdownSection(title: "INSTRUCTIONS", items: ["Writing task", "Writing instructions"]))
+        return sections
     }
 
     var body: some View {
@@ -265,18 +286,24 @@ struct PromptPackPreviewView: View {
 
     // MARK: Prompt Breakdown Block
 
-    /// Shows a compact summary of what sections are present in the prompt sent to the model.
+    /// Shows a compact grouped summary of what sections are present in the prompt sent to the model.
     private var promptBreakdownBlock: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
             Text("WHAT THE MODEL SEES".uppercased())
                 .font(CathedralTheme.Typography.label(10, weight: .semibold))
                 .tracking(1.5)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(promptBreakdownLines, id: \.self) { line in
-                    Text("• \(line)")
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            ForEach(promptBreakdownSections, id: \.title) { section in
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(section.title)
+                        .font(CathedralTheme.Typography.label(9, weight: .semibold))
+                        .tracking(1.2)
+                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                    ForEach(section.items, id: \.self) { item in
+                        Text("• \(item)")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
                 }
             }
         }
