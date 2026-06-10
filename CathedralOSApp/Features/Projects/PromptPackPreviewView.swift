@@ -96,6 +96,45 @@ struct PromptPackPreviewView: View {
         viewMode == .json ? CathedralTheme.Typography.mono(12) : CathedralTheme.Typography.body(14)
     }
 
+    /// A quick human-readable summary of what sections will appear in the prompt sent to the model.
+    private var promptBreakdownLines: [String] {
+        let p = exportPayload
+        var lines: [String] = []
+        if !p.project.summary.isEmpty {
+            let preview = p.project.summary.count > 60
+                ? String(p.project.summary.prefix(60)) + "…"
+                : p.project.summary
+            lines.append("Premise: \"\(preview)\"")
+        }
+        if p.setting.included && !p.setting.summary.isEmpty {
+            lines.append("World & Constraints: \(p.setting.summary.count > 50 ? String(p.setting.summary.prefix(50)) + "…" : p.setting.summary)")
+        }
+        if !p.selectedCharacters.isEmpty {
+            let names = p.selectedCharacters.map { $0.name }.joined(separator: ", ")
+            lines.append("Characters: \(names)")
+        }
+        if !p.selectedRelationships.isEmpty {
+            let names = p.selectedRelationships.map { $0.name }.joined(separator: ", ")
+            lines.append("Relationships: \(names)")
+        }
+        if !p.selectedThemeQuestions.isEmpty {
+            lines.append("Themes: \(p.selectedThemeQuestions.count)")
+        }
+        if !p.selectedMotifs.isEmpty {
+            let labels = p.selectedMotifs.map { $0.label }.joined(separator: ", ")
+            lines.append("Motifs: \(labels)")
+        }
+        if let spark = p.selectedStorySpark {
+            lines.append("Dramatic seed: \"\(spark.title)\"")
+        }
+        if let at = p.selectedAftertaste {
+            lines.append("Ending instruction: \(at.label)")
+        }
+        lines.append("Writing task: included")
+        lines.append("Writing instructions: included")
+        return lines
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
@@ -212,6 +251,9 @@ struct PromptPackPreviewView: View {
 
             if isPromptPreviewExpanded {
                 modePicker
+                if viewMode == .prompt {
+                    promptBreakdownBlock
+                }
                 contentBlock
             }
         }
@@ -219,6 +261,33 @@ struct PromptPackPreviewView: View {
 
     private var previewCharacterCount: Int {
         activeText.count
+    }
+
+    // MARK: Prompt Breakdown Block
+
+    /// Shows a compact summary of what sections are present in the prompt sent to the model.
+    private var promptBreakdownBlock: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("WHAT THE MODEL SEES".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(promptBreakdownLines, id: \.self) { line in
+                    Text("• \(line)")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+            }
+        }
+        .padding(CathedralTheme.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
     }
 
     // MARK: Content Block
