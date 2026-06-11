@@ -1226,7 +1226,6 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
 
     func deleteLocal(project: StoryProject, context: ModelContext) async throws {
         let projectID = project.id.uuidString
-        let userID = authService.authState.currentUser?.id
         context.delete(project)
         do {
             try context.save()
@@ -1235,7 +1234,12 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
             throw ProjectDeletionError.persistenceError(stage: "local delete", error: error)
         }
 
-        if let userID {
+        // Resolve auth state before reading userID so that an early-launch delete
+        // (when authState is still .unknown) still produces a tombstone.
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        if let userID = authService.authState.currentUser?.id {
             await tombstoneService.record(
                 SyncTombstone(
                     userID: userID,
@@ -1251,13 +1255,21 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
 
     func deleteEverywhere(project: StoryProject, context: ModelContext) async throws {
         let projectID = project.id.uuidString
-        let userID = authService.authState.currentUser?.id
 
         do {
             try await cloudSyncService.deleteSnapshot(forLocalProjectID: projectID)
         } catch {
             throw ProjectDeletionError.syncError(error)
         }
+
+        // Resolve auth state before reading userID. deleteSnapshot calls
+        // ensureSignedInUser() internally, which may refresh a stale .unknown auth
+        // state to .signedIn. Adding an explicit check here covers any edge case
+        // where the snapshot delete path exits early without performing that check.
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        let userID = authService.authState.currentUser?.id
 
         context.delete(project)
         do {

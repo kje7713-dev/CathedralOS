@@ -47,6 +47,22 @@ private final class StubAuthSignedOut: AuthService {
     func refreshSession() async throws {}
 }
 
+/// Auth service that starts in the .unknown state and transitions to .signedIn
+/// on the first checkSession() call, simulating normal app-launch behaviour.
+private final class StubAuthUnknownTransitioning: AuthService {
+    var authState: AuthState = .unknown
+    var currentAccessToken: String? = "token"
+    private let resolvedUser = AuthUser(id: "user-resolved", email: "resolved@example.com")
+
+    func checkSession() async {
+        authState = .signedIn(resolvedUser)
+    }
+    func signIn() async throws {}
+    func signInWithApple() async throws {}
+    func signOut() async throws { authState = .signedOut }
+    func refreshSession() async throws {}
+}
+
 private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     var syncAllCalled = false
     var restoreCalled = false
@@ -205,6 +221,62 @@ final class DataDurabilityTests: XCTestCase {
 
         let everywhereTombstone = spy.recordedTombstones.first { $0.deletionScope == .everywhere }
         XCTAssertNotNil(everywhereTombstone, "deleteEverywhere must write an everywhere tombstone.")
+    }
+
+    // MARK: Tombstone written when auth state is .unknown at delete time
+
+    func testDeleteLocalWritesTombstoneWhenAuthStateUnknownAtStart() async throws {
+        let context = try makeInMemoryContext()
+        let output = GenerationOutput()
+        output.outputText = "text"
+        output.cloudGenerationOutputID = UUID().uuidString
+        context.insert(output)
+        try context.save()
+
+        let spy = SpyTombstoneService()
+        let auth = StubAuthUnknownTransitioning()
+
+        let sut = GenerationOutputDeletionService(
+            authService: auth,
+            sharingService: StubPublicSharingService(),
+            backupService: .shared,
+            tombstoneService: spy
+        )
+
+        try await sut.deleteLocal(output: output, context: context)
+
+        XCTAssertEqual(spy.recordedTombstones.count, 1,
+                       "deleteLocal must write a tombstone even when auth state is .unknown at call time.")
+        XCTAssertEqual(spy.recordedTombstones.first?.deletionScope, .localOnly)
+        XCTAssertEqual(spy.recordedTombstones.first?.userID, "user-resolved")
+    }
+
+    func testDeleteEverywhereWritesTombstoneWhenAuthStateUnknownAtStart() async throws {
+        let context = try makeInMemoryContext()
+        let output = GenerationOutput()
+        // Empty cloudID: deleteCloud returns early without an auth check,
+        // so the explicit checkSession() in deleteEverywhere is the only path
+        // that can resolve the .unknown state before reading userID.
+        output.cloudGenerationOutputID = ""
+        context.insert(output)
+        try context.save()
+
+        let spy = SpyTombstoneService()
+        let auth = StubAuthUnknownTransitioning()
+
+        let sut = GenerationOutputDeletionService(
+            authService: auth,
+            sharingService: StubPublicSharingService(),
+            backupService: .shared,
+            tombstoneService: spy
+        )
+
+        try await sut.deleteEverywhere(output: output, context: context)
+
+        let everywhereTombstone = spy.recordedTombstones.first { $0.deletionScope == .everywhere }
+        XCTAssertNotNil(everywhereTombstone,
+                        "deleteEverywhere must write an everywhere tombstone even when auth state is .unknown at call time.")
+        XCTAssertEqual(everywhereTombstone?.userID, "user-resolved")
     }
 
     // MARK: Tombstone reconciliation
