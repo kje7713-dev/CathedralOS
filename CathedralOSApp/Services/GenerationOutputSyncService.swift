@@ -364,6 +364,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             if let local = existing {
                 if local.project == nil {
                     local.project = GenerationOutputRecoveryProjectResolver.resolveProject(
+                        projectID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
                         projectName: record.projectName,
                         in: context,
                         recoverySource: "cloud recovery"
@@ -416,6 +417,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         output.syncErrorMessage    = nil
         if output.project == nil {
             output.project = GenerationOutputRecoveryProjectResolver.resolveProject(
+                projectID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
                 projectName: record.projectName,
                 in: context,
                 recoverySource: "cloud recovery"
@@ -442,6 +444,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         output.syncStatus    = SyncStatus.synced.rawValue
         output.lastSyncedAt  = Date()
         output.project = GenerationOutputRecoveryProjectResolver.resolveProject(
+            projectID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
             projectName: record.projectName,
             in: context,
             recoverySource: "cloud recovery"

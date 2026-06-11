@@ -46,12 +46,6 @@ private struct AppRootView: View {
 
     var body: some View {
         TabView {
-            if let recoveryContext {
-                RecoveryModeView(context: recoveryContext)
-                    .tabItem {
-                        Label("Recovery", systemImage: "externaldrive.badge.exclamationmark")
-                    }
-            }
             ProjectsListView()
                 .tabItem {
                     Label("Projects", systemImage: "books.vertical")
@@ -60,11 +54,7 @@ private struct AppRootView: View {
                 .tabItem {
                     Label("Shared", systemImage: "globe")
                 }
-            CathedralView()
-                .tabItem {
-                    Label("Profile", systemImage: "person.crop.rectangle")
-                }
-            AccountView()
+            AccountView(recoveryContext: recoveryContext)
                 .tabItem {
                     Label("Account", systemImage: "person.circle")
                 }
