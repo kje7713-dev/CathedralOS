@@ -566,7 +566,6 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     func deleteLocal(output: GenerationOutput, context: ModelContext) async throws {
         let outputID = output.id
         let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let userID = authService.authState.currentUser?.id
 
         context.delete(output)
         do {
@@ -577,8 +576,13 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         }
         _ = backupService.deleteBackups(outputID: outputID)
 
+        // Resolve auth state before reading userID so that an early-launch delete
+        // (when authState is still .unknown) still produces a tombstone.
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
         // Write tombstone so cloud pull does not resurrect this row.
-        if let userID {
+        if let userID = authService.authState.currentUser?.id {
             await tombstoneService.record(SyncTombstone(
                 userID: userID,
                 entityType: .generationOutput,
@@ -664,9 +668,19 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     func deleteEverywhere(output: GenerationOutput, context: ModelContext) async throws {
         let outputID = output.id
         let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let userID = authService.authState.currentUser?.id
 
         try await deleteCloud(output: output)
+
+        // Resolve auth state before reading userID. When cloudID is empty, deleteCloud
+        // returns early without performing any auth check, so the state may still be
+        // .unknown for an early-launch delete. When deleteCloud did run, it calls
+        // ensureSignedInUser() internally which also resolves .unknown, but that result
+        // is already reflected in authService.authState by the time we reach here.
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        let userID = authService.authState.currentUser?.id
+
         context.delete(output)
         do {
             try context.save()
