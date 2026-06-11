@@ -976,6 +976,9 @@ final class LocalProjectBackupService {
 }
 
 enum GenerationOutputRecoveryProjectResolver {
+    private static let fallbackProjectName = "Recovered Outputs"
+    private static let recoveryNotePrefix = "Recovered generated outputs from "
+
     static func resolveProject(
         projectID: UUID? = nil,
         projectName: String,
@@ -987,12 +990,12 @@ enum GenerationOutputRecoveryProjectResolver {
         }
 
         let resolvedName = projectName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-            ?? "Recovered Outputs"
+            ?? fallbackProjectName
         let project = StoryProject(name: resolvedName)
         if let projectID {
             project.id = projectID
         }
-        project.notes = "Recovered generated outputs from \(recoverySource)."
+        project.notes = "\(recoveryNotePrefix)\(recoverySource)."
         context.insert(project)
         return project
     }
@@ -1008,7 +1011,13 @@ enum GenerationOutputRecoveryProjectResolver {
         }
 
         let trimmedName = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else { return nil }
+        if trimmedName.isEmpty {
+            return projects.first {
+                $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .localizedCaseInsensitiveCompare(fallbackProjectName) == .orderedSame
+                    && $0.notes.hasPrefix(recoveryNotePrefix)
+            }
+        }
         return projects.first {
             $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 .localizedCaseInsensitiveCompare(trimmedName) == .orderedSame

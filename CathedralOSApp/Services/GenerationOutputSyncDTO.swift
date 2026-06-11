@@ -16,6 +16,7 @@ struct GenerationOutputUploadRequest: Codable {
     let localGenerationId: String
 
     // MARK: Provenance
+    let projectLocalID: String?
     let projectName: String
     let promptPackName: String
 
@@ -45,6 +46,7 @@ struct GenerationOutputUploadRequest: Codable {
     init(output: GenerationOutput, userID: String) {
         self.userID               = userID
         self.localGenerationId    = output.id.uuidString
+        self.projectLocalID       = output.project?.id.uuidString
         self.projectName          = output.project?.name ?? ""
         self.promptPackName       = output.sourcePromptPackName
         self.title                = output.title
@@ -64,6 +66,7 @@ struct GenerationOutputUploadRequest: Codable {
     enum CodingKeys: String, CodingKey {
         case userID               = "user_id"
         case localGenerationId    = "local_generation_id"
+        case projectLocalID       = "project_local_id"
         case projectName          = "project_name"
         case promptPackName       = "prompt_pack_name"
         case title
@@ -88,6 +91,7 @@ struct GenerationOutputCloudRecord: Codable {
     /// Supabase-assigned UUID for the cloud row.
     let id: String
     let localGenerationId: String?
+    let projectLocalID: String?
     let projectName: String
     let promptPackName: String
     let title: String
@@ -106,6 +110,7 @@ struct GenerationOutputCloudRecord: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id                  = try c.decode(String.self, forKey: .id)
         localGenerationId   = try c.decodeIfPresent(String.self, forKey: .localGenerationId)
+        projectLocalID      = try c.decodeIfPresent(String.self, forKey: .projectLocalID)
         projectName         = try c.decodeIfPresent(String.self, forKey: .projectName) ?? ""
         promptPackName      = try c.decodeIfPresent(String.self, forKey: .promptPackName) ?? ""
         title               = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
@@ -125,6 +130,7 @@ struct GenerationOutputCloudRecord: Codable {
     enum CodingKeys: String, CodingKey {
         case id
         case localGenerationId   = "local_generation_id"
+        case projectLocalID      = "project_local_id"
         case projectName         = "project_name"
         case promptPackName      = "prompt_pack_name"
         case title

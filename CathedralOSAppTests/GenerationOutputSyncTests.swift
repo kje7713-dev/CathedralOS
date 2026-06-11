@@ -135,6 +135,8 @@ private func makeSuccessResponseJSON(cloudID: String? = nil) -> Data {
 private func makeCloudRecord(
     id: String = UUID().uuidString,
     localID: String? = nil,
+    projectLocalID: String? = nil,
+    projectName: String = "Test Project",
     title: String = "Cloud Story",
     updatedAt: Date = Date()
 ) -> GenerationOutputCloudRecord {
@@ -142,11 +144,13 @@ private func makeCloudRecord(
     let updatedStr = iso.string(from: updatedAt)
     let createdStr = iso.string(from: updatedAt.addingTimeInterval(-60))
     let localIDField = localID.map { "\"local_generation_id\": \"\($0)\"" } ?? "\"local_generation_id\": null"
+    let projectLocalIDField = projectLocalID.map { "\"project_local_id\": \"\($0)\"" } ?? "\"project_local_id\": null"
     let json = """
     {
       "id": "\(id)",
       \(localIDField),
-      "project_name": "Test Project",
+      \(projectLocalIDField),
+      "project_name": "\(projectName)",
       "prompt_pack_name": "Test Pack",
       "title": "\(title)",
       "output_text": "Generated content.",
@@ -378,12 +382,32 @@ final class GenerationOutputSyncPullTests: XCTestCase {
         XCTAssertEqual(outputs.first?.project?.name, "Test Project")
     }
 
+    func testReconcileReusesSingleRecoveryProjectWhenCloudProjectNameIsBlank() throws {
+        let realService = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+
+        let first = makeCloudRecord(title: "Recovered Story 1", projectName: " ")
+        let second = makeCloudRecord(title: "Recovered Story 2", projectName: "")
+        realService.reconcile([first, second], into: context)
+
+        let projects = try context.fetch(FetchDescriptor<StoryProject>())
+        XCTAssertEqual(projects.count, 1)
+        XCTAssertEqual(projects.first?.name, "Recovered Outputs")
+    }
+
     func testCloudRecordDTODecoding() throws {
         let cloudID = UUID().uuidString
         let localID = UUID().uuidString
-        let record = makeCloudRecord(id: cloudID, localID: localID, title: "Decoded Story")
+        let projectLocalID = UUID().uuidString
+        let record = makeCloudRecord(
+            id: cloudID,
+            localID: localID,
+            projectLocalID: projectLocalID,
+            title: "Decoded Story"
+        )
         XCTAssertEqual(record.id, cloudID)
         XCTAssertEqual(record.localGenerationId, localID)
+        XCTAssertEqual(record.projectLocalID, projectLocalID)
         XCTAssertEqual(record.title, "Decoded Story")
         XCTAssertEqual(record.generationAction, "generate")
     }
@@ -872,6 +896,7 @@ final class GenerationOutputUploadRequestTests: XCTestCase {
 
         XCTAssertEqual(obj["user_id"] as? String, userID)
         XCTAssertEqual(obj["local_generation_id"] as? String, gen.id.uuidString)
+        XCTAssertNil(obj["project_local_id"])
         XCTAssertEqual(obj["title"] as? String, "Upload Test")
         XCTAssertEqual(obj["output_text"] as? String, "Content here.")
         XCTAssertEqual(obj["model_name"] as? String, "gpt-4o")
@@ -882,5 +907,18 @@ final class GenerationOutputUploadRequestTests: XCTestCase {
         XCTAssertEqual(obj["status"] as? String, GenerationStatus.complete.rawValue)
         XCTAssertEqual(obj["visibility"] as? String, OutputVisibility.private.rawValue)
         XCTAssertEqual(obj["allow_remix"] as? Bool, false)
+    }
+
+    func testUploadRequestIncludesProjectLocalIDWhenOutputHasProject() throws {
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let project = StoryProject(name: "Linked Project")
+        let gen = GenerationOutput(title: "Linked Output")
+        gen.project = project
+
+        let dto = GenerationOutputUploadRequest(output: gen, userID: userID)
+        let data = try JSONEncoder().encode(dto)
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(obj["project_local_id"] as? String, project.id.uuidString)
     }
 }

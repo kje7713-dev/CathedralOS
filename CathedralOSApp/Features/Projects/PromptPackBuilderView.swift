@@ -18,6 +18,7 @@ struct PromptPackBuilderView: View {
     @State private var selectedRelationshipIDs: Set<UUID> = []
     @State private var selectedThemeQuestionIDs: Set<UUID> = []
     @State private var selectedMotifIDs: Set<UUID> = []
+    @State private var saveErrorMessage: String?
 
     private var isEditing: Bool { pack != nil }
 
@@ -240,6 +241,14 @@ struct PromptPackBuilderView: View {
         }
         .tint(CathedralTheme.Colors.accent)
         .interactiveDismissDisabled(isEditing || !name.trimmingCharacters(in: .whitespaces).isEmpty)
+        .alert("Could Not Save Prompt Pack", isPresented: Binding(
+            get: { saveErrorMessage != nil },
+            set: { if !$0 { saveErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { saveErrorMessage = nil }
+        } message: {
+            Text(saveErrorMessage ?? "An unknown error occurred.")
+        }
     }
 
     // MARK: Selection Row
@@ -280,15 +289,26 @@ struct PromptPackBuilderView: View {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         guard !trimmedName.isEmpty else { return }
 
+        let targetPack: PromptPack
         if let p = pack {
             apply(to: p, name: trimmedName)
+            targetPack = p
         } else {
             let p = PromptPack(name: trimmedName)
             modelContext.insert(p)
             project.promptPacks.append(p)
             apply(to: p, name: trimmedName)
+            targetPack = p
         }
-        dismiss()
+
+        targetPack.project = project
+        do {
+            try modelContext.save()
+            dismiss()
+        } catch {
+            modelContext.rollback()
+            saveErrorMessage = error.localizedDescription
+        }
     }
 
     private func apply(to p: PromptPack, name: String) {

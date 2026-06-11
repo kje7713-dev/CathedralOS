@@ -20,6 +20,7 @@ struct AccountView: View {
     let usageLimitService: any UsageLimitServiceProtocol
     let entitlementService: any StoreKitEntitlementServiceProtocol
     let creditStateService: any CreditStateServiceProtocol
+    let recoveryContext: PersistenceRecoveryContext?
 
     @Environment(\.modelContext) private var modelContext
     @Query private var localProjects: [StoryProject]
@@ -31,7 +32,8 @@ struct AccountView: View {
         profileBootstrapService: (any ProfileBootstrapServiceProtocol)? = nil,
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
         entitlementService: any StoreKitEntitlementServiceProtocol = StoreKitEntitlementService.shared,
-        creditStateService: any CreditStateServiceProtocol = BackendCreditStateService()
+        creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
+        recoveryContext: PersistenceRecoveryContext? = nil
     ) {
         self.authService = authService
         self.syncService = syncService
@@ -39,6 +41,7 @@ struct AccountView: View {
         self.usageLimitService = usageLimitService
         self.entitlementService = entitlementService
         self.creditStateService = creditStateService
+        self.recoveryContext = recoveryContext
     }
 
     @State private var authState: AuthState = .unknown
@@ -64,7 +67,7 @@ struct AccountView: View {
         NavigationStack {
             List {
                 accountSection
-                if shouldShowRecoveryPanel {
+                if shouldShowRecoveryPanel || recoveryContext != nil {
                     recoverySection
                 }
                 cloudFeaturesSection
@@ -378,6 +381,41 @@ struct AccountView: View {
 
     private var recoverySection: some View {
         Section("Recovery (TestFlight)") {
+            if let recoveryContext {
+                Text("CathedralOS is currently running with a recovery database because the original SwiftData store could not be opened.")
+                    .font(.caption)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Text("Primary store: \(recoveryContext.primaryStoreURL.lastPathComponent)")
+                    .font(.caption2)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                if let recoveryStoreURL = recoveryContext.recoveryStoreURL {
+                    Text("Recovery store: \(recoveryStoreURL.lastPathComponent)")
+                        .font(.caption2)
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                if let preservedArtifactDirectory = recoveryContext.preservedArtifactDirectory {
+                    Text("Preserved artifacts: \(preservedArtifactDirectory.path)")
+                        .font(.caption2)
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                if let storeLoadErrorMessage = recoveryContext.storeLoadErrorMessage {
+                    Text("Original load error: \(storeLoadErrorMessage)")
+                        .font(.caption2)
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                Button {
+                    restoreProjectsFromLocalBackup()
+                } label: {
+                    Label("Restore Latest Local Project Backup", systemImage: "clock.arrow.circlepath")
+                }
+                .disabled(isSyncing || isWorking)
+                Button {
+                    restoreOutputsFromLocalBackup()
+                } label: {
+                    Label("Restore Outputs from Local Backup", systemImage: "externaldrive.badge.timemachine")
+                }
+                .disabled(isSyncing || isWorking)
+            }
             HStack {
                 Text("Local projects")
                 Spacer()
@@ -590,6 +628,30 @@ struct AccountView: View {
         guard let receiptURL = Bundle.main.appStoreReceiptURL else { return false }
         return receiptURL.lastPathComponent == "sandboxReceipt"
         #endif
+    }
+
+    private func restoreProjectsFromLocalBackup() {
+        syncError = nil
+        do {
+            _ = try LocalProjectBackupService.shared.restoreLatestProject(into: modelContext)
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            lastSyncMessage = "Local project backup restored at \(formatter.string(from: Date()))."
+        } catch {
+            syncError = (error as? LocalProjectBackupError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func restoreOutputsFromLocalBackup() {
+        syncError = nil
+        do {
+            let restoredCount = try LocalGenerationOutputBackupService.shared.restoreLatestOutputs(into: modelContext)
+            lastSyncMessage = restoredCount == 1
+                ? "Restored 1 generated output from local backup."
+                : "Restored \(restoredCount) generated outputs from local backup."
+        } catch {
+            syncError = (error as? LocalGenerationOutputBackupError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
     // MARK: - Diagnostics section
