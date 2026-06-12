@@ -125,6 +125,51 @@ export function formatOpenAIError(details: OpenAIErrorDetails): string {
   return `OpenAI error (${parts.join(", ")})`;
 }
 
+// deno-lint-ignore no-explicit-any
+export function extractResponseText(json: any): string {
+  if (typeof json?.output_text === "string") return json.output_text;
+
+  const parts: string[] = [];
+  for (const item of json?.output ?? []) {
+    for (const content of item?.content ?? []) {
+      if (
+        content?.type === "output_text" &&
+        typeof content?.text === "string"
+      ) {
+        parts.push(content.text);
+      }
+    }
+  }
+  return parts.join("");
+}
+
+function isTokenLimitIncompleteReason(reason: string): boolean {
+  const normalized = reason.toLowerCase();
+  return normalized === "max_output_tokens" ||
+    normalized === "max_completion_tokens" ||
+    normalized === "output_token_limit" ||
+    normalized === "token_limit" ||
+    (normalized.includes("token") &&
+      (normalized.includes("max") || normalized.includes("limit")));
+}
+
+// deno-lint-ignore no-explicit-any
+export function extractResponsesFinishReason(json: any): string | undefined {
+  if (json?.status === "incomplete") {
+    const reason = json?.incomplete_details?.reason;
+    if (
+      typeof reason === "string" &&
+      isTokenLimitIncompleteReason(reason)
+    ) {
+      return "length";
+    }
+  }
+
+  return typeof json?.status === "string" && json.status.length > 0
+    ? json.status
+    : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // LLM interface types
 // ---------------------------------------------------------------------------
@@ -184,7 +229,7 @@ export class OpenAIProvider implements LLMProvider {
 
     let resp: Response;
     try {
-      resp = await fetch("https://api.openai.com/v1/chat/completions", {
+      resp = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -192,8 +237,9 @@ export class OpenAIProvider implements LLMProvider {
         },
         body: JSON.stringify({
           model: resolvedModel,
-          messages,
-          max_completion_tokens: maxTokens,
+          input: messages,
+          max_output_tokens: maxTokens,
+          store: false,
         }),
         signal: controller.signal,
       });
@@ -232,19 +278,12 @@ export class OpenAIProvider implements LLMProvider {
 
     // deno-lint-ignore no-explicit-any
     const json: any = await resp.json();
-    const choice = json.choices?.[0];
-    if (!choice) {
-      throw new ProviderError("OpenAI returned no choices", "unknown", false);
-    }
-
     return {
-      content: choice.message?.content ?? "",
+      content: extractResponseText(json),
       modelName: json.model ?? resolvedModel,
-      finishReason: typeof choice.finish_reason === "string"
-        ? choice.finish_reason
-        : undefined,
-      inputTokens: json.usage?.prompt_tokens,
-      outputTokens: json.usage?.completion_tokens,
+      finishReason: extractResponsesFinishReason(json),
+      inputTokens: json.usage?.input_tokens,
+      outputTokens: json.usage?.output_tokens,
       totalTokens: json.usage?.total_tokens,
     };
   }

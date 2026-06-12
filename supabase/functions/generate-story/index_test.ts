@@ -50,6 +50,8 @@ import {
 import type { GenerationModelStore } from "./_generation_models.ts";
 import {
   classifyOpenAIStatus,
+  extractResponseText,
+  extractResponsesFinishReason,
   OpenAIProvider,
   PROVIDER_TIMEOUT_MS,
   ProviderError,
@@ -700,21 +702,28 @@ Deno.test("OpenAIProvider: 429 insufficient_quota maps to provider_insufficient_
   }
 });
 
-Deno.test("OpenAIProvider: uses max_completion_tokens in request body", async () => {
+Deno.test("OpenAIProvider: uses Responses API payload and parses output_text", async () => {
   const originalFetch = globalThis.fetch;
   let requestBody: Record<string, unknown> | null = null;
+  let requestedUrl = "";
 
   globalThis.fetch = ((
-    _input: string | URL | Request,
+    input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
+    requestedUrl = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.toString()
+      : input.url;
     requestBody = JSON.parse(String(init?.body));
     return Promise.resolve(
       new Response(
         JSON.stringify({
-          choices: [{ message: { content: "Generated story" }, finish_reason: "stop" }],
+          output_text: "Generated story",
+          status: "completed",
           model: "gpt-4o-mini",
-          usage: { prompt_tokens: 12, completion_tokens: 34 },
+          usage: { input_tokens: 12, output_tokens: 34, total_tokens: 46 },
         }),
         {
           status: 200,
@@ -729,24 +738,59 @@ Deno.test("OpenAIProvider: uses max_completion_tokens in request body", async ()
     const result = await provider.complete([{ role: "user", content: "Tell a story" }], 800);
 
     assertExists(requestBody);
-    assertEquals(requestBody?.max_completion_tokens, 800);
+    assertEquals(requestedUrl, "https://api.openai.com/v1/responses");
+    assertEquals(requestBody?.input, [{ role: "user", content: "Tell a story" }]);
+    assertEquals(requestBody?.max_output_tokens, 800);
+    assertEquals(requestBody?.store, false);
     assertEquals("max_tokens" in requestBody!, false);
-    assertEquals(result.finishReason, "stop");
+    assertEquals("max_completion_tokens" in requestBody!, false);
+    assertEquals(result.content, "Generated story");
+    assertEquals(result.finishReason, "completed");
+    assertEquals(result.inputTokens, 12);
+    assertEquals(result.outputTokens, 34);
+    assertEquals(result.totalTokens, 46);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-Deno.test("OpenAIProvider: parses finish_reason length", async () => {
+Deno.test("extractResponseText: falls back to output array items", () => {
+  const text = extractResponseText({
+    output: [
+      {
+        content: [
+          { type: "output_text", text: "Part one. " },
+          { type: "reasoning", text: "internal notes" },
+          { type: "output_text", text: "Part two." },
+        ],
+      },
+      {
+        content: [{ type: "output_text", text: " Final part." }],
+      },
+    ],
+  });
+
+  assertEquals(text, "Part one. Part two. Final part.");
+});
+
+Deno.test("OpenAIProvider: parses output array when output_text missing", async () => {
   const originalFetch = globalThis.fetch;
 
   globalThis.fetch = ((): Promise<Response> =>
     Promise.resolve(
       new Response(
         JSON.stringify({
-          choices: [{ message: { content: "Partial story" }, finish_reason: "length" }],
+          output: [
+            {
+              content: [
+                { type: "output_text", text: "Partial story " },
+                { type: "output_text", text: "from parts." },
+              ],
+            },
+          ],
+          status: "completed",
           model: "gpt-4o-mini",
-          usage: { prompt_tokens: 12, completion_tokens: 800 },
+          usage: { input_tokens: 12, output_tokens: 800, total_tokens: 812 },
         }),
         {
           status: 200,
@@ -758,10 +802,20 @@ Deno.test("OpenAIProvider: parses finish_reason length", async () => {
   try {
     const provider = new OpenAIProvider("test-key", "gpt-4o-mini");
     const result = await provider.complete([{ role: "user", content: "Tell a story" }], 800);
-    assertEquals(result.finishReason, "length");
+    assertEquals(result.content, "Partial story from parts.");
+    assertEquals(result.finishReason, "completed");
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+Deno.test("extractResponsesFinishReason: incomplete max_output_tokens maps to length", () => {
+  const finishReason = extractResponsesFinishReason({
+    status: "incomplete",
+    incomplete_details: { reason: "max_output_tokens" },
+  });
+
+  assertEquals(finishReason, "length");
 });
 
 Deno.test("OpenAIProvider: logs OpenAI rejection details for 400 responses", async () => {
