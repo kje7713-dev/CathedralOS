@@ -175,6 +175,11 @@ struct AftertasteFormView: View {
             modelContext.insert(a)
             project.aftertastes.append(a)
         }
+        let parentProject = project ?? aftertaste?.project
+        if let parentProject {
+            let ctx = modelContext
+            Task { await DataDurabilityCoordinator.shared.saveProject(parentProject, context: ctx) }
+        }
         dismiss()
     }
 }

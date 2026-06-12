@@ -304,6 +304,8 @@ struct PromptPackBuilderView: View {
         targetPack.project = project
         do {
             try modelContext.save()
+            let ctx = modelContext
+            Task { await DataDurabilityCoordinator.shared.saveProject(project, context: ctx) }
             dismiss()
         } catch {
             modelContext.rollback()

@@ -350,6 +350,11 @@ struct CharacterFormView: View {
             modelContext.insert(c)
             project.characters.append(c)
         }
+        let parentProject = project ?? character?.project
+        if let parentProject {
+            let ctx = modelContext
+            Task { await DataDurabilityCoordinator.shared.saveProject(parentProject, context: ctx) }
+        }
         dismiss()
     }
 }

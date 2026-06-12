@@ -22,10 +22,19 @@ struct ProjectsListView: View {
     @State private var deleteErrorMessage: String?
     private let projectDeletionService: any ProjectDeletionServiceProtocol = ProjectDeletionService.shared
 
+    // MARK: - Dedupe
+
+    /// Projects with duplicate `id` values hidden: shows only the first occurrence from the
+    /// sorted @Query result. The one-time cleanup in `.task` removes stored duplicates.
+    private var dedupedProjects: [StoryProject] {
+        var seen = Set<UUID>()
+        return projects.filter { seen.insert($0.id).inserted }
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             Group {
-                if projects.isEmpty {
+                if dedupedProjects.isEmpty {
                     emptyState
                 } else {
                     projectList
@@ -142,7 +151,7 @@ struct ProjectsListView: View {
             Text(deleteErrorMessage ?? "The project could not be deleted.")
         }
         .task {
-            LocalProjectBackupService.shared.backupAllProjects(in: modelContext)
+            await deduplicateLocalProjects()
             await refreshRecoveryAvailability()
         }
     }
@@ -201,7 +210,7 @@ struct ProjectsListView: View {
 
     private var projectList: some View {
         List {
-            ForEach(projects) { project in
+            ForEach(dedupedProjects) { project in
                 NavigationLink(value: project) {
                     projectRow(project)
                 }
@@ -311,9 +320,8 @@ struct ProjectsListView: View {
                         let trimmed = renameText.trimmingCharacters(in: .whitespaces)
                         guard !trimmed.isEmpty else { return }
                         project.name = trimmed
-                        _ = LocalProjectBackupService.shared.backup(project: project)
-                        refreshBackupAvailability()
                         projectToRename = nil
+                        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
                     }
                     .disabled(renameText.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
@@ -329,11 +337,10 @@ struct ProjectsListView: View {
         guard !trimmed.isEmpty else { return }
         let p = StoryProject(name: trimmed)
         modelContext.insert(p)
-        _ = LocalProjectBackupService.shared.backup(project: p)
-        refreshBackupAvailability()
         pendingNavigationProject = p
         newProjectName = ""
         showAddProject = false
+        Task { await DataDurabilityCoordinator.shared.saveProject(p, context: modelContext) }
     }
 
     private func refreshBackupAvailability() {
@@ -348,6 +355,56 @@ struct ProjectsListView: View {
     private func refreshRecoveryAvailability() async {
         refreshBackupAvailability()
         await refreshCloudBackupAvailability()
+    }
+
+    /// One-time cleanup: deduplicates StoryProject records that share the same `id` UUID.
+    /// Keeps the most complete record (most children), merges children from duplicates into
+    /// the keeper, then deletes the duplicate records and saves the context.
+    /// After cleanup, syncs surviving projects to cloud if the user is signed in.
+    private func deduplicateLocalProjects() async {
+        let descriptor = FetchDescriptor<StoryProject>()
+        guard let allProjects = try? modelContext.fetch(descriptor) else { return }
+
+        let grouped = Dictionary(grouping: allProjects, by: { $0.id })
+        var didChange = false
+
+        for (_, group) in grouped where group.count > 1 {
+            // Pick keeper: highest child entity count (most complete record).
+            let sorted = group.sorted { a, b in
+                let aScore = a.characters.count + a.storySparks.count + a.aftertastes.count
+                    + a.promptPacks.count + a.relationships.count + a.themeQuestions.count + a.motifs.count
+                let bScore = b.characters.count + b.storySparks.count + b.aftertastes.count
+                    + b.promptPacks.count + b.relationships.count + b.themeQuestions.count + b.motifs.count
+                return aScore > bScore
+            }
+            let keeper = sorted[0]
+            for duplicate in sorted.dropFirst() {
+                // Merge each child collection into keeper before deletion so cascade
+                // delete does not destroy entities that should be preserved.
+                for c in duplicate.characters       { keeper.characters.append(c) }
+                for s in duplicate.storySparks      { keeper.storySparks.append(s) }
+                for a in duplicate.aftertastes      { keeper.aftertastes.append(a) }
+                for p in duplicate.promptPacks      { keeper.promptPacks.append(p) }
+                for r in duplicate.relationships    { keeper.relationships.append(r) }
+                for t in duplicate.themeQuestions   { keeper.themeQuestions.append(t) }
+                for m in duplicate.motifs           { keeper.motifs.append(m) }
+                for g in duplicate.generations      { keeper.generations.append(g) }
+                if keeper.projectSetting == nil, let s = duplicate.projectSetting {
+                    keeper.projectSetting = s
+                }
+                modelContext.delete(duplicate)
+                didChange = true
+            }
+        }
+
+        if didChange {
+            try? modelContext.save()
+        }
+
+        // Sync surviving projects to cloud if signed in.
+        if BackendAuthService.shared.authState.isSignedIn {
+            try? await ProjectCloudSyncService.shared.syncAllProjects(in: modelContext)
+        }
     }
 
     private func restoreFromLatestBackup() {

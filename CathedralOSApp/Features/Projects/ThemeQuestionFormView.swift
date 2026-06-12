@@ -162,6 +162,11 @@ struct ThemeQuestionFormView: View {
             modelContext.insert(t)
             project.themeQuestions.append(t)
         }
+        let parentProject = project ?? themeQuestion?.project
+        if let parentProject {
+            let ctx = modelContext
+            Task { await DataDurabilityCoordinator.shared.saveProject(parentProject, context: ctx) }
+        }
         dismiss()
     }
 }
