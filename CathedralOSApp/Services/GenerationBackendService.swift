@@ -226,6 +226,29 @@ protocol GenerationBackendServiceProtocol {
     ) async throws -> GenerationResponse
 }
 
+// MARK: - GenerationCostEstimateServiceProtocol
+
+/// Service protocol for requesting a credit cost estimate from the backend.
+/// The estimate call never triggers an LLM call, inserts no rows, and charges no credits.
+/// The backend is the source of truth for credit rates; this avoids hardcoded client-side costs.
+protocol GenerationCostEstimateServiceProtocol: AnyObject {
+    /// Requests a credit cost estimate for a prospective generation.
+    /// - Parameters:
+    ///   - project: The story project providing context.
+    ///   - pack: The prompt pack to be used for generation.
+    ///   - lengthMode: The story goal (short / medium / long / chapter).
+    ///   - selectedModelId: The backend model identifier, or `nil` to use the backend default.
+    /// - Returns: A `GenerationCostEstimate` describing the projected credit cost and whether the user may proceed.
+    /// - Throws: `GenerationBackendServiceError` on auth, config, or network failure.
+    func estimateGenerationCost(
+        project: StoryProject,
+        pack: PromptPack,
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String?
+    ) async throws -> GenerationCostEstimate
+}
+
+
 // MARK: - SupabaseGenerationService
 
 /// Production implementation — POSTs to the Supabase `generate-story` Edge Function.
@@ -234,7 +257,7 @@ protocol GenerationBackendServiceProtocol {
 ///
 /// Auth: requires a signed-in session (`authService.authState.isSignedIn`).
 /// Config: requires `SupabaseProjectURL` and `SupabaseAnonKey` in Info.plist.
-final class SupabaseGenerationService: GenerationBackendServiceProtocol, GenerationService {
+final class SupabaseGenerationService: GenerationBackendServiceProtocol, GenerationCostEstimateServiceProtocol, GenerationService {
 
     private let authService: AuthService
     private let session: URLSession
@@ -285,6 +308,80 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         )
 
         return try await post(requestBody)
+    }
+
+    // MARK: - GenerationCostEstimateServiceProtocol
+
+    func estimateGenerationCost(
+        project: StoryProject,
+        pack: PromptPack,
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String?
+    ) async throws -> GenerationCostEstimate {
+        do {
+            try await validateConfigAndAuth()
+        } catch {
+            throw error
+        }
+
+        let payload = PromptPackExportBuilder.build(pack: pack, project: project)
+
+        let requestBody = GenerationRequest(
+            schema: StoryGenerationService.requestSchema,
+            version: StoryGenerationService.requestVersion,
+            projectID: project.id.uuidString,
+            projectName: project.name,
+            promptPackID: pack.id.uuidString,
+            promptPackName: pack.name,
+            sourcePayload: payload,
+            readingLevel: project.readingLevel,
+            contentRating: project.contentRating,
+            audienceNotes: project.audienceNotes,
+            requestedOutputType: GenerationOutputType.story.rawValue,
+            generationLengthMode: lengthMode.rawValue,
+            approximateMaxOutputTokens: lengthMode.outputBudget,
+            selectedModelId: selectedModelId,
+            action: "estimate"
+        )
+
+        let client: SupabaseBackendClient
+        do {
+            client = try SupabaseBackendClient()
+        } catch {
+            throw GenerationBackendServiceError.notConfigured
+        }
+
+        let url = client.edgeFunctionURL(path: SupabaseConfiguration.generationEdgeFunctionPath)
+        let userAccessToken: String
+        do {
+            userAccessToken = try await resolveAccessTokenForRequest()
+        } catch {
+            throw error
+        }
+
+        var urlRequest = client.authorizedRequest(for: url, userAccessToken: userAccessToken)
+        urlRequest.httpMethod = "POST"
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        do {
+            urlRequest.httpBody = try encoder.encode(requestBody)
+        } catch {
+            throw GenerationBackendServiceError.encodingError(error)
+        }
+
+        let data: Data
+        do {
+            (data, _) = try await session.data(for: urlRequest)
+        } catch {
+            throw GenerationBackendServiceError.networkError(error)
+        }
+
+        do {
+            return try JSONDecoder().decode(GenerationCostEstimate.self, from: data)
+        } catch {
+            throw GenerationBackendServiceError.decodingError(error)
+        }
     }
 
     func generateAction(
@@ -581,7 +678,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
 
 /// Placeholder implementation — always throws `notImplemented`.
 /// Used when Supabase is not configured so the app does not crash.
-final class StubGenerationBackendService: GenerationBackendServiceProtocol, GenerationService {
+final class StubGenerationBackendService: GenerationBackendServiceProtocol, GenerationCostEstimateServiceProtocol, GenerationService {
 
     func generate(
         project: StoryProject,
@@ -590,6 +687,15 @@ final class StubGenerationBackendService: GenerationBackendServiceProtocol, Gene
         lengthMode: GenerationLengthMode,
         selectedModelId: String?
     ) async throws -> GenerationResponse {
+        throw GenerationBackendServiceError.notImplemented
+    }
+
+    func estimateGenerationCost(
+        project: StoryProject,
+        pack: PromptPack,
+        lengthMode: GenerationLengthMode,
+        selectedModelId: String?
+    ) async throws -> GenerationCostEstimate {
         throw GenerationBackendServiceError.notImplemented
     }
 }

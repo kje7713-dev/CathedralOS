@@ -215,3 +215,30 @@ struct GenerationResponse: Codable {
         errorMessage        = try c.decodeIfPresent(String.self, forKey: .errorMessage)
     }
 }
+
+// MARK: - GenerationCostEstimate
+// Response DTO returned by the backend when generationAction == "estimate".
+// Contains the projected credit cost and whether the user has sufficient credits,
+// based on the full prompt/context size and the selected model's rate schedule.
+// No OpenAI call is made; no credits are charged; no generation_outputs row is inserted.
+
+struct GenerationCostEstimate: Codable {
+    /// Always "ok" for a successful estimate response.
+    let status: String
+    let selectedModelId: String
+    let modelDisplayName: String
+    /// Raw value of `GenerationLengthMode`: "short" | "medium" | "long" | "chapter".
+    let storyGoal: String
+    /// Estimated input token count based on the assembled prompt.
+    let estimatedInputTokens: Int
+    /// Maximum output token budget applied by the backend for this story goal.
+    let estimatedOutputTokens: Int
+    /// Projected credit charge, computed from model input/output rates and minimum charge.
+    let estimatedCredits: Int
+    /// Current available credits for the authenticated user.
+    let availableCredits: Int
+    /// `true` if the user has enough credits to proceed with generation.
+    let allowed: Bool
+    /// Minimum charge enforced by the selected model regardless of actual token usage.
+    let minimumChargeCredits: Int
+}

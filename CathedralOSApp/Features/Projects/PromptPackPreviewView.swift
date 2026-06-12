@@ -41,6 +41,13 @@ struct PromptPackPreviewView: View {
     let authService: any AuthService
     let creditStateService: any CreditStateServiceProtocol
     let outputSyncService: any GenerationOutputSyncServiceProtocol
+    let estimateService: any GenerationCostEstimateServiceProtocol
+
+    // Cost estimate state
+    @State private var costEstimate: GenerationCostEstimate?
+    @State private var isEstimating = false
+    @State private var estimateError: String?
+    @State private var estimateTask: Task<Void, Never>?
 
     init(
         project: StoryProject,
@@ -50,7 +57,8 @@ struct PromptPackPreviewView: View {
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
         authService: any AuthService = BackendAuthService.shared,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
-        outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
+        outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
+        estimateService: (any GenerationCostEstimateServiceProtocol)? = nil
     ) {
         self.project = project
         self.pack = pack
@@ -60,20 +68,11 @@ struct PromptPackPreviewView: View {
         self.authService = authService
         self.creditStateService = creditStateService
         self.outputSyncService = outputSyncService
-    }
-
-    // MARK: Credit state
-
-    private var creditState: GenerationCreditState {
-        usageLimitService.currentState
+        self.estimateService = estimateService ?? SupabaseGenerationService()
     }
 
     private var selectedModel: GenerationModelOption? {
         generationModels.first(where: { $0.id == selectedModelId })
-    }
-
-    private var selectedCreditCost: Int {
-        selectedModel?.minimumChargeCredits ?? 1
     }
 
     private var exportPayload: PromptPackExportPayload {
@@ -210,7 +209,10 @@ struct PromptPackPreviewView: View {
         .task {
             await loadGenerationModels()
             await refreshBackendCreditState()
+            scheduleEstimate()
         }
+        .onChange(of: selectedLengthMode) { scheduleEstimate() }
+        .onChange(of: selectedModelId) { scheduleEstimate() }
     }
 
     // MARK: Mode Picker
@@ -531,7 +533,10 @@ struct PromptPackPreviewView: View {
                     Task { await startGeneration() }
                 }
             }
-            .disabled(isGenerating)
+            .disabled(isGenerating || isEstimating || costEstimate?.allowed == false)
+
+            // Cost estimate row
+            creditEstimateRow
 
             Text("Sends the current pack payload to your generation backend. The result is saved to Generated Outputs.")
                 .font(CathedralTheme.Typography.caption())
@@ -540,6 +545,55 @@ struct PromptPackPreviewView: View {
                 .frame(maxWidth: .infinity)
         }
     }
+
+    @ViewBuilder
+    private var creditEstimateRow: some View {
+        if isEstimating {
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text("Estimating cost…")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Spacer()
+            }
+        } else if let err = estimateError {
+            HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+                Text(err)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if let estimate = costEstimate {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: CathedralTheme.Spacing.xs) {
+                    Image(systemName: "bolt.circle")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(estimate.allowed
+                            ? CathedralTheme.Colors.secondaryText
+                            : CathedralTheme.Colors.destructive)
+                    if estimate.allowed {
+                        let c = estimate.estimatedCredits
+                        Text("Estimated cost: \(c) \(c == 1 ? "credit" : "credits")")
+                            .font(CathedralTheme.Typography.label(11, weight: .regular))
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        Spacer()
+                        Text("\(estimate.availableCredits) remaining")
+                            .font(CathedralTheme.Typography.label(11, weight: .regular))
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    } else {
+                        let needed = estimate.estimatedCredits
+                        let have = estimate.availableCredits
+                        Text("Need \(needed) \(needed == 1 ? "credit" : "credits"), you have \(have)")
+                            .font(CathedralTheme.Typography.label(11, weight: .regular))
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                    }
+                }
+            }
+        }
 
     private var modelPicker: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
@@ -575,29 +629,16 @@ struct PromptPackPreviewView: View {
 
     private var lengthModePicker: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-            Text("OUTPUT LENGTH".uppercased())
+            Text("STORY GOAL".uppercased())
                 .font(CathedralTheme.Typography.label(10, weight: .semibold))
                 .tracking(1.5)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            Picker("Output length", selection: $selectedLengthMode) {
+            Picker("Story goal", selection: $selectedLengthMode) {
                 ForEach(GenerationLengthMode.allCases, id: \.self) { mode in
                     Text(mode.displayName).tag(mode)
                 }
             }
             .pickerStyle(.segmented)
-            // Credit cost hint beneath the picker.
-            HStack(spacing: 4) {
-                Image(systemName: "bolt.circle")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                Text("Base minimum \(selectedCreditCost) \(selectedCreditCost == 1 ? "credit" : "credits")")
-                    .font(CathedralTheme.Typography.label(11, weight: .regular))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                Spacer()
-                Text("\(creditState.availableCredits) remaining")
-                    .font(CathedralTheme.Typography.label(11, weight: .regular))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            }
             Text("\(selectedLengthMode.displayName): \(selectedLengthMode.storyUnitHint)")
                 .font(CathedralTheme.Typography.label(11, weight: .regular))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
@@ -605,6 +646,63 @@ struct PromptPackPreviewView: View {
     }
 
     // MARK: Generation Logic
+
+    /// Debounces estimate requests so rapid picker changes do not flood the backend.
+    /// Cancels any in-flight estimate task, then fires after a 400 ms delay.
+    private func scheduleEstimate() {
+        estimateTask?.cancel()
+        estimateTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            await performEstimate()
+        }
+    }
+
+    @MainActor
+    private func performEstimate() async {
+        // Require auth before hitting the backend.
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard authService.authState.isSignedIn else {
+            estimateError = "Sign in to see the estimated cost."
+            costEstimate = nil
+            return
+        }
+        guard SupabaseConfiguration.isConfigured else {
+            estimateError = nil
+            costEstimate = nil
+            return
+        }
+
+        isEstimating = true
+        estimateError = nil
+        defer { isEstimating = false }
+
+        do {
+            let estimate = try await estimateService.estimateGenerationCost(
+                project: project,
+                pack: pack,
+                lengthMode: selectedLengthMode,
+                selectedModelId: selectedModelId
+            )
+            costEstimate = estimate
+            estimateError = nil
+        } catch let error as GenerationBackendServiceError {
+            costEstimate = nil
+            switch error {
+            case .notSignedIn:
+                estimateError = "Sign in to see the estimated cost."
+            case .notConfigured:
+                estimateError = nil
+            default:
+                estimateError = "Could not estimate cost — \(error.errorDescription ?? error.localizedDescription)"
+            }
+        } catch {
+            costEstimate = nil
+            estimateError = "Could not estimate cost — \(error.localizedDescription)"
+        }
+    }
 
     private func startGeneration() async {
         generationError = nil
