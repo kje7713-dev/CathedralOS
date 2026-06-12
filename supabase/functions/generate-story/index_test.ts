@@ -66,7 +66,7 @@ import {
   MAX_PREVIOUS_OUTPUT_CHARS,
   MAX_SOURCE_PAYLOAD_CHARS,
 } from "./index.ts";
-import type { LLMMessage, LLMProvider } from "./_provider.ts";
+import type { LLMMessage, LLMProvider, LLMResponse } from "./_provider.ts";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -1704,9 +1704,15 @@ Deno.test("handler: estimate action returns ok with required estimate fields", a
 
   let providerCalled = false;
   const provider: LLMProvider = {
-    complete() {
+    complete(_messages: LLMMessage[], _maxTokens: number): Promise<LLMResponse> {
       providerCalled = true;
-      return Promise.resolve({ content: "ok", modelName: "gpt-4o-mini" });
+      return Promise.resolve({
+        content: "ok",
+        modelName: "gpt-4o-mini",
+        finishReason: "stop",
+        inputTokens: 10,
+        outputTokens: 25,
+      });
     },
   };
 

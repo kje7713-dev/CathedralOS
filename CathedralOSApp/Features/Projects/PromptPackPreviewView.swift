@@ -71,12 +71,6 @@ struct PromptPackPreviewView: View {
         self.estimateService = estimateService ?? SupabaseGenerationService()
     }
 
-    // MARK: Credit state
-
-    private var creditState: GenerationCreditState {
-        usageLimitService.currentState
-    }
-
     private var selectedModel: GenerationModelOption? {
         generationModels.first(where: { $0.id == selectedModelId })
     }
