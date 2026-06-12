@@ -1691,3 +1691,163 @@ Deno.test("handler: each length mode has distinct story-unit guidance", async ()
   assertStringIncludes(combined, "complete extended multi-beat scene sequence");
   assertStringIncludes(combined, "complete chapter-shaped section");
 });
+
+// =============================================================================
+// 26. Estimate action
+// =============================================================================
+
+Deno.test("handler: estimate action returns ok with required estimate fields", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+
+  let providerCalled = false;
+  const provider: LLMProvider = {
+    complete() {
+      providerCalled = true;
+      return Promise.resolve({ content: "ok", modelName: "gpt-4o-mini" });
+    },
+  };
+
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({ generationAction: "estimate" })),
+    {
+      provider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
+
+  const body = await resp.json();
+  assertEquals(resp.status, 200);
+  assertEquals(body.status, "ok");
+  assertEquals(body.storyGoal, "short");
+  assertEquals(body.selectedModelId, "gpt-4o-mini");
+  assertEquals(body.allowed, true);
+  assertEquals(typeof body.estimatedInputTokens, "number");
+  assertEquals(typeof body.estimatedOutputTokens, "number");
+  assertEquals(typeof body.estimatedCredits, "number");
+  assertEquals(typeof body.availableCredits, "number");
+  assertEquals(typeof body.minimumChargeCredits, "number");
+  // Provider must not be called.
+  assertEquals(providerCalled, false);
+  // Rate limiter must not have any recorded requests.
+  assertEquals(rateLimitState.recordRequestCalls.length, 0);
+  // No rows should be inserted.
+  assertEquals(persistenceState.outputInsertCalls.length, 0);
+  assertEquals(persistenceState.usageInsertCalls.length, 0);
+});
+
+Deno.test("handler: estimate action returns allowed=false when credits are insufficient", async () => {
+  const { store: creditStore } = makeMockCreditStore(
+    makeEntitlement({ monthly_credit_allowance: 0, purchased_credit_balance: 0 }),
+  );
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore([{
+    id: "gpt-4o-mini",
+    provider_model: "gpt-4o-mini",
+    input_credit_rate: 100,
+    output_credit_rate: 100,
+    minimum_charge_credits: 9999,
+  }]);
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({ generationAction: "estimate" })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
+
+  const body = await resp.json();
+  assertEquals(resp.status, 200);
+  assertEquals(body.status, "ok");
+  assertEquals(body.allowed, false);
+  assertEquals(body.availableCredits, 0);
+});
+
+Deno.test("handler: estimate action does not charge credits", async () => {
+  const { store: creditStore, state: creditState } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  await handler(
+    makeAuthRequest(makeBaseRequest({ generationAction: "estimate" })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
+
+  assertEquals(creditState.chargeCalls.length, 0);
+});
+
+Deno.test("handler: estimate action with invalid length mode returns 422", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({ generationAction: "estimate", generationLengthMode: "invalid" })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
+
+  const body = await resp.json();
+  assertEquals(resp.status, 422);
+  assertEquals(body.errorCode, "invalid_request");
+});
+
+Deno.test("handler: estimate action uses model rates for cost calculation", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  // Use a model with high rates so estimates are visibly non-zero.
+  const { store: generationModelStore } = makeMockGenerationModelStore([{
+    id: "gpt-4o-mini",
+    provider_model: "gpt-4o-mini",
+    input_credit_rate: 2,
+    output_credit_rate: 2,
+    minimum_charge_credits: 5,
+  }]);
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({ generationAction: "estimate", generationLengthMode: "chapter" })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
+
+  const body = await resp.json();
+  assertEquals(resp.status, 200);
+  assertEquals(body.storyGoal, "chapter");
+  assertEquals(body.estimatedOutputTokens, 6000);
+  // With rate=2, minimum=5, and a non-trivial prompt, estimated credits should be > 5.
+  assertEquals(body.estimatedCredits >= 5, true);
+});

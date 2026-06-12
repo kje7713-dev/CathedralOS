@@ -1025,7 +1025,7 @@ struct GenerationOutputDetailView: View {
 
             // Output length picker for derived actions
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-                Text("OUTPUT LENGTH".uppercased())
+                Text("STORY GOAL".uppercased())
                     .font(CathedralTheme.Typography.label(10, weight: .semibold))
                     .tracking(1.5)
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)

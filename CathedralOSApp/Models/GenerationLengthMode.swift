@@ -13,21 +13,23 @@ enum GenerationLengthMode: String, CaseIterable, Codable {
 
     // MARK: Display
 
+    /// User-facing story goal label shown in the picker.
     var displayName: String {
         switch self {
-        case .short:   return "Short"
-        case .medium:  return "Medium"
-        case .long:    return "Long"
-        case .chapter: return "Chapter"
+        case .short:   return "Short Scene"
+        case .medium:  return "Complete Scene"
+        case .long:    return "Extended Scene"
+        case .chapter: return "Chapter Section"
         }
     }
 
+    /// Helper description shown beneath the picker.
     var storyUnitHint: String {
         switch self {
-        case .short:   return "Complete short scene"
-        case .medium:  return "Complete scene"
-        case .long:    return "Extended scene"
-        case .chapter: return "Full chapter section"
+        case .short:   return "a tight complete beat"
+        case .medium:  return "one full dramatic scene"
+        case .long:    return "multiple connected beats"
+        case .chapter: return "a chapter-shaped section"
         }
     }
 
@@ -44,10 +46,10 @@ enum GenerationLengthMode: String, CaseIterable, Codable {
         }
     }
 
-    // MARK: Credit cost
-    // Generation credit cost per request, keyed by length mode.
-    // Single source of truth — do not scatter credit costs across views or services.
-    // Actions (regenerate / continue / remix) use the same cost as the selected length mode.
+    // MARK: Credit cost (local fallback only)
+    // Used as a local preflight estimate when the backend estimate is unavailable.
+    // The backend always recomputes the actual cost from model rates and prompt size.
+    // Do not use this for final generation gating — rely on the backend estimate.
 
     var creditCost: Int {
         switch self {

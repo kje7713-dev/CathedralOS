@@ -76,6 +76,9 @@ import {
 const ALLOWED_ACTIONS = ["generate", "regenerate", "continue", "remix"] as const;
 type GenerationAction = typeof ALLOWED_ACTIONS[number];
 
+/** Estimate-only action — returns a cost estimate without calling the LLM. */
+const ESTIMATE_ACTION = "estimate" as const;
+
 const MAX_BUDGET: Record<LengthMode, number> = {
   short: 800,
   medium: 1600,
@@ -574,6 +577,15 @@ function buildPrompt(req: {
       "Length: one complete chapter-shaped section with progression (roughly 2500–4000 words).",
   };
 
+  // Story-goal instruction appended to the Writing Task block.
+  // This replaces the raw token-count directive with a prose-level writing goal.
+  const storyGoalInstruction: Record<LengthMode, string> = {
+    short:   "Write one tight complete scene beat. End cleanly.",
+    medium:  "Write one complete dramatic scene with setup, pressure, turn, and consequence.",
+    long:    "Write an extended scene sequence with multiple connected beats.",
+    chapter: "Write a chapter-shaped section with progression and a clean stopping point.",
+  };
+
   const lines: string[] = [
     "You are a creative writing assistant helping authors craft compelling story content.",
     "",
@@ -608,7 +620,7 @@ function buildPrompt(req: {
     "## Writing Task",
     actionTask[req.generationAction],
     lengthGuidance[req.generationLengthMode],
-    `Approximate maximum output: ${req.outputBudget} tokens.`,
+    storyGoalInstruction[req.generationLengthMode],
     "",
   );
 
@@ -816,17 +828,22 @@ async function handler(
   // Server-side validation
   // -------------------------------------------------------------------------
 
-  if (!ALLOWED_ACTIONS.includes(body.generationAction as GenerationAction)) {
+  const isEstimate = body.generationAction === ESTIMATE_ACTION;
+
+  if (!isEstimate && !ALLOWED_ACTIONS.includes(body.generationAction as GenerationAction)) {
     return corsResponse(
       JSON.stringify({
         status: "failed",
         errorCode: "invalid_request",
-        errorMessage: `Invalid generationAction. Allowed values: ${ALLOWED_ACTIONS.join(", ")}`,
+        errorMessage: `Invalid generationAction. Allowed values: ${ALLOWED_ACTIONS.join(", ")}, ${ESTIMATE_ACTION}`,
       }),
       { status: 422 },
     );
   }
-  const generationAction = body.generationAction as GenerationAction;
+  // For the estimate path, use "generate" as the prompt-building action.
+  const generationAction: GenerationAction = isEstimate
+    ? "generate"
+    : body.generationAction as GenerationAction;
 
   if (!ALLOWED_LENGTH_MODES.includes(body.generationLengthMode as LengthMode)) {
     return corsResponse(
@@ -928,6 +945,50 @@ async function handler(
 
   const projectName = body.projectName ?? "";
   const promptPackName = body.promptPackName ?? "";
+
+  // -------------------------------------------------------------------------
+  // Estimate-only path — returns a cost estimate without calling the LLM,
+  // persisting any row, or charging credits.
+  // -------------------------------------------------------------------------
+
+  if (isEstimate) {
+    const estimatePrompt = buildPrompt({
+      sourcePayloadJSON: body.sourcePayloadJSON,
+      generationAction: "generate",
+      generationLengthMode,
+      outputBudget: maxCompletionTokens,
+      previousOutputText: undefined,
+      readingLevel: body.readingLevel,
+      contentRating: body.contentRating,
+      audienceNotes: body.audienceNotes,
+      projectName,
+      promptPackName,
+    });
+    const estimatedInputTokens = estimateTokensFromText(estimatePrompt);
+    const estimatedCredits = computeEstimatedCharge(
+      estimatedInputTokens,
+      maxCompletionTokens,
+      selectedModel,
+    );
+    const entitlement = await store.loadOrDefault(userId);
+    const creditCheck = checkCredits(entitlement, estimatedCredits);
+
+    return corsResponse(
+      JSON.stringify({
+        status: "ok",
+        selectedModelId: selectedModel.id,
+        modelDisplayName: selectedModel.display_name,
+        storyGoal: generationLengthMode,
+        estimatedInputTokens,
+        estimatedOutputTokens: maxCompletionTokens,
+        estimatedCredits,
+        availableCredits: creditCheck.availableCredits,
+        allowed: creditCheck.allowed,
+        minimumChargeCredits: selectedModel.minimum_charge_credits,
+      }),
+      { status: 200 },
+    );
+  }
 
   // -------------------------------------------------------------------------
   // Rate limiting -- must happen before credit check and provider call
