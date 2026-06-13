@@ -247,6 +247,11 @@ struct StorySparkFormView: View {
             modelContext.insert(s)
             project.storySparks.append(s)
         }
+        let parentProject = project ?? spark?.project
+        if let parentProject {
+            let ctx = modelContext
+            Task { await DataDurabilityCoordinator.shared.saveProject(parentProject, context: ctx) }
+        }
         dismiss()
     }
 }

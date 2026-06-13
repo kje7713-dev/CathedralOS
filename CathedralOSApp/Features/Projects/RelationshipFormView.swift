@@ -283,6 +283,11 @@ struct RelationshipFormView: View {
             modelContext.insert(r)
             project.relationships.append(r)
         }
+        let parentProject = project ?? relationship?.project
+        if let parentProject {
+            let ctx = modelContext
+            Task { await DataDurabilityCoordinator.shared.saveProject(parentProject, context: ctx) }
+        }
         dismiss()
     }
 }

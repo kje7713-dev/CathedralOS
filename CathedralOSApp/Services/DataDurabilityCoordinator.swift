@@ -2,6 +2,19 @@ import Foundation
 import SwiftData
 import os
 
+// MARK: - ProjectSaveResult
+
+/// The outcome of an explicit user-initiated project save through the cloud-first helper.
+enum ProjectSaveResult {
+    /// The project was saved to SwiftData and successfully synced to the cloud.
+    case cloudSaved
+    /// SwiftData was saved; cloud sync failed — a local backup was written as fallback.
+    case localFallback(errorMessage: String)
+    /// SwiftData was saved; cloud sync was not attempted (user signed out or not configured)
+    /// — a local backup was written.
+    case localOnly(reason: String)
+}
+
 // MARK: - DataDurabilityCoordinator
 //
 // Central coordinator for cloud-first data lifecycle events.
@@ -189,8 +202,64 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
     }
 
+    // MARK: - Explicit save helper
+
+    /// Cloud-first save for a single project triggered by an explicit user action.
+    ///
+    /// Call this from every user-facing Save / Create / Rename path instead of calling
+    /// `LocalProjectBackupService.shared.backup(project:)` directly.
+    ///
+    /// Behavior:
+    /// 1. Flush the SwiftData context (best-effort).
+    /// 2. If the user is signed in and Supabase is configured, attempt cloud sync.
+    ///    - On success → return `.cloudSaved` (no local backup written).
+    ///    - On failure → write a local backup and return `.localFallback`.
+    /// 3. If the user is not signed in or Supabase is not configured, write a local backup
+    ///    and return `.localOnly`.
+    ///
+    /// The helper never inserts or duplicates the project.
+    @discardableResult
+    func saveProject(_ project: StoryProject, context: ModelContext) async -> ProjectSaveResult {
+        // 1. Flush SwiftData — ignore save errors (SwiftData autosaves anyway).
+        try? context.save()
+
+        // 2. Check auth state.
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard authService.authState.isSignedIn else {
+            LocalProjectBackupService.shared.backup(project: project)
+            logger.log("saveProject: not signed in — wrote local backup for \(project.id.uuidString, privacy: .public)")
+            return .localOnly(reason: "User is not signed in.")
+        }
+
+        // 3. Check Supabase configuration.
+        guard SupabaseConfiguration.isConfigured else {
+            LocalProjectBackupService.shared.backup(project: project)
+            logger.log("saveProject: Supabase not configured — wrote local backup for \(project.id.uuidString, privacy: .public)")
+            return .localOnly(reason: "Cloud sync is not configured.")
+        }
+
+        // 4. Attempt cloud sync.
+        do {
+            try await projectSyncService.syncProject(project)
+            logger.log("saveProject: cloud sync succeeded for \(project.id.uuidString, privacy: .public)")
+            return .cloudSaved
+        } catch {
+            let msg = error.localizedDescription
+            logger.error("saveProject: cloud sync failed for \(project.id.uuidString, privacy: .public): \(msg, privacy: .public)")
+            LocalProjectBackupService.shared.backup(project: project)
+            return .localFallback(errorMessage: msg)
+        }
+    }
+
     /// Returns current diagnostics state for display or copy.
     func diagnosticsLines(
+        localProjectCount: Int,
+        localOutputCount: Int,
+        cloudProjectCount: Int?,
+        cloudOutputCount: Int?
+    ) -> [String] {
         localProjectCount: Int,
         localOutputCount: Int,
         cloudProjectCount: Int?,

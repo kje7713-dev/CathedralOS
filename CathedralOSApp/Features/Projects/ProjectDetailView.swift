@@ -99,7 +99,7 @@ struct ProjectDetailView: View {
             GenerationOutputDetailView(output: g)
         }
         .onDisappear {
-            _ = LocalProjectBackupService.shared.backup(project: project)
+            Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
         }
     }
 

@@ -271,6 +271,8 @@ struct SettingEditorView: View {
 
     private func saveThenDismiss() {
         saveBack()
+        let ctx = modelContext
+        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: ctx) }
         dismiss()
     }
 }

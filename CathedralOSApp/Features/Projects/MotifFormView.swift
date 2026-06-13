@@ -142,6 +142,11 @@ struct MotifFormView: View {
             modelContext.insert(m)
             project.motifs.append(m)
         }
+        let parentProject = project ?? motif?.project
+        if let parentProject {
+            let ctx = modelContext
+            Task { await DataDurabilityCoordinator.shared.saveProject(parentProject, context: ctx) }
+        }
         dismiss()
     }
 }
