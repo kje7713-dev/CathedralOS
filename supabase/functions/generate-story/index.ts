@@ -61,8 +61,7 @@ import {
   type RateLimitStore,
 } from "./_rate_limiter.ts";
 import {
-  computeActualCharge,
-  computeEstimatedCharge,
+  computeGenerationCreditCharge,
   estimateTokensFromText,
   normalizedModelId,
   SupabaseGenerationModelStore,
@@ -965,9 +964,8 @@ async function handler(
       promptPackName,
     });
     const estimatedInputTokens = estimateTokensFromText(estimatePrompt);
-    const estimatedCredits = computeEstimatedCharge(
-      estimatedInputTokens,
-      maxCompletionTokens,
+    const estimatedCredits = computeGenerationCreditCharge(
+      generationLengthMode,
       selectedModel,
     );
     const entitlement = await store.loadOrDefault(userId);
@@ -1033,8 +1031,8 @@ async function handler(
   // -------------------------------------------------------------------------
   // Credit enforcement -- must happen BEFORE the LLM provider call
   //
-  // Credit check is computed server-side from selected model rates and estimated
-  // input/output tokens. The client cannot override model rates.
+  // Credit check is computed server-side from length mode and selected model
+  // multiplier. The client cannot override model rates.
   // -------------------------------------------------------------------------
 
   const systemPrompt = buildPrompt({
@@ -1049,10 +1047,8 @@ async function handler(
     projectName,
     promptPackName,
   });
-  const estimatedInputTokens = estimateTokensFromText(systemPrompt);
-  const requiredCredits = computeEstimatedCharge(
-    estimatedInputTokens,
-    maxCompletionTokens,
+  const requiredCredits = computeGenerationCreditCharge(
+    generationLengthMode,
     selectedModel,
   );
   const entitlement = await store.loadOrDefault(userId);
@@ -1312,11 +1308,8 @@ async function handler(
   // Monthly allowance is drained first; purchased balance is used second.
   // -------------------------------------------------------------------------
 
-  const actualInputTokens = llmResult.inputTokens ?? 0;
-  const actualOutputTokens = llmResult.outputTokens ?? 0;
-  const actualCharge = computeActualCharge(
-    actualInputTokens,
-    actualOutputTokens,
+  const actualCharge = computeGenerationCreditCharge(
+    generationLengthMode,
     selectedModel,
   );
   const updatedEntitlement = await store.charge(
@@ -1394,4 +1387,4 @@ export { handler };
 export { checkCredits, computeCharge } from "./_credits.ts";
 export { RATE_LIMITS } from "./_rate_limiter.ts";
 export { classifyOpenAIStatus, ProviderError, PROVIDER_TIMEOUT_MS } from "./_provider.ts";
-export { computeActualCharge, computeEstimatedCharge, DEFAULT_GENERATION_MODEL_ID } from "./_generation_models.ts";
+export { computeGenerationCreditCharge, DEFAULT_GENERATION_MODEL_ID } from "./_generation_models.ts";

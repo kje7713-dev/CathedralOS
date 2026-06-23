@@ -11,6 +11,7 @@ insert into public.generation_models (
   description,
   input_credit_rate,
   output_credit_rate,
+  minimum_charge_credits,
   enabled,
   sort_order
 ) values
@@ -20,6 +21,7 @@ insert into public.generation_models (
     'gpt-5.4-nano',
     'GPT-5.4 nano',
     'Fast, lightweight GPT-5 model.',
+    6,
     6,
     6,
     true,
@@ -33,6 +35,7 @@ insert into public.generation_models (
     'Premium model, higher quality, higher rate-limit pressure.',
     8,
     8,
+    8,
     true,
     40
   ),
@@ -42,6 +45,7 @@ insert into public.generation_models (
     'gpt-5.4',
     'GPT-5.4',
     'Full GPT-5.4 model.',
+    10,
     10,
     10,
     true,
@@ -55,6 +59,7 @@ insert into public.generation_models (
     'Latest flagship GPT-5.5 model.',
     15,
     15,
+    15,
     true,
     60
   )
@@ -65,6 +70,7 @@ on conflict (id) do update set
   description     = excluded.description,
   input_credit_rate  = excluded.input_credit_rate,
   output_credit_rate = excluded.output_credit_rate,
+  minimum_charge_credits = excluded.minimum_charge_credits,
   enabled         = excluded.enabled,
   sort_order      = excluded.sort_order,
   updated_at      = now();
