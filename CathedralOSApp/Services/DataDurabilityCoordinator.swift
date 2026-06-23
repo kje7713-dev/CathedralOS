@@ -260,11 +260,6 @@ final class DataDurabilityCoordinator: ObservableObject {
         cloudProjectCount: Int?,
         cloudOutputCount: Int?
     ) -> [String] {
-        localProjectCount: Int,
-        localOutputCount: Int,
-        cloudProjectCount: Int?,
-        cloudOutputCount: Int?
-    ) -> [String] {
         var lines: [String] = []
         lines.append("Store mode: \(storeMode.rawValue)")
         lines.append("Local projects: \(localProjectCount)")
