@@ -594,6 +594,7 @@ struct PromptPackPreviewView: View {
                 }
             }
         }
+    }
 
     private var modelPicker: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
