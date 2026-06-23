@@ -1,3 +1,5 @@
+import { getCreditCost, type LengthMode } from "./_credits.ts";
+
 export const DEFAULT_GENERATION_MODEL_ID = "gpt-4o-mini";
 
 export interface GenerationModel {
@@ -58,7 +60,6 @@ function mapModelRow(row: Record<string, unknown>): GenerationModel {
   };
 }
 
-// deno-lint-ignore no-explicit-any
 export class SupabaseGenerationModelStore implements GenerationModelStore {
   // deno-lint-ignore no-explicit-any
   constructor(private readonly db: any) {}
@@ -119,21 +120,12 @@ export function estimateTokensFromText(text: string): number {
   return Math.max(1, Math.ceil(baseEstimate * 1.25));
 }
 
-export function computeEstimatedCharge(
-  estimatedInputTokens: number,
-  maxCompletionTokens: number,
+export function computeGenerationCreditCharge(
+  lengthMode: LengthMode,
   model: GenerationModel,
 ): number {
-  const raw = (estimatedInputTokens * model.input_credit_rate) +
-    (maxCompletionTokens * model.output_credit_rate);
-  return Math.max(model.minimum_charge_credits, Math.ceil(raw));
-}
-
-export function computeActualCharge(
-  inputTokens: number,
-  outputTokens: number,
-  model: GenerationModel,
-): number {
-  const raw = (inputTokens * model.input_credit_rate) + (outputTokens * model.output_credit_rate);
+  const baseLengthCost = getCreditCost(lengthMode);
+  const modelMultiplier = model.output_credit_rate;
+  const raw = baseLengthCost * modelMultiplier;
   return Math.max(model.minimum_charge_credits, Math.ceil(raw));
 }

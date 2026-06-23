@@ -192,7 +192,8 @@ function makeMockCreditStore(
     ): Promise<UserEntitlement> {
       state.chargeCalls.push({ userId, cost, relatedOutputId });
       const newMonthly = Math.max(0, ent.monthly_credit_allowance - cost);
-      return Promise.resolve({ ...ent, monthly_credit_allowance: newMonthly });
+      state.entitlement = { ...ent, monthly_credit_allowance: newMonthly };
+      return Promise.resolve(state.entitlement);
     },
   };
 
@@ -1386,7 +1387,7 @@ Deno.test("handler: raw model override fields are ignored", async () => {
   assertEquals(providerModelSeen, "gpt-4.1-mini");
 });
 
-Deno.test("handler: successful generation charges from actual usage and model rates", async () => {
+Deno.test("handler: successful generation charges fixed length cost × model multiplier", async () => {
   const { store: creditStore, state: creditState } = makeMockCreditStore(makeEntitlement());
   const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore([{
@@ -1420,9 +1421,9 @@ Deno.test("handler: successful generation charges from actual usage and model ra
   });
   const body = await resp.json();
   assertEquals(resp.status, 200);
-  assertEquals(body.creditCostCharged, 70);
+  assertEquals(body.creditCostCharged, 2);
   assertEquals(creditState.chargeCalls.length, 1);
-  assertEquals(creditState.chargeCalls[0].cost, 70);
+  assertEquals(creditState.chargeCalls[0].cost, 2);
 });
 
 Deno.test("handler: provider 429 maps to provider_rate_limited and charges 0", async () => {
@@ -1825,21 +1826,33 @@ Deno.test("handler: estimate action with invalid length mode returns 422", async
   assertEquals(body.errorCode, "invalid_request");
 });
 
-Deno.test("handler: estimate action uses model rates for cost calculation", async () => {
+Deno.test("handler: GPT-5.4 short estimate is 10 credits even for huge prompt", async () => {
   const { store: creditStore } = makeMockCreditStore(makeEntitlement());
   const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
-  // Use a model with high rates so estimates are visibly non-zero.
   const { store: generationModelStore } = makeMockGenerationModelStore([{
-    id: "gpt-4o-mini",
-    provider_model: "gpt-4o-mini",
-    input_credit_rate: 2,
-    output_credit_rate: 2,
-    minimum_charge_credits: 5,
+    id: "gpt-5.4",
+    provider_model: "gpt-5.4",
+    input_credit_rate: 10,
+    output_credit_rate: 10,
+    minimum_charge_credits: 10,
   }]);
   const { store: persistenceStore } = makeMockPersistenceStore();
 
+  const hugePromptPayload = {
+    ...MINIMAL_PAYLOAD,
+    project: {
+      ...MINIMAL_PAYLOAD.project,
+      notes: "x".repeat(30_000),
+    },
+  };
+
   const resp = await handler(
-    makeAuthRequest(makeBaseRequest({ generationAction: "estimate", generationLengthMode: "chapter" })),
+    makeAuthRequest(makeBaseRequest({
+      generationAction: "estimate",
+      generationLengthMode: "short",
+      selectedModelId: "gpt-5.4",
+      sourcePayloadJSON: hugePromptPayload,
+    })),
     {
       provider: _mockSuccessProvider,
       creditStore,
@@ -1852,8 +1865,191 @@ Deno.test("handler: estimate action uses model rates for cost calculation", asyn
 
   const body = await resp.json();
   assertEquals(resp.status, 200);
-  assertEquals(body.storyGoal, "chapter");
-  assertEquals(body.estimatedOutputTokens, 6000);
-  // With rate=2, minimum=5, and a non-trivial prompt, estimated credits should be > 5.
-  assertEquals(body.estimatedCredits >= 5, true);
+  assertEquals(body.estimatedCredits, 10);
+});
+
+Deno.test("handler: GPT-5.4 fixed estimate costs by length mode", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore([{
+    id: "gpt-5.4",
+    provider_model: "gpt-5.4",
+    input_credit_rate: 10,
+    output_credit_rate: 10,
+    minimum_charge_credits: 10,
+  }]);
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const cases = [
+    { mode: "medium", expected: 20 },
+    { mode: "long", expected: 40 },
+    { mode: "chapter", expected: 80 },
+  ] as const;
+
+  for (const { mode, expected } of cases) {
+    const resp = await handler(
+      makeAuthRequest(makeBaseRequest({
+        generationAction: "estimate",
+        generationLengthMode: mode,
+        selectedModelId: "gpt-5.4",
+      })),
+      {
+        provider: _mockSuccessProvider,
+        creditStore,
+        rateLimitStore,
+        generationModelStore,
+        authenticatedUserId: FAKE_USER_ID,
+        persistenceStore,
+      },
+    );
+
+    const body = await resp.json();
+    assertEquals(resp.status, 200);
+    assertEquals(body.estimatedCredits, expected);
+  }
+});
+
+Deno.test("handler: user with 33 credits can generate GPT-5.4 short then medium", async () => {
+  const { store: creditStore, state: creditState } = makeMockCreditStore(
+    makeEntitlement({ monthly_credit_allowance: 33, purchased_credit_balance: 0 }),
+  );
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore([{
+    id: "gpt-5.4",
+    provider_model: "gpt-5.4",
+    input_credit_rate: 10,
+    output_credit_rate: 10,
+    minimum_charge_credits: 10,
+  }]);
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const shortResp = await handler(
+    makeAuthRequest(makeBaseRequest({
+      generationLengthMode: "short",
+      selectedModelId: "gpt-5.4",
+    })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
+  assertEquals(shortResp.status, 200);
+
+  const mediumResp = await handler(
+    makeAuthRequest(makeBaseRequest({
+      generationLengthMode: "medium",
+      outputBudget: 1600,
+      selectedModelId: "gpt-5.4",
+    })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
+  assertEquals(mediumResp.status, 200);
+  assertEquals(creditState.chargeCalls.map((call) => call.cost), [10, 20]);
+});
+
+Deno.test("handler: user with 33 credits cannot generate GPT-5.4 long", async () => {
+  const { store: creditStore } = makeMockCreditStore(
+    makeEntitlement({ monthly_credit_allowance: 33, purchased_credit_balance: 0 }),
+  );
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore([{
+    id: "gpt-5.4",
+    provider_model: "gpt-5.4",
+    input_credit_rate: 10,
+    output_credit_rate: 10,
+    minimum_charge_credits: 10,
+  }]);
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({
+      generationLengthMode: "long",
+      outputBudget: 3000,
+      selectedModelId: "gpt-5.4",
+    })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
+
+  const body = await resp.json();
+  assertEquals(resp.status, 402);
+  assertEquals(body.errorCode, "insufficient_credits");
+  assertEquals(body.requiredCredits, 40);
+  assertEquals(body.availableCredits, 33);
+});
+
+Deno.test("handler: post-generation charge exactly matches preflight estimate", async () => {
+  const { store: creditStore, state: creditState } = makeMockCreditStore(
+    makeEntitlement({ monthly_credit_allowance: 100, purchased_credit_balance: 0 }),
+  );
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore([{
+    id: "gpt-5.4",
+    provider_model: "gpt-5.4",
+    input_credit_rate: 10,
+    output_credit_rate: 10,
+    minimum_charge_credits: 10,
+  }]);
+  const { store: persistenceStore } = makeMockPersistenceStore();
+
+  const estimateResp = await handler(
+    makeAuthRequest(makeBaseRequest({
+      generationAction: "estimate",
+      generationLengthMode: "chapter",
+      outputBudget: 6000,
+      selectedModelId: "gpt-5.4",
+    })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
+  const estimateBody = await estimateResp.json();
+  assertEquals(estimateResp.status, 200);
+
+  const generateResp = await handler(
+    makeAuthRequest(makeBaseRequest({
+      generationAction: "generate",
+      generationLengthMode: "chapter",
+      outputBudget: 6000,
+      selectedModelId: "gpt-5.4",
+    })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
+  const generateBody = await generateResp.json();
+  assertEquals(generateResp.status, 200);
+  assertEquals(estimateBody.estimatedCredits, 80);
+  assertEquals(generateBody.creditCostCharged, estimateBody.estimatedCredits);
+  assertEquals(
+    creditState.chargeCalls[creditState.chargeCalls.length - 1]?.cost,
+    estimateBody.estimatedCredits,
+  );
 });
