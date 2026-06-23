@@ -1,6 +1,4 @@
-import { getCreditCost, type LengthMode } from "./_credits.ts";
-
-export const DEFAULT_GENERATION_MODEL_ID = "gpt-4o-mini";
+export const DEFAULT_GENERATION_MODEL_ID = "gpt-5.4-mini";
 
 export interface GenerationModel {
   id: string;
@@ -118,14 +116,4 @@ export function estimateTokensFromText(text: string): number {
   // to a provider-specific tokenizer if exact preflight estimates are required.
   const baseEstimate = Math.ceil(text.length / 3);
   return Math.max(1, Math.ceil(baseEstimate * 1.25));
-}
-
-export function computeGenerationCreditCharge(
-  lengthMode: LengthMode,
-  model: GenerationModel,
-): number {
-  const baseLengthCost = getCreditCost(lengthMode);
-  const modelMultiplier = model.output_credit_rate;
-  const raw = baseLengthCost * modelMultiplier;
-  return Math.max(model.minimum_charge_credits, Math.ceil(raw));
 }

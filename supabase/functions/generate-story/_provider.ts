@@ -186,6 +186,13 @@ export interface LLMResponse {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  reasoningTokens?: number;
+}
+
+export interface LLMCompletionOptions {
+  reasoning?: {
+    effort: "none";
+  };
 }
 
 export interface LLMProvider {
@@ -193,6 +200,7 @@ export interface LLMProvider {
     messages: LLMMessage[],
     maxTokens: number,
     providerModel?: string,
+    options?: LLMCompletionOptions,
   ): Promise<LLMResponse>;
 }
 
@@ -219,6 +227,7 @@ export class OpenAIProvider implements LLMProvider {
     messages: LLMMessage[],
     maxTokens: number,
     providerModel?: string,
+    options?: LLMCompletionOptions,
   ): Promise<LLMResponse> {
     const resolvedModel = providerModel ?? this.model;
     const controller = new AbortController();
@@ -226,6 +235,16 @@ export class OpenAIProvider implements LLMProvider {
       () => controller.abort(),
       this.timeoutMs,
     );
+
+    const requestBody: Record<string, unknown> = {
+      model: resolvedModel,
+      input: messages,
+      max_output_tokens: maxTokens,
+      store: false,
+    };
+    if (resolvedModel.startsWith("gpt-5")) {
+      requestBody.reasoning = options?.reasoning ?? { effort: "none" };
+    }
 
     let resp: Response;
     try {
@@ -235,12 +254,7 @@ export class OpenAIProvider implements LLMProvider {
           "Content-Type": "application/json",
           Authorization: `Bearer ${this.apiKey}`,
         },
-        body: JSON.stringify({
-          model: resolvedModel,
-          input: messages,
-          max_output_tokens: maxTokens,
-          store: false,
-        }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
     } catch (err) {
@@ -285,6 +299,8 @@ export class OpenAIProvider implements LLMProvider {
       inputTokens: json.usage?.input_tokens,
       outputTokens: json.usage?.output_tokens,
       totalTokens: json.usage?.total_tokens,
+      reasoningTokens: json.usage?.output_tokens_details?.reasoning_tokens ??
+        json.usage?.reasoning_tokens,
     };
   }
 }
@@ -298,6 +314,6 @@ export function buildProviderFromEnv(): OpenAIProvider {
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not set");
   }
-  const model = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini";
+  const model = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-5.4-mini";
   return new OpenAIProvider(apiKey, model);
 }
