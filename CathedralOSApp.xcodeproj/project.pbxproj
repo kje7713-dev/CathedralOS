@@ -122,7 +122,8 @@
 0000000000000000000001AA /* DataDurabilityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001AB /* DataDurabilityCoordinator.swift */; };
 000000000000000000000164 /* RemixEventService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000163 /* RemixEventService.swift */; };
 000000000000000000000166 /* AudienceControlsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000165 /* AudienceControlsTests.swift */; };
-000000000000000000000168 /* GenerationOutputSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000167 /* GenerationOutputSyncTests.swift */; };
+		000000000000000000000168 /* GenerationOutputSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000167 /* GenerationOutputSyncTests.swift */; };
+		0000000000000000000001FE /* DataDurabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001FF /* DataDurabilityTests.swift */; };
 00000000000000000000016A /* ImportHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000169 /* ImportHardeningTests.swift */; };
 00000000000000000000016C /* ImportedEntityEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000016B /* ImportedEntityEditingTests.swift */; };
 00000000000000000000016E /* RemixFromSharedOutputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000016D /* RemixFromSharedOutputTests.swift */; };
@@ -285,7 +286,8 @@
 		0000000000000000000001B1 /* TestSupabaseConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupabaseConfiguration.swift; sourceTree = "<group>"; };
 000000000000000000000163 /* RemixEventService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemixEventService.swift; sourceTree = "<group>"; };
 000000000000000000000165 /* AudienceControlsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudienceControlsTests.swift; sourceTree = "<group>"; };
-000000000000000000000167 /* GenerationOutputSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputSyncTests.swift; sourceTree = "<group>"; };
+		000000000000000000000167 /* GenerationOutputSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputSyncTests.swift; sourceTree = "<group>"; };
+		0000000000000000000001FF /* DataDurabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataDurabilityTests.swift; sourceTree = "<group>"; };
 000000000000000000000169 /* ImportHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportHardeningTests.swift; sourceTree = "<group>"; };
 00000000000000000000016B /* ImportedEntityEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedEntityEditingTests.swift; sourceTree = "<group>"; };
 00000000000000000000016D /* RemixFromSharedOutputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemixFromSharedOutputTests.swift; sourceTree = "<group>"; };
@@ -500,6 +502,7 @@
 				000000000000000000000146 /* PublicSharingTests.swift */,
 				000000000000000000000165 /* AudienceControlsTests.swift */,
 				000000000000000000000167 /* GenerationOutputSyncTests.swift */,
+				0000000000000000000001FF /* DataDurabilityTests.swift */,
 				000000000000000000000169 /* ImportHardeningTests.swift */,
 				00000000000000000000016B /* ImportedEntityEditingTests.swift */,
 				00000000000000000000016D /* RemixFromSharedOutputTests.swift */,
@@ -892,6 +895,7 @@
 				00000000000000000000015E /* GenerationBackendServiceTests.swift in Sources */,
 				000000000000000000000166 /* AudienceControlsTests.swift in Sources */,
 				000000000000000000000168 /* GenerationOutputSyncTests.swift in Sources */,
+				0000000000000000000001FE /* DataDurabilityTests.swift in Sources */,
 				00000000000000000000016A /* ImportHardeningTests.swift in Sources */,
 				00000000000000000000016C /* ImportedEntityEditingTests.swift in Sources */,
 				00000000000000000000016E /* RemixFromSharedOutputTests.swift in Sources */,
