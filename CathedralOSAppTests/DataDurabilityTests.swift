@@ -114,6 +114,7 @@ private func makeInMemoryContext() throws -> ModelContext {
 
 // MARK: - Tests
 
+@MainActor
 final class DataDurabilityTests: XCTestCase {
 
     // MARK: Sign-out preservation
