@@ -65,6 +65,7 @@ private final class StubAuthUnknownTransitioning: AuthService {
 
 private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     var syncAllCalled = false
+    var syncAllError: Error?
     var restoreCalled = false
     var restoreResult = ProjectRestoreReport(
         projects: [],
@@ -79,7 +80,10 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
 
     func syncProject(_ project: StoryProject) async throws {}
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {}
-    func syncAllProjects(in context: ModelContext) async throws { syncAllCalled = true }
+    func syncAllProjects(in context: ModelContext) async throws {
+        syncAllCalled = true
+        if let syncAllError { throw syncAllError }
+    }
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {}
     func cloudSnapshotPresence() async -> CloudSnapshotPresence { .none }
     @MainActor
@@ -383,7 +387,9 @@ final class DataDurabilityTests: XCTestCase {
         await coordinator.performAppLaunch(context: context, isFirstLaunchAfterUpdate: false, recoveryContext: nil)
 
         XCTAssertTrue(projectSpy.syncAllCalled, "Project sync must run when user is signed in.")
-        XCTAssertTrue(outputSpy.pullCalled, "Output pull must run when user is signed in.")
+        XCTAssertTrue(projectSpy.restoreCalled, "Project sync must restore cloud-only projects after reinstall or recovery.")
+        XCTAssertTrue(outputSpy.syncAllCalled, "Output sync must retry pending uploads before pulling cloud data.")
+        XCTAssertFalse(outputSpy.pullCalled, "Launch uses the unified sync path rather than a pull-only path.")
     }
 
     func testAppUpdateLaunchRunsSyncAll() async throws {
@@ -400,7 +406,47 @@ final class DataDurabilityTests: XCTestCase {
         await coordinator.performAppLaunch(context: context, isFirstLaunchAfterUpdate: true, recoveryContext: nil)
 
         XCTAssertTrue(projectSpy.syncAllCalled, "Project sync must run on update launch.")
+        XCTAssertTrue(projectSpy.restoreCalled, "Project cloud snapshots must be reconciled after upload.")
         XCTAssertTrue(outputSpy.syncAllCalled, "Output sync-all must run on update launch.")
+    }
+
+    func testProjectUploadFailureStillAttemptsCloudRestore() async throws {
+        let context = try makeInMemoryContext()
+        let projectSpy = SpyProjectSyncService()
+        projectSpy.syncAllError = NSError(domain: "test", code: 1)
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSpy,
+            outputSyncService: SpyOutputSyncService()
+        )
+
+        await coordinator.performAppLaunch(context: context, isFirstLaunchAfterUpdate: false, recoveryContext: nil)
+
+        XCTAssertTrue(projectSpy.restoreCalled)
+        XCTAssertNotNil(coordinator.lastSyncError)
+    }
+
+    func testPendingTombstoneStorePersistsAndDeduplicatesDeleteIntent() throws {
+        let suiteName = "DataDurabilityTests.pending-tombstones.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = PendingSyncTombstoneStore(defaults: defaults)
+        let tombstone = SyncTombstone(
+            userID: "user-123",
+            entityType: .project,
+            localEntityID: UUID().uuidString,
+            cloudEntityID: nil,
+            deletionScope: .everywhere,
+            reason: nil
+        )
+
+        store.save(tombstone)
+        store.save(tombstone)
+
+        XCTAssertEqual(store.all().count, 1)
+        XCTAssertEqual(store.all().first?.localEntityID, tombstone.localEntityID)
+        store.remove(tombstone)
+        XCTAssertTrue(store.all().isEmpty)
     }
 
     // MARK: StoreMode

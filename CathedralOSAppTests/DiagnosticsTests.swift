@@ -666,7 +666,7 @@ final class DiagnosticsDeveloperCreditsTests: XCTestCase {
         let health = StubBackendHealthService()
         let creditState = StubCreditStateService(
             result: .success(.stub(availableCredits: 10, isAdmin: true)),
-            grantResult: .success(.stub(availableCredits: 110, purchasedCreditBalance: 100, isAdmin: true))
+            grantResult: .success(.stub(purchasedCreditBalance: 100, availableCredits: 110, isAdmin: true))
         )
 
         let vm = DiagnosticsViewModel(

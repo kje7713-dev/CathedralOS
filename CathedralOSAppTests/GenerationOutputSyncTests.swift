@@ -347,6 +347,25 @@ final class GenerationOutputSyncPullTests: XCTestCase {
         XCTAssertEqual(outputs.count, 1, "Reconcile must not create a duplicate for a known cloud ID")
     }
 
+    func testReconcileRepairsPreexistingLocalDuplicatesByCloudID() throws {
+        let service = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+        let cloudID = UUID().uuidString
+        let older = GenerationOutput(title: "Older duplicate")
+        older.cloudGenerationOutputID = cloudID
+        older.updatedAt = Date(timeIntervalSinceNow: -60)
+        let newer = GenerationOutput(title: "Newer keeper")
+        newer.cloudGenerationOutputID = cloudID
+        context.insert(older)
+        context.insert(newer)
+
+        service.reconcile([makeCloudRecord(id: cloudID, title: "Cloud record")], into: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertEqual(outputs.first?.id, newer.id)
+    }
+
     func testReconcileUpdatesExistingOutputWhenCloudIsNewer() throws {
         let realService = SupabaseGenerationOutputSyncService()
         let context = ModelContext(container)
@@ -386,8 +405,8 @@ final class GenerationOutputSyncPullTests: XCTestCase {
         let realService = SupabaseGenerationOutputSyncService()
         let context = ModelContext(container)
 
-        let first = makeCloudRecord(title: "Recovered Story 1", projectName: " ")
-        let second = makeCloudRecord(title: "Recovered Story 2", projectName: "")
+        let first = makeCloudRecord(projectName: " ", title: "Recovered Story 1")
+        let second = makeCloudRecord(projectName: "", title: "Recovered Story 2")
         realService.reconcile([first, second], into: context)
 
         let projects = try context.fetch(FetchDescriptor<StoryProject>())

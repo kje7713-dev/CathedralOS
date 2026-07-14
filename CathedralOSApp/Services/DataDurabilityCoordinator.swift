@@ -88,8 +88,10 @@ final class DataDurabilityCoordinator: ObservableObject {
 
         storeMode = recoveryContext != nil ? .recovery : .normal
         storePath = context.container.configurations.first?.url.path
+        lastSyncError = nil
         isRunning = true
         lastSyncStartedAt = Date()
+        lastSyncError = nil
         defer {
             isRunning = false
             lastSyncFinishedAt = Date()
@@ -115,7 +117,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
 
         do {
-            try await projectSyncService.syncAllProjects(in: context)
+            try await syncProjects(in: context)
         } catch {
             let msg = error.localizedDescription
             logger.error("App launch project sync failed: \(msg, privacy: .public)")
@@ -123,11 +125,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
 
         do {
-            if isFirstLaunchAfterUpdate {
-                try await outputSyncService.syncAll(in: context)
-            } else {
-                try await outputSyncService.pullOutputs(into: context)
-            }
+            try await outputSyncService.syncAll(in: context)
         } catch {
             let msg = error.localizedDescription
             logger.error("App launch output sync failed: \(msg, privacy: .public)")
@@ -152,7 +150,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         logger.log("Sign-in sync: pulling and pushing data.")
 
         do {
-            try await projectSyncService.syncAllProjects(in: context)
+            try await syncProjects(in: context)
         } catch {
             let msg = error.localizedDescription
             logger.error("Sign-in project sync failed: \(msg, privacy: .public)")
@@ -187,7 +185,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
 
         do {
-            try await projectSyncService.syncAllProjects(in: context)
+            try await syncProjects(in: context)
         } catch {
             let msg = error.localizedDescription
             logger.error("Manual sync projects failed: \(msg, privacy: .public)")
@@ -200,6 +198,21 @@ final class DataDurabilityCoordinator: ObservableObject {
             logger.error("Manual sync outputs failed: \(msg, privacy: .public)")
             if lastSyncError == nil { lastSyncError = msg }
         }
+    }
+
+    /// Push local projects first, then reconcile the cloud snapshot set back into the
+    /// same store. An empty/recovery store therefore restores from cloud, while an
+    /// existing local store remains the source for unsynced edits.
+    private func syncProjects(in context: ModelContext) async throws {
+        var uploadError: Error?
+        do {
+            try await projectSyncService.syncAllProjects(in: context)
+        } catch {
+            // A failed upload must not prevent recovery of cloud-only projects.
+            uploadError = error
+        }
+        _ = try await projectSyncService.restoreAllProjects(into: context)
+        if let uploadError { throw uploadError }
     }
 
     // MARK: - Explicit save helper
