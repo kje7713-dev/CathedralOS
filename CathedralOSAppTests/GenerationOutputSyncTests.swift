@@ -405,8 +405,8 @@ final class GenerationOutputSyncPullTests: XCTestCase {
         let realService = SupabaseGenerationOutputSyncService()
         let context = ModelContext(container)
 
-        let first = makeCloudRecord(title: "Recovered Story 1", projectName: " ")
-        let second = makeCloudRecord(title: "Recovered Story 2", projectName: "")
+        let first = makeCloudRecord(projectName: " ", title: "Recovered Story 1")
+        let second = makeCloudRecord(projectName: "", title: "Recovered Story 2")
         realService.reconcile([first, second], into: context)
 
         let projects = try context.fetch(FetchDescriptor<StoryProject>())

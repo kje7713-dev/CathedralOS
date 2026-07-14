@@ -679,7 +679,7 @@ final class ImportedEntityEditingTests: XCTestCase {
             version: 1,
             project: .init(name: "Test", summary: "", notes: "", tags: []),
             setting: .init(
-                summary: summary, domains: domains, constraints: constraints,
+                id: nil, summary: summary, domains: domains, constraints: constraints,
                 themes: themes, season: season, worldRules: worldRules,
                 historicalPressure: historicalPressure, politicalForces: politicalForces,
                 socialOrder: socialOrder, environmentalPressure: environmentalPressure,
