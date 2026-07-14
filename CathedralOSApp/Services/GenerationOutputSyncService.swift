@@ -171,7 +171,9 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             request.httpMethod = "GET"
 
             let records = try await fetch([GenerationOutputCloudRecord].self, request: request)
-            let tombstones = (try? await tombstoneService.fetchGenerationOutputTombstones()) ?? SyncTombstoneSet(records: [])
+            // A failed tombstone fetch must fail closed. Reconciling without delete
+            // knowledge can resurrect records after an offline deletion.
+            let tombstones = try await tombstoneService.fetchGenerationOutputTombstones()
             reconcile(records, tombstones: tombstones, into: context)
             try persistContext(context, stage: "cloud restore")
             OutputSyncActivityStore.shared.recordSuccess("Restored \(records.count) cloud outputs.")
@@ -353,7 +355,8 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     /// - Preserves local-only fields (`isFavorite`, `notes`) during updates.
     /// - Skips rows that are covered by a tombstone (intentionally deleted by the user).
     func reconcile(_ records: [GenerationOutputCloudRecord], tombstones: SyncTombstoneSet = SyncTombstoneSet(records: []), into context: ModelContext) {
-        for record in records {
+        deduplicateLocalOutputs(in: context)
+        for record in deduplicatedCloudRecords(records) {
             // Skip if the user intentionally deleted this row.
             if tombstones.isTombstoned(cloudID: record.id) { continue }
             if let localID = record.localGenerationId, tombstones.isTombstoned(localID: localID) { continue }
@@ -380,6 +383,36 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
                 context.insert(newOutput)
             }
         }
+    }
+
+    private func deduplicatedCloudRecords(_ records: [GenerationOutputCloudRecord]) -> [GenerationOutputCloudRecord] {
+        var newestByKey: [String: GenerationOutputCloudRecord] = [:]
+        for record in records {
+            let localID = record.localGenerationId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let key = localID.isEmpty ? "cloud:\(record.id)" : "local:\(localID)"
+            if let existing = newestByKey[key], existing.updatedAt >= record.updatedAt { continue }
+            newestByKey[key] = record
+        }
+        return Array(newestByKey.values)
+    }
+
+    private func deduplicateLocalOutputs(in context: ModelContext) {
+        guard let outputs = try? context.fetch(FetchDescriptor<GenerationOutput>()) else { return }
+        var seenCloudIDs: [String: GenerationOutput] = [:]
+        var seenLocalIDs: [UUID: GenerationOutput] = [:]
+        var changed = false
+
+        for output in outputs.sorted(by: { $0.updatedAt > $1.updatedAt }) {
+            let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if seenLocalIDs[output.id] != nil || (!cloudID.isEmpty && seenCloudIDs[cloudID] != nil) {
+                context.delete(output)
+                changed = true
+                continue
+            }
+            seenLocalIDs[output.id] = output
+            if !cloudID.isEmpty { seenCloudIDs[cloudID] = output }
+        }
+        if changed { try? context.save() }
     }
 
     func findLocal(cloudID: String, localID: String?, in context: ModelContext) -> GenerationOutput? {

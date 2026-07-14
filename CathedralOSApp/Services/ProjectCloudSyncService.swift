@@ -237,9 +237,11 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         let cloudWarnings = duplicateWarnings(in: rows)
         let duplicateWarnings = dedupeWarnings + cloudWarnings
 
+        // Fail closed if delete knowledge is unavailable; restoring without it can
+        // resurrect projects that were intentionally deleted while offline.
         let tombstones = includeTombstoned
             ? SyncTombstoneSet(records: [])
-            : ((try? await tombstoneService.fetchProjectTombstones()) ?? SyncTombstoneSet(records: []))
+            : (try await tombstoneService.fetchProjectTombstones())
         let reconciledRows = deduplicatedRows(rows)
 
         var touchedProjects: [StoryProject] = []
