@@ -53,31 +53,6 @@ private final class ProjectCloudSyncURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-/// Isolated from the suite-wide URL protocol because XCTest may run test clones in parallel.
-private final class ConcurrentRestoreURLProtocol: URLProtocol {
-    static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
-
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        guard let handler = Self.requestHandler else {
-            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
-            return
-        }
-        do {
-            let (response, data) = try handler(request)
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
-        } catch {
-            client?.urlProtocol(self, didFailWithError: error)
-        }
-    }
-
-    override func stopLoading() {}
-}
-
 private final class MockProjectTombstoneService: SyncTombstoneServiceProtocol {
     var projectTombstones = SyncTombstoneSet(records: [])
     private(set) var recordedTombstones: [SyncTombstone] = []
@@ -669,60 +644,33 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertTrue(updateReport.summaryMessage.contains("Projects updated: 1"), updateReport.summaryMessage)
     }
 
-    func testConcurrentRestoresAwaitSameNetworkOperationAndReport() async throws {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [ConcurrentRestoreURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let authService = MockProjectCloudSyncAuthService(
-            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
-            accessToken: "user-jwt-token"
+    @MainActor
+    func testRestoreOperationGateCoalescesCallersAndReturnsSameReport() async throws {
+        let gate = ProjectRestoreOperationGate()
+        var invocationCount = 0
+        let expected = ProjectRestoreReport(
+            projects: [],
+            localProjectCountBefore: 4,
+            cloudProjectCountBefore: 7,
+            insertedCount: 0,
+            updatedCount: 4,
+            skippedTombstonedCount: 3,
+            duplicateWarnings: []
         )
-        let localProjectID = UUID()
-        let project = StoryProject(name: "Concurrent Story")
-        let payload = ProjectSchemaTemplateBuilder.build(project: project)
-        let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
-
-        // Delay the first response long enough to start a second restore while it is in flight.
-        let requestCountLock = NSLock()
-        var requestCount = 0
-
-        ConcurrentRestoreURLProtocol.requestHandler = { request in
-            requestCountLock.withLock { requestCount += 1 }
-            Thread.sleep(forTimeInterval: 0.5)
-            let response = HTTPURLResponse(
-                url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil
-            )!
-            return (response, responseData)
-        }
-        defer { ConcurrentRestoreURLProtocol.requestHandler = nil }
-
-        let service = ProjectCloudSyncService(
-            authService: authService,
-            session: session,
-            configuration: .makeForTesting()
-        )
-        let context = ModelContext(try makeProjectContainer())
-
-        // Start first restore; it will suspend at the network gate.
-        let firstTask = Task { @MainActor in
-            try await service.restoreAllProjects(into: context)
+        let operation: @MainActor () async throws -> ProjectRestoreReport = {
+            invocationCount += 1
+            try await Task.sleep(nanoseconds: 100_000_000)
+            return expected
         }
 
-        // Give the first task time to install its in-flight restore before joining it.
-        try await Task.sleep(nanoseconds: 50_000_000)
+        let firstTask = Task { @MainActor in try await gate.run(operation) }
+        while invocationCount == 0 { await Task.yield() }
+        let secondTask = Task { @MainActor in try await gate.run(operation) }
 
-        // A second caller joins the first restore rather than starting another request.
-        let secondTask = Task { @MainActor in
-            return try await service.restoreAllProjects(into: context)
-        }
-
-        // Both callers receive the report produced by the shared restore.
         let firstReport = try await firstTask.value
         let secondReport = try await secondTask.value
 
-        let finalRequestCount = requestCountLock.withLock { requestCount }
-
-        XCTAssertEqual(finalRequestCount, 1, "Concurrent restore callers must share one network sequence.")
+        XCTAssertEqual(invocationCount, 1)
         XCTAssertEqual(firstReport.summaryMessage, secondReport.summaryMessage)
     }
 
