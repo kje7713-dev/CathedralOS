@@ -133,6 +133,38 @@ final class ProjectRestoreOperationGate {
     }
 }
 
+/// Serializes project snapshot writes and deletes. Actor reentrancy alone does not
+/// provide this guarantee, so callers explicitly queue while another mutation is
+/// awaiting the network.
+actor ProjectCloudMutationGate {
+    private var isLocked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func run<T>(_ operation: () async throws -> T) async rethrows -> T {
+        await acquire()
+        defer { release() }
+        return try await operation()
+    }
+
+    private func acquire() async {
+        guard isLocked else {
+            isLocked = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    private func release() {
+        guard !waiters.isEmpty else {
+            isLocked = false
+            return
+        }
+        waiters.removeFirst().resume()
+    }
+}
+
 final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
 
     static let shared = ProjectCloudSyncService()
@@ -142,6 +174,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     private let session: URLSession
     private let configuration: ValidatedSupabaseConfiguration?
     private let tombstoneService: any SyncTombstoneServiceProtocol
+    private let mutationGate = ProjectCloudMutationGate()
     private let logger = Logger(subsystem: "CathedralOS", category: "ProjectSync")
 
     @MainActor private lazy var restoreOperationGate = ProjectRestoreOperationGate()
@@ -166,17 +199,19 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     }
 
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {
-        // Individual saves and local-backup tasks use this path instead of
-        // syncAllProjects. Honor delete intent here too so a stale upload that
-        // finishes after Delete Everywhere cannot recreate the cloud snapshot.
-        let tombstones = try await tombstoneService.fetchProjectTombstones()
-        guard !tombstones.isTombstoned(localID: localProjectID) else {
-            logger.log("Skipped tombstoned project upload \(localProjectID, privacy: .public)")
-            return
+        try await mutationGate.run {
+            // Individual saves and local-backup tasks use this path instead of
+            // syncAllProjects. Honor delete intent here too so a stale upload that
+            // finishes after Delete Everywhere cannot recreate the cloud snapshot.
+            let tombstones = try await tombstoneService.fetchProjectTombstones()
+            guard !tombstones.isTombstoned(localID: localProjectID) else {
+                logger.log("Skipped tombstoned project upload \(localProjectID, privacy: .public)")
+                return
+            }
+            try await syncSnapshots([
+                .init(localProjectID: localProjectID, payload: payload)
+            ])
         }
-        try await syncSnapshots([
-            .init(localProjectID: localProjectID, payload: payload)
-        ])
     }
 
     func syncAllProjects(in context: ModelContext) async throws {
@@ -186,47 +221,54 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         // Bulk sync can observe a project that another context recently deleted.
         // Honor delete intent on upload as well as restore so Sync Everything
         // cannot recreate a snapshot that was deliberately removed.
-        let tombstones = try await tombstoneService.fetchProjectTombstones()
-        let snapshots = projects.compactMap { project -> ProjectSnapshotSyncInput? in
-            guard !tombstones.isTombstoned(localID: project.id.uuidString) else {
-                logger.log("Skipped tombstoned project upload \(project.id.uuidString, privacy: .public)")
-                return nil
-            }
-            return ProjectSnapshotSyncInput(
+        let candidates = projects.map { project in
+            ProjectSnapshotSyncInput(
                 localProjectID: project.id.uuidString,
                 payload: ProjectSchemaTemplateBuilder.build(project: project)
             )
         }
-        guard !snapshots.isEmpty else { return }
-        try await syncSnapshots(snapshots)
+        try await mutationGate.run {
+            let tombstones = try await tombstoneService.fetchProjectTombstones()
+            let snapshots = candidates.compactMap { candidate -> ProjectSnapshotSyncInput? in
+                guard !tombstones.isTombstoned(localID: candidate.localProjectID) else {
+                    logger.log("Skipped tombstoned project upload \(candidate.localProjectID, privacy: .public)")
+                    return nil
+                }
+                return candidate
+            }
+            guard !snapshots.isEmpty else { return }
+            try await syncSnapshots(snapshots)
+        }
     }
 
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {
-        let (client, user, accessToken) = try await validatedClientAndSession()
-        var components = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
-        // local_project_id is text in Supabase. Historical/imported rows may use
-        // different UUID casing, or may carry the stable ID only in snapshot_json.
-        // Match both representations case-insensitively and scope explicitly to
-        // the authenticated user in addition to RLS.
-        let identityFilter = [
-            "local_project_id.ilike.\(localProjectID)",
-            "snapshot_json->project->>id.ilike.\(localProjectID)"
-        ].joined(separator: ",")
-        components?.queryItems = [
-            URLQueryItem(name: "user_id", value: "eq.\(user.id)"),
-            URLQueryItem(name: "or", value: "(\(identityFilter))")
-        ]
-        guard let url = components?.url else {
-            throw ProjectCloudSyncError.notConfigured
+        try await mutationGate.run {
+            let (client, user, accessToken) = try await validatedClientAndSession()
+            var components = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
+            // local_project_id is text in Supabase. Historical/imported rows may use
+            // different UUID casing, or may carry the stable ID only in snapshot_json.
+            // Match both representations case-insensitively and scope explicitly to
+            // the authenticated user in addition to RLS.
+            let identityFilter = [
+                "local_project_id.ilike.\(localProjectID)",
+                "snapshot_json->project->>id.ilike.\(localProjectID)"
+            ].joined(separator: ",")
+            components?.queryItems = [
+                URLQueryItem(name: "user_id", value: "eq.\(user.id)"),
+                URLQueryItem(name: "or", value: "(\(identityFilter))")
+            ]
+            guard let url = components?.url else {
+                throw ProjectCloudSyncError.notConfigured
+            }
+
+            var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
+            request.httpMethod = "DELETE"
+            // Request the affected rows. A malformed/minimal response now fails
+            // decoding instead of silently treating an unverifiable delete as success.
+            request.setValue("return=representation", forHTTPHeaderField: "Prefer")
+
+            _ = try await fetch([ProjectSnapshotDeleteResponse].self, request: request)
         }
-
-        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
-        request.httpMethod = "DELETE"
-        // Request the affected rows. A malformed/minimal response now fails
-        // decoding instead of silently treating an unverifiable delete as success.
-        request.setValue("return=representation", forHTTPHeaderField: "Prefer")
-
-        _ = try await fetch([ProjectSnapshotDeleteResponse].self, request: request)
     }
 
     func cloudSnapshotPresence() async -> CloudSnapshotPresence {
