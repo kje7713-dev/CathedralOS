@@ -1278,21 +1278,29 @@ protocol ProjectDeletionServiceProtocol {
     func deleteEverywhere(project: StoryProject, context: ModelContext) async throws
 }
 
+protocol ProjectBackupDeletionServiceProtocol {
+    @discardableResult
+    func deleteBackups(forProjectID projectID: String) throws -> Int
+}
+
 final class ProjectDeletionService: ProjectDeletionServiceProtocol {
     static let shared = ProjectDeletionService()
 
     private let authService: any AuthService
     private let cloudSyncService: any ProjectCloudSyncServiceProtocol
     private let tombstoneService: any SyncTombstoneServiceProtocol
+    private let backupDeletionService: any ProjectBackupDeletionServiceProtocol
 
     init(
         authService: any AuthService = BackendAuthService.shared,
         cloudSyncService: any ProjectCloudSyncServiceProtocol = ProjectCloudSyncService.shared,
-        tombstoneService: any SyncTombstoneServiceProtocol = SupabaseSyncTombstoneService.shared
+        tombstoneService: any SyncTombstoneServiceProtocol = SupabaseSyncTombstoneService.shared,
+        backupDeletionService: any ProjectBackupDeletionServiceProtocol = LocalProjectBackupService.shared
     ) {
         self.authService = authService
         self.cloudSyncService = cloudSyncService
         self.tombstoneService = tombstoneService
+        self.backupDeletionService = backupDeletionService
     }
 
     func deleteLocal(project: StoryProject, context: ModelContext) async throws {
@@ -1359,6 +1367,11 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
         } catch {
             context.rollback()
             throw ProjectDeletionError.persistenceError(stage: "local delete after cloud delete", error: error)
+        }
+        do {
+            try backupDeletionService.deleteBackups(forProjectID: projectID)
+        } catch {
+            throw ProjectDeletionError.persistenceError(stage: "local backup cleanup", error: error)
         }
     }
 }

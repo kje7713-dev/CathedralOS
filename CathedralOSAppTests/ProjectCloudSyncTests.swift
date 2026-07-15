@@ -111,6 +111,15 @@ private final class NoOpProjectOutputSyncService: GenerationOutputSyncServicePro
     func syncAll(in context: ModelContext) async throws {}
 }
 
+private final class SpyProjectBackupDeletionService: ProjectBackupDeletionServiceProtocol {
+    private(set) var deletedProjectIDs: [String] = []
+
+    func deleteBackups(forProjectID projectID: String) throws -> Int {
+        deletedProjectIDs.append(projectID)
+        return 1
+    }
+}
+
 final class ProjectCloudSyncTests: XCTestCase {
 
     override func tearDown() {
@@ -265,6 +274,7 @@ final class ProjectCloudSyncTests: XCTestCase {
             accessToken: "user-jwt-token"
         )
         let tombstoneService = MockProjectTombstoneService()
+        let backupDeletionService = SpyProjectBackupDeletionService()
         let cloudSyncService = ProjectCloudSyncService(
             authService: authService,
             session: session,
@@ -313,13 +323,15 @@ final class ProjectCloudSyncTests: XCTestCase {
         let deletionService = ProjectDeletionService(
             authService: authService,
             cloudSyncService: cloudSyncService,
-            tombstoneService: tombstoneService
+            tombstoneService: tombstoneService,
+            backupDeletionService: backupDeletionService
         )
         try await deletionService.deleteEverywhere(project: project, context: context)
 
         XCTAssertEqual(deleteRequestCount, 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
         XCTAssertEqual(tombstoneService.recordedTombstones.first?.deletionScope, .everywhere)
+        XCTAssertEqual(backupDeletionService.deletedProjectIDs, [projectID.uuidString])
 
         // A delayed single-project/local-backup upload must not recreate the row.
         try await cloudSyncService.syncProjectSnapshot(

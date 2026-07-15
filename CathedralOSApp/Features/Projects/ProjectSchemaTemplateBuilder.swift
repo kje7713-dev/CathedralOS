@@ -818,7 +818,7 @@ enum LocalProjectBackupError: LocalizedError {
     }
 }
 
-final class LocalProjectBackupService {
+final class LocalProjectBackupService: ProjectBackupDeletionServiceProtocol {
 
     static let shared = LocalProjectBackupService()
 
@@ -887,6 +887,25 @@ final class LocalProjectBackupService {
 
     func hasBackups() -> Bool {
         backupCount() > 0
+    }
+
+    @discardableResult
+    func deleteBackups(forProjectID projectID: String) throws -> Int {
+        let prefix = "project-\(projectID)-".lowercased()
+        var deletedCount = 0
+        for backup in sortedBackupURLs()
+            where backup.url.lastPathComponent.lowercased().hasPrefix(prefix) {
+            do {
+                try fileManager.removeItem(at: backup.url)
+                deletedCount += 1
+            } catch {
+                logger.error(
+                    "Could not delete backup for project \(projectID, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+                throw error
+            }
+        }
+        return deletedCount
     }
 
     func latestBackup() -> LocalProjectBackupMetadata? {
