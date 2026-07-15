@@ -33,6 +33,39 @@ enum ProjectSaveResult {
 @MainActor
 final class DataDurabilityCoordinator: ObservableObject {
 
+    enum SyncOperationKind: String, Equatable {
+        case appLaunch
+        case signIn
+        case syncAll
+        case syncOutputs
+        case restoreAll
+        case restoreDeletedProjects
+        case refreshSession
+
+        var progressMessage: String {
+            switch self {
+            case .restoreAll, .restoreDeletedProjects: return "Restoring from cloud…"
+            default: return "Syncing…"
+            }
+        }
+    }
+
+    enum SyncOperationState: Equatable {
+        case idle
+        case running(SyncOperationKind)
+        case succeeded(SyncOperationKind, message: String)
+        case failed(SyncOperationKind, message: String)
+    }
+
+    struct SyncOperationResult: Equatable {
+        let kind: SyncOperationKind
+        let message: String?
+        let errorMessage: String?
+        let joinedExistingOperation: Bool
+
+        var succeeded: Bool { errorMessage == nil }
+    }
+
     // MARK: - Shared instance
 
     static let shared = DataDurabilityCoordinator()
@@ -40,6 +73,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     // MARK: - Published state
 
     @Published private(set) var isRunning = false
+    @Published private(set) var operationState: SyncOperationState = .idle
     @Published private(set) var lastSyncStartedAt: Date?
     @Published private(set) var lastSyncFinishedAt: Date?
     @Published private(set) var lastSyncError: String?
@@ -59,6 +93,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     private let projectSyncService: any ProjectCloudSyncServiceProtocol
     private let outputSyncService: any GenerationOutputSyncServiceProtocol
     private let logger = Logger(subsystem: "CathedralOS", category: "DataDurability")
+    private var activeOperation: Task<SyncOperationResult, Never>?
 
     // MARK: - Init
 
@@ -83,20 +118,10 @@ final class DataDurabilityCoordinator: ObservableObject {
         context: ModelContext,
         isFirstLaunchAfterUpdate: Bool,
         recoveryContext: PersistenceRecoveryContext?
-    ) async {
-        guard !isRunning else { return }
+    ) async -> SyncOperationResult {
 
         storeMode = recoveryContext != nil ? .recovery : .normal
         storePath = context.container.configurations.first?.url.path
-        lastSyncError = nil
-        isRunning = true
-        lastSyncStartedAt = Date()
-        lastSyncError = nil
-        defer {
-            isRunning = false
-            lastSyncFinishedAt = Date()
-        }
-
         if case .unknown = authService.authState {
             await authService.checkSession()
         }
@@ -109,60 +134,25 @@ final class DataDurabilityCoordinator: ObservableObject {
 
         guard authService.authState.isSignedIn else {
             logger.log("App launch: user not signed in, skipping cloud sync.")
-            return
+            return SyncOperationResult(kind: .appLaunch, message: nil, errorMessage: nil, joinedExistingOperation: false)
         }
 
         if recoveryContext != nil {
             logger.log("App launch in recovery mode — pulling cloud data to recovery store.")
         }
 
-        do {
-            try await syncProjects(in: context)
-        } catch {
-            let msg = error.localizedDescription
-            logger.error("App launch project sync failed: \(msg, privacy: .public)")
-            lastSyncError = msg
-        }
-
-        do {
-            try await outputSyncService.syncAll(in: context)
-        } catch {
-            let msg = error.localizedDescription
-            logger.error("App launch output sync failed: \(msg, privacy: .public)")
-            if lastSyncError == nil { lastSyncError = msg }
-        }
-
-        if lastSyncError == nil {
-            logger.log("App launch sync complete.")
+        return await runOperation(kind: .appLaunch) {
+            try await self.syncAllData(in: context)
+            return "Cloud sync complete."
         }
     }
 
     /// Call after a successful sign-in.
-    func performSignInSync(context: ModelContext) async {
-        guard !isRunning else { return }
-        isRunning = true
-        lastSyncStartedAt = Date()
-        defer {
-            isRunning = false
-            lastSyncFinishedAt = Date()
-        }
-
+    func performSignInSync(context: ModelContext) async -> SyncOperationResult {
         logger.log("Sign-in sync: pulling and pushing data.")
-
-        do {
-            try await syncProjects(in: context)
-        } catch {
-            let msg = error.localizedDescription
-            logger.error("Sign-in project sync failed: \(msg, privacy: .public)")
-            lastSyncError = msg
-        }
-
-        do {
-            try await outputSyncService.syncAll(in: context)
-        } catch {
-            let msg = error.localizedDescription
-            logger.error("Sign-in output sync failed: \(msg, privacy: .public)")
-            if lastSyncError == nil { lastSyncError = msg }
+        return await runOperation(kind: .signIn) {
+            try await syncAllData(in: context)
+            return "Cloud sync complete."
         }
     }
 
@@ -171,33 +161,91 @@ final class DataDurabilityCoordinator: ObservableObject {
         // Sign-out only clears auth; local projects, outputs, and backups are preserved.
         logger.log("Sign-out: preserving local data, clearing sync state.")
         lastSyncError = nil
+        operationState = .idle
     }
 
     /// Call on explicit "Sync Everything" user action.
-    func performManualSyncAll(context: ModelContext) async {
-        guard !isRunning else { return }
+    func performManualSyncAll(context: ModelContext) async -> SyncOperationResult {
+        await runOperation(kind: .syncAll) {
+            try await syncAllData(in: context)
+            return "All data synced."
+        }
+    }
+
+    func performOutputSync(context: ModelContext) async -> SyncOperationResult {
+        await runOperation(kind: .syncOutputs) {
+            try await outputSyncService.syncAll(in: context)
+            return "Generated outputs synced."
+        }
+    }
+
+    func performCloudRestore(context: ModelContext, includeDeletedProjects: Bool = false) async -> SyncOperationResult {
+        let kind: SyncOperationKind = includeDeletedProjects ? .restoreDeletedProjects : .restoreAll
+        return await runOperation(kind: kind) {
+            let report = try await projectSyncService.restoreAllProjects(
+                into: context,
+                includeTombstoned: includeDeletedProjects
+            )
+            if !includeDeletedProjects {
+                try await outputSyncService.pullOutputs(into: context)
+            }
+            let prefix = includeDeletedProjects ? "Restored deleted cloud projects: " : ""
+            return prefix + report.summaryMessage
+        }
+    }
+
+    func performSessionRefresh() async -> SyncOperationResult {
+        await runOperation(kind: .refreshSession) {
+            try await authService.refreshSession()
+            return "Session refreshed."
+        }
+    }
+
+    private func runOperation(
+        kind: SyncOperationKind,
+        operation: @escaping @MainActor () async throws -> String
+    ) async -> SyncOperationResult {
+        if let activeOperation {
+            let result = await activeOperation.value
+            return SyncOperationResult(
+                kind: result.kind,
+                message: result.message,
+                errorMessage: result.errorMessage,
+                joinedExistingOperation: true
+            )
+        }
+
         isRunning = true
         lastSyncStartedAt = Date()
         lastSyncError = nil
-        defer {
-            isRunning = false
-            lastSyncFinishedAt = Date()
-        }
+        operationState = .running(kind)
 
-        do {
-            try await syncProjects(in: context)
-        } catch {
-            let msg = error.localizedDescription
-            logger.error("Manual sync projects failed: \(msg, privacy: .public)")
-            lastSyncError = msg
+        let task = Task { @MainActor in
+            do {
+                let message = try await operation()
+                return SyncOperationResult(kind: kind, message: message, errorMessage: nil, joinedExistingOperation: false)
+            } catch {
+                return SyncOperationResult(
+                    kind: kind,
+                    message: nil,
+                    errorMessage: error.localizedDescription,
+                    joinedExistingOperation: false
+                )
+            }
         }
-        do {
-            try await outputSyncService.syncAll(in: context)
-        } catch {
-            let msg = error.localizedDescription
-            logger.error("Manual sync outputs failed: \(msg, privacy: .public)")
-            if lastSyncError == nil { lastSyncError = msg }
+        activeOperation = task
+        let result = await task.value
+        activeOperation = nil
+        isRunning = false
+        lastSyncFinishedAt = Date()
+        lastSyncError = result.errorMessage
+        if let errorMessage = result.errorMessage {
+            operationState = .failed(result.kind, message: errorMessage)
+            logger.error("\(result.kind.rawValue, privacy: .public) failed: \(errorMessage, privacy: .public)")
+        } else {
+            operationState = .succeeded(result.kind, message: result.message ?? "Cloud operation complete.")
         }
+        return result
     }
 
     /// Push local projects first, then reconcile the cloud snapshot set back into the
@@ -213,6 +261,23 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
         _ = try await projectSyncService.restoreAllProjects(into: context)
         if let uploadError { throw uploadError }
+    }
+
+    /// Project and output sync are independent recovery paths. Attempt both and
+    /// report the first real failure only after each has had a chance to recover.
+    private func syncAllData(in context: ModelContext) async throws {
+        var firstError: Error?
+        do {
+            try await syncProjects(in: context)
+        } catch {
+            firstError = error
+        }
+        do {
+            try await outputSyncService.syncAll(in: context)
+        } catch {
+            if firstError == nil { firstError = error }
+        }
+        if let firstError { throw firstError }
     }
 
     // MARK: - Explicit save helper

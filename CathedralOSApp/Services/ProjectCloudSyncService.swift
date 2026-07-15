@@ -118,8 +118,8 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     private let tombstoneService: any SyncTombstoneServiceProtocol
     private let logger = Logger(subsystem: "CathedralOS", category: "ProjectSync")
 
-    /// Guards against concurrent restore calls; isolated to @MainActor.
-    @MainActor private var isRestoringProjects = false
+    /// Direct callers share the same restore work instead of turning overlap into an error.
+    @MainActor private var activeRestore: Task<ProjectRestoreReport, Error>?
 
     init(
         authService: AuthService = BackendAuthService.shared,
@@ -203,13 +203,27 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
 
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
-        // Phase 0: prevent concurrent restores.
-        guard !isRestoringProjects else {
-            logger.info("Restore already in progress; ignoring duplicate call.")
-            throw ProjectCloudSyncError.restoreAlreadyInProgress
+        if let activeRestore {
+            logger.info("Restore already in progress; awaiting existing operation.")
+            return try await activeRestore.value
         }
-        isRestoringProjects = true
-        defer { isRestoringProjects = false }
+
+        let task = Task { @MainActor in
+            try await restoreProjects(into: context, includeTombstoned: includeTombstoned)
+        }
+        activeRestore = task
+        do {
+            let report = try await task.value
+            activeRestore = nil
+            return report
+        } catch {
+            activeRestore = nil
+            throw error
+        }
+    }
+
+    @MainActor
+    private func restoreProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
 
         // Phase A: fetch and decode cloud payloads into plain DTOs.
         let (client, _, accessToken) = try await validatedClientAndSession()
