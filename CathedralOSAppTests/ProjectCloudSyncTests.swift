@@ -59,6 +59,16 @@ private final class MockProjectTombstoneService: SyncTombstoneServiceProtocol {
 
     func record(_ tombstone: SyncTombstone) async {
         recordedTombstones.append(tombstone)
+        let projectRecords = recordedTombstones.compactMap { tombstone -> SyncTombstoneCloudRecord? in
+            guard tombstone.entityType == .project else { return nil }
+            return SyncTombstoneCloudRecord(
+                entityType: tombstone.entityType.rawValue,
+                localEntityID: tombstone.localEntityID,
+                cloudEntityID: tombstone.cloudEntityID,
+                deletionScope: tombstone.deletionScope.rawValue
+            )
+        }
+        projectTombstones = SyncTombstoneSet(records: projectRecords)
     }
 
     func fetchGenerationOutputTombstones() async throws -> SyncTombstoneSet {
@@ -94,6 +104,22 @@ private final class SpyProjectCloudSyncService: ProjectCloudSyncServiceProtocol 
     }
 }
 
+private final class NoOpProjectOutputSyncService: GenerationOutputSyncServiceProtocol {
+    func pullOutputs(into context: ModelContext) async throws {}
+    func pushOutput(_ output: GenerationOutput) async throws {}
+    func fetchCloudOutputCount() async throws -> Int { 0 }
+    func syncAll(in context: ModelContext) async throws {}
+}
+
+private final class SpyProjectBackupDeletionService: ProjectBackupDeletionServiceProtocol {
+    private(set) var deletedProjectIDs: [String] = []
+
+    func deleteBackups(forProjectID projectID: String) throws -> Int {
+        deletedProjectIDs.append(projectID)
+        return 1
+    }
+}
+
 final class ProjectCloudSyncTests: XCTestCase {
 
     override func tearDown() {
@@ -114,7 +140,8 @@ final class ProjectCloudSyncTests: XCTestCase {
             configuration: .makeForTesting(
                 projectURL: URL(string: "https://example.supabase.co")!,
                 anonKey: "anon-key"
-            )
+            ),
+            tombstoneService: MockProjectTombstoneService()
         )
 
         let project = StoryProject(name: "Cloud Story")
@@ -159,6 +186,188 @@ final class ProjectCloudSyncTests: XCTestCase {
         try await service.syncProject(project)
     }
 
+    func testDeleteSnapshotUsesAuthenticatedCaseInsensitiveStableIdentityAndVerifiesResponse() async throws {
+        let session = makeSession()
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let projectID = UUID()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let requestSent = expectation(description: "project snapshot DELETE sent")
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            XCTAssertEqual(request.url?.path, "/rest/v1/project_snapshots")
+            let queryItems = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
+            )
+            XCTAssertEqual(queryItems.first(where: { $0.name == "user_id" })?.value, "eq.\(userID)")
+            XCTAssertEqual(
+                queryItems.first(where: { $0.name == "or" })?.value,
+                "(local_project_id.ilike.\(projectID.uuidString),snapshot_json->project->>id.ilike.\(projectID.uuidString))"
+            )
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt-token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Prefer"), "return=representation")
+            requestSent.fulfill()
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (
+                response,
+                Data(#"[{"local_project_id":"\#(projectID.uuidString.lowercased())"}]"#.utf8)
+            )
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+
+        try await service.deleteSnapshot(forLocalProjectID: projectID.uuidString)
+        await fulfillment(of: [requestSent], timeout: 1)
+    }
+
+    func testDeleteSnapshotDoesNotSilentlyAcceptUnverifiableMinimalResponse() async throws {
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 204,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data())
+        }
+        let service = ProjectCloudSyncService(
+            authService: MockProjectCloudSyncAuthService(
+                authState: .signedIn(AuthUser(
+                    id: "11111111-1111-1111-1111-111111111111",
+                    email: "test@example.com"
+                )),
+                accessToken: "user-jwt-token"
+            ),
+            session: makeSession(),
+            configuration: .makeForTesting()
+        )
+
+        do {
+            try await service.deleteSnapshot(forLocalProjectID: UUID().uuidString)
+            XCTFail("Expected an unverifiable DELETE response to fail")
+        } catch let error as ProjectCloudSyncError {
+            guard case .decodingError = error else {
+                XCTFail("Expected decodingError, got \(error)")
+                return
+            }
+        }
+    }
+
+    @MainActor
+    func testDeleteEverywhereTombstonesBeforeCloudDeleteAndBlocksEveryProjectSyncPath() async throws {
+        let session = makeSession()
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let tombstoneService = MockProjectTombstoneService()
+        let backupDeletionService = SpyProjectBackupDeletionService()
+        let cloudSyncService = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting(),
+            tombstoneService: tombstoneService
+        )
+        let context = ModelContext(try makeProjectContainer())
+        let project = StoryProject(name: "Delete everywhere")
+        context.insert(project)
+        try context.save()
+        let projectID = project.id
+        let stalePayload = ProjectSchemaTemplateBuilder.build(project: project)
+        var deleteRequestCount = 0
+        var restoreRequestCount = 0
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            if request.httpMethod == "DELETE" {
+                deleteRequestCount += 1
+                XCTAssertTrue(
+                    tombstoneService.projectTombstones.isTombstoned(localID: projectID.uuidString),
+                    "Delete intent must exist before the cloud DELETE starts."
+                )
+                let response = HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+                return (
+                    response,
+                    Data(#"[{"local_project_id":"\#(projectID.uuidString.lowercased())"}]"#.utf8)
+                )
+            }
+
+            XCTAssertEqual(request.httpMethod, "GET", "Tombstoned uploads must not issue POST requests.")
+            restoreRequestCount += 1
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, try self.makeRestoreResponse(localProjectID: projectID, payload: stalePayload))
+        }
+
+        let deletionService = ProjectDeletionService(
+            authService: authService,
+            cloudSyncService: cloudSyncService,
+            tombstoneService: tombstoneService,
+            backupDeletionService: backupDeletionService
+        )
+        try await deletionService.deleteEverywhere(project: project, context: context)
+
+        XCTAssertEqual(deleteRequestCount, 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
+        XCTAssertEqual(tombstoneService.recordedTombstones.first?.deletionScope, .everywhere)
+        XCTAssertEqual(backupDeletionService.deletedProjectIDs, [projectID.uuidString])
+
+        // A delayed single-project/local-backup upload must not recreate the row.
+        try await cloudSyncService.syncProjectSnapshot(
+            localProjectID: projectID.uuidString,
+            payload: stalePayload
+        )
+
+        // A stale SwiftData context observed by Sync Everything must also be blocked.
+        let staleContext = ModelContext(try makeProjectContainer())
+        let staleProject = ProjectImportMapper.map(stalePayload)
+        staleProject.id = projectID
+        staleContext.insert(staleProject)
+        try staleContext.save()
+        try await cloudSyncService.syncAllProjects(in: staleContext)
+
+        // Even if a legacy/stale cloud row still exists, normal refresh/restore
+        // must not reinsert it locally after Delete Everywhere.
+        let report = try await cloudSyncService.restoreAllProjects(into: context)
+        XCTAssertEqual(report.insertedCount, 0)
+        XCTAssertEqual(report.skippedTombstonedCount, 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
+
+        // The user-facing Sync Everything coordinator performs upload followed by
+        // restore. It must preserve the same absence guarantee.
+        let coordinator = DataDurabilityCoordinator(
+            authService: authService,
+            projectSyncService: cloudSyncService,
+            outputSyncService: NoOpProjectOutputSyncService()
+        )
+        let syncResult = await coordinator.performManualSyncAll(context: context)
+        XCTAssertTrue(syncResult.succeeded)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
+        XCTAssertEqual(restoreRequestCount, 2)
+    }
+
     func testSyncAllProjectsDoesNotReuploadTombstonedProject() async throws {
         let session = makeSession()
         let userID = "11111111-1111-1111-1111-111111111111"
@@ -170,8 +379,9 @@ final class ProjectCloudSyncTests: XCTestCase {
         let activeProject = StoryProject(name: "Keep syncing")
         let tombstoneService = MockProjectTombstoneService()
         tombstoneService.projectTombstones = try makeProjectTombstoneSet(
-            localProjectID: tombstonedProject.id.uuidString
+            localProjectID: tombstonedProject.id.uuidString.lowercased()
         )
+        var uploadRequestCount = 0
 
         let context = ModelContext(try makeProjectContainer())
         context.insert(tombstonedProject)
@@ -179,6 +389,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         try context.save()
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
+            uploadRequestCount += 1
             XCTAssertEqual(request.httpMethod, "POST")
             let body = try XCTUnwrap(request.httpBody)
             let payloads = try XCTUnwrap(
@@ -205,6 +416,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
 
         try await service.syncAllProjects(in: context)
+        XCTAssertEqual(uploadRequestCount, 1, "Bulk sync must send the active project upload.")
     }
 
     func testRestoreAllProjectsReusesCloudLocalProjectIDAndProjectNotes() async throws {

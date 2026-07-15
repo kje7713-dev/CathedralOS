@@ -133,6 +133,38 @@ final class ProjectRestoreOperationGate {
     }
 }
 
+/// Serializes project snapshot writes and deletes. Actor reentrancy alone does not
+/// provide this guarantee, so callers explicitly queue while another mutation is
+/// awaiting the network.
+actor ProjectCloudMutationGate {
+    private var isLocked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func run<T>(_ operation: () async throws -> T) async rethrows -> T {
+        await acquire()
+        defer { release() }
+        return try await operation()
+    }
+
+    private func acquire() async {
+        guard isLocked else {
+            isLocked = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    private func release() {
+        guard !waiters.isEmpty else {
+            isLocked = false
+            return
+        }
+        waiters.removeFirst().resume()
+    }
+}
+
 final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
 
     static let shared = ProjectCloudSyncService()
@@ -142,6 +174,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     private let session: URLSession
     private let configuration: ValidatedSupabaseConfiguration?
     private let tombstoneService: any SyncTombstoneServiceProtocol
+    private let mutationGate = ProjectCloudMutationGate()
     private let logger = Logger(subsystem: "CathedralOS", category: "ProjectSync")
 
     @MainActor private lazy var restoreOperationGate = ProjectRestoreOperationGate()
@@ -166,9 +199,22 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     }
 
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {
-        try await syncSnapshots([
-            .init(localProjectID: localProjectID, payload: payload)
-        ])
+        try await mutationGate.run {
+            // Individual saves and local-backup tasks use this path instead of
+            // syncAllProjects. Honor delete intent here too so a stale upload that
+            // finishes after Delete Everywhere cannot recreate the cloud snapshot.
+            // Resolve through this service first to preserve ProjectCloudSyncError
+            // semantics for signed-out/misconfigured callers.
+            _ = try await validatedClientAndSession()
+            let tombstones = try await tombstoneService.fetchProjectTombstones()
+            guard !tombstones.isTombstoned(localID: localProjectID) else {
+                logger.log("Skipped tombstoned project upload \(localProjectID, privacy: .public)")
+                return
+            }
+            try await syncSnapshots([
+                .init(localProjectID: localProjectID, payload: payload)
+            ])
+        }
     }
 
     func syncAllProjects(in context: ModelContext) async throws {
@@ -178,36 +224,54 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         // Bulk sync can observe a project that another context recently deleted.
         // Honor delete intent on upload as well as restore so Sync Everything
         // cannot recreate a snapshot that was deliberately removed.
-        let tombstones = try await tombstoneService.fetchProjectTombstones()
-        let snapshots = projects.compactMap { project -> ProjectSnapshotSyncInput? in
-            guard !tombstones.isTombstoned(localID: project.id.uuidString) else {
-                logger.log("Skipped tombstoned project upload \(project.id.uuidString, privacy: .public)")
-                return nil
-            }
-            return ProjectSnapshotSyncInput(
+        let candidates = projects.map { project in
+            ProjectSnapshotSyncInput(
                 localProjectID: project.id.uuidString,
                 payload: ProjectSchemaTemplateBuilder.build(project: project)
             )
         }
-        guard !snapshots.isEmpty else { return }
-        try await syncSnapshots(snapshots)
+        try await mutationGate.run {
+            let tombstones = try await tombstoneService.fetchProjectTombstones()
+            let snapshots = candidates.compactMap { candidate -> ProjectSnapshotSyncInput? in
+                guard !tombstones.isTombstoned(localID: candidate.localProjectID) else {
+                    logger.log("Skipped tombstoned project upload \(candidate.localProjectID, privacy: .public)")
+                    return nil
+                }
+                return candidate
+            }
+            guard !snapshots.isEmpty else { return }
+            try await syncSnapshots(snapshots)
+        }
     }
 
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {
-        let (client, _, accessToken) = try await validatedClientAndSession()
-        var components = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "local_project_id", value: "eq.\(localProjectID)")
-        ]
-        guard let url = components?.url else {
-            throw ProjectCloudSyncError.notConfigured
+        try await mutationGate.run {
+            let (client, user, accessToken) = try await validatedClientAndSession()
+            var components = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
+            // local_project_id is text in Supabase. Historical/imported rows may use
+            // different UUID casing, or may carry the stable ID only in snapshot_json.
+            // Match both representations case-insensitively and scope explicitly to
+            // the authenticated user in addition to RLS.
+            let identityFilter = [
+                "local_project_id.ilike.\(localProjectID)",
+                "snapshot_json->project->>id.ilike.\(localProjectID)"
+            ].joined(separator: ",")
+            components?.queryItems = [
+                URLQueryItem(name: "user_id", value: "eq.\(user.id)"),
+                URLQueryItem(name: "or", value: "(\(identityFilter))")
+            ]
+            guard let url = components?.url else {
+                throw ProjectCloudSyncError.notConfigured
+            }
+
+            var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
+            request.httpMethod = "DELETE"
+            // Request the affected rows. A malformed/minimal response now fails
+            // decoding instead of silently treating an unverifiable delete as success.
+            request.setValue("return=representation", forHTTPHeaderField: "Prefer")
+
+            _ = try await fetch([ProjectSnapshotDeleteResponse].self, request: request)
         }
-
-        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
-        request.httpMethod = "DELETE"
-        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
-
-        try await send(request)
     }
 
     func cloudSnapshotPresence() async -> CloudSnapshotPresence {
@@ -1163,32 +1227,6 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             .appendingPathComponent(path)
     }
 
-    private func send(_ request: URLRequest) async throws {
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await sessionProvider.retryOnceAfterExpiredJWT(
-                request: request,
-                session: session
-            )
-        } catch let error as SupabaseSessionProviderError {
-            switch error {
-            case .notSignedIn:
-                throw ProjectCloudSyncError.notSignedIn
-            case .sessionExpired:
-                throw ProjectCloudSyncError.sessionExpired
-            }
-        } catch {
-            throw ProjectCloudSyncError.networkError(error)
-        }
-
-        if let http = response as? HTTPURLResponse,
-           !(200..<300).contains(http.statusCode) {
-            let message = String(data: data, encoding: .utf8)
-            throw ProjectCloudSyncError.serverError(statusCode: http.statusCode, message: message)
-        }
-    }
-
     private func fetch<T: Decodable>(_ type: T.Type, request: URLRequest) async throws -> T {
         let data: Data
         let response: URLResponse
@@ -1243,21 +1281,29 @@ protocol ProjectDeletionServiceProtocol {
     func deleteEverywhere(project: StoryProject, context: ModelContext) async throws
 }
 
+protocol ProjectBackupDeletionServiceProtocol {
+    @discardableResult
+    func deleteBackups(forProjectID projectID: String) throws -> Int
+}
+
 final class ProjectDeletionService: ProjectDeletionServiceProtocol {
     static let shared = ProjectDeletionService()
 
     private let authService: any AuthService
     private let cloudSyncService: any ProjectCloudSyncServiceProtocol
     private let tombstoneService: any SyncTombstoneServiceProtocol
+    private let backupDeletionService: any ProjectBackupDeletionServiceProtocol
 
     init(
         authService: any AuthService = BackendAuthService.shared,
         cloudSyncService: any ProjectCloudSyncServiceProtocol = ProjectCloudSyncService.shared,
-        tombstoneService: any SyncTombstoneServiceProtocol = SupabaseSyncTombstoneService.shared
+        tombstoneService: any SyncTombstoneServiceProtocol = SupabaseSyncTombstoneService.shared,
+        backupDeletionService: any ProjectBackupDeletionServiceProtocol = LocalProjectBackupService.shared
     ) {
         self.authService = authService
         self.cloudSyncService = cloudSyncService
         self.tombstoneService = tombstoneService
+        self.backupDeletionService = backupDeletionService
     }
 
     func deleteLocal(project: StoryProject, context: ModelContext) async throws {
@@ -1292,29 +1338,13 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
     func deleteEverywhere(project: StoryProject, context: ModelContext) async throws {
         let projectID = project.id.uuidString
 
-        do {
-            try await cloudSyncService.deleteSnapshot(forLocalProjectID: projectID)
-        } catch {
-            throw ProjectDeletionError.syncError(error)
-        }
-
-        // Resolve auth state before reading userID. deleteSnapshot calls
-        // ensureSignedInUser() internally, which may refresh a stale .unknown auth
-        // state to .signedIn. Adding an explicit check here covers any edge case
-        // where the snapshot delete path exits early without performing that check.
+        // Persist delete intent before any cloud request. This closes the race in
+        // which an already-running single-project/backup upload could recreate the
+        // snapshot after the DELETE but before the tombstone existed.
         if case .unknown = authService.authState {
             await authService.checkSession()
         }
         let userID = authService.authState.currentUser?.id
-
-        context.delete(project)
-        do {
-            try context.save()
-        } catch {
-            context.rollback()
-            throw ProjectDeletionError.persistenceError(stage: "local delete after cloud delete", error: error)
-        }
-
         if let userID {
             await tombstoneService.record(
                 SyncTombstone(
@@ -1326,6 +1356,25 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
                     reason: nil
                 )
             )
+        }
+
+        do {
+            try await cloudSyncService.deleteSnapshot(forLocalProjectID: projectID)
+        } catch {
+            throw ProjectDeletionError.syncError(error)
+        }
+
+        context.delete(project)
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw ProjectDeletionError.persistenceError(stage: "local delete after cloud delete", error: error)
+        }
+        do {
+            try backupDeletionService.deleteBackups(forProjectID: projectID)
+        } catch {
+            throw ProjectDeletionError.persistenceError(stage: "local backup cleanup", error: error)
         }
     }
 }
@@ -1354,6 +1403,14 @@ private struct ProjectSnapshotUpsertRequest: Encodable {
 }
 
 private struct ProjectSnapshotWriteResponse: Decodable {
+    let localProjectID: String
+
+    enum CodingKeys: String, CodingKey {
+        case localProjectID = "local_project_id"
+    }
+}
+
+private struct ProjectSnapshotDeleteResponse: Decodable {
     let localProjectID: String
 
     enum CodingKeys: String, CodingKey {
