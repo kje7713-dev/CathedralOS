@@ -655,16 +655,15 @@ final class ProjectCloudSyncTests: XCTestCase {
         let payload = ProjectSchemaTemplateBuilder.build(project: project)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
-        // Semaphores coordinate blocking the URLProtocol background thread until we need it.
+        // Delay the first response long enough to start a second restore while it is in flight.
         let requestEntered = DispatchSemaphore(value: 0)
-        let requestPermitted = DispatchSemaphore(value: 0)
         let requestCountLock = NSLock()
         var requestCount = 0
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
             requestCountLock.withLock { requestCount += 1 }
             requestEntered.signal()      // Signal: first request is in flight.
-            requestPermitted.wait()      // Block background thread until permitted.
+            Thread.sleep(forTimeInterval: 0.5)
             let response = HTTPURLResponse(
                 url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil
             )!
@@ -692,21 +691,11 @@ final class ProjectCloudSyncTests: XCTestCase {
         }
 
         // A second caller joins the first restore rather than starting another request.
-        let secondStarted = DispatchSemaphore(value: 0)
         let secondTask = Task { @MainActor in
-            secondStarted.signal()
             return try await service.restoreAllProjects(into: context)
         }
-        await withCheckedContinuation { cont in
-            DispatchQueue.global().async {
-                secondStarted.wait()
-                cont.resume()
-            }
-        }
-        await Task.yield()
 
-        // Unblock the shared restore and wait for both callers to receive its report.
-        requestPermitted.signal()
+        // Both callers receive the report produced by the shared restore.
         let firstReport = try await firstTask.value
         let secondReport = try await secondTask.value
 
