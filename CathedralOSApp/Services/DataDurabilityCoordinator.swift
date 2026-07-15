@@ -151,7 +151,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     func performSignInSync(context: ModelContext) async -> SyncOperationResult {
         logger.log("Sign-in sync: pulling and pushing data.")
         return await runOperation(kind: .signIn) {
-            try await syncAllData(in: context)
+            try await self.syncAllData(in: context)
             return "Cloud sync complete."
         }
     }
@@ -167,14 +167,14 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// Call on explicit "Sync Everything" user action.
     func performManualSyncAll(context: ModelContext) async -> SyncOperationResult {
         await runOperation(kind: .syncAll) {
-            try await syncAllData(in: context)
+            try await self.syncAllData(in: context)
             return "All data synced."
         }
     }
 
     func performOutputSync(context: ModelContext) async -> SyncOperationResult {
         await runOperation(kind: .syncOutputs) {
-            try await outputSyncService.syncAll(in: context)
+            try await self.outputSyncService.syncAll(in: context)
             return "Generated outputs synced."
         }
     }
@@ -182,12 +182,12 @@ final class DataDurabilityCoordinator: ObservableObject {
     func performCloudRestore(context: ModelContext, includeDeletedProjects: Bool = false) async -> SyncOperationResult {
         let kind: SyncOperationKind = includeDeletedProjects ? .restoreDeletedProjects : .restoreAll
         return await runOperation(kind: kind) {
-            let report = try await projectSyncService.restoreAllProjects(
+            let report = try await self.projectSyncService.restoreAllProjects(
                 into: context,
                 includeTombstoned: includeDeletedProjects
             )
             if !includeDeletedProjects {
-                try await outputSyncService.pullOutputs(into: context)
+                try await self.outputSyncService.pullOutputs(into: context)
             }
             let prefix = includeDeletedProjects ? "Restored deleted cloud projects: " : ""
             return prefix + report.summaryMessage
@@ -196,7 +196,7 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     func performSessionRefresh() async -> SyncOperationResult {
         await runOperation(kind: .refreshSession) {
-            try await authService.refreshSession()
+            try await self.authService.refreshSession()
             return "Session refreshed."
         }
     }
