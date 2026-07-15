@@ -203,6 +203,9 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             // Individual saves and local-backup tasks use this path instead of
             // syncAllProjects. Honor delete intent here too so a stale upload that
             // finishes after Delete Everywhere cannot recreate the cloud snapshot.
+            // Resolve through this service first to preserve ProjectCloudSyncError
+            // semantics for signed-out/misconfigured callers.
+            _ = try await validatedClientAndSession()
             let tombstones = try await tombstoneService.fetchProjectTombstones()
             guard !tombstones.isTombstoned(localID: localProjectID) else {
                 logger.log("Skipped tombstoned project upload \(localProjectID, privacy: .public)")

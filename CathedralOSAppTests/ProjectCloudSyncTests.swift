@@ -140,7 +140,8 @@ final class ProjectCloudSyncTests: XCTestCase {
             configuration: .makeForTesting(
                 projectURL: URL(string: "https://example.supabase.co")!,
                 anonKey: "anon-key"
-            )
+            ),
+            tombstoneService: MockProjectTombstoneService()
         )
 
         let project = StoryProject(name: "Cloud Story")
@@ -380,7 +381,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         tombstoneService.projectTombstones = try makeProjectTombstoneSet(
             localProjectID: tombstonedProject.id.uuidString.lowercased()
         )
-        let uploadSent = expectation(description: "active project upload sent")
+        var uploadRequestCount = 0
 
         let context = ModelContext(try makeProjectContainer())
         context.insert(tombstonedProject)
@@ -388,6 +389,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         try context.save()
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
+            uploadRequestCount += 1
             XCTAssertEqual(request.httpMethod, "POST")
             let body = try XCTUnwrap(request.httpBody)
             let payloads = try XCTUnwrap(
@@ -403,7 +405,6 @@ final class ProjectCloudSyncTests: XCTestCase {
                 headerFields: nil
             )!
             let data = Data(#"[{"local_project_id":"\#(activeProject.id.uuidString)"}]"#.utf8)
-            uploadSent.fulfill()
             return (response, data)
         }
 
@@ -415,7 +416,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
 
         try await service.syncAllProjects(in: context)
-        await fulfillment(of: [uploadSent], timeout: 1)
+        XCTAssertEqual(uploadRequestCount, 1, "Bulk sync must send the active project upload.")
     }
 
     func testRestoreAllProjectsReusesCloudLocalProjectIDAndProjectNotes() async throws {
