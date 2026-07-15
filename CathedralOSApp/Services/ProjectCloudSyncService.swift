@@ -174,8 +174,17 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     func syncAllProjects(in context: ModelContext) async throws {
         let descriptor = FetchDescriptor<StoryProject>()
         let projects = try context.fetch(descriptor)
-        let snapshots = projects.map { project in
-            ProjectSnapshotSyncInput(
+        guard !projects.isEmpty else { return }
+        // Bulk sync can observe a project that another context recently deleted.
+        // Honor delete intent on upload as well as restore so Sync Everything
+        // cannot recreate a snapshot that was deliberately removed.
+        let tombstones = try await tombstoneService.fetchProjectTombstones()
+        let snapshots = projects.compactMap { project -> ProjectSnapshotSyncInput? in
+            guard !tombstones.isTombstoned(localID: project.id.uuidString) else {
+                logger.log("Skipped tombstoned project upload \(project.id.uuidString, privacy: .public)")
+                return nil
+            }
+            return ProjectSnapshotSyncInput(
                 localProjectID: project.id.uuidString,
                 payload: ProjectSchemaTemplateBuilder.build(project: project)
             )
