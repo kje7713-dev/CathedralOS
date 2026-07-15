@@ -644,7 +644,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertTrue(updateReport.summaryMessage.contains("Projects updated: 1"), updateReport.summaryMessage)
     }
 
-    func testRestoreCannotRunConcurrentlyThrowsRestoreAlreadyInProgress() async throws {
+    func testConcurrentRestoresAwaitSameNetworkOperationAndReport() async throws {
         let session = makeSession()
         let authService = MockProjectCloudSyncAuthService(
             authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
@@ -658,8 +658,11 @@ final class ProjectCloudSyncTests: XCTestCase {
         // Semaphores coordinate blocking the URLProtocol background thread until we need it.
         let requestEntered = DispatchSemaphore(value: 0)
         let requestPermitted = DispatchSemaphore(value: 0)
+        let requestCountLock = NSLock()
+        var requestCount = 0
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
+            requestCountLock.withLock { requestCount += 1 }
             requestEntered.signal()      // Signal: first request is in flight.
             requestPermitted.wait()      // Block background thread until permitted.
             let response = HTTPURLResponse(
@@ -688,25 +691,31 @@ final class ProjectCloudSyncTests: XCTestCase {
             }
         }
 
-        // isRestoringProjects is now true; second call must throw restoreAlreadyInProgress.
-        var secondError: Error?
-        do {
-            _ = try await service.restoreAllProjects(into: context)
-            XCTFail("Expected restoreAlreadyInProgress to be thrown")
-        } catch {
-            secondError = error
+        // A second caller joins the first restore rather than starting another request.
+        let secondStarted = DispatchSemaphore(value: 0)
+        let secondTask = Task { @MainActor in
+            secondStarted.signal()
+            return try await service.restoreAllProjects(into: context)
         }
+        await withCheckedContinuation { cont in
+            DispatchQueue.global().async {
+                secondStarted.wait()
+                cont.resume()
+            }
+        }
+        await Task.yield()
 
-        // Unblock the first restore and wait for it to finish.
+        // Unblock the shared restore and wait for both callers to receive its report.
         requestPermitted.signal()
-        _ = try await firstTask.value
+        let firstReport = try await firstTask.value
+        let secondReport = try await secondTask.value
 
-        guard let cloudError = secondError as? ProjectCloudSyncError,
-              case .restoreAlreadyInProgress = cloudError else {
-            XCTFail("Expected restoreAlreadyInProgress, got \(String(describing: secondError))")
-            return
-        }
+        let finalRequestCount = requestCountLock.withLock { requestCount }
 
+        XCTAssertEqual(finalRequestCount, 1, "Concurrent restore callers must share one network sequence.")
+        XCTAssertEqual(firstReport.summaryMessage, secondReport.summaryMessage)
+        XCTAssertEqual(firstReport.insertedCount, 1)
+        XCTAssertEqual(secondReport.insertedCount, 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 1)
     }
 
