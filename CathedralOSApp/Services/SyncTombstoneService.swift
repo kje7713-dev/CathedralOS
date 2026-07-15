@@ -62,10 +62,10 @@ struct SyncTombstoneSet {
     init(records: [SyncTombstoneCloudRecord]) {
         for record in records {
             if let lid = record.localEntityID?.trimmingCharacters(in: .whitespacesAndNewlines), !lid.isEmpty {
-                localIDs.insert(lid)
+                localIDs.insert(Self.normalized(lid))
             }
             if let cid = record.cloudEntityID?.trimmingCharacters(in: .whitespacesAndNewlines), !cid.isEmpty {
-                cloudIDs.insert(cid)
+                cloudIDs.insert(Self.normalized(cid))
             }
         }
     }
@@ -73,13 +73,17 @@ struct SyncTombstoneSet {
     /// Returns true when the given local ID appears in the tombstone set.
     func isTombstoned(localID: String) -> Bool {
         guard !localID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        return localIDs.contains(localID.trimmingCharacters(in: .whitespacesAndNewlines))
+        return localIDs.contains(Self.normalized(localID))
     }
 
     /// Returns true when the given cloud UUID string appears in the tombstone set.
     func isTombstoned(cloudID: String) -> Bool {
         guard !cloudID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        return cloudIDs.contains(cloudID.trimmingCharacters(in: .whitespacesAndNewlines))
+        return cloudIDs.contains(Self.normalized(cloudID))
+    }
+
+    private static func normalized(_ id: String) -> String {
+        id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
 
