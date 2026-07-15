@@ -53,6 +53,31 @@ private final class ProjectCloudSyncURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+/// Isolated from the suite-wide URL protocol because XCTest may run test clones in parallel.
+private final class ConcurrentRestoreURLProtocol: URLProtocol {
+    static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(with request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = Self.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
 private final class MockProjectTombstoneService: SyncTombstoneServiceProtocol {
     var projectTombstones = SyncTombstoneSet(records: [])
     private(set) var recordedTombstones: [SyncTombstone] = []
@@ -645,7 +670,9 @@ final class ProjectCloudSyncTests: XCTestCase {
     }
 
     func testConcurrentRestoresAwaitSameNetworkOperationAndReport() async throws {
-        let session = makeSession()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ConcurrentRestoreURLProtocol.self]
+        let session = URLSession(configuration: configuration)
         let authService = MockProjectCloudSyncAuthService(
             authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
             accessToken: "user-jwt-token"
@@ -659,7 +686,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let requestCountLock = NSLock()
         var requestCount = 0
 
-        ProjectCloudSyncURLProtocol.requestHandler = { request in
+        ConcurrentRestoreURLProtocol.requestHandler = { request in
             requestCountLock.withLock { requestCount += 1 }
             Thread.sleep(forTimeInterval: 0.5)
             let response = HTTPURLResponse(
@@ -667,6 +694,7 @@ final class ProjectCloudSyncTests: XCTestCase {
             )!
             return (response, responseData)
         }
+        defer { ConcurrentRestoreURLProtocol.requestHandler = nil }
 
         let service = ProjectCloudSyncService(
             authService: authService,
