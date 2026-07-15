@@ -159,6 +159,54 @@ final class ProjectCloudSyncTests: XCTestCase {
         try await service.syncProject(project)
     }
 
+    func testSyncAllProjectsDoesNotReuploadTombstonedProject() async throws {
+        let session = makeSession()
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let tombstonedProject = StoryProject(name: "Deleted everywhere")
+        let activeProject = StoryProject(name: "Keep syncing")
+        let tombstoneService = MockProjectTombstoneService()
+        tombstoneService.projectTombstones = try makeProjectTombstoneSet(
+            localProjectID: tombstonedProject.id.uuidString
+        )
+
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(tombstonedProject)
+        context.insert(activeProject)
+        try context.save()
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            let body = try XCTUnwrap(request.httpBody)
+            let payloads = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: body) as? [[String: Any]]
+            )
+            XCTAssertEqual(payloads.count, 1)
+            XCTAssertEqual(payloads.first?["local_project_id"] as? String, activeProject.id.uuidString)
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = Data(#"[{"local_project_id":"\#(activeProject.id.uuidString)"}]"#.utf8)
+            return (response, data)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting(),
+            tombstoneService: tombstoneService
+        )
+
+        try await service.syncAllProjects(in: context)
+    }
+
     func testRestoreAllProjectsReusesCloudLocalProjectIDAndProjectNotes() async throws {
         let session = makeSession()
         let userID = "11111111-1111-1111-1111-111111111111"
