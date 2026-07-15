@@ -68,7 +68,7 @@ private struct AppRootView: View {
     }
 
     private func performLaunchRecoveryTasks() async {
-        await DataDurabilityCoordinator.shared.performAppLaunch(
+        _ = await DataDurabilityCoordinator.shared.performAppLaunch(
             context: modelContext,
             isFirstLaunchAfterUpdate: firstLaunchAfterUpdate,
             recoveryContext: recoveryContext

@@ -23,6 +23,7 @@ struct AccountView: View {
     let recoveryContext: PersistenceRecoveryContext?
 
     @Environment(\.modelContext) private var modelContext
+    @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator
     @Query private var localProjects: [StoryProject]
     @Query private var localGenerations: [GenerationOutput]
 
@@ -33,7 +34,8 @@ struct AccountView: View {
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
         entitlementService: any StoreKitEntitlementServiceProtocol = StoreKitEntitlementService.shared,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
-        recoveryContext: PersistenceRecoveryContext? = nil
+        recoveryContext: PersistenceRecoveryContext? = nil,
+        durabilityCoordinator: DataDurabilityCoordinator = .shared
     ) {
         self.authService = authService
         self.syncService = syncService
@@ -42,6 +44,7 @@ struct AccountView: View {
         self.entitlementService = entitlementService
         self.creditStateService = creditStateService
         self.recoveryContext = recoveryContext
+        _durabilityCoordinator = ObservedObject(wrappedValue: durabilityCoordinator)
     }
 
     @State private var authState: AuthState = .unknown
@@ -50,10 +53,8 @@ struct AccountView: View {
     @State private var profileBootstrapWarning: String?
 
     // MARK: Sync state
-    @State private var isSyncing = false
-    @State private var isRestoringFromCloud = false
-    @State private var syncError: String?
-    @State private var lastSyncMessage: String?
+    @State private var localRecoveryMessage: String?
+    @State private var localRecoveryError: String?
 
     // MARK: Entitlement state
     @State private var entitlementState: StoreKitEntitlementState = .freeTier()
@@ -164,7 +165,7 @@ struct AccountView: View {
             } label: {
                 Label("Sign Out", systemImage: "person.badge.minus")
             }
-            .disabled(isWorking)
+            .disabled(isWorking || durabilityCoordinator.isRunning)
         }
         .padding(.vertical, 4)
     }
@@ -189,7 +190,7 @@ struct AccountView: View {
                 .foregroundColor(Color(UIColor.systemBackground))
                 .cornerRadius(8)
             }
-            .disabled(isWorking)
+            .disabled(isWorking || durabilityCoordinator.isRunning)
             .buttonStyle(.plain)
         } else {
             Text("Configure backend to enable Sign in with Apple.")
@@ -408,13 +409,18 @@ struct AccountView: View {
                 } label: {
                     Label("Restore Latest Local Project Backup", systemImage: "clock.arrow.circlepath")
                 }
-                .disabled(isSyncing || isWorking)
+                .disabled(durabilityCoordinator.isRunning || isWorking)
                 Button {
                     restoreOutputsFromLocalBackup()
                 } label: {
                     Label("Restore Outputs from Local Backup", systemImage: "externaldrive.badge.timemachine")
                 }
-                .disabled(isSyncing || isWorking)
+                .disabled(durabilityCoordinator.isRunning || isWorking)
+                if let localRecoveryError {
+                    Text(localRecoveryError).font(.caption).foregroundStyle(.red)
+                } else if let localRecoveryMessage {
+                    Text(localRecoveryMessage).font(.caption).foregroundStyle(.secondary)
+                }
             }
             HStack {
                 Text("Local projects")
@@ -474,39 +480,39 @@ struct AccountView: View {
                     Task { await attemptSyncEverything() }
                 } label: {
                     Label(
-                        isSyncing ? "Syncing…" : "Sync Everything",
-                        systemImage: isSyncing ? "arrow.trianglehead.2.clockwise" : "arrow.triangle.2.circlepath"
+                        durabilityCoordinator.isRunning ? "Syncing…" : "Sync Everything",
+                        systemImage: durabilityCoordinator.isRunning ? "arrow.trianglehead.2.clockwise" : "arrow.triangle.2.circlepath"
                     )
                 }
-                .disabled(isSyncing || !authState.isSignedIn)
+                .disabled(durabilityCoordinator.isRunning || !authState.isSignedIn)
 
                 Button {
                     Task { await attemptSync() }
                 } label: {
                     Label("Sync Outputs", systemImage: "square.and.arrow.up")
                 }
-                .disabled(isSyncing || !authState.isSignedIn)
+                .disabled(durabilityCoordinator.isRunning || !authState.isSignedIn)
 
                 Button {
                     Task { await attemptRestoreFromCloud() }
                 } label: {
                     Label("Restore Everything From Cloud", systemImage: "icloud.and.arrow.down")
                 }
-                .disabled(isSyncing || !authState.isSignedIn)
+                .disabled(durabilityCoordinator.isRunning || !authState.isSignedIn)
 
                 Button {
                     Task { await attemptRestoreDeletedProjectsFromCloud() }
                 } label: {
                     Label("Restore Deleted Cloud Projects", systemImage: "trash.circle")
                 }
-                .disabled(isSyncing || !authState.isSignedIn)
+                .disabled(durabilityCoordinator.isRunning || !authState.isSignedIn)
 
                 Button {
                     Task { await attemptRefreshSession() }
                 } label: {
                     Label("Refresh Session", systemImage: "arrow.clockwise")
                 }
-                .disabled(isSyncing || !authState.isSignedIn)
+                .disabled(durabilityCoordinator.isRunning || !authState.isSignedIn)
 
                 if !authState.isSignedIn {
                     Text("Sign in to sync data between devices.")
@@ -514,15 +520,13 @@ struct AccountView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if let syncError {
-                    Text(syncError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-                if let lastSyncMessage {
-                    Text(lastSyncMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                switch durabilityCoordinator.operationState {
+                case .succeeded(_, let message):
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                case .failed(_, let message):
+                    Text(message).font(.caption).foregroundStyle(.red)
+                case .idle, .running:
+                    EmptyView()
                 }
             }
             .padding(.vertical, 4)
@@ -531,18 +535,18 @@ struct AccountView: View {
 
     @ViewBuilder
     private var syncStatusRow: some View {
-        if isSyncing {
+        if case .running(let kind) = durabilityCoordinator.operationState {
             HStack(spacing: 8) {
                 ProgressView()
-                Text(isRestoringFromCloud ? "Restoring…" : "Syncing outputs…")
+                Text(kind.progressMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        } else if syncError != nil {
+        } else if case .failed = durabilityCoordinator.operationState {
             Label("Sync failed", systemImage: "exclamationmark.triangle.fill")
                 .font(.caption)
                 .foregroundStyle(.red)
-        } else if lastSyncMessage != nil {
+        } else if case .succeeded = durabilityCoordinator.operationState {
             Label("Synced", systemImage: "checkmark.circle.fill")
                 .font(.caption)
                 .foregroundStyle(CathedralTheme.Colors.accent)
@@ -631,26 +635,28 @@ struct AccountView: View {
     }
 
     private func restoreProjectsFromLocalBackup() {
-        syncError = nil
+        localRecoveryError = nil
         do {
             _ = try LocalProjectBackupService.shared.restoreLatestProject(into: modelContext)
             let formatter = DateFormatter()
             formatter.timeStyle = .short
-            lastSyncMessage = "Local project backup restored at \(formatter.string(from: Date()))."
+            localRecoveryMessage = "Local project backup restored at \(formatter.string(from: Date()))."
         } catch {
-            syncError = (error as? LocalProjectBackupError)?.errorDescription ?? error.localizedDescription
+            localRecoveryMessage = nil
+            localRecoveryError = (error as? LocalProjectBackupError)?.errorDescription ?? error.localizedDescription
         }
     }
 
     private func restoreOutputsFromLocalBackup() {
-        syncError = nil
+        localRecoveryError = nil
         do {
             let restoredCount = try LocalGenerationOutputBackupService.shared.restoreLatestOutputs(into: modelContext)
-            lastSyncMessage = restoredCount == 1
+            localRecoveryMessage = restoredCount == 1
                 ? "Restored 1 generated output from local backup."
                 : "Restored \(restoredCount) generated outputs from local backup."
         } catch {
-            syncError = (error as? LocalGenerationOutputBackupError)?.errorDescription ?? error.localizedDescription
+            localRecoveryMessage = nil
+            localRecoveryError = (error as? LocalGenerationOutputBackupError)?.errorDescription ?? error.localizedDescription
         }
     }
 
@@ -701,16 +707,7 @@ struct AccountView: View {
             try await authService.signInWithApple()
             authState = authService.authState
             await attemptProfileBootstrap()
-            try? await ProjectCloudSyncService.shared.syncAllProjects(in: modelContext)
-            do {
-                try await syncService.pullOutputs(into: modelContext)
-                let formatter = DateFormatter()
-                formatter.timeStyle = .short
-                lastSyncMessage = "Last synced at \(formatter.string(from: Date()))"
-                syncError = nil
-            } catch {
-                syncError = userFacingSyncErrorMessage(error)
-            }
+            _ = await durabilityCoordinator.performSignInSync(context: modelContext)
             // Fetch backend-authoritative credit balance after sign-in.
             await refreshBackendCreditState()
         } catch AuthServiceError.cancelled {
@@ -728,151 +725,35 @@ struct AccountView: View {
         do {
             try await authService.signOut()
             authState = authService.authState
+            durabilityCoordinator.performSignOut(context: modelContext)
         } catch {
             actionError = (error as? AuthServiceError)?.errorDescription ?? error.localizedDescription
         }
     }
 
     private func attemptSync() async {
-        guard authState.isSignedIn else {
-            syncError = GenerationOutputSyncError.notSignedIn.errorDescription
-            return
-        }
-        isSyncing = true
-        syncError = nil
-        lastSyncMessage = nil
-        defer { isSyncing = false }
-        do {
-            try await syncService.syncAll(in: modelContext)
-            let formatter = DateFormatter()
-            formatter.timeStyle = .short
-            lastSyncMessage = "Last synced at \(formatter.string(from: Date()))"
-        } catch {
-            syncError = userFacingSyncErrorMessage(error)
-        }
+        guard authState.isSignedIn else { return }
+        _ = await durabilityCoordinator.performOutputSync(context: modelContext)
     }
 
     private func attemptSyncEverything() async {
-        guard authState.isSignedIn else {
-            syncError = GenerationOutputSyncError.notSignedIn.errorDescription
-            return
-        }
-        isSyncing = true
-        syncError = nil
-        lastSyncMessage = nil
-        defer { isSyncing = false }
-        await DataDurabilityCoordinator.shared.performManualSyncAll(context: modelContext)
-        if let err = DataDurabilityCoordinator.shared.lastSyncError {
-            syncError = userFacingSyncErrorMessage(err)
-        } else {
-            let formatter = DateFormatter()
-            formatter.timeStyle = .short
-            lastSyncMessage = "All data synced at \(formatter.string(from: Date()))"
-        }
+        guard authState.isSignedIn else { return }
+        _ = await durabilityCoordinator.performManualSyncAll(context: modelContext)
     }
 
     private func attemptRestoreFromCloud() async {
-        guard authState.isSignedIn else {
-            syncError = GenerationOutputSyncError.notSignedIn.errorDescription
-            return
-        }
-        isSyncing = true
-        isRestoringFromCloud = true
-        syncError = nil
-        lastSyncMessage = nil
-        defer {
-            isSyncing = false
-            isRestoringFromCloud = false
-        }
-        do {
-            let report = try await ProjectCloudSyncService.shared.restoreAllProjects(into: modelContext)
-            try await syncService.pullOutputs(into: modelContext)
-            let formatter = DateFormatter()
-            formatter.timeStyle = .short
-            lastSyncMessage = "\(report.summaryMessage) (\(formatter.string(from: Date())))"
-        } catch let error as ProjectCloudSyncError {
-            switch error {
-            case .restoreAlreadyInProgress:
-                syncError = error.errorDescription
-            case .saveFailed, .duplicateChildIDsDetected:
-                syncError = (error.errorDescription ?? error.localizedDescription) + " Restore failed before all changes were applied."
-            default:
-                syncError = userFacingSyncErrorMessage(error)
-            }
-        } catch {
-            syncError = userFacingSyncErrorMessage(error)
-        }
+        guard authState.isSignedIn else { return }
+        _ = await durabilityCoordinator.performCloudRestore(context: modelContext)
     }
 
     private func attemptRestoreDeletedProjectsFromCloud() async {
-        guard authState.isSignedIn else {
-            syncError = GenerationOutputSyncError.notSignedIn.errorDescription
-            return
-        }
-        isSyncing = true
-        isRestoringFromCloud = true
-        syncError = nil
-        lastSyncMessage = nil
-        defer {
-            isSyncing = false
-            isRestoringFromCloud = false
-        }
-        do {
-            let report = try await ProjectCloudSyncService.shared.restoreAllProjects(
-                into: modelContext,
-                includeTombstoned: true
-            )
-            let formatter = DateFormatter()
-            formatter.timeStyle = .short
-            lastSyncMessage = "Restored deleted cloud projects: \(report.summaryMessage) (\(formatter.string(from: Date())))"
-        } catch let error as ProjectCloudSyncError {
-            switch error {
-            case .restoreAlreadyInProgress:
-                syncError = error.errorDescription
-            case .saveFailed, .duplicateChildIDsDetected:
-                syncError = (error.errorDescription ?? error.localizedDescription) + " Restore failed before all changes were applied."
-            default:
-                syncError = userFacingSyncErrorMessage(error)
-            }
-        } catch {
-            syncError = userFacingSyncErrorMessage(error)
-        }
+        guard authState.isSignedIn else { return }
+        _ = await durabilityCoordinator.performCloudRestore(context: modelContext, includeDeletedProjects: true)
     }
 
     private func attemptRefreshSession() async {
         guard authState.isSignedIn else { return }
-        isSyncing = true
-        syncError = nil
-        lastSyncMessage = nil
-        defer { isSyncing = false }
-        do {
-            try await authService.refreshSession()
-            lastSyncMessage = "Session refreshed."
-        } catch {
-            syncError = userFacingSyncErrorMessage(error)
-        }
-    }
-
-    private func userFacingSyncErrorMessage(_ error: Error) -> String {
-        if AuthSessionResolver.isSessionExpiredError(error) {
-            return "Session expired. Sign in again to continue syncing."
-        }
-        let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        if message.localizedCaseInsensitiveContains("jwt expired")
-            || message.localizedCaseInsensitiveContains("pgrst303")
-            || message.localizedCaseInsensitiveContains("session expired") {
-            return "Session expired. Sign in again to continue syncing."
-        }
-        return message
-    }
-
-    private func userFacingSyncErrorMessage(_ message: String) -> String {
-        if message.localizedCaseInsensitiveContains("jwt expired")
-            || message.localizedCaseInsensitiveContains("pgrst303")
-            || message.localizedCaseInsensitiveContains("session expired") {
-            return "Session expired. Sign in again to continue syncing."
-        }
-        return message
+        _ = await durabilityCoordinator.performSessionRefresh()
     }
 
     /// Attempts to bootstrap a profile row after sign-in.

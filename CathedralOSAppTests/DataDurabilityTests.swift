@@ -67,6 +67,8 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     var syncAllCalled = false
     var syncAllError: Error?
     var restoreCalled = false
+    var restoreCallCount = 0
+    var restoreDelayNanoseconds: UInt64 = 0
     var restoreResult = ProjectRestoreReport(
         projects: [],
         localProjectCountBefore: 0,
@@ -89,6 +91,10 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
         restoreCalled = true
+        restoreCallCount += 1
+        if restoreDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: restoreDelayNanoseconds)
+        }
         return restoreResult
     }
 }
@@ -425,6 +431,58 @@ final class DataDurabilityTests: XCTestCase {
 
         XCTAssertTrue(projectSpy.restoreCalled)
         XCTAssertNotNil(coordinator.lastSyncError)
+    }
+
+    func testOverlappingManualOperationsAwaitAndShareOneResult() async throws {
+        let context = try makeInMemoryContext()
+        let projectSpy = SpyProjectSyncService()
+        projectSpy.restoreDelayNanoseconds = 100_000_000
+        projectSpy.restoreResult = ProjectRestoreReport(
+            projects: [],
+            localProjectCountBefore: 4,
+            cloudProjectCountBefore: 7,
+            insertedCount: 0,
+            updatedCount: 4,
+            skippedTombstonedCount: 3,
+            duplicateWarnings: []
+        )
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSpy,
+            outputSyncService: SpyOutputSyncService()
+        )
+
+        let automatic = Task { await coordinator.performManualSyncAll(context: context) }
+        while !coordinator.isRunning { await Task.yield() }
+        let manualRestore = Task { await coordinator.performCloudRestore(context: context) }
+
+        let automaticResult = await automatic.value
+        let manualResult = await manualRestore.value
+
+        XCTAssertEqual(projectSpy.restoreCallCount, 1, "Overlapping operations must share the in-flight task.")
+        XCTAssertFalse(automaticResult.joinedExistingOperation)
+        XCTAssertTrue(manualResult.joinedExistingOperation)
+        XCTAssertEqual(manualResult.kind, automaticResult.kind)
+        XCTAssertEqual(manualResult.message, automaticResult.message)
+        XCTAssertNil(manualResult.errorMessage)
+    }
+
+    func testTerminalSyncStateAtomicallyContainsSuccessOrFailure() async throws {
+        let context = try makeInMemoryContext()
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: SpyProjectSyncService(),
+            outputSyncService: SpyOutputSyncService()
+        )
+
+        let result = await coordinator.performCloudRestore(context: context)
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertNil(coordinator.lastSyncError)
+        guard case .succeeded(.restoreAll, let message) = coordinator.operationState else {
+            return XCTFail("Expected one authoritative success state, got \(coordinator.operationState)")
+        }
+        XCTAssertTrue(message.contains("Projects restored"))
     }
 
     func testPendingTombstoneStorePersistsAndDeduplicatesDeleteIntent() throws {

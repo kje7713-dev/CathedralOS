@@ -644,70 +644,34 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertTrue(updateReport.summaryMessage.contains("Projects updated: 1"), updateReport.summaryMessage)
     }
 
-    func testRestoreCannotRunConcurrentlyThrowsRestoreAlreadyInProgress() async throws {
-        let session = makeSession()
-        let authService = MockProjectCloudSyncAuthService(
-            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
-            accessToken: "user-jwt-token"
+    @MainActor
+    func testRestoreOperationGateCoalescesCallersAndReturnsSameReport() async throws {
+        let gate = ProjectRestoreOperationGate()
+        var invocationCount = 0
+        let expected = ProjectRestoreReport(
+            projects: [],
+            localProjectCountBefore: 4,
+            cloudProjectCountBefore: 7,
+            insertedCount: 0,
+            updatedCount: 4,
+            skippedTombstonedCount: 3,
+            duplicateWarnings: []
         )
-        let localProjectID = UUID()
-        let project = StoryProject(name: "Concurrent Story")
-        let payload = ProjectSchemaTemplateBuilder.build(project: project)
-        let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
-
-        // Semaphores coordinate blocking the URLProtocol background thread until we need it.
-        let requestEntered = DispatchSemaphore(value: 0)
-        let requestPermitted = DispatchSemaphore(value: 0)
-
-        ProjectCloudSyncURLProtocol.requestHandler = { request in
-            requestEntered.signal()      // Signal: first request is in flight.
-            requestPermitted.wait()      // Block background thread until permitted.
-            let response = HTTPURLResponse(
-                url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil
-            )!
-            return (response, responseData)
+        let operation: @MainActor () async throws -> ProjectRestoreReport = {
+            invocationCount += 1
+            try await Task.sleep(nanoseconds: 100_000_000)
+            return expected
         }
 
-        let service = ProjectCloudSyncService(
-            authService: authService,
-            session: session,
-            configuration: .makeForTesting()
-        )
-        let context = ModelContext(try makeProjectContainer())
+        let firstTask = Task { @MainActor in try await gate.run(operation) }
+        while invocationCount == 0 { await Task.yield() }
+        let secondTask = Task { @MainActor in try await gate.run(operation) }
 
-        // Start first restore; it will suspend at the network gate.
-        let firstTask = Task { @MainActor in
-            try await service.restoreAllProjects(into: context)
-        }
+        let firstReport = try await firstTask.value
+        let secondReport = try await secondTask.value
 
-        // Wait until the first network request is in flight (blocking on its background thread).
-        await withCheckedContinuation { cont in
-            DispatchQueue.global().async {
-                requestEntered.wait()
-                cont.resume()
-            }
-        }
-
-        // isRestoringProjects is now true; second call must throw restoreAlreadyInProgress.
-        var secondError: Error?
-        do {
-            _ = try await service.restoreAllProjects(into: context)
-            XCTFail("Expected restoreAlreadyInProgress to be thrown")
-        } catch {
-            secondError = error
-        }
-
-        // Unblock the first restore and wait for it to finish.
-        requestPermitted.signal()
-        _ = try await firstTask.value
-
-        guard let cloudError = secondError as? ProjectCloudSyncError,
-              case .restoreAlreadyInProgress = cloudError else {
-            XCTFail("Expected restoreAlreadyInProgress, got \(String(describing: secondError))")
-            return
-        }
-
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 1)
+        XCTAssertEqual(invocationCount, 1)
+        XCTAssertEqual(firstReport.summaryMessage, secondReport.summaryMessage)
     }
 
     func testRestoreFailureSurfacesProjectCloudSyncErrorNotCrash() async throws {

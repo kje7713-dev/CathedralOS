@@ -107,6 +107,32 @@ struct ProjectRestoreReport {
     }
 }
 
+/// Single-flight gate for project restores. Concurrent callers await the same task
+/// and receive the same report instead of treating overlap as a failure.
+@MainActor
+final class ProjectRestoreOperationGate {
+    private var activeTask: Task<ProjectRestoreReport, Error>?
+
+    func run(
+        _ operation: @escaping @MainActor () async throws -> ProjectRestoreReport
+    ) async throws -> ProjectRestoreReport {
+        if let activeTask {
+            return try await activeTask.value
+        }
+
+        let task = Task { @MainActor in try await operation() }
+        activeTask = task
+        do {
+            let report = try await task.value
+            activeTask = nil
+            return report
+        } catch {
+            activeTask = nil
+            throw error
+        }
+    }
+}
+
 final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
 
     static let shared = ProjectCloudSyncService()
@@ -118,8 +144,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     private let tombstoneService: any SyncTombstoneServiceProtocol
     private let logger = Logger(subsystem: "CathedralOS", category: "ProjectSync")
 
-    /// Guards against concurrent restore calls; isolated to @MainActor.
-    @MainActor private var isRestoringProjects = false
+    @MainActor private lazy var restoreOperationGate = ProjectRestoreOperationGate()
 
     init(
         authService: AuthService = BackendAuthService.shared,
@@ -203,13 +228,13 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
 
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
-        // Phase 0: prevent concurrent restores.
-        guard !isRestoringProjects else {
-            logger.info("Restore already in progress; ignoring duplicate call.")
-            throw ProjectCloudSyncError.restoreAlreadyInProgress
+        try await restoreOperationGate.run {
+            try await self.restoreProjects(into: context, includeTombstoned: includeTombstoned)
         }
-        isRestoringProjects = true
-        defer { isRestoringProjects = false }
+    }
+
+    @MainActor
+    private func restoreProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
 
         // Phase A: fetch and decode cloud payloads into plain DTOs.
         let (client, _, accessToken) = try await validatedClientAndSession()
