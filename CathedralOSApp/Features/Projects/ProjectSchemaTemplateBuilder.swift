@@ -1062,6 +1062,7 @@ struct LocalGenerationOutputBackupPayload: Codable {
     let createdAt: Date
     let updatedAt: Date
     let cloudGenerationOutputID: String?
+    let cloudOwnerUserID: String?
 
     init(output: GenerationOutput) {
         self.localOutputID = output.id.uuidString
@@ -1081,6 +1082,7 @@ struct LocalGenerationOutputBackupPayload: Codable {
         self.createdAt = output.createdAt
         self.updatedAt = output.updatedAt
         self.cloudGenerationOutputID = output.cloudGenerationOutputID.nilIfEmpty
+        self.cloudOwnerUserID = output.cloudOwnerUserID.nilIfEmpty
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1101,6 +1103,7 @@ struct LocalGenerationOutputBackupPayload: Codable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case cloudGenerationOutputID = "cloud_generation_output_id"
+        case cloudOwnerUserID = "cloud_owner_user_id"
     }
 }
 
@@ -1274,6 +1277,7 @@ final class LocalGenerationOutputBackupService {
         output.createdAt = payload.createdAt
         output.updatedAt = payload.updatedAt
         output.cloudGenerationOutputID = payload.cloudGenerationOutputID ?? ""
+        output.cloudOwnerUserID = payload.cloudOwnerUserID ?? ""
         output.lastSyncedAt = payload.syncStatus == SyncStatus.synced.rawValue ? payload.updatedAt : output.lastSyncedAt
     }
 

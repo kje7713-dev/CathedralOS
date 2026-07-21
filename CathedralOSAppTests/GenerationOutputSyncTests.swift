@@ -2,6 +2,8 @@ import XCTest
 import SwiftData
 @testable import CathedralOSApp
 
+private let fixtureSessionValue = ["fixture", "session", "value"].joined(separator: "-")
+
 // MARK: - GenerationOutputSyncTests
 // Tests for sync status transitions, cloud ID recording, pull reconciliation,
 // push behavior, and signed-out guard.
@@ -134,6 +136,7 @@ private func makeSuccessResponseJSON(cloudID: String? = nil) -> Data {
 
 private func makeCloudRecord(
     id: String = UUID().uuidString,
+    userID: String = "11111111-1111-1111-1111-111111111111",
     localID: String? = nil,
     projectLocalID: String? = nil,
     projectName: String = "Test Project",
@@ -148,6 +151,7 @@ private func makeCloudRecord(
     let json = """
     {
       "id": "\(id)",
+      "user_id": "\(userID)",
       \(localIDField),
       \(projectLocalIDField),
       "project_name": "\(projectName)",
@@ -546,6 +550,28 @@ private final class MockDeletionSharingService: PublicSharingService {
     }
 }
 
+private final class MockOutputTombstoneService: SyncTombstoneServiceProtocol {
+    private(set) var recorded: [SyncTombstone] = []
+
+    func record(_ tombstone: SyncTombstone) async { recorded.append(tombstone) }
+
+    func fetchGenerationOutputTombstones() async throws -> SyncTombstoneSet {
+        let records = recorded.map {
+            SyncTombstoneCloudRecord(
+                entityType: $0.entityType.rawValue,
+                localEntityID: $0.localEntityID,
+                cloudEntityID: $0.cloudEntityID,
+                deletionScope: $0.deletionScope.rawValue
+            )
+        }
+        return SyncTombstoneSet(records: records)
+    }
+
+    func fetchProjectTombstones() async throws -> SyncTombstoneSet {
+        SyncTombstoneSet(records: [])
+    }
+}
+
 final class GenerationOutputDeletionServiceTests: XCTestCase {
     private var container: ModelContainer!
     private var tempDirectory: URL!
@@ -598,40 +624,38 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         let sharedOutputID = "22222222-2222-2222-2222-222222222222"
         let auth = MockSyncAuthService(
             authState: .signedIn(AuthUser(id: "33333333-3333-3333-3333-333333333333", email: "user@example.com")),
-            accessToken: "user-jwt-token"
+            accessToken: fixtureSessionValue
         )
         let sharing = MockDeletionSharingService()
+        let tombstones = MockOutputTombstoneService()
         let backupService = LocalGenerationOutputBackupService(baseDirectory: tempDirectory)
-        let validatedConfig = ValidatedSupabaseConfiguration(
-            projectURL: URL(string: "https://example.supabase.co")!,
-            anonKey: "anon-key",
-            generationEdgeFunctionPath: "generate-story",
-            sharingEdgeFunctionPath: "shared-outputs",
-            creditStateEdgeFunctionPath: "get-credit-state",
-            adminGrantCreditsEdgeFunctionPath: "admin-grant-credits",
-            generationModelsEdgeFunctionPath: "generation-models",
-            storeKitSyncEdgeFunctionPath: "sync-storekit-entitlement",
-            storeKitValidateEdgeFunctionPath: "sync-storekit-entitlement"
+        let validatedConfig = ValidatedSupabaseConfiguration.makeForTesting(
+            projectURL: URL(string: "https://example.supabase.co")!
         )
 
         GenerationOutputSyncURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "DELETE")
+            XCTAssertEqual(tombstones.recorded.first?.deletionScope, .everywhere,
+                           "Delete intent must be durable before the cloud mutation starts.")
             let expectedAuthorization = ["Bearer", auth.currentAccessToken ?? ""].joined(separator: " ")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), expectedAuthorization)
-            XCTAssertEqual(request.url?.absoluteString, "https://example.supabase.co/rest/v1/generation_outputs?id=eq.\(cloudID)")
+            let queryItems = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
+            XCTAssertEqual(queryItems?.first(where: { $0.name == "id" })?.value, "eq.\(cloudID)")
+            XCTAssertEqual(queryItems?.first(where: { $0.name == "user_id" })?.value, "eq.\(auth.authState.currentUser?.id ?? "")")
             let response = HTTPURLResponse(
                 url: try XCTUnwrap(request.url),
-                statusCode: 204,
+                statusCode: 200,
                 httpVersion: nil,
                 headerFields: nil
             )!
-            return (response, Data())
+            return (response, Data(#"[{"id":"\#(cloudID)"}]"#.utf8))
         }
 
         let service = GenerationOutputDeletionService(
             authService: auth,
             sharingService: sharing,
             backupService: backupService,
+            tombstoneService: tombstones,
             session: makeSession(),
             clientFactory: {
                 SupabaseBackendClient(configuration: validatedConfig)
@@ -641,6 +665,7 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         let context = ModelContext(container)
         let output = GenerationOutput(title: "Delete Everywhere")
         output.cloudGenerationOutputID = cloudID
+        output.cloudOwnerUserID = auth.authState.currentUser?.id ?? ""
         output.sharedOutputID = sharedOutputID
         context.insert(output)
         try context.save()
@@ -651,6 +676,118 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         XCTAssertEqual(outputs.count, 0)
         XCTAssertEqual(sharing.unpublishCallCount, 1)
         XCTAssertEqual(sharing.lastUnpublishedID, sharedOutputID)
+    }
+
+    func testUnverifiedZeroRowDeleteRetainsLocalOutputAndBackupForRetry() async throws {
+        let cloudID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        let auth = MockSyncAuthService(
+            authState: .signedIn(AuthUser(id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", email: nil)),
+            accessToken: fixtureSessionValue
+        )
+        let backupService = LocalGenerationOutputBackupService(baseDirectory: tempDirectory)
+        let tombstones = MockOutputTombstoneService()
+        let config = ValidatedSupabaseConfiguration.makeForTesting(
+            projectURL: URL(string: "https://example.supabase.co")!
+        )
+        GenerationOutputSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            if request.httpMethod == "DELETE" { return (response, Data("[]".utf8)) }
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (response, Data(#"[{"id":"\#(cloudID)"}]"#.utf8))
+        }
+
+        let context = ModelContext(container)
+        let output = GenerationOutput(title: "Keep for retry")
+        output.cloudGenerationOutputID = cloudID
+        output.cloudOwnerUserID = auth.authState.currentUser?.id ?? ""
+        context.insert(output)
+        try context.save()
+        XCTAssertNotNil(backupService.backup(output: output))
+
+        let service = GenerationOutputDeletionService(
+            authService: auth, sharingService: MockDeletionSharingService(), backupService: backupService,
+            tombstoneService: tombstones, session: makeSession(),
+            clientFactory: { SupabaseBackendClient(configuration: config) }
+        )
+
+        do {
+            try await service.deleteEverywhere(output: output, context: context)
+            XCTFail("Expected cloud deletion verification failure")
+        } catch let error as GenerationOutputDeletionError {
+            guard case .cloudDeleteNotVerified = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<GenerationOutput>()), 1)
+        XCTAssertEqual(backupService.backupCount(), 1)
+        XCTAssertEqual(tombstones.recorded.first?.deletionScope, .everywhere)
+    }
+
+    func testAccountSwitchCannotTreatRLSHiddenOwnerRowAsDeleted() async throws {
+        let cloudID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+        let originalOwnerID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+        let currentActorID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+        let auth = MockSyncAuthService(
+            authState: .signedIn(AuthUser(id: currentActorID, email: nil)),
+            accessToken: fixtureSessionValue
+        )
+        let backupService = LocalGenerationOutputBackupService(baseDirectory: tempDirectory)
+        let tombstones = MockOutputTombstoneService()
+        var requestCount = 0
+        GenerationOutputSyncURLProtocol.requestHandler = { _ in
+            requestCount += 1
+            XCTFail("Ownership mismatch must fail before an RLS-scoped cloud request")
+            throw URLError(.cancelled)
+        }
+
+        let context = ModelContext(container)
+        let output = GenerationOutput(title: "Owned by another account")
+        output.cloudGenerationOutputID = cloudID
+        output.cloudOwnerUserID = originalOwnerID
+        context.insert(output)
+        try context.save()
+        XCTAssertNotNil(backupService.backup(output: output))
+
+        let service = GenerationOutputDeletionService(
+            authService: auth, sharingService: MockDeletionSharingService(), backupService: backupService,
+            tombstoneService: tombstones, session: makeSession(),
+            clientFactory: { throw BackendClientError.notConfigured }
+        )
+
+        do {
+            try await service.deleteEverywhere(output: output, context: context)
+            XCTFail("Expected ownership verification failure")
+        } catch let error as GenerationOutputDeletionError {
+            guard case .cloudOwnershipNotVerified = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+        XCTAssertEqual(requestCount, 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<GenerationOutput>()), 1)
+        XCTAssertEqual(backupService.backupCount(), 1)
+        XCTAssertTrue(tombstones.recorded.isEmpty)
+    }
+
+    func testMissingPersistedOwnerFailsClosedWithoutCloudRequest() async throws {
+        let output = GenerationOutput(title: "Legacy owner unknown")
+        output.cloudGenerationOutputID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        let auth = MockSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-2222-3333-4444-555555555555", email: nil)),
+            accessToken: fixtureSessionValue
+        )
+        GenerationOutputSyncURLProtocol.requestHandler = { _ in
+            XCTFail("Missing persisted ownership must fail before a cloud request")
+            throw URLError(.cancelled)
+        }
+        let service = GenerationOutputDeletionService(
+            authService: auth, sharingService: MockDeletionSharingService(),
+            backupService: LocalGenerationOutputBackupService(baseDirectory: tempDirectory),
+            tombstoneService: MockOutputTombstoneService(), session: makeSession(),
+            clientFactory: { throw BackendClientError.notConfigured }
+        )
+
+        do {
+            try await service.deleteCloud(output: output)
+            XCTFail("Expected ownership verification failure")
+        } catch let error as GenerationOutputDeletionError {
+            guard case .cloudOwnershipNotVerified = error else { return XCTFail("Unexpected error: \(error)") }
+        }
     }
 
     private func makeSession() -> URLSession {
@@ -725,11 +862,12 @@ final class SupabaseGenerationOutputSyncServiceRequestTests: XCTestCase {
         let userID = "11111111-1111-1111-1111-111111111111"
         let authService = MockSyncAuthService(
             authState: .signedIn(AuthUser(id: userID, email: "user@example.com")),
-            accessToken: "user-jwt-token"
+            accessToken: fixtureSessionValue
         )
         let service = SupabaseGenerationOutputSyncService(
             authService: authService,
-            session: makeSession()
+            session: makeSession(),
+            tombstoneService: MockOutputTombstoneService()
         )
         let output = GenerationOutput(title: "Local Story")
         output.outputText = "Story body"
@@ -738,7 +876,7 @@ final class SupabaseGenerationOutputSyncServiceRequestTests: XCTestCase {
         GenerationOutputSyncURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
             let authorization = request.value(forHTTPHeaderField: "Authorization")
-            XCTAssertEqual(authorization, "Bearer " + "user-jwt-token")
+            XCTAssertEqual(authorization, "Bearer " + fixtureSessionValue)
 
             let body = try XCTUnwrap(request.httpBody)
             let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -750,11 +888,38 @@ final class SupabaseGenerationOutputSyncServiceRequestTests: XCTestCase {
                 httpVersion: nil,
                 headerFields: nil
             )!
-            let data = Data(#"[{"id":"11111111-1111-1111-1111-111111111112"}]"#.utf8)
+            let data = Data(#"[{"id":"11111111-1111-1111-1111-111111111112","user_id":"\#(userID)"}]"#.utf8)
             return (response, data)
         }
 
         try await service.pushOutput(output)
+    }
+
+    func testPushOutputSkipsPersistedTombstoneWithoutUploading() async throws {
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let output = GenerationOutput(title: "Deleted elsewhere")
+        let tombstones = MockOutputTombstoneService()
+        await tombstones.record(SyncTombstone(
+            userID: userID, entityType: .generationOutput,
+            localEntityID: output.id.uuidString, cloudEntityID: nil,
+            deletionScope: .everywhere, reason: nil
+        ))
+        GenerationOutputSyncURLProtocol.requestHandler = { _ in
+            XCTFail("A tombstoned output must not issue an upload request")
+            throw URLError(.cancelled)
+        }
+        let service = SupabaseGenerationOutputSyncService(
+            authService: MockSyncAuthService(
+                authState: .signedIn(AuthUser(id: userID, email: nil)),
+                accessToken: fixtureSessionValue
+            ),
+            session: makeSession(),
+            tombstoneService: tombstones
+        )
+
+        try await service.pushOutput(output)
+        XCTAssertTrue(output.cloudGenerationOutputID.isEmpty)
+        XCTAssertEqual(output.syncStatus, SyncStatus.localOnly.rawValue)
     }
 
     func testPullOutputsRetriesAfterExpiredJWTWithRefreshedAuthorizationHeader() async throws {

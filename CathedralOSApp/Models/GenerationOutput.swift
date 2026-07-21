@@ -164,6 +164,9 @@ class GenerationOutput {
     /// Supabase `generation_outputs.id` (UUID string) returned after the record is synced.
     /// Empty when the output has never been synced to the cloud.
     var cloudGenerationOutputID: String
+    /// Supabase user UUID that owns the cloud row. Empty for legacy/local-only outputs.
+    /// Cloud deletion fails closed until ownership can be established.
+    var cloudOwnerUserID: String
     /// Raw value of `SyncStatus`: "local_only" | "synced" | "pending_upload" | "pending_update" | "failed".
     var syncStatus: String
     /// Timestamp of the most-recent successful sync to/from the cloud. Nil until first sync.
@@ -224,6 +227,7 @@ class GenerationOutput {
         self.coverImageContentType = nil
         self.publishErrorMessage = nil
         self.cloudGenerationOutputID = ""
+        self.cloudOwnerUserID = ""
         self.syncStatus = SyncStatus.localOnly.rawValue
         self.lastSyncedAt = nil
         self.syncErrorMessage = nil

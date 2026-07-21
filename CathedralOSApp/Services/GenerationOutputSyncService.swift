@@ -133,6 +133,38 @@ protocol GenerationOutputSyncServiceProtocol {
     func syncAll(in context: ModelContext) async throws
 }
 
+/// Serializes output uploads and deletes across the sync and deletion services.
+/// The shared default closes the window where an in-flight upload can complete
+/// after a cloud DELETE and recreate the row.
+actor GenerationOutputCloudMutationGate {
+    static let shared = GenerationOutputCloudMutationGate()
+
+    private var isLocked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func run<T>(_ operation: () async throws -> T) async rethrows -> T {
+        await acquire()
+        defer { release() }
+        return try await operation()
+    }
+
+    private func acquire() async {
+        guard isLocked else {
+            isLocked = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    private func release() {
+        guard !waiters.isEmpty else {
+            isLocked = false
+            return
+        }
+        waiters.removeFirst().resume()
+    }
+}
+
 // MARK: - SupabaseGenerationOutputSyncService
 
 /// Production implementation — calls the Supabase REST API for `generation_outputs`.
@@ -149,16 +181,19 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     private let session: URLSession
 
     private let tombstoneService: any SyncTombstoneServiceProtocol
+    private let mutationGate: GenerationOutputCloudMutationGate
 
     init(
         authService: AuthService = BackendAuthService.shared,
         sessionProvider: SupabaseSessionProvider? = nil,
         session: URLSession = .shared,
-        tombstoneService: any SyncTombstoneServiceProtocol = SupabaseSyncTombstoneService.shared
+        tombstoneService: any SyncTombstoneServiceProtocol = SupabaseSyncTombstoneService.shared,
+        mutationGate: GenerationOutputCloudMutationGate = .shared
     ) {
         self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.session = session
         self.tombstoneService = tombstoneService
+        self.mutationGate = mutationGate
     }
 
     // MARK: - Pull
@@ -186,6 +221,17 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     // MARK: - Push
 
     func pushOutput(_ output: GenerationOutput) async throws {
+        try await mutationGate.run {
+            let tombstones = try await tombstoneService.fetchGenerationOutputTombstones()
+            guard !tombstones.isTombstoned(localID: output.id.uuidString),
+                  !tombstones.isTombstoned(cloudID: output.cloudGenerationOutputID) else {
+                return
+            }
+            try await pushUntombstonedOutput(output)
+        }
+    }
+
+    private func pushUntombstonedOutput(_ output: GenerationOutput) async throws {
         let (client, user, accessToken) = try await validatedClientAndUser()
         let url = restURL(client: client, path: "generation_outputs")
         var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
@@ -212,6 +258,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             let returned = try await fetch([GenerationOutputUploadResponse].self, request: request)
             if let cloudRecord = returned.first {
                 output.cloudGenerationOutputID = cloudRecord.id
+                output.cloudOwnerUserID = cloudRecord.userID
                 output.syncStatus  = SyncStatus.synced.rawValue
                 output.lastSyncedAt = Date()
                 output.syncErrorMessage = nil
@@ -435,6 +482,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
 
     private func applyCloudUpdate(_ record: GenerationOutputCloudRecord, to output: GenerationOutput, in context: ModelContext) {
         output.cloudGenerationOutputID = record.id
+        output.cloudOwnerUserID        = record.userID
         output.title               = record.title
         output.outputText          = record.outputText
         output.modelName           = record.modelName
@@ -470,6 +518,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             outputBudget: record.outputBudget ?? GenerationLengthMode.defaultMode.outputBudget
         )
         output.cloudGenerationOutputID = record.id
+        output.cloudOwnerUserID = record.userID
         output.visibility    = record.visibility
         output.allowRemix    = record.allowRemix
         output.createdAt     = record.createdAt
@@ -525,6 +574,8 @@ enum GenerationOutputDeletionError: Error, LocalizedError {
     case invalidCloudGenerationOutputID
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
+    case cloudDeleteNotVerified
+    case cloudOwnershipNotVerified
     case persistenceError(stage: String, error: Error)
 
     var errorDescription: String? {
@@ -545,6 +596,10 @@ enum GenerationOutputDeletionError: Error, LocalizedError {
                 return "\(base) \(message)"
             }
             return base
+        case .cloudDeleteNotVerified:
+            return "The cloud could not confirm this output was deleted. Your local copy was kept so you can retry."
+        case .cloudOwnershipNotVerified:
+            return "This output's cloud ownership could not be verified for the signed-in account. Your local copy was kept."
         case .persistenceError(let stage, let error):
             return "Could not save output deletion (\(stage)): \(error.localizedDescription)"
         }
@@ -575,6 +630,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     private let tombstoneService: any SyncTombstoneServiceProtocol
     private let session: URLSession
     private let clientFactory: () throws -> SupabaseBackendClient
+    private let mutationGate: GenerationOutputCloudMutationGate
 
     init(
         authService: any AuthService = BackendAuthService.shared,
@@ -585,7 +641,8 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         backupService: LocalGenerationOutputBackupService = .shared,
         tombstoneService: any SyncTombstoneServiceProtocol = SupabaseSyncTombstoneService.shared,
         session: URLSession = .shared,
-        clientFactory: @escaping () throws -> SupabaseBackendClient = { try SupabaseBackendClient() }
+        clientFactory: @escaping () throws -> SupabaseBackendClient = { try SupabaseBackendClient() },
+        mutationGate: GenerationOutputCloudMutationGate = .shared
     ) {
         self.authService = authService
         self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
@@ -594,6 +651,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         self.tombstoneService = tombstoneService
         self.session = session
         self.clientFactory = clientFactory
+        self.mutationGate = mutationGate
     }
 
     func deleteLocal(output: GenerationOutput, context: ModelContext) async throws {
@@ -628,11 +686,12 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     }
 
     func deleteCloud(output: GenerationOutput) async throws {
-        let sharedOutputID = output.sharedOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !sharedOutputID.isEmpty {
-            try await sharingService.unpublish(sharedOutputID: sharedOutputID)
+        try await mutationGate.run {
+            try await deleteCloudWhileSerialized(output: output)
         }
+    }
 
+    private func deleteCloudWhileSerialized(output: GenerationOutput) async throws {
         let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cloudID.isEmpty else { return }
         guard UUID(uuidString: cloudID) != nil else {
@@ -641,7 +700,12 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
 
         let accessToken: String
         do {
-            _ = try await sessionProvider.ensureSignedInUser()
+            let user = try await sessionProvider.ensureSignedInUser()
+            let ownerID = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !ownerID.isEmpty,
+                  ownerID.caseInsensitiveCompare(user.id) == .orderedSame else {
+                throw GenerationOutputDeletionError.cloudOwnershipNotVerified
+            }
             accessToken = try await sessionProvider.validAccessToken(forceRefresh: false)
         } catch let error as SupabaseSessionProviderError {
             switch error {
@@ -650,6 +714,11 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             case .sessionExpired:
                 throw GenerationOutputDeletionError.sessionExpired
             }
+        }
+
+        let sharedOutputID = output.sharedOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !sharedOutputID.isEmpty {
+            try await sharingService.unpublish(sharedOutputID: sharedOutputID)
         }
 
         let client: SupabaseBackendClient
@@ -666,13 +735,17 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
                 .appendingPathComponent("generation_outputs"),
             resolvingAgainstBaseURL: false
         )
-        components?.queryItems = [URLQueryItem(name: "id", value: "eq.\(cloudID)")]
+        components?.queryItems = [
+            URLQueryItem(name: "id", value: "eq.\(cloudID)"),
+            URLQueryItem(name: "user_id", value: "eq.\(output.cloudOwnerUserID)")
+        ]
         guard let url = components?.url else {
             throw GenerationOutputDeletionError.notConfigured
         }
 
         var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
         request.httpMethod = "DELETE"
+        request.setValue("return=representation", forHTTPHeaderField: "Prefer")
 
         let data: Data
         let response: URLResponse
@@ -696,34 +769,52 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             let message = String(data: data, encoding: .utf8)
             throw GenerationOutputDeletionError.serverError(statusCode: http.statusCode, message: message)
         }
+
+        let deleted = (try? JSONDecoder().decode([GenerationOutputDeleteResponse].self, from: data)) ?? []
+        if deleted.contains(where: { $0.id.caseInsensitiveCompare(cloudID) == .orderedSame }) {
+            return
+        }
+
+        // An empty representation is only idempotent success when an independent
+        // ownership-scoped read proves that the row is already absent.
+        var verifyComponents = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        verifyComponents?.queryItems?.append(URLQueryItem(name: "select", value: "id"))
+        guard let verifyURL = verifyComponents?.url else {
+            throw GenerationOutputDeletionError.cloudDeleteNotVerified
+        }
+        var verifyRequest = client.authorizedRequest(for: verifyURL, userAccessToken: accessToken)
+        verifyRequest.httpMethod = "GET"
+        let (verifyData, verifyResponse) = try await sessionProvider.retryOnceAfterExpiredJWT(
+            request: verifyRequest,
+            session: session
+        )
+        guard let verifyHTTP = verifyResponse as? HTTPURLResponse,
+              (200..<300).contains(verifyHTTP.statusCode),
+              let remaining = try? JSONDecoder().decode([GenerationOutputDeleteResponse].self, from: verifyData),
+              remaining.isEmpty else {
+            throw GenerationOutputDeletionError.cloudDeleteNotVerified
+        }
     }
 
     func deleteEverywhere(output: GenerationOutput, context: ModelContext) async throws {
         let outputID = output.id
         let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        try await deleteCloud(output: output)
-
-        // Resolve auth state before reading userID. When cloudID is empty, deleteCloud
-        // returns early without performing any auth check, so the state may still be
-        // .unknown for an early-launch delete. When deleteCloud did run, it calls
-        // ensureSignedInUser() internally which also resolves .unknown, but that result
-        // is already reflected in authService.authState by the time we reach here.
+        // Persist deletion intent before any cloud mutation. The pending tombstone is
+        // durable across offline failure/relaunch and every upload path checks it.
         if case .unknown = authService.authState {
             await authService.checkSession()
         }
         let userID = authService.authState.currentUser?.id
 
-        context.delete(output)
-        do {
-            try context.save()
-        } catch {
-            context.rollback()
-            throw GenerationOutputDeletionError.persistenceError(stage: "local delete after cloud delete", error: error)
+        if !cloudID.isEmpty {
+            let ownerID = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let userID, !ownerID.isEmpty,
+                  ownerID.caseInsensitiveCompare(userID) == .orderedSame else {
+                throw GenerationOutputDeletionError.cloudOwnershipNotVerified
+            }
         }
-        _ = backupService.deleteBackups(outputID: outputID)
 
-        // Write tombstone so subsequent pulls do not restore this row.
         if let userID {
             await tombstoneService.record(SyncTombstone(
                 userID: userID,
@@ -734,7 +825,23 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
                 reason: nil
             ))
         }
+
+        try await deleteCloud(output: output)
+
+        context.delete(output)
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw GenerationOutputDeletionError.persistenceError(stage: "local delete after cloud delete", error: error)
+        }
+        _ = backupService.deleteBackups(outputID: outputID)
+
     }
+}
+
+private struct GenerationOutputDeleteResponse: Decodable {
+    let id: String
 }
 
 // MARK: - StubGenerationOutputSyncService

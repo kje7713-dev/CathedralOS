@@ -270,7 +270,29 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             // decoding instead of silently treating an unverifiable delete as success.
             request.setValue("return=representation", forHTTPHeaderField: "Prefer")
 
-            _ = try await fetch([ProjectSnapshotDeleteResponse].self, request: request)
+            let deleted = try await fetch([ProjectSnapshotDeleteResponse].self, request: request)
+            if deleted.contains(where: {
+                $0.localProjectID.caseInsensitiveCompare(localProjectID) == .orderedSame
+            }) {
+                return
+            }
+            guard deleted.isEmpty else {
+                throw ProjectCloudSyncError.decodingError(ProjectSnapshotDeleteVerificationError.unverified)
+            }
+
+            // Zero affected rows are only an idempotent success when a separate,
+            // ownership-scoped read proves the snapshot is already absent.
+            var verifyComponents = components
+            verifyComponents?.queryItems?.append(URLQueryItem(name: "select", value: "id"))
+            guard let verifyURL = verifyComponents?.url else {
+                throw ProjectCloudSyncError.decodingError(ProjectSnapshotDeleteVerificationError.unverified)
+            }
+            var verifyRequest = client.authorizedRequest(for: verifyURL, userAccessToken: accessToken)
+            verifyRequest.httpMethod = "GET"
+            let remaining = try await fetch([ProjectSnapshotDeleteResponse].self, request: verifyRequest)
+            guard remaining.isEmpty else {
+                throw ProjectCloudSyncError.decodingError(ProjectSnapshotDeleteVerificationError.unverified)
+            }
         }
     }
 
@@ -1416,6 +1438,10 @@ private struct ProjectSnapshotDeleteResponse: Decodable {
     enum CodingKeys: String, CodingKey {
         case localProjectID = "local_project_id"
     }
+}
+
+private enum ProjectSnapshotDeleteVerificationError: Error {
+    case unverified
 }
 
 private struct ProjectSnapshotPresenceRow: Decodable {

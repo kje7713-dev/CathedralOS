@@ -90,6 +90,7 @@ struct GenerationOutputCloudRecord: Codable {
 
     /// Supabase-assigned UUID for the cloud row.
     let id: String
+    let userID: String
     let localGenerationId: String?
     let projectLocalID: String?
     let projectName: String
@@ -109,6 +110,7 @@ struct GenerationOutputCloudRecord: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id                  = try c.decode(String.self, forKey: .id)
+        userID              = try c.decode(String.self, forKey: .userID)
         localGenerationId   = try c.decodeIfPresent(String.self, forKey: .localGenerationId)
         projectLocalID      = try c.decodeIfPresent(String.self, forKey: .projectLocalID)
         projectName         = try c.decodeIfPresent(String.self, forKey: .projectName) ?? ""
@@ -129,6 +131,7 @@ struct GenerationOutputCloudRecord: Codable {
     // MARK: - CodingKeys (snake_case → camelCase)
     enum CodingKeys: String, CodingKey {
         case id
+        case userID              = "user_id"
         case localGenerationId   = "local_generation_id"
         case projectLocalID      = "project_local_id"
         case projectName         = "project_name"
