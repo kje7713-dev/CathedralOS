@@ -208,6 +208,11 @@ final class GenerationOutputCloudIdentityTests: XCTestCase {
         XCTAssertEqual(gen.cloudGenerationOutputID, "")
     }
 
+    func testCloudOwnerUserIDDefaultsToEmpty() {
+        let gen = GenerationOutput()
+        XCTAssertEqual(gen.cloudOwnerUserID, "")
+    }
+
     func testSyncStatusDefaultsToLocalOnly() {
         let gen = GenerationOutput()
         XCTAssertEqual(gen.syncStatus, SyncStatus.localOnly.rawValue)
@@ -258,6 +263,7 @@ final class GenerationResponseCloudIDTests: XCTestCase {
 
     func testBackendResponseWithCloudIDMarksLocalOutputSynced() throws {
         let cloudID = UUID().uuidString
+        let ownerUserID = UUID().uuidString
         let data = makeSuccessResponseJSON(cloudID: cloudID)
         let response = try JSONDecoder().decode(GenerationResponse.self, from: data)
 
@@ -272,11 +278,13 @@ final class GenerationResponseCloudIDTests: XCTestCase {
         gen.updatedAt = Date()
         if let id = response.cloudGenerationOutputID, !id.isEmpty {
             gen.cloudGenerationOutputID = id
+            gen.cloudOwnerUserID = ownerUserID
             gen.syncStatus = SyncStatus.synced.rawValue
             gen.lastSyncedAt = Date()
         }
 
         XCTAssertEqual(gen.cloudGenerationOutputID, cloudID)
+        XCTAssertEqual(gen.cloudOwnerUserID, ownerUserID)
         XCTAssertEqual(gen.syncStatus, SyncStatus.synced.rawValue)
         XCTAssertNotNil(gen.lastSyncedAt)
     }

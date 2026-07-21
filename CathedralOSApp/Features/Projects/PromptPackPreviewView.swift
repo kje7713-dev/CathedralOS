@@ -801,6 +801,7 @@ struct PromptPackPreviewView: View {
             // If the backend returned a cloud generation output ID, record it and mark synced.
             if let cloudID = response.cloudGenerationOutputID, !cloudID.isEmpty {
                 gen.cloudGenerationOutputID = cloudID
+                gen.cloudOwnerUserID = authService.authState.currentUser?.id ?? ""
                 gen.syncStatus = SyncStatus.synced.rawValue
                 gen.lastSyncedAt = Date()
                 OutputSyncActivityStore.shared.recordSuccess("Output synced during generation.")
