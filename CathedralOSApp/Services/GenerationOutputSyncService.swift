@@ -599,7 +599,7 @@ enum GenerationOutputDeletionError: Error, LocalizedError {
         case .cloudDeleteNotVerified:
             return "The cloud could not confirm this output was deleted. Your local copy was kept so you can retry."
         case .cloudOwnershipNotVerified:
-            return "This output's cloud ownership could not be verified for the signed-in account. Your local copy was kept."
+            return "This output's cloud ownership could not be verified. Confirm you're signed in to the account that created it, then retry. Your local copy was kept."
         case .persistenceError(let stage, let error):
             return "Could not save output deletion (\(stage)): \(error.localizedDescription)"
         }
@@ -699,13 +699,10 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         }
 
         let accessToken: String
+        let userID: String
         do {
             let user = try await sessionProvider.ensureSignedInUser()
-            let ownerID = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !ownerID.isEmpty,
-                  ownerID.caseInsensitiveCompare(user.id) == .orderedSame else {
-                throw GenerationOutputDeletionError.cloudOwnershipNotVerified
-            }
+            userID = user.id
             accessToken = try await sessionProvider.validAccessToken(forceRefresh: false)
         } catch let error as SupabaseSessionProviderError {
             switch error {
@@ -728,6 +725,18 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             throw GenerationOutputDeletionError.notConfigured
         }
 
+        try await establishLegacyOwnershipIfNeeded(
+            output: output,
+            cloudID: cloudID,
+            userID: userID,
+            accessToken: accessToken,
+            client: client
+        )
+        let ownerID = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard ownerID.caseInsensitiveCompare(userID) == .orderedSame else {
+            throw GenerationOutputDeletionError.cloudOwnershipNotVerified
+        }
+
         var components = URLComponents(
             url: client.configuration.projectURL
                 .appendingPathComponent("rest")
@@ -737,7 +746,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         )
         components?.queryItems = [
             URLQueryItem(name: "id", value: "eq.\(cloudID)"),
-            URLQueryItem(name: "user_id", value: "eq.\(output.cloudOwnerUserID)")
+            URLQueryItem(name: "user_id", value: "eq.\(ownerID)")
         ]
         guard let url = components?.url else {
             throw GenerationOutputDeletionError.notConfigured
@@ -796,6 +805,83 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         }
     }
 
+    private func establishLegacyOwnershipIfNeeded(
+        output: GenerationOutput,
+        cloudID: String,
+        userID: String,
+        accessToken: String,
+        client: SupabaseBackendClient
+    ) async throws {
+        let persistedOwnerID = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard persistedOwnerID.isEmpty else {
+            guard persistedOwnerID.caseInsensitiveCompare(userID) == .orderedSame else {
+                throw GenerationOutputDeletionError.cloudOwnershipNotVerified
+            }
+            return
+        }
+
+        var components = URLComponents(
+            url: client.configuration.projectURL
+                .appendingPathComponent("rest")
+                .appendingPathComponent("v1")
+                .appendingPathComponent("generation_outputs"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "id", value: "eq.\(cloudID)"),
+            URLQueryItem(name: "select", value: "id,user_id")
+        ]
+        guard let url = components?.url else {
+            throw GenerationOutputDeletionError.notConfigured
+        }
+        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
+        request.httpMethod = "GET"
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await sessionProvider.retryOnceAfterExpiredJWT(request: request, session: session)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn: throw GenerationOutputDeletionError.notSignedIn
+            case .sessionExpired: throw GenerationOutputDeletionError.sessionExpired
+            }
+        } catch {
+            throw GenerationOutputDeletionError.networkError(error)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw GenerationOutputDeletionError.cloudOwnershipNotVerified
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw GenerationOutputDeletionError.serverError(
+                statusCode: http.statusCode,
+                message: String(data: data, encoding: .utf8)
+            )
+        }
+        guard let rows = try? JSONDecoder().decode([GenerationOutputOwnershipResponse].self, from: data),
+              rows.count == 1,
+              rows[0].id.caseInsensitiveCompare(cloudID) == .orderedSame,
+              rows[0].userID.caseInsensitiveCompare(userID) == .orderedSame else {
+            throw GenerationOutputDeletionError.cloudOwnershipNotVerified
+        }
+
+        output.cloudOwnerUserID = rows[0].userID
+        if let context = output.modelContext {
+            do {
+                try context.save()
+            } catch {
+                context.rollback()
+                throw GenerationOutputDeletionError.persistenceError(stage: "legacy ownership backfill", error: error)
+            }
+        }
+        guard backupService.backup(output: output) != nil else {
+            throw GenerationOutputDeletionError.persistenceError(
+                stage: "legacy ownership backup",
+                error: CocoaError(.fileWriteUnknown)
+            )
+        }
+    }
+
     func deleteEverywhere(output: GenerationOutput, context: ModelContext) async throws {
         let outputID = output.id
         let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -808,6 +894,11 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         let userID = authService.authState.currentUser?.id
 
         if !cloudID.isEmpty {
+            if output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                try await mutationGate.run {
+                    try await resolveLegacyOwnership(output: output, cloudID: cloudID)
+                }
+            }
             let ownerID = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let userID, !ownerID.isEmpty,
                   ownerID.caseInsensitiveCompare(userID) == .orderedSame else {
@@ -838,10 +929,50 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         _ = backupService.deleteBackups(outputID: outputID)
 
     }
+
+    private func resolveLegacyOwnership(output: GenerationOutput, cloudID: String) async throws {
+        guard UUID(uuidString: cloudID) != nil else {
+            throw GenerationOutputDeletionError.invalidCloudGenerationOutputID
+        }
+        let userID: String
+        let accessToken: String
+        do {
+            userID = try await sessionProvider.ensureSignedInUser().id
+            accessToken = try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn: throw GenerationOutputDeletionError.notSignedIn
+            case .sessionExpired: throw GenerationOutputDeletionError.sessionExpired
+            }
+        }
+        let client: SupabaseBackendClient
+        do {
+            client = try clientFactory()
+        } catch {
+            throw GenerationOutputDeletionError.notConfigured
+        }
+        try await establishLegacyOwnershipIfNeeded(
+            output: output,
+            cloudID: cloudID,
+            userID: userID,
+            accessToken: accessToken,
+            client: client
+        )
+    }
 }
 
 private struct GenerationOutputDeleteResponse: Decodable {
     let id: String
+}
+
+private struct GenerationOutputOwnershipResponse: Decodable {
+    let id: String
+    let userID: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userID = "user_id"
+    }
 }
 
 // MARK: - StubGenerationOutputSyncService

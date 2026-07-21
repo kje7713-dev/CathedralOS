@@ -772,30 +772,46 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         XCTAssertTrue(tombstones.recorded.isEmpty)
     }
 
-    func testMissingPersistedOwnerFailsClosedWithoutCloudRequest() async throws {
+    func testMissingPersistedOwnerIsResolvedByRLSReadBeforeDelete() async throws {
         let output = GenerationOutput(title: "Legacy owner unknown")
-        output.cloudGenerationOutputID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        let cloudID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        output.cloudGenerationOutputID = cloudID
+        let userID = "11111111-2222-3333-4444-555555555555"
         let auth = MockSyncAuthService(
-            authState: .signedIn(AuthUser(id: "11111111-2222-3333-4444-555555555555", email: nil)),
+            authState: .signedIn(AuthUser(id: userID, email: nil)),
             accessToken: fixtureSessionValue
         )
-        GenerationOutputSyncURLProtocol.requestHandler = { _ in
-            XCTFail("Missing persisted ownership must fail before a cloud request")
-            throw URLError(.cancelled)
+        var methods: [String] = []
+        GenerationOutputSyncURLProtocol.requestHandler = { request in
+            methods.append(request.httpMethod ?? "")
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            if request.httpMethod == "GET" {
+                let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
+                XCTAssertEqual(query?.first(where: { $0.name == "id" })?.value, "eq.\(cloudID)")
+                XCTAssertEqual(query?.first(where: { $0.name == "select" })?.value, "id,user_id")
+                return (response, Data(#"[{"id":"\#(cloudID)","user_id":"\#(userID)"}]"#.utf8))
+            }
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            return (response, Data(#"[{"id":"\#(cloudID)"}]"#.utf8))
         }
+        let config = ValidatedSupabaseConfiguration.makeForTesting(
+            projectURL: URL(string: "https://example.supabase.co")!
+        )
+        let context = ModelContext(container)
+        context.insert(output)
+        try context.save()
         let service = GenerationOutputDeletionService(
             authService: auth, sharingService: MockDeletionSharingService(),
             backupService: LocalGenerationOutputBackupService(baseDirectory: tempDirectory),
             tombstoneService: MockOutputTombstoneService(), session: makeSession(),
-            clientFactory: { throw BackendClientError.notConfigured }
+            clientFactory: { SupabaseBackendClient(configuration: config) }
         )
 
-        do {
-            try await service.deleteCloud(output: output)
-            XCTFail("Expected ownership verification failure")
-        } catch let error as GenerationOutputDeletionError {
-            guard case .cloudOwnershipNotVerified = error else { return XCTFail("Unexpected error: \(error)") }
-        }
+        try await service.deleteEverywhere(output: output, context: context)
+
+        XCTAssertEqual(methods, ["GET", "DELETE"])
+        XCTAssertEqual(output.cloudOwnerUserID, userID)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<GenerationOutput>()), 0)
     }
 
     private func makeSession() -> URLSession {
