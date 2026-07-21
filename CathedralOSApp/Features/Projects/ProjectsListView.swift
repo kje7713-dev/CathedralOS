@@ -107,11 +107,6 @@ struct ProjectsListView: View {
             get: { projectToDelete != nil },
             set: { if !$0 { projectToDelete = nil } }
         )) {
-            Button("Delete Local Only", role: .destructive) {
-                if let p = projectToDelete {
-                    Task { await deleteProjectLocalOnly(p) }
-                }
-            }
             Button("Delete Everywhere", role: .destructive) {
                 if let p = projectToDelete {
                     Task { await deleteProjectEverywhere(p) }
@@ -119,7 +114,7 @@ struct ProjectsListView: View {
             }
             Button("Cancel", role: .cancel) { projectToDelete = nil }
         } message: {
-            Text("Delete \"\(projectToDelete?.name ?? "this project")\" from this device only, or from both this device and the cloud.")
+            Text("Delete \"\(projectToDelete?.name ?? "this project")\" from the cloud and this device? Your local copy is kept if cloud deletion cannot be confirmed.")
         }
         .alert("Copied", isPresented: $showCopiedLLMPrompt) {
             Button("OK", role: .cancel) {}

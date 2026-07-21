@@ -192,19 +192,26 @@ struct GenerationOutputDetailView: View {
             }
         }
         .confirmationDialog(
-            "Delete this output?",
+            output.cloudGenerationOutputID.isEmpty ? "Delete this local output?" : "Delete this output everywhere?",
             isPresented: $showDeleteConfirm,
             titleVisibility: .visible
         ) {
-            Button("Delete Local Only", role: .destructive) {
-                Task { await performDeleteLocalOnly() }
-            }
-            Button("Delete Everywhere", role: .destructive) {
-                Task { await performDeleteEverywhere() }
+            if output.cloudGenerationOutputID.isEmpty {
+                Button("Delete from This Device", role: .destructive) {
+                    Task { await performDeleteLocalOnly() }
+                }
+            } else {
+                Button("Delete Everywhere", role: .destructive) {
+                    Task { await performDeleteEverywhere() }
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Delete this generated output from this device only, or from both this device and the cloud.")
+            if output.cloudGenerationOutputID.isEmpty {
+                Text("This output has not been saved to the cloud. It will be removed from this device.")
+            } else {
+                Text("This removes the output from the cloud and this device. Your local copy is kept if cloud deletion cannot be confirmed.")
+            }
         }
         .confirmationDialog(
             "Publish this output?",
