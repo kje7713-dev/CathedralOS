@@ -270,6 +270,73 @@ final class ProjectCloudSyncTests: XCTestCase {
     }
 
     @MainActor
+    func testDeleteEverywhereKeepsLocalProjectWhenCloudDeleteAffectsZeroRows() async throws {
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let project = StoryProject(name: "Keep visible after failed delete")
+        let projectID = project.id
+        let snapshotRowID = UUID().uuidString
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let tombstoneService = MockProjectTombstoneService()
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(project)
+        try context.save()
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            if request.httpMethod == "GET" {
+                return (
+                    response,
+                    Data(#"[{"id":"\#(snapshotRowID)","user_id":"\#(userID)","local_project_id":"\#(projectID.uuidString)","snapshot_json":{"project":{"id":"\#(projectID.uuidString)"}}}]"#.utf8)
+                )
+            }
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            return (response, Data("[]".utf8))
+        }
+
+        let cloudSyncService = ProjectCloudSyncService(
+            authService: authService,
+            session: makeSession(),
+            configuration: .makeForTesting(),
+            tombstoneService: tombstoneService
+        )
+        let deletionService = ProjectDeletionService(
+            authService: authService,
+            cloudSyncService: cloudSyncService,
+            tombstoneService: tombstoneService
+        )
+
+        do {
+            try await deletionService.deleteEverywhere(project: project, context: context)
+            XCTFail("Expected zero affected cloud rows to fail deletion")
+        } catch let error as ProjectDeletionError {
+            guard case .syncError(let underlying) = error,
+                  let cloudError = underlying as? ProjectCloudSyncError else {
+                XCTFail("Expected snapshotDeletionNotConfirmed, got \(error)")
+                return
+            }
+            guard case .snapshotDeletionNotConfirmed = cloudError else {
+                XCTFail("Expected snapshotDeletionNotConfirmed, got \(cloudError)")
+                return
+            }
+        }
+
+        let remaining = try context.fetch(FetchDescriptor<StoryProject>())
+        XCTAssertEqual(remaining.map(\.id), [projectID], "The project must remain visible locally.")
+        XCTAssertTrue(
+            tombstoneService.projectTombstones.isTombstoned(localID: projectID.uuidString),
+            "Failed deletion intent must prevent a later sync from reporting or recreating a synced row."
+        )
+    }
+
+    @MainActor
     func testDeleteEverywhereTombstonesBeforeCloudDeleteAndBlocksEveryProjectSyncPath() async throws {
         let session = makeSession()
         let userID = "11111111-1111-1111-1111-111111111111"
