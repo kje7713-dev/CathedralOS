@@ -80,12 +80,23 @@ protocol ProjectCloudSyncServiceProtocol {
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws
     func syncAllProjects(in context: ModelContext) async throws
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws
+    func deleteSnapshot(
+        forLocalProjectID localProjectID: String,
+        matching payload: ProjectImportExportPayload
+    ) async throws
     func cloudSnapshotPresence() async -> CloudSnapshotPresence
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport
 }
 
 extension ProjectCloudSyncServiceProtocol {
+    func deleteSnapshot(
+        forLocalProjectID localProjectID: String,
+        matching payload: ProjectImportExportPayload
+    ) async throws {
+        try await deleteSnapshot(forLocalProjectID: localProjectID)
+    }
+
     @MainActor
     func restoreAllProjects(into context: ModelContext) async throws -> ProjectRestoreReport {
         try await restoreAllProjects(into: context, includeTombstoned: false)
@@ -253,6 +264,20 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     }
 
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {
+        try await deleteResolvedSnapshot(forLocalProjectID: localProjectID, matching: nil)
+    }
+
+    func deleteSnapshot(
+        forLocalProjectID localProjectID: String,
+        matching payload: ProjectImportExportPayload
+    ) async throws {
+        try await deleteResolvedSnapshot(forLocalProjectID: localProjectID, matching: payload)
+    }
+
+    private func deleteResolvedSnapshot(
+        forLocalProjectID localProjectID: String,
+        matching payload: ProjectImportExportPayload?
+    ) async throws {
         try await mutationGate.run {
             let (client, user, accessToken) = try await validatedClientAndSession()
             var lookupComponents = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
@@ -273,17 +298,36 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                 throw ProjectCloudSyncError.decodingError(ProjectSnapshotDeleteVerificationError.unverified)
             }
             let requestedIdentity = canonicalProjectIdentity(localProjectID)
-            let matches = ownedRows.filter { row in
+            let identityMatches = ownedRows.filter { row in
                 row.claimedIdentities.contains(requestedIdentity)
             }
 
-            guard matches.count <= 1 else {
+            guard identityMatches.count <= 1 else {
                 throw ProjectCloudSyncError.ambiguousSnapshotIdentity(localProjectID: localProjectID)
             }
-            guard let resolvedRow = matches.first else {
-                // The full authenticated/RLS-scoped identity read proves there is no
-                // owned row that restore or upload associates with this project.
-                return
+
+            let resolvedRow: ProjectSnapshotIdentityRow
+            if let identityMatch = identityMatches.first {
+                resolvedRow = identityMatch
+            } else {
+                // An empty authenticated/RLS-scoped read proves there is no owned
+                // cloud snapshot to remove. A nonempty read requires an unambiguous
+                // payload match; silently accepting it could leave a drifted row
+                // available for a later restore.
+                guard !ownedRows.isEmpty else { return }
+                guard let payload else {
+                    throw ProjectCloudSyncError.snapshotDeletionNotConfirmed(localProjectID: localProjectID)
+                }
+
+                let contentMatches = ownedRows.filter { $0.matchesProjectContent(payload) }
+                guard contentMatches.count <= 1 else {
+                    throw ProjectCloudSyncError.ambiguousSnapshotIdentity(localProjectID: localProjectID)
+                }
+                if let contentMatch = contentMatches.first {
+                    resolvedRow = contentMatch
+                } else {
+                    throw ProjectCloudSyncError.snapshotDeletionNotConfirmed(localProjectID: localProjectID)
+                }
             }
 
             // Cover every identity used by restore/upload before the DELETE. This
@@ -1405,6 +1449,7 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
 
     func deleteEverywhere(project: StoryProject, context: ModelContext) async throws {
         let projectID = project.id.uuidString
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
 
         // Persist delete intent before any cloud request. This closes the race in
         // which an already-running single-project/backup upload could recreate the
@@ -1427,7 +1472,10 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
         }
 
         do {
-            try await cloudSyncService.deleteSnapshot(forLocalProjectID: projectID)
+            try await cloudSyncService.deleteSnapshot(
+                forLocalProjectID: projectID,
+                matching: payload
+            )
         } catch {
             throw ProjectDeletionError.syncError(error)
         }
@@ -1490,7 +1538,7 @@ private struct ProjectSnapshotIdentityRow: Decodable {
     let id: String
     let userID: String
     let localProjectID: String
-    let snapshotJSON: SnapshotIdentityJSON
+    let snapshotJSON: ProjectSnapshotJSONValue
 
     var claimedIdentities: Set<String> {
         var identities = Set<String>()
@@ -1498,11 +1546,16 @@ private struct ProjectSnapshotIdentityRow: Decodable {
         if !local.isEmpty {
             identities.insert(UUID(uuidString: local)?.uuidString.lowercased() ?? local.lowercased())
         }
-        if let nested = snapshotJSON.project.id?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let nested = snapshotJSON.projectID?.trimmingCharacters(in: .whitespacesAndNewlines),
            !nested.isEmpty {
             identities.insert(UUID(uuidString: nested)?.uuidString.lowercased() ?? nested.lowercased())
         }
         return identities
+    }
+
+    func matchesProjectContent(_ payload: ProjectImportExportPayload) -> Bool {
+        guard let localSnapshot = ProjectSnapshotJSONValue(payload: payload) else { return false }
+        return snapshotJSON.removingProjectID() == localSnapshot.removingProjectID()
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1512,12 +1565,64 @@ private struct ProjectSnapshotIdentityRow: Decodable {
         case snapshotJSON = "snapshot_json"
     }
 
-    struct SnapshotIdentityJSON: Decodable {
-        let project: ProjectIdentityJSON
+}
+
+private enum ProjectSnapshotJSONValue: Decodable, Equatable {
+    case object([String: ProjectSnapshotJSONValue])
+    case array([ProjectSnapshotJSONValue])
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode([String: ProjectSnapshotJSONValue].self) {
+            self = .object(value)
+        } else if let value = try? container.decode([ProjectSnapshotJSONValue].self) {
+            self = .array(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unsupported project snapshot JSON value."
+            )
+        }
     }
 
-    struct ProjectIdentityJSON: Decodable {
-        let id: String?
+    init?(payload: ProjectImportExportPayload) {
+        guard let data = try? JSONEncoder().encode(payload),
+              let value = try? JSONDecoder().decode(Self.self, from: data) else {
+            return nil
+        }
+        self = value
+    }
+
+    var projectID: String? { projectString(forKey: "id") }
+    func removingProjectID() -> Self {
+        guard case .object(var root) = self,
+              case .object(var project)? = root["project"] else {
+            return self
+        }
+        project.removeValue(forKey: "id")
+        root["project"] = .object(project)
+        return .object(root)
+    }
+
+    private func projectString(forKey key: String) -> String? {
+        guard case .object(let root) = self,
+              case .object(let project)? = root["project"],
+              case .string(let value)? = project[key] else {
+            return nil
+        }
+        return value
     }
 }
 

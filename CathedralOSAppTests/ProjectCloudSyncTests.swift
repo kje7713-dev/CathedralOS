@@ -337,6 +337,140 @@ final class ProjectCloudSyncTests: XCTestCase {
     }
 
     @MainActor
+    func testDeleteEverywhereKeepsLocalProjectWhenDriftedSnapshotsAreAmbiguous() async throws {
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let project = StoryProject(name: "Ambiguous project")
+        let projectID = project.id
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
+            accessToken: "test-auth-token"
+        )
+        let tombstoneService = MockProjectTombstoneService()
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(project)
+        try context.save()
+        var deleteRequestCount = 0
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            if request.httpMethod == "DELETE" {
+                deleteRequestCount += 1
+                return (response, Data("[]".utf8))
+            }
+            return (
+                response,
+                try self.makeIdentityPreflightResponse(rows: [
+                    (UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, payload),
+                    (UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, payload)
+                ])
+            )
+        }
+
+        let cloudSyncService = ProjectCloudSyncService(
+            authService: authService,
+            session: makeSession(),
+            configuration: .makeForTesting(),
+            tombstoneService: tombstoneService
+        )
+        let deletionService = ProjectDeletionService(
+            authService: authService,
+            cloudSyncService: cloudSyncService,
+            tombstoneService: tombstoneService
+        )
+
+        do {
+            try await deletionService.deleteEverywhere(project: project, context: context)
+            XCTFail("Expected ambiguous drifted snapshots to fail deletion")
+        } catch let error as ProjectDeletionError {
+            guard case .syncError(let underlying) = error,
+                  let cloudError = underlying as? ProjectCloudSyncError,
+                  case .ambiguousSnapshotIdentity = cloudError else {
+                XCTFail("Expected ambiguousSnapshotIdentity, got \(error)")
+                return
+            }
+        }
+
+        XCTAssertEqual(deleteRequestCount, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.id), [projectID])
+    }
+
+    @MainActor
+    func testDeleteEverywhereKeepsLocalProjectWhenCloudRowsHaveNoPlausibleMatch() async throws {
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let project = StoryProject(name: "Intended project")
+        let projectID = project.id
+        let differentProject = StoryProject(name: "  INTENDED PROJECT  ")
+        differentProject.summary = "Unrelated content"
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
+            accessToken: "test-auth-token"
+        )
+        let tombstoneService = MockProjectTombstoneService()
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(project)
+        try context.save()
+        var deleteRequestCount = 0
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            if request.httpMethod == "DELETE" {
+                deleteRequestCount += 1
+                return (response, Data("[]".utf8))
+            }
+            return (
+                response,
+                try self.makeIdentityPreflightResponse(rows: [
+                    (
+                        UUID().uuidString,
+                        userID,
+                        UUID().uuidString,
+                        UUID().uuidString,
+                        ProjectSchemaTemplateBuilder.build(project: differentProject)
+                    )
+                ])
+            )
+        }
+
+        let cloudSyncService = ProjectCloudSyncService(
+            authService: authService,
+            session: makeSession(),
+            configuration: .makeForTesting(),
+            tombstoneService: tombstoneService
+        )
+        let deletionService = ProjectDeletionService(
+            authService: authService,
+            cloudSyncService: cloudSyncService,
+            tombstoneService: tombstoneService
+        )
+
+        do {
+            try await deletionService.deleteEverywhere(project: project, context: context)
+            XCTFail("Expected an unexplained nonempty cloud snapshot set to fail deletion")
+        } catch let error as ProjectDeletionError {
+            guard case .syncError(let underlying) = error,
+                  let cloudError = underlying as? ProjectCloudSyncError,
+                  case .snapshotDeletionNotConfirmed = cloudError else {
+                XCTFail("Expected snapshotDeletionNotConfirmed, got \(error)")
+                return
+            }
+        }
+
+        XCTAssertEqual(deleteRequestCount, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.id), [projectID])
+    }
+
+    @MainActor
     func testDeleteEverywhereTombstonesBeforeCloudDeleteAndBlocksEveryProjectSyncPath() async throws {
         let session = makeSession()
         let userID = "11111111-1111-1111-1111-111111111111"
@@ -361,12 +495,22 @@ final class ProjectCloudSyncTests: XCTestCase {
         var deleteRequestCount = 0
         var restoreRequestCount = 0
         let snapshotRowID = UUID().uuidString
+        let driftedLocalProjectID = UUID().uuidString
+        let driftedSnapshotProjectID = UUID().uuidString
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
             let queryItems = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
             if request.httpMethod == "GET",
                queryItems.first(where: { $0.name == "select" })?.value == "id,user_id,local_project_id,snapshot_json" {
-                let data = Data(#"[{"id":"\#(snapshotRowID)","user_id":"\#(userID)","local_project_id":"\#(projectID.uuidString.lowercased())","snapshot_json":{"project":{"id":"\#(projectID.uuidString)"}}}]"#.utf8)
+                let data = try self.makeIdentityPreflightResponse(rows: [
+                    (
+                        snapshotRowID,
+                        userID,
+                        driftedLocalProjectID,
+                        driftedSnapshotProjectID,
+                        stalePayload
+                    )
+                ])
                 let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
                 return (response, data)
             }
@@ -415,6 +559,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(deleteRequestCount, 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
         XCTAssertEqual(tombstoneService.recordedTombstones.first?.deletionScope, .everywhere)
+        XCTAssertTrue(tombstoneService.projectTombstones.isTombstoned(localID: driftedLocalProjectID))
+        XCTAssertTrue(tombstoneService.projectTombstones.isTombstoned(localID: driftedSnapshotProjectID))
         XCTAssertEqual(backupDeletionService.deletedProjectIDs, [projectID.uuidString])
 
         // A delayed single-project/local-backup upload must not recreate the row.
@@ -1116,6 +1262,30 @@ final class ProjectCloudSyncTests: XCTestCase {
         try makeRestoreResponse(rows: [
             (localProjectID, payload, "2026-05-15T14:00:00Z")
         ])
+    }
+
+    private func makeIdentityPreflightResponse(
+        rows: [(String, String, String, String, ProjectImportExportPayload)]
+    ) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let responseObject: [[String: Any]] = try rows.map {
+            rowID, userID, localProjectID, snapshotProjectID, payload in
+            let payloadData = try encoder.encode(payload)
+            var payloadObject = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
+            )
+            var projectObject = try XCTUnwrap(payloadObject["project"] as? [String: Any])
+            projectObject["id"] = snapshotProjectID
+            payloadObject["project"] = projectObject
+            return [
+                "id": rowID,
+                "user_id": userID,
+                "local_project_id": localProjectID,
+                "snapshot_json": payloadObject
+            ]
+        }
+        return try JSONSerialization.data(withJSONObject: responseObject, options: [.sortedKeys])
     }
 
     private func makeRestoreResponse(rows: [(UUID, ProjectImportExportPayload, String)]) throws -> Data {
