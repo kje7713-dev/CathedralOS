@@ -132,7 +132,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let userID = "11111111-1111-1111-1111-111111111111"
         let authService = MockProjectCloudSyncAuthService(
             authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
-            accessToken: "user-jwt-token"
+            accessToken: "test-auth-token"
         )
         let service = ProjectCloudSyncService(
             authService: authService,
