@@ -16,6 +16,8 @@ enum ProjectCloudSyncError: Error, LocalizedError {
     case saveFailed(localProjectID: String, underlying: Error)
     /// Duplicate stable IDs detected in a project's child entities before save.
     case duplicateChildIDsDetected(localProjectID: String, detail: String)
+    /// More than one owned cloud row claims the project identity, so deletion cannot safely choose one.
+    case ambiguousSnapshotIdentity(localProjectID: String)
 
     var errorDescription: String? {
         switch self {
@@ -43,6 +45,8 @@ enum ProjectCloudSyncError: Error, LocalizedError {
             return "Restore save failed for project \(localProjectID): \(underlying.localizedDescription)"
         case .duplicateChildIDsDetected(let localProjectID, let detail):
             return "Duplicate child IDs detected in project \(localProjectID) before save. Restore stopped: \(detail)"
+        case .ambiguousSnapshotIdentity(let localProjectID):
+            return "Cloud deletion found multiple snapshots for project \(localProjectID). Sync or restore your projects, then try again. Your local project was kept."
         }
     }
 }
@@ -247,42 +251,72 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {
         try await mutationGate.run {
             let (client, user, accessToken) = try await validatedClientAndSession()
-            var components = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
-            // local_project_id is text in Supabase. Historical/imported rows may use
-            // different UUID casing, or may carry the stable ID only in snapshot_json.
-            // Match both representations case-insensitively and scope explicitly to
-            // the authenticated user in addition to RLS.
-            let identityFilter = [
-                "local_project_id.ilike.\(localProjectID)",
-                "snapshot_json->project->>id.ilike.\(localProjectID)"
-            ].joined(separator: ",")
-            components?.queryItems = [
+            var lookupComponents = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
+            // Read the complete RLS-scoped identity surface. Legacy rows can have a
+            // different local_project_id than snapshot_json.project.id, and restore
+            // gives precedence to any UUID-valued local_project_id.
+            lookupComponents?.queryItems = [
                 URLQueryItem(name: "user_id", value: "eq.\(user.id)"),
-                URLQueryItem(name: "or", value: "(\(identityFilter))")
+                URLQueryItem(name: "select", value: "id,user_id,local_project_id,snapshot_json")
             ]
-            guard let url = components?.url else {
+            guard let lookupURL = lookupComponents?.url else {
+                throw ProjectCloudSyncError.notConfigured
+            }
+            var lookupRequest = client.authorizedRequest(for: lookupURL, userAccessToken: accessToken)
+            lookupRequest.httpMethod = "GET"
+            let ownedRows = try await fetch([ProjectSnapshotIdentityRow].self, request: lookupRequest)
+            guard ownedRows.allSatisfy({ $0.userID == user.id }) else {
+                throw ProjectCloudSyncError.decodingError(ProjectSnapshotDeleteVerificationError.unverified)
+            }
+            let requestedIdentity = canonicalProjectIdentity(localProjectID)
+            let matches = ownedRows.filter { row in
+                row.claimedIdentities.contains(requestedIdentity)
+            }
+
+            guard matches.count <= 1 else {
+                throw ProjectCloudSyncError.ambiguousSnapshotIdentity(localProjectID: localProjectID)
+            }
+            guard let resolvedRow = matches.first else {
+                // The full authenticated/RLS-scoped identity read proves there is no
+                // owned row that restore or upload associates with this project.
+                return
+            }
+
+            // Cover every identity used by restore/upload before the DELETE. This
+            // closes the delete-vs-upload race even for drifted legacy rows.
+            for identity in resolvedRow.claimedIdentities {
+                await tombstoneService.record(
+                    SyncTombstone(
+                        userID: user.id,
+                        entityType: .project,
+                        localEntityID: identity,
+                        cloudEntityID: resolvedRow.id,
+                        deletionScope: .everywhere,
+                        reason: nil
+                    )
+                )
+            }
+
+            var deleteComponents = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
+            deleteComponents?.queryItems = [
+                URLQueryItem(name: "id", value: "eq.\(resolvedRow.id)"),
+                URLQueryItem(name: "user_id", value: "eq.\(user.id)")
+            ]
+            guard let deleteURL = deleteComponents?.url else {
                 throw ProjectCloudSyncError.notConfigured
             }
 
-            var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
+            var request = client.authorizedRequest(for: deleteURL, userAccessToken: accessToken)
             request.httpMethod = "DELETE"
-            // Request the affected rows. A malformed/minimal response now fails
-            // decoding instead of silently treating an unverifiable delete as success.
             request.setValue("return=representation", forHTTPHeaderField: "Prefer")
 
             let deleted = try await fetch([ProjectSnapshotDeleteResponse].self, request: request)
-            if deleted.contains(where: {
-                $0.localProjectID.caseInsensitiveCompare(localProjectID) == .orderedSame
-            }) {
-                return
-            }
-            guard deleted.isEmpty else {
+            guard deleted.allSatisfy({ $0.id == resolvedRow.id }) else {
                 throw ProjectCloudSyncError.decodingError(ProjectSnapshotDeleteVerificationError.unverified)
             }
 
-            // Zero affected rows are only an idempotent success when a separate,
-            // ownership-scoped read proves the snapshot is already absent.
-            var verifyComponents = components
+            // Verify the resolved canonical primary key, never the original legacy filter.
+            var verifyComponents = deleteComponents
             verifyComponents?.queryItems?.append(URLQueryItem(name: "select", value: "id"))
             guard let verifyURL = verifyComponents?.url else {
                 throw ProjectCloudSyncError.decodingError(ProjectSnapshotDeleteVerificationError.unverified)
@@ -294,6 +328,11 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                 throw ProjectCloudSyncError.decodingError(ProjectSnapshotDeleteVerificationError.unverified)
             }
         }
+    }
+
+    private func canonicalProjectIdentity(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return UUID(uuidString: trimmed)?.uuidString.lowercased() ?? trimmed.lowercased()
     }
 
     func cloudSnapshotPresence() async -> CloudSnapshotPresence {
@@ -1433,10 +1472,45 @@ private struct ProjectSnapshotWriteResponse: Decodable {
 }
 
 private struct ProjectSnapshotDeleteResponse: Decodable {
-    let localProjectID: String
+    let id: String
 
     enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+private struct ProjectSnapshotIdentityRow: Decodable {
+    let id: String
+    let userID: String
+    let localProjectID: String
+    let snapshotJSON: SnapshotIdentityJSON
+
+    var claimedIdentities: Set<String> {
+        var identities = Set<String>()
+        let local = localProjectID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !local.isEmpty {
+            identities.insert(UUID(uuidString: local)?.uuidString.lowercased() ?? local.lowercased())
+        }
+        if let nested = snapshotJSON.project.id?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !nested.isEmpty {
+            identities.insert(UUID(uuidString: nested)?.uuidString.lowercased() ?? nested.lowercased())
+        }
+        return identities
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userID = "user_id"
         case localProjectID = "local_project_id"
+        case snapshotJSON = "snapshot_json"
+    }
+
+    struct SnapshotIdentityJSON: Decodable {
+        let project: ProjectIdentityJSON
+    }
+
+    struct ProjectIdentityJSON: Decodable {
+        let id: String?
     }
 }
 
