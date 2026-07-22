@@ -195,21 +195,15 @@ final class ProjectCloudSyncTests: XCTestCase {
             accessToken: "user-jwt-token"
         )
         let requestSent = expectation(description: "project snapshot DELETE sent")
+        let rowID = UUID().uuidString
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.httpMethod, "DELETE")
             XCTAssertEqual(request.url?.path, "/rest/v1/project_snapshots")
             let queryItems = try XCTUnwrap(
                 URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
             )
             XCTAssertEqual(queryItems.first(where: { $0.name == "user_id" })?.value, "eq.\(userID)")
-            XCTAssertEqual(
-                queryItems.first(where: { $0.name == "or" })?.value,
-                "(local_project_id.ilike.\(projectID.uuidString),snapshot_json->project->>id.ilike.\(projectID.uuidString))"
-            )
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt-token")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Prefer"), "return=representation")
-            requestSent.fulfill()
 
             let response = HTTPURLResponse(
                 url: try XCTUnwrap(request.url),
@@ -217,10 +211,19 @@ final class ProjectCloudSyncTests: XCTestCase {
                 httpVersion: nil,
                 headerFields: nil
             )!
-            return (
-                response,
-                Data(#"[{"local_project_id":"\#(projectID.uuidString.lowercased())"}]"#.utf8)
-            )
+            if request.httpMethod == "GET",
+               queryItems.first(where: { $0.name == "select" })?.value == "id,user_id,local_project_id,snapshot_json" {
+                let data = Data(#"[{"id":"\#(rowID)","user_id":"\#(userID)","local_project_id":"legacy-key","snapshot_json":{"project":{"id":"\#(projectID.uuidString.lowercased())"}}}]"#.utf8)
+                return (response, data)
+            }
+            if request.httpMethod == "DELETE" {
+                XCTAssertEqual(queryItems.first(where: { $0.name == "id" })?.value, "eq.\(rowID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Prefer"), "return=representation")
+                requestSent.fulfill()
+                return (response, Data(#"[{"id":"\#(rowID)"}]"#.utf8))
+            }
+            XCTAssertEqual(queryItems.first(where: { $0.name == "id" })?.value, "eq.\(rowID)")
+            return (response, Data("[]".utf8))
         }
 
         let service = ProjectCloudSyncService(
@@ -233,15 +236,15 @@ final class ProjectCloudSyncTests: XCTestCase {
         await fulfillment(of: [requestSent], timeout: 1)
     }
 
-    func testDeleteSnapshotDoesNotSilentlyAcceptUnverifiableMinimalResponse() async throws {
+    func testDeleteSnapshotDoesNotSilentlyAcceptMalformedIdentityPreflight() async throws {
         ProjectCloudSyncURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
                 url: try XCTUnwrap(request.url),
-                statusCode: 204,
+                statusCode: 200,
                 httpVersion: nil,
                 headerFields: nil
             )!
-            return (response, Data())
+            return (response, Data(#"[{"id":"broken"}]"#.utf8))
         }
         let service = ProjectCloudSyncService(
             authService: MockProjectCloudSyncAuthService(
@@ -290,8 +293,16 @@ final class ProjectCloudSyncTests: XCTestCase {
         let stalePayload = ProjectSchemaTemplateBuilder.build(project: project)
         var deleteRequestCount = 0
         var restoreRequestCount = 0
+        let snapshotRowID = UUID().uuidString
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let queryItems = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if request.httpMethod == "GET",
+               queryItems.first(where: { $0.name == "select" })?.value == "id,user_id,local_project_id,snapshot_json" {
+                let data = Data(#"[{"id":"\#(snapshotRowID)","user_id":"\#(userID)","local_project_id":"\#(projectID.uuidString.lowercased())","snapshot_json":{"project":{"id":"\#(projectID.uuidString)"}}}]"#.utf8)
+                let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (response, data)
+            }
             if request.httpMethod == "DELETE" {
                 deleteRequestCount += 1
                 XCTAssertTrue(
@@ -306,8 +317,13 @@ final class ProjectCloudSyncTests: XCTestCase {
                 )!
                 return (
                     response,
-                    Data(#"[{"local_project_id":"\#(projectID.uuidString.lowercased())"}]"#.utf8)
+                    Data(#"[{"id":"\#(snapshotRowID)"}]"#.utf8)
                 )
+            }
+
+            if queryItems.first(where: { $0.name == "id" }) != nil {
+                let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (response, Data("[]".utf8))
             }
 
             XCTAssertEqual(request.httpMethod, "GET", "Tombstoned uploads must not issue POST requests.")
