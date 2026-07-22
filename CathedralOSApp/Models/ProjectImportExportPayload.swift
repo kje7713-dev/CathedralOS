@@ -17,6 +17,7 @@ struct ProjectImportExportPayload: Codable {
 
     struct ProjectPayload: Codable {
         let id: String?
+        let lineageID: String?
         let name: String
         let summary: String
         let notes: String
@@ -27,6 +28,7 @@ struct ProjectImportExportPayload: Codable {
 
         init(
             id: String? = nil,
+            lineageID: String? = nil,
             name: String,
             summary: String,
             notes: String,
@@ -36,6 +38,7 @@ struct ProjectImportExportPayload: Codable {
             audienceNotes: String = ""
         ) {
             self.id = id
+            self.lineageID = lineageID
             self.name = name
             self.summary = summary
             self.notes = notes
@@ -48,6 +51,7 @@ struct ProjectImportExportPayload: Codable {
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             id           = try c.decodeIfPresent(String.self, forKey: .id)
+            lineageID    = try c.decodeIfPresent(String.self, forKey: .lineageID)
             name         = try c.decode(String.self,   forKey: .name)
             summary      = try c.decode(String.self,   forKey: .summary)
             notes        = try c.decode(String.self,   forKey: .notes)

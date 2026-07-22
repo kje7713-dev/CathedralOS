@@ -3,6 +3,41 @@ import XCTest
 
 final class ProjectSchemaRoundTripTests: XCTestCase {
 
+    func testExportAndImportRetainStableProjectLineage() throws {
+        let original = StoryProject(name: "Lineage")
+        let lineageID = try XCTUnwrap(original.lineageID)
+
+        let payload = ProjectSchemaTemplateBuilder.build(project: original)
+        let restored = ProjectImportMapper.map(payload)
+
+        XCTAssertEqual(payload.project.lineageID, lineageID.uuidString)
+        XCTAssertEqual(restored.lineageID, lineageID)
+    }
+
+    func testLegacyImportBackfillsLineageFromProjectID() throws {
+        let projectID = UUID()
+        let payload = ProjectImportExportPayload(
+            schema: "cathedralos.project_schema",
+            version: 1,
+            project: .init(
+                id: projectID.uuidString,
+                name: "Legacy",
+                summary: "",
+                notes: "",
+                tags: []
+            ),
+            setting: nil,
+            characters: [],
+            storySparks: [],
+            aftertastes: [],
+            relationships: [],
+            themeQuestions: [],
+            motifs: []
+        )
+
+        XCTAssertEqual(ProjectImportMapper.map(payload).lineageID, projectID)
+    }
+
     // MARK: 1. Blank Template Generation
 
     func testBlankTemplateGeneration() {

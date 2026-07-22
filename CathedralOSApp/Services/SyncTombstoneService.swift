@@ -41,12 +41,37 @@ struct SyncTombstoneCloudRecord: Decodable {
     let localEntityID: String?
     let cloudEntityID: String?
     let deletionScope: String
+    let lineageID: String?
+
+    init(
+        entityType: String,
+        localEntityID: String?,
+        cloudEntityID: String?,
+        deletionScope: String,
+        lineageID: String? = nil
+    ) {
+        self.entityType = entityType
+        self.localEntityID = localEntityID
+        self.cloudEntityID = cloudEntityID
+        self.deletionScope = deletionScope
+        self.lineageID = lineageID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        entityType = try container.decode(String.self, forKey: .entityType)
+        localEntityID = try container.decodeIfPresent(String.self, forKey: .localEntityID)
+        cloudEntityID = try container.decodeIfPresent(String.self, forKey: .cloudEntityID)
+        deletionScope = try container.decode(String.self, forKey: .deletionScope)
+        lineageID = try container.decodeIfPresent(String.self, forKey: .lineageID)
+    }
 
     enum CodingKeys: String, CodingKey {
         case entityType     = "entity_type"
         case localEntityID  = "local_entity_id"
         case cloudEntityID  = "cloud_entity_id"
         case deletionScope  = "deletion_scope"
+        case lineageID      = "lineage_id"
     }
 }
 
@@ -61,6 +86,9 @@ struct SyncTombstoneSet {
 
     init(records: [SyncTombstoneCloudRecord]) {
         for record in records {
+            if let lineage = record.lineageID?.trimmingCharacters(in: .whitespacesAndNewlines), !lineage.isEmpty {
+                localIDs.insert(Self.normalized(lineage))
+            }
             if let lid = record.localEntityID?.trimmingCharacters(in: .whitespacesAndNewlines), !lid.isEmpty {
                 localIDs.insert(Self.normalized(lid))
             }
@@ -81,6 +109,8 @@ struct SyncTombstoneSet {
         guard !cloudID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         return cloudIDs.contains(Self.normalized(cloudID))
     }
+
+    func isTombstoned(lineageID: String) -> Bool { isTombstoned(localID: lineageID) }
 
     private static func normalized(_ id: String) -> String {
         id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -175,7 +205,7 @@ final class SupabaseSyncTombstoneService: SyncTombstoneServiceProtocol {
         var components = URLComponents(url: restURL(client: client, path: "sync_tombstones"), resolvingAgainstBaseURL: false)
         components?.queryItems = [
             URLQueryItem(name: "entity_type", value: "eq.\(entityType)"),
-            URLQueryItem(name: "select", value: "entity_type,local_entity_id,cloud_entity_id,deletion_scope")
+            URLQueryItem(name: "select", value: "entity_type,local_entity_id,cloud_entity_id,deletion_scope,lineage_id")
         ]
         guard let url = components?.url else {
             return SyncTombstoneSet(records: [])
@@ -201,7 +231,8 @@ final class SupabaseSyncTombstoneService: SyncTombstoneServiceProtocol {
                     entityType: $0.entityType.rawValue,
                     localEntityID: $0.localEntityID,
                     cloudEntityID: $0.cloudEntityID,
-                    deletionScope: $0.deletionScope.rawValue
+                    deletionScope: $0.deletionScope.rawValue,
+                    lineageID: nil
                 )
             }
         return SyncTombstoneSet(records: records + pendingRecords)

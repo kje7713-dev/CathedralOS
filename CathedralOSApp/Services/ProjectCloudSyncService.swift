@@ -84,12 +84,17 @@ protocol ProjectCloudSyncServiceProtocol {
         forLocalProjectID localProjectID: String,
         matching payload: ProjectImportExportPayload
     ) async throws
+    func deleteProjectLineage(lineageID: String, localProjectID: String) async throws
     func cloudSnapshotPresence() async -> CloudSnapshotPresence
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport
 }
 
 extension ProjectCloudSyncServiceProtocol {
+    func deleteProjectLineage(lineageID: String, localProjectID: String) async throws {
+        try await deleteSnapshot(forLocalProjectID: localProjectID)
+    }
+
     func deleteSnapshot(
         forLocalProjectID localProjectID: String,
         matching payload: ProjectImportExportPayload
@@ -226,7 +231,8 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             // semantics for signed-out/misconfigured callers.
             _ = try await validatedClientAndSession()
             let tombstones = try await tombstoneService.fetchProjectTombstones()
-            guard !tombstones.isTombstoned(localID: localProjectID) else {
+            let lineageID = payload.project.lineageID ?? localProjectID
+            guard !tombstones.isTombstoned(lineageID: lineageID) else {
                 logger.log("Skipped tombstoned project upload \(localProjectID, privacy: .public)")
                 return
             }
@@ -252,7 +258,8 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         try await mutationGate.run {
             let tombstones = try await tombstoneService.fetchProjectTombstones()
             let snapshots = candidates.compactMap { candidate -> ProjectSnapshotSyncInput? in
-                guard !tombstones.isTombstoned(localID: candidate.localProjectID) else {
+                let lineageID = candidate.payload.project.lineageID ?? candidate.localProjectID
+                guard !tombstones.isTombstoned(lineageID: lineageID) else {
                     logger.log("Skipped tombstoned project upload \(candidate.localProjectID, privacy: .public)")
                     return nil
                 }
@@ -265,6 +272,25 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
 
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {
         try await deleteResolvedSnapshot(forLocalProjectID: localProjectID, matching: nil)
+    }
+
+    /// Atomically records irreversible lineage deletion intent and deletes every
+    /// owned historical snapshot in that lineage on the server.
+    func deleteProjectLineage(lineageID: String, localProjectID: String) async throws {
+        try await mutationGate.run {
+            let (client, _, accessToken) = try await validatedClientAndSession()
+            let url = restURL(client: client, path: "rpc/delete_project_lineage")
+            var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(
+                ProjectLineageDeleteRequest(lineageID: lineageID, localProjectID: localProjectID)
+            )
+            let response = try await fetch([ProjectLineageDeleteResponse].self, request: request).first
+            guard let response, response.deletionConfirmed else {
+                throw ProjectCloudSyncError.snapshotDeletionNotConfirmed(localProjectID: localProjectID)
+            }
+        }
     }
 
     func deleteSnapshot(
@@ -425,7 +451,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         let (client, _, accessToken) = try await validatedClientAndSession()
         var components = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
         components?.queryItems = [
-            URLQueryItem(name: "select", value: "local_project_id,snapshot_json,updated_at"),
+            URLQueryItem(name: "select", value: "local_project_id,lineage_id,snapshot_json,updated_at"),
             URLQueryItem(name: "order", value: "updated_at.desc")
         ]
         guard let url = components?.url else {
@@ -465,7 +491,8 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                 logger.warning("Skipping project snapshot without stable project id.")
                 continue
             }
-            if !includeTombstoned, tombstones.isTombstoned(localID: projectID.uuidString) {
+            let lineageID = row.lineageID ?? row.snapshotJSON.project.lineageID.flatMap(UUID.init(uuidString:)) ?? projectID
+            if !includeTombstoned, tombstones.isTombstoned(lineageID: lineageID.uuidString) {
                 skippedTombstonedCount += 1
                 logger.log("Skipped tombstoned project \(projectID.uuidString, privacy: .public)")
                 continue
@@ -478,11 +505,13 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             let isUpdate: Bool
             if let existing = existingProject {
                 reconcileProject(existing, with: row.snapshotJSON, in: context)
+                existing.lineageID = lineageID
                 project = existing
                 isUpdate = true
             } else {
                 let newProject = ProjectImportMapper.map(row.snapshotJSON)
                 newProject.id = projectID
+                newProject.lineageID = lineageID
                 context.insert(newProject)
                 project = newProject
                 isUpdate = false
@@ -583,6 +612,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                     ProjectSnapshotUpsertRequest(
                         userID: user.id,
                         localProjectID: snapshot.localProjectID,
+                        lineageID: snapshot.payload.project.lineageID ?? snapshot.localProjectID,
                         schema: snapshot.payload.schema,
                         version: snapshot.payload.version,
                         snapshotJSON: snapshot.payload
@@ -1449,32 +1479,11 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
 
     func deleteEverywhere(project: StoryProject, context: ModelContext) async throws {
         let projectID = project.id.uuidString
-        let payload = ProjectSchemaTemplateBuilder.build(project: project)
-
-        // Persist delete intent before any cloud request. This closes the race in
-        // which an already-running single-project/backup upload could recreate the
-        // snapshot after the DELETE but before the tombstone existed.
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        let userID = authService.authState.currentUser?.id
-        if let userID {
-            await tombstoneService.record(
-                SyncTombstone(
-                    userID: userID,
-                    entityType: .project,
-                    localEntityID: projectID,
-                    cloudEntityID: nil,
-                    deletionScope: .everywhere,
-                    reason: nil
-                )
-            )
-        }
 
         do {
-            try await cloudSyncService.deleteSnapshot(
-                forLocalProjectID: projectID,
-                matching: payload
+            try await cloudSyncService.deleteProjectLineage(
+                lineageID: project.stableLineageID.uuidString,
+                localProjectID: projectID
             )
         } catch {
             throw ProjectDeletionError.syncError(error)
@@ -1500,9 +1509,30 @@ private struct ProjectSnapshotSyncInput {
     let payload: ProjectImportExportPayload
 }
 
+private struct ProjectLineageDeleteRequest: Encodable {
+    let lineageID: String
+    let localProjectID: String
+
+    enum CodingKeys: String, CodingKey {
+        case lineageID = "p_lineage_id"
+        case localProjectID = "p_local_project_id"
+    }
+}
+
+private struct ProjectLineageDeleteResponse: Decodable {
+    let deletedCount: Int
+    let deletionConfirmed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case deletedCount = "deleted_count"
+        case deletionConfirmed = "deletion_confirmed"
+    }
+}
+
 private struct ProjectSnapshotUpsertRequest: Encodable {
     let userID: String
     let localProjectID: String
+    let lineageID: String
     let schema: String
     let version: Int
     let snapshotJSON: ProjectImportExportPayload
@@ -1511,6 +1541,7 @@ private struct ProjectSnapshotUpsertRequest: Encodable {
     enum CodingKeys: String, CodingKey {
         case userID = "user_id"
         case localProjectID = "local_project_id"
+        case lineageID = "lineage_id"
         case schema
         case version
         case snapshotJSON = "snapshot_json"
@@ -1640,11 +1671,13 @@ private struct ProjectSnapshotPresenceRow: Decodable {
 
 private struct ProjectSnapshotCloudRecord: Decodable {
     let localProjectID: String
+    let lineageID: UUID?
     let snapshotJSON: ProjectImportExportPayload
     let updatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case localProjectID = "local_project_id"
+        case lineageID = "lineage_id"
         case snapshotJSON = "snapshot_json"
         case updatedAt = "updated_at"
     }
