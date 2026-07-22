@@ -1,4 +1,6 @@
 -- Canonicalize historical project aliases without grouping by mutable prose.
+-- History note: production recorded this migration as 20260722185712; the
+-- repository filename is reconciled to that applied version.
 --
 -- Alias evidence is deliberately limited to legacy payloads without an explicit
 -- lineage and the exact non-empty graph of stable nested entity UUIDs
