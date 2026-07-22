@@ -755,6 +755,7 @@ enum ProjectSchemaTemplateBuilder {
             version: schemaVersion,
             project: .init(
                 id: project.id.uuidString,
+                lineageID: project.stableLineageID.uuidString,
                 name: project.name,
                 summary: project.summary,
                 notes: project.notes,

@@ -82,12 +82,16 @@ private final class MockProjectTombstoneService: SyncTombstoneServiceProtocol {
 
 private final class SpyProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     private(set) var deletedLocalProjectIDs: [String] = []
+    private(set) var deletedLineages: [(lineageID: String, localProjectID: String)] = []
 
     func syncProject(_ project: StoryProject) async throws {}
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {}
     func syncAllProjects(in context: ModelContext) async throws {}
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {
         deletedLocalProjectIDs.append(localProjectID)
+    }
+    func deleteProjectLineage(lineageID: String, localProjectID: String) async throws {
+        deletedLineages.append((lineageID, localProjectID))
     }
     func cloudSnapshotPresence() async -> CloudSnapshotPresence { .none }
     @MainActor
@@ -494,47 +498,18 @@ final class ProjectCloudSyncTests: XCTestCase {
         let stalePayload = ProjectSchemaTemplateBuilder.build(project: project)
         var deleteRequestCount = 0
         var restoreRequestCount = 0
-        let snapshotRowID = UUID().uuidString
-        let driftedLocalProjectID = UUID().uuidString
-        let driftedSnapshotProjectID = UUID().uuidString
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
-            let queryItems = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
-            if request.httpMethod == "GET",
-               queryItems.first(where: { $0.name == "select" })?.value == "id,user_id,local_project_id,snapshot_json" {
-                let data = try self.makeIdentityPreflightResponse(rows: [
-                    (
-                        snapshotRowID,
-                        userID,
-                        driftedLocalProjectID,
-                        driftedSnapshotProjectID,
-                        stalePayload
-                    )
-                ])
-                let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
-                return (response, data)
-            }
-            if request.httpMethod == "DELETE" {
+            if request.url?.path == "/rest/v1/rpc/delete_project_lineage" {
                 deleteRequestCount += 1
-                XCTAssertTrue(
-                    tombstoneService.projectTombstones.isTombstoned(localID: projectID.uuidString),
-                    "Delete intent must exist before the cloud DELETE starts."
-                )
+                XCTAssertEqual(request.httpMethod, "POST")
                 let response = HTTPURLResponse(
                     url: try XCTUnwrap(request.url),
                     statusCode: 200,
                     httpVersion: nil,
                     headerFields: nil
                 )!
-                return (
-                    response,
-                    Data(#"[{"id":"\#(snapshotRowID)"}]"#.utf8)
-                )
-            }
-
-            if queryItems.first(where: { $0.name == "id" }) != nil {
-                let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
-                return (response, Data("[]".utf8))
+                return (response, Data(#"[{"deleted_count":2,"deletion_confirmed":true}]"#.utf8))
             }
 
             XCTAssertEqual(request.httpMethod, "GET", "Tombstoned uploads must not issue POST requests.")
@@ -558,10 +533,18 @@ final class ProjectCloudSyncTests: XCTestCase {
 
         XCTAssertEqual(deleteRequestCount, 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
-        XCTAssertEqual(tombstoneService.recordedTombstones.first?.deletionScope, .everywhere)
-        XCTAssertTrue(tombstoneService.projectTombstones.isTombstoned(localID: driftedLocalProjectID))
-        XCTAssertTrue(tombstoneService.projectTombstones.isTombstoned(localID: driftedSnapshotProjectID))
+        XCTAssertTrue(tombstoneService.recordedTombstones.isEmpty)
         XCTAssertEqual(backupDeletionService.deletedProjectIDs, [projectID.uuidString])
+
+        tombstoneService.projectTombstones = SyncTombstoneSet(records: [
+            SyncTombstoneCloudRecord(
+                entityType: "project",
+                localEntityID: projectID.uuidString,
+                cloudEntityID: nil,
+                deletionScope: "everywhere",
+                lineageID: project.stableLineageID.uuidString
+            )
+        ])
 
         // A delayed single-project/local-backup upload must not recreate the row.
         try await cloudSyncService.syncProjectSnapshot(
@@ -1097,9 +1080,9 @@ final class ProjectCloudSyncTests: XCTestCase {
         try await deletionService.deleteEverywhere(project: project, context: context)
 
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
-        XCTAssertEqual(cloudSyncService.deletedLocalProjectIDs, [project.id.uuidString])
-        XCTAssertEqual(tombstoneService.recordedTombstones.first?.deletionScope, .everywhere)
-        XCTAssertEqual(tombstoneService.recordedTombstones.first?.entityType, .project)
+        XCTAssertEqual(cloudSyncService.deletedLineages.first?.lineageID, project.stableLineageID.uuidString)
+        XCTAssertEqual(cloudSyncService.deletedLineages.first?.localProjectID, project.id.uuidString)
+        XCTAssertTrue(tombstoneService.recordedTombstones.isEmpty)
     }
 
     func testRestoreAllProjectsSummaryMessageShowsRestoredUpdatedCounts() async throws {

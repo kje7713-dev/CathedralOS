@@ -7,6 +7,9 @@ enum ProjectImportMapper {
         if let projectID = payload.project.id.flatMap(UUID.init(uuidString:)) {
             project.id = projectID
         }
+        project.lineageID = payload.project.lineageID.flatMap(UUID.init(uuidString:))
+            ?? payload.project.id.flatMap(UUID.init(uuidString:))
+            ?? project.id
         project.summary = payload.project.summary
         project.notes = payload.project.notes
         project.readingLevel = payload.project.readingLevel

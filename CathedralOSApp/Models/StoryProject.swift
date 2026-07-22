@@ -4,6 +4,9 @@ import SwiftData
 @Model
 class StoryProject {
     var id: UUID
+    /// Stable identity shared by imported/restored copies of this project.
+    /// Optional so existing SwiftData stores migrate without a required-value backfill.
+    var lineageID: UUID?
     var name: String
     var summary: String
     // Audience targeting metadata
@@ -34,6 +37,7 @@ class StoryProject {
 
     init(name: String = "My Story") {
         self.id = UUID()
+        self.lineageID = UUID()
         self.name = name
         self.summary = ""
         self.notes = ""
@@ -50,4 +54,6 @@ class StoryProject {
         self.motifs = []
         self.generations = []
     }
+
+    var stableLineageID: UUID { lineageID ?? id }
 }
