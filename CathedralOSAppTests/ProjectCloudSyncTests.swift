@@ -756,6 +756,94 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(storedProjects.first?.notes, "Newest")
     }
 
+    func testRestoreAllProjectsDeduplicatesHistoricalAliasesByCanonicalLineage() async throws {
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(
+                id: "11111111-1111-1111-1111-111111111111",
+                email: "test@example.com"
+            )),
+            accessToken: "fixture"
+        )
+        let canonicalLineageID = UUID()
+        let newestLocalID = UUID()
+        let olderLocalID = UUID()
+        let project = StoryProject(name: "Historical alias")
+        project.notes = "Canonical newest snapshot"
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (newestLocalID, canonicalLineageID, payload, "2026-07-22T17:30:00Z"),
+            (olderLocalID, canonicalLineageID, payload, "2026-07-20T12:00:00Z")
+        ])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: makeSession(),
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        let report = try await service.restoreAllProjects(into: context)
+        let storedProjects = try context.fetch(FetchDescriptor<StoryProject>())
+
+        XCTAssertEqual(report.cloudProjectCountBefore, 2)
+        XCTAssertEqual(report.insertedCount, 1)
+        XCTAssertEqual(report.duplicateWarnings.count, 1)
+        XCTAssertEqual(storedProjects.count, 1)
+        XCTAssertEqual(storedProjects.first?.id, newestLocalID)
+        XCTAssertEqual(storedProjects.first?.lineageID, canonicalLineageID)
+    }
+
+    func testRestoreAllProjectsKeepsIdenticalContentWithDistinctLineages() async throws {
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(
+                id: "11111111-1111-1111-1111-111111111111",
+                email: "test@example.com"
+            )),
+            accessToken: "fixture"
+        )
+        let first = StoryProject(name: "Same visible project")
+        let second = StoryProject(name: "Same visible project")
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (first.id, first.stableLineageID, ProjectSchemaTemplateBuilder.build(project: first), "2026-07-22T17:30:00Z"),
+            (second.id, second.stableLineageID, ProjectSchemaTemplateBuilder.build(project: second), "2026-07-22T17:29:00Z")
+        ])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: makeSession(),
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        let report = try await service.restoreAllProjects(into: context)
+        let storedProjects = try context.fetch(FetchDescriptor<StoryProject>())
+
+        XCTAssertEqual(report.insertedCount, 2)
+        XCTAssertTrue(report.duplicateWarnings.isEmpty)
+        XCTAssertEqual(Set(storedProjects.map(\.id)), Set([first.id, second.id]))
+        XCTAssertEqual(Set(storedProjects.compactMap(\.lineageID)), Set([first.stableLineageID, second.stableLineageID]))
+    }
+
     func testRestoreAllProjectsSkipsTombstonedProjectsDuringNormalRestore() async throws {
         let session = makeSession()
         let authService = MockProjectCloudSyncAuthService(
@@ -1281,6 +1369,27 @@ final class ProjectCloudSyncTests: XCTestCase {
             )
             return [
                 "local_project_id": localProjectID.uuidString,
+                "snapshot_json": payloadObject,
+                "updated_at": updatedAt
+            ]
+        }
+        return try JSONSerialization.data(withJSONObject: responseObject, options: [.sortedKeys])
+    }
+
+    private func makeRestoreResponse(
+        rowsWithLineage rows: [(UUID, UUID, ProjectImportExportPayload, String)]
+    ) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let responseObject: [[String: Any]] = try rows.map {
+            localProjectID, lineageID, payload, updatedAt in
+            let payloadData = try encoder.encode(payload)
+            let payloadObject = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
+            )
+            return [
+                "local_project_id": localProjectID.uuidString,
+                "lineage_id": lineageID.uuidString,
                 "snapshot_json": payloadObject,
                 "updated_at": updatedAt
             ]

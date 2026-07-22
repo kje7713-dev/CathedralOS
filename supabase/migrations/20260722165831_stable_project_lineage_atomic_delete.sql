@@ -1,4 +1,6 @@
 -- Stable project lineage and atomic Delete Everywhere.
+-- History note: production recorded this migration as 20260722165831; the
+-- repository filename is intentionally reconciled to that applied version.
 -- Compatibility: legacy rows deterministically use snapshot lineage_id, then a
 -- UUID local_project_id, then the row id. Existing UUID tombstones remain usable.
 -- Rollback: drop the trigger/function and lineage indexes first; columns may be
@@ -11,12 +13,12 @@ update public.project_snapshots
 set lineage_id = coalesce(
   case
     when coalesce(snapshot_json #>> '{project,lineageID}', '')
-      ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+      ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     then (snapshot_json #>> '{project,lineageID}')::uuid
   end,
   case
     when coalesce(local_project_id, '')
-      ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+      ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     then local_project_id::uuid
   end,
   id
@@ -36,13 +38,13 @@ alter table public.sync_tombstones
 
 update public.sync_tombstones t
 set lineage_id = coalesce(
-  case
-    when coalesce(t.local_entity_id, '')
-      ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-    then t.local_entity_id::uuid
-  end,
   (select p.lineage_id from public.project_snapshots p
     where p.user_id = t.user_id and p.id = t.cloud_entity_id),
+  case
+    when coalesce(t.local_entity_id, '')
+      ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    then t.local_entity_id::uuid
+  end,
   t.id
 )
 where t.entity_type = 'project' and t.lineage_id is null;
@@ -90,7 +92,7 @@ begin
         limit 1),
       case
         when coalesce(new.local_entity_id, '')
-          ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+          ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
         then new.local_entity_id::uuid
       end
     );
@@ -116,12 +118,12 @@ begin
     new.lineage_id := coalesce(
       case
         when coalesce(new.snapshot_json #>> '{project,lineageID}', '')
-          ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+          ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
         then (new.snapshot_json #>> '{project,lineageID}')::uuid
       end,
       case
         when coalesce(new.local_project_id, '')
-          ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+          ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
         then new.local_project_id::uuid
       end,
       new.id
