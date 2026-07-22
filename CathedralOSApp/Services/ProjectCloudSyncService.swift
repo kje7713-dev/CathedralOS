@@ -18,6 +18,8 @@ enum ProjectCloudSyncError: Error, LocalizedError {
     case duplicateChildIDsDetected(localProjectID: String, detail: String)
     /// More than one owned cloud row claims the project identity, so deletion cannot safely choose one.
     case ambiguousSnapshotIdentity(localProjectID: String)
+    /// Supabase accepted the DELETE request but did not report the resolved row as deleted.
+    case snapshotDeletionNotConfirmed(localProjectID: String)
 
     var errorDescription: String? {
         switch self {
@@ -47,6 +49,8 @@ enum ProjectCloudSyncError: Error, LocalizedError {
             return "Duplicate child IDs detected in project \(localProjectID) before save. Restore stopped: \(detail)"
         case .ambiguousSnapshotIdentity(let localProjectID):
             return "Cloud deletion found multiple snapshots for project \(localProjectID). Sync or restore your projects, then try again. Your local project was kept."
+        case .snapshotDeletionNotConfirmed:
+            return "Cloud deletion could not be confirmed. Your local project was kept."
         }
     }
 }
@@ -311,6 +315,9 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             request.setValue("return=representation", forHTTPHeaderField: "Prefer")
 
             let deleted = try await fetch([ProjectSnapshotDeleteResponse].self, request: request)
+            guard !deleted.isEmpty else {
+                throw ProjectCloudSyncError.snapshotDeletionNotConfirmed(localProjectID: localProjectID)
+            }
             guard deleted.allSatisfy({ $0.id == resolvedRow.id }) else {
                 throw ProjectCloudSyncError.decodingError(ProjectSnapshotDeleteVerificationError.unverified)
             }
