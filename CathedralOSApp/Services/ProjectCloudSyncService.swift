@@ -661,6 +661,13 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     }
 
     private func restoreKey(for row: ProjectSnapshotCloudRecord) -> String {
+        // The server canonicalizes every proven historical alias onto one lineage.
+        // Prefer that durable identity so rows with drifted local_project_id values
+        // reconcile once. Separate projects keep separate lineage IDs even when
+        // their user-visible content is identical.
+        if let lineageID = row.lineageID {
+            return "lineage:\(lineageID.uuidString.lowercased())"
+        }
         let primary = row.localProjectID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !primary.isEmpty {
             return "local:\(primary)"
