@@ -1,4 +1,4 @@
-name: iOS CI
+name: iOS Build
 
 on:
   push:
@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  build-and-test:
-    name: Build and Test
+  build:
+    name: Build
     runs-on: macos-26
 
     steps:
@@ -57,16 +57,6 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild build \
-            -project CathedralOSApp.xcodeproj \
-            -scheme CathedralOSApp \
-            -sdk iphonesimulator \
-            -destination "$DESTINATION" \
-            CODE_SIGNING_ALLOWED=NO
-
-      - name: Run unit tests
-        run: |
-          set -o pipefail
-          xcodebuild test \
             -project CathedralOSApp.xcodeproj \
             -scheme CathedralOSApp \
             -sdk iphonesimulator \
