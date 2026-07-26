@@ -251,7 +251,23 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// Push local projects first, then reconcile the cloud snapshot set back into the
     /// same store. An empty/recovery store therefore restores from cloud, while an
     /// existing local store remains the source for unsynced edits.
+    ///
+    /// A pre-upload tombstone reconciliation runs FIRST. This closes the
+    /// legacy window where an older build (or a stale local backup) had
+    /// reintroduced a previously-deleted project into the local store:
+    /// that project is removed locally before any upload can recreate
+    /// its cloud snapshot. The reconciliation fails closed — if we
+    /// cannot determine the authoritative tombstone set, the whole
+    /// sync is skipped rather than risking a resurrection.
     private func syncProjects(in context: ModelContext) async throws {
+        let reconciliationReport = try await projectSyncService.reconcileProjectTombstonesBeforeUpload(
+            backupDeletionService: LocalProjectBackupService.shared,
+            in: context
+        )
+        if reconciliationReport.deletedCount > 0 {
+            logger.log("Pre-upload tombstone reconciliation removed \(reconciliationReport.deletedCount, privacy: .public) local project(s).")
+        }
+
         var uploadError: Error?
         do {
             try await projectSyncService.syncAllProjects(in: context)

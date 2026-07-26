@@ -397,7 +397,26 @@ struct ProjectsListView: View {
         }
 
         // Sync surviving projects to cloud if signed in.
+        //
+        // Run the pre-upload tombstone reconciliation first so that any
+        // tombstoned project reintroduced into the local store by an older
+        // build is removed before the survivors are pushed. This is the
+        // recovery-path counterpart of the gate in DataDurabilityCoordinator.
+        //
+        // This path is fail-open with backstop: if the tombstone fetch
+        // itself fails, we still proceed with syncAllProjects because its
+        // inline tombstone checks prevent the cloud-row resurrection we
+        // care about. Failing closed here would block a manual recovery
+        // action on a transient Supabase error.
         if BackendAuthService.shared.authState.isSignedIn {
+            do {
+                _ = try await ProjectCloudSyncService.shared.reconcileProjectTombstonesBeforeUpload(
+                    backupDeletionService: LocalProjectBackupService.shared,
+                    in: modelContext
+                )
+            } catch {
+                print("Pre-upload tombstone reconciliation failed in ProjectsListView recovery path: \(error)")
+            }
             try? await ProjectCloudSyncService.shared.syncAllProjects(in: modelContext)
         }
     }
