@@ -408,6 +408,16 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             if tombstones.isTombstoned(cloudID: record.id) { continue }
             if let localID = record.localGenerationId, tombstones.isTombstoned(localID: localID) { continue }
 
+            // Skip if the parent project was tombstoned via Delete Everywhere.
+            // The project tombstone is recorded with the project's local UUID as
+            // local_entity_id (and lineage_id), so either match blocks this
+            // orphan output from being restored. Without this, the next sync
+            // would pull the orphan, GenerationOutputRecoveryProjectResolver
+            // would fabricate a fallback StoryProject to hold it, and that
+            // fallback would upload to cloud — appearing as a phantom
+            // resurrection of the deleted project under fresh UUIDs.
+            if let parentID = record.projectLocalID, tombstones.isTombstoned(localID: parentID) { continue }
+
             // First try to match by cloudGenerationOutputID, then by localGenerationId.
             let existing = findLocal(cloudID: record.id, localID: record.localGenerationId, in: context)
 
