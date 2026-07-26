@@ -88,6 +88,26 @@ protocol ProjectCloudSyncServiceProtocol {
     func cloudSnapshotPresence() async -> CloudSnapshotPresence
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport
+    /// Reconcile local SwiftData projects against a tombstone set BEFORE upload.
+    /// Matching projects (by local id OR lineage id) are deleted from the context,
+    /// their local JSON backups are removed, and the context is saved. Returns a
+    /// report describing what was deleted. Throws on context save failure so the
+    /// caller can fail closed before any upload.
+    func reconcileLocalProjectsAgainstTombstones(
+        tombstones: SyncTombstoneSet,
+        backupDeletionService: any ProjectBackupDeletionServiceProtocol,
+        in context: ModelContext
+    ) throws -> ProjectReconciliationReport
+    /// Fetch the current authenticated user's project tombstones and
+    /// reconcile the local SwiftData store against them BEFORE any
+    /// upload. Fails closed (throws) on tombstone-fetch failure so the
+    /// caller can skip the upload rather than risk resurrecting a
+    /// deleted project. Backup-deletion failures are non-fatal and
+    /// surfaced in the report.
+    func reconcileProjectTombstonesBeforeUpload(
+        backupDeletionService: any ProjectBackupDeletionServiceProtocol,
+        in context: ModelContext
+    ) async throws -> ProjectReconciliationReport
 }
 
 extension ProjectCloudSyncServiceProtocol {
@@ -105,6 +125,17 @@ extension ProjectCloudSyncServiceProtocol {
     @MainActor
     func restoreAllProjects(into context: ModelContext) async throws -> ProjectRestoreReport {
         try await restoreAllProjects(into: context, includeTombstoned: false)
+    }
+
+    /// Default no-op reconciliation. Concrete services should override this to
+    /// actually delete tombstoned local projects. Tests that need to verify
+    /// deletion behaviour inject a service that overrides this implementation.
+    func reconcileLocalProjectsAgainstTombstones(
+        tombstones: SyncTombstoneSet,
+        backupDeletionService: any ProjectBackupDeletionServiceProtocol,
+        in context: ModelContext
+    ) throws -> ProjectReconciliationReport {
+        ProjectReconciliationReport(deletedCount: 0, deletedLocalIDs: [], deletedLineageIDs: [], skippedBackupFailureIDs: [])
     }
 }
 
@@ -126,6 +157,33 @@ struct ProjectRestoreReport {
         }
         if skippedTombstonedCount > 0 {
             parts.append("Skipped (deleted): \(skippedTombstonedCount)")
+        }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// Outcome of the pre-upload tombstone reconciliation step.
+///
+/// Counts how many local SwiftData projects were removed because their stable
+/// identity matched a tombstone fetched for the currently authenticated user.
+/// Matching is by local id OR lineage id; matching projects are deleted from
+/// the context, their local JSON recovery backups are removed, and the context
+/// is saved. `skippedBackupFailureIDs` lists projects whose backups could not
+/// be removed (the local deletion still happened, but those files may still
+/// be recovered from disk — surfaced for diagnostics).
+struct ProjectReconciliationReport {
+    let deletedCount: Int
+    let deletedLocalIDs: [String]
+    let deletedLineageIDs: [String]
+    let skippedBackupFailureIDs: [String]
+
+    var summaryMessage: String {
+        if deletedCount == 0 {
+            return "No local projects needed tombstone reconciliation."
+        }
+        var parts = ["Reconciled deleted projects: \(deletedCount)"]
+        if !skippedBackupFailureIDs.isEmpty {
+            parts.append("Backup cleanup failures: \(skippedBackupFailureIDs.count)")
         }
         return parts.joined(separator: ", ")
     }
@@ -410,6 +468,118 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     private func canonicalProjectIdentity(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return UUID(uuidString: trimmed)?.uuidString.lowercased() ?? trimmed.lowercased()
+    }
+
+    /// Reconcile local SwiftData projects against the supplied tombstone set.
+    /// Deletes any project whose local id OR lineage id matches a tombstone,
+    /// removes its local JSON recovery backups, and saves the context.
+    ///
+    /// The caller (DataDurabilityCoordinator) is responsible for fetching the
+    /// tombstone set and for failing closed on tombstone-fetch errors — this
+    /// method assumes the supplied set is the current best knowledge for the
+    /// authenticated user. Matching reuses the existing `SyncTombstoneSet`
+    /// normalization, which lowercases and trims candidate ids, so no second
+    /// normalizer is introduced here.
+    ///
+    /// Throws on context save failure so the caller can fail closed before
+    /// any upload. Backup-deletion failures are non-fatal — the local deletion
+    /// still happens, but those project ids are surfaced in the report.
+    func reconcileLocalProjectsAgainstTombstones(
+        tombstones: SyncTombstoneSet,
+        backupDeletionService: any ProjectBackupDeletionServiceProtocol,
+        in context: ModelContext
+    ) throws -> ProjectReconciliationReport {
+        try Self.reconcileLocalProjects(
+            in: context,
+            against: tombstones,
+            backupDeletionService: backupDeletionService
+        )
+    }
+
+    /// High-level entry point. Fetches the authenticated user's project
+    /// tombstones (which also drains any pending outbox entries) and
+    /// reconciles the local SwiftData store against them. The fetch is
+    /// serialized with other mutations via `mutationGate` so that an
+    /// upload cannot start while reconciliation is in progress.
+    func reconcileProjectTombstonesBeforeUpload(
+        backupDeletionService: any ProjectBackupDeletionServiceProtocol,
+        in context: ModelContext
+    ) async throws -> ProjectReconciliationReport {
+        try await mutationGate.run {
+            _ = try await validatedClientAndSession()
+            let tombstones = try await tombstoneService.fetchProjectTombstones()
+            return try Self.reconcileLocalProjects(
+                in: context,
+                against: tombstones,
+                backupDeletionService: backupDeletionService
+            )
+        }
+    }
+
+    /// Static reconciliation core. Identifies local projects whose
+    /// local id OR lineage id matches a tombstone, deletes them from
+    /// the context, saves the context, then best-effort removes their
+    /// local JSON recovery backups.
+    ///
+    /// Order matters: context delete + save FIRST (a save failure
+    /// rolls back both the deletion and the local-state intent, and
+    /// leaves backups intact for the next reconciliation pass), then
+    /// best-effort backup cleanup. Backup failures do not fail the
+    /// reconciliation — the local deletion still happens.
+    private static func reconcileLocalProjects(
+        in context: ModelContext,
+        against tombstones: SyncTombstoneSet,
+        backupDeletionService: any ProjectBackupDeletionServiceProtocol
+    ) throws -> ProjectReconciliationReport {
+        let projects = try context.fetch(FetchDescriptor<StoryProject>())
+        guard !projects.isEmpty else {
+            return ProjectReconciliationReport(
+                deletedCount: 0,
+                deletedLocalIDs: [],
+                deletedLineageIDs: [],
+                skippedBackupFailureIDs: []
+            )
+        }
+
+        var deletedLocalIDs: [String] = []
+        var deletedLineageIDs: [String] = []
+
+        for project in projects {
+            let localID = project.id.uuidString
+            let lineageID = project.lineageID?.uuidString ?? localID
+            let tombstonedByLocal = tombstones.isTombstoned(localID: localID)
+            let tombstonedByLineage = tombstones.isTombstoned(lineageID: lineageID)
+            if tombstonedByLocal || tombstonedByLineage {
+                context.delete(project)
+                deletedLocalIDs.append(localID)
+                deletedLineageIDs.append(lineageID)
+            }
+        }
+
+        if !deletedLocalIDs.isEmpty {
+            do {
+                try context.save()
+            } catch {
+                context.rollback()
+                throw error
+            }
+        }
+
+        var skippedBackupFailureIDs: [String] = []
+        for localID in deletedLocalIDs {
+            do {
+                try backupDeletionService.deleteBackups(forProjectID: localID)
+            } catch {
+                skippedBackupFailureIDs.append(localID)
+            }
+        }
+
+        return ProjectReconciliationReport(
+            deletedCount: deletedLocalIDs.count,
+            deletedLocalIDs: deletedLocalIDs,
+            deletedLineageIDs: deletedLineageIDs,
+            skippedBackupFailureIDs: skippedBackupFailureIDs
+        )
     }
 
     func cloudSnapshotPresence() async -> CloudSnapshotPresence {

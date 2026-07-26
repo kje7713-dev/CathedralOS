@@ -1329,6 +1329,162 @@ final class ProjectCloudSyncTests: XCTestCase {
         return URLSession(configuration: configuration)
     }
 
+
+private final class ThrowingProjectBackupDeletionService: ProjectBackupDeletionServiceProtocol {
+    let failingProjectID: String
+    init(failingProjectID: String) { self.failingProjectID = failingProjectID }
+
+    func deleteBackups(forProjectID projectID: String) throws -> Int {
+        if projectID == failingProjectID {
+            struct BackupDeletionFailed: Error {}
+            throw BackupDeletionFailed()
+        }
+        return 0
+    }
+}
+
+    // MARK: - Pre-upload tombstone reconciliation
+
+    @MainActor
+    func testReconciliationDeletesProjectMatchingTombstoneLocalID() async throws {
+        let tombstoned = StoryProject(name: "Tombstoned by local id")
+        let survivor = StoryProject(name: "Survivor")
+        let tombstoneSet = try makeProjectTombstoneSet(localProjectID: tombstoned.id.uuidString)
+        let backupDeletion = SpyProjectBackupDeletionService()
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(tombstoned)
+        context.insert(survivor)
+        try context.save()
+
+        let service = ProjectCloudSyncService(
+            tombstoneService: MockProjectTombstoneService()
+        )
+
+        let report = try service.reconcileLocalProjectsAgainstTombstones(
+            tombstones: tombstoneSet,
+            backupDeletionService: backupDeletion,
+            in: context
+        )
+
+        XCTAssertEqual(report.deletedCount, 1)
+        XCTAssertEqual(report.deletedLocalIDs, [tombstoned.id.uuidString])
+        XCTAssertEqual(backupDeletion.deletedProjectIDs, [tombstoned.id.uuidString])
+        let remaining = try context.fetch(FetchDescriptor<StoryProject>())
+        XCTAssertEqual(remaining.map(\.id), [survivor.id])
+    }
+
+    @MainActor
+    func testReconciliationDeletesProjectMatchingTombstoneLineageID() async throws {
+        let project = StoryProject(name: "Lineage-match target")
+        let lineageID = UUID()
+        project.lineageID = lineageID
+        let tombstoneJSON = """
+        {
+            "entity_type": "project",
+            "local_entity_id": null,
+            "cloud_entity_id": null,
+            "deletion_scope": "everywhere",
+            "lineage_id": "\(lineageID.uuidString)"
+        }
+        """
+        let record = try JSONDecoder().decode(SyncTombstoneCloudRecord.self, from: Data(tombstoneJSON.utf8))
+        let tombstoneSet = SyncTombstoneSet(records: [record])
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(project)
+        try context.save()
+
+        let service = ProjectCloudSyncService(
+            tombstoneService: MockProjectTombstoneService()
+        )
+
+        let report = try service.reconcileLocalProjectsAgainstTombstones(
+            tombstones: tombstoneSet,
+            backupDeletionService: SpyProjectBackupDeletionService(),
+            in: context
+        )
+
+        XCTAssertEqual(report.deletedCount, 1)
+        XCTAssertEqual(report.deletedLineageIDs, [lineageID.uuidString])
+        XCTAssertTrue(try context.fetch(FetchDescriptor<StoryProject>()).isEmpty)
+    }
+
+    @MainActor
+    func testReconciliationKeepsNonTombstonedProject() async throws {
+        let survivor = StoryProject(name: "Survivor")
+        survivor.lineageID = UUID()
+        let tombstoneSet = try makeProjectTombstoneSet(localProjectID: UUID().uuidString)
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(survivor)
+        try context.save()
+
+        let service = ProjectCloudSyncService(
+            tombstoneService: MockProjectTombstoneService()
+        )
+
+        let report = try service.reconcileLocalProjectsAgainstTombstones(
+            tombstones: tombstoneSet,
+            backupDeletionService: SpyProjectBackupDeletionService(),
+            in: context
+        )
+
+        XCTAssertEqual(report.deletedCount, 0)
+        XCTAssertTrue(report.deletedLocalIDs.isEmpty)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.id), [survivor.id])
+    }
+
+    @MainActor
+    func testReconciliationHandlesEmptyTombstoneSet() async throws {
+        let project = StoryProject(name: "Unscathed")
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(project)
+        try context.save()
+
+        let service = ProjectCloudSyncService(
+            tombstoneService: MockProjectTombstoneService()
+        )
+
+        let report = try service.reconcileLocalProjectsAgainstTombstones(
+            tombstones: SyncTombstoneSet(records: []),
+            backupDeletionService: SpyProjectBackupDeletionService(),
+            in: context
+        )
+
+        XCTAssertEqual(report.deletedCount, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.id), [project.id])
+    }
+
+    @MainActor
+    func testReconciliationContinuesWhenBackupDeletionThrows() async throws {
+        let tombstonedA = StoryProject(name: "A")
+        let tombstonedB = StoryProject(name: "B")
+        let tombstoneSet = SyncTombstoneSet(records: [
+            try JSONDecoder().decode(SyncTombstoneCloudRecord.self, from: Data("""
+                {"entity_type":"project","local_entity_id":"\(tombstonedA.id.uuidString)","cloud_entity_id":null,"deletion_scope":"everywhere"}
+                """.utf8)),
+            try JSONDecoder().decode(SyncTombstoneCloudRecord.self, from: Data("""
+                {"entity_type":"project","local_entity_id":"\(tombstonedB.id.uuidString)","cloud_entity_id":null,"deletion_scope":"everywhere"}
+                """.utf8))
+        ])
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(tombstonedA)
+        context.insert(tombstonedB)
+        try context.save()
+
+        let service = ProjectCloudSyncService(
+            tombstoneService: MockProjectTombstoneService()
+        )
+
+        let report = try service.reconcileLocalProjectsAgainstTombstones(
+            tombstones: tombstoneSet,
+            backupDeletionService: ThrowingProjectBackupDeletionService(failingProjectID: tombstonedA.id.uuidString),
+            in: context
+        )
+
+        XCTAssertEqual(report.deletedCount, 2)
+        XCTAssertEqual(report.skippedBackupFailureIDs, [tombstonedA.id.uuidString])
+        XCTAssertTrue(try context.fetch(FetchDescriptor<StoryProject>()).isEmpty)
+    }
+
     private func makeRestoreResponse(localProjectID: UUID, payload: ProjectImportExportPayload) throws -> Data {
         try makeRestoreResponse(rows: [
             (localProjectID, payload, "2026-05-15T14:00:00Z")
