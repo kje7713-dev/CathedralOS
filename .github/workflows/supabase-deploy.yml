@@ -32,7 +32,7 @@ jobs:
         run: |
           supabase migration repair \
             --status applied \
-            20260722190336_reconcile_tombstone_linked_project_aliases
+            20260722190336
       - name: Run database migrations
         run: supabase db push --password "$SUPABASE_DB_PASSWORD"
 
