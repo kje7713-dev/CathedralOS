@@ -311,13 +311,13 @@ struct ProjectDetailView: View {
         }
     }
 
-    // MARK: Prompt Packs Section
+    // MARK: Story Packs Section
 
     private var promptPacksSection: some View {
         Section {
             let sorted = (project.promptPacks).sorted { $0.name < $1.name }
             if sorted.isEmpty {
-                CathedralEmptyState(label: "No prompt packs yet.")
+                CathedralEmptyState(label: "No story packs yet.")
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
@@ -351,7 +351,7 @@ struct ProjectDetailView: View {
                 }
             }
         } header: {
-            CathedralSectionHeader("Prompt Packs") { showAddPromptPack = true }
+            CathedralSectionHeader("Story Packs") { showAddPromptPack = true }
                 .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }

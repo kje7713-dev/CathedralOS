@@ -313,7 +313,7 @@ struct GenerationOutputDetailView: View {
             CathedralCard {
                 VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
                     if !output.sourcePromptPackName.isEmpty {
-                        provenanceRow(label: "Prompt Pack", value: output.sourcePromptPackName)
+                        provenanceRow(label: "Story Pack", value: output.sourcePromptPackName)
                         Divider()
                     }
                     provenanceRow(label: "Action", value: output.generationAction.capitalized)

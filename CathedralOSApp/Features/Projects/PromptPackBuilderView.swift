@@ -233,7 +233,7 @@ struct PromptPackBuilderView: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
+                    Button("Save") { Task { await save() } }
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
@@ -241,7 +241,7 @@ struct PromptPackBuilderView: View {
         }
         .tint(CathedralTheme.Colors.accent)
         .interactiveDismissDisabled(isEditing || !name.trimmingCharacters(in: .whitespaces).isEmpty)
-        .alert("Could Not Save Prompt Pack", isPresented: Binding(
+        .alert("Could Not Save Story Pack", isPresented: Binding(
             get: { saveErrorMessage != nil },
             set: { if !$0 { saveErrorMessage = nil } }
         )) {
@@ -285,7 +285,7 @@ struct PromptPackBuilderView: View {
         selectedMotifIDs = Set(p.selectedMotifIDs)
     }
 
-    private func save() {
+    private func save() async {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         guard !trimmedName.isEmpty else { return }
 
@@ -304,8 +304,11 @@ struct PromptPackBuilderView: View {
         targetPack.project = project
         do {
             try modelContext.save()
-            let ctx = modelContext
-            Task { await DataDurabilityCoordinator.shared.saveProject(project, context: ctx) }
+            // Await the cloud sync so it isn't abandoned when the view dismisses.
+            // Without this, the local save succeeds but the cloud sync is a
+            // fire-and-forget Task that runs after `dismiss()`, and the captured
+            // `modelContext` is invalidated mid-flight, so the sync silently drops.
+            _ = await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
             dismiss()
         } catch {
             modelContext.rollback()
