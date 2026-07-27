@@ -926,7 +926,7 @@ final class SupabaseGenerationOutputSyncServiceRequestTests: XCTestCase {
         await tombstones.record(SyncTombstone(
             userID: userID, entityType: .generationOutput,
             localEntityID: output.id.uuidString, cloudEntityID: nil,
-            deletionScope: .everywhere, reason: nil
+            deletionScope: .everywhere, reason: nil, projectName: nil
         ))
         GenerationOutputSyncURLProtocol.requestHandler = { _ in
             XCTFail("A tombstoned output must not issue an upload request")

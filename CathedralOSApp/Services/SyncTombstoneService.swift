@@ -11,6 +11,11 @@ struct SyncTombstone: Codable {
     let cloudEntityID: String?
     let deletionScope: DeletionScope
     let reason: String?
+    /// Project name for project tombstones. Used by the reconcile fallback
+    /// to match legacy generation_outputs whose `local_project_id` was never
+    /// uploaded (older iOS builds populated `project_name` but not
+    /// `local_project_id`). Ignored for non-project tombstones.
+    let projectName: String?
 
     enum EntityType: String, Codable {
         case project            = "project"
@@ -31,6 +36,7 @@ struct SyncTombstone: Codable {
         case cloudEntityID  = "cloud_entity_id"
         case deletionScope  = "deletion_scope"
         case reason
+        case projectName    = "project_name"
     }
 }
 
@@ -42,19 +48,22 @@ struct SyncTombstoneCloudRecord: Decodable {
     let cloudEntityID: String?
     let deletionScope: String
     let lineageID: String?
+    let projectName: String?
 
     init(
         entityType: String,
         localEntityID: String?,
         cloudEntityID: String?,
         deletionScope: String,
-        lineageID: String? = nil
+        lineageID: String? = nil,
+        projectName: String? = nil
     ) {
         self.entityType = entityType
         self.localEntityID = localEntityID
         self.cloudEntityID = cloudEntityID
         self.deletionScope = deletionScope
         self.lineageID = lineageID
+        self.projectName = projectName
     }
 
     init(from decoder: Decoder) throws {
@@ -64,6 +73,7 @@ struct SyncTombstoneCloudRecord: Decodable {
         cloudEntityID = try container.decodeIfPresent(String.self, forKey: .cloudEntityID)
         deletionScope = try container.decode(String.self, forKey: .deletionScope)
         lineageID = try container.decodeIfPresent(String.self, forKey: .lineageID)
+        projectName = try container.decodeIfPresent(String.self, forKey: .projectName)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -72,6 +82,7 @@ struct SyncTombstoneCloudRecord: Decodable {
         case cloudEntityID  = "cloud_entity_id"
         case deletionScope  = "deletion_scope"
         case lineageID      = "lineage_id"
+        case projectName    = "project_name"
     }
 }
 
@@ -83,6 +94,7 @@ struct SyncTombstoneSet {
 
     private var localIDs: Set<String> = []
     private var cloudIDs: Set<String> = []
+    private var projectNames: Set<String> = []
 
     init(records: [SyncTombstoneCloudRecord]) {
         for record in records {
@@ -94,6 +106,9 @@ struct SyncTombstoneSet {
             }
             if let cid = record.cloudEntityID?.trimmingCharacters(in: .whitespacesAndNewlines), !cid.isEmpty {
                 cloudIDs.insert(Self.normalized(cid))
+            }
+            if let name = record.projectName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+                projectNames.insert(Self.normalized(name))
             }
         }
     }
@@ -111,6 +126,25 @@ struct SyncTombstoneSet {
     }
 
     func isTombstoned(lineageID: String) -> Bool { isTombstoned(localID: lineageID) }
+
+    /// Returns true when the given project name appears in the tombstone set.
+    /// Used as a fallback for legacy generation_outputs whose parent project
+    /// was tombstoned but whose `local_project_id` was never uploaded.
+    func isTombstoned(projectName candidate: String) -> Bool {
+        guard !candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return projectNames.contains(Self.normalized(candidate))
+    }
+
+    /// Returns a new set containing tombstone identity from both this set and
+    /// `other`. Used to merge output and project tombstones for the reconcile
+    /// path so the parent-project name/ID fallback can skip orphan outputs.
+    func merged(with other: SyncTombstoneSet) -> SyncTombstoneSet {
+        var combined = SyncTombstoneSet(records: [])
+        combined.localIDs = self.localIDs.union(other.localIDs)
+        combined.cloudIDs = self.cloudIDs.union(other.cloudIDs)
+        combined.projectNames = self.projectNames.union(other.projectNames)
+        return combined
+    }
 
     private static func normalized(_ id: String) -> String {
         id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -205,7 +239,7 @@ final class SupabaseSyncTombstoneService: SyncTombstoneServiceProtocol {
         var components = URLComponents(url: restURL(client: client, path: "sync_tombstones"), resolvingAgainstBaseURL: false)
         components?.queryItems = [
             URLQueryItem(name: "entity_type", value: "eq.\(entityType)"),
-            URLQueryItem(name: "select", value: "entity_type,local_entity_id,cloud_entity_id,deletion_scope,lineage_id")
+            URLQueryItem(name: "select", value: "entity_type,local_entity_id,cloud_entity_id,deletion_scope,lineage_id,project_name")
         ]
         guard let url = components?.url else {
             return SyncTombstoneSet(records: [])
@@ -232,7 +266,8 @@ final class SupabaseSyncTombstoneService: SyncTombstoneServiceProtocol {
                     localEntityID: $0.localEntityID,
                     cloudEntityID: $0.cloudEntityID,
                     deletionScope: $0.deletionScope.rawValue,
-                    lineageID: nil
+                    lineageID: nil,
+                    projectName: $0.projectName
                 )
             }
         return SyncTombstoneSet(records: records + pendingRecords)

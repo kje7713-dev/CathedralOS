@@ -416,6 +416,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
 
             // Cover every identity used by restore/upload before the DELETE. This
             // closes the delete-vs-upload race even for drifted legacy rows.
+            let tombstoneProjectName = resolvedRow.snapshotJSON.projectName
             for identity in resolvedRow.claimedIdentities {
                 await tombstoneService.record(
                     SyncTombstone(
@@ -424,7 +425,8 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                         localEntityID: identity,
                         cloudEntityID: resolvedRow.id,
                         deletionScope: .everywhere,
-                        reason: nil
+                        reason: nil,
+                        projectName: tombstoneProjectName
                     )
                 )
             }
@@ -1648,7 +1650,8 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
                     localEntityID: projectID,
                     cloudEntityID: nil,
                     deletionScope: .localOnly,
-                    reason: nil
+                    reason: nil,
+                    projectName: project.name
                 )
             )
         }
@@ -1814,6 +1817,7 @@ private enum ProjectSnapshotJSONValue: Decodable, Equatable {
     }
 
     var projectID: String? { projectString(forKey: "id") }
+    var projectName: String? { projectString(forKey: "name") }
     func removingProjectID() -> Self {
         guard case .object(var root) = self,
               case .object(var project)? = root["project"] else {
