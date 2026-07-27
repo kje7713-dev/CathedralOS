@@ -1,0 +1,32 @@
+-- Add project_name to sync_tombstones so the iOS reconcile can skip legacy
+-- generation_outputs whose local_project_id was never uploaded (older iOS
+-- builds populated project_name but not local_project_id on upload).
+--
+-- Without this column, a tombstone only matches on local_project_id; legacy
+-- outputs fall through the reconciliation guard and the resolver fabricates a
+-- fallback project, looping the phantom-fallback-projects bug until the
+-- creation is undone or the orphan output is deleted.
+--
+-- The iOS reconcile now checks, in order:
+--   1. record.projectLocalID against tombstone         (fast path, new outputs)
+--   2. record.projectName   against tombstone.project_name (legacy fallback)
+--
+-- What this migration does NOT do:
+--   * Backfill the 4 existing tombstones. Their 22 legacy generation_outputs
+--     were cleaned up by the β stopgap (PR #200), so there is no source row to
+--     copy a project_name from. The 4 existing tombstones keep project_name
+--     NULL. Going forward, every new tombstone uploaded by the current iOS
+--     build includes project_name, so the name-match fallback covers future
+--     cases. If a legacy device later uploads an orphan output for one of the
+--     4 already-deleted phantom projects, the reconcile will still attempt to
+--     fabricate a fallback — the same bug, for a narrow edge case. To cover
+--     that too, the user can re-create the 4 phantoms and delete them again
+--     on the new build, which will upload fresh tombstones with project_name.
+--
+-- PostgREST cache: after this migration runs, the PostgREST schema cache
+-- needs a refresh to expose project_name through /rest/v1. The add+drop of a
+-- throwaway __reload_trigger column on the same table (the trick used for
+-- local_project_id) works here too.
+
+alter table public.sync_tombstones
+  add column if not exists project_name text;

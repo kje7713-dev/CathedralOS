@@ -208,7 +208,11 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             let records = try await fetch([GenerationOutputCloudRecord].self, request: request)
             // A failed tombstone fetch must fail closed. Reconciling without delete
             // knowledge can resurrect records after an offline deletion.
-            let tombstones = try await tombstoneService.fetchGenerationOutputTombstones()
+            // Merge output and project tombstones so the parent-project name/ID
+            // fallback can skip orphan outputs whose parent was deleted.
+            let outputTombstones = try await tombstoneService.fetchGenerationOutputTombstones()
+            let projectTombstones = try await tombstoneService.fetchProjectTombstones()
+            let tombstones = outputTombstones.merged(with: projectTombstones)
             reconcile(records, tombstones: tombstones, into: context)
             try persistContext(context, stage: "cloud restore")
             OutputSyncActivityStore.shared.recordSuccess("Restored \(records.count) cloud outputs.")
@@ -417,6 +421,10 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             // fallback would upload to cloud — appearing as a phantom
             // resurrection of the deleted project under fresh UUIDs.
             if let parentID = record.projectLocalID, tombstones.isTombstoned(localID: parentID) { continue }
+            // Name fallback: cover legacy generation_outputs whose parent project
+            // was tombstoned but whose `local_project_id` was never uploaded by
+            // older iOS builds. Matches against tombstone.project_name.
+            if tombstones.isTombstoned(projectName: record.projectName) { continue }
 
             // First try to match by cloudGenerationOutputID, then by localGenerationId.
             let existing = findLocal(cloudID: record.id, localID: record.localGenerationId, in: context)
@@ -690,7 +698,8 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
                 localEntityID: outputID.uuidString,
                 cloudEntityID: UUID(uuidString: cloudID)?.uuidString,
                 deletionScope: .localOnly,
-                reason: nil
+                reason: nil,
+                projectName: nil
             ))
         }
     }
@@ -923,7 +932,8 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
                 localEntityID: outputID.uuidString,
                 cloudEntityID: UUID(uuidString: cloudID)?.uuidString,
                 deletionScope: .everywhere,
-                reason: nil
+                reason: nil,
+                projectName: nil
             ))
         }
 

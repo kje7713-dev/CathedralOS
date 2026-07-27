@@ -496,7 +496,8 @@ final class DataDurabilityTests: XCTestCase {
             localEntityID: UUID().uuidString,
             cloudEntityID: nil,
             deletionScope: .everywhere,
-            reason: nil
+            reason: nil,
+            projectName: nil
         )
 
         store.save(tombstone)
