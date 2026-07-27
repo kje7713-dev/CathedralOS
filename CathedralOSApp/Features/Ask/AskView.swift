@@ -69,7 +69,7 @@ struct AskView: View {
                     // Actions
                     VStack(spacing: CathedralTheme.Spacing.sm) {
                         CathedralPrimaryButton(
-                            showCopiedConfirmation ? "Copied" : "Copy Prompt Pack",
+                            showCopiedConfirmation ? "Copied" : "Copy Story Pack",
                             systemImage: showCopiedConfirmation ? "checkmark" : "doc.on.doc"
                         ) {
                             UIPasteboard.general.string = assembledOutput
@@ -80,7 +80,7 @@ struct AskView: View {
                         }
                         .disabled(isQuestionEmpty)
 
-                        CathedralSecondaryButton("Share Prompt Pack", systemImage: "square.and.arrow.up") {
+                        CathedralSecondaryButton("Share Story Pack", systemImage: "square.and.arrow.up") {
                             showShareSheet = true
                         }
                         .disabled(isQuestionEmpty)
