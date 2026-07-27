@@ -68,6 +68,12 @@ private struct AppRootView: View {
     }
 
     private func performLaunchRecoveryTasks() async {
+        // Proactively refresh the JWT before any data durability work. Eliminates
+        // the cold-launch 401/PGRST303 "JWT expired" window: the stored JWT in the
+        // keychain may be past its TTL by the time the first PostgREST query runs.
+        // Mid-session expiry is still handled by
+        // AuthSessionResolver.retryOnceAfterExpiredJWT.
+        _ = try? await AuthSessionResolver.shared.refreshSessionIfNeeded()
         _ = await DataDurabilityCoordinator.shared.performAppLaunch(
             context: modelContext,
             isFirstLaunchAfterUpdate: firstLaunchAfterUpdate,
