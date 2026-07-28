@@ -70,6 +70,14 @@ struct ProjectsListView: View {
                                 .foregroundStyle(CathedralTheme.Colors.accent)
                         }
 
+                        Button {
+                            NotificationCenter.default.post(name: Notification.Name("showWelcomeRequested"), object: nil)
+                        } label: {
+                            Image(systemName: "questionmark.circle")
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        }
+                        .accessibilityLabel("Show welcome")
+
                         Button { showAddProject = true } label: {
                             Image(systemName: "plus")
                                 .foregroundStyle(CathedralTheme.Colors.accent)
