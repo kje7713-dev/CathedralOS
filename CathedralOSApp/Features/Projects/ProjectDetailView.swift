@@ -95,31 +95,14 @@ struct ProjectDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             if !advancedMode {
-                if firstGenerateCompleted {
-                    modePicker
-                } else {
-                    // Tutorial mode: step indicator guides authoring progression.
-                    // Segmented picker is hidden since all sections are visible below.
-                    TutorialStepBanner(step: tutorialStep)
-                }
+                // Tutorial step banner + segmented picker are both visible from
+                // day one. The picker scopes the List to one bucket at a time;
+                // the banner tracks authoring progression across buckets.
+                TutorialStepBanner(step: tutorialStep)
+                modePicker
             }
             List {
-                if !firstGenerateCompleted {
-                    // Tutorial mode: show all sections so the user can navigate freely.
-                    // Step indicator (in VStack above) + segmented picker (when shown)
-                    // guide authoring progression.
-                    summarySection
-                    audienceSection
-                    charactersSection
-                    settingSection
-                    sparksSection
-                    aftertastesSection
-                    relationshipsSection
-                    themeQuestionsSection
-                    motifsSection
-                    promptPacksSection
-                    generationsSection
-                } else if advancedMode {
+                if advancedMode {
                     summarySection
                     audienceSection
                     charactersSection
