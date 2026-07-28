@@ -103,6 +103,7 @@ struct ProjectDetailView: View {
                     // Segmented picker is hidden since all sections are visible below.
                     TutorialStepBanner(step: tutorialStep)
                 }
+            }
             List {
                 if !firstGenerateCompleted {
                     // Tutorial mode: show all sections so the user can navigate freely.
@@ -251,6 +252,7 @@ struct ProjectDetailView: View {
         .onDisappear {
             Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
         }
+    }
     }
     }
 
