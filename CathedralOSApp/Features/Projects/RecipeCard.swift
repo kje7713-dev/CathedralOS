@@ -139,10 +139,10 @@ struct RecipeCard: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
         .sheet(isPresented: $showSharePrompt) {
-            ShareSheet(items: [promptText])
+            ShareSheet(activityItems: [promptText])
         }
         .sheet(isPresented: $showShareJSON) {
-            ShareSheet(items: [jsonText])
+            ShareSheet(activityItems: [jsonText])
         }
         .alert("Generate Chapter?", isPresented: $showChapterConfirm) {
             Button("Cancel", role: .cancel) {}
@@ -639,7 +639,7 @@ struct RecipeCard: View {
     private var recipeOutputs: [GenerationOutput] {
         project.generations
             .filter { $0.sourcePromptPackID == pack.id }
-            .sorted { $0.createdAt > $0.createdAt }
+            .sorted { $0.createdAt > $1.createdAt }
     }
 
     private var outputsSection: some View {
@@ -957,14 +957,3 @@ struct RecipeCard: View {
     }
 }
 
-// MARK: - Share Sheet (UIKit bridge)
-
-private struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
