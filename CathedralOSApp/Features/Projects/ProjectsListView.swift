@@ -100,7 +100,12 @@ struct ProjectsListView: View {
                 pendingNavigationProject = project
             })
         }
-        .sheet(isPresented: $showAddProject) {
+        .sheet(isPresented: $showAddProject, onDismiss: {
+            if let project = pendingNavigationProject {
+                navigationPath.append(project)
+                pendingNavigationProject = nil
+            }
+        }) {
             addProjectSheet
         }
         .sheet(item: $projectToRename) { project in
@@ -341,10 +346,10 @@ struct ProjectsListView: View {
         guard !trimmed.isEmpty else { return }
         let p = StoryProject(name: trimmed)
         modelContext.insert(p)
-        // Push navigation synchronously to avoid the race that briefly opens
-        // the detail view and then immediately pops back to the list.
-        navigationPath.append(p)
-        pendingNavigationProject = nil
+        // Defer the navigation push to the sheet's onDismiss callback — same
+        // pattern the import flow uses. The synchronous push before dismissal
+        // raced with sheet teardown and popped the new project back to the list.
+        pendingNavigationProject = p
         newProjectName = ""
         showAddProject = false
         Task { await DataDurabilityCoordinator.shared.saveProject(p, context: modelContext) }
