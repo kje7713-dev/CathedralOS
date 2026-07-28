@@ -93,7 +93,6 @@ struct ProjectDetailView: View {
     }
 
     var body: some View {
-        NavigationStack {
         VStack(spacing: 0) {
             if !advancedMode {
                 if firstGenerateCompleted {
@@ -252,7 +251,6 @@ struct ProjectDetailView: View {
         .onDisappear {
             Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
         }
-    }
     }
 
     // MARK: - Mode Picker / First-run hint
