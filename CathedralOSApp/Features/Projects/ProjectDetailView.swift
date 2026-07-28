@@ -54,27 +54,71 @@ struct ProjectDetailView: View {
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
     @AppStorage("cathedralos.firstGenerateCompleted") private var firstGenerateCompleted = false
+    @AppStorage("cathedralos.welcomeDismissed") private var welcomeDismissed = false
 
     private var storyEditorMode: StoryEditorMode {
         StoryEditorMode(rawValue: storyEditorModeRaw) ?? .story
     }
 
+    // MARK: - Tutorial step computation
+
+    private var inTutorialMode: Bool {
+        !firstGenerateCompleted
+    }
+
+    private var hasStoryContent: Bool {
+        !project.summary.isEmpty ||
+        !project.readingLevel.isEmpty ||
+        !project.contentRating.isEmpty ||
+        !project.audienceNotes.isEmpty ||
+        project.projectSetting != nil ||
+        !project.motifs.isEmpty
+    }
+
+    private var hasCastContent: Bool {
+        !project.characters.isEmpty || !project.relationships.isEmpty
+    }
+
+    private var hasThemesContent: Bool {
+        !project.storySparks.isEmpty ||
+        !project.aftertastes.isEmpty ||
+        !project.themeQuestions.isEmpty
+    }
+
+    private var tutorialStep: Int {
+        if !hasStoryContent { return 1 }
+        if !hasCastContent { return 2 }
+        if !hasThemesContent { return 3 }
+        return 4
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if !advancedMode {
-                modePicker
-                if !firstGenerateCompleted {
-                    firstRunHint
+                if firstGenerateCompleted {
+                    modePicker
+                } else {
+                    // Tutorial mode: step indicator guides authoring progression.
+                    // Segmented picker is hidden since all sections are visible below.
+                    TutorialStepBanner(step: tutorialStep)
                 }
             }
             List {
                 if !firstGenerateCompleted {
-                    // Locked: Story bucket + path to Generate (via promptPacksSection).
+                    // Tutorial mode: show all sections so the user can navigate freely.
+                    // Step indicator (in VStack above) + segmented picker (when shown)
+                    // guide authoring progression.
                     summarySection
                     audienceSection
+                    charactersSection
                     settingSection
+                    sparksSection
+                    aftertastesSection
+                    relationshipsSection
+                    themeQuestionsSection
                     motifsSection
                     promptPacksSection
+                    generationsSection
                 } else if advancedMode {
                     summarySection
                     audienceSection
@@ -114,6 +158,15 @@ struct ProjectDetailView: View {
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    welcomeDismissed = false
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                .accessibilityLabel("Show welcome")
+            }
             if firstGenerateCompleted {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -195,32 +248,9 @@ struct ProjectDetailView: View {
     }
 
     private var firstRunHint: some View {
-        HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(CathedralTheme.Colors.accent)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Set up your story, then Generate to unlock the full editor.")
-                    .font(CathedralTheme.Typography.caption(13, weight: .medium))
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                Text("Cast, Themes, and Outputs appear after your first compile.")
-                    .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, CathedralTheme.Spacing.base)
-        .padding(.vertical, CathedralTheme.Spacing.md)
-        .background(CathedralTheme.Colors.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
-        .padding(.horizontal, CathedralTheme.Spacing.base)
-        .padding(.bottom, CathedralTheme.Spacing.xs)
+        // Replaced by TutorialStepBanner (v2a.1). Kept as a stub so existing
+        // references compile; safe to delete in v2b cleanup.
+        EmptyView()
     }
 
     // MARK: Summary Section
@@ -698,5 +728,60 @@ struct ProjectDetailView: View {
             parts.append(vis.displayName)
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+
+// MARK: - Tutorial Step Banner
+
+/// Persistent step indicator shown while in tutorial mode (firstGenerateCompleted == false).
+/// Advances as the user fills Story / Cast / Themes sections.
+struct TutorialStepBanner: View {
+    let step: Int
+
+    private var copy: (title: String, subtitle: String) {
+        switch step {
+        case 1:
+            return ("Step 1 of 4 · Tutorial Mode",
+                    "Add a Story item — summary, audience, setting, or motif.")
+        case 2:
+            return ("Step 2 of 4 · Tutorial Mode",
+                    "Add at least one character or relationship.")
+        case 3:
+            return ("Step 3 of 4 · Tutorial Mode",
+                    "Add at least one spark, aftertaste, or theme question.")
+        default:
+            return ("Step 4 of 4 · Ready to Compile",
+                    "Tap Compile to generate your first scene.")
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            HStack(spacing: CathedralTheme.Spacing.sm) {
+                ForEach(1...4, id: \.self) { i in
+                    Circle()
+                        .fill(i <= step ? CathedralTheme.Colors.accent : CathedralTheme.Colors.border)
+                        .frame(width: 8, height: 8)
+                }
+                Text(copy.title)
+                    .font(CathedralTheme.Typography.caption(13, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                Spacer()
+            }
+            Text(copy.subtitle)
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(CathedralTheme.Spacing.md)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.accent.opacity(0.3), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.bottom, CathedralTheme.Spacing.xs)
     }
 }
