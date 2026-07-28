@@ -102,7 +102,6 @@ struct ProjectDetailView: View {
                     // Segmented picker is hidden since all sections are visible below.
                     TutorialStepBanner(step: tutorialStep)
                 }
-            }
             List {
                 if !firstGenerateCompleted {
                     // Tutorial mode: show all sections so the user can navigate freely.
@@ -158,6 +157,26 @@ struct ProjectDetailView: View {
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
+            if !firstGenerateCompleted {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    HStack(spacing: CathedralTheme.Spacing.xs) {
+                        Image(systemName: "graduationcap.fill")
+                            .font(.system(size: 11))
+                        Text("TUTORIAL")
+                            .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                            .tracking(1.0)
+                    }
+                    .foregroundStyle(CathedralTheme.Colors.accent)
+                    .padding(.horizontal, CathedralTheme.Spacing.sm)
+                    .padding(.vertical, CathedralTheme.Spacing.xs)
+                    .background(CathedralTheme.Colors.surface)
+                    .overlay(
+                        Capsule().stroke(CathedralTheme.Colors.accent.opacity(0.3), lineWidth: 1)
+                    )
+                    .clipShape(Capsule())
+                    .accessibilityLabel("Tutorial mode active")
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     welcomeDismissed = false
@@ -166,6 +185,7 @@ struct ProjectDetailView: View {
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
                 .accessibilityLabel("Show welcome")
+            }
             }
             if firstGenerateCompleted {
                 ToolbarItem(placement: .navigationBarTrailing) {
