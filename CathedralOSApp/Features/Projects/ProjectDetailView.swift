@@ -54,6 +54,7 @@ struct ProjectDetailView: View {
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
     @AppStorage("cathedralos.firstGenerateCompleted") private var firstGenerateCompleted = false
+    @AppStorage("cathedralos.welcomeDismissed") private var welcomeDismissed = false
 
     private var storyEditorMode: StoryEditorMode {
         StoryEditorMode(rawValue: storyEditorModeRaw) ?? .story
@@ -94,19 +95,29 @@ struct ProjectDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             if !advancedMode {
-                modePicker
-                if inTutorialMode {
+                if firstGenerateCompleted {
+                    modePicker
+                } else {
+                    // Tutorial mode: step indicator guides authoring progression.
+                    // Segmented picker is hidden since all sections are visible below.
                     TutorialStepBanner(step: tutorialStep)
                 }
-            }
             List {
                 if !firstGenerateCompleted {
-                    // Locked: Story bucket + path to Generate (via promptPacksSection).
+                    // Tutorial mode: show all sections so the user can navigate freely.
+                    // Step indicator (in VStack above) + segmented picker (when shown)
+                    // guide authoring progression.
                     summarySection
                     audienceSection
+                    charactersSection
                     settingSection
+                    sparksSection
+                    aftertastesSection
+                    relationshipsSection
+                    themeQuestionsSection
                     motifsSection
                     promptPacksSection
+                    generationsSection
                 } else if advancedMode {
                     summarySection
                     audienceSection
@@ -165,6 +176,15 @@ struct ProjectDetailView: View {
                     .clipShape(Capsule())
                     .accessibilityLabel("Tutorial mode active")
                 }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    welcomeDismissed = false
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                .accessibilityLabel("Show welcome")
             }
             if firstGenerateCompleted {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -247,7 +267,7 @@ struct ProjectDetailView: View {
     }
 
     private var firstRunHint: some View {
-        // Replaced by TutorialStepBanner (v2a). Kept as a stub so existing
+        // Replaced by TutorialStepBanner (v2a.1). Kept as a stub so existing
         // references compile; safe to delete in v2b cleanup.
         EmptyView()
     }
