@@ -255,6 +255,7 @@ struct ProjectDetailView: View {
     }
     }
     }
+    }
 
     // MARK: - Mode Picker / First-run hint
 
