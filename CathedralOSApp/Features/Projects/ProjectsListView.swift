@@ -70,6 +70,14 @@ struct ProjectsListView: View {
                                 .foregroundStyle(CathedralTheme.Colors.accent)
                         }
 
+                        Button {
+                            NotificationCenter.default.post(name: Notification.Name("showWelcomeRequested"), object: nil)
+                        } label: {
+                            Image(systemName: "questionmark.circle")
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        }
+                        .accessibilityLabel("Show welcome")
+
                         Button { showAddProject = true } label: {
                             Image(systemName: "plus")
                                 .foregroundStyle(CathedralTheme.Colors.accent)
@@ -92,7 +100,12 @@ struct ProjectsListView: View {
                 pendingNavigationProject = project
             })
         }
-        .sheet(isPresented: $showAddProject) {
+        .sheet(isPresented: $showAddProject, onDismiss: {
+            if let project = pendingNavigationProject {
+                navigationPath.append(project)
+                pendingNavigationProject = nil
+            }
+        }) {
             addProjectSheet
         }
         .sheet(item: $projectToRename) { project in
@@ -268,8 +281,14 @@ struct ProjectsListView: View {
     private var addProjectSheet: some View {
         NavigationStack {
             Form {
-                TextField("Project Name", text: $newProjectName)
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                Section {
+                    TextField("Project Name", text: $newProjectName)
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                } footer: {
+                    Text("A project gathers one story's characters, setting, sparks, and a generation-ready pack. Start with a name — you can rename anytime.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
             }
             .cathedralFormStyle()
             .navigationTitle("New Project")
@@ -327,10 +346,10 @@ struct ProjectsListView: View {
         guard !trimmed.isEmpty else { return }
         let p = StoryProject(name: trimmed)
         modelContext.insert(p)
-        // Push navigation synchronously to avoid the race that briefly opens
-        // the detail view and then immediately pops back to the list.
-        navigationPath.append(p)
-        pendingNavigationProject = nil
+        // Defer the navigation push to the sheet's onDismiss callback — same
+        // pattern the import flow uses. The synchronous push before dismissal
+        // raced with sheet teardown and popped the new project back to the list.
+        pendingNavigationProject = p
         newProjectName = ""
         showAddProject = false
         Task { await DataDurabilityCoordinator.shared.saveProject(p, context: modelContext) }
