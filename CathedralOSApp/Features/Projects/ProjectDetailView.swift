@@ -9,6 +9,27 @@ enum OutputListFilter: String, CaseIterable {
     case shared    = "Shared"
 }
 
+/// Top-level segmentation for the ProjectDetailView editor.
+/// An @AppStorage flag (`cathedralos.firstGenerateCompleted`) gates the
+/// Advanced toggle that reveals every section in a single flat list.
+enum StoryEditorMode: String, CaseIterable, Identifiable {
+    case story
+    case cast
+    case themes
+    case output
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .story: return "Story"
+        case .cast: return "Cast"
+        case .themes: return "Themes"
+        case .output: return "Output"
+        }
+    }
+}
+
 struct ProjectDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var project: StoryProject
@@ -30,25 +51,81 @@ struct ProjectDetailView: View {
     @State private var generationToView: GenerationOutput?
     @State private var outputFilter: OutputListFilter = .all
 
+    @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
+    @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
+    @AppStorage("cathedralos.firstGenerateCompleted") private var firstGenerateCompleted = false
+
+    private var storyEditorMode: StoryEditorMode {
+        StoryEditorMode(rawValue: storyEditorModeRaw) ?? .story
+    }
+
     var body: some View {
-        List {
-            summarySection
-            audienceSection
-            charactersSection
-            settingSection
-            sparksSection
-            aftertastesSection
-            relationshipsSection
-            themeQuestionsSection
-            motifsSection
-            promptPacksSection
-            generationsSection
+        VStack(spacing: 0) {
+            if !advancedMode {
+                modePicker
+                if !firstGenerateCompleted {
+                    firstRunHint
+                }
+            }
+            List {
+                if !firstGenerateCompleted {
+                    // Locked: Story bucket + path to Generate (via promptPacksSection).
+                    summarySection
+                    audienceSection
+                    settingSection
+                    motifsSection
+                    promptPacksSection
+                } else if advancedMode {
+                    summarySection
+                    audienceSection
+                    charactersSection
+                    settingSection
+                    sparksSection
+                    aftertastesSection
+                    relationshipsSection
+                    themeQuestionsSection
+                    motifsSection
+                    promptPacksSection
+                    generationsSection
+                } else {
+                    switch storyEditorMode {
+                    case .story:
+                        summarySection
+                        audienceSection
+                        settingSection
+                        motifsSection
+                    case .cast:
+                        charactersSection
+                        relationshipsSection
+                    case .themes:
+                        sparksSection
+                        aftertastesSection
+                        themeQuestionsSection
+                    case .output:
+                        promptPacksSection
+                        generationsSection
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
         .background(CathedralTheme.Colors.background.ignoresSafeArea())
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            if firstGenerateCompleted {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        advancedMode.toggle()
+                    } label: {
+                        Image(systemName: advancedMode ? "rectangle.grid.2x2.fill" : "rectangle.grid.2x2")
+                            .foregroundStyle(advancedMode ? CathedralTheme.Colors.accent : CathedralTheme.Colors.secondaryText)
+                    }
+                    .accessibilityLabel(advancedMode ? "Exit advanced mode" : "Enter advanced mode")
+                }
+            }
+        }
         .tint(CathedralTheme.Colors.accent)
         .sheet(isPresented: $showAddCharacter) {
             NavigationStack {
@@ -101,6 +178,49 @@ struct ProjectDetailView: View {
         .onDisappear {
             Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
         }
+    }
+
+    // MARK: - Mode Picker / First-run hint
+
+    private var modePicker: some View {
+        Picker("Mode", selection: $storyEditorModeRaw) {
+            ForEach(StoryEditorMode.allCases) { mode in
+                Text(mode.title).tag(mode.rawValue)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.vertical, CathedralTheme.Spacing.sm)
+        .background(CathedralTheme.Colors.background)
+    }
+
+    private var firstRunHint: some View {
+        HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(CathedralTheme.Colors.accent)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Set up your story, then Generate to unlock the full editor.")
+                    .font(CathedralTheme.Typography.caption(13, weight: .medium))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                Text("Cast, Themes, and Outputs appear after your first compile.")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.vertical, CathedralTheme.Spacing.md)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.bottom, CathedralTheme.Spacing.xs)
     }
 
     // MARK: Summary Section
@@ -197,7 +317,12 @@ struct ProjectDetailView: View {
         Section {
             let sorted = (project.characters).sorted { $0.name < $1.name }
             if sorted.isEmpty {
-                CathedralEmptyState(label: "No characters yet.")
+                CathedralEmptyState(
+                    label: "Who's in your story?",
+                    description: "Cast your characters first — every generation runs through them.",
+                    actionLabel: "Add first character",
+                    action: { showAddCharacter = true }
+                )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
@@ -251,7 +376,12 @@ struct ProjectDetailView: View {
         Section {
             let sorted = (project.storySparks).sorted { $0.title < $1.title }
             if sorted.isEmpty {
-                CathedralEmptyState(label: "No story sparks yet.")
+                CathedralEmptyState(
+                    label: "What's the inciting moment?",
+                    description: "Sparks seed scenes. Add one to give the compiler somewhere to start.",
+                    actionLabel: "Add first spark",
+                    action: { showAddSpark = true }
+                )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
@@ -284,7 +414,12 @@ struct ProjectDetailView: View {
         Section {
             let sorted = (project.aftertastes).sorted { $0.label < $1.label }
             if sorted.isEmpty {
-                CathedralEmptyState(label: "No aftertastes defined.")
+                CathedralEmptyState(
+                    label: "How should it feel at the end?",
+                    description: "Aftertastes shape what the reader carries away.",
+                    actionLabel: "Add first aftertaste",
+                    action: { showAddAftertaste = true }
+                )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
@@ -317,7 +452,12 @@ struct ProjectDetailView: View {
         Section {
             let sorted = (project.promptPacks).sorted { $0.name < $1.name }
             if sorted.isEmpty {
-                CathedralEmptyState(label: "No story packs yet.")
+                CathedralEmptyState(
+                    label: "Bundle a story to compile.",
+                    description: "A pack selects which characters, sparks, and themes feed a generation.",
+                    actionLabel: "Create first pack",
+                    action: { showAddPromptPack = true }
+                )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
@@ -360,7 +500,12 @@ struct ProjectDetailView: View {
         Section {
             let sorted = project.relationships.sorted { $0.name < $1.name }
             if sorted.isEmpty {
-                CathedralEmptyState(label: "No relationships yet.")
+                CathedralEmptyState(
+                    label: "Who connects to whom?",
+                    description: "Relationships drive dialogue and subtext in generated scenes.",
+                    actionLabel: "Add first relationship",
+                    action: { showAddRelationship = true }
+                )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
@@ -391,7 +536,12 @@ struct ProjectDetailView: View {
         Section {
             let sorted = project.themeQuestions.sorted { $0.question < $1.question }
             if sorted.isEmpty {
-                CathedralEmptyState(label: "No theme questions yet.")
+                CathedralEmptyState(
+                    label: "What is the story arguing?",
+                    description: "Theme questions give the compiler something to interrogate.",
+                    actionLabel: "Add first theme question",
+                    action: { showAddThemeQuestion = true }
+                )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
@@ -422,7 +572,12 @@ struct ProjectDetailView: View {
         Section {
             let sorted = project.motifs.sorted { $0.label < $1.label }
             if sorted.isEmpty {
-                CathedralEmptyState(label: "No motifs yet.")
+                CathedralEmptyState(
+                    label: "What images recur?",
+                    description: "Motifs give your story texture — anchors the reader recognizes.",
+                    actionLabel: "Add first motif",
+                    action: { showAddMotif = true }
+                )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
@@ -497,9 +652,14 @@ struct ProjectDetailView: View {
             }
 
             if filteredGenerations.isEmpty {
-                CathedralEmptyState(label: project.generations.isEmpty
-                    ? "No generated outputs yet."
-                    : "No outputs match this filter.")
+                CathedralEmptyState(
+                    label: project.generations.isEmpty
+                        ? "No outputs yet."
+                        : "No outputs match this filter.",
+                    description: project.generations.isEmpty
+                        ? "Generate from any pack to start filling this list."
+                        : "Try a different filter or generate more outputs."
+                )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
