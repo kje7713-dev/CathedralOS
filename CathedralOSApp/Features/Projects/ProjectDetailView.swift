@@ -186,7 +186,6 @@ struct ProjectDetailView: View {
                 }
                 .accessibilityLabel("Show welcome")
             }
-            }
             if firstGenerateCompleted {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
