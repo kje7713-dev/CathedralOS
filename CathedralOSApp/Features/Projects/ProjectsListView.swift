@@ -276,8 +276,14 @@ struct ProjectsListView: View {
     private var addProjectSheet: some View {
         NavigationStack {
             Form {
-                TextField("Project Name", text: $newProjectName)
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                Section {
+                    TextField("Project Name", text: $newProjectName)
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                } footer: {
+                    Text("A project gathers one story's characters, setting, sparks, and a generation-ready pack. Start with a name — you can rename anytime.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
             }
             .cathedralFormStyle()
             .navigationTitle("New Project")
