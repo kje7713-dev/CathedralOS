@@ -43,7 +43,8 @@ private struct AppRootView: View {
     let recoveryContext: PersistenceRecoveryContext?
 
     @State private var hasRunLaunchTasks = false
-    @AppStorage("cathedralos.welcomeDismissed") private var welcomeDismissed = false
+    @State private var showWelcome = true
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         TabView {
@@ -66,11 +67,16 @@ private struct AppRootView: View {
             hasRunLaunchTasks = true
             await performLaunchRecoveryTasks()
         }
-        .fullScreenCover(isPresented: Binding(
-            get: { !welcomeDismissed },
-            set: { if !$0 { welcomeDismissed = true } }
-        )) {
-            WelcomeView { welcomeDismissed = true }
+        .fullScreenCover(isPresented: $showWelcome) {
+            WelcomeView { showWelcome = false }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                showWelcome = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("showWelcomeRequested"))) { _ in
+            showWelcome = true
         }
     }
 

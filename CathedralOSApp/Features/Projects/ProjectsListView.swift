@@ -92,12 +92,7 @@ struct ProjectsListView: View {
                 pendingNavigationProject = project
             })
         }
-        .sheet(isPresented: $showAddProject, onDismiss: {
-            if let project = pendingNavigationProject {
-                navigationPath.append(project)
-                pendingNavigationProject = nil
-            }
-        }) {
+        .sheet(isPresented: $showAddProject) {
             addProjectSheet
         }
         .sheet(item: $projectToRename) { project in
@@ -332,7 +327,10 @@ struct ProjectsListView: View {
         guard !trimmed.isEmpty else { return }
         let p = StoryProject(name: trimmed)
         modelContext.insert(p)
-        pendingNavigationProject = p
+        // Push navigation synchronously to avoid the race that briefly opens
+        // the detail view and then immediately pops back to the list.
+        navigationPath.append(p)
+        pendingNavigationProject = nil
         newProjectName = ""
         showAddProject = false
         Task { await DataDurabilityCoordinator.shared.saveProject(p, context: modelContext) }

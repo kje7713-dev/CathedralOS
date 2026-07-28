@@ -181,7 +181,7 @@ struct ProjectDetailView: View {
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
-                    welcomeDismissed = false
+                    NotificationCenter.default.post(name: Notification.Name("showWelcomeRequested"), object: nil)
                 } label: {
                     Image(systemName: "questionmark.circle")
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
