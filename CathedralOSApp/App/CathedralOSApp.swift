@@ -43,6 +43,7 @@ private struct AppRootView: View {
     let recoveryContext: PersistenceRecoveryContext?
 
     @State private var hasRunLaunchTasks = false
+    @AppStorage("cathedralos.welcomeDismissed") private var welcomeDismissed = false
 
     var body: some View {
         TabView {
@@ -64,6 +65,12 @@ private struct AppRootView: View {
             guard !hasRunLaunchTasks else { return }
             hasRunLaunchTasks = true
             await performLaunchRecoveryTasks()
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { !welcomeDismissed },
+            set: { if !$0 { welcomeDismissed = true } }
+        )) {
+            WelcomeView { welcomeDismissed = true }
         }
     }
 
@@ -548,5 +555,100 @@ private struct PersistenceFailureView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(CathedralTheme.Colors.background.ignoresSafeArea())
+    }
+}
+
+
+
+// MARK: - Welcome View
+
+struct WelcomeView: View {
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(spacing: CathedralTheme.Spacing.lg) {
+            Spacer()
+
+            VStack(spacing: CathedralTheme.Spacing.sm) {
+                Image(systemName: "books.vertical.fill")
+                    .font(.system(size: 48, weight: .light))
+                    .foregroundStyle(CathedralTheme.Colors.accent)
+                Text("Welcome to CathedralOS")
+                    .font(CathedralTheme.Typography.display(28))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    .multilineTextAlignment(.center)
+                Text("Build stories. Compile scenes.")
+                    .font(CathedralTheme.Typography.body(15))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+
+            Text("CathedralOS helps you build stories and compile them into finished scenes. Every project is organized into five buckets:")
+                .font(CathedralTheme.Typography.body(14))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, CathedralTheme.Spacing.base)
+
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                bucketRow(icon: "book.closed.fill", title: "Story", description: "Premise, audience, setting, motifs")
+                bucketRow(icon: "person.2.fill", title: "Cast", description: "Characters and their relationships")
+                bucketRow(icon: "sparkles", title: "Themes", description: "Sparks, aftertastes, theme questions")
+                bucketRow(icon: "hammer.fill", title: "Compile", description: "Bundle your story into a generation-ready pack")
+                bucketRow(icon: "doc.text.fill", title: "Output", description: "Review and publish what you've generated")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, CathedralTheme.Spacing.lg)
+
+            VStack(spacing: CathedralTheme.Spacing.xs) {
+                Text("Your first project is in tutorial mode.")
+                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                Text("Add one item per authoring bucket — Story, Cast, Themes — then Compile to unlock the rest of the editor.")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(CathedralTheme.Spacing.md)
+            .frame(maxWidth: .infinity)
+            .background(CathedralTheme.Colors.surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                    .stroke(CathedralTheme.Colors.accent.opacity(0.3), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            .padding(.horizontal, CathedralTheme.Spacing.lg)
+
+            Spacer()
+
+            CathedralPrimaryButton("Start building", systemImage: "arrow.right") {
+                onDismiss()
+            }
+            .padding(.horizontal, CathedralTheme.Spacing.lg)
+
+            Spacer().frame(height: CathedralTheme.Spacing.lg)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(CathedralTheme.Colors.background.ignoresSafeArea())
+        .interactiveDismissDisabled(true)
+    }
+
+    private func bucketRow(icon: String, title: String, description: String) -> some View {
+        HStack(alignment: .top, spacing: CathedralTheme.Spacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(CathedralTheme.Colors.accent)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                Text(description)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
     }
 }
