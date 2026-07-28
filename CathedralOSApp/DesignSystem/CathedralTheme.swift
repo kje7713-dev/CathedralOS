@@ -358,16 +358,70 @@ struct CathedralItemRow: View {
 // MARK: - CathedralEmptyState
 
 /// Empty state placeholder for sections with no items.
+///
+/// Contract: every empty section answers three questions:
+/// 1. **What** — `label` (one-line identity of the section)
+/// 2. **Why** — `description` (one-line consequence of leaving it empty)
+/// 3. **How** — `actionLabel` + `action` (single primary CTA)
+///
+/// Backwards-compatible: existing call sites that only pass `label:` keep
+/// rendering as a single muted line until the section is upgraded to the
+/// full contract.
 struct CathedralEmptyState: View {
     let label: String
+    var description: String?
+    var actionLabel: String?
+    var action: (() -> Void)?
+
+    init(
+        label: String,
+        description: String? = nil,
+        actionLabel: String? = nil,
+        action: (() -> Void)? = nil
+    ) {
+        self.label = label
+        self.description = description
+        self.actionLabel = actionLabel
+        self.action = action
+    }
 
     var body: some View {
-        Text(label)
-            .font(CathedralTheme.Typography.caption())
-            .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, CathedralTheme.Spacing.sm)
-            .padding(.horizontal, CathedralTheme.Spacing.base)
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text(label)
+                .font(CathedralTheme.Typography.body(14, weight: .medium))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+            if let description, !description.isEmpty {
+                Text(description)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let actionLabel, !actionLabel.isEmpty, let action {
+                Button(action: action) {
+                    HStack(spacing: CathedralTheme.Spacing.xs) {
+                        Text(actionLabel.uppercased())
+                            .tracking(1.0)
+                        Image(systemName: "plus.circle.fill")
+                            .imageScale(.small)
+                    }
+                    .font(CathedralTheme.Typography.label(11, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.accent)
+                    .padding(.vertical, CathedralTheme.Spacing.xs)
+                    .padding(.horizontal, CathedralTheme.Spacing.sm)
+                    .background(CathedralTheme.Colors.surfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm)
+                            .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, CathedralTheme.Spacing.xs)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, CathedralTheme.Spacing.sm)
+        .padding(.horizontal, CathedralTheme.Spacing.base)
     }
 }
 

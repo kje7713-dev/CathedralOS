@@ -35,6 +35,14 @@ struct PromptPackPreviewView: View {
     @AppStorage("cathedralos.generation.selectedModelID")
     private var selectedModelId: String = "gpt-4o-mini"
 
+    // First-generate gate for the ProjectDetailView editor lock-in.
+    @AppStorage("cathedralos.firstGenerateCompleted") private var firstGenerateCompleted = false
+
+    private func markFirstGenerateCompleted() {
+        guard !firstGenerateCompleted else { return }
+        firstGenerateCompleted = true
+    }
+
     let generationService: GenerationService
     let generationModelService: GenerationModelServiceProtocol
     let usageLimitService: any UsageLimitServiceProtocol
@@ -201,7 +209,10 @@ struct PromptPackPreviewView: View {
             isPresented: $showChapterConfirm,
             titleVisibility: .visible
         ) {
-            Button("Generate anyway") { Task { await startGeneration() } }
+            Button("Generate anyway") {
+                markFirstGenerateCompleted()
+                Task { await startGeneration() }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Chapter mode requests up to \(GenerationLengthMode.chapter.outputBudget) output tokens and may take longer.")
@@ -530,6 +541,7 @@ struct PromptPackPreviewView: View {
                 if selectedLengthMode == .chapter {
                     showChapterConfirm = true
                 } else {
+                    markFirstGenerateCompleted()
                     Task { await startGeneration() }
                 }
             }
