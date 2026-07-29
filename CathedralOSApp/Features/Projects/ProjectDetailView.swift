@@ -702,6 +702,7 @@ struct ProjectDetailView: View {
         if !gen.sourcePromptPackName.isEmpty {
             parts.append(gen.sourcePromptPackName)
         }
+        parts.append(gen.createdAt.formatted(date: .abbreviated, time: .shortened))
         let vis = OutputVisibility(rawValue: gen.visibility) ?? .private
         if vis != .private {
             parts.append(vis.displayName)
