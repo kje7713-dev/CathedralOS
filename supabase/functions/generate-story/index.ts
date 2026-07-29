@@ -209,6 +209,16 @@ interface GenerationUsageEventInsert {
   generation_length_mode: LengthMode;
   output_budget: number;
   status: "complete" | "failed";
+  // Phase 1 telemetry: USD revenue (= credits charged * $0.05/credit).
+  // Optional; null for failed events where no credits were charged.
+  credit_revenue_usd?: number | null;
+}
+
+interface ModelRateRow {
+  input_per_1k_usd: number;
+  output_per_1k_usd: number;
+  premium_markup_pct: number;
+  tier: "cheap" | "standard" | "premium";
 }
 
 interface GenerationPersistenceStore {
@@ -242,9 +252,72 @@ class SupabaseGenerationPersistenceStore implements GenerationPersistenceStore {
   async insertUsageEvent(
     row: GenerationUsageEventInsert,
   ): Promise<{ error: unknown | null }> {
-    const { error } = await this.db.from("generation_usage_events").insert(row);
+    // Phase 1 telemetry: compute per-model USD cost and margin from model_rates.
+    // Only runs when we have both token counts and a known model rate; failed
+    // events (no tokens) and unmapped models (no rate row) get nulls.
+    const marginFields = await this.computeMarginFields(row);
+    const insertRow = { ...row, ...marginFields };
+    // credit_revenue_usd is only persisted when the caller passes it.
+    if (row.credit_revenue_usd == null) {
+      delete (insertRow as Record<string, unknown>).credit_revenue_usd;
+    }
+    const { error } = await this.db.from("generation_usage_events").insert(insertRow);
     return { error };
   }
+
+  private async computeMarginFields(
+    row: GenerationUsageEventInsert,
+  ): Promise<Record<string, number | null>> {
+    const empty = {
+      model_input_usd: null,
+      model_output_usd: null,
+      total_model_usd: null,
+      credit_revenue_usd: row.credit_revenue_usd ?? null,
+      margin_usd: null,
+      margin_pct: null,
+    };
+    if (row.input_tokens == null || row.output_tokens == null) return empty;
+
+    const rate = await this.lookupModelRate(row.model_name);
+    if (!rate) return empty;
+
+    const inputUsd = (row.input_tokens / 1000) * rate.input_per_1k_usd;
+    const outputUsd = (row.output_tokens / 1000) * rate.output_per_1k_usd;
+    const totalUsd = inputUsd + outputUsd;
+    const revenueUsd = row.credit_revenue_usd ?? 0;
+    const marginUsd = revenueUsd - totalUsd;
+    const marginPct = revenueUsd > 0 ? marginUsd / revenueUsd : null;
+
+    return {
+      model_input_usd: round6(inputUsd),
+      model_output_usd: round6(outputUsd),
+      total_model_usd: round6(totalUsd),
+      credit_revenue_usd: round6(revenueUsd),
+      margin_usd: round6(marginUsd),
+      margin_pct: marginPct == null ? null : round6(marginPct),
+    };
+  }
+
+  private async lookupModelRate(modelName: string): Promise<ModelRateRow | null> {
+    const { data, error } = await this.db
+      .from("model_rates")
+      .select("input_per_1k_usd, output_per_1k_usd, premium_markup_pct, tier")
+      .eq("model_name", modelName)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (error || !data) return null;
+    const r = data as Record<string, unknown>;
+    return {
+      input_per_1k_usd: Number(r.input_per_1k_usd) || 0,
+      output_per_1k_usd: Number(r.output_per_1k_usd) || 0,
+      premium_markup_pct: Number(r.premium_markup_pct) || 0,
+      tier: (r.tier as ModelRateRow["tier"]) || "cheap",
+    };
+  }
+}
+
+function round6(n: number): number {
+  return Math.round(n * 1e6) / 1e6;
 }
 
 interface HandlerDependencies {
@@ -1280,6 +1353,17 @@ async function handler(
   const generationOutputId = outputRow.id;
 
   // -------------------------------------------------------------------------
+  // Compute credit charge BEFORE persisting usage event so we can record
+  // credit_revenue_usd on the row (Phase 1 telemetry).
+  // -------------------------------------------------------------------------
+
+  const actualCharge = computeGenerationCreditCharge(
+    generationLengthMode,
+    selectedModel,
+  );
+  const creditRevenueUsd = actualCharge * 0.05;
+
+  // -------------------------------------------------------------------------
   // Persist generation_usage_events row
   // -------------------------------------------------------------------------
 
@@ -1293,6 +1377,7 @@ async function handler(
     generation_length_mode: generationLengthMode,
     output_budget: maxCompletionTokens,
     status: "complete",
+    credit_revenue_usd: creditRevenueUsd,
   });
 
   if (usageInsertError) {
@@ -1300,18 +1385,14 @@ async function handler(
   }
 
   // -------------------------------------------------------------------------
-  // Charge credits -- only after successful generation
-  //
+  // Charge credits -- only after successful generation.
   // Credits are charged AFTER the LLM provider returns successfully and the
   // output row is persisted.
   // A failed LLM call or output persistence failure does NOT charge.
   // Monthly allowance is drained first; purchased balance is used second.
+  // actualCharge was computed above for telemetry; reuse it here.
   // -------------------------------------------------------------------------
 
-  const actualCharge = computeGenerationCreditCharge(
-    generationLengthMode,
-    selectedModel,
-  );
   const updatedEntitlement = await store.charge(
     userId,
     actualCharge,
