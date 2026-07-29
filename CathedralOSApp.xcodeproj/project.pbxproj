@@ -55,7 +55,6 @@
 		0000000000000000000000CA /* StorySparkFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000C9 /* StorySparkFormView.swift */; };
 		0000000000000000000000CC /* AftertasteFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000CB /* AftertasteFormView.swift */; };
 		0000000000000000000000CE /* PromptPackBuilderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000CD /* PromptPackBuilderView.swift */; };
-		0000000000000000000000D0 /* PromptPackPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000CF /* PromptPackPreviewView.swift */; };
 		0000000000000000000000D2 /* PromptPackAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000D1 /* PromptPackAssembler.swift */; };
 		0000000000000000000000E7 /* PromptPackExportPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000E6 /* PromptPackExportPayload.swift */; };
 		0000000000000000000000E9 /* PromptPackJSONAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000E8 /* PromptPackJSONAssembler.swift */; };
@@ -155,6 +154,7 @@
 		0000000000000000000001A6 /* GenerationOutputPublishCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001A7 /* GenerationOutputPublishCoordinator.swift */; };
 		0000000000000000000001AD /* AuthSessionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001AC /* AuthSessionResolver.swift */; };
 		0000000000000000000001B0 /* TestSupabaseConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001B1 /* TestSupabaseConfiguration.swift */; };
+		000000000000000000000FF1 /* RecipeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000FF0 /* RecipeCard.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -218,7 +218,6 @@
 		0000000000000000000000C9 /* StorySparkFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorySparkFormView.swift; sourceTree = "<group>"; };
 		0000000000000000000000CB /* AftertasteFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AftertasteFormView.swift; sourceTree = "<group>"; };
 		0000000000000000000000CD /* PromptPackBuilderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackBuilderView.swift; sourceTree = "<group>"; };
-		0000000000000000000000CF /* PromptPackPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackPreviewView.swift; sourceTree = "<group>"; };
 		0000000000000000000000D1 /* PromptPackAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackAssembler.swift; sourceTree = "<group>"; };
 		0000000000000000000000E6 /* PromptPackExportPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackExportPayload.swift; sourceTree = "<group>"; };
 		0000000000000000000000E8 /* PromptPackJSONAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPackJSONAssembler.swift; sourceTree = "<group>"; };
@@ -319,6 +318,7 @@
 		0000000000000000000001A5 /* ProjectCloudSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectCloudSyncTests.swift; sourceTree = "<group>"; };
 		0000000000000000000001A7 /* GenerationOutputPublishCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputPublishCoordinator.swift; sourceTree = "<group>"; };
 		0000000000000000000001AC /* AuthSessionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthSessionResolver.swift; sourceTree = "<group>"; };
+		000000000000000000000FF0 /* RecipeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeCard.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -609,7 +609,6 @@
 				0000000000000000000000C9 /* StorySparkFormView.swift */,
 				0000000000000000000000CB /* AftertasteFormView.swift */,
 				0000000000000000000000CD /* PromptPackBuilderView.swift */,
-				0000000000000000000000CF /* PromptPackPreviewView.swift */,
 				0000000000000000000000D1 /* PromptPackAssembler.swift */,
 				0000000000000000000000E8 /* PromptPackJSONAssembler.swift */,
 				0000000000000000000000ED /* PromptPackExportBuilder.swift */,
@@ -626,6 +625,7 @@
 				0000000000000000000001A7 /* GenerationOutputPublishCoordinator.swift */,
 				000000000000000000000142 /* SharedOutputsView.swift */,
 				000000000000000000000144 /* SharedOutputDetailView.swift */,
+				000000000000000000000FF0 /* RecipeCard.swift */,
 			);
 			path = Projects;
 			sourceTree = "<group>";
@@ -794,7 +794,6 @@
 				0000000000000000000000CA /* StorySparkFormView.swift in Sources */,
 				0000000000000000000000CC /* AftertasteFormView.swift in Sources */,
 				0000000000000000000000CE /* PromptPackBuilderView.swift in Sources */,
-				0000000000000000000000D0 /* PromptPackPreviewView.swift in Sources */,
 				0000000000000000000000D2 /* PromptPackAssembler.swift in Sources */,
 				0000000000000000000000E7 /* PromptPackExportPayload.swift in Sources */,
 				0000000000000000000000E9 /* PromptPackJSONAssembler.swift in Sources */,
@@ -861,6 +860,7 @@
 				0000000000000000000001A2 /* ProjectCloudSyncService.swift in Sources */,
 				0000000000000000000001AD /* AuthSessionResolver.swift in Sources */,
 				000000000000000000000198 /* DiagnosticsView.swift in Sources */,
+				000000000000000000000FF1 /* RecipeCard.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

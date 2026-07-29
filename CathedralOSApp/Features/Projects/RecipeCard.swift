@@ -1,27 +1,34 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - Export mode for Prompt Pack preview
+// MARK: - Export mode for Recipe Card
 
-private enum PromptPackViewMode: String, CaseIterable {
+private enum RecipeCardViewMode: String, CaseIterable {
     case prompt = "Prompt"
     case json   = "JSON"
 }
 
-// MARK: - PromptPackPreviewView
+// MARK: - RecipeCard
 
-struct PromptPackPreviewView: View {
+/// In-project recipe card. Folds the former `PromptPackPreviewView` generation /
+/// share / prompt-vs-JSON flow into a single card rendered inline inside the
+/// project's recipes section, so the user no longer has to navigate to a
+/// separate screen to inspect a pack or kick off a generation.
+struct RecipeCard: View {
+    @Environment(\.modelContext) private var modelContext
     let project: StoryProject
     let pack: PromptPack
+    let onEdit: () -> Void
+    let onDelete: () -> Void
 
-    @Environment(\.modelContext) private var modelContext
-
-    @State private var viewMode = PromptPackViewMode.prompt
+    // View mode + share/copy affordances (no standalone share buttons anymore —
+    // share lives in the 3-dot menu).
+    @State private var viewMode = RecipeCardViewMode.prompt
     @State private var showSharePrompt = false
-    @State private var showShareJSON   = false
-    @State private var copiedPrompt    = false
-    @State private var copiedJSON      = false
-    @State private var showEditPack    = false
+    @State private var showShareJSON = false
+    @State private var copiedPrompt = false
+    @State private var copiedJSON = false
+    @State private var isElementsExpanded = true
     @State private var isPromptPreviewExpanded = false
 
     // Generation state
@@ -60,6 +67,8 @@ struct PromptPackPreviewView: View {
     init(
         project: StoryProject,
         pack: PromptPack,
+        onEdit: @escaping () -> Void,
+        onDelete: @escaping () -> Void,
         generationService: GenerationService = SupabaseGenerationService(),
         generationModelService: GenerationModelServiceProtocol = BackendGenerationModelService(),
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
@@ -70,6 +79,8 @@ struct PromptPackPreviewView: View {
     ) {
         self.project = project
         self.pack = pack
+        self.onEdit = onEdit
+        self.onDelete = onDelete
         self.generationService = generationService
         self.generationModelService = generationModelService
         self.usageLimitService = usageLimitService
@@ -103,289 +114,92 @@ struct PromptPackPreviewView: View {
         viewMode == .json ? CathedralTheme.Typography.mono(12) : CathedralTheme.Typography.body(14)
     }
 
-    /// A quick human-readable summary of what sections will appear in the prompt sent to the model,
-    /// grouped into Context, Priority Elements, and Instructions.
-    private struct BreakdownSection {
-        let title: String
-        let items: [String]
-    }
-
-    private var promptBreakdownSections: [BreakdownSection] {
-        let p = exportPayload
-        var contextItems: [String] = []
-        var priorityItems: [String] = []
-
-        // Context: premise and world/setting
-        if !p.project.summary.isEmpty {
-            let preview = p.project.summary.count > 60
-                ? String(p.project.summary.prefix(60)) + "…"
-                : p.project.summary
-            contextItems.append("Premise: \"\(preview)\"")
-        }
-        if p.setting.included && !p.setting.summary.isEmpty {
-            let preview = p.setting.summary.count > 50
-                ? String(p.setting.summary.prefix(50)) + "…"
-                : p.setting.summary
-            contextItems.append("World & Constraints: \(preview)")
-        }
-
-        // Priority elements: selected characters, relationships, themes, motifs, spark, aftertaste
-        if !p.selectedCharacters.isEmpty {
-            let names = p.selectedCharacters.map { $0.name }.joined(separator: ", ")
-            priorityItems.append("Characters: \(names)")
-        }
-        if !p.selectedRelationships.isEmpty {
-            let names = p.selectedRelationships.map { $0.name }.joined(separator: ", ")
-            priorityItems.append("Relationships: \(names)")
-        }
-        if !p.selectedThemeQuestions.isEmpty {
-            priorityItems.append("Themes: \(p.selectedThemeQuestions.count)")
-        }
-        if !p.selectedMotifs.isEmpty {
-            let labels = p.selectedMotifs.map { $0.label }.joined(separator: ", ")
-            priorityItems.append("Motifs: \(labels)")
-        }
-        if let spark = p.selectedStorySpark {
-            priorityItems.append("Spark: \"\(spark.title)\"")
-        }
-        if let at = p.selectedAftertaste {
-            priorityItems.append("Ending: \(at.label)")
-        }
-
-        var sections: [BreakdownSection] = []
-        if !contextItems.isEmpty {
-            sections.append(BreakdownSection(title: "CONTEXT", items: contextItems))
-        }
-        if !priorityItems.isEmpty {
-            sections.append(BreakdownSection(title: "PRIORITY ELEMENTS", items: priorityItems))
-        }
-        sections.append(BreakdownSection(title: "INSTRUCTIONS", items: ["Writing task", "Writing instructions"]))
-        return sections
-    }
+    // MARK: Body
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+            header
+            elementsSection
 
-                // Metadata strip
-                metadataStrip
-
-                // Sparse-pack notice
-                if isSparse {
-                    sparsePackNotice
-                }
-
-                // Prompt preview
-                promptPreviewSection
-
-                // Export actions
-                exportActions
-
-                // Generation action
-                generateAction
+            if isSparse {
+                sparsePackNotice
             }
-            .padding(CathedralTheme.Spacing.base)
-        }
-        .background(CathedralTheme.Colors.background.ignoresSafeArea())
-        .navigationTitle(pack.name)
-        .navigationBarTitleDisplayMode(.large)
-        .tint(CathedralTheme.Colors.accent)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Edit") { showEditPack = true }
-            }
-        }
-        .sheet(isPresented: $showEditPack) {
-            PromptPackBuilderView(project: project, pack: pack)
-        }
-        .sheet(isPresented: $showSharePrompt) {
-            ShareSheet(activityItems: [promptText])
-        }
-        .sheet(isPresented: $showShareJSON) {
-            ShareSheet(activityItems: [jsonText])
-        }
-        .confirmationDialog(
-            "Chapter-length generation",
-            isPresented: $showChapterConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Generate anyway") {
-                markFirstGenerateCompleted()
-                Task { await startGeneration() }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Chapter mode requests up to \(GenerationLengthMode.chapter.outputBudget) output tokens and may take longer.")
-        }
-        .task {
-            await loadGenerationModels()
-            await refreshBackendCreditState()
-            scheduleEstimate()
-        }
-        .onChange(of: selectedLengthMode) { scheduleEstimate() }
-        .onChange(of: selectedModelId) { scheduleEstimate() }
-    }
 
-    // MARK: Mode Picker
+            promptJSONSection
 
-    private var modePicker: some View {
-        Picker("Export format", selection: $viewMode) {
-            ForEach(PromptPackViewMode.allCases, id: \.self) { mode in
-                Text(mode.rawValue).tag(mode)
-            }
+            generateAction
+
+            outputsSection
         }
-        .pickerStyle(.segmented)
-        .padding(.vertical, CathedralTheme.Spacing.xs)
-    }
-
-    // MARK: Prompt Preview Section
-
-    private var promptPreviewSection: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isPromptPreviewExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: CathedralTheme.Spacing.sm) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Prompt Preview")
-                            .font(CathedralTheme.Typography.label(12, weight: .semibold))
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-
-                        HStack(spacing: CathedralTheme.Spacing.xs) {
-                            Text(viewMode.rawValue)
-                                .font(CathedralTheme.Typography.caption())
-                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                            if previewCharacterCount > 0 {
-                                Text("•")
-                                    .font(CathedralTheme.Typography.caption())
-                                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-                                Text("\(previewCharacterCount.formatted()) chars")
-                                    .font(CathedralTheme.Typography.caption())
-                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                            }
-                        }
-                    }
-                    Spacer()
-                    Image(systemName: isPromptPreviewExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                }
-                .padding(CathedralTheme.Spacing.base)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(CathedralTheme.Colors.surface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                        .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
-            }
-            .buttonStyle(.plain)
-
-            if isPromptPreviewExpanded {
-                modePicker
-                if viewMode == .prompt {
-                    promptBreakdownBlock
-                }
-                contentBlock
-            }
-        }
-    }
-
-    private var previewCharacterCount: Int {
-        activeText.count
-    }
-
-    // MARK: Prompt Breakdown Block
-
-    /// Shows a compact grouped summary of what sections are present in the prompt sent to the model.
-    private var promptBreakdownBlock: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-            Text("WHAT THE MODEL SEES".uppercased())
-                .font(CathedralTheme.Typography.label(10, weight: .semibold))
-                .tracking(1.5)
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            ForEach(promptBreakdownSections, id: \.title) { section in
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(section.title)
-                        .font(CathedralTheme.Typography.label(9, weight: .semibold))
-                        .tracking(1.2)
-                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-                    ForEach(section.items, id: \.self) { item in
-                        Text("• \(item)")
-                            .font(CathedralTheme.Typography.caption())
-                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    }
-                }
-            }
-        }
-        .padding(CathedralTheme.Spacing.sm)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(CathedralTheme.Spacing.base)
         .background(CathedralTheme.Colors.surface)
         .overlay(
             RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
                 .stroke(CathedralTheme.Colors.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
-    }
-
-    // MARK: Content Block
-
-    private var contentBlock: some View {
-        Text(activeText)
-            .font(contentFont)
-            .foregroundStyle(CathedralTheme.Colors.primaryText)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .textSelection(.enabled)
-            .padding(CathedralTheme.Spacing.base)
-            .background(CathedralTheme.Colors.surface)
-            .overlay(
-                RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                    .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
-    }
-
-    // MARK: Export Actions
-
-    private var exportActions: some View {
-        VStack(spacing: CathedralTheme.Spacing.sm) {
-            if viewMode == .prompt {
-                CathedralPrimaryButton("Share Prompt", systemImage: "square.and.arrow.up") {
-                    showSharePrompt = true
-                }
-                CathedralSecondaryButton(
-                    copiedPrompt ? "Copied!" : "Copy Prompt",
-                    systemImage: "doc.on.doc"
-                ) {
-                    UIPasteboard.general.string = promptText
-                    copiedPrompt = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        copiedPrompt = false
-                    }
-                }
-            } else {
-                CathedralPrimaryButton("Share JSON", systemImage: "square.and.arrow.up") {
-                    showShareJSON = true
-                }
-                CathedralSecondaryButton(
-                    copiedJSON ? "Copied!" : "Copy JSON",
-                    systemImage: "doc.on.doc"
-                ) {
-                    UIPasteboard.general.string = jsonText
-                    copiedJSON = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        copiedJSON = false
-                    }
-                }
+        .sheet(isPresented: $showSharePrompt) {
+            ShareSheet(activityItems: [promptText])
+        }
+        .sheet(isPresented: $showShareJSON) {
+            ShareSheet(activityItems: [jsonText])
+        }
+        .alert("Generate Chapter?", isPresented: $showChapterConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Generate") {
+                markFirstGenerateCompleted()
+                Task { await startGeneration() }
             }
+        } message: {
+            Text("Chapters are long. Make sure your credit balance can cover the generation.")
+        }
+        .task {
+            await loadGenerationModels()
+            await performEstimate()
         }
     }
 
-    // MARK: Metadata Strip
+    // MARK: Header
 
-    private var metadataStrip: some View {
+    private var header: some View {
+        HStack(spacing: CathedralTheme.Spacing.sm) {
+            Text(pack.name)
+                .font(CathedralTheme.Typography.headline(16))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+                .lineLimit(1)
+            Spacer()
+            metadataPillStrip
+            Menu {
+                Button {
+                    showSharePrompt = true
+                } label: {
+                    Label("Share Prompt", systemImage: "square.and.arrow.up")
+                }
+                Button {
+                    showShareJSON = true
+                } label: {
+                    Label("Share JSON", systemImage: "curlybraces.square")
+                }
+                Button {
+                    onEdit()
+                } label: {
+                    Label("Edit Recipe", systemImage: "pencil")
+                }
+                Divider()
+                Button(role: .destructive) {
+                    onDelete()
+                } label: {
+                    Label("Delete Recipe", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            .accessibilityLabel("Recipe actions")
+        }
+    }
+
+    private var metadataPillStrip: some View {
         let pills = metadataPills
         return Group {
             if !pills.isEmpty {
@@ -410,6 +224,95 @@ struct PromptPackPreviewView: View {
         return pills
     }
 
+    // MARK: Elements Section
+
+    private var elementsSection: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isElementsExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: CathedralTheme.Spacing.xs) {
+                    Image(systemName: isElementsExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("WHAT THIS RECIPE USES")
+                        .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                        .tracking(1.5)
+                }
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            .buttonStyle(.plain)
+
+            if isElementsExpanded {
+                elementsList
+                    .padding(.top, 2)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var elementsList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            let characterNames = pack.selectedCharacterIDs.compactMap { id in
+                project.characters.first(where: { $0.id == id })?.name
+            }
+            if !characterNames.isEmpty {
+                elementRow(label: "Characters", value: characterNames.joined(separator: ", "))
+            }
+            if let sparkID = pack.selectedStorySparkID,
+               let spark = project.storySparks.first(where: { $0.id == sparkID }) {
+                elementRow(label: "Story spark", value: spark.title)
+            }
+            if let aID = pack.selectedAftertasteID,
+               let a = project.aftertastes.first(where: { $0.id == aID }) {
+                elementRow(label: "Aftertaste", value: a.label)
+            }
+            let relNames = pack.selectedRelationshipIDs.compactMap { id in
+                project.relationships.first(where: { $0.id == id })?.name
+            }
+            if !relNames.isEmpty {
+                elementRow(label: "Relationships", value: relNames.joined(separator: ", "))
+            }
+            let themeQs = pack.selectedThemeQuestionIDs.compactMap { id in
+                project.themeQuestions.first(where: { $0.id == id })?.question
+            }
+            if !themeQs.isEmpty {
+                elementRow(label: "Theme questions", value: themeQs.joined(separator: ", "))
+            }
+            let motifLabels = pack.selectedMotifIDs.compactMap { id in
+                project.motifs.first(where: { $0.id == id })?.label
+            }
+            if !motifLabels.isEmpty {
+                elementRow(label: "Motifs", value: motifLabels.joined(separator: ", "))
+            }
+            if pack.includeProjectSetting && project.projectSetting != nil {
+                elementRow(label: "Setting", value: "Included")
+            }
+            if let notes = pack.notes, !notes.isEmpty {
+                elementRow(label: "Notes", value: notes)
+            }
+            if let bias = pack.instructionBias, !bias.isEmpty {
+                elementRow(label: "Instruction bias", value: bias)
+            }
+        }
+    }
+
+    private func elementRow(label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: CathedralTheme.Spacing.xs) {
+            Text(label)
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.2)
+                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                .frame(width: 110, alignment: .leading)
+            Text(value)
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+
     // MARK: Sparse-pack notice
 
     private var isSparse: Bool {
@@ -423,7 +326,7 @@ struct PromptPackPreviewView: View {
             Image(systemName: "info.circle")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            Text("This pack has no characters, spark, or aftertaste selected. The export will be sparse.")
+            Text("This recipe has no characters, spark, or aftertaste selected. The generation will be sparse.")
                 .font(CathedralTheme.Typography.caption())
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
         }
@@ -437,103 +340,95 @@ struct PromptPackPreviewView: View {
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
     }
 
-    // MARK: Generate Action
+    // MARK: Prompt / JSON section
 
-    private var generateAction: some View {
-        VStack(spacing: CathedralTheme.Spacing.sm) {
-
-            // Output length picker
-            modelPicker
-            lengthModePicker
-
-            // Error banner
-            if let errorMessage = generationError {
-                HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                    Text(errorMessage)
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+    private var promptJSONSection: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Picker("View", selection: $viewMode) {
+                ForEach(RecipeCardViewMode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
                 }
-                .padding(CathedralTheme.Spacing.sm)
-                .background(CathedralTheme.Colors.surface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                        .stroke(CathedralTheme.Colors.destructive.opacity(0.4), lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
+            .pickerStyle(.segmented)
 
-            // Success banner with link to generated output
-            if let output = lastGeneratedOutput,
-               output.status == GenerationStatus.complete.rawValue || (output.status == GenerationStatus.draft.rawValue && output.wasTruncated) {
-                HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
-                    Image(systemName: output.wasTruncated
-                        ? "exclamationmark.triangle"
-                        : (output.syncStatus == SyncStatus.failed.rawValue ? "exclamationmark.triangle" : "checkmark.circle"))
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
-                            ? CathedralTheme.Colors.destructive
-                            : CathedralTheme.Colors.accent)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(output.wasTruncated
-                            ? "Generation saved as incomplete — \(output.title)"
-                            : "Generation complete — \(output.title)")
-                            .font(CathedralTheme.Typography.caption())
-                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .lineLimit(2)
-                        if output.wasTruncated {
-                            Text("This output hit the model length limit and may be incomplete.")
-                                .font(CathedralTheme.Typography.caption())
-                                .foregroundStyle(CathedralTheme.Colors.destructive)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        if output.syncStatus == SyncStatus.failed.rawValue {
-                            Text("Output Sync: Failed\(output.syncErrorMessage.flatMap { $0.nilIfEmpty }.map { " — \($0)" } ?? "")")
-                                .font(CathedralTheme.Typography.caption())
-                                .foregroundStyle(CathedralTheme.Colors.destructive)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
-                .padding(CathedralTheme.Spacing.sm)
-                .background(CathedralTheme.Colors.surface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                        .stroke(
-                            (output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
-                                ? CathedralTheme.Colors.destructive
-                                : CathedralTheme.Colors.accent).opacity(0.4),
-                            lineWidth: 1
-                        )
-                )
-                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
-            }
-
-            if let diagnostics = generationDiagnostics {
-                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-                    Label("Diagnostics", systemImage: "antennaradiowaves.left.and.right")
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    Text(diagnostics)
-                        .font(CathedralTheme.Typography.mono(12))
-                        .foregroundStyle(CathedralTheme.Colors.primaryText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-                .padding(CathedralTheme.Spacing.sm)
-                .background(CathedralTheme.Colors.surface)
+            Text(activeText)
+                .font(contentFont)
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .lineLimit(isPromptPreviewExpanded ? nil : 8)
+                .padding(CathedralTheme.Spacing.base)
+                .background(CathedralTheme.Colors.background)
                 .overlay(
                     RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
                         .stroke(CathedralTheme.Colors.border, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+
+            HStack {
+                Button {
+                    isPromptPreviewExpanded.toggle()
+                } label: {
+                    Text(isPromptPreviewExpanded ? "Collapse" : "Show full")
+                        .font(CathedralTheme.Typography.label(11, weight: .regular))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Spacer()
+                Button {
+                    copyActive()
+                } label: {
+                    Label(activeCopyLabel, systemImage: "doc.on.doc")
+                        .font(CathedralTheme.Typography.label(11, weight: .regular))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+        }
+    }
+
+    private var activeCopyLabel: String {
+        switch viewMode {
+        case .prompt:
+            return copiedPrompt ? "Prompt copied" : "Copy prompt"
+        case .json:
+            return copiedJSON ? "JSON copied" : "Copy JSON"
+        }
+    }
+
+    private func copyActive() {
+        switch viewMode {
+        case .prompt:
+            UIPasteboard.general.string = promptText
+            copiedPrompt = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copiedPrompt = false }
+        case .json:
+            UIPasteboard.general.string = jsonText
+            copiedJSON = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copiedJSON = false }
+        }
+    }
+
+    // MARK: Generate action
+
+    private var generateAction: some View {
+        VStack(spacing: CathedralTheme.Spacing.sm) {
+            modelPicker
+            lengthModePicker
+
+            if let errorMessage = generationError {
+                errorBanner(errorMessage)
             }
 
-            // Generate button
+            if let output = lastGeneratedOutput,
+               output.status == GenerationStatus.complete.rawValue || (output.status == GenerationStatus.draft.rawValue && output.wasTruncated) {
+                successBanner(for: output)
+            }
+
+            if let diagnostics = generationDiagnostics {
+                diagnosticsBlock(diagnostics)
+            }
+
             CathedralPrimaryButton(
                 isGenerating ? "Generating…" : "Generate",
                 systemImage: isGenerating ? "arrow.trianglehead.2.clockwise" : "sparkles"
@@ -547,15 +442,98 @@ struct PromptPackPreviewView: View {
             }
             .disabled(isGenerating || isEstimating || costEstimate?.allowed == false)
 
-            // Cost estimate row
             creditEstimateRow
 
-            Text("Sends the current pack payload to your generation backend. The result is saved to Generated Outputs.")
+            Text("Sends this recipe's payload to your generation backend. Results appear under this recipe.")
                 .font(CathedralTheme.Typography.caption())
                 .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
         }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(CathedralTheme.Colors.destructive)
+            Text(message)
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.destructive)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(CathedralTheme.Spacing.sm)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.destructive.opacity(0.4), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+
+    private func successBanner(for output: GenerationOutput) -> some View {
+        HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+            Image(systemName: output.wasTruncated
+                ? "exclamationmark.triangle"
+                : (output.syncStatus == SyncStatus.failed.rawValue ? "exclamationmark.triangle" : "checkmark.circle"))
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
+                    ? CathedralTheme.Colors.destructive
+                    : CathedralTheme.Colors.accent)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(output.wasTruncated
+                    ? "Generation saved as incomplete — \(output.title)"
+                    : "Generation complete — \(output.title)")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(2)
+                if output.wasTruncated {
+                    Text("This output hit the model length limit and may be incomplete.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if output.syncStatus == SyncStatus.failed.rawValue {
+                    Text("Output Sync: Failed\(output.syncErrorMessage.flatMap { $0.nilIfEmpty }.map { " — \($0)" } ?? "")")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(CathedralTheme.Spacing.sm)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(
+                    (output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
+                        ? CathedralTheme.Colors.destructive
+                        : CathedralTheme.Colors.accent).opacity(0.4),
+                    lineWidth: 1
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+
+    private func diagnosticsBlock(_ diagnostics: String) -> some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Label("Diagnostics", systemImage: "antennaradiowaves.left.and.right")
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            Text(diagnostics)
+                .font(CathedralTheme.Typography.mono(12))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+        .padding(CathedralTheme.Spacing.sm)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
     }
 
     @ViewBuilder
@@ -638,8 +616,6 @@ struct PromptPackPreviewView: View {
         }
     }
 
-    // MARK: Length Mode Picker
-
     private var lengthModePicker: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
             Text("STORY GOAL".uppercased())
@@ -658,10 +634,98 @@ struct PromptPackPreviewView: View {
         }
     }
 
-    // MARK: Generation Logic
+    // MARK: Outputs from this recipe
 
-    /// Debounces estimate requests so rapid picker changes do not flood the backend.
-    /// Cancels any in-flight estimate task, then fires after a 400 ms delay.
+    private var recipeOutputs: [GenerationOutput] {
+        project.generations
+            .filter { $0.sourcePromptPackID == pack.id }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var outputsSection: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                Text("OUTPUTS FROM THIS RECIPE")
+                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                    .tracking(1.5)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Spacer()
+                Text("\(recipeOutputs.count)")
+                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+            }
+
+            if recipeOutputs.isEmpty {
+                Text("No outputs yet. Tap Generate above to create one.")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                    .padding(.vertical, CathedralTheme.Spacing.xs)
+            } else {
+                ForEach(recipeOutputs) { output in
+                    outputRow(for: output)
+                }
+            }
+        }
+        .padding(CathedralTheme.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CathedralTheme.Colors.background)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+
+    private func outputRow(for output: GenerationOutput) -> some View {
+        NavigationLink {
+            GenerationOutputDetailView(output: output)
+        } label: {
+            HStack(alignment: .center, spacing: CathedralTheme.Spacing.sm) {
+                statusGlyph(for: output)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(output.title)
+                        .font(CathedralTheme.Typography.body(14, weight: .medium))
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(1)
+                    let status = GenerationStatus(rawValue: output.status)?.displayName ?? output.status
+                    Text("\(status) · \(output.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .padding(.vertical, CathedralTheme.Spacing.xs)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func statusGlyph(for output: GenerationOutput) -> some View {
+        let icon: String
+        let color: Color
+        switch (GenerationStatus(rawValue: output.status), output.wasTruncated, output.syncStatus == SyncStatus.failed.rawValue) {
+        case (.failed, _, _), (_, _, true):
+            icon = "exclamationmark.triangle.fill"
+            color = CathedralTheme.Colors.destructive
+        case (.generating, _, _):
+            icon = "arrow.trianglehead.2.clockwise"
+            color = CathedralTheme.Colors.secondaryText
+        case (.complete, true, _):
+            icon = "exclamationmark.triangle"
+            color = CathedralTheme.Colors.destructive
+        default:
+            icon = "checkmark.circle.fill"
+            color = CathedralTheme.Colors.accent
+        }
+        return Image(systemName: icon)
+            .foregroundStyle(color)
+            .font(.system(size: 16, weight: .medium))
+    }
+
+    // MARK: Generation logic
+
     private func scheduleEstimate() {
         estimateTask?.cancel()
         estimateTask = Task {
@@ -673,7 +737,6 @@ struct PromptPackPreviewView: View {
 
     @MainActor
     private func performEstimate() async {
-        // Require auth before hitting the backend.
         if case .unknown = authService.authState {
             await authService.checkSession()
         }
@@ -722,42 +785,30 @@ struct PromptPackPreviewView: View {
         generationDiagnostics = nil
         let mode = selectedLengthMode
 
-        // Resolve auth state at tap time — if the session hasn't been checked yet
-        // (e.g. the Account tab was never visited this launch), check it now so the
-        // preflight sees the real signed-in state rather than the initial .unknown.
-        // checkSession() is a synchronous keychain read (no network I/O) and is
-        // idempotent; concurrent calls from separate tasks would produce the same result.
-        // Simultaneous taps are already prevented by the isGenerating guard in the UI.
         if case .unknown = authService.authState {
             await authService.checkSession()
         }
 
-        // Preflight: check credits and auth before making any network call.
         let preflight = usageLimitService.checkPreflight(lengthMode: mode, authState: authService.authState)
         switch preflight {
         case .signedOut:
             generationError = GenerationBackendServiceError.notSignedIn.errorDescription
             return
         case .backendConfigMissing:
-            // Backend not configured — fall through and let the service throw .notConfigured
-            // so the existing error path handles it consistently.
             break
         case .allowed, .unknown, .insufficientCredits:
             break
         }
 
-        // Freeze the payload and JSON snapshot at submission time.
         let frozenPayload = exportPayload
         let frozenJSON = PromptPackJSONAssembler.jsonString(payload: frozenPayload)
 
-        // Record usage event before the network call.
         GenerationUsageTracker.shared.record(
             action: "generate",
             lengthMode: mode,
             sourcePromptPackID: pack.id
         )
 
-        // Create the GenerationOutput record and mark it as generating.
         let gen = GenerationOutput(
             title: "\(pack.name) — \(project.name)",
             outputText: "",
@@ -810,7 +861,6 @@ struct PromptPackPreviewView: View {
             }
             gen.updatedAt = Date()
             gen.syncErrorMessage = nil
-            // If the backend returned a cloud generation output ID, record it and mark synced.
             if let cloudID = response.cloudGenerationOutputID, !cloudID.isEmpty {
                 gen.cloudGenerationOutputID = cloudID
                 gen.cloudOwnerUserID = authService.authState.currentUser?.id ?? ""
@@ -827,31 +877,22 @@ struct PromptPackPreviewView: View {
             try? persistGeneration(stage: "saving the completed output")
             _ = LocalGenerationOutputBackupService.shared.backup(output: gen)
 
-            // On success: refresh backend-authoritative credit balance.
-            // The backend is the source of truth for credits consumed and remaining.
-            // Decrement locally first so the UI updates immediately, then overwrite
-            // with the authoritative backend balance.
             usageLimitService.recordSuccessfulGeneration(
                 creditCost: response.creditCostCharged ?? 0,
                 lengthMode: mode
             )
             await refreshBackendCreditState()
-            // sourcePayloadJSON is never overwritten — snapshot is preserved.
-
         } catch {
             mergeGenerationDiagnostics(await GenerationRequestDiagnosticsStore.shared.latestVisibleText())
             gen.status = GenerationStatus.failed.rawValue
             gen.notes = error.localizedDescription
             gen.updatedAt = Date()
             try? persistGeneration(stage: "saving the failed output")
-            // sourcePayloadJSON is never overwritten — snapshot is preserved.
-            // MVP policy: do not charge credits on generation failure.
             generationError = localizedGenerationError(error)
         }
         _ = LocalProjectBackupService.shared.backup(project: project)
     }
 
-    /// Returns a human-readable error string, with special handling for auth and config errors.
     private func localizedGenerationError(_ error: Error) -> String {
         if let backendError = error as? GenerationBackendServiceError {
             return backendError.errorDescription ?? backendError.localizedDescription
@@ -900,9 +941,6 @@ struct PromptPackPreviewView: View {
         }
     }
 
-    /// Fetches the backend-authoritative credit state and applies it to the local service.
-    /// Silently ignores errors (network unavailable, not signed in) so that the UI
-    /// remains functional with stale local values when the backend is unreachable.
     @MainActor
     private func refreshBackendCreditState() async {
         guard SupabaseConfiguration.isConfigured else { return }
@@ -918,3 +956,4 @@ struct PromptPackPreviewView: View {
         }
     }
 }
+

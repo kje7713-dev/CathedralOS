@@ -112,7 +112,7 @@ struct ProjectDetailView: View {
                     relationshipsSection
                     themeQuestionsSection
                     motifsSection
-                    promptPacksSection
+                    recipesSection
                     generationsSection
                 } else {
                     switch storyEditorMode {
@@ -129,7 +129,7 @@ struct ProjectDetailView: View {
                         aftertastesSection
                         themeQuestionsSection
                     case .output:
-                        promptPacksSection
+                        recipesSection
                         generationsSection
                     }
                 }
@@ -479,16 +479,16 @@ struct ProjectDetailView: View {
         }
     }
 
-    // MARK: Story Packs Section
+    // MARK: Recipes Section
 
-    private var promptPacksSection: some View {
+    private var recipesSection: some View {
         Section {
             let sorted = (project.promptPacks).sorted { $0.name < $1.name }
             if sorted.isEmpty {
                 CathedralEmptyState(
-                    label: "Bundle a story to compile.",
-                    description: "A pack selects which characters, sparks, and themes feed a generation.",
-                    actionLabel: "Create first pack",
+                    label: "Recipes turn your story into something the model can write from.",
+                    description: "Each one bundles characters, sparks, and themes into a generation-ready set. Create your first to get started.",
+                    actionLabel: "Create first recipe",
                     action: { showAddPromptPack = true }
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
@@ -496,35 +496,26 @@ struct ProjectDetailView: View {
                     .listRowInsets(EdgeInsets())
             }
             ForEach(sorted) { pack in
-                NavigationLink {
-                    PromptPackPreviewView(project: project, pack: pack)
-                } label: {
-                    // Use CathedralNavRowLabel (no onTapGesture) to avoid
-                    // gesture interception on the enclosing NavigationLink.
-                    CathedralNavRowLabel(
-                        title: pack.name,
-                        subtitle: packSubtitle(pack)
-                    )
-                }
-                .listRowBackground(CathedralTheme.Colors.background)
-                .listRowSeparatorTint(CathedralTheme.Colors.separator)
-                .listRowInsets(EdgeInsets())
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) {
+                RecipeCard(
+                    project: project,
+                    pack: pack,
+                    onEdit: { packToEdit = pack },
+                    onDelete: {
                         modelContext.delete(pack)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
+                        try? modelContext.save()
                     }
-                    Button {
-                        packToEdit = pack
-                    } label: {
-                        Label("Edit", systemImage: "pencil")
-                    }
-                    .tint(CathedralTheme.Colors.accent)
-                }
+                )
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(
+                    top: CathedralTheme.Spacing.sm,
+                    leading: CathedralTheme.Spacing.base,
+                    bottom: CathedralTheme.Spacing.sm,
+                    trailing: CathedralTheme.Spacing.base
+                ))
             }
         } header: {
-            CathedralSectionHeader("Story Packs") { showAddPromptPack = true }
+            CathedralSectionHeader("Recipes") { showAddPromptPack = true }
                 .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
@@ -635,21 +626,6 @@ struct ProjectDetailView: View {
             CathedralSectionHeader("Motifs") { showAddMotif = true }
                 .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
-    }
-
-    private func packSubtitle(_ pack: PromptPack) -> String? {
-        var parts: [String] = []
-        let charCount = pack.selectedCharacterIDs.count
-        if charCount > 0 { parts.append("\(charCount) character\(charCount == 1 ? "" : "s")") }
-        if pack.selectedStorySparkID != nil { parts.append("spark") }
-        if pack.selectedAftertasteID != nil { parts.append("aftertaste") }
-        let relCount = pack.selectedRelationshipIDs.count
-        if relCount > 0 { parts.append("\(relCount) relationship\(relCount == 1 ? "" : "s")") }
-        let themeCount = pack.selectedThemeQuestionIDs.count
-        if themeCount > 0 { parts.append("\(themeCount) theme\(themeCount == 1 ? "" : "s")") }
-        let motifCount = pack.selectedMotifIDs.count
-        if motifCount > 0 { parts.append("\(motifCount) motif\(motifCount == 1 ? "" : "s")") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     // MARK: Generations Section
