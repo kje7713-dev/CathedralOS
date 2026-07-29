@@ -117,6 +117,7 @@ struct ProjectDetailView: View {
                 } else {
                     switch storyEditorMode {
                     case .story:
+                        outputsJumpSection
                         summarySection
                         audienceSection
                         settingSection
@@ -183,6 +184,16 @@ struct ProjectDetailView: View {
             }
         }
         .tint(CathedralTheme.Colors.accent)
+        .onAppear {
+            // New or empty projects (no story content yet) should always land
+            // on Story, not the last globally-persisted tab from the previous
+            // project. The @AppStorage storyEditorMode flag persists across
+            // projects, so without this guard a freshly created project can
+            // open on Output because the user was on Output elsewhere.
+            if tutorialStep == 1 {
+                storyEditorModeRaw = StoryEditorMode.story.rawValue
+            }
+        }
         .sheet(isPresented: $showAddCharacter) {
             NavigationStack {
                 CharacterFormView(project: project, character: nil)
@@ -248,6 +259,60 @@ struct ProjectDetailView: View {
         .padding(.horizontal, CathedralTheme.Spacing.base)
         .padding(.vertical, CathedralTheme.Spacing.sm)
         .background(CathedralTheme.Colors.background)
+    }
+
+    // MARK: - Outputs jump section
+    // Shown on the Story tab when the project already has at least one
+    // generation. Provides a clear, tappable path to the Output tab so the
+    // user doesn't have to hunt for it in the segmented picker.
+
+    private var latestGeneration: GenerationOutput? {
+        project.generations.sorted { $0.createdAt > $1.createdAt }.first
+    }
+
+    @ViewBuilder
+    private var outputsJumpSection: some View {
+        if let latest = latestGeneration {
+            Section {
+                Button {
+                    storyEditorModeRaw = StoryEditorMode.output.rawValue
+                } label: {
+                    CathedralCard {
+                        HStack(spacing: CathedralTheme.Spacing.md) {
+                            Image(systemName: "doc.text.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(CathedralTheme.Colors.accent)
+                                .frame(width: 36, height: 36)
+                                .background(CathedralTheme.Colors.accent.opacity(0.12))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("View \(project.generations.count) output\(project.generations.count == 1 ? "" : "s")")
+                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                Text("Latest: \(latest.title)")
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                            Spacer(minLength: CathedralTheme.Spacing.sm)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(
+                    top: CathedralTheme.Spacing.sm,
+                    leading: CathedralTheme.Spacing.base,
+                    bottom: CathedralTheme.Spacing.sm,
+                    trailing: CathedralTheme.Spacing.base
+                ))
+            }
+        }
     }
 
     private var firstRunHint: some View {
