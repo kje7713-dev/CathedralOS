@@ -147,6 +147,8 @@ struct RecipeCard: View {
         .alert("Generate Chapter?", isPresented: $showChapterConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Generate") {
+                guard !isGenerating else { return }
+                isGenerating = true
                 markFirstGenerateCompleted()
                 Task { await startGeneration() }
             }
@@ -436,6 +438,8 @@ struct RecipeCard: View {
                 if selectedLengthMode == .chapter {
                     showChapterConfirm = true
                 } else {
+                    guard !isGenerating else { return }
+                    isGenerating = true
                     markFirstGenerateCompleted()
                     Task { await startGeneration() }
                 }
@@ -834,7 +838,6 @@ struct RecipeCard: View {
         _ = LocalProjectBackupService.shared.backup(project: project)
         lastGeneratedOutput = gen
 
-        isGenerating = true
         defer { isGenerating = false }
 
         do {
