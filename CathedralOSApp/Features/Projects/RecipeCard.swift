@@ -39,6 +39,10 @@ struct RecipeCard: View {
     @State private var selectedLengthMode: GenerationLengthMode = .defaultMode
     @State private var generationModels: [GenerationModelOption] = []
     @State private var showChapterConfirm = false
+    // Phase 2: budget picker (UI-only). Defaults to medium scene which matches
+    // GenerationLengthMode.defaultMode so existing user flow is unchanged
+    // until they pick a budget.
+    @State private var selectedBudgetPreset: BudgetPreset = .defaultPreset
     @AppStorage("cathedralos.generation.selectedModelID")
     private var selectedModelId: String = "gpt-4o-mini"
 
@@ -416,6 +420,7 @@ struct RecipeCard: View {
     private var generateAction: some View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
             modelPicker
+            budgetPicker
             lengthModePicker
 
             if let errorMessage = generationError {
@@ -617,6 +622,66 @@ struct RecipeCard: View {
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
             }
+        }
+    }
+
+    // MARK: Budget picker
+    //
+    // Phase 2 budget picker. Four preset cards ($0.10 / $0.30 / $1.00 / $3.00).
+    // Selecting a preset also pre-selects the matching length mode in the
+    // lengthModePicker below — but the user can still override the length
+    // mode independently. Per docs/generation-budget.md §3.4 this is UI-only:
+    // the server still consumes `lengthMode` and computes credits itself.
+    private var budgetPicker: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("BUDGET".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                ForEach(BudgetPreset.allCases) { preset in
+                    Button {
+                        selectedBudgetPreset = preset
+                        selectedLengthMode = preset.defaultLengthMode
+                    } label: {
+                        VStack(spacing: 2) {
+                            Text(preset.displayPrice)
+                                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                .foregroundStyle(
+                                    selectedBudgetPreset == preset
+                                        ? CathedralTheme.Colors.accent
+                                        : CathedralTheme.Colors.primaryText
+                                )
+                            Text(preset.coverageHint)
+                                .font(CathedralTheme.Typography.label(10, weight: .regular))
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, CathedralTheme.Spacing.sm)
+                        .background(
+                            selectedBudgetPreset == preset
+                                ? CathedralTheme.Colors.accent.opacity(0.15)
+                                : CathedralTheme.Colors.background
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm)
+                                .stroke(
+                                    selectedBudgetPreset == preset
+                                        ? CathedralTheme.Colors.accent
+                                        : CathedralTheme.Colors.border,
+                                    lineWidth: 1
+                                )
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text("Selected: \(selectedBudgetPreset.coverageHint) · \(selectedBudgetPreset.baseCredits) credits")
+                .font(CathedralTheme.Typography.label(11, weight: .regular))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
         }
     }
 
