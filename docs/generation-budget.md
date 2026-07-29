@@ -59,7 +59,7 @@ This reframe moves the user from picking **shape** to picking **spend**, and giv
 ### 3.4 Pay-as-you-go (Budget × Model Picker)
 
 - **Budget presets:** **$0.10 · $0.30 · $1.00 · $3.00** (= 2 / 6 / 20 / 60 credits at $0.05/credit).
-- **Model picker is user-facing.** The user picks the model from the enabled list (grouped by tier — Cheap / Standard / Premium). The server respects the choice — no server-side override.
+- **Model picker is user-facing, and the actual model name is shown to the user.** The picker lists every enabled model with its display name visible — e.g., "Cheap — GPT-4o mini," "Standard — Claude 3.5 Sonnet," "Premium — Claude 3 Opus." Tier grouping is organizational; the model name is the unit of choice. Some users care which model they're getting (provider politics, model-specific quirks, vibes), and the UI respects that. The server respects the choice — no server-side override.
 - **Effective credits = budget credits × model multiplier.** The picker displays the final credit cost before the user commits, so the price never surprises.
   | Model tier | Multiplier on budget credits |
   |---|---|
@@ -71,7 +71,7 @@ This reframe moves the user from picking **shape** to picking **spend**, and giv
 - **Pre-flight input token estimation** — `max_output = budget_tokens − estimated_input − safety` (using `estimateTokensFromText` from `_generation_models.ts`, +25% safety).
 - **Auto-continue on `finishReason === "length"`** — server chains a "wrap up cleanly" continuation call and stitches the output. Continuation consumes the remaining budget. Stop only when budget is exhausted or the scene closes naturally.
 - **Refund unused budget on natural finish** — see §4.
-- **Roadmap:** when Kevin adds new cheap providers (Kimi, MiniMax, etc.), they appear in the Cheap tier automatically. The tier abstraction means users don't churn on model swaps — they're paying for "cheap," not for a specific model name.
+- **Roadmap:** when Kevin adds new cheap providers (Kimi, MiniMax, etc.), they appear as additional Cheap-tier rows with their model name visible — e.g., "Cheap — Kimi," "Cheap — MiniMax." The tier abstraction handles routing and pricing consistently; the model name lets users who care pick the one they want. Existing Cheap-tier users can switch to a new provider with one tap if they prefer it.
 
 ### 3.5 IAP Packs (StoreKit)
 
