@@ -95,6 +95,8 @@
 		000000000000000000000131 /* GenerationOutputActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000130 /* GenerationOutputActionTests.swift */; };
 		000000000000000000000133 /* GenerationLengthMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000132 /* GenerationLengthMode.swift */; };
 		B8E3C2D4E5F6A7B8C9D0E1F2 /* BudgetPreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F2B1C3D4E5F6A7B8C9D0E1 /* BudgetPreset.swift */; };
+		C5D6E7F8A9B0C1D2E3F4A5C2 /* Container.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5D6E7F8A9B0C1D2E3F4A5C1 /* Container.swift */; };
+		C5D6E7F8A9B0C1D2E3F4A5C4 /* POV.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5D6E7F8A9B0C1D2E3F4A5C3 /* POV.swift */; };
 		C5D6E7F8A9B0C1D2E3F4A5B8 /* GenerationStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5D6E7F8A9B0C1D2E3F4A5B7 /* GenerationStyle.swift */; };
 		000000000000000000000135 /* GenerationUsageEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000134 /* GenerationUsageEvent.swift */; };
 		000000000000000000000137 /* GenerationUsageTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000136 /* GenerationUsageTracker.swift */; };
@@ -260,6 +262,8 @@
 		000000000000000000000130 /* GenerationOutputActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputActionTests.swift; sourceTree = "<group>"; };
 		000000000000000000000132 /* GenerationLengthMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationLengthMode.swift; sourceTree = "<group>"; };
 		A7F2B1C3D4E5F6A7B8C9D0E1 /* BudgetPreset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BudgetPreset.swift; sourceTree = "<group>"; };
+		C5D6E7F8A9B0C1D2E3F4A5C1 /* Container.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Container.swift; sourceTree = "<group>"; };
+		C5D6E7F8A9B0C1D2E3F4A5C3 /* POV.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = POV.swift; sourceTree = "<group>"; };
 		C5D6E7F8A9B0C1D2E3F4A5B7 /* GenerationStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationStyle.swift; sourceTree = "<group>"; };
 		000000000000000000000134 /* GenerationUsageEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationUsageEvent.swift; sourceTree = "<group>"; };
 		000000000000000000000136 /* GenerationUsageTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationUsageTracker.swift; sourceTree = "<group>"; };
@@ -463,6 +467,8 @@
 				000000000000000000000122 /* GenerationOutput.swift */,
 				000000000000000000000132 /* GenerationLengthMode.swift */,
 				A7F2B1C3D4E5F6A7B8C9D0E1 /* BudgetPreset.swift */,
+				C5D6E7F8A9B0C1D2E3F4A5C1 /* Container.swift */,
+				C5D6E7F8A9B0C1D2E3F4A5C3 /* POV.swift */,
 				C5D6E7F8A9B0C1D2E3F4A5B7 /* GenerationStyle.swift */,
 				000000000000000000000134 /* GenerationUsageEvent.swift */,
 				00000000000000000000017D /* GenerationCreditState.swift */,
@@ -830,6 +836,8 @@
 				00000000000000000000012D /* GenerationService.swift in Sources */,
 				000000000000000000000133 /* GenerationLengthMode.swift in Sources */,
 				B8E3C2D4E5F6A7B8C9D0E1F2 /* BudgetPreset.swift in Sources */,
+				C5D6E7F8A9B0C1D2E3F4A5C2 /* Container.swift in Sources */,
+				C5D6E7F8A9B0C1D2E3F4A5C4 /* POV.swift in Sources */,
 				C5D6E7F8A9B0C1D2E3F4A5B8 /* GenerationStyle.swift in Sources */,
 				000000000000000000000135 /* GenerationUsageEvent.swift in Sources */,
 				000000000000000000000137 /* GenerationUsageTracker.swift in Sources */,
