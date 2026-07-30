@@ -650,26 +650,38 @@ function buildPrompt(req: {
   // the model often ignored. “auto” gives no length target at all — the
   // model writes whatever fits the budget. “compact/standard/expansive” give
   // density hints the model can actually honor.
-  const styleDensityHint: Record<Style, string> = {
-    auto:
-      "Density: not specified — write whatever fits the budget naturally. There is no word-count target.",
-    compact:
-      "Density: tight and focused (roughly 300–500 words). High information density, less interiority.",
-    standard:
-      "Density: standard pacing (roughly 600–1000 words). Balanced with a full dramatic beat.",
-    expansive:
-      "Density: expansive (roughly 1500+ words). Breathing room, more interiority, longer beats.",
+  // Budget-aware prompts: the model gets the actual token budget UP FRONT
+  // so it can PLAN scene structure proportionally from sentence one. Telling
+  // it to "wrap up faster" mid-flow produces bad writing. Telling it the
+  // budget and a proportional structure plan lets it write a coherent scene
+  // that fits. (Kevin's insight, build-thread #1460.)
+  const styleDensityHint = (style: Style, budget: number): string => {
+    const tokens = budget;
+    const words = Math.round(budget * 0.75); // approx tokens-to-words
+    switch (style) {
+      case "auto":
+        return `Density: not specified — write whatever fits the budget naturally. You have ~${tokens} tokens (~${words} words). There is no word-count target.`;
+      case "compact":
+        return `Density: tight and focused. You have ~${tokens} tokens (~${words} words). High information density, less interiority.`;
+      case "standard":
+        return `Density: standard pacing. You have ~${tokens} tokens (~${words} words). Balanced with a full dramatic beat.`;
+      case "expansive":
+        return `Density: expansive. You have ~${tokens} tokens (~${words} words). Breathing room, more interiority, longer beats.`;
+    }
   };
 
-  const styleStoryGoal: Record<Style, string> = {
-    auto:
-      "Write a complete scene that ends cleanly within the budget. Use as much of the budget as the scene needs — there is no word-count target.",
-    compact:
-      "Write one tight scene beat. End cleanly.",
-    standard:
-      "Write one complete dramatic scene with setup, pressure, turn, and consequence.",
-    expansive:
-      "Write an extended scene with multiple connected beats and inner life.",
+  const styleStoryGoal = (style: Style, budget: number): string => {
+    const tokens = budget;
+    switch (style) {
+      case "auto":
+        return `Write a complete scene that fits naturally within the budget of ${tokens} tokens. Plan the structure based on what this scene needs. There is no word-count target — use what fits the budget. End cleanly.`;
+      case "compact":
+        return `Write one tight scene beat within ${tokens} tokens total. Plan the structure based on what this scene needs — some beats need more setup, some need more pressure, some need a sharper turn. Trust your craft. End cleanly within this budget.`;
+      case "standard":
+        return `Write one complete dramatic scene with setup, pressure, turn, and consequence, within ${tokens} tokens total. Plan the structure based on what this scene needs: some scenes need slow build, some need fast escalation, some need lingering aftermath. The proportions vary by what’s being told. Trust your craft. End cleanly within this budget.`;
+      case "expansive":
+        return `Write an extended scene with multiple connected beats and inner life, within ${tokens} tokens total. Plan the structure based on what this scene needs — some scenes need atmosphere, some need momentum, some need reflection. Trust your craft. End cleanly within this budget.`;
+    }
   };
 
   // Craft directives — sent as the SYSTEM message. Persistent across
@@ -707,12 +719,13 @@ function buildPrompt(req: {
   }
 
   // Writing Task — per-request specifics, lives in the user message.
-  // Style-driven: replaces the old length-based density target.
+  // Budget-aware: passes the actual token budget so the model plans
+  // structure proportionally from sentence one.
   contextLines.push(
     "## Writing Task",
     actionTask[req.generationAction],
-    styleDensityHint[req.style],
-    styleStoryGoal[req.style],
+    styleDensityHint(req.style, req.outputBudget),
+    styleStoryGoal(req.style, req.outputBudget),
     "",
   );
 
