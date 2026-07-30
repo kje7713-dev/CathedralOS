@@ -37,6 +37,10 @@ struct RecipeCard: View {
     @State private var generationDiagnostics: String?
     @State private var lastGeneratedOutput: GenerationOutput?
     @State private var selectedLengthMode: GenerationLengthMode = .defaultMode
+    // Style picker: drives prompt content on the server. Auto = no length
+    // target; Compact/Standard/Expansive = density hint. selectedLengthMode
+    // is auto-derived from this for credit-cost purposes via creditLengthMode.
+    @State private var selectedStyle: GenerationStyle = .defaultStyle
     @State private var generationModels: [GenerationModelOption] = []
     @State private var showChapterConfirm = false
     // Phase 2: budget picker (UI-only). Defaults to medium scene which matches
@@ -421,7 +425,7 @@ struct RecipeCard: View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
             modelPicker
             budgetPicker
-            lengthModePicker
+            stylePicker
 
             if let errorMessage = generationError {
                 errorBanner(errorMessage)
@@ -692,19 +696,23 @@ struct RecipeCard: View {
         return "\(cost) cr \u{00b7} \(preset.coverageHint)"
     }
 
-    private var lengthModePicker: some View {
+    private var stylePicker: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-            Text("STORY GOAL".uppercased())
+            Text("STYLE".uppercased())
                 .font(CathedralTheme.Typography.label(10, weight: .semibold))
                 .tracking(1.5)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            Picker("Story goal", selection: $selectedLengthMode) {
-                ForEach(GenerationLengthMode.allCases, id: \.self) { mode in
-                    Text(mode.displayName).tag(mode)
+            Picker("Style", selection: $selectedStyle) {
+                ForEach(GenerationStyle.allCases, id: \.self) { style in
+                    Text(style.displayName).tag(style)
                 }
             }
             .pickerStyle(.segmented)
-            Text("\(selectedLengthMode.displayName): \(selectedLengthMode.storyUnitHint)")
+            .onChange(of: selectedStyle) { _, newStyle in
+                // Keep length-mode-derived credit tier in sync with style.
+                selectedLengthMode = newStyle.creditLengthMode
+            }
+            Text(selectedStyle.helperText)
                 .font(CathedralTheme.Typography.label(11, weight: .regular))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
         }

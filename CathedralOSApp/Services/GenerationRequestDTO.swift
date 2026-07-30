@@ -36,6 +36,9 @@ struct GenerationRequest: Codable {
     // MARK: Length / budget controls
     /// Raw value of `GenerationLengthMode`: "short" | "medium" | "long" | "chapter".
     let generationLengthMode: String
+    /// Style picker (replaces length-based density guidance in the prompt).
+    /// Optional for backwards compat — omitted => "auto".
+    let style: String?
     /// Approximate maximum output tokens for this request.
     /// Derived from `GenerationLengthMode.outputBudget`; centralized there.
     /// Encodes as "outputBudget" to match the Edge Function contract.
@@ -72,6 +75,7 @@ struct GenerationRequest: Codable {
         case audienceNotes
         case requestedOutputType
         case generationLengthMode
+        case style
         case approximateMaxOutputTokens = "outputBudget"
         case selectedModelId
         case action                   = "generationAction"
@@ -93,6 +97,7 @@ struct GenerationRequest: Codable {
         audienceNotes: String,
         requestedOutputType: String,
         generationLengthMode: String = GenerationLengthMode.defaultMode.rawValue,
+        style: String? = nil,
         approximateMaxOutputTokens: Int = GenerationLengthMode.defaultMode.outputBudget,
         selectedModelId: String? = nil,
         action: String = "generate",
@@ -112,6 +117,7 @@ struct GenerationRequest: Codable {
         self.audienceNotes = audienceNotes
         self.requestedOutputType = requestedOutputType
         self.generationLengthMode = generationLengthMode
+        self.style = style
         self.approximateMaxOutputTokens = approximateMaxOutputTokens
         self.selectedModelId = selectedModelId
         self.action = action
