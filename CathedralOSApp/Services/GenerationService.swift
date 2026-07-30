@@ -69,13 +69,19 @@ extension GenerationService {
         project: StoryProject,
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
+        lengthMode: GenerationLengthMode,
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil
     ) async throws -> GenerationResponse {
         try await generate(
             project: project,
             pack: pack,
             requestedOutputType: requestedOutputType,
             lengthMode: lengthMode,
+            selectedContainer: selectedContainer,
+            selectedPOV: selectedPOV,
+            terminalBeat: terminalBeat,
             selectedModelId: nil
         )
     }
@@ -88,28 +94,12 @@ extension GenerationService {
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
         selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
         throw GenerationServiceError.endpointNotConfigured
-    }
-
-    func generateAction(
-        action: String,
-        sourcePayloadJSON: String,
-        previousOutputText: String?,
-        parentGenerationID: UUID?,
-        requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
-    ) async throws -> GenerationResponse {
-        try await generateAction(
-            action: action,
-            sourcePayloadJSON: sourcePayloadJSON,
-            previousOutputText: previousOutputText,
-            parentGenerationID: parentGenerationID,
-            requestedOutputType: requestedOutputType,
-            lengthMode: lengthMode,
-            selectedModelId: nil
-        )
     }
 }
 
