@@ -968,7 +968,7 @@ struct RecipeCard: View {
                 selectedPOV: selectedPOV,
                 terminalBeat: terminalBeat.isEmpty ? nil : terminalBeat,
                 selectedModelId: selectedModelId
-            }
+            )
             mergeGenerationDiagnostics(await GenerationRequestDiagnosticsStore.shared.latestVisibleText())
 
             gen.outputText = response.generatedText
