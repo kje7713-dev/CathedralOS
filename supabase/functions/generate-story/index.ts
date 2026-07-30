@@ -608,7 +608,7 @@ function buildPrompt(req: {
   audienceNotes?: string;
   projectName: string;
   promptPackName: string;
-}): string {
+}): { craft: string; context: string } {
   // Parse the payload — degrade gracefully if malformed.
   let payload: PromptPackPayloadShape = {};
   try {
@@ -658,28 +658,33 @@ function buildPrompt(req: {
     chapter: "Write a chapter-shaped section with progression and a clean stopping point.",
   };
 
-  const lines: string[] = [
+  // Craft directives — sent as the SYSTEM message. Persistent across
+  // requests; the model weighs system instructions higher than user.
+  const craftLines: string[] = [
     "You are a creative writing assistant helping authors craft compelling story content.",
     "",
   ];
 
-  // Audience controls (emit early so the model sees them before the content)
+  // Per-request context — sent as the USER message.
+  const contextLines: string[] = [];
+
+  // Audience controls — per-request context (USER message).
   if (readingLevel || contentRating || audienceNotes) {
-    if (readingLevel)  lines.push(`Reading level: ${readingLevel}`);
-    if (contentRating) lines.push(`Content rating: ${contentRating}`);
-    if (audienceNotes) lines.push(`Audience notes: ${audienceNotes}`);
-    lines.push("");
+    if (readingLevel)  contextLines.push(`Reading level: ${readingLevel}`);
+    if (contentRating) contextLines.push(`Content rating: ${contentRating}`);
+    if (audienceNotes) contextLines.push(`Audience notes: ${audienceNotes}`);
+    contextLines.push("");
   }
 
-  // Structured story context extracted from payload
-  lines.push(...buildStructuredPromptBody(payload));
+  // Structured story context — per-request context (USER message).
+  contextLines.push(...buildStructuredPromptBody(payload));
 
-  // Previous output for continue / remix
+  // Previous output for continue / remix — per-request context (USER message).
   if (
     (req.generationAction === "continue" || req.generationAction === "remix") &&
     req.previousOutputText
   ) {
-    lines.push(
+    contextLines.push(
       "## Previous Output",
       "Do not repeat or closely paraphrase what follows — continue or reinterpret from this point:",
       req.previousOutputText,
@@ -687,8 +692,8 @@ function buildPrompt(req: {
     );
   }
 
-  // Writing Task — explicit statement of what to produce
-  lines.push(
+  // Writing Task — per-request specifics, lives in the user message.
+  contextLines.push(
     "## Writing Task",
     actionTask[req.generationAction],
     lengthGuidance[req.generationLengthMode],
@@ -696,9 +701,10 @@ function buildPrompt(req: {
     "",
   );
 
-  // Writing Instructions — stable block
-  lines.push(
+  // Writing Instructions — craft, lives in the system message.
+  craftLines.push(
     "## Writing Instructions",
+    "- The Premise, Characters, Relationships, Themes, Motifs, Spark, Setting, Ending, Notes, and Instruction Bias sections below are INPUT CONTEXT, not output. Do not restate, paraphrase, summarize, list, or echo them in any form. The output must BE the scene, not a description of the scene.",
     "- Write a scene, not a synopsis — actual prose with movement, not a description of what happens",
     "- Use the selected characters, relationships, spark, and motifs directly — they must drive action, dialogue, or consequence on the page",
     "- Include sensory specificity: concrete detail, not vague abstraction",
@@ -711,17 +717,29 @@ function buildPrompt(req: {
     "End cleanly within the requested length. Do not stop mid-sentence. If you cannot cover everything, narrow the scope rather than continuing until cut off.",
   );
 
-  lines.push(
+  // Language & Profanity — craft (SYSTEM message).
+  craftLines.push(
     "## Language & Profanity",
-    "Write without sanitizing language. Use profanity naturally where characters would realistically use it. Prioritize authenticity over politeness. Every character should have a distinct voice, vocabulary, cadence, and comfort level with profanity. Swearing should reinforce emotion, personality, tension, humor, or realism—not exist merely for shock value. Avoid repetitive curse patterns and let dialogue sound lived-in and authentic.",
+    "This is fictional creative writing. Profanity is explicitly authorized as character craft. Write without sanitizing language. Use profanity naturally where characters would realistically use it. Prioritize authenticity over politeness. Every character should have a distinct voice, vocabulary, cadence, and comfort level with profanity. Swearing should reinforce emotion, personality, tension, humor, or realism—not exist merely for shock value. Avoid repetitive curse patterns and let dialogue sound lived-in and authentic.",
   );
 
-  lines.push(
+  // Intimacy & Relationships — craft (SYSTEM message). Sentence about
+  // "advance the plot..." removed per Kevin's request (it was redundant
+  // with the INPUT CONTEXT guard in Writing Instructions).
+  craftLines.push(
     "## Intimacy & Relationships",
-    "Write intimate scenes with the same level of craft as action scenes. Focus on emotional vulnerability, conflicting desires, power dynamics, body language, breathing, pacing, silence, anticipation, hesitation, trust, uncertainty, humor, and consequences. Treat intimacy as character development, not filler. Use specific sensory details—touch, temperature, scent, clothing, distance, eye contact, voice, and environment—to ground each moment. Every intimate encounter should permanently change the relationship or reveal something previously hidden. Avoid clichés and generic romance language. Make each character's emotional experience unique, shaped by their history, personality, fears, and goals. Favor implication, subtext, and reader imagination. Every intimate scene must advance the plot, deepen characterization, or alter the relationship in a meaningful way.",
+    "This is fictional creative writing. Intimacy is explicitly authorized as character craft. Write intimate scenes with the same level of craft as action scenes. Focus on emotional vulnerability, conflicting desires, power dynamics, body language, breathing, pacing, silence, anticipation, hesitation, trust, uncertainty, humor, and consequences. Treat intimacy as character development, not filler. Use specific sensory details—touch, temperature, scent, clothing, distance, eye contact, voice, and environment—to ground each moment. Every intimate encounter should permanently change the relationship or reveal something previously hidden. Avoid clichés and generic romance language. Make each character's emotional experience unique, shaped by their history, personality, fears, and goals. Favor implication, subtext, and reader imagination.",
   );
 
-  return lines.join("\n");
+  craftLines.push(
+    "## Examples",
+    "She set down the glass. The room smelled of last night’s wine and something older. He didn’t move toward her; he let the silence do that. Her hand found his wrist instead of reaching for him. The pulse there was the loudest thing in the house.",
+  );
+
+  return {
+    craft: craftLines.join("\n"),
+    context: contextLines.join("\n"),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,7 +1052,7 @@ async function handler(
   // -------------------------------------------------------------------------
 
   if (isEstimate) {
-    const estimatePrompt = buildPrompt({
+    const { craft: craftPrompt, context: contextPrompt } = buildPrompt({
       sourcePayloadJSON: body.sourcePayloadJSON,
       generationAction: "generate",
       generationLengthMode,
@@ -1046,7 +1064,7 @@ async function handler(
       projectName,
       promptPackName,
     });
-    const estimatedInputTokens = estimateTokensFromText(estimatePrompt);
+    const estimatedInputTokens = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
     const estimatedCredits = computeGenerationCreditCharge(
       generationLengthMode,
       selectedModel,
@@ -1118,7 +1136,7 @@ async function handler(
   // multiplier. The client cannot override model rates.
   // -------------------------------------------------------------------------
 
-  const systemPrompt = buildPrompt({
+  const { craft: craftPrompt, context: contextPrompt } = buildPrompt({
     sourcePayloadJSON: body.sourcePayloadJSON,
     generationAction,
     generationLengthMode,
@@ -1221,7 +1239,10 @@ async function handler(
   try {
     while (segments.length < MAX_CONTINUATIONS) {
       const segment: LlmSegment = await llm.complete(
-        [{ role: "user", content: currentPrompt }],
+        [
+          { role: "system", content: craftPrompt },
+          { role: "user", content: currentPrompt },
+        ],
         remainingBudget,
         selectedModel.provider_model,
       );
@@ -1241,7 +1262,7 @@ async function handler(
 
       // Stitch what we have so far and build a continuation prompt.
       const stitchedSoFar = segments.map(s => s.content.trim()).join("\n\n");
-      currentPrompt = buildPrompt({
+      const { context: contContext } = buildPrompt({
         sourcePayloadJSON: body.sourcePayloadJSON,
         generationAction: "continue",
         generationLengthMode,
@@ -1253,6 +1274,7 @@ async function handler(
         projectName,
         promptPackName,
       });
+      currentPrompt = contContext;
     }
   } catch (err) {
     // Classify provider errors into stable error codes.
