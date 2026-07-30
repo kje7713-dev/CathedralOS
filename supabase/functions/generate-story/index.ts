@@ -1262,7 +1262,11 @@ async function handler(
   const segments: LlmSegment[] = [];
   const MAX_CONTINUATIONS = 5;
   let remainingBudget = maxCompletionTokens;
-  let currentPrompt = systemPrompt;
+  // Phase 3 loop's user-message half. craftPrompt (system message) is
+  // sent separately on each llm.complete call and stays constant across
+  // iterations. currentPrompt starts as the initial context and gets
+  // rebuilt per continuation call.
+  let currentPrompt = contextPrompt;
 
   try {
     while (segments.length < MAX_CONTINUATIONS) {
