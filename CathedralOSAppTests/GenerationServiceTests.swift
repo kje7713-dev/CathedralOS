@@ -28,7 +28,10 @@ final class MockGenerationService: GenerationService {
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
-        selectedModelId: String?
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
+        selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
         callCount += 1
         lastProject = project

@@ -23,7 +23,10 @@ final class MockOutputActionService: GenerationService {
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
-        selectedModelId: String?
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
+        selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
         throw GenerationServiceError.endpointNotConfigured
     }
@@ -35,7 +38,10 @@ final class MockOutputActionService: GenerationService {
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
-        selectedModelId: String?
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
+        selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
         actionCallCount += 1
         lastAction = action
