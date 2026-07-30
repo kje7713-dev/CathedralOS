@@ -652,7 +652,7 @@ struct RecipeCard: View {
                                         ? CathedralTheme.Colors.accent
                                         : CathedralTheme.Colors.primaryText
                                 )
-                            Text(preset.coverageHint)
+                            Text(budgetDetailLabel(for: preset))
                                 .font(CathedralTheme.Typography.label(10, weight: .regular))
                                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
                                 .lineLimit(1)
@@ -679,10 +679,22 @@ struct RecipeCard: View {
                     .buttonStyle(.plain)
                 }
             }
-            Text("Selected: \(selectedBudgetPreset.coverageHint) · \(selectedBudgetPreset.baseCredits) credits")
-                .font(CathedralTheme.Typography.label(11, weight: .regular))
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
         }
+    }
+
+    /// Real-cost label for a budget preset given the currently-selected model.
+    /// Computes the actual credit cost the user will pay using the same
+    /// formula as the server's `computeGenerationCreditCharge`:
+    ///   cost = max(model.minimumChargeCredits, ceil(baseCredits * model.outputCreditRate))
+    /// where `baseCredits` comes from the budget's `defaultLengthMode.creditCost`.
+    /// Updates live whenever the user picks a different model.
+    /// Falls back to the coverage hint when no model is selected yet.
+    private func budgetDetailLabel(for preset: BudgetPreset) -> String {
+        guard let model = selectedModel else { return preset.coverageHint }
+        let baseCredits = Double(preset.defaultLengthMode.creditCost)
+        let raw = baseCredits * model.outputCreditRate
+        let cost = max(model.minimumChargeCredits, Int(ceil(raw)))
+        return "\(cost) cr \u{00b7} \(preset.coverageHint)"
     }
 
     private var lengthModePicker: some View {
