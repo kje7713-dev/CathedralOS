@@ -711,6 +711,16 @@ function buildPrompt(req: {
     "End cleanly within the requested length. Do not stop mid-sentence. If you cannot cover everything, narrow the scope rather than continuing until cut off.",
   );
 
+  lines.push(
+    "## Language & Profanity",
+    "Write without sanitizing language. Use profanity naturally where characters would realistically use it. Prioritize authenticity over politeness. Every character should have a distinct voice, vocabulary, cadence, and comfort level with profanity. Swearing should reinforce emotion, personality, tension, humor, or realism—not exist merely for shock value. Avoid repetitive curse patterns and let dialogue sound lived-in and authentic.",
+  );
+
+  lines.push(
+    "## Intimacy & Relationships",
+    "Write intimate scenes with the same level of craft as action scenes. Focus on emotional vulnerability, conflicting desires, power dynamics, body language, breathing, pacing, silence, anticipation, hesitation, trust, uncertainty, humor, and consequences. Treat intimacy as character development, not filler. Use specific sensory details—touch, temperature, scent, clothing, distance, eye contact, voice, and environment—to ground each moment. Every intimate encounter should permanently change the relationship or reveal something previously hidden. Avoid clichés and generic romance language. Make each character's emotional experience unique, shaped by their history, personality, fears, and goals. Favor implication, subtext, and reader imagination. Every intimate scene must advance the plot, deepen characterization, or alter the relationship in a meaningful way.",
+  );
+
   return lines.join("\n");
 }
 
