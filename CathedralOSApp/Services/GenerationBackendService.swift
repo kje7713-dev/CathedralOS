@@ -361,6 +361,8 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
 
         var urlRequest = client.authorizedRequest(for: url, userAccessToken: userAccessToken)
         urlRequest.httpMethod = "POST"
+        // Estimate is cheap -- 30s is plenty. URLSession default is 60s.
+        urlRequest.timeoutInterval = 30
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -476,6 +478,10 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
 
         var urlRequest = client.authorizedRequest(for: url, userAccessToken: userAccessToken)
         urlRequest.httpMethod = "POST"
+        // Generate is the slow path -- Phase 3 auto-continue + slower models
+        // can take 60-120s. 180s gives headroom for legitimate long
+        // generations without the 60s default killing the request mid-flight.
+        urlRequest.timeoutInterval = 180
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
