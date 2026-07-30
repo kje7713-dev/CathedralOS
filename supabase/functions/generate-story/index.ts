@@ -178,6 +178,15 @@ interface GenerateStoryRequest {
   // “auto” = no length target, model writes naturally within budget.
   // “compact/standard/expansive” = density hint the model can honor.
   // Optional for backwards compat — omitted => “auto”.
+  // Output container: what size / shape the finished unit should be.
+  // Drives whatItContains + naturalStoppingPoint in the prompt.
+  // Optional for backwards compat — omitted => "scene".
+  container?: string;
+  // Point of view: who narrates the scene.
+  // Optional for backwards compat — omitted => "thirdPersonLimited".
+  pov?: string;
+  // @deprecated use container instead. Kept for backwards compat with
+  // older iOS builds that still send style.
   style?: string;
   outputBudget: number;
   selectedModelId?: string;
@@ -602,13 +611,32 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   return out;
 }
 
-type Style = "auto" | "compact" | "standard" | "expansive";
+// Output container: how large the finished unit should be.
+// "modelDecides" lets the server pick based on the recipe.
+type Container =
+  | "modelDecides"
+  | "beat"
+  | "moment"
+  | "vignette"
+  | "microScene"
+  | "scene"
+  | "developedScene"
+  | "setPiece"
+  | "sceneSequence"
+  | "shortStory"
+  | "chapter"
+  | "episode"
+  | "novella";
+
+// Point of view: who narrates the scene.
+type POV = "firstPerson" | "secondPerson" | "thirdPersonLimited" | "thirdPersonOmniscient";
 
 function buildPrompt(req: {
   sourcePayloadJSON: unknown;
   generationAction: GenerationAction;
   generationLengthMode: LengthMode;
-  style: Style;
+  container: Container;
+  pov: POV;
   outputBudget: number;
   previousOutputText?: string;
   readingLevel?: string;
@@ -650,39 +678,169 @@ function buildPrompt(req: {
   // the model often ignored. “auto” gives no length target at all — the
   // model writes whatever fits the budget. “compact/standard/expansive” give
   // density hints the model can actually honor.
-  // Budget-aware prompts: the model gets the actual token budget UP FRONT
-  // so it can PLAN scene structure proportionally from sentence one. Telling
-  // it to "wrap up faster" mid-flow produces bad writing. Telling it the
-  // budget and a proportional structure plan lets it write a coherent scene
-  // that fits. (Kevin's insight, build-thread #1460.)
-  const styleDensityHint = (style: Style, budget: number): string => {
-    const tokens = budget;
-    const words = Math.round(budget * 0.75); // approx tokens-to-words
-    switch (style) {
-      case "auto":
-        return `Density: not specified — write whatever fits the budget naturally. You have ~${tokens} tokens (~${words} words). There is no word-count target.`;
-      case "compact":
-        return `Density: tight and focused. You have ~${tokens} tokens (~${words} words). High information density, less interiority.`;
-      case "standard":
-        return `Density: standard pacing. You have ~${tokens} tokens (~${words} words). Balanced with a full dramatic beat.`;
-      case "expansive":
-        return `Density: expansive. You have ~${tokens} tokens (~${words} words). Breathing room, more interiority, longer beats.`;
-    }
+  // Container config: name, what-it-contains, natural-stopping-point,
+  // expected token range, and hard cap. The hard cap is emergency headroom,
+  // not the desired output length. Models trained on creative writing
+  // recognize these terms and respond to them with the right shape.
+  interface ContainerConfig {
+    name: string;
+    whatItContains: string;
+    naturalStoppingPoint: string;
+    expectedRange: string;
+    hardCap: number;
+  }
+  const containerConfig: Record<Container, ContainerConfig> = {
+    modelDecides: {
+      name: "Model decides",
+      whatItContains: "(server picks the right container for the recipe)",
+      naturalStoppingPoint: "(naturally terminates per the chosen container)",
+      expectedRange: "varies",
+      hardCap: 8000,
+    },
+    beat: {
+      name: "Beat",
+      whatItContains: "One action, reaction, discovery, or exchange",
+      naturalStoppingPoint: "The immediate action completes",
+      expectedRange: "75–250 tokens",
+      hardCap: 350,
+    },
+    moment: {
+      name: "Moment",
+      whatItContains: "One focused emotional or sensory event",
+      naturalStoppingPoint: "A realization, image, gesture, or decision",
+      expectedRange: "200–500 tokens",
+      hardCap: 700,
+    },
+    vignette: {
+      name: "Vignette",
+      whatItContains: "A compact portrait of a person, place, relationship, or situation",
+      naturalStoppingPoint: "A resonant image or emotional turn",
+      expectedRange: "300–900 tokens",
+      hardCap: 1200,
+    },
+    microScene: {
+      name: "Micro-scene",
+      whatItContains: "One goal, one obstacle, one change",
+      naturalStoppingPoint: "The immediate interaction changes state",
+      expectedRange: "400–900 tokens",
+      hardCap: 1200,
+    },
+    scene: {
+      name: "Scene",
+      whatItContains: "One continuous dramatic event",
+      naturalStoppingPoint: "Goal succeeds, fails, changes, or becomes impossible",
+      expectedRange: "800–1,800 tokens",
+      hardCap: 2300,
+    },
+    developedScene: {
+      name: "Developed scene",
+      whatItContains: "A fuller scene with escalation and multiple tactics",
+      naturalStoppingPoint: "The central conflict reaches a definite outcome",
+      expectedRange: "1,500–3,000 tokens",
+      hardCap: 4000,
+    },
+    setPiece: {
+      name: "Set piece",
+      whatItContains: "A major action, confrontation, ceremony, battle, escape, or reveal",
+      naturalStoppingPoint: "The major event completes",
+      expectedRange: "2,000–5,000 tokens",
+      hardCap: 6500,
+    },
+    sceneSequence: {
+      name: "Scene sequence",
+      whatItContains: "Several connected scenes pursuing one larger objective",
+      naturalStoppingPoint: "The sequence-level objective is achieved or fails",
+      expectedRange: "3,000–7,000 tokens",
+      hardCap: 9000,
+    },
+    shortStory: {
+      name: "Short story",
+      whatItContains: "A complete independent narrative",
+      naturalStoppingPoint: "The central dramatic question is answered",
+      expectedRange: "2,500–8,000 tokens",
+      hardCap: 10000,
+    },
+    chapter: {
+      name: "Chapter",
+      whatItContains: "A publishing or pacing division containing one or more scenes",
+      naturalStoppingPoint: "A turn, hook, revelation, decision, or transition",
+      expectedRange: "3,000–8,000+ tokens",
+      hardCap: 11000,
+    },
+    episode: {
+      name: "Episode",
+      whatItContains: "A self-contained installment within a larger serial",
+      naturalStoppingPoint: "The episode’s main problem resolves, often with a larger hook",
+      expectedRange: "5,000–15,000+ tokens",
+      hardCap: 18000,
+    },
+    novella: {
+      name: "Novella",
+      whatItContains: "A complete extended story with multiple sequences",
+      naturalStoppingPoint: "Central arc and major subplots resolve",
+      expectedRange: "20,000–50,000 tokens",
+      hardCap: 60000,
+    },
   };
 
-  const styleStoryGoal = (style: Style, budget: number): string => {
-    const tokens = budget;
-    switch (style) {
-      case "auto":
-        return `Write a complete scene that fits naturally within the budget of ${tokens} tokens. Plan the structure based on what this scene needs. There is no word-count target — use what fits the budget. End cleanly.`;
-      case "compact":
-        return `Write one tight scene beat within ${tokens} tokens total. Plan the structure based on what this scene needs — some beats need more setup, some need more pressure, some need a sharper turn. Trust your craft. End cleanly within this budget.`;
-      case "standard":
-        return `Write one complete dramatic scene with setup, pressure, turn, and consequence, within ${tokens} tokens total. Plan the structure based on what this scene needs: some scenes need slow build, some need fast escalation, some need lingering aftermath. The proportions vary by what’s being told. Trust your craft. End cleanly within this budget.`;
-      case "expansive":
-        return `Write an extended scene with multiple connected beats and inner life, within ${tokens} tokens total. Plan the structure based on what this scene needs — some scenes need atmosphere, some need momentum, some need reflection. Trust your craft. End cleanly within this budget.`;
-    }
+  // POV config: who narrates. Models know these canonical options.
+  interface POVConfig {
+    name: string;
+    instruction: string;
+  }
+  const povConfig: Record<POV, POVConfig> = {
+    firstPerson: {
+      name: "First person",
+      instruction: "Write in first person (I, me, my). The viewpoint character narrates in their own voice.",
+    },
+    secondPerson: {
+      name: "Second person",
+      instruction: "Write in second person (you, your). Address the reader or the viewpoint character directly.",
+    },
+    thirdPersonLimited: {
+      name: "Third person limited",
+      instruction: "Write in third person limited (he/she/they). Stay close to one character’s perspective; show only what that character can perceive and feel.",
+    },
+    thirdPersonOmniscient: {
+      name: "Third person omniscient",
+      instruction: "Write in third person omniscient (he/she/they). The narrator is all-knowing and can enter any character’s mind.",
+    },
   };
+
+  // Narrative shape: server infers from recipe for v1. Hardcoded to
+  // Confrontation because the recipe's dramatic seed is the strongest
+  // signal. Future: model-picked in a quick first call.
+  const inferredShape = "Confrontation";
+
+  // Container-aware scene instructions. The model gets:
+  //  - the container's "what it contains" so it knows the shape
+  //  - the container's "natural stopping point" so it knows when to end
+  //  - structural limits so it doesn't sprawl
+  //  - the POV so it knows who is narrating
+  // The hard cap is emergency headroom, NOT a budget the model should fill.
+  const containerInstructions = (
+    containerName: string,
+    whatItContains: string,
+    naturalStoppingPoint: string,
+    expectedRange: string,
+  ): string =>
+    `Write one complete ${containerName.toLowerCase()} (${expectedRange} tokens expected).
+
+What it contains:
+${whatItContains}
+
+Natural stopping point:
+${naturalStoppingPoint}
+
+Structural limits:
+- Use a limited number of major beats proportional to the scene’s complexity. Do not over-stuff.
+- Do not introduce a new subplot.
+- Do not introduce a new unresolved conflict near the ending.
+- End immediately after the natural stopping point.
+- Do not continue into the aftermath, next destination, next scene, or consequences.
+- Produce a complete ending before stopping.`;
+
+  const povInstruction = (pov: POV): string => povConfig[pov].instruction;
 
   // Craft directives — sent as the SYSTEM message. Persistent across
   // requests; the model weighs system instructions higher than user.
@@ -719,13 +877,16 @@ function buildPrompt(req: {
   }
 
   // Writing Task — per-request specifics, lives in the user message.
-  // Budget-aware: passes the actual token budget so the model plans
-  // structure proportionally from sentence one.
+  // Container-driven: tells the model what shape to write, when to end,
+  // and how (POV). The hard cap is NOT mentioned — the model focuses on
+  // the container’s natural stopping point, not a token count.
+  const cfg = containerConfig[req.container];
   contextLines.push(
     "## Writing Task",
     actionTask[req.generationAction],
-    styleDensityHint(req.style, req.outputBudget),
-    styleStoryGoal(req.style, req.outputBudget),
+    containerInstructions(cfg.name, cfg.whatItContains, cfg.naturalStoppingPoint, cfg.expectedRange),
+    `Narrative shape: ${inferredShape}.`,
+    `POV: ${povInstruction(req.pov)}`,
     "",
   );
 
@@ -985,16 +1146,25 @@ async function handler(
   }
   const generationLengthMode = body.generationLengthMode as LengthMode;
 
-  // Style picker: defaults to "auto" (no length target) if not provided.
-  // Coerces unknown values to "auto" so old clients and typos don't break.
-  const style: Style = (
-    body.style === "compact" ||
-    body.style === "standard" ||
-    body.style === "expansive" ||
-    body.style === "auto"
-  )
-    ? body.style
-    : "auto";
+  // Container picker: defaults to "scene" (common, well-known) if not
+  // provided. Coerces unknown values to a safe default.
+  const validContainers: Container[] = [
+    "modelDecides", "beat", "moment", "vignette", "microScene", "scene",
+    "developedScene", "setPiece", "sceneSequence", "shortStory",
+    "chapter", "episode", "novella",
+  ];
+  const container: Container = validContainers.includes(body.container as Container)
+    ? body.container as Container
+    : "scene";
+
+  // POV picker: defaults to "thirdPersonLimited" (most common in modern
+  // fiction). Coerces unknown values to the default.
+  const validPOVs: POV[] = [
+    "firstPerson", "secondPerson", "thirdPersonLimited", "thirdPersonOmniscient",
+  ];
+  const pov: POV = validPOVs.includes(body.pov as POV)
+    ? body.pov as POV
+    : "thirdPersonLimited";
 
   if (!body.sourcePayloadJSON) {
     return corsResponse(
@@ -1095,7 +1265,8 @@ async function handler(
       sourcePayloadJSON: body.sourcePayloadJSON,
       generationAction: "generate",
       generationLengthMode,
-      style,
+      container,
+      pov,
       outputBudget: maxCompletionTokens,
       previousOutputText: undefined,
       readingLevel: body.readingLevel,
@@ -1180,7 +1351,8 @@ async function handler(
     sourcePayloadJSON: body.sourcePayloadJSON,
     generationAction,
     generationLengthMode,
-    style,
+    container,
+    pov,
     outputBudget: maxCompletionTokens,
     previousOutputText: body.previousOutputText,
     readingLevel: body.readingLevel,
@@ -1311,7 +1483,8 @@ async function handler(
         sourcePayloadJSON: body.sourcePayloadJSON,
         generationAction: "continue",
         generationLengthMode,
-        style,
+        container,
+        pov,
         outputBudget: remainingBudget,
         previousOutputText: stitchedSoFar,
         readingLevel: body.readingLevel,
