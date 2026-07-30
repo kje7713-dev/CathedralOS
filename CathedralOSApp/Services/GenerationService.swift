@@ -39,7 +39,10 @@ protocol GenerationService {
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
-        selectedModelId: String?
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
+        selectedModelId: String? = nil
     ) async throws -> GenerationResponse
 
     /// Submits a derived generation action (regenerate / continue / remix) using
@@ -52,7 +55,10 @@ protocol GenerationService {
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
-        selectedModelId: String?
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
+        selectedModelId: String? = nil
     ) async throws -> GenerationResponse
 }
 
@@ -129,6 +135,9 @@ final class StoryGenerationService: GenerationService {
         pack: PromptPack,
         requestedOutputType: GenerationOutputType = .story,
         lengthMode: GenerationLengthMode = .defaultMode,
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
         selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
 
@@ -148,6 +157,9 @@ final class StoryGenerationService: GenerationService {
             audienceNotes: project.audienceNotes,
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
+            container: selectedContainer?.rawValue,
+            pov: selectedPOV?.rawValue,
+            terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId
         )
@@ -162,6 +174,9 @@ final class StoryGenerationService: GenerationService {
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode = .defaultMode,
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
         selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
 
@@ -190,6 +205,9 @@ final class StoryGenerationService: GenerationService {
             audienceNotes: frozenPayload.project.audienceNotes,
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
+            container: selectedContainer?.rawValue,
+            pov: selectedPOV?.rawValue,
+            terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId,
             action: action,

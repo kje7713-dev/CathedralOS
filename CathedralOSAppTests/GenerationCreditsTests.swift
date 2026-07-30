@@ -288,7 +288,10 @@ private final class SpyGenerationService: GenerationService {
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
-        selectedModelId: String?
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
+        selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
         generateCallCount += 1
         if shouldThrow {
