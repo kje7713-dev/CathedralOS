@@ -43,6 +43,13 @@ struct GenerationRequest: Codable {
     /// Point of view: who narrates the scene. Basic English class fiction
     /// craft. Optional for backwards compat — omitted => "thirdPersonLimited".
     let pov: String?
+    /// Terminal beat: the final scene-level dramatic unit. The decisive action
+    /// plus enough immediate reaction to land the ending cleanly. Example:
+    /// "Jonah admits he lied. His father takes the letter, turns away, and
+    /// refuses to answer him." Lives on the generation request, not the recipe.
+    /// When absent, the model privately infers one inside the same call.
+    /// NEVER derived from Ending Instruction.
+    let terminalBeat: String?
     /// @deprecated use container instead. Kept for backwards compat with
     /// older iOS builds that still send style.
     /// Optional for backwards compat — omitted => "auto".
@@ -85,6 +92,7 @@ struct GenerationRequest: Codable {
         case generationLengthMode
         case container
         case pov
+        case terminalBeat
         case style
         case approximateMaxOutputTokens = "outputBudget"
         case selectedModelId
@@ -109,6 +117,7 @@ struct GenerationRequest: Codable {
         generationLengthMode: String = GenerationLengthMode.defaultMode.rawValue,
         container: String? = nil,
         pov: String? = nil,
+        terminalBeat: String? = nil,
         style: String? = nil,
         approximateMaxOutputTokens: Int = GenerationLengthMode.defaultMode.outputBudget,
         selectedModelId: String? = nil,
@@ -131,6 +140,7 @@ struct GenerationRequest: Codable {
         self.generationLengthMode = generationLengthMode
         self.container = container
         self.pov = pov
+        self.terminalBeat = terminalBeat
         self.style = style
         self.approximateMaxOutputTokens = approximateMaxOutputTokens
         self.selectedModelId = selectedModelId
