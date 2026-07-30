@@ -1618,6 +1618,159 @@ Deno.test("handler: finish_reason stop remains complete", async () => {
   );
 });
 
+Deno.test("handler: auto-continues on length and stitches segments", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+
+  let callCount = 0;
+  const provider: LLMProvider = {
+    complete() {
+      callCount += 1;
+      if (callCount === 1) {
+        return Promise.resolve({
+          content: "First segment text.",
+          modelName: "gpt-4o-mini",
+          finishReason: "length",
+          inputTokens: 100,
+          outputTokens: 400,
+          totalTokens: 500,
+        });
+      }
+      return Promise.resolve({
+        content: "Second segment text.",
+        modelName: "gpt-4o-mini",
+        finishReason: "stop",
+        inputTokens: 50,
+        outputTokens: 100,
+        totalTokens: 150,
+      });
+    },
+  };
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest()), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+
+  assertEquals(resp.status, 200);
+  assertEquals(body.status, "complete");
+  assertEquals(body.wasTruncated, false);
+  assertEquals(body.finishReason, "stop");
+  // Phase 3: LLM was called twice -- initial + one continuation.
+  assertEquals(callCount, 2);
+  // Phase 3: stitched output contains both segments.
+  assertStringIncludes(body.generatedText, "First segment text.");
+  assertStringIncludes(body.generatedText, "Second segment text.");
+  // Phase 3: tokens summed across segments for telemetry.
+  assertEquals(body.inputTokens, 150);
+  assertEquals(body.outputTokens, 500);
+  // Phase 3: persisted as complete since final segment wasn't truncated.
+  assertEquals(
+    (persistenceState.outputInsertCalls[0] as { status?: string }).status,
+    "complete",
+  );
+});
+
+Deno.test("handler: continues until budget exhausted -- stops and marks draft", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+
+  let callCount = 0;
+  const provider: LLMProvider = {
+    complete() {
+      callCount += 1;
+      // Every call returns length-truncated with outputTokens that uses
+      // the full remaining budget, forcing the loop to exhaust.
+      return Promise.resolve({
+        content: `Segment ${callCount}.`,
+        modelName: "gpt-4o-mini",
+        finishReason: "length",
+        inputTokens: 50,
+        outputTokens: 800, // base maxCompletionTokens for short mode
+        totalTokens: 850,
+      });
+    },
+  };
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest()), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+
+  assertEquals(resp.status, 200);
+  assertEquals(body.status, "incomplete");
+  assertEquals(body.wasTruncated, true);
+  assertEquals(body.finishReason, "length");
+  // MAX_CONTINUATIONS = 5, so we expect 5 total calls before stopping.
+  assertEquals(callCount, 5);
+  // Stitched text contains all 5 segments.
+  for (let i = 1; i <= 5; i++) {
+    assertStringIncludes(body.generatedText, `Segment ${i}.`);
+  }
+  assertEquals(
+    (persistenceState.outputInsertCalls[0] as { status?: string }).status,
+    "draft",
+  );
+});
+
+Deno.test("handler: null outputTokens on length breaks loop (no infinite spin)", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+
+  let callCount = 0;
+  const provider: LLMProvider = {
+    complete() {
+      callCount += 1;
+      // First call: length-truncated but no token count (provider bug).
+      return Promise.resolve({
+        content: "Truncated without token count",
+        modelName: "gpt-4o-mini",
+        finishReason: "length",
+        inputTokens: 100,
+        outputTokens: undefined,
+        totalTokens: undefined,
+      });
+    },
+  };
+
+  const resp = await handler(makeAuthRequest(makeBaseRequest()), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  const body = await resp.json();
+
+  // Loop must break after the first call since we can't safely budget
+  // a continuation without knowing tokens used.
+  assertEquals(callCount, 1);
+  assertEquals(body.wasTruncated, true);
+  assertEquals(body.finishReason, "length");
+  assertEquals(body.status, "incomplete");
+  assertEquals(
+    (persistenceState.outputInsertCalls[0] as { status?: string }).status,
+    "draft",
+  );
+});
+
 Deno.test("handler: prompt includes anti-truncation instruction and short guidance", async () => {
   const { store: creditStore } = makeMockCreditStore(makeEntitlement());
   const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });

@@ -1190,21 +1190,60 @@ async function handler(
   // Build prompt and call LLM
   // -------------------------------------------------------------------------
 
-  let llmResult: {
+  // Phase 3: Auto-continue on `finishReason === "length"`.
+  // When the model hits the length limit, chain a continuation call with the
+  // remaining budget and the previous output stitched in. Stop when budget is
+  // exhausted, the scene closes naturally, or MAX_CONTINUATIONS is reached.
+  // Refund-as-credit for unused budget is deferred to Phase 5 (when the credit
+  // ledger lands). Per docs/generation-budget.md sections 3.4 and 6.
+  type LlmSegment = {
     content: string;
-    modelName: string;
     finishReason?: string;
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
   };
+  const segments: LlmSegment[] = [];
+  const MAX_CONTINUATIONS = 5;
+  let remainingBudget = maxCompletionTokens;
+  let currentPrompt = systemPrompt;
 
   try {
-    llmResult = await llm.complete(
-      [{ role: "user", content: systemPrompt }],
-      maxCompletionTokens,
-      selectedModel.provider_model,
-    );
+    while (segments.length < MAX_CONTINUATIONS) {
+      const segment: LlmSegment = await llm.complete(
+        [{ role: "user", content: currentPrompt }],
+        remainingBudget,
+        selectedModel.provider_model,
+      );
+      segments.push(segment);
+
+      // Natural close -- done.
+      if (segment.finishReason !== "length") break;
+
+      // If the provider didn't report output tokens, we can't safely budget
+      // the continuation. Break rather than risk spinning on stale budget.
+      const usedTokens = segment.outputTokens;
+      if (usedTokens === undefined || usedTokens === null) break;
+
+      // Budget accounting -- decrement by tokens used this segment.
+      remainingBudget = Math.max(0, remainingBudget - usedTokens);
+      if (remainingBudget <= 0) break;
+
+      // Stitch what we have so far and build a continuation prompt.
+      const stitchedSoFar = segments.map(s => s.content.trim()).join("\n\n");
+      currentPrompt = buildPrompt({
+        sourcePayloadJSON: body.sourcePayloadJSON,
+        generationAction: "continue",
+        generationLengthMode,
+        outputBudget: remainingBudget,
+        previousOutputText: stitchedSoFar,
+        readingLevel: body.readingLevel,
+        contentRating: body.contentRating,
+        audienceNotes: body.audienceNotes,
+        projectName,
+        promptPackName,
+      });
+    }
   } catch (err) {
     // Classify provider errors into stable error codes.
     // Credits are NOT charged on provider failure.
@@ -1276,6 +1315,16 @@ async function handler(
       },
     );
   }
+
+  // Phase 3: Synthesize llmResult from segments for downstream code.
+  const llmResult = {
+    content: segments.map(s => s.content.trim()).join("\n\n"),
+    modelName: segments[0]?.modelName ?? selectedModel.provider_model,
+    finishReason: segments[segments.length - 1]?.finishReason,
+    inputTokens: segments.reduce((sum, s) => sum + (s.inputTokens ?? 0), 0),
+    outputTokens: segments.reduce((sum, s) => sum + (s.outputTokens ?? 0), 0),
+    totalTokens: segments.reduce((sum, s) => sum + (s.totalTokens ?? 0), 0),
+  };
 
   // -------------------------------------------------------------------------
   // Persist generation_outputs row
