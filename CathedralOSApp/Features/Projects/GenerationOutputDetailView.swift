@@ -95,6 +95,11 @@ struct GenerationOutputDetailView: View {
     let outputSyncService: any GenerationOutputSyncServiceProtocol
     let outputDeletionService: any GenerationOutputDeletionServiceProtocol
 
+    /// True when this view is rendered as a page inside the sibling-pager
+    /// TabView. Inner pages skip their own TabView wrap and the outer
+    /// navigation chrome so the pager renders cleanly without recursion.
+    var isInnerPage: Bool = false
+
     init(output: GenerationOutput,
          generationService: GenerationService = StoryGenerationService(),
          sharingService: PublicSharingService = BackendPublicSharingService(
@@ -103,7 +108,8 @@ struct GenerationOutputDetailView: View {
          usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
          authService: any AuthService = BackendAuthService.shared,
          outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
-         outputDeletionService: any GenerationOutputDeletionServiceProtocol = GenerationOutputDeletionService.shared) {
+         outputDeletionService: any GenerationOutputDeletionServiceProtocol = GenerationOutputDeletionService.shared,
+         isInnerPage: Bool = false) {
         self._output = Bindable(output)
         self.generationService = generationService
         self.sharingService = sharingService
@@ -111,6 +117,17 @@ struct GenerationOutputDetailView: View {
         self.authService = authService
         self.outputSyncService = outputSyncService
         self.outputDeletionService = outputDeletionService
+        self.isInnerPage = isInnerPage
+    }
+
+    /// Sibling outputs from the same recipe (same sourcePromptPackID),
+    /// newest-first. Returns just `[output]` when project isn't loaded so
+    /// the pager doesn't trigger on its own.
+    private var siblingOutputs: [GenerationOutput] {
+        guard let project = output.project else { return [output] }
+        return project.generations
+            .filter { $0.sourcePromptPackID == output.sourcePromptPackID }
+            .sorted { $0.createdAt > $1.createdAt }
     }
 
     @State private var copiedOutput      = false
@@ -164,6 +181,37 @@ struct GenerationOutputDetailView: View {
     }()
 
     var body: some View {
+        // Pager when this output has siblings in the same recipe; otherwise
+        // the plain single-output scroll view.
+        if !isInnerPage && siblingOutputs.count > 1 {
+            pagerContent
+        } else {
+            scrollContent
+        }
+    }
+
+    /// Horizontal pager across all sibling outputs from this recipe,
+    /// newest-first. Opens at the tapped output (it is the one whose view
+    /// we are rendering, so siblingOutputs already contains it).
+    private var pagerContent: some View {
+        TabView {
+            ForEach(siblingOutputs) { sibling in
+                GenerationOutputDetailView(
+                    output: sibling,
+                    isInnerPage: true
+                )
+                .tag(sibling.id)
+            }
+        }
+        .tabViewStyle(.page)
+        .indexViewStyle(.page(backgroundDisplayMode: .always))
+        .navigationTitle(output.title)
+        .navigationBarTitleDisplayMode(.large)
+        .tint(CathedralTheme.Colors.accent)
+        .toolbar { toolbarContent }
+    }
+
+    private var scrollContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
                 metadataSection

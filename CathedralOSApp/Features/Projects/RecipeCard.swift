@@ -644,20 +644,15 @@ struct RecipeCard: View {
                         selectedBudgetPreset = preset
                         selectedLengthMode = preset.defaultLengthMode
                     } label: {
-                        VStack(spacing: 2) {
-                            Text(preset.displayPrice)
-                                .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                                .foregroundStyle(
-                                    selectedBudgetPreset == preset
-                                        ? CathedralTheme.Colors.accent
-                                        : CathedralTheme.Colors.primaryText
-                                )
-                            Text(budgetDetailLabel(for: preset))
-                                .font(CathedralTheme.Typography.label(10, weight: .regular))
-                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                        }
+                        Text(budgetDetailLabel(for: preset))
+                            .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                            .foregroundStyle(
+                                selectedBudgetPreset == preset
+                                    ? CathedralTheme.Colors.accent
+                                    : CathedralTheme.Colors.primaryText
+                            )
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, CathedralTheme.Spacing.sm)
                         .background(
