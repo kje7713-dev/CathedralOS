@@ -1429,72 +1429,31 @@ async function handler(
 
   // -------------------------------------------------------------------------
   // Build prompt and call LLM
+  // One LLM call per generation request. No auto-continuation: if the model
+  // truncates, the response carries wasTruncated=true and the iOS app
+  // surfaces it. The user can hit an explicit Continue action if they
+  // want more.
   // -------------------------------------------------------------------------
 
-  // Phase 3: Auto-continue on `finishReason === "length"`.
-  // When the model hits the length limit, chain a continuation call with the
-  // remaining budget and the previous output stitched in. Stop when budget is
-  // exhausted, the scene closes naturally, or MAX_CONTINUATIONS is reached.
-  // Refund-as-credit for unused budget is deferred to Phase 5 (when the credit
-  // ledger lands). Per docs/generation-budget.md sections 3.4 and 6.
-  type LlmSegment = {
+  type LlmResult = {
     content: string;
+    modelName: string;
     finishReason?: string;
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
   };
-  const segments: LlmSegment[] = [];
-  const MAX_CONTINUATIONS = 5;
-  let remainingBudget = maxCompletionTokens;
-  // Phase 3 loop's user-message half. craftPrompt (system message) is
-  // sent separately on each llm.complete call and stays constant across
-  // iterations. currentPrompt starts as the initial context and gets
-  // rebuilt per continuation call.
-  let currentPrompt = contextPrompt;
+  let llmResult: LlmResult | null = null;
 
   try {
-    while (segments.length < MAX_CONTINUATIONS) {
-      const segment: LlmSegment = await llm.complete(
-        [
-          { role: "system", content: craftPrompt },
-          { role: "user", content: currentPrompt },
-        ],
-        remainingBudget,
-        selectedModel.provider_model,
-      );
-      segments.push(segment);
-
-      // Natural close -- done.
-      if (segment.finishReason !== "length") break;
-
-      // If the provider didn't report output tokens, we can't safely budget
-      // the continuation. Break rather than risk spinning on stale budget.
-      const usedTokens = segment.outputTokens;
-      if (usedTokens === undefined || usedTokens === null) break;
-
-      // Budget accounting -- decrement by tokens used this segment.
-      remainingBudget = Math.max(0, remainingBudget - usedTokens);
-      if (remainingBudget <= 0) break;
-
-      // Stitch what we have so far and build a continuation prompt.
-      const stitchedSoFar = segments.map(s => s.content.trim()).join("\n\n");
-      const { context: contContext } = buildPrompt({
-        sourcePayloadJSON: body.sourcePayloadJSON,
-        generationAction: "continue",
-        generationLengthMode,
-        container,
-        pov,
-        outputBudget: remainingBudget,
-        previousOutputText: stitchedSoFar,
-        readingLevel: body.readingLevel,
-        contentRating: body.contentRating,
-        audienceNotes: body.audienceNotes,
-        projectName,
-        promptPackName,
-      });
-      currentPrompt = contContext;
-    }
+    llmResult = await llm.complete(
+      [
+        { role: "system", content: craftPrompt },
+        { role: "user", content: contextPrompt },
+      ],
+      maxCompletionTokens,
+      selectedModel.provider_model,
+    );
   } catch (err) {
     // Classify provider errors into stable error codes.
     // Credits are NOT charged on provider failure.
@@ -1567,15 +1526,11 @@ async function handler(
     );
   }
 
-  // Phase 3: Synthesize llmResult from segments for downstream code.
-  const llmResult = {
-    content: segments.map(s => s.content.trim()).join("\n\n"),
-    modelName: segments[0]?.modelName ?? selectedModel.provider_model,
-    finishReason: segments[segments.length - 1]?.finishReason,
-    inputTokens: segments.reduce((sum, s) => sum + (s.inputTokens ?? 0), 0),
-    outputTokens: segments.reduce((sum, s) => sum + (s.outputTokens ?? 0), 0),
-    totalTokens: segments.reduce((sum, s) => sum + (s.totalTokens ?? 0), 0),
-  };
+  // Phase 3 removed: llmResult is the single response, not stitched from segments.
+  // The downstream code reads llmResult!.content etc. directly.
+  // (TypeScript can't narrow let from a try/catch that returns, so we use a
+  // non-null assertion at use sites — the catch block always returns.)
+
 
   // -------------------------------------------------------------------------
   // Persist generation_outputs row
