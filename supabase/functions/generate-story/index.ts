@@ -174,6 +174,11 @@ interface GenerateStoryRequest {
   sourcePayloadJSON: unknown; // object or JSON string
   generationAction: string;
   generationLengthMode: string;
+  // Style picker (replaces length-based density guidance in the prompt).
+  // “auto” = no length target, model writes naturally within budget.
+  // “compact/standard/expansive” = density hint the model can honor.
+  // Optional for backwards compat — omitted => “auto”.
+  style?: string;
   outputBudget: number;
   selectedModelId?: string;
   previousOutputText?: string;
@@ -597,10 +602,13 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   return out;
 }
 
+type Style = "auto" | "compact" | "standard" | "expansive";
+
 function buildPrompt(req: {
   sourcePayloadJSON: unknown;
   generationAction: GenerationAction;
   generationLengthMode: LengthMode;
+  style: Style;
   outputBudget: number;
   previousOutputText?: string;
   readingLevel?: string;
@@ -638,24 +646,30 @@ function buildPrompt(req: {
       "Reinterpret the premise and selected elements in a creative new direction while keeping the core characters and world intact.",
   };
 
-  const lengthGuidance: Record<LengthMode, string> = {
-    short:
-      "Length: one complete short scene or vignette (roughly 300–500 words).",
-    medium:
-      "Length: one complete scene with a full dramatic beat (roughly 600–1000 words).",
-    long:
-      "Length: a complete extended multi-beat scene sequence (roughly 1200–2000 words).",
-    chapter:
-      "Length: one complete chapter-shaped section with progression (roughly 2500–4000 words).",
+  // Style-driven scene guidance. Replaces the old length-based targets that
+  // the model often ignored. “auto” gives no length target at all — the
+  // model writes whatever fits the budget. “compact/standard/expansive” give
+  // density hints the model can actually honor.
+  const styleDensityHint: Record<Style, string> = {
+    auto:
+      "Density: not specified — write whatever fits the budget naturally. There is no word-count target.",
+    compact:
+      "Density: tight and focused (roughly 300–500 words). High information density, less interiority.",
+    standard:
+      "Density: standard pacing (roughly 600–1000 words). Balanced with a full dramatic beat.",
+    expansive:
+      "Density: expansive (roughly 1500+ words). Breathing room, more interiority, longer beats.",
   };
 
-  // Story-goal instruction appended to the Writing Task block.
-  // This replaces the raw token-count directive with a prose-level writing goal.
-  const storyGoalInstruction: Record<LengthMode, string> = {
-    short:   "Write one tight complete scene beat. End cleanly.",
-    medium:  "Write one complete dramatic scene with setup, pressure, turn, and consequence.",
-    long:    "Write an extended scene sequence with multiple connected beats.",
-    chapter: "Write a chapter-shaped section with progression and a clean stopping point.",
+  const styleStoryGoal: Record<Style, string> = {
+    auto:
+      "Write a complete scene that ends cleanly within the budget. Use as much of the budget as the scene needs — there is no word-count target.",
+    compact:
+      "Write one tight scene beat. End cleanly.",
+    standard:
+      "Write one complete dramatic scene with setup, pressure, turn, and consequence.",
+    expansive:
+      "Write an extended scene with multiple connected beats and inner life.",
   };
 
   // Craft directives — sent as the SYSTEM message. Persistent across
@@ -693,11 +707,12 @@ function buildPrompt(req: {
   }
 
   // Writing Task — per-request specifics, lives in the user message.
+  // Style-driven: replaces the old length-based density target.
   contextLines.push(
     "## Writing Task",
     actionTask[req.generationAction],
-    lengthGuidance[req.generationLengthMode],
-    storyGoalInstruction[req.generationLengthMode],
+    styleDensityHint[req.style],
+    styleStoryGoal[req.style],
     "",
   );
 
@@ -957,6 +972,17 @@ async function handler(
   }
   const generationLengthMode = body.generationLengthMode as LengthMode;
 
+  // Style picker: defaults to "auto" (no length target) if not provided.
+  // Coerces unknown values to "auto" so old clients and typos don't break.
+  const style: Style = (
+    body.style === "compact" ||
+    body.style === "standard" ||
+    body.style === "expansive" ||
+    body.style === "auto"
+  )
+    ? body.style
+    : "auto";
+
   if (!body.sourcePayloadJSON) {
     return corsResponse(
       JSON.stringify({
@@ -1056,6 +1082,7 @@ async function handler(
       sourcePayloadJSON: body.sourcePayloadJSON,
       generationAction: "generate",
       generationLengthMode,
+      style,
       outputBudget: maxCompletionTokens,
       previousOutputText: undefined,
       readingLevel: body.readingLevel,
@@ -1140,6 +1167,7 @@ async function handler(
     sourcePayloadJSON: body.sourcePayloadJSON,
     generationAction,
     generationLengthMode,
+    style,
     outputBudget: maxCompletionTokens,
     previousOutputText: body.previousOutputText,
     readingLevel: body.readingLevel,
@@ -1266,6 +1294,7 @@ async function handler(
         sourcePayloadJSON: body.sourcePayloadJSON,
         generationAction: "continue",
         generationLengthMode,
+        style,
         outputBudget: remainingBudget,
         previousOutputText: stitchedSoFar,
         readingLevel: body.readingLevel,
