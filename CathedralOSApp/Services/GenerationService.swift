@@ -39,10 +39,10 @@ protocol GenerationService {
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
-        selectedContainer: Container? = nil,
-        selectedPOV: POV? = nil,
-        terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedContainer: Container?,
+        selectedPOV: POV?,
+        terminalBeat: String?,
+        selectedModelId: String?
     ) async throws -> GenerationResponse
 
     /// Submits a derived generation action (regenerate / continue / remix) using
@@ -55,10 +55,10 @@ protocol GenerationService {
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
-        selectedContainer: Container? = nil,
-        selectedPOV: POV? = nil,
-        terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedContainer: Container?,
+        selectedPOV: POV?,
+        terminalBeat: String?,
+        selectedModelId: String?
     ) async throws -> GenerationResponse
 }
 
