@@ -222,10 +222,10 @@ protocol GenerationBackendServiceProtocol {
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
-        selectedContainer: Container? = nil,
-        selectedPOV: POV? = nil,
-        terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedContainer: Container?,
+        selectedPOV: POV?,
+        terminalBeat: String?,
+        selectedModelId: String?
     ) async throws -> GenerationResponse
 }
 
@@ -247,10 +247,10 @@ protocol GenerationCostEstimateServiceProtocol: AnyObject {
         project: StoryProject,
         pack: PromptPack,
         lengthMode: GenerationLengthMode,
-        selectedContainer: Container? = nil,
-        selectedPOV: POV? = nil,
-        terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedContainer: Container?,
+        selectedPOV: POV?,
+        terminalBeat: String?,
+        selectedModelId: String?
     ) async throws -> GenerationCostEstimate
 }
 
