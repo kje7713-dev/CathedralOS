@@ -156,21 +156,6 @@ struct RecipeCard: View {
         .sheet(isPresented: $showShareJSON) {
             ShareSheet(activityItems: [jsonText])
         }
-        .alert("Generate Chapter?", isPresented: $showChapterConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Generate") {
-                guard !isGenerating else { return }
-                isGenerating = true
-                markFirstGenerateCompleted()
-                Task { await startGeneration() }
-            }
-        } message: {
-            Text("Chapters are long. Make sure your credit balance can cover the generation.")
-        }
-        .task {
-            await loadGenerationModels()
-            await performEstimate()
-        }
     }
 
     // MARK: Header
@@ -422,67 +407,6 @@ struct RecipeCard: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copiedJSON = false }
         }
     }
-
-    // MARK: Generate action
-
-    private var generateAction: some View {
-        VStack(spacing: CathedralTheme.Spacing.sm) {
-            modelPicker
-            budgetPicker
-            containerPicker
-            povPicker
-
-            // Optional terminal beat field: "End this piece when..."
-            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-                Text("END THIS PIECE WHEN…".uppercased())
-                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
-                    .tracking(1.5)
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                TextField("e.g. Jonah admits the lie. His father takes the letter.", text: $terminalBeat, axis: .vertical)
-                    .lineLimit(1...3)
-                    .textFieldStyle(.roundedBorder)
-                    .font(CathedralTheme.Typography.body(14))
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-            }
-
-            if let errorMessage = generationError {
-                errorBanner(errorMessage)
-            }
-
-            if let output = lastGeneratedOutput,
-               output.status == GenerationStatus.complete.rawValue || (output.status == GenerationStatus.draft.rawValue && output.wasTruncated) {
-                successBanner(for: output)
-            }
-
-            if let diagnostics = generationDiagnostics {
-                diagnosticsBlock(diagnostics)
-            }
-
-            CathedralPrimaryButton(
-                isGenerating ? "Generating…" : "Generate",
-                systemImage: isGenerating ? "arrow.trianglehead.2.clockwise" : "sparkles"
-            ) {
-                if selectedLengthMode == .chapter {
-                    showChapterConfirm = true
-                } else {
-                    guard !isGenerating else { return }
-                    isGenerating = true
-                    markFirstGenerateCompleted()
-                    Task { await startGeneration() }
-                }
-            }
-            .disabled(isGenerating || isEstimating || costEstimate?.allowed == false)
-
-            creditEstimateRow
-
-            Text("Sends this recipe's payload to your generation backend. Results appear under this recipe.")
-                .font(CathedralTheme.Typography.caption())
-                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-        }
-    }
-
     private func errorBanner(_ message: String) -> some View {
         HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
             Image(systemName: "exclamationmark.triangle")
