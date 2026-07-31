@@ -8,6 +8,17 @@ private enum RecipeCardViewMode: String, CaseIterable {
     case json   = "JSON"
 }
 
+// MARK: - Recipe card tabs
+
+/// Top-level tabs for the recipe card. Generate = recipe setup + trigger
+/// generation. Output = read/copy/share the produced text. The existing
+/// `RecipeCardViewMode` (prompt vs JSON) stays as an inner sub-mode inside
+/// the Generate tab.
+private enum RecipeTab: Hashable {
+    case generate
+    case output
+}
+
 // MARK: - RecipeCard
 
 /// In-project recipe card. Folds the former `PromptPackPreviewView` generation /
@@ -24,6 +35,7 @@ struct RecipeCard: View {
     // View mode + share/copy affordances (no standalone share buttons anymore —
     // share lives in the 3-dot menu).
     @State private var viewMode = RecipeCardViewMode.prompt
+    @State private var selectedTab: RecipeTab = .generate
     @State private var showSharePrompt = false
     @State private var showShareJSON = false
     @State private var copiedPrompt = false
@@ -132,17 +144,31 @@ struct RecipeCard: View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
             header
 
-            elementsSection
+            TabView(selection: $selectedTab) {
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+                    elementsSection
 
-            if isSparse {
-                sparsePackNotice
+                    if isSparse {
+                        sparsePackNotice
+                    }
+
+                    promptJSONSection
+
+                    generateAction
+                }
+                .tabItem {
+                    Label("Generate", systemImage: "wand.and.stars")
+                }
+                .tag(RecipeTab.generate)
+
+                outputsSection
+                    .tabItem {
+                        Label("Output", systemImage: "doc.text")
+                    }
+                    .tag(RecipeTab.output)
             }
-
-            promptJSONSection
-
-            outputsSection
+            .tint(CathedralTheme.Colors.accent)
         }
-        .tint(CathedralTheme.Colors.accent)
         .padding(CathedralTheme.Spacing.base)
         .background(CathedralTheme.Colors.surface)
         .overlay(
