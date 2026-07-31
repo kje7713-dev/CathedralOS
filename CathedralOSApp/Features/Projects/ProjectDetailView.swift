@@ -17,7 +17,6 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
     case cast
     case themes
     case output
-    case generate
 
     var id: String { rawValue }
 
@@ -27,7 +26,6 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
         case .cast: return "Cast"
         case .themes: return "Themes"
         case .output: return "Output"
-        case .generate: return "Generate"
         }
     }
 }
@@ -94,11 +92,6 @@ struct ProjectDetailView: View {
                         themeQuestionsSection
                     case .output:
                         recipesSection
-                    case .generate:
-                        VStack(spacing: CathedralTheme.Spacing.md) {
-                            recipesSection
-                            generationsSection
-                        }
                         generationsSection
                     }
                 }
