@@ -46,10 +46,6 @@ private struct AppRootView: View {
 
     var body: some View {
         TabView {
-            HomeView()
-                .tabItem {
-                    Label("Home", systemImage: "house")
-                }
             ProjectsListView()
                 .tabItem {
                     Label("Projects", systemImage: "books.vertical")

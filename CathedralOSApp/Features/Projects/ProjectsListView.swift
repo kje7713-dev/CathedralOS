@@ -22,6 +22,120 @@ struct ProjectsListView: View {
     @State private var deleteErrorMessage: String?
     private let projectDeletionService: any ProjectDeletionServiceProtocol = ProjectDeletionService.shared
 
+    // MARK: - Top-of-list summary + Generate / Output toggle
+
+    @Query(sort: \GenerationOutput.createdAt, order: .reverse)
+    private var allOutputs: [GenerationOutput]
+
+    @State private var viewMode: ProjectsViewMode = .generate
+
+    private var topOutputs: [GenerationOutput] {
+        Array(allOutputs.prefix(5))
+    }
+
+    private var welcomeSummary: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("Welcome to CathedralOS")
+                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+            Text("Build stories. Compile scenes. Pick up where you left off below.")
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: CathedralTheme.Spacing.sm) {
+                statChip(value: "\(projects.count)", label: "Projects")
+                statChip(value: "\(allOutputs.count)", label: "Outputs")
+            }
+            .padding(.top, CathedralTheme.Spacing.xs)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(CathedralTheme.Spacing.base)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.top, CathedralTheme.Spacing.base)
+    }
+
+    private func statChip(value: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(CathedralTheme.Typography.display(20))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+            Text(label)
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(CathedralTheme.Spacing.sm)
+        .background(CathedralTheme.Colors.background)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm)
+                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+    }
+
+    private var modePicker: some View {
+        Picker("Mode", selection: $viewMode) {
+            ForEach(ProjectsViewMode.allCases) { mode in
+                Text(mode.label).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.top, CathedralTheme.Spacing.sm)
+    }
+
+    private var recentOutputsList: some View {
+        VStack(spacing: 0) {
+            ForEach(topOutputs) { output in
+                recentOutputRow(output)
+                if output.id != topOutputs.last?.id {
+                    Divider()
+                }
+            }
+        }
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+    }
+
+    private func recentOutputRow(_ output: GenerationOutput) -> some View {
+        HStack(alignment: .center, spacing: CathedralTheme.Spacing.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(output.title.isEmpty ? "Untitled" : output.title)
+                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                Text(subtitle(for: output))
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            Spacer()
+            statusPill(for: output)
+        }
+        .padding(.vertical, CathedralTheme.Spacing.sm)
+    }
+
+    private func subtitle(for output: GenerationOutput) -> String {
+        let when = output.createdAt.formatted(date: .abbreviated, time: .shortened)
+        let model = output.modelName.isEmpty ? "Unknown model" : output.modelName
+        return "\(when) · \(output.status) · \(model)"
+    }
+
+    private func statusPill(for output: GenerationOutput) -> some View {
+        Text(output.status)
+            .font(CathedralTheme.Typography.caption(11, weight: .medium))
+            .padding(.horizontal, CathedralTheme.Spacing.sm)
+            .padding(.vertical, CathedralTheme.Spacing.xs)
+            .background(CathedralTheme.Colors.background)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule().stroke(CathedralTheme.Colors.border, lineWidth: 1)
+            )
+    }
+
     // MARK: - Dedupe
 
     /// Projects with duplicate `id` values hidden: shows only the first occurrence from the
@@ -33,12 +147,24 @@ struct ProjectsListView: View {
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            Group {
-                if dedupedProjects.isEmpty {
-                    emptyState
-                } else {
-                    projectList
+            ScrollView {
+                VStack(spacing: CathedralTheme.Spacing.md) {
+                    welcomeSummary
+                    modePicker
+                    Group {
+                        switch viewMode {
+                        case .generate:
+                            if dedupedProjects.isEmpty {
+                                emptyState
+                            } else {
+                                projectList
+                            }
+                        case .output:
+                            recentOutputsList
+                        }
+                    }
                 }
+                .padding(.bottom, CathedralTheme.Spacing.lg)
             }
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .navigationTitle("Projects")
@@ -488,6 +614,19 @@ struct ProjectsListView: View {
             await refreshRecoveryAvailability()
         } catch {
             deleteErrorMessage = (error as? ProjectDeletionError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Projects list view mode
+private enum ProjectsViewMode: String, CaseIterable, Identifiable {
+    case generate
+    case output
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .generate: return "Generate"
+        case .output:   return "Output"
         }
     }
 }

@@ -159,7 +159,6 @@
 		0000000000000000000001AD /* AuthSessionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001AC /* AuthSessionResolver.swift */; };
 		0000000000000000000001B0 /* TestSupabaseConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001B1 /* TestSupabaseConfiguration.swift */; };
 		000000000000000000000FF1 /* RecipeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000FF0 /* RecipeCard.swift */; };
-		000000000000000000000FF3 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000FF2 /* HomeView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -328,7 +327,6 @@
 		0000000000000000000001A7 /* GenerationOutputPublishCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputPublishCoordinator.swift; sourceTree = "<group>"; };
 		0000000000000000000001AC /* AuthSessionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthSessionResolver.swift; sourceTree = "<group>"; };
 		000000000000000000000FF0 /* RecipeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeCard.swift; sourceTree = "<group>"; };
-		000000000000000000000FF2 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -411,7 +409,6 @@
 				0000000000000000000000AA /* Templates */,
 				0000000000000000000000D3 /* Projects */,
 				00000000000000000000015A /* Account */,
-				000000000000000000000FF4 /* Home */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -655,14 +652,6 @@
 			path = Account;
 			sourceTree = "<group>";
 		};
-		000000000000000000000FF4 /* Home */ = {
-			isa = PBXGroup;
-			children = (
-				000000000000000000000FF2 /* HomeView.swift */,
-			);
-			path = Home;
-			sourceTree = "<group>";
-		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -887,7 +876,7 @@
 				0000000000000000000001A2 /* ProjectCloudSyncService.swift in Sources */,
 				0000000000000000000001AD /* AuthSessionResolver.swift in Sources */,
 				000000000000000000000198 /* DiagnosticsView.swift in Sources */,
-				000000000000000000000FF1 /* RecipeCard.swift in Sources */,				000000000000000000000FF3 /* HomeView.swift in Sources */,
+				000000000000000000000FF1 /* RecipeCard.swift in Sources */,
 
 			);
 			runOnlyForDeploymentPostprocessing = 0;
