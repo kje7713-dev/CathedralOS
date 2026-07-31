@@ -53,54 +53,15 @@ struct ProjectDetailView: View {
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
-    @AppStorage("cathedralos.firstGenerateCompleted") private var firstGenerateCompleted = false
-    @AppStorage("cathedralos.welcomeDismissed") private var welcomeDismissed = false
 
     private var storyEditorMode: StoryEditorMode {
         StoryEditorMode(rawValue: storyEditorModeRaw) ?? .story
     }
 
-    // MARK: - Tutorial step computation
-
-    private var inTutorialMode: Bool {
-        !firstGenerateCompleted
-    }
-
-    private var hasStoryContent: Bool {
-        !project.summary.isEmpty ||
-        !project.readingLevel.isEmpty ||
-        !project.contentRating.isEmpty ||
-        !project.audienceNotes.isEmpty ||
-        project.projectSetting != nil ||
-        !project.motifs.isEmpty
-    }
-
-    private var hasCastContent: Bool {
-        !project.characters.isEmpty || !project.relationships.isEmpty
-    }
-
-    private var hasThemesContent: Bool {
-        !project.storySparks.isEmpty ||
-        !project.aftertastes.isEmpty ||
-        !project.themeQuestions.isEmpty
-    }
-
-    private var tutorialStep: Int {
-        if !hasStoryContent { return 1 }
-        if !hasCastContent { return 2 }
-        if !hasThemesContent { return 3 }
-        return 4
-    }
 
     var body: some View {
         VStack(spacing: 0) {
-            if !advancedMode {
-                // Tutorial step banner + segmented picker are both visible from
-                // day one. The picker scopes the List to one bucket at a time;
-                // the banner tracks authoring progression across buckets.
-                TutorialStepBanner(step: tutorialStep)
-                modePicker
-            }
+            modePicker
             List {
                 if advancedMode {
                     summarySection
@@ -142,58 +103,17 @@ struct ProjectDetailView: View {
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
-            if !firstGenerateCompleted {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    HStack(spacing: CathedralTheme.Spacing.xs) {
-                        Image(systemName: "graduationcap.fill")
-                            .font(.system(size: 11))
-                        Text("TUTORIAL")
-                            .font(CathedralTheme.Typography.label(10, weight: .semibold))
-                            .tracking(1.0)
-                    }
-                    .foregroundStyle(CathedralTheme.Colors.accent)
-                    .padding(.horizontal, CathedralTheme.Spacing.sm)
-                    .padding(.vertical, CathedralTheme.Spacing.xs)
-                    .background(CathedralTheme.Colors.surface)
-                    .overlay(
-                        Capsule().stroke(CathedralTheme.Colors.accent.opacity(0.3), lineWidth: 1)
-                    )
-                    .clipShape(Capsule())
-                    .accessibilityLabel("Tutorial mode active")
-                }
-            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
-                    NotificationCenter.default.post(name: Notification.Name("showWelcomeRequested"), object: nil)
+                    advancedMode.toggle()
                 } label: {
-                    Image(systemName: "questionmark.circle")
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    Image(systemName: advancedMode ? "rectangle.grid.2x2.fill" : "rectangle.grid.2x2")
+                        .foregroundStyle(advancedMode ? CathedralTheme.Colors.accent : CathedralTheme.Colors.secondaryText)
                 }
-                .accessibilityLabel("Show welcome")
-            }
-            if firstGenerateCompleted {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        advancedMode.toggle()
-                    } label: {
-                        Image(systemName: advancedMode ? "rectangle.grid.2x2.fill" : "rectangle.grid.2x2")
-                            .foregroundStyle(advancedMode ? CathedralTheme.Colors.accent : CathedralTheme.Colors.secondaryText)
-                    }
-                    .accessibilityLabel(advancedMode ? "Exit advanced mode" : "Enter advanced mode")
-                }
+                .accessibilityLabel(advancedMode ? "Exit advanced mode" : "Enter advanced mode")
             }
         }
         .tint(CathedralTheme.Colors.accent)
-        .onAppear {
-            // New or empty projects (no story content yet) should always land
-            // on Story, not the last globally-persisted tab from the previous
-            // project. The @AppStorage storyEditorMode flag persists across
-            // projects, so without this guard a freshly created project can
-            // open on Output because the user was on Output elsewhere.
-            if tutorialStep == 1 {
-                storyEditorModeRaw = StoryEditorMode.story.rawValue
-            }
-        }
         .sheet(isPresented: $showAddCharacter) {
             NavigationStack {
                 CharacterFormView(project: project, character: nil)
