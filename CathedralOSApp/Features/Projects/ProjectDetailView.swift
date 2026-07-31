@@ -17,7 +17,7 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
     case cast
     case themes
     case output
-    case compile
+    case generate
 
     var id: String { rawValue }
 
@@ -27,7 +27,7 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
         case .cast: return "Cast"
         case .themes: return "Themes"
         case .output: return "Output"
-        case .compile: return "Compile"
+        case .generate: return "Generate"
         }
     }
 }
@@ -50,9 +50,6 @@ struct ProjectDetailView: View {
     @State private var motifToEdit: Motif?
     @State private var showAddPromptPack = false
     @State private var packToEdit: PromptPack?
-    @State private var showChapterConfirm = false
-    @State private var isGenerating = false
-    @State private var generationError: String?
     @State private var generationToView: GenerationOutput?
     @State private var outputFilter: OutputListFilter = .all
 
@@ -97,23 +94,14 @@ struct ProjectDetailView: View {
                         themeQuestionsSection
                     case .output:
                         recipesSection
-                    case .compile:
+                    case .generate:
                         VStack(spacing: CathedralTheme.Spacing.md) {
-                            compileGenerateCTA
                             recipesSection
                             generationsSection
                         }
                         generationsSection
                     }
                 }
-            }
-            .alert("Generate Chapter?", isPresented: $showChapterConfirm) {
-                Button("Cancel", role: .cancel) {}
-                Button("Generate") {
-                    triggerGenerationForProject()
-                }
-            } message: {
-                Text("Chapters are long. Make sure your credit balance can cover the generation.")
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -483,38 +471,6 @@ struct ProjectDetailView: View {
         }
     }
 
-    // MARK: - Compile-mode primary CTA
-
-    private var compileGenerateCTA: some View {
-        HStack(spacing: CathedralTheme.Spacing.sm) {
-            Image(systemName: "hammer.fill")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(CathedralTheme.Colors.accent)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Compile a recipe into a finished scene.")
-                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                Text("Pick a recipe below and tap Generate to send the prompt to the model.")
-                    .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            CathedralPrimaryButton("Generate", systemImage: "wand.and.stars") {
-                triggerGenerationForProject()
-            }
-            .disabled(project.promptPacks.isEmpty)
-        }
-        .padding(CathedralTheme.Spacing.base)
-        .background(CathedralTheme.Colors.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
-    }
-
     // MARK: Recipes Section
 
     private var recipesSection: some View {
@@ -801,12 +757,3 @@ struct TutorialStepBanner: View {
         .padding(.bottom, CathedralTheme.Spacing.xs)
     }
 }
-
-    // MARK: - Generation trigger (Compile tab)
-
-    private func triggerGenerationForProject() {
-        // v1: button press flips isGenerating. The actual generation pipeline
-        // (model + container + pov + length mode + first prompt pack) lands
-        // in the next iteration.
-        isGenerating = true
-    }
