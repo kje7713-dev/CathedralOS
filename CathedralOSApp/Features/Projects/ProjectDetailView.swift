@@ -17,6 +17,7 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
     case cast
     case themes
     case output
+    case compile
 
     var id: String { rawValue }
 
@@ -26,6 +27,7 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
         case .cast: return "Cast"
         case .themes: return "Themes"
         case .output: return "Output"
+        case .compile: return "Compile"
         }
     }
 }
@@ -56,6 +58,61 @@ struct ProjectDetailView: View {
 
     private var storyEditorMode: StoryEditorMode {
         StoryEditorMode(rawValue: storyEditorModeRaw) ?? .story
+    }
+
+    // MARK: - Generation state (owned by Compile tab; moved from RecipeCard)
+
+    @State private var isGenerating = false
+    @State private var generationError: String?
+    @State private var generationDiagnostics: String?
+    @State private var lastGeneratedOutput: GenerationOutput?
+    @State private var selectedLengthMode: GenerationLengthMode = .defaultMode
+    @State private var selectedContainer: Container = .defaultContainer
+    @State private var selectedPOV: POV = .defaultPOV
+    @State private var terminalBeat: String = ""
+    @State private var generationModels: [GenerationModelOption] = []
+    @State private var showChapterConfirm = false
+    @State private var selectedBudgetPreset: BudgetPreset = .defaultPreset
+    @AppStorage("cathedralos.generation.selectedModelID") private var selectedModelId: String = "gpt-4o-mini"
+
+    @AppStorage("cathedralos.firstGenerateCompleted") private var firstGenerateCompleted = false
+
+    @State private var costEstimate: GenerationCostEstimate?
+    @State private var isEstimating = false
+    @State private var estimateError: String?
+    @State private var estimateTask: Task<Void, Never>?
+
+    private func markFirstGenerateCompleted() {
+        guard !firstGenerateCompleted else { return }
+        firstGenerateCompleted = true
+    }
+
+    let generationService: GenerationService
+    let generationModelService: GenerationModelServiceProtocol
+    let usageLimitService: any UsageLimitServiceProtocol
+    let authService: any AuthService
+    let creditStateService: any CreditStateServiceProtocol
+    let outputSyncService: any GenerationOutputSyncServiceProtocol
+    let estimateService: any GenerationCostEstimateServiceProtocol
+
+    init(
+        project: StoryProject,
+        generationService: GenerationService = SupabaseGenerationService(),
+        generationModelService: GenerationModelServiceProtocol = BackendGenerationModelService(),
+        usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
+        authService: any AuthService = BackendAuthService.shared,
+        creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
+        outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
+        estimateService: (any GenerationCostEstimateServiceProtocol)? = nil
+    ) {
+        self.project = project
+        self.generationService = generationService
+        self.generationModelService = generationModelService
+        self.usageLimitService = usageLimitService
+        self.authService = authService
+        self.creditStateService = creditStateService
+        self.outputSyncService = outputSyncService
+        self.estimateService = estimateService ?? SupabaseGenerationService()
     }
 
 
@@ -91,6 +148,10 @@ struct ProjectDetailView: View {
                         aftertastesSection
                         themeQuestionsSection
                     case .output:
+                        recipesSection
+                        generationsSection
+                    case .compile:
+                        compileGenerateCTA
                         recipesSection
                         generationsSection
                     }
@@ -161,6 +222,21 @@ struct ProjectDetailView: View {
         }
         .navigationDestination(item: $generationToView) { g in
             GenerationOutputDetailView(output: g)
+        }
+        .alert("Generate Chapter?", isPresented: $showChapterConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Generate") {
+                guard !isGenerating else { return }
+                isGenerating = true
+                markFirstGenerateCompleted()
+                Task { await triggerGenerationForProject() }
+            }
+        } message: {
+            Text("Chapters are long. Make sure your credit balance can cover the generation.")
+        }
+        .task {
+            await loadGenerationModels()
+            await performEstimate()
         }
         .onDisappear {
             Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
@@ -693,6 +769,601 @@ struct ProjectDetailView: View {
             parts.append(vis.displayName)
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    // MARK: - Compile tab CTA + generation helpers
+    //
+    // Generation state + service deps live here so the CTA in the Compile tab
+    // owns the lifecycle (alert + .task + startGeneration). RecipeCard is now
+    // a passive display — see `feat/ios/compile-tab-coherent` for context.
+
+    private var compileGenerateCTA: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+            Text("Compile a recipe into a finished scene.")
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if project.promptPacks.isEmpty {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    Text("Add a recipe to enable generation.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+            } else {
+                VStack(spacing: CathedralTheme.Spacing.sm) {
+                    modelPicker
+                    budgetPicker
+                    containerPicker
+                    povPicker
+
+                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                        Text("END THIS PIECE WHEN…".uppercased())
+                            .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                            .tracking(1.5)
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        TextField("e.g. Jonah admits the lie. His father takes the letter.", text: $terminalBeat, axis: .vertical)
+                            .lineLimit(1...3)
+                            .textFieldStyle(.roundedBorder)
+                            .font(CathedralTheme.Typography.body(14))
+                            .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    }
+
+                    if let errorMessage = generationError {
+                        errorBanner(errorMessage)
+                    }
+
+                    if let output = lastGeneratedOutput,
+                       output.status == GenerationStatus.complete.rawValue || (output.status == GenerationStatus.draft.rawValue && output.wasTruncated) {
+                        successBanner(for: output)
+                    }
+
+                    if let diagnostics = generationDiagnostics {
+                        diagnosticsBlock(diagnostics)
+                    }
+
+                    CathedralPrimaryButton(
+                        isGenerating ? "Generating…" : "Generate",
+                        systemImage: isGenerating ? "arrow.trianglehead.2.clockwise" : "sparkles"
+                    ) {
+                        if selectedLengthMode == .chapter {
+                            showChapterConfirm = true
+                        } else {
+                            guard !isGenerating else { return }
+                            isGenerating = true
+                            markFirstGenerateCompleted()
+                            Task { await triggerGenerationForProject() }
+                        }
+                    }
+                    .disabled(isGenerating || isEstimating || costEstimate?.allowed == false)
+
+                    creditEstimateRow
+
+                    Text("Sends this project's first recipe to your generation backend. Results appear under Generated Outputs.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .listRowInsets(EdgeInsets(top: CathedralTheme.Spacing.sm,
+                                 leading: CathedralTheme.Spacing.base,
+                                 bottom: CathedralTheme.Spacing.sm,
+                                 trailing: CathedralTheme.Spacing.base))
+        .listRowBackground(CathedralTheme.Colors.background)
+        .listRowSeparator(.hidden)
+    }
+
+    private var selectedModel: GenerationModelOption? {
+        generationModels.first(where: { $0.id == selectedModelId })
+    }
+
+    private var modelPicker: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("MODEL".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            if generationModels.isEmpty {
+                Text("Loading models…")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            } else {
+                Picker("Model", selection: $selectedModelId) {
+                    ForEach(generationModels) { model in
+                        Text(model.displayName).tag(model.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                if let selectedModel {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(selectedModel.description ?? "No description.")
+                        Text("Relative cost: \(selectedModel.relativeCostLabel)")
+                        Text("Minimum: \(selectedModel.minimumChargeCredits) \(selectedModel.minimumChargeCredits == 1 ? "credit" : "credits")")
+                    }
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+            }
+        }
+    }
+
+    private var budgetPicker: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("BUDGET".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                ForEach(BudgetPreset.allCases) { preset in
+                    Button {
+                        selectedBudgetPreset = preset
+                        selectedLengthMode = preset.defaultLengthMode
+                    } label: {
+                        Text(budgetDetailLabel(for: preset))
+                            .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                            .foregroundStyle(
+                                selectedBudgetPreset == preset
+                                    ? CathedralTheme.Colors.accent
+                                    : CathedralTheme.Colors.primaryText
+                            )
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, CathedralTheme.Spacing.sm)
+                        .background(
+                            selectedBudgetPreset == preset
+                                ? CathedralTheme.Colors.accent.opacity(0.15)
+                                : CathedralTheme.Colors.background
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm)
+                                .stroke(
+                                    selectedBudgetPreset == preset
+                                        ? CathedralTheme.Colors.accent
+                                        : CathedralTheme.Colors.border,
+                                    lineWidth: 1
+                                )
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func budgetDetailLabel(for preset: BudgetPreset) -> String {
+        guard let model = selectedModel else { return preset.coverageHint }
+        let baseCredits = Double(preset.defaultLengthMode.creditCost)
+        let raw = baseCredits * model.outputCreditRate
+        let cost = max(model.minimumChargeCredits, Int(ceil(raw)))
+        return "\(cost) cr · \(preset.coverageHint)"
+    }
+
+    private var containerPicker: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("CONTAINER".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            Picker("Container", selection: $selectedContainer) {
+                ForEach(Container.allCases, id: \.self) { container in
+                    Text(container.displayName).tag(container)
+                }
+            }
+            .pickerStyle(.menu)
+            Text(selectedContainer.expectedRange)
+                .font(CathedralTheme.Typography.label(11, weight: .regular))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            Text(selectedContainer.oneLineDescription)
+                .font(CathedralTheme.Typography.label(11, weight: .regular))
+                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+        }
+    }
+
+    private var povPicker: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("POV".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            Picker("POV", selection: $selectedPOV) {
+                ForEach(POV.allCases, id: \.self) { pov in
+                    Text(pov.displayName).tag(pov)
+                }
+            }
+            .pickerStyle(.menu)
+            Text(selectedPOV.oneLineDescription)
+                .font(CathedralTheme.Typography.label(11, weight: .regular))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+        }
+    }
+
+    @ViewBuilder
+    private var creditEstimateRow: some View {
+        if isEstimating {
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text("Estimating cost…")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Spacer()
+            }
+        } else if let err = estimateError {
+            HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+                Text(err)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if let estimate = costEstimate {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: CathedralTheme.Spacing.xs) {
+                    Image(systemName: "bolt.circle")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(estimate.allowed
+                            ? CathedralTheme.Colors.secondaryText
+                            : CathedralTheme.Colors.destructive)
+                    if estimate.allowed {
+                        let c = estimate.estimatedCredits
+                        Text("Estimated cost: \(c) \(c == 1 ? "credit" : "credits")")
+                            .font(CathedralTheme.Typography.label(11, weight: .regular))
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        Spacer()
+                        Text("\(estimate.availableCredits) remaining")
+                            .font(CathedralTheme.Typography.label(11, weight: .regular))
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    } else {
+                        let needed = estimate.estimatedCredits
+                        let have = estimate.availableCredits
+                        Text("Need \(needed) \(needed == 1 ? "credit" : "credits"), you have \(have)")
+                            .font(CathedralTheme.Typography.label(11, weight: .regular))
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                    }
+                }
+            }
+        }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(CathedralTheme.Colors.destructive)
+            Text(message)
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.destructive)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(CathedralTheme.Spacing.sm)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.destructive.opacity(0.4), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+
+    private func successBanner(for output: GenerationOutput) -> some View {
+        HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+            Image(systemName: output.wasTruncated
+                ? "exclamationmark.triangle"
+                : (output.syncStatus == SyncStatus.failed.rawValue ? "exclamationmark.triangle" : "checkmark.circle"))
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
+                    ? CathedralTheme.Colors.destructive
+                    : CathedralTheme.Colors.accent)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(output.wasTruncated
+                    ? "Generation saved as incomplete — \(output.title)"
+                    : "Generation complete — \(output.title)")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(2)
+                if output.wasTruncated {
+                    Text("This output hit the model length limit and may be incomplete.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if output.syncStatus == SyncStatus.failed.rawValue {
+                    Text("Output Sync: Failed\(output.syncErrorMessage.flatMap { $0.nilIfEmpty }.map { " — \($0)" } ?? "")")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(CathedralTheme.Spacing.sm)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(
+                    (output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
+                        ? CathedralTheme.Colors.destructive
+                        : CathedralTheme.Colors.accent).opacity(0.4),
+                    lineWidth: 1
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+
+    private func diagnosticsBlock(_ diagnostics: String) -> some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Label("Diagnostics", systemImage: "antennaradiowaves.left.and.right")
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            Text(diagnostics)
+                .font(CathedralTheme.Typography.mono(12))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+        .padding(CathedralTheme.Spacing.sm)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+
+    @MainActor
+    private func triggerGenerationForProject() async {
+        generationError = nil
+        generationDiagnostics = nil
+
+        let mode = selectedLengthMode
+
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+
+        let preflight = usageLimitService.checkPreflight(lengthMode: mode, authState: authService.authState)
+        switch preflight {
+        case .signedOut:
+            generationError = GenerationBackendServiceError.notSignedIn.errorDescription
+            isGenerating = false
+            return
+        case .backendConfigMissing, .allowed, .unknown, .insufficientCredits:
+            break
+        }
+
+        guard let pack = project.promptPacks.sorted(by: { $0.name < $1.name }).first else {
+            generationError = "Add a recipe to generate."
+            isGenerating = false
+            return
+        }
+
+        let frozenPayload = PromptPackExportBuilder.build(pack: pack, project: project)
+        let frozenJSON = PromptPackJSONAssembler.jsonString(payload: frozenPayload)
+
+        GenerationUsageTracker.shared.record(
+            action: "generate",
+            lengthMode: mode,
+            sourcePromptPackID: pack.id
+        )
+
+        let gen = GenerationOutput(
+            title: "\(pack.name) — \(project.name)",
+            outputText: "",
+            status: GenerationStatus.generating.rawValue,
+            modelName: "",
+            sourcePromptPackID: pack.id,
+            sourcePromptPackName: pack.name,
+            sourcePayloadJSON: frozenJSON,
+            outputType: GenerationOutputType.story.rawValue,
+            generationLengthMode: mode.rawValue,
+            outputBudget: mode.outputBudget
+        )
+        gen.project = project
+        modelContext.insert(gen)
+        do {
+            try modelContext.save()
+        } catch {
+            appendGenerationDiagnostic("SwiftData save failed after creating the output: \(error.localizedDescription)")
+            generationError = "Could not save the new output locally."
+            modelContext.delete(gen)
+            isGenerating = false
+            return
+        }
+        _ = LocalProjectBackupService.shared.backup(project: project)
+        lastGeneratedOutput = gen
+
+        defer { isGenerating = false }
+
+        do {
+            let response = try await generationService.generate(
+                project: project,
+                pack: pack,
+                requestedOutputType: .story,
+                lengthMode: mode,
+                selectedContainer: selectedContainer,
+                selectedPOV: selectedPOV,
+                terminalBeat: terminalBeat.isEmpty ? nil : terminalBeat,
+                selectedModelId: selectedModelId
+            )
+            mergeGenerationDiagnostics(await GenerationRequestDiagnosticsStore.shared.latestVisibleText())
+
+            gen.outputText = response.generatedText
+            gen.modelName = response.modelName
+            gen.title = response.title ?? "\(pack.name) — \(project.name)"
+            gen.finishReason = response.finishReason
+            gen.wasTruncated = response.wasTruncated ?? false
+            if gen.wasTruncated {
+                gen.status = GenerationStatus.draft.rawValue
+                gen.notes = "This output hit the model length limit and may be incomplete."
+            } else {
+                gen.status = GenerationStatus.complete.rawValue
+                gen.notes = nil
+            }
+            gen.updatedAt = Date()
+            gen.syncErrorMessage = nil
+            if let cloudID = response.cloudGenerationOutputID, !cloudID.isEmpty {
+                gen.cloudGenerationOutputID = cloudID
+                gen.cloudOwnerUserID = authService.authState.currentUser?.id ?? ""
+                gen.syncStatus = SyncStatus.synced.rawValue
+                gen.lastSyncedAt = Date()
+                OutputSyncActivityStore.shared.recordSuccess("Output synced during generation.")
+            } else {
+                do {
+                    try await outputSyncService.pushOutput(gen)
+                } catch {
+                    appendGenerationDiagnostic("Output sync failed: \(localizedSyncError(error))")
+                }
+            }
+            try? persistGeneration(stage: "saving the completed output")
+            _ = LocalGenerationOutputBackupService.shared.backup(output: gen)
+
+            usageLimitService.recordSuccessfulGeneration(
+                creditCost: response.creditCostCharged ?? 0,
+                lengthMode: mode
+            )
+            await refreshBackendCreditState()
+        } catch {
+            mergeGenerationDiagnostics(await GenerationRequestDiagnosticsStore.shared.latestVisibleText())
+            gen.status = GenerationStatus.failed.rawValue
+            gen.notes = error.localizedDescription
+            gen.updatedAt = Date()
+            try? persistGeneration(stage: "saving the failed output")
+            generationError = localizedGenerationError(error)
+        }
+        _ = LocalProjectBackupService.shared.backup(project: project)
+    }
+
+    private func scheduleEstimate() {
+        estimateTask?.cancel()
+        estimateTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            await performEstimate()
+        }
+    }
+
+    @MainActor
+    private func performEstimate() async {
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard authService.authState.isSignedIn else {
+            estimateError = "Sign in to see the estimated cost."
+            costEstimate = nil
+            return
+        }
+        guard SupabaseConfiguration.isConfigured else {
+            estimateError = nil
+            costEstimate = nil
+            return
+        }
+
+        isEstimating = true
+        estimateError = nil
+        defer { isEstimating = false }
+
+        guard let pack = project.promptPacks.sorted(by: { $0.name < $1.name }).first else {
+            costEstimate = nil
+            return
+        }
+
+        do {
+            let estimate = try await estimateService.estimateGenerationCost(
+                project: project,
+                pack: pack,
+                lengthMode: selectedLengthMode,
+                selectedContainer: selectedContainer,
+                selectedPOV: selectedPOV,
+                terminalBeat: terminalBeat.isEmpty ? nil : terminalBeat,
+                selectedModelId: selectedModelId
+            )
+            costEstimate = estimate
+            estimateError = nil
+        } catch let error as GenerationBackendServiceError {
+            costEstimate = nil
+            switch error {
+            case .notSignedIn:
+                estimateError = "Sign in to see the estimated cost."
+            case .notConfigured:
+                estimateError = nil
+            default:
+                estimateError = "Could not estimate cost — \(error.errorDescription ?? error.localizedDescription)"
+            }
+        } catch {
+            costEstimate = nil
+            estimateError = "Could not estimate cost — \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    private func loadGenerationModels() async {
+        do {
+            let models = try await generationModelService.fetchEnabledModels()
+            generationModels = models
+            if !models.contains(where: { $0.id == selectedModelId }) {
+                selectedModelId = models.first?.id ?? "gpt-4o-mini"
+            }
+        } catch {
+            generationModels = []
+            generationError = (error as? GenerationModelServiceError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func refreshBackendCreditState() async {
+        guard SupabaseConfiguration.isConfigured else { return }
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard authService.authState.isSignedIn else { return }
+        do {
+            let state = try await creditStateService.fetchCreditState()
+            usageLimitService.applyBackendCreditState(state)
+        } catch {
+            // Non-fatal.
+        }
+    }
+
+    private func localizedGenerationError(_ error: Error) -> String {
+        if let backendError = error as? GenerationBackendServiceError {
+            return backendError.errorDescription ?? backendError.localizedDescription
+        }
+        if let serviceError = error as? GenerationServiceError {
+            return serviceError.errorDescription ?? serviceError.localizedDescription
+        }
+        return error.localizedDescription
+    }
+
+    private func localizedSyncError(_ error: Error) -> String {
+        (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+    }
+
+    private func mergeGenerationDiagnostics(_ diagnostics: String?) {
+        let trimmed = diagnostics?.trimmingCharacters(in: .whitespacesAndNewlines)
+        generationDiagnostics = trimmed?.isEmpty == true ? nil : trimmed
+    }
+
+    private func appendGenerationDiagnostic(_ message: String) {
+        let existing = generationDiagnostics?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = [existing?.isEmpty == false ? existing : nil, message.nilIfEmpty].compactMap { $0 }
+        generationDiagnostics = parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    private func persistGeneration(stage: String) throws {
+        do {
+            try modelContext.save()
+        } catch {
+            appendGenerationDiagnostic("SwiftData save failed after \(stage): \(error.localizedDescription)")
+            throw error
+        }
     }
 }
 
