@@ -42,9 +42,6 @@ struct RecipeCard: View {
     // is auto-derived from this for credit-cost purposes via creditLengthMode.
     @State private var selectedContainer: Container = .defaultContainer
     @State private var selectedPOV: POV = .defaultPOV
-    /// Optional terminal beat: "End this piece when..." If empty, the model
-    /// privately infers one inside the same generation call.
-    @State private var terminalBeat: String = ""
     @State private var generationModels: [GenerationModelOption] = []
     @State private var showChapterConfirm = false
     // Phase 2: budget picker (UI-only). Defaults to medium scene which matches
@@ -431,19 +428,6 @@ struct RecipeCard: View {
             budgetPicker
             containerPicker
             povPicker
-
-            // Optional terminal beat field: "End this piece when..."
-            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-                Text("END THIS PIECE WHEN…".uppercased())
-                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
-                    .tracking(1.5)
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                TextField("e.g. Jonah admits the lie. His father takes the letter.", text: $terminalBeat, axis: .vertical)
-                    .lineLimit(1...3)
-                    .textFieldStyle(.roundedBorder)
-                    .font(CathedralTheme.Typography.body(14))
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-            }
 
             if let errorMessage = generationError {
                 errorBanner(errorMessage)
@@ -881,7 +865,6 @@ struct RecipeCard: View {
                 lengthMode: selectedLengthMode,
                 selectedContainer: selectedContainer,
                 selectedPOV: selectedPOV,
-                terminalBeat: terminalBeat.isEmpty ? nil : terminalBeat,
                 selectedModelId: selectedModelId
             )
             costEstimate = estimate
@@ -966,9 +949,8 @@ struct RecipeCard: View {
                 lengthMode: mode,
                 selectedContainer: selectedContainer,
                 selectedPOV: selectedPOV,
-                terminalBeat: terminalBeat.isEmpty ? nil : terminalBeat,
                 selectedModelId: selectedModelId
-            }
+            )
             mergeGenerationDiagnostics(await GenerationRequestDiagnosticsStore.shared.latestVisibleText())
 
             gen.outputText = response.generatedText
