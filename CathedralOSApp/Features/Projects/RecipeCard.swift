@@ -40,8 +40,7 @@ struct RecipeCard: View {
     // Style picker: drives prompt content on the server. Auto = no length
     // target; Compact/Standard/Expansive = density hint. selectedLengthMode
     // is auto-derived from this for credit-cost purposes via creditLengthMode.
-    @State private var selectedContainer: Container = .defaultContainer
-    @State private var selectedPOV: POV = .defaultPOV
+    @State private var selectedStyle: GenerationStyle = .defaultStyle
     @State private var generationModels: [GenerationModelOption] = []
     @State private var showChapterConfirm = false
     // Phase 2: budget picker (UI-only). Defaults to medium scene which matches
@@ -426,8 +425,7 @@ struct RecipeCard: View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
             modelPicker
             budgetPicker
-            containerPicker
-            povPicker
+            stylePicker
 
             if let errorMessage = generationError {
                 errorBanner(errorMessage)
@@ -698,40 +696,23 @@ struct RecipeCard: View {
         return "\(cost) cr \u{00b7} \(preset.coverageHint)"
     }
 
-    private var containerPicker: some View {
+    private var stylePicker: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-            Text("CONTAINER".uppercased())
+            Text("STYLE".uppercased())
                 .font(CathedralTheme.Typography.label(10, weight: .semibold))
                 .tracking(1.5)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            Picker("Container", selection: $selectedContainer) {
-                ForEach(Container.allCases, id: \.self) { container in
-                    Text(container.displayName).tag(container)
+            Picker("Style", selection: $selectedStyle) {
+                ForEach(GenerationStyle.allCases, id: \.self) { style in
+                    Text(style.displayName).tag(style)
                 }
             }
-            .pickerStyle(.menu)
-            Text(selectedContainer.expectedRange)
-                .font(CathedralTheme.Typography.label(11, weight: .regular))
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            Text(selectedContainer.oneLineDescription)
-                .font(CathedralTheme.Typography.label(11, weight: .regular))
-                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-        }
-    }
-
-    private var povPicker: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-            Text("POV".uppercased())
-                .font(CathedralTheme.Typography.label(10, weight: .semibold))
-                .tracking(1.5)
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            Picker("POV", selection: $selectedPOV) {
-                ForEach(POV.allCases, id: \.self) { pov in
-                    Text(pov.displayName).tag(pov)
-                }
+            .pickerStyle(.segmented)
+            .onChange(of: selectedStyle) { _, newStyle in
+                // Keep length-mode-derived credit tier in sync with style.
+                selectedLengthMode = newStyle.creditLengthMode
             }
-            .pickerStyle(.menu)
-            Text(selectedPOV.oneLineDescription)
+            Text(selectedStyle.helperText)
                 .font(CathedralTheme.Typography.label(11, weight: .regular))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
         }
@@ -863,8 +844,6 @@ struct RecipeCard: View {
                 project: project,
                 pack: pack,
                 lengthMode: selectedLengthMode,
-                selectedContainer: selectedContainer,
-                selectedPOV: selectedPOV,
                 selectedModelId: selectedModelId
             )
             costEstimate = estimate
@@ -947,8 +926,6 @@ struct RecipeCard: View {
                 pack: pack,
                 requestedOutputType: .story,
                 lengthMode: mode,
-                selectedContainer: selectedContainer,
-                selectedPOV: selectedPOV,
                 selectedModelId: selectedModelId
             )
             mergeGenerationDiagnostics(await GenerationRequestDiagnosticsStore.shared.latestVisibleText())
