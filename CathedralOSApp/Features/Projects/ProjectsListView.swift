@@ -91,15 +91,11 @@ struct ProjectsListView: View {
     }
 
     private var recentOutputsList: some View {
-        VStack(spacing: 0) {
-            ForEach(topOutputs) { output in
-                recentOutputRow(output)
-                if output.id != topOutputs.last?.id {
-                    Divider()
-                }
-            }
+        ForEach(topOutputs) { output in
+            recentOutputRow(output)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
         }
-        .padding(.horizontal, CathedralTheme.Spacing.base)
     }
 
     private func recentOutputRow(_ output: GenerationOutput) -> some View {
@@ -147,25 +143,29 @@ struct ProjectsListView: View {
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            ScrollView {
-                VStack(spacing: CathedralTheme.Spacing.md) {
+            List {
+                Section {
                     welcomeSummary
                     modePicker
-                    Group {
-                        switch viewMode {
-                        case .generate:
-                            if dedupedProjects.isEmpty {
-                                emptyState
-                            } else {
-                                projectList
-                            }
-                        case .output:
-                            recentOutputsList
-                        }
-                    }
                 }
-                .padding(.bottom, CathedralTheme.Spacing.lg)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+
+                switch viewMode {
+                case .generate:
+                    if dedupedProjects.isEmpty {
+                        emptyState
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color.clear)
+                    } else {
+                        projectList
+                    }
+                case .output:
+                    recentOutputsList
+                }
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .navigationTitle("Projects")
             .navigationBarTitleDisplayMode(.large)
@@ -196,13 +196,6 @@ struct ProjectsListView: View {
                                 .foregroundStyle(CathedralTheme.Colors.accent)
                         }
 
-                        Button {
-                            NotificationCenter.default.post(name: Notification.Name("showWelcomeRequested"), object: nil)
-                        } label: {
-                            Image(systemName: "questionmark.circle")
-                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        }
-                        .accessibilityLabel("Show welcome")
 
                         Button { showAddProject = true } label: {
                             Image(systemName: "plus")
@@ -338,32 +331,27 @@ struct ProjectsListView: View {
     // MARK: Project List
 
     private var projectList: some View {
-        List {
-            ForEach(dedupedProjects) { project in
-                NavigationLink(value: project) {
-                    projectRow(project)
+        ForEach(dedupedProjects) { project in
+            NavigationLink(value: project) {
+                projectRow(project)
+            }
+            .listRowBackground(CathedralTheme.Colors.surface)
+            .listRowSeparatorTint(CathedralTheme.Colors.separator)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button(role: .destructive) {
+                    projectToDelete = project
+                } label: {
+                    Label("Delete", systemImage: "trash")
                 }
-                .listRowBackground(CathedralTheme.Colors.surface)
-                .listRowSeparatorTint(CathedralTheme.Colors.separator)
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) {
-                        projectToDelete = project
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    Button {
-                        renameText = project.name
-                        projectToRename = project
-                    } label: {
-                        Label("Rename", systemImage: "pencil")
-                    }
-                    .tint(CathedralTheme.Colors.accent)
+                Button {
+                    renameText = project.name
+                    projectToRename = project
+                } label: {
+                    Label("Rename", systemImage: "pencil")
                 }
+                .tint(CathedralTheme.Colors.accent)
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(CathedralTheme.Colors.background.ignoresSafeArea())
     }
 
     @ViewBuilder
