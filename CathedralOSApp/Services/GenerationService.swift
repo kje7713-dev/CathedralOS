@@ -39,6 +39,9 @@ protocol GenerationService {
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
+        selectedContainer: Container?,
+        selectedPOV: POV?,
+        terminalBeat: String?,
         selectedModelId: String?
     ) async throws -> GenerationResponse
 
@@ -52,6 +55,9 @@ protocol GenerationService {
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
+        selectedContainer: Container?,
+        selectedPOV: POV?,
+        terminalBeat: String?,
         selectedModelId: String?
     ) async throws -> GenerationResponse
 }
@@ -63,13 +69,19 @@ extension GenerationService {
         project: StoryProject,
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
+        lengthMode: GenerationLengthMode,
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil
     ) async throws -> GenerationResponse {
         try await generate(
             project: project,
             pack: pack,
             requestedOutputType: requestedOutputType,
             lengthMode: lengthMode,
+            selectedContainer: selectedContainer,
+            selectedPOV: selectedPOV,
+            terminalBeat: terminalBeat,
             selectedModelId: nil
         )
     }
@@ -82,28 +94,12 @@ extension GenerationService {
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
         selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
         throw GenerationServiceError.endpointNotConfigured
-    }
-
-    func generateAction(
-        action: String,
-        sourcePayloadJSON: String,
-        previousOutputText: String?,
-        parentGenerationID: UUID?,
-        requestedOutputType: GenerationOutputType,
-        lengthMode: GenerationLengthMode
-    ) async throws -> GenerationResponse {
-        try await generateAction(
-            action: action,
-            sourcePayloadJSON: sourcePayloadJSON,
-            previousOutputText: previousOutputText,
-            parentGenerationID: parentGenerationID,
-            requestedOutputType: requestedOutputType,
-            lengthMode: lengthMode,
-            selectedModelId: nil
-        )
     }
 }
 
@@ -129,6 +125,9 @@ final class StoryGenerationService: GenerationService {
         pack: PromptPack,
         requestedOutputType: GenerationOutputType = .story,
         lengthMode: GenerationLengthMode = .defaultMode,
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
         selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
 
@@ -148,6 +147,9 @@ final class StoryGenerationService: GenerationService {
             audienceNotes: project.audienceNotes,
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
+            container: selectedContainer?.rawValue,
+            pov: selectedPOV?.rawValue,
+            terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId
         )
@@ -162,6 +164,9 @@ final class StoryGenerationService: GenerationService {
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode = .defaultMode,
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
         selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
 
@@ -190,6 +195,9 @@ final class StoryGenerationService: GenerationService {
             audienceNotes: frozenPayload.project.audienceNotes,
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
+            container: selectedContainer?.rawValue,
+            pov: selectedPOV?.rawValue,
+            terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId,
             action: action,

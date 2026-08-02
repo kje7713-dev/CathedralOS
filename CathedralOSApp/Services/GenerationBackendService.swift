@@ -222,6 +222,9 @@ protocol GenerationBackendServiceProtocol {
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
+        selectedContainer: Container?,
+        selectedPOV: POV?,
+        terminalBeat: String?,
         selectedModelId: String?
     ) async throws -> GenerationResponse
 }
@@ -244,6 +247,9 @@ protocol GenerationCostEstimateServiceProtocol: AnyObject {
         project: StoryProject,
         pack: PromptPack,
         lengthMode: GenerationLengthMode,
+        selectedContainer: Container?,
+        selectedPOV: POV?,
+        terminalBeat: String?,
         selectedModelId: String?
     ) async throws -> GenerationCostEstimate
 }
@@ -278,6 +284,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         pack: PromptPack,
         requestedOutputType: GenerationOutputType = .story,
         lengthMode: GenerationLengthMode = .defaultMode,
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
         selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
         do {
@@ -303,6 +312,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             audienceNotes: project.audienceNotes,
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
+            container: selectedContainer?.rawValue,
+            pov: selectedPOV?.rawValue,
+            terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId
         )
@@ -316,7 +328,10 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         project: StoryProject,
         pack: PromptPack,
         lengthMode: GenerationLengthMode,
-        selectedModelId: String?
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
+        selectedModelId: String? = nil
     ) async throws -> GenerationCostEstimate {
         do {
             try await validateConfigAndAuth()
@@ -339,6 +354,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             audienceNotes: project.audienceNotes,
             requestedOutputType: GenerationOutputType.story.rawValue,
             generationLengthMode: lengthMode.rawValue,
+            container: selectedContainer?.rawValue,
+            pov: selectedPOV?.rawValue,
+            terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId,
             action: "estimate"
@@ -393,6 +411,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         parentGenerationID: UUID?,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode = .defaultMode,
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
         selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
         do {
@@ -428,6 +449,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             audienceNotes: frozenPayload.project.audienceNotes,
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
+            container: selectedContainer?.rawValue,
+            pov: selectedPOV?.rawValue,
+            terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId,
             action: action,
@@ -691,7 +715,10 @@ final class StubGenerationBackendService: GenerationBackendServiceProtocol, Gene
         pack: PromptPack,
         requestedOutputType: GenerationOutputType,
         lengthMode: GenerationLengthMode,
-        selectedModelId: String?
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
+        selectedModelId: String? = nil
     ) async throws -> GenerationResponse {
         throw GenerationBackendServiceError.notImplemented
     }
@@ -700,7 +727,10 @@ final class StubGenerationBackendService: GenerationBackendServiceProtocol, Gene
         project: StoryProject,
         pack: PromptPack,
         lengthMode: GenerationLengthMode,
-        selectedModelId: String?
+        selectedContainer: Container? = nil,
+        selectedPOV: POV? = nil,
+        terminalBeat: String? = nil,
+        selectedModelId: String? = nil
     ) async throws -> GenerationCostEstimate {
         throw GenerationBackendServiceError.notImplemented
     }

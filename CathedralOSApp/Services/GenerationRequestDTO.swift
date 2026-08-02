@@ -36,7 +36,22 @@ struct GenerationRequest: Codable {
     // MARK: Length / budget controls
     /// Raw value of `GenerationLengthMode`: "short" | "medium" | "long" | "chapter".
     let generationLengthMode: String
-    /// Style picker (replaces length-based density guidance in the prompt).
+    /// Output container: what size / shape the finished unit should be.
+    /// Drives whatItContains + naturalStoppingPoint in the prompt.
+    /// Optional for backwards compat — omitted => "scene".
+    let container: String?
+    /// Point of view: who narrates the scene. Basic English class fiction
+    /// craft. Optional for backwards compat — omitted => "thirdPersonLimited".
+    let pov: String?
+    /// Terminal beat: the final scene-level dramatic unit. The decisive action
+    /// plus enough immediate reaction to land the ending cleanly. Example:
+    /// "Jonah admits he lied. His father takes the letter, turns away, and
+    /// refuses to answer him." Lives on the generation request, not the recipe.
+    /// When absent, the model privately infers one inside the same call.
+    /// NEVER derived from Ending Instruction.
+    let terminalBeat: String?
+    /// @deprecated use container instead. Kept for backwards compat with
+    /// older iOS builds that still send style.
     /// Optional for backwards compat — omitted => "auto".
     let style: String?
     /// Approximate maximum output tokens for this request.
@@ -75,6 +90,9 @@ struct GenerationRequest: Codable {
         case audienceNotes
         case requestedOutputType
         case generationLengthMode
+        case container
+        case pov
+        case terminalBeat
         case style
         case approximateMaxOutputTokens = "outputBudget"
         case selectedModelId
@@ -97,6 +115,9 @@ struct GenerationRequest: Codable {
         audienceNotes: String,
         requestedOutputType: String,
         generationLengthMode: String = GenerationLengthMode.defaultMode.rawValue,
+        container: String? = nil,
+        pov: String? = nil,
+        terminalBeat: String? = nil,
         style: String? = nil,
         approximateMaxOutputTokens: Int = GenerationLengthMode.defaultMode.outputBudget,
         selectedModelId: String? = nil,
@@ -117,6 +138,9 @@ struct GenerationRequest: Codable {
         self.audienceNotes = audienceNotes
         self.requestedOutputType = requestedOutputType
         self.generationLengthMode = generationLengthMode
+        self.container = container
+        self.pov = pov
+        self.terminalBeat = terminalBeat
         self.style = style
         self.approximateMaxOutputTokens = approximateMaxOutputTokens
         self.selectedModelId = selectedModelId
