@@ -16,8 +16,8 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
     case story
     case cast
     case themes
-    case output
     case compile
+    case output
 
     var id: String { rawValue }
 
@@ -151,9 +151,8 @@ struct ProjectDetailView: View {
                         recipesSection
                         generationsSection
                     case .compile:
-                        compileGenerateCTA
                         recipesSection
-                        generationsSection
+                        compileGenerateCTA
                     }
                 }
             }
@@ -796,7 +795,6 @@ struct ProjectDetailView: View {
             } else {
                 VStack(spacing: CathedralTheme.Spacing.sm) {
                     modelPicker
-                    budgetPicker
                     containerPicker
                     povPicker
 
@@ -839,8 +837,6 @@ struct ProjectDetailView: View {
                         }
                     }
                     .disabled(isGenerating || isEstimating || costEstimate?.allowed == false)
-
-                    creditEstimateRow
 
                     Text("Sends this project's first recipe to your generation backend. Results appear under Generated Outputs.")
                         .font(CathedralTheme.Typography.caption())
