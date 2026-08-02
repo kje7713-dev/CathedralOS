@@ -148,7 +148,6 @@ struct ProjectDetailView: View {
                         aftertastesSection
                         themeQuestionsSection
                     case .output:
-                        recipesSection
                         generationsSection
                     case .compile:
                         recipesSection
@@ -563,7 +562,8 @@ struct ProjectDetailView: View {
                     onDelete: {
                         modelContext.delete(pack)
                         try? modelContext.save()
-                    }
+                    },
+                    showOutputs: false
                 )
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)

@@ -18,6 +18,10 @@ struct RecipeCard: View {
     let pack: PromptPack
     let onEdit: () -> Void
     let onDelete: () -> Void
+    /// Show the "Outputs from this recipe" section. Default true. Pass false
+    /// when rendering on the Compile tab (where only the recipe info matters,
+    /// not the historical outputs).
+    var showOutputs: Bool = true
 
     // Display state only — generation state moved up to ProjectDetailView.
     @State private var viewMode = RecipeCardViewMode.prompt
@@ -32,12 +36,14 @@ struct RecipeCard: View {
         project: StoryProject,
         pack: PromptPack,
         onEdit: @escaping () -> Void,
-        onDelete: @escaping () -> Void
+        onDelete: @escaping () -> Void,
+        showOutputs: Bool = true
     ) {
         self.project = project
         self.pack = pack
         self.onEdit = onEdit
         self.onDelete = onDelete
+        self.showOutputs = showOutputs
     }
 
     private var exportPayload: PromptPackExportPayload {
@@ -74,7 +80,9 @@ struct RecipeCard: View {
 
             promptJSONSection
 
-            outputsSection
+            if showOutputs {
+                outputsSection
+            }
         }
         .padding(CathedralTheme.Spacing.base)
         .background(CathedralTheme.Colors.surface)
