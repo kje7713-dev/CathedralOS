@@ -194,6 +194,10 @@ interface GenerateStoryRequest {
   readingLevel?: string;
   contentRating?: string;
   audienceNotes?: string;
+  // Terminal beat: the specific dramatic action + immediate reaction that
+  // closes the scene. Optional. When set, rendered as the LAST input section
+  // in the user message so the model sees it right before the Writing Task.
+  terminalBeat?: string;
   localGenerationID?: string;
 }
 
@@ -677,6 +681,10 @@ function buildPrompt(req: {
   readingLevel?: string;
   contentRating?: string;
   audienceNotes?: string;
+  // Terminal beat: optional concrete endpoint the model should land on.
+  // When set, rendered in the user message as the last input section
+  // before the Writing Task. When absent, the model privately infers one.
+  terminalBeat?: string;
   projectName: string;
   promptPackName: string;
 }): { craft: string; context: string } {
@@ -916,6 +924,16 @@ Structural limits:
   // and how (POV). The hard cap is NOT mentioned — the model focuses on
   // the container’s natural stopping point, not a token count.
   const cfg = containerConfig[req.container];
+  // Terminal beat — optional concrete endpoint, rendered as the LAST input
+  // section in the user message so the model sees it right before the
+  // Writing Task. Strongest anchor position.
+  if (nonEmpty(req.terminalBeat)) {
+    contextLines.push(
+      "## Terminal Beat",
+      `End the scene at this exact moment: ${req.terminalBeat}`,
+      "",
+    );
+  }
   contextLines.push(
     "## Writing Task",
     actionTask[req.generationAction],
@@ -1307,6 +1325,7 @@ async function handler(
       readingLevel: body.readingLevel,
       contentRating: body.contentRating,
       audienceNotes: body.audienceNotes,
+      terminalBeat: body.terminalBeat,
       projectName,
       promptPackName,
     });
@@ -1393,6 +1412,7 @@ async function handler(
     readingLevel: body.readingLevel,
     contentRating: body.contentRating,
     audienceNotes: body.audienceNotes,
+    terminalBeat: body.terminalBeat,
     projectName,
     promptPackName,
   });
