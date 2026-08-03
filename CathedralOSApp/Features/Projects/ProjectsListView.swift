@@ -211,7 +211,7 @@ struct ProjectsListView: View {
                 ProjectDetailView(project: project)
             }
             .navigationDestination(for: GenerationOutput.self) { output in
-                GenerationOutputDetailView(output: output)
+                GenerationOutputDetailView(output: output, hidePager: true)
             }
         }
         .tint(CathedralTheme.Colors.accent)

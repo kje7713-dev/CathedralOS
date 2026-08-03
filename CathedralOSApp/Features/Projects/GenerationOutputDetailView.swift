@@ -100,6 +100,13 @@ struct GenerationOutputDetailView: View {
     /// navigation chrome so the pager renders cleanly without recursion.
     var isInnerPage: Bool = false
 
+    /// When true, force a single-output scroll view even if siblings exist.
+    /// Used by list-tap navigators (Home / Projects / Project > Output tab)
+    /// so tapping a row lands on just that row, not a horizontal pager of
+    /// every sibling from the same recipe. RecipeCard keeps the pager on by
+    /// default since swiping siblings is the natural UX there.
+    private let hidePager: Bool
+
     init(output: GenerationOutput,
          generationService: GenerationService = StoryGenerationService(),
          sharingService: PublicSharingService = BackendPublicSharingService(
@@ -109,7 +116,8 @@ struct GenerationOutputDetailView: View {
          authService: any AuthService = BackendAuthService.shared,
          outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
          outputDeletionService: any GenerationOutputDeletionServiceProtocol = GenerationOutputDeletionService.shared,
-         isInnerPage: Bool = false) {
+         isInnerPage: Bool = false,
+         hidePager: Bool = false) {
         self._output = Bindable(output)
         self.generationService = generationService
         self.sharingService = sharingService
@@ -118,6 +126,7 @@ struct GenerationOutputDetailView: View {
         self.outputSyncService = outputSyncService
         self.outputDeletionService = outputDeletionService
         self.isInnerPage = isInnerPage
+        self.hidePager = hidePager
     }
 
     /// Sibling outputs from the same recipe (same sourcePromptPackID),
@@ -182,8 +191,11 @@ struct GenerationOutputDetailView: View {
 
     var body: some View {
         // Pager when this output has siblings in the same recipe; otherwise
-        // the plain single-output scroll view.
-        if !isInnerPage && siblingOutputs.count > 1 {
+        // the plain single-output scroll view. The pager is suppressed when
+        // the caller navigated from a single-row context (hidePager == true)
+        // so tapping a row lands on just that row, not a horizontal pager of
+        // every sibling from the same recipe.
+        if !isInnerPage && !hidePager && siblingOutputs.count > 1 {
             pagerContent
         } else {
             scrollContent
