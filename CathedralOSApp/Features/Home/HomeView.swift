@@ -183,7 +183,7 @@ struct HomeView: View {
             }
         }
         .navigationDestination(for: GenerationOutput.self) { output in
-            GenerationOutputDetailView(output: output)
+            GenerationOutputDetailView(output: output, hidePager: true)
         }
     }
 

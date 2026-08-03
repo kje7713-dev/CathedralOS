@@ -219,7 +219,7 @@ struct ProjectDetailView: View {
             PromptPackBuilderView(project: project, pack: p)
         }
         .navigationDestination(item: $generationToView) { g in
-            GenerationOutputDetailView(output: g)
+            GenerationOutputDetailView(output: g, hidePager: true)
         }
         .alert("Generate Chapter?", isPresented: $showChapterConfirm) {
             Button("Cancel", role: .cancel) {}
