@@ -330,28 +330,33 @@ struct CathedralItemRow: View {
     }
 
     var body: some View {
-        HStack(spacing: CathedralTheme.Spacing.sm) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(CathedralTheme.Typography.body(15))
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                if let subtitle, !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+        // Wrap the row in a Button instead of using .onTapGesture. .onTapGesture
+        // inside a List row is unreliable (the List intercepts taps); Button is
+        // the canonical SwiftUI pattern for tappable rows in a List. .buttonStyle(.plain)
+        // strips default Button chrome so the row looks identical to before.
+        Button(action: onTap) {
+            HStack(spacing: CathedralTheme.Spacing.sm) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(CathedralTheme.Typography.body(15))
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
+                }
+                Spacer()
+                if isSensitive {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                 }
             }
-            Spacer()
-            if isSensitive {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-            }
+            .padding(.vertical, CathedralTheme.Spacing.sm)
+            .padding(.horizontal, CathedralTheme.Spacing.base)
         }
-        .padding(.vertical, CathedralTheme.Spacing.sm)
-        .padding(.horizontal, CathedralTheme.Spacing.base)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
+        .buttonStyle(.plain)
     }
 }
 
