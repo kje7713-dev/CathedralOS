@@ -953,9 +953,6 @@ struct ProjectDetailView: View {
                 }
             }
             .pickerStyle(.menu)
-            Text(selectedContainer.expectedRange)
-                .font(CathedralTheme.Typography.label(11, weight: .regular))
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
             Text(selectedContainer.oneLineDescription)
                 .font(CathedralTheme.Typography.label(11, weight: .regular))
                 .foregroundStyle(CathedralTheme.Colors.tertiaryText)
