@@ -670,6 +670,25 @@ type Container =
 // Point of view: who narrates the scene.
 type POV = "firstPerson" | "secondPerson" | "thirdPersonLimited" | "thirdPersonOmniscient";
 
+// Pre-flight hard cap lookup for credit estimation. Mirrors the hardCap
+// values in containerConfig inside buildPrompt — keep in sync if those
+// values change. Used by the Phase 2 pre-flight cost check.
+const CONTAINER_HARD_CAPS: Record<Container, number> = {
+  modelDecides: 8000,
+  beat: 350,
+  moment: 700,
+  vignette: 1200,
+  microScene: 1200,
+  scene: 2300,
+  developedScene: 4000,
+  setPiece: 6500,
+  sceneSequence: 9000,
+  shortStory: 10000,
+  chapter: 11000,
+  episode: 18000,
+  novella: 60000,
+};
+
 function buildPrompt(req: {
   sourcePayloadJSON: unknown;
   generationAction: GenerationAction;
@@ -1338,8 +1357,10 @@ async function handler(
       promptPackName,
     });
     const estimatedInputTokens = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
-    const estimatedCredits = computeGenerationCreditCharge(
-      generationLengthMode,
+    // Phase 2: max possible credit cost = (estimated input + container hard cap) × rates
+    const estimatedCredits = computeMaxCreditCharge(
+      estimatedInputTokens,
+      CONTAINER_HARD_CAPS[container],
       selectedModel,
     );
     const entitlement = await store.loadOrDefault(userId);
@@ -1424,8 +1445,11 @@ async function handler(
     projectName,
     promptPackName,
   });
-  const requiredCredits = computeGenerationCreditCharge(
-    generationLengthMode,
+  // Phase 2: max possible credit cost for the pre-flight check
+  const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
+  const requiredCredits = computeMaxCreditCharge(
+    estimatedInputTokensForCheck,
+    CONTAINER_HARD_CAPS[container],
     selectedModel,
   );
   const entitlement = await store.loadOrDefault(userId);
@@ -1675,8 +1699,12 @@ async function handler(
   // credit_revenue_usd on the row (Phase 1 telemetry).
   // -------------------------------------------------------------------------
 
-  const actualCharge = computeGenerationCreditCharge(
-    generationLengthMode,
+  // Phase 2: actual cost based on real input + output tokens. No floor.
+  const inputTokens = llmResult.inputTokens ?? 0;
+  const outputTokens = llmResult.outputTokens ?? 0;
+  const actualCharge = computeActualCreditCharge(
+    inputTokens,
+    outputTokens,
     selectedModel,
   );
   const creditRevenueUsd = actualCharge * 0.05;

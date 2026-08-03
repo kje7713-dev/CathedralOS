@@ -124,8 +124,50 @@ export function computeGenerationCreditCharge(
   lengthMode: LengthMode,
   model: GenerationModel,
 ): number {
+  // Phase 1 (legacy): fixed charge per length mode × model rate, with a
+  // per-model minimum floor. Kept for backwards compat; new code should use
+  // computeMaxCreditCharge (pre-flight) and computeActualCreditCharge
+  // (post-flight) instead.
   const baseLengthCost = getCreditCost(lengthMode);
   const modelMultiplier = model.output_credit_rate;
   const raw = baseLengthCost * modelMultiplier;
   return Math.max(model.minimum_charge_credits, Math.ceil(raw));
+}
+
+/**
+ * Phase 2: max possible credit charge for a generation.
+ * Used by the pre-flight check to verify the user has enough credits before
+ * invoking the LLM. No minimum floor — OpenAI has no minimum per request,
+ * so we don't either (per policy).
+ *
+ * @param estimatedInputTokens - estimated input tokens (recipe + system msg)
+ * @param containerHardCap - the output hard cap for the chosen container
+ * @param model - the selected generation model
+ */
+export function computeMaxCreditCharge(
+  estimatedInputTokens: number,
+  containerHardCap: number,
+  model: GenerationModel,
+): number {
+  const inputCost = (estimatedInputTokens * model.input_credit_rate) / 1000;
+  const outputCost = (containerHardCap * model.output_credit_rate) / 1000;
+  return Math.ceil(inputCost + outputCost);
+}
+
+/**
+ * Phase 2: actual credit charge for a completed generation.
+ * Uses real input + output tokens from the LLM response. No minimum floor.
+ *
+ * @param inputTokens - actual input tokens used (from LLM response)
+ * @param outputTokens - actual output tokens produced (from LLM response)
+ * @param model - the selected generation model
+ */
+export function computeActualCreditCharge(
+  inputTokens: number,
+  outputTokens: number,
+  model: GenerationModel,
+): number {
+  const inputCost = (inputTokens * model.input_credit_rate) / 1000;
+  const outputCost = (outputTokens * model.output_credit_rate) / 1000;
+  return Math.ceil(inputCost + outputCost);
 }

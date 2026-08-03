@@ -1008,7 +1008,7 @@ struct ProjectDetailView: View {
                             : CathedralTheme.Colors.destructive)
                     if estimate.allowed {
                         let c = estimate.estimatedCredits
-                        Text("Estimated cost: \(c) \(c == 1 ? "credit" : "credits")")
+                        Text("Up to: \(c) \(c == 1 ? "credit" : "credits")")
                             .font(CathedralTheme.Typography.label(11, weight: .regular))
                             .foregroundStyle(CathedralTheme.Colors.secondaryText)
                         Spacer()
