@@ -620,8 +620,8 @@ private enum ProjectsViewMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .generate: return "Generate"
-        case .output:   return "Output"
+        case .generate: return "Projects"
+        case .output:   return "Outputs"
         }
     }
 }
