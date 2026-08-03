@@ -887,8 +887,16 @@ Structural limits:
 
   // Craft directives — sent as the SYSTEM message. Persistent across
   // requests; the model weighs system instructions higher than user.
+  //
+  // Container instructions live here (moved from the user message in this
+  // commit). The model weighs structural limits much more heavily when they
+  // appear in the system message vs the user message.
+  const cfg = containerConfig[req.container];
   const craftLines: string[] = [
     "You are a creative writing assistant helping authors craft compelling story content.",
+    "",
+    "## Container (CRITICAL SHAPE GUIDANCE)",
+    containerInstructions(cfg.name, cfg.whatItContains, cfg.naturalStoppingPoint, cfg.expectedRange),
     "",
   ];
 
@@ -920,10 +928,11 @@ Structural limits:
   }
 
   // Writing Task — per-request specifics, lives in the user message.
-  // Container-driven: tells the model what shape to write, when to end,
-  // and how (POV). The hard cap is NOT mentioned — the model focuses on
-  // the container’s natural stopping point, not a token count.
-  const cfg = containerConfig[req.container];
+  // Container-driven shape lives in the SYSTEM message (computed above and
+  // pushed into craftLines) — the model weights system > user for structural
+  // limits, so the container guidance now anchors in the system message.
+  // The user message just carries the per-request specifics (action,
+  // narrative shape, POV).
   // Terminal beat — optional concrete endpoint, rendered as the LAST input
   // section in the user message so the model sees it right before the
   // Writing Task. Strongest anchor position.
@@ -937,7 +946,6 @@ Structural limits:
   contextLines.push(
     "## Writing Task",
     actionTask[req.generationAction],
-    containerInstructions(cfg.name, cfg.whatItContains, cfg.naturalStoppingPoint, cfg.expectedRange),
     `Narrative shape: ${inferredShape}.`,
     `POV: ${povInstruction(req.pov)}`,
     "",
