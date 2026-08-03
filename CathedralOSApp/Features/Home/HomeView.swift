@@ -163,7 +163,10 @@ struct HomeView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(recentOutputsTop) { output in
-                        outputRow(output)
+                        NavigationLink(value: output) {
+                            outputRow(output)
+                        }
+                        .buttonStyle(.plain)
                         if output.id != recentOutputsTop.last?.id {
                             Divider().background(CathedralTheme.Colors.border)
                         }
@@ -178,6 +181,9 @@ struct HomeView: View {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
+        }
+        .navigationDestination(for: GenerationOutput.self) { output in
+            GenerationOutputDetailView(output: output)
         }
     }
 
