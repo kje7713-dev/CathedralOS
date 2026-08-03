@@ -490,6 +490,23 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
       if (c.selfDeceptions?.length)  out.push(`Self-deceptions: ${join(c.selfDeceptions)}`);
       if (c.identityConflicts?.length) out.push(`Identity conflicts: ${join(c.identityConflicts)}`);
       if (nonEmpty(c.instructionBias)) out.push(`Character instruction: ${c.instructionBias}`);
+    // Fields captured by PromptPackExportBuilder.build() but previously dropped
+    // by buildStructuredPromptBody. Each line uses nonEmpty() / array-length
+    // checks so empty values cost nothing in tokens.
+    if (c.preferences?.length)       out.push(`Preferences: ${join(c.preferences)}`);
+    if (c.resources?.length)         out.push(`Resources: ${join(c.resources)}`);
+    if (c.failurePatterns?.length)   out.push(`Failure patterns: ${join(c.failurePatterns)}`);
+    if (c.needs?.length)             out.push(`Needs: ${join(c.needs)}`);
+    if (c.contradictions?.length)   out.push(`Contradictions: ${join(c.contradictions)}`);
+    if (c.obsessions?.length)       out.push(`Obsessions: ${join(c.obsessions)}`);
+    if (c.attachments?.length)      out.push(`Attachments: ${join(c.attachments)}`);
+    if (nonEmpty(c.notes))           out.push(`Notes: ${c.notes}`);
+    if (c.virtues?.length)           out.push(`Virtues: ${join(c.virtues)}`);
+    if (nonEmpty(c.publicMask))      out.push(`Public mask: ${c.publicMask}`);
+    if (nonEmpty(c.privateLogic))    out.push(`Private logic: ${c.privateLogic}`);
+    if (nonEmpty(c.speechStyle))     out.push(`Speech style: ${c.speechStyle}`);
+    if (nonEmpty(c.reputation))      out.push(`Reputation: ${c.reputation}`);
+    if (nonEmpty(c.status))          out.push(`Status: ${c.status}`);
     }
     out.push("");
   }
@@ -506,6 +523,17 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
       if (nonEmpty(r.whatEachWantsFromTheOther)) out.push(`What each wants: ${r.whatEachWantsFromTheOther}`);
       if (nonEmpty(r.whatWouldBreakIt)) out.push(`What would break it: ${r.whatWouldBreakIt}`);
       if (nonEmpty(r.whatWouldTransformIt)) out.push(`What would transform it: ${r.whatWouldTransformIt}`);
+    // Fields captured by PromptPackExportBuilder.build() but previously dropped
+    // by buildStructuredPromptBody.
+    if (nonEmpty(r.loyalty))         out.push(`Loyalty: ${r.loyalty}`);
+    if (nonEmpty(r.fear))            out.push(`Fear: ${r.fear}`);
+    if (nonEmpty(r.desire))          out.push(`Desire: ${r.desire}`);
+    if (nonEmpty(r.dependency))      out.push(`Dependency: ${r.dependency}`);
+    if (nonEmpty(r.history))         out.push(`History: ${r.history}`);
+    if (nonEmpty(r.powerBalance))    out.push(`Power balance: ${r.powerBalance}`);
+    if (nonEmpty(r.resentment))      out.push(`Resentment: ${r.resentment}`);
+    if (nonEmpty(r.misunderstanding)) out.push(`Misunderstanding: ${r.misunderstanding}`);
+    if (nonEmpty(r.notes))           out.push(`Notes: ${r.notes}`);
     }
     out.push("");
   }
@@ -519,6 +547,9 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
       if (nonEmpty(t.coreTension))   out.push(`  Core tension: ${t.coreTension}`);
       if (nonEmpty(t.moralFaultLine)) out.push(`  Moral fault line: ${t.moralFaultLine}`);
       if (nonEmpty(t.endingTruth))   out.push(`  Ending truth: ${t.endingTruth}`);
+    // Fields captured by PromptPackExportBuilder.build() but previously dropped.
+    if (nonEmpty(t.valueConflict))   out.push(`  Value conflict: ${t.valueConflict}`);
+    if (nonEmpty(t.notes))           out.push(`  Notes: ${t.notes}`);
     }
     out.push("");
   }
@@ -529,6 +560,10 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
     out.push("## Motifs");
     for (const m of motifs) {
       out.push(`- ${m.label ?? ""}${nonEmpty(m.meaning) ? ": " + m.meaning : ""}`);
+      // Fields captured by PromptPackExportBuilder.build() but previously dropped.
+      if (nonEmpty(m.category)) out.push(`  Category: ${m.category}`);
+      if (m.examples?.length)   out.push(`  Examples: ${join(m.examples)}`);
+      if (nonEmpty(m.notes))    out.push(`  Notes: ${m.notes}`);
     }
     out.push("");
   }
