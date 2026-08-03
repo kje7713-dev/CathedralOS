@@ -99,19 +99,22 @@ struct ProjectsListView: View {
     }
 
     private func recentOutputRow(_ output: GenerationOutput) -> some View {
-        HStack(alignment: .center, spacing: CathedralTheme.Spacing.sm) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(output.title.isEmpty ? "Untitled" : output.title)
-                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                Text(subtitle(for: output))
-                    .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+        NavigationLink(value: output) {
+            HStack(alignment: .center, spacing: CathedralTheme.Spacing.sm) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(output.title.isEmpty ? "Untitled" : output.title)
+                        .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    Text(subtitle(for: output))
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                Spacer()
+                statusPill(for: output)
             }
-            Spacer()
-            statusPill(for: output)
+            .padding(.vertical, CathedralTheme.Spacing.sm)
         }
-        .padding(.vertical, CathedralTheme.Spacing.sm)
+        .buttonStyle(.plain)
     }
 
     private func subtitle(for output: GenerationOutput) -> String {
@@ -206,6 +209,9 @@ struct ProjectsListView: View {
             }
             .navigationDestination(for: StoryProject.self) { project in
                 ProjectDetailView(project: project)
+            }
+            .navigationDestination(for: GenerationOutput.self) { output in
+                GenerationOutputDetailView(output: output)
             }
         }
         .tint(CathedralTheme.Colors.accent)
