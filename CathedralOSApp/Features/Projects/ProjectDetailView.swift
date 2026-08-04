@@ -16,6 +16,9 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
     case story
     case cast
     case themes
+    // outline = novel-building Story Arc + Outline Sections (Phase 0/1,
+    // see docs/novel-building.md).
+    case outline
     case compile
     case output
 
@@ -26,6 +29,7 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
         case .story: return "Story"
         case .cast: return "Cast"
         case .themes: return "Themes"
+        case .outline: return "Outline"
         case .output: return "Output"
         case .compile: return "Compile"
         }
@@ -131,6 +135,7 @@ struct ProjectDetailView: View {
                     themeQuestionsSection
                     motifsSection
                     recipesSection
+                    OutlineTabView(project: project)
                     generationsSection
                 } else {
                     switch storyEditorMode {
@@ -147,6 +152,8 @@ struct ProjectDetailView: View {
                         sparksSection
                         aftertastesSection
                         themeQuestionsSection
+                    case .outline:
+                        OutlineTabView(project: project)
                     case .output:
                         generationsSection
                     case .compile:

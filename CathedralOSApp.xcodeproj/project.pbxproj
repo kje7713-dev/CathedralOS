@@ -164,6 +164,10 @@
 		A000000000000000000000B4 /* StoryArcBeat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A000000000000000000000B3 /* StoryArcBeat.swift */; };
 		A000000000000000000000B6 /* Outline.swift in Sources */ = {isa = PBXBuildFile; fileRef = A000000000000000000000B5 /* Outline.swift */; };
 		A000000000000000000000B8 /* OutlineSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A000000000000000000000B7 /* OutlineSection.swift */; };
+		C000000000000000000000B2 /* StoryArcTemplate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C000000000000000000000B1 /* StoryArcTemplate.swift */; };
+		C000000000000000000000B4 /* OutlineTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C000000000000000000000B3 /* OutlineTabView.swift */; };
+		C000000000000000000000B6 /* StoryArcRegionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C000000000000000000000B5 /* StoryArcRegionView.swift */; };
+		C000000000000000000000B8 /* OutlineSectionsRegionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C000000000000000000000B7 /* OutlineSectionsRegionView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -337,6 +341,10 @@
 		A000000000000000000000B3 /* StoryArcBeat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcBeat.swift; sourceTree = "<group>"; };
 		A000000000000000000000B5 /* Outline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Outline.swift; sourceTree = "<group>"; };
 		A000000000000000000000B7 /* OutlineSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSection.swift; sourceTree = "<group>"; };
+		C000000000000000000000B1 /* StoryArcTemplate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcTemplate.swift; sourceTree = "<group>"; };
+		C000000000000000000000B3 /* OutlineTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineTabView.swift; sourceTree = "<group>"; };
+		C000000000000000000000B5 /* StoryArcRegionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcRegionView.swift; sourceTree = "<group>"; };
+		C000000000000000000000B7 /* OutlineSectionsRegionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSectionsRegionView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -488,6 +496,7 @@
 				A000000000000000000000B3 /* StoryArcBeat.swift */,
 				A000000000000000000000B5 /* Outline.swift */,
 				A000000000000000000000B7 /* OutlineSection.swift */,
+				C000000000000000000000B1 /* StoryArcTemplate.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -653,6 +662,9 @@
 				000000000000000000000142 /* SharedOutputsView.swift */,
 				000000000000000000000144 /* SharedOutputDetailView.swift */,
 				000000000000000000000FF0 /* RecipeCard.swift */,
+				C000000000000000000000B3 /* OutlineTabView.swift */,
+				C000000000000000000000B5 /* StoryArcRegionView.swift */,
+				C000000000000000000000B7 /* OutlineSectionsRegionView.swift */,
 			);
 			path = Projects;
 			sourceTree = "<group>";
@@ -904,6 +916,10 @@
 				A000000000000000000000B4 /* StoryArcBeat.swift in Sources */,
 				A000000000000000000000B6 /* Outline.swift in Sources */,
 				A000000000000000000000B8 /* OutlineSection.swift in Sources */,
+				C000000000000000000000B2 /* StoryArcTemplate.swift in Sources */,
+				C000000000000000000000B4 /* OutlineTabView.swift in Sources */,
+				C000000000000000000000B6 /* StoryArcRegionView.swift in Sources */,
+				C000000000000000000000B8 /* OutlineSectionsRegionView.swift in Sources */,
 
 			);
 			runOnlyForDeploymentPostprocessing = 0;
