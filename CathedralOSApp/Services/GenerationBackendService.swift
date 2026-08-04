@@ -397,9 +397,17 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             throw GenerationBackendServiceError.networkError(error)
         }
 
+        // TEMP DEBUG: log raw estimate response + underlying JSONDecoder error.
+        // PR #263 fixed estimatedCredits Int→Double but the parse error persisted.
+        // We need to see the actual response shape to find the remaining mismatch.
+        // Remove once we identify the failing field.
+        if let jsonString = String(data: data, encoding: .utf8) {
+            NSLog("[ESTIMATE-DEBUG] raw response: %@", jsonString)
+        }
         do {
             return try JSONDecoder().decode(GenerationCostEstimate.self, from: data)
         } catch {
+            NSLog("[ESTIMATE-DEBUG] decode failed: %@", String(describing: error))
             throw GenerationBackendServiceError.decodingError(error)
         }
     }
