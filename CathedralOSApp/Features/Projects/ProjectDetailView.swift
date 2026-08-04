@@ -880,8 +880,6 @@ struct ProjectDetailView: View {
                 if let selectedModel {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(selectedModel.description ?? "No description.")
-                        Text("Relative cost: \(selectedModel.relativeCostLabel)")
-                        Text("Minimum: \(selectedModel.minimumChargeCredits) \(selectedModel.minimumChargeCredits == 1 ? "credit" : "credits")")
                     }
                     .font(CathedralTheme.Typography.caption())
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
@@ -1010,7 +1008,7 @@ struct ProjectDetailView: View {
                             : CathedralTheme.Colors.destructive)
                     if estimate.allowed {
                         let c = estimate.estimatedCredits
-                        Text("Up to: \(c) \(c == 1 ? "credit" : "credits")")
+                        Text("Up to: \(c) \(c <= 1 ? "credit" : "credits")")
                             .font(CathedralTheme.Typography.label(11, weight: .regular))
                             .foregroundStyle(CathedralTheme.Colors.secondaryText)
                         Spacer()
@@ -1020,7 +1018,7 @@ struct ProjectDetailView: View {
                     } else {
                         let needed = estimate.estimatedCredits
                         let have = estimate.availableCredits
-                        Text("Need \(needed) \(needed == 1 ? "credit" : "credits"), you have \(have)")
+                        Text("Need \(needed) \(needed <= 1 ? "credit" : "credits"), you have \(have)")
                             .font(CathedralTheme.Typography.label(11, weight: .regular))
                             .foregroundStyle(CathedralTheme.Colors.destructive)
                     }
