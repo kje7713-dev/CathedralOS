@@ -160,6 +160,10 @@
 		0000000000000000000001B0 /* TestSupabaseConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001B1 /* TestSupabaseConfiguration.swift */; };
 		000000000000000000000FF1 /* RecipeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000FF0 /* RecipeCard.swift */; };
 		000000000000000000000FF3 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000FF2 /* HomeView.swift */; };
+		A000000000000000000000B2 /* StoryArc.swift in Sources */ = {isa = PBXBuildFile; fileRef = A000000000000000000000B1 /* StoryArc.swift */; };
+		A000000000000000000000B4 /* StoryArcBeat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A000000000000000000000B3 /* StoryArcBeat.swift */; };
+		A000000000000000000000B6 /* Outline.swift in Sources */ = {isa = PBXBuildFile; fileRef = A000000000000000000000B5 /* Outline.swift */; };
+		A000000000000000000000B8 /* OutlineSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A000000000000000000000B7 /* OutlineSection.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -329,6 +333,10 @@
 		0000000000000000000001AC /* AuthSessionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthSessionResolver.swift; sourceTree = "<group>"; };
 		000000000000000000000FF0 /* RecipeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeCard.swift; sourceTree = "<group>"; };
 		000000000000000000000FF2 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		A000000000000000000000B1 /* StoryArc.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArc.swift; sourceTree = "<group>"; };
+		A000000000000000000000B3 /* StoryArcBeat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcBeat.swift; sourceTree = "<group>"; };
+		A000000000000000000000B5 /* Outline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Outline.swift; sourceTree = "<group>"; };
+		A000000000000000000000B7 /* OutlineSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSection.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -476,6 +484,10 @@
 				000000000000000000000134 /* GenerationUsageEvent.swift */,
 				00000000000000000000017D /* GenerationCreditState.swift */,
 				000000000000000000000183 /* StoreKitEntitlementModel.swift */,
+				A000000000000000000000B1 /* StoryArc.swift */,
+				A000000000000000000000B3 /* StoryArcBeat.swift */,
+				A000000000000000000000B5 /* Outline.swift */,
+				A000000000000000000000B7 /* OutlineSection.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -888,6 +900,10 @@
 				0000000000000000000001AD /* AuthSessionResolver.swift in Sources */,
 				000000000000000000000198 /* DiagnosticsView.swift in Sources */,
 				000000000000000000000FF1 /* RecipeCard.swift in Sources */,				000000000000000000000FF3 /* HomeView.swift in Sources */,
+				A000000000000000000000B2 /* StoryArc.swift in Sources */,
+				A000000000000000000000B4 /* StoryArcBeat.swift in Sources */,
+				A000000000000000000000B6 /* Outline.swift in Sources */,
+				A000000000000000000000B8 /* OutlineSection.swift in Sources */,
 
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -936,6 +952,7 @@
 				00000000000000000000019A /* DiagnosticsTests.swift in Sources */,
 				0000000000000000000001A4 /* ProjectCloudSyncTests.swift in Sources */,
 				0000000000000000000001B0 /* TestSupabaseConfiguration.swift in Sources */,
+
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

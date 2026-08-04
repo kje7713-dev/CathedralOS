@@ -34,6 +34,11 @@ class StoryProject {
     var motifs: [Motif]
     @Relationship(deleteRule: .cascade, inverse: \GenerationOutput.project)
     var generations: [GenerationOutput]
+    // Novel-building (Phase 0/1, see docs/novel-building.md)
+    @Relationship(deleteRule: .cascade, inverse: \StoryArc.project)
+    var storyArcs: [StoryArc]
+    @Relationship(deleteRule: .cascade, inverse: \Outline.project)
+    var outlines: [Outline]
 
     init(name: String = "My Story") {
         self.id = UUID()
@@ -53,6 +58,8 @@ class StoryProject {
         self.themeQuestions = []
         self.motifs = []
         self.generations = []
+        self.storyArcs = []
+        self.outlines = []
     }
 
     var stableLineageID: UUID { lineageID ?? id }
