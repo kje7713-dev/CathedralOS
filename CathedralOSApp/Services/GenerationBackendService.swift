@@ -105,6 +105,11 @@ enum GenerationBackendServiceError: Error, LocalizedError {
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
     case decodingError(Error)
+    /// Same as `decodingError` but carries the raw response body so the caller can
+    /// surface it on-screen (Kevin only has a phone — no Console.app or Xcode access).
+    /// Thrown by the estimate path so the user can screenshot the raw JSON when the
+    /// decode fails and paste it back to the assistant for diagnosis.
+    case decodingErrorWithBody(Error, rawBody: String)
     /// The backend rejected the request because the user has insufficient generation credits.
     /// `required` is the credit cost for the requested generation; `available` is the user's
     /// current balance as reported by the backend.
@@ -146,6 +151,8 @@ enum GenerationBackendServiceError: Error, LocalizedError {
             return base
         case .decodingError(let underlying):
             return "Could not parse server response: \(underlying.localizedDescription)"
+        case .decodingErrorWithBody(let underlying, let rawBody):
+            return "Could not parse server response: \(underlying.localizedDescription)\n\nRaw response body:\n\(rawBody)"
         case .insufficientCredits(let required, let available):
             return "Not enough credits to generate. Required: \(required), available: \(available)."
         case .rateLimited(let retryAfter):
@@ -178,7 +185,7 @@ enum GenerationBackendServiceError: Error, LocalizedError {
             return "Generation is not available right now."
         case .notSignedIn:
             return "Please sign in to generate content."
-        case .encodingError, .decodingError:
+        case .encodingError, .decodingError, .decodingErrorWithBody:
             return "Something went wrong processing your request. Please try again."
         case .networkError:
             return "Check your internet connection and try again."
@@ -408,7 +415,8 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             return try JSONDecoder().decode(GenerationCostEstimate.self, from: data)
         } catch {
             NSLog("[ESTIMATE-DEBUG] decode failed: %@", String(describing: error))
-            throw GenerationBackendServiceError.decodingError(error)
+            let rawBody = String(data: data, encoding: .utf8) ?? "<binary>"
+            throw GenerationBackendServiceError.decodingErrorWithBody(error, rawBody: rawBody)
         }
     }
 
