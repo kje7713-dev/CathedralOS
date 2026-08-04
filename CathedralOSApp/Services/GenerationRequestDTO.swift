@@ -264,7 +264,8 @@ struct GenerationCostEstimate: Codable {
     /// Maximum output token budget applied by the backend for this story goal.
     let estimatedOutputTokens: Int
     /// Projected credit charge, computed from model input/output rates and minimum charge.
-    let estimatedCredits: Int
+    /// Phase 3 pricing returns fractional credits (6-decimal precision), so this is Double.
+    let estimatedCredits: Double
     /// Current available credits for the authenticated user.
     let availableCredits: Int
     /// `true` if the user has enough credits to proceed with generation.
