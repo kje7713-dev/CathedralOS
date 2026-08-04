@@ -258,6 +258,15 @@ function makeMockGenerationModelStore(
         max_output_tokens: row.max_output_tokens ?? null,
         enabled: true,
         sort_order: 0,
+        // Phase 3 pricing fields. Defaults derived from legacy rates using the
+        // migration's backfill formula (provider_usd_per_1m = legacy_rate × 5)
+        // so tests that don't explicitly set Phase 3 fields still produce
+        // sensible math. multiplier defaults to 2.0 (the migration default).
+        billing_multiplier: 2.0,
+        provider_input_usd_per_1m: (row.input_credit_rate ?? 1) * 5,
+        provider_cached_input_usd_per_1m: 0,
+        provider_output_usd_per_1m: (row.output_credit_rate ?? 1) * 5,
+        pricing_effective_at: new Date(0).toISOString(),
       });
     },
     listEnabledModels() {

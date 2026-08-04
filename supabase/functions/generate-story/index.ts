@@ -61,9 +61,12 @@ import {
   type RateLimitStore,
 } from "./_rate_limiter.ts";
 import {
+  computeActualChargeCredits,
   computeGenerationCreditCharge,
+  computeMaxChargeCredits,
   estimateTokensFromText,
   normalizedModelId,
+  snapshotPricing,
   SupabaseGenerationModelStore,
   type GenerationModelStore,
 } from "./_generation_models.ts";
