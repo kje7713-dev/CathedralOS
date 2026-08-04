@@ -823,6 +823,8 @@ struct ProjectDetailView: View {
                         diagnosticsBlock(diagnostics)
                     }
 
+                    creditEstimateRow
+
                     CathedralPrimaryButton(
                         isGenerating ? "Generating…" : "Generate",
                         systemImage: isGenerating ? "arrow.trianglehead.2.clockwise" : "sparkles"
