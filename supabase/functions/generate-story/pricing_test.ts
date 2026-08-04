@@ -213,9 +213,13 @@ Deno.test("pricing: margin is exactly 50% regardless of token count", () => {
       outputTokens: tokens * 2,
     });
     const charge = computeActualChargeCredits(usage, pricing);
-    // Provider cost in credits = (tokens × 1.0 + tokens*2 × 6.0) / 1000 = 13 × tokens / 1000
-    const providerCostCredits = (tokens * 1.0 + tokens * 2 * 6.0) / 1000;
-    // Margin = (charge - providerCost) / charge
+    // Customer rates in makeSnapshot defaults ALREADY include the 2x markup
+    // (inputCreditRatePer1k=1.0 = 5.0 x 2.0 / 10, outputCreditRatePer1k=6.0
+    // = 30.0 x 2.0 / 10). The previous formula used these customer rates
+    // as if they were provider rates, so margin came out 0 instead of 50%.
+    // Since customer_charge = provider_cost x multiplier, the inverse is
+    // provider_cost = charge / multiplier. Robust against rate changes.
+    const providerCostCredits = charge / pricing.billingMultiplier;
     const margin = (charge - providerCostCredits) / charge;
     assertAlmostEquals(margin, 0.5, 1e-9);
   }
