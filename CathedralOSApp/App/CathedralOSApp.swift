@@ -198,7 +198,10 @@ enum PersistenceBootstrap {
             StoryProject.self, ProjectSetting.self, StoryCharacter.self,
             StorySpark.self, Aftertaste.self, PromptPack.self,
             StoryRelationship.self, ThemeQuestion.self, Motif.self,
-            GenerationOutput.self
+            GenerationOutput.self,
+            // Novel-building (Phase 0/1, see docs/novel-building.md)
+            StoryArc.self, StoryArcBeat.self,
+            Outline.self, OutlineSection.self
         ])
 
         do {
