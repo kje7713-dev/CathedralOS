@@ -236,6 +236,12 @@ struct ProjectDetailView: View {
             await loadGenerationModels()
             await performEstimate()
         }
+        // Re-estimate when any cost-affecting picker changes. scheduleEstimate()
+        // debounces 400ms so rapid picker drags don't flood the backend.
+        .onChange(of: selectedModelId) { _, _ in scheduleEstimate() }
+        .onChange(of: selectedContainer) { _, _ in scheduleEstimate() }
+        .onChange(of: selectedPOV) { _, _ in scheduleEstimate() }
+        .onChange(of: selectedLengthMode) { _, _ in scheduleEstimate() }
         .onDisappear {
             Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
         }
