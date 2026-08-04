@@ -14,7 +14,7 @@ struct OutlineTabView: View {
         ScrollView {
             VStack(spacing: CathedralTheme.Spacing.base) {
                 StoryArcRegionView(project: project, modelContext: modelContext)
-                OutlineSectionsRegionView(project: project)
+                OutlineSectionsRegionView(project: project, modelContext: modelContext)
             }
             .padding(.vertical, CathedralTheme.Spacing.base)
         }

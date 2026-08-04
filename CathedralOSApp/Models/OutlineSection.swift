@@ -10,7 +10,7 @@ import SwiftData
 /// `"draft"`, `"queued"`, `"generated"`, `"accepted"` — see
 /// `outline_sections_status_valid` in the migration for the canonical list.
 @Model
-class OutlineSection {
+class OutlineSection: Identifiable {
     var id: UUID
     /// 0-indexed ordering within the parent (outline or parent section).
     var position: Int
@@ -24,6 +24,11 @@ class OutlineSection {
     var terminalBeat: String?
     /// One of: "draft", "queued", "generated", "accepted".
     var status: String
+    /// UUID of the `StoryArcBeat` this section is tagged with (e.g. "this is
+    /// the Inciting Incident scene"). Optional — sections without an arc link
+    /// are allowed (free-form authoring). Resolved client-side by the picker
+    /// in `OutlineSectionEditView` against the project's current arc beats.
+    var storyArcBeatID: UUID?
 
     var outline: Outline?
     /// Parent section for grouping (e.g. a scene inside a chapter). Nil for
@@ -41,6 +46,7 @@ class OutlineSection {
         self.pov = nil
         self.terminalBeat = nil
         self.status = "draft"
+        self.storyArcBeatID = nil
         self.children = []
     }
 }
