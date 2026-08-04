@@ -1219,7 +1219,7 @@ struct ProjectDetailView: View {
             _ = LocalGenerationOutputBackupService.shared.backup(output: gen)
 
             usageLimitService.recordSuccessfulGeneration(
-                creditCost: response.creditCostCharged ?? 0,
+                creditCost: response.creditCostCharged ?? 0.0,
                 lengthMode: mode
             )
             await refreshBackendCreditState()

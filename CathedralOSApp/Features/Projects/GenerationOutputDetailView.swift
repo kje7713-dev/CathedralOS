@@ -1305,7 +1305,7 @@ struct GenerationOutputDetailView: View {
             // On success: decrement local credits.
             // MVP policy: failed generation does not consume credits.
             usageLimitService.recordSuccessfulGeneration(
-                creditCost: mode.creditCost,
+                creditCost: Double(mode.creditCost),
                 lengthMode: mode
             )
             _ = LocalProjectBackupService.shared.backup(project: project)

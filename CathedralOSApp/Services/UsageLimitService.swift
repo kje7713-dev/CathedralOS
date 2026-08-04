@@ -44,9 +44,9 @@ protocol UsageLimitServiceProtocol: AnyObject {
 
     /// Records that a generation attempt succeeded and decrements local credits.
     /// - Parameters:
-    ///   - creditCost: Credits consumed (equals `lengthMode.creditCost`).
+    ///   - creditCost: Actual credits charged by the backend (fractional).
     ///   - lengthMode: The output length mode used for this generation.
-    func recordSuccessfulGeneration(creditCost: Int, lengthMode: GenerationLengthMode)
+    func recordSuccessfulGeneration(creditCost: Double, lengthMode: GenerationLengthMode)
 
     /// Seeds local credit state from a verified StoreKit entitlement.
     ///
@@ -136,11 +136,11 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
         return .allowed
     }
 
-    func recordSuccessfulGeneration(creditCost: Int, lengthMode: GenerationLengthMode) {
+    func recordSuccessfulGeneration(creditCost: Double, lengthMode: GenerationLengthMode) {
         resetIfNeeded()
         let state = load()
 
-        let newCredits  = max(0, state.availableCredits - creditCost)
+        let newCredits  = max(0, state.availableCredits - Int(creditCost.rounded(.down)))
         let newCount    = state.monthlyGenerationCount + 1
         let newBudget   = state.monthlyOutputBudgetUsed + lengthMode.outputBudget
 
@@ -288,7 +288,7 @@ final class StubUsageLimitService: UsageLimitServiceProtocol {
         return .allowed
     }
 
-    func recordSuccessfulGeneration(creditCost: Int, lengthMode: GenerationLengthMode) {
+    func recordSuccessfulGeneration(creditCost: Double, lengthMode: GenerationLengthMode) {
         // No-op stub.
     }
 
