@@ -14,6 +14,14 @@ export interface GenerationModel {
   max_output_tokens: number | null;
   enabled: boolean;
   sort_order: number;
+  // Phase 3 pricing fields (raw provider USD rates + 2x markup multiplier).
+  // Read by snapshotPricing() to derive the per-1K credit rate snapshot.
+  // Supabase JS returns NUMERIC as a string; mapModelRow coerces via toNumber.
+  billing_multiplier: number;
+  provider_input_usd_per_1m: number;
+  provider_cached_input_usd_per_1m: number;
+  provider_output_usd_per_1m: number;
+  pricing_effective_at: string;
 }
 
 export type PublicGenerationModel = Pick<
@@ -43,6 +51,13 @@ function toNumber(value: unknown, fallback = 0): number {
 }
 
 function mapModelRow(row: Record<string, unknown>): GenerationModel {
+  // Phase 3 default multiplier is 2.0 (50% gross margin). Older rows that
+  // pre-date the migration won't have the column populated; toNumber's
+  // fallback handles that.
+  const providerInput = toNumber(row.provider_input_usd_per_1m, 0);
+  const providerCached = toNumber(row.provider_cached_input_usd_per_1m, 0);
+  const providerOutput = toNumber(row.provider_output_usd_per_1m, 0);
+  const multiplier = toNumber(row.billing_multiplier, 2.0);
   return {
     id: String(row.id ?? ""),
     provider: String(row.provider ?? "openai"),
@@ -57,6 +72,14 @@ function mapModelRow(row: Record<string, unknown>): GenerationModel {
       : Math.max(1, Math.round(toNumber(row.max_output_tokens, 1))),
     enabled: Boolean(row.enabled),
     sort_order: Math.round(toNumber(row.sort_order, 0)),
+    // Phase 3 pricing fields — populated by migration 20260803194600.
+    billing_multiplier: multiplier,
+    provider_input_usd_per_1m: providerInput,
+    provider_cached_input_usd_per_1m: providerCached,
+    provider_output_usd_per_1m: providerOutput,
+    pricing_effective_at: row.pricing_effective_at == null
+      ? new Date(0).toISOString()
+      : String(row.pricing_effective_at),
   };
 }
 
