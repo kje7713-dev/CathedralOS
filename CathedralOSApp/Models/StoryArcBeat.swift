@@ -7,7 +7,7 @@ import SwiftData
 /// user picks a template, then freed for the user to edit / reorder / add /
 /// remove without affecting the template.
 @Model
-class StoryArcBeat {
+class StoryArcBeat: Identifiable {
     var id: UUID
     /// 0-indexed ordering within the parent arc.
     var position: Int

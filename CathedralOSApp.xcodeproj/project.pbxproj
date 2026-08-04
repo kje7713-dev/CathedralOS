@@ -168,6 +168,7 @@
 		C000000000000000000000B4 /* OutlineTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C000000000000000000000B3 /* OutlineTabView.swift */; };
 		C000000000000000000000B6 /* StoryArcRegionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C000000000000000000000B5 /* StoryArcRegionView.swift */; };
 		C000000000000000000000B8 /* OutlineSectionsRegionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C000000000000000000000B7 /* OutlineSectionsRegionView.swift */; };
+		C000000000000000000000BC /* StoryArcBeatEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C000000000000000000000BB /* StoryArcBeatEditView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -345,6 +346,7 @@
 		C000000000000000000000B3 /* OutlineTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineTabView.swift; sourceTree = "<group>"; };
 		C000000000000000000000B5 /* StoryArcRegionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcRegionView.swift; sourceTree = "<group>"; };
 		C000000000000000000000B7 /* OutlineSectionsRegionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSectionsRegionView.swift; sourceTree = "<group>"; };
+		C000000000000000000000BB /* StoryArcBeatEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcBeatEditView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -665,6 +667,7 @@
 				C000000000000000000000B3 /* OutlineTabView.swift */,
 				C000000000000000000000B5 /* StoryArcRegionView.swift */,
 				C000000000000000000000B7 /* OutlineSectionsRegionView.swift */,
+				C000000000000000000000BB /* StoryArcBeatEditView.swift */,
 			);
 			path = Projects;
 			sourceTree = "<group>";
@@ -920,6 +923,7 @@
 				C000000000000000000000B4 /* OutlineTabView.swift in Sources */,
 				C000000000000000000000B6 /* StoryArcRegionView.swift in Sources */,
 				C000000000000000000000B8 /* OutlineSectionsRegionView.swift in Sources */,
+				C000000000000000000000BC /* StoryArcBeatEditView.swift in Sources */,
 
 			);
 			runOnlyForDeploymentPostprocessing = 0;
