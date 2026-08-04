@@ -1357,12 +1357,15 @@ async function handler(
       promptPackName,
     });
     const estimatedInputTokens = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
-    // Phase 2: max possible credit cost = (estimated input + container hard cap) × rates
-    const estimatedCredits = computeMaxCreditCharge(
-      estimatedInputTokens,
-      CONTAINER_HARD_CAPS[container],
-      selectedModel,
-    );
+    // Phase 3: pre-flight max = (estimated input + container hard cap) × rates, with 0.25 floor
+    const estimatePricing = snapshotPricing(selectedModel);
+    const estimateUsage = {
+      uncachedInputTokens: estimatedInputTokens,
+      cachedInputTokens: 0,
+      outputTokens: CONTAINER_HARD_CAPS[container],
+      toolCostUsd: 0,
+    };
+    const estimatedCredits = computeMaxChargeCredits(estimateUsage, estimatePricing);
     const entitlement = await store.loadOrDefault(userId);
     const creditCheck = checkCredits(entitlement, estimatedCredits);
 
@@ -1445,13 +1448,16 @@ async function handler(
     projectName,
     promptPackName,
   });
-  // Phase 2: max possible credit cost for the pre-flight check
+  // Phase 3: max possible credit cost for the pre-flight check
   const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
-  const requiredCredits = computeMaxCreditCharge(
-    estimatedInputTokensForCheck,
-    CONTAINER_HARD_CAPS[container],
-    selectedModel,
-  );
+  const checkPricing = snapshotPricing(selectedModel);
+  const checkUsage = {
+    uncachedInputTokens: estimatedInputTokensForCheck,
+    cachedInputTokens: 0,
+    outputTokens: CONTAINER_HARD_CAPS[container],
+    toolCostUsd: 0,
+  };
+  const requiredCredits = computeMaxChargeCredits(checkUsage, checkPricing);
   const entitlement = await store.loadOrDefault(userId);
   const creditCheck = checkCredits(entitlement, requiredCredits);
 
@@ -1527,8 +1533,10 @@ async function handler(
     modelName: string;
     finishReason?: string;
     inputTokens?: number;
+    cachedInputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
+    toolCostUsd?: number;
   };
   let llmResult: LlmResult | null = null;
 
@@ -1699,14 +1707,16 @@ async function handler(
   // credit_revenue_usd on the row (Phase 1 telemetry).
   // -------------------------------------------------------------------------
 
-  // Phase 2: actual cost based on real input + output tokens. No floor.
-  const inputTokens = llmResult.inputTokens ?? 0;
-  const outputTokens = llmResult.outputTokens ?? 0;
-  const actualCharge = computeActualCreditCharge(
-    inputTokens,
-    outputTokens,
-    selectedModel,
-  );
+  // Phase 3: actual cost based on real input + output + cached + tool tokens. No floor.
+  // Pricing was snapshotted at request start — admin updates don't change charges.
+  const postFlightUsage = {
+    uncachedInputTokens: llmResult.inputTokens ?? 0,
+    cachedInputTokens: llmResult.cachedInputTokens ?? 0,
+    outputTokens: llmResult.outputTokens ?? 0,
+    toolCostUsd: llmResult.toolCostUsd ?? 0,
+  };
+  const postFlightPricing = snapshotPricing(selectedModel);
+  const actualCharge = computeActualChargeCredits(postFlightUsage, postFlightPricing);
   const creditRevenueUsd = actualCharge * 0.05;
 
   // -------------------------------------------------------------------------

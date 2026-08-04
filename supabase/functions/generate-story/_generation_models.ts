@@ -126,12 +126,123 @@ export function computeGenerationCreditCharge(
 ): number {
   // Phase 1 (legacy): fixed charge per length mode × model rate, with a
   // per-model minimum floor. Kept for backwards compat; new code should use
-  // computeMaxCreditCharge (pre-flight) and computeActualCreditCharge
-  // (post-flight) instead.
+  // computeActualChargeCredits (post-flight) and computeMaxChargeCredits
+  // (pre-flight) instead.
   const baseLengthCost = getCreditCost(lengthMode);
   const modelMultiplier = model.output_credit_rate;
   const raw = baseLengthCost * modelMultiplier;
   return Math.max(model.minimum_charge_credits, Math.ceil(raw));
+}
+
+// =============================================================================
+// Phase 3 pricing: 2× markup on provider cost, fractional credits, snapshot
+// pricing at request start. See supabase/migrations/20260803194600_*.sql.
+// =============================================================================
+
+export interface PricingSnapshot {
+  /** Credits per 1K uncached input tokens (derived from provider × multiplier / 10). */
+  inputCreditRatePer1k: number;
+  /** Credits per 1K cached input tokens (0 if the model does not support caching). */
+  cachedInputCreditRatePer1k: number;
+  /** Credits per 1K output tokens (derived from provider × multiplier / 10). */
+  outputCreditRatePer1k: number;
+  /** Billing multiplier (e.g., 2.0 for 2× markup → 50% gross margin). */
+  billingMultiplier: number;
+  /** Product floor (NOT the OpenAI minimum). 0.25 credits by default. */
+  minimumChargeCredits: number;
+  /** USD value of one credit. 0.01 by default. */
+  creditValueUsd: number;
+  /** ISO timestamp of when this pricing snapshot became effective. */
+  effectiveAt: string;
+}
+
+export interface GenerationUsage {
+  /** Uncached input tokens (charged at full rate). */
+  uncachedInputTokens: number;
+  /** Cached input tokens (charged at the cached rate). */
+  cachedInputTokens: number;
+  /** Output tokens (charged at the output rate). */
+  outputTokens: number;
+  /** Tool / function-call / web-search / image-gen cost in USD. */
+  toolCostUsd: number;
+}
+
+export interface PricingDefaults {
+  /** Product floor (NOT the OpenAI minimum). */
+  minimumChargeCredits: number;
+  /** USD value of one credit. */
+  creditValueUsd: number;
+}
+
+export const DEFAULT_PRICING: PricingDefaults = {
+  minimumChargeCredits: 0.25,
+  creditValueUsd: 0.01,
+};
+
+/**
+ * Capture the pricing snapshot from a GenerationModel at the moment of the
+ * request. Used to freeze the rate so admin updates don't change charges for
+ * in-flight or completed requests.
+ */
+export function snapshotPricing(
+  model: GenerationModel,
+  defaults: PricingDefaults = DEFAULT_PRICING,
+): PricingSnapshot {
+  const multiplier = model.billing_multiplier;
+  return {
+    inputCreditRatePer1k:
+      (model.provider_input_usd_per_1m ?? 0) * multiplier / 10,
+    cachedInputCreditRatePer1k:
+      (model.provider_cached_input_usd_per_1m ?? 0) * multiplier / 10,
+    outputCreditRatePer1k:
+      (model.provider_output_usd_per_1m ?? 0) * multiplier / 10,
+    billingMultiplier: multiplier,
+    minimumChargeCredits: defaults.minimumChargeCredits,
+    creditValueUsd: defaults.creditValueUsd,
+    effectiveAt: model.pricing_effective_at,
+  };
+}
+
+/**
+ * Compute the customer charge in credits, given actual token usage and the
+ * pricing snapshot. Pricing: provider cost (input + cached + output + tool) ×
+ * billing_multiplier / credit_value_usd, floored by the product minimum.
+ *
+ * 6-decimal precision. Does NOT ceil per-component — fractional credits are
+ * preserved so cheap models and short requests aren't materially overcharged.
+ */
+export function computeActualChargeCredits(
+  usage: GenerationUsage,
+  pricing: PricingSnapshot,
+): number {
+  const uncachedCredits =
+    (usage.uncachedInputTokens * pricing.inputCreditRatePer1k) / 1000;
+  const cachedCredits =
+    (usage.cachedInputTokens * pricing.cachedInputCreditRatePer1k) / 1000;
+  const outputCredits =
+    (usage.outputTokens * pricing.outputCreditRatePer1k) / 1000;
+  const toolCredits =
+    usage.toolCostUsd > 0 ? usage.toolCostUsd / pricing.creditValueUsd : 0;
+  const providerCostCredits =
+    uncachedCredits + cachedCredits + outputCredits + toolCredits;
+  const charge = Math.max(
+    pricing.minimumChargeCredits,
+    providerCostCredits,
+  );
+  // Round to 6 decimal places for storage. Do NOT ceil.
+  return Math.round(charge * 1_000_000) / 1_000_000;
+}
+
+/**
+ * Pre-flight: compute the maximum possible charge for the upcoming generation.
+ * Uses the estimated input token count and the container's output hard cap.
+ * Used as the affordability check before invoking the LLM.
+ */
+export function computeMaxChargeCredits(
+  estimatedUsage: GenerationUsage,
+  pricing: PricingSnapshot,
+): number {
+  return computeActualChargeCredits(estimatedUsage, pricing);
 }
 
 /**

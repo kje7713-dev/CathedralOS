@@ -184,8 +184,12 @@ export interface LLMResponse {
   modelName: string;
   finishReason?: string;
   inputTokens?: number;
+  /** Cached input tokens (from OpenAI response.usage.prompt_tokens_details.cached_tokens). */
+  cachedInputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  /** Additional tool / function-call cost in USD. 0 for most chat models. */
+  toolCostUsd?: number;
 }
 
 export interface LLMProvider {
@@ -283,8 +287,10 @@ export class OpenAIProvider implements LLMProvider {
       modelName: json.model ?? resolvedModel,
       finishReason: extractResponsesFinishReason(json),
       inputTokens: json.usage?.input_tokens,
+      cachedInputTokens: json.usage?.input_tokens_details?.cached_tokens,
       outputTokens: json.usage?.output_tokens,
       totalTokens: json.usage?.total_tokens,
+      toolCostUsd: 0,
     };
   }
 }

@@ -204,7 +204,7 @@ struct GenerationResponse: Codable {
     /// The number of credits available to the user (present on insufficient_credits error).
     let availableCredits: Int?
     /// The number of credits charged for this generation (present on success).
-    let creditCostCharged: Int?
+    let creditCostCharged: Double?
     /// The number of credits remaining after this generation (present on success).
     let remainingCredits: Int?
 
@@ -238,7 +238,7 @@ struct GenerationResponse: Codable {
         errorCode           = try c.decodeIfPresent(String.self, forKey: .errorCode)
         requiredCredits     = try c.decodeIfPresent(Int.self, forKey: .requiredCredits)
         availableCredits    = try c.decodeIfPresent(Int.self, forKey: .availableCredits)
-        creditCostCharged   = try c.decodeIfPresent(Int.self, forKey: .creditCostCharged)
+        creditCostCharged   = try c.decodeIfPresent(Double.self, forKey: .creditCostCharged)
         remainingCredits    = try c.decodeIfPresent(Int.self, forKey: .remainingCredits)
         retryAfterSeconds   = try c.decodeIfPresent(Int.self, forKey: .retryAfterSeconds)
         status              = try c.decode(String.self, forKey: .status)
