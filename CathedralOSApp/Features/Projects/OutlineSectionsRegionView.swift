@@ -16,6 +16,10 @@ struct OutlineSectionsRegionView: View {
     @State private var sectionsOrder: [OutlineSection] = []
     @State private var editingSection: OutlineSection?
     @State private var showingGenerateStub = false
+    @State private var showingSuggestionSheet = false
+    @State private var suggestions: [OutlineSuggestion] = []
+    @State private var suggestionsLoading = false
+    @State private var suggestionsError: String?
 
     /// At most one Outline per project in Phase 0/1.
     private var currentOutline: Outline? {
@@ -67,6 +71,24 @@ struct OutlineSectionsRegionView: View {
         } message: {
             Text("Coming soon — generation wires in Phase 3.")
         }
+        .alert("Suggest Sections Failed", isPresented: Binding(
+            get: { suggestionsError != nil },
+            set: { if !$0 { suggestionsError = nil } }
+        )) {
+            Button("OK", role: .cancel) { suggestionsError = nil }
+        } message: {
+            Text(suggestionsError ?? "An unknown error occurred.")
+        }
+        .sheet(isPresented: $showingSuggestionSheet) {
+            if let outline = currentOutline {
+                OutlineSuggestionsReviewView(
+                    outline: outline,
+                    suggestions: suggestions,
+                    project: project,
+                    modelContext: modelContext
+                )
+            }
+        }
     }
 
     /// Stable identity key for the top-level sections relationship — re-sync
@@ -97,10 +119,66 @@ struct OutlineSectionsRegionView: View {
         try? modelContext.save()
     }
 
+    private var suggestionsReady: Bool {
+        guard project.promptPacks.first != nil else { return false }
+        guard let arc = project.storyArcs.first else { return false }
+        guard arc.templateID != nil else { return false }
+        return StoryArcTemplate.allTemplates.contains { $0.id == arc.templateID }
+    }
+
+    private func loadSuggestions() async {
+        guard !suggestionsLoading else { return }
+        guard let recipe = project.promptPacks.first,
+              let arc = project.storyArcs.first,
+              let templateID = arc.templateID,
+              let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
+            suggestionsError = "Need a Recipe and a Story Arc template first."
+            return
+        }
+        guard let baseURL = SupabaseConfiguration.projectURL else {
+            suggestionsError = "Backend not configured."
+            return
+        }
+        let outlineURL = baseURL
+            .appendingPathComponent("functions/v1")
+            .appendingPathComponent(SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath)
+        suggestionsLoading = true
+        defer { suggestionsLoading = false }
+        do {
+            let service = OutlineSuggestionService()
+            let result = try await service.requestSuggestions(
+                edgeFunctionURL: outlineURL,
+                recipe: recipe,
+                arc: arc,
+                arcTemplate: template
+            )
+            suggestions = result
+            showingSuggestionSheet = true
+        } catch let error as OutlineSuggestionError {
+            suggestionsError = error.localizedDescription
+        } catch {
+            suggestionsError = error.localizedDescription
+        }
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Outline Sections")
-                .font(CathedralTheme.Typography.headline(20, weight: .semibold))
+            HStack(alignment: .firstTextBaseline) {
+                Text("Outline Sections")
+                    .font(CathedralTheme.Typography.headline(20, weight: .semibold))
+                Spacer()
+                Button {
+                    Task { await loadSuggestions() }
+                } label: {
+                    if suggestionsLoading {
+                        ProgressView()
+                    } else {
+                        Label("Suggest Sections", systemImage: "sparkles")
+                            .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    }
+                }
+                .disabled(suggestionsLoading || !suggestionsReady)
+            }
             Text("Add sections, tag them with arc beats, generate one Container run per section (coming soon).")
                 .font(CathedralTheme.Typography.body(13))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)

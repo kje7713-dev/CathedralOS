@@ -48,6 +48,7 @@ struct ValidatedSupabaseConfiguration {
     let projectURL: URL
     let anonKey: String
     let generationEdgeFunctionPath: String
+    let outlineFromRecipeEdgeFunctionPath: String
     let sharingEdgeFunctionPath: String
     let creditStateEdgeFunctionPath: String
     let adminGrantCreditsEdgeFunctionPath: String
@@ -104,6 +105,7 @@ enum SupabaseConfiguration {
 
     /// Supabase Edge Function path for the generation backend.
     static let generationEdgeFunctionPath = "generate-story"
+    static let outlineFromRecipeEdgeFunctionPath = "outline-from-recipe"
 
     /// Supabase Edge Function path for the public sharing backend.
     static let sharingEdgeFunctionPath = "shared-outputs"
@@ -145,6 +147,7 @@ enum SupabaseConfiguration {
             projectURL: url,
             anonKey: key,
             generationEdgeFunctionPath: generationEdgeFunctionPath,
+            outlineFromRecipeEdgeFunctionPath: outlineFromRecipeEdgeFunctionPath,
             sharingEdgeFunctionPath: sharingEdgeFunctionPath,
             creditStateEdgeFunctionPath: creditStateEdgeFunctionPath,
             adminGrantCreditsEdgeFunctionPath: adminGrantCreditsEdgeFunctionPath,
