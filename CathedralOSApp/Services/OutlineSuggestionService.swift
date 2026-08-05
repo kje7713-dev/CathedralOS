@@ -20,7 +20,7 @@ enum OutlineSuggestionError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConfigured(let r): return "Suggestions backend not configured. \(r)
+        case .notConfigured(let r): return "Suggestions backend not configured. \(r)"
         case .notAuthenticated:      return "Sign in to suggest sections."
         case .rateLimited:           return "Too many suggestion requests. Try again in a minute."
         case .providerError:         return "The AI suggestion failed. Try again."

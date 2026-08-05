@@ -12,7 +12,7 @@ enum BackendClientError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConfigured(let reason):
-            return "Backend client is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist. \(reason)
+            return "Backend client is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist. \(reason)"
         case .encodingError(let underlying):
             return "Could not encode request: \(underlying.localizedDescription)"
         case .networkError(let underlying):
