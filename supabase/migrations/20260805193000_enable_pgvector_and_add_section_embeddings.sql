@@ -27,8 +27,10 @@ create extension if not exists vector;
 
 create table if not exists public.section_embeddings (
   id                 uuid        primary key default gen_random_uuid(),
-  project_id         uuid        not null references public.projects(id) on delete cascade,
-  outline_section_id uuid        not null references public.outline_sections(id) on delete cascade,
+  -- FK to public.projects(id) added in follow-up migration (see deployment log: original FK failed because public.projects not visible in deploy target DB)
+  project_id         uuid        not null,
+  -- FK to public.outline_sections(id) added in follow-up migration
+  outline_section_id uuid        not null,
 
   -- The 1536-dim embedding (text-embedding-3-small)
   embedding          vector(1536) not null,
