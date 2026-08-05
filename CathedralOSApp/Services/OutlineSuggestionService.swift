@@ -10,7 +10,7 @@ import Foundation
 // Timeout: 180s (LLM call — slower than app-level).
 
 enum OutlineSuggestionError: Error, LocalizedError {
-    case notConfigured
+    case notConfigured(reason: String)
     case notAuthenticated
     case rateLimited
     case providerError
@@ -20,7 +20,7 @@ enum OutlineSuggestionError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConfigured:        return "Suggestions backend not configured."
+        case .notConfigured(let r): return "Suggestions backend not configured. \(r)
         case .notAuthenticated:      return "Sign in to suggest sections."
         case .rateLimited:           return "Too many suggestion requests. Try again in a minute."
         case .providerError:         return "The AI suggestion failed. Try again."
@@ -73,7 +73,13 @@ struct OutlineSuggestionService {
         do {
             client = try SupabaseBackendClient()
         } catch {
-            throw OutlineSuggestionError.notConfigured
+            let reason: String
+            if let backendError = error as? BackendClientError, case .notConfigured(let r) = backendError {
+                reason = r
+            } else {
+                reason = String(describing: error)
+            }
+            throw OutlineSuggestionError.notConfigured(reason: reason)
         }
 
         let url = client.edgeFunctionURL(path: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath)
@@ -115,7 +121,7 @@ struct OutlineSuggestionService {
         case 429:
             throw OutlineSuggestionError.rateLimited
         case 500:
-            throw OutlineSuggestionError.notConfigured
+            throw OutlineSuggestionError.notConfigured(reason: "Server returned 500")
         case 502:
             throw OutlineSuggestionError.providerError
         default:
