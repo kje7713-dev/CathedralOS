@@ -49,11 +49,17 @@ struct OutlineSectionsRegionView: View {
         .onChange(of: sectionsKey) { _, _ in
             syncSectionsOrder()
         }
+        .onDisappear {
+            Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+        }
         .sheet(item: $editingSection) { section in
             OutlineSectionEditView(
                 section: section,
                 availableBeats: availableBeats,
-                onSave: { try? modelContext.save() }
+                onSave: {
+                    try? modelContext.save()
+                    Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+                }
             )
         }
         .alert("Generate", isPresented: $showingGenerateStub) {

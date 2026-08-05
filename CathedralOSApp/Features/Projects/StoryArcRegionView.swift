@@ -56,10 +56,16 @@ struct StoryArcRegionView: View {
         .onChange(of: beatsKey) { _, _ in
             syncBeatsOrder()
         }
+        .onDisappear {
+            Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+        }
         .sheet(item: $editingBeat) { beat in
             StoryArcBeatEditView(
                 beat: beat,
-                onSave: { try? modelContext.save() }
+                onSave: {
+                    try? modelContext.save()
+                    Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+                }
             )
         }
     }
