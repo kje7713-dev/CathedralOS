@@ -14,6 +14,7 @@ struct ProjectImportExportPayload: Codable {
     let motifs: [MotifPayload]
     let storyArcs: [StoryArcPayload]
     let outlines: [OutlinePayload]
+    let promptPacks: [PromptPackPayload]
 
     // MARK: - CodingKeys
 
@@ -22,6 +23,7 @@ struct ProjectImportExportPayload: Codable {
         case characters, storySparks, aftertastes, relationships
         case themeQuestions, motifs
         case storyArcs, outlines
+        case promptPacks
     }
 
     // MARK: - Decoder
@@ -41,6 +43,7 @@ struct ProjectImportExportPayload: Codable {
         // Novel-building payloads: optional for backward-compat with v1 snapshots.
         storyArcs      = try c.decodeIfPresent([StoryArcPayload].self, forKey: .storyArcs) ?? []
         outlines       = try c.decodeIfPresent([OutlinePayload].self, forKey: .outlines) ?? []
+        promptPacks    = try c.decodeIfPresent([PromptPackPayload].self, forKey: .promptPacks) ?? []
     }
 
     // MARK: - Explicit memberwise init
@@ -57,7 +60,8 @@ struct ProjectImportExportPayload: Codable {
         themeQuestions: [ThemeQuestionPayload],
         motifs: [MotifPayload],
         storyArcs: [StoryArcPayload],
-        outlines: [OutlinePayload]
+        outlines: [OutlinePayload],
+        promptPacks: [PromptPackPayload]
     ) {
         self.schema = schema
         self.version = version
@@ -71,6 +75,7 @@ struct ProjectImportExportPayload: Codable {
         self.motifs = motifs
         self.storyArcs = storyArcs
         self.outlines = outlines
+        self.promptPacks = promptPacks
     }
 
     // MARK: - Nested Types
@@ -306,4 +311,20 @@ struct ProjectImportExportPayload: Codable {
         let parentID: String?
         let storyArcBeatID: String?
     }
+    struct PromptPackPayload: Codable {
+        let id: String?
+        let localProjectID: String
+        let lineageID: String?
+        let name: String
+        let selectedCharacterIDs: [String]
+        let selectedStorySparkID: String?
+        let selectedAftertasteID: String?
+        let notes: String?
+        let instructionBias: String?
+        let includeProjectSetting: Bool
+        let selectedRelationshipIDs: [String]
+        let selectedThemeQuestionIDs: [String]
+        let selectedMotifIDs: [String]
+    }
+
 }

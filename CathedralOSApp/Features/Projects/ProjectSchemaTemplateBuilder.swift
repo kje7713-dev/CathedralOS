@@ -115,7 +115,8 @@ enum ProjectSchemaTemplateBuilder {
             themeQuestions: [],
             motifs: [],
             storyArcs: [],
-            outlines: []
+            outlines: [],
+            promptPacks: []
         )
     }
 
@@ -327,7 +328,8 @@ enum ProjectSchemaTemplateBuilder {
             themeQuestions: [theme],
             motifs: [motif],
             storyArcs: [],
-            outlines: []
+            outlines: [],
+            promptPacks: []
         )
 
         return encode(payload)
@@ -540,7 +542,8 @@ enum ProjectSchemaTemplateBuilder {
             themeQuestions: [theme],
             motifs: [motif],
             storyArcs: [],
-            outlines: []
+            outlines: [],
+            promptPacks: []
         )
 
         return encode(payload)
@@ -817,6 +820,24 @@ enum ProjectSchemaTemplateBuilder {
             )
         }
 
+        let promptPackPayloads = project.promptPacks.map { pp -> ProjectImportExportPayload.PromptPackPayload in
+            ProjectImportExportPayload.PromptPackPayload(
+                id: pp.id.uuidString,
+                localProjectID: project.id.uuidString,
+                lineageID: project.stableLineageID.uuidString,
+                name: pp.name,
+                selectedCharacterIDs: pp.selectedCharacterIDs.map { $0.uuidString },
+                selectedStorySparkID: pp.selectedStorySparkID?.uuidString,
+                selectedAftertasteID: pp.selectedAftertasteID?.uuidString,
+                notes: pp.notes,
+                instructionBias: pp.instructionBias,
+                includeProjectSetting: pp.includeProjectSetting,
+                selectedRelationshipIDs: pp.selectedRelationshipIDs.map { $0.uuidString },
+                selectedThemeQuestionIDs: pp.selectedThemeQuestionIDs.map { $0.uuidString },
+                selectedMotifIDs: pp.selectedMotifIDs.map { $0.uuidString }
+            )
+        }
+
         return ProjectImportExportPayload(
             schema: schemaIdentifier,
             version: schemaVersion,
@@ -839,7 +860,8 @@ enum ProjectSchemaTemplateBuilder {
             themeQuestions: themePayloads,
             motifs: motifPayloads,
             storyArcs: storyArcPayloads,
-            outlines: outlinePayloads
+            outlines: outlinePayloads,
+            promptPacks: promptPackPayloads
         )
     }
 
