@@ -113,7 +113,9 @@ enum ProjectSchemaTemplateBuilder {
             aftertastes: [],
             relationships: [],
             themeQuestions: [],
-            motifs: []
+            motifs: [],
+            storyArcs: [],
+            outlines: []
         )
     }
 
@@ -323,7 +325,9 @@ enum ProjectSchemaTemplateBuilder {
             aftertastes: [aftertaste],
             relationships: [relationship],
             themeQuestions: [theme],
-            motifs: [motif]
+            motifs: [motif],
+            storyArcs: [],
+            outlines: []
         )
 
         return encode(payload)
@@ -534,7 +538,9 @@ enum ProjectSchemaTemplateBuilder {
             aftertastes: [aftertaste],
             relationships: [relationship],
             themeQuestions: [theme],
-            motifs: [motif]
+            motifs: [motif],
+            storyArcs: [],
+            outlines: []
         )
 
         return encode(payload)
@@ -750,6 +756,67 @@ enum ProjectSchemaTemplateBuilder {
             )
         }
 
+        // MARK: Novel-building payloads (StoryArc + Outline)
+
+        let storyArcPayloads = project.storyArcs.map { arc -> ProjectImportExportPayload.StoryArcPayload in
+            // customizationsData is Data on the model — encode as UTF-8 string (JSON-encoded bytes).
+            // Round-trip: nil/empty on the cloud decodes to nil on restore.
+            let customizationsString: String? = arc.customizationsData.flatMap { data in
+                String(data: data, encoding: .utf8)
+            }
+
+            let beatPayloads: [ProjectImportExportPayload.StoryArcBeatPayload] = arc.beats
+                .sorted(by: { $0.position < $1.position })
+                .map { beat in
+                    ProjectImportExportPayload.StoryArcBeatPayload(
+                        id: beat.id.uuidString,
+                        position: beat.position,
+                        role: beat.role,
+                        label: beat.label,
+                        details: beat.details
+                    )
+                }
+
+            return ProjectImportExportPayload.StoryArcPayload(
+                id: arc.id.uuidString,
+                localProjectID: project.id.uuidString,
+                lineageID: project.stableLineageID.uuidString,
+                templateID: arc.templateID?.uuidString,
+                customizationsData: customizationsString,
+                beats: beatPayloads
+            )
+        }
+
+        let outlinePayloads = project.outlines.map { outline -> ProjectImportExportPayload.OutlinePayload in
+            // Top-level sections only (parent == nil). Grouped sections (parent_id != nil) defer to a follow-up.
+            let sectionPayloads: [ProjectImportExportPayload.OutlineSectionPayload] = outline.sections
+                .filter { $0.parent == nil }
+                .sorted(by: { $0.position < $1.position })
+                .map { section in
+                    ProjectImportExportPayload.OutlineSectionPayload(
+                        id: section.id.uuidString,
+                        position: section.position,
+                        title: section.title,
+                        summary: section.summary,
+                        container: section.container,
+                        pov: section.pov,
+                        terminalBeat: section.terminalBeat,
+                        status: section.status,
+                        parentID: section.parent?.id.uuidString,
+                        storyArcBeatID: section.storyArcBeatID?.uuidString
+                    )
+                }
+
+            return ProjectImportExportPayload.OutlinePayload(
+                id: outline.id.uuidString,
+                localProjectID: project.id.uuidString,
+                lineageID: project.stableLineageID.uuidString,
+                storyArcID: outline.storyArcID?.uuidString,
+                name: outline.name,
+                sections: sectionPayloads
+            )
+        }
+
         return ProjectImportExportPayload(
             schema: schemaIdentifier,
             version: schemaVersion,
@@ -770,7 +837,9 @@ enum ProjectSchemaTemplateBuilder {
             aftertastes: aftertastePayloads,
             relationships: relationshipPayloads,
             themeQuestions: themePayloads,
-            motifs: motifPayloads
+            motifs: motifPayloads,
+            storyArcs: storyArcPayloads,
+            outlines: outlinePayloads
         )
     }
 

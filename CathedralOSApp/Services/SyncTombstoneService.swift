@@ -21,6 +21,10 @@ struct SyncTombstone: Codable {
         case project            = "project"
         case generationOutput   = "generation_output"
         case sharedOutput       = "shared_output"
+        // Novel-building entities (Phase 0/1 PR — cloud sync round-trip).
+        // Treat sections as part of their outline tombstone (cascading delete on cloud).
+        case storyArc           = "story_arc"
+        case outline            = "outline"
     }
 
     enum DeletionScope: String, Codable {
