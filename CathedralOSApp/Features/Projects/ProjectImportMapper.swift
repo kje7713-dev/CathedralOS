@@ -190,6 +190,79 @@ enum ProjectImportMapper {
         }
         project.motifs = motifs
 
+        // MARK: - Story Arc + Outline (novel-building, PR #2e)
+
+        let storyArcs: [StoryArc] = payload.storyArcs.map { ap in
+            let arc = StoryArc()
+            if let arcID = ap.id.flatMap(UUID.init(uuidString:)) {
+                arc.id = arcID
+            }
+            if let templateID = ap.templateID.flatMap(UUID.init(uuidString:)) {
+                arc.templateID = templateID
+            }
+            if let customizationsString = ap.customizationsData,
+               let data = customizationsString.data(using: .utf8) {
+                arc.customizationsData = data
+            }
+            arc.project = project
+
+            let beats: [StoryArcBeat] = ap.beats.map { bp in
+                let beat = StoryArcBeat(
+                    position: bp.position,
+                    role: bp.role,
+                    label: bp.label,
+                    details: bp.details
+                )
+                if let beatID = bp.id.flatMap(UUID.init(uuidString:)) {
+                    beat.id = beatID
+                }
+                beat.storyArc = arc
+                return beat
+            }
+            arc.beats = beats
+            return arc
+        }
+        project.storyArcs = storyArcs
+
+        let outlines: [Outline] = payload.outlines.map { op in
+            let outline = Outline(name: op.name)
+            if let outlineID = op.id.flatMap(UUID.init(uuidString:)) {
+                outline.id = outlineID
+            }
+            if let storyArcID = op.storyArcID.flatMap(UUID.init(uuidString:)) {
+                outline.storyArcID = storyArcID
+            }
+            outline.project = project
+
+            // Top-level sections only (parent_id == nil). Grouped sections
+            // (parent_id != nil) defer to a follow-up — same scope as #274's
+            // push slice.
+            let topLevelSections: [OutlineSection] = op.sections
+                .filter { $0.parentID == nil }
+                .map { sp in
+                    let section = OutlineSection(
+                        position: sp.position,
+                        title: sp.title,
+                        summary: sp.summary
+                    )
+                    if let sectionID = sp.id.flatMap(UUID.init(uuidString:)) {
+                        section.id = sectionID
+                    }
+                    section.container = sp.container
+                    section.pov = sp.pov
+                    section.terminalBeat = sp.terminalBeat
+                    section.status = sp.status
+                    if let storyArcBeatID = sp.storyArcBeatID.flatMap(UUID.init(uuidString:)) {
+                        section.storyArcBeatID = storyArcBeatID
+                    }
+                    section.outline = outline
+                    return section
+                }
+            outline.sections = topLevelSections
+            return outline
+        }
+        project.outlines = outlines
+
         return project
     }
 
