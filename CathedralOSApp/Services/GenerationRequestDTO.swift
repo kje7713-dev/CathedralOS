@@ -206,7 +206,7 @@ struct GenerationResponse: Codable {
     /// The number of credits charged for this generation (present on success).
     let creditCostCharged: Double?
     /// The number of credits remaining after this generation (present on success).
-    let remainingCredits: Int?
+    let remainingCredits: Double?
 
     // MARK: Rate limiting
     /// Seconds the client should wait before retrying after a rate_limited error.
@@ -239,7 +239,7 @@ struct GenerationResponse: Codable {
         requiredCredits     = try c.decodeIfPresent(Int.self, forKey: .requiredCredits)
         availableCredits    = try c.decodeIfPresent(Int.self, forKey: .availableCredits)
         creditCostCharged   = try c.decodeIfPresent(Double.self, forKey: .creditCostCharged)
-        remainingCredits    = try c.decodeIfPresent(Int.self, forKey: .remainingCredits)
+        remainingCredits    = try c.decodeIfPresent(Double.self, forKey: .remainingCredits)
         retryAfterSeconds   = try c.decodeIfPresent(Int.self, forKey: .retryAfterSeconds)
         status              = try c.decode(String.self, forKey: .status)
         errorMessage        = try c.decodeIfPresent(String.self, forKey: .errorMessage)
