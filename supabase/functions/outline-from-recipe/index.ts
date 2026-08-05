@@ -1,3 +1,5 @@
+import { createClient } from 'jsr:@supabase/supabase-js@2'
+
 // =============================================================================
 // index.ts — outline-from-recipe Edge Function
 //

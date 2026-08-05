@@ -3,7 +3,7 @@ import Foundation
 // MARK: - BackendClientError
 
 enum BackendClientError: Error, LocalizedError {
-    case notConfigured
+    case notConfigured(reason: String)
     case encodingError(Error)
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
@@ -11,8 +11,8 @@ enum BackendClientError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConfigured:
-            return "Backend client is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist."
+        case .notConfigured(let reason):
+            return "Backend client is not configured. Set SupabaseProjectURL and SupabaseAnonKey in Info.plist. \(reason)"
         case .encodingError(let underlying):
             return "Could not encode request: \(underlying.localizedDescription)"
         case .networkError(let underlying):
@@ -64,7 +64,7 @@ final class SupabaseBackendClient: BackendClient {
         do {
             self.configuration = try SupabaseConfiguration.validatedConfiguration()
         } catch {
-            throw BackendClientError.notConfigured
+            throw BackendClientError.notConfigured(reason: String(describing: error))
         }
     }
 
