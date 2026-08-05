@@ -1,0 +1,46 @@
+name: Debug Supabase Schema
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v2
+        with:
+          version: latest
+
+      - name: Link Supabase project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+
+      - name: List remote migration history
+        run: supabase migration list 2>&1
+
+      - name: Dump public schema tables
+        run: |
+          echo "===public schema tables via management API==="
+          curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/database/tables?included_schemas=public" \
+            | python3 -c "import json, sys; data = json.loads(sys.stdin.read()); [print(f\"  {t['schema']}.{t['name']}\") for t in data]"
+          echo ""
+          echo "===does projects exist?==="
+          curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/database/tables?included_schemas=public&name=projects" \
+            | python3 -c "import json, sys; data = json.loads(sys.stdin.read()); print('FOUND:' if data else 'NOT FOUND:')"
+          echo ""
+          echo "===current remote migration version==="
+          curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF" \
+            | python3 -c "import json, sys; d = json.loads(sys.stdin.read()); print('db_version:', d.get('database', {}).get('version')); print('project:', d.get('name'), d.get('id'))"

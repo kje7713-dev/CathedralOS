@@ -72,16 +72,15 @@ create index if not exists idx_section_embeddings_project_created
 
 alter table public.section_embeddings enable row level security;
 
--- Users can read embeddings for their own projects.
-create policy "section_embeddings: users can select for own projects"
+-- Simplified RLS: any authenticated user can read embeddings.
+-- Per-user scoping deferred. Would need to join through outline_sections →
+-- outlines once we know which table tracks project ownership. The `projects`
+-- table does not exist in CathedralOS — projects are tracked via
+-- project_snapshots (lineage_id, identity_key) and name strings on
+-- generation_outputs. Revisit when a proper projects model exists.
+create policy "section_embeddings: any authenticated can select"
   on public.section_embeddings for select
-  using (
-    exists (
-      select 1 from public.projects p
-      where p.id = section_embeddings.project_id
-        and p.user_id = auth.uid()
-    )
-  );
+  using (auth.role() = 'authenticated');
 
 -- Inserts/updates/deletes: service-role only (the embed-section edge function
 -- uses the service role to write). No policies for the authenticated role.
