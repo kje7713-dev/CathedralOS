@@ -1229,6 +1229,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         // Novel-building entities (Phase 0/1 PR — cloud sync round-trip).
         reconcileStoryArcs(payload.storyArcs, for: project, in: context)
         reconcileOutlines(payload.outlines, for: project, in: context)
+        reconcilePromptPacks(payload.promptPacks, for: project, in: context)
     }
 
     private func reconcileSetting(_ payload: ProjectImportExportPayload.SettingPayload?, for project: StoryProject, in context: ModelContext) {
@@ -1616,6 +1617,41 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             }
             // parentID deferred (grouping is a follow-up).
             section.outline = outline
+        }
+    }
+
+    // MARK: - Prompt Packs (cloud sync round-trip, PR #2f)
+
+    private func reconcilePromptPacks(
+        _ payloads: [ProjectImportExportPayload.PromptPackPayload],
+        for project: StoryProject,
+        in context: ModelContext
+    ) {
+        var existingByID = Dictionary(
+            project.promptPacks.map { ($0.id, $0) },
+            uniquingKeysWith: { _, later in later }
+        )
+        for payload in payloads {
+            let parsedID = payload.id.flatMap(UUID.init(uuidString:))
+            let pack: PromptPack
+            if let parsedID, let existing = existingByID.removeValue(forKey: parsedID) {
+                pack = existing
+                pack.id = parsedID
+            } else {
+                pack = PromptPack(name: payload.name)
+                context.insert(pack)
+            }
+            pack.name = payload.name
+            pack.selectedCharacterIDs = payload.selectedCharacterIDs.compactMap(UUID.init(uuidString:))
+            pack.selectedStorySparkID = payload.selectedStorySparkID.flatMap(UUID.init(uuidString:))
+            pack.selectedAftertasteID = payload.selectedAftertasteID.flatMap(UUID.init(uuidString:))
+            pack.notes = payload.notes
+            pack.instructionBias = payload.instructionBias
+            pack.includeProjectSetting = payload.includeProjectSetting
+            pack.selectedRelationshipIDs = payload.selectedRelationshipIDs.compactMap(UUID.init(uuidString:))
+            pack.selectedThemeQuestionIDs = payload.selectedThemeQuestionIDs.compactMap(UUID.init(uuidString:))
+            pack.selectedMotifIDs = payload.selectedMotifIDs.compactMap(UUID.init(uuidString:))
+            pack.project = project
         }
     }
 

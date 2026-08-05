@@ -25,6 +25,7 @@ struct SyncTombstone: Codable {
         // Treat sections as part of their outline tombstone (cascading delete on cloud).
         case storyArc           = "story_arc"
         case outline            = "outline"
+        case promptPack         = "prompt_pack"
     }
 
     enum DeletionScope: String, Codable {

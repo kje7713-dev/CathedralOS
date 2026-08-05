@@ -575,6 +575,7 @@ struct ProjectDetailView: View {
                     onDelete: {
                         modelContext.delete(pack)
                         try? modelContext.save()
+                        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
                     },
                     showOutputs: false
                 )

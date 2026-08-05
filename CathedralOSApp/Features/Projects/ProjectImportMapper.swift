@@ -263,6 +263,27 @@ enum ProjectImportMapper {
         }
         project.outlines = outlines
 
+        // MARK: - Prompt Packs (cloud sync round-trip, PR #2f)
+
+        let promptPacks: [PromptPack] = payload.promptPacks.map { pp in
+            let pack = PromptPack(name: pp.name)
+            if let packID = pp.id.flatMap(UUID.init(uuidString:)) {
+                pack.id = packID
+            }
+            pack.selectedCharacterIDs = pp.selectedCharacterIDs.compactMap(UUID.init(uuidString:))
+            pack.selectedStorySparkID = pp.selectedStorySparkID.flatMap(UUID.init(uuidString:))
+            pack.selectedAftertasteID = pp.selectedAftertasteID.flatMap(UUID.init(uuidString:))
+            pack.notes = pp.notes
+            pack.instructionBias = pp.instructionBias
+            pack.includeProjectSetting = pp.includeProjectSetting
+            pack.selectedRelationshipIDs = pp.selectedRelationshipIDs.compactMap(UUID.init(uuidString:))
+            pack.selectedThemeQuestionIDs = pp.selectedThemeQuestionIDs.compactMap(UUID.init(uuidString:))
+            pack.selectedMotifIDs = pp.selectedMotifIDs.compactMap(UUID.init(uuidString:))
+            pack.project = project
+            return pack
+        }
+        project.promptPacks = promptPacks
+
         return project
     }
 
