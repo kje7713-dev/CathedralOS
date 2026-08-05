@@ -12,6 +12,66 @@ struct ProjectImportExportPayload: Codable {
     let relationships: [RelationshipPayload]
     let themeQuestions: [ThemeQuestionPayload]
     let motifs: [MotifPayload]
+    let storyArcs: [StoryArcPayload]
+    let outlines: [OutlinePayload]
+
+    // MARK: - CodingKeys
+
+    enum CodingKeys: String, CodingKey {
+        case schema, version, project, setting
+        case characters, storySparks, aftertastes, relationships
+        case themeQuestions, motifs
+        case storyArcs, outlines
+    }
+
+    // MARK: - Decoder
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schema         = try c.decode(String.self, forKey: .schema)
+        version        = try c.decode(Int.self,    forKey: .version)
+        project        = try c.decode(ProjectPayload.self, forKey: .project)
+        setting        = try c.decodeIfPresent(SettingPayload.self, forKey: .setting)
+        characters     = try c.decode([CharacterPayload].self, forKey: .characters)
+        storySparks    = try c.decode([StorySparkPayload].self, forKey: .storySparks)
+        aftertastes    = try c.decode([AftertastePayload].self, forKey: .aftertastes)
+        relationships  = try c.decode([RelationshipPayload].self, forKey: .relationships)
+        themeQuestions = try c.decode([ThemeQuestionPayload].self, forKey: .themeQuestions)
+        motifs         = try c.decode([MotifPayload].self, forKey: .motifs)
+        // Novel-building payloads: optional for backward-compat with v1 snapshots.
+        storyArcs      = try c.decodeIfPresent([StoryArcPayload].self, forKey: .storyArcs) ?? []
+        outlines       = try c.decodeIfPresent([OutlinePayload].self, forKey: .outlines) ?? []
+    }
+
+    // MARK: - Explicit memberwise init
+
+    init(
+        schema: String,
+        version: Int,
+        project: ProjectPayload,
+        setting: SettingPayload?,
+        characters: [CharacterPayload],
+        storySparks: [StorySparkPayload],
+        aftertastes: [AftertastePayload],
+        relationships: [RelationshipPayload],
+        themeQuestions: [ThemeQuestionPayload],
+        motifs: [MotifPayload],
+        storyArcs: [StoryArcPayload],
+        outlines: [OutlinePayload]
+    ) {
+        self.schema = schema
+        self.version = version
+        self.project = project
+        self.setting = setting
+        self.characters = characters
+        self.storySparks = storySparks
+        self.aftertastes = aftertastes
+        self.relationships = relationships
+        self.themeQuestions = themeQuestions
+        self.motifs = motifs
+        self.storyArcs = storyArcs
+        self.outlines = outlines
+    }
 
     // MARK: - Nested Types
 
@@ -203,5 +263,47 @@ struct ProjectImportExportPayload: Codable {
         let notes: String
         let fieldLevel: String
         let enabledFieldGroups: [String]
+    }
+
+    // MARK: - Novel-building payloads (cloud sync round-trip for StoryArc + Outline)
+
+    struct StoryArcPayload: Codable {
+        let id: String?
+        let localProjectID: String
+        let lineageID: String?
+        let templateID: String?
+        /// JSON-encoded `customizationsData` bytes as a UTF-8 string. nil if empty.
+        let customizationsData: String?
+        let beats: [StoryArcBeatPayload]
+    }
+
+    struct StoryArcBeatPayload: Codable {
+        let id: String?
+        let position: Int
+        let role: String
+        let label: String
+        let details: String
+    }
+
+    struct OutlinePayload: Codable {
+        let id: String?
+        let localProjectID: String
+        let lineageID: String?
+        let storyArcID: String?
+        let name: String
+        let sections: [OutlineSectionPayload]
+    }
+
+    struct OutlineSectionPayload: Codable {
+        let id: String?
+        let position: Int
+        let title: String
+        let summary: String
+        let container: String?
+        let pov: String?
+        let terminalBeat: String?
+        let status: String
+        let parentID: String?
+        let storyArcBeatID: String?
     }
 }

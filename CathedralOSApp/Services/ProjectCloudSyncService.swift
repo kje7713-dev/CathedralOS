@@ -1226,6 +1226,9 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         reconcileRelationships(payload.relationships, characterIDMap: characterIDMap, for: project, in: context)
         reconcileThemeQuestions(payload.themeQuestions, for: project, in: context)
         reconcileMotifs(payload.motifs, for: project, in: context)
+        // Novel-building entities (Phase 0/1 PR — cloud sync round-trip).
+        reconcileStoryArcs(payload.storyArcs, for: project, in: context)
+        reconcileOutlines(payload.outlines, for: project, in: context)
     }
 
     private func reconcileSetting(_ payload: ProjectImportExportPayload.SettingPayload?, for project: StoryProject, in context: ModelContext) {
@@ -1503,6 +1506,117 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             context.delete(orphan)
         }
         project.motifs = reconciled
+    }
+
+    // MARK: - Novel-building entity reconciliation (cloud sync round-trip)
+
+    private func reconcileStoryArcs(
+        _ payloads: [ProjectImportExportPayload.StoryArcPayload],
+        for project: StoryProject,
+        in context: ModelContext
+    ) {
+        var existingByID = Dictionary(
+            project.storyArcs.map { ($0.id, $0) },
+            uniquingKeysWith: { _, later in later }
+        )
+        for payload in payloads {
+            let parsedID = payload.id.flatMap(UUID.init(uuidString:))
+            let arc = parsedID.flatMap { existingByID.removeValue(forKey: $0) } ?? StoryArc()
+            if let parsedID { arc.id = parsedID }
+            if let templateIDString = payload.templateID,
+               let templateID = UUID(uuidString: templateIDString) {
+                arc.templateID = templateID
+            }
+            if let customizationsString = payload.customizationsData,
+               let customizationsData = customizationsString.data(using: .utf8) {
+                arc.customizationsData = customizationsData
+            }
+            arc.project = project
+            reconcileStoryArcBeats(payload.beats, for: arc, in: context)
+        }
+    }
+
+    private func reconcileStoryArcBeats(
+        _ payloads: [ProjectImportExportPayload.StoryArcBeatPayload],
+        for arc: StoryArc,
+        in context: ModelContext
+    ) {
+        var existingByID = Dictionary(
+            arc.beats.map { ($0.id, $0) },
+            uniquingKeysWith: { _, later in later }
+        )
+        for payload in payloads {
+            let parsedID = payload.id.flatMap(UUID.init(uuidString:))
+            let beat = parsedID.flatMap { existingByID.removeValue(forKey: $0) } ?? StoryArcBeat(
+                position: payload.position,
+                role: payload.role,
+                label: payload.label,
+                details: payload.details
+            )
+            if let parsedID { beat.id = parsedID }
+            beat.position = payload.position
+            beat.role = payload.role
+            beat.label = payload.label
+            beat.details = payload.details
+            beat.storyArc = arc
+        }
+    }
+
+    private func reconcileOutlines(
+        _ payloads: [ProjectImportExportPayload.OutlinePayload],
+        for project: StoryProject,
+        in context: ModelContext
+    ) {
+        var existingByID = Dictionary(
+            project.outlines.map { ($0.id, $0) },
+            uniquingKeysWith: { _, later in later }
+        )
+        for payload in payloads {
+            let parsedID = payload.id.flatMap(UUID.init(uuidString:))
+            let outline = parsedID.flatMap { existingByID.removeValue(forKey: $0) } ?? Outline()
+            if let parsedID { outline.id = parsedID }
+            if let storyArcIDString = payload.storyArcID,
+               let storyArcID = UUID(uuidString: storyArcIDString) {
+                outline.storyArcID = storyArcID
+            }
+            outline.name = payload.name
+            outline.project = project
+            reconcileOutlineSections(payload.sections, for: outline, in: context)
+        }
+    }
+
+    private func reconcileOutlineSections(
+        _ payloads: [ProjectImportExportPayload.OutlineSectionPayload],
+        for outline: Outline,
+        in context: ModelContext
+    ) {
+        // Top-level sections only (parent == nil). Grouped sections (parent_id != nil) deferred to a follow-up.
+        var existingByID = Dictionary(
+            outline.sections.filter { $0.parent == nil }.map { ($0.id, $0) },
+            uniquingKeysWith: { _, later in later }
+        )
+        for payload in payloads {
+            let parsedID = payload.id.flatMap(UUID.init(uuidString:))
+            let section = parsedID.flatMap { existingByID.removeValue(forKey: $0) } ?? OutlineSection(
+                position: payload.position,
+                title: payload.title,
+                summary: payload.summary
+            )
+            if let parsedID { section.id = parsedID }
+            section.position = payload.position
+            section.title = payload.title
+            section.summary = payload.summary
+            section.container = payload.container
+            section.pov = payload.pov
+            section.terminalBeat = payload.terminalBeat
+            section.status = payload.status
+            if let storyArcBeatIDString = payload.storyArcBeatID,
+               let storyArcBeatID = UUID(uuidString: storyArcBeatIDString) {
+                section.storyArcBeatID = storyArcBeatID
+            }
+            // parentID deferred (grouping is a follow-up).
+            section.outline = outline
+        }
     }
 
     private func validatedFieldLevel(_ rawValue: String) -> String {
