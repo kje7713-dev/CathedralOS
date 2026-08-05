@@ -128,21 +128,30 @@ enum SupabaseConfiguration {
     /// Returns a validated configuration, or throws a `SupabaseConfigurationError`
     /// if required keys are missing or the URL is malformed.
     static func validatedConfiguration() throws -> ValidatedSupabaseConfiguration {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let projURLStr = info["SupabaseProjectURL"] as? String ?? ""
+        let anonKeyRaw = info["SupabaseAnonKey"] as? String ?? ""
+        let shareURLStr = info["PublicSharingBaseURL"] as? String ?? ""
+        print("[CathedralOS.Config] Info.plist keys: SupabaseProjectURL=\(projURLStr.isEmpty ? "EMPTY" : "OK(len=\(projURLStr.count),prefix=\(String(projURLStr.prefix(12))))"), SupabaseAnonKey=\(anonKeyRaw.isEmpty ? "EMPTY" : "OK(len=\(anonKeyRaw.count),prefix=\(String(anonKeyRaw.prefix(8))))"), PublicSharingBaseURL=\(shareURLStr.isEmpty ? "EMPTY" : "OK(len=\(shareURLStr.count),prefix=\(String(shareURLStr.prefix(12))))")")
         guard
-            let rawURL = Bundle.main.infoDictionary?["SupabaseProjectURL"] as? String,
+            let rawURL = info["SupabaseProjectURL"] as? String,
             !rawURL.isEmpty
         else {
+            print("[CathedralOS.Config] FAIL: missingProjectURL")
             throw SupabaseConfigurationError.missingProjectURL
         }
         guard let url = URL(string: rawURL) else {
+            print("[CathedralOS.Config] FAIL: invalidURL prefix=\(String(rawURL.prefix(20)))")
             throw SupabaseConfigurationError.invalidURL(rawURL)
         }
         guard
-            let key = Bundle.main.infoDictionary?["SupabaseAnonKey"] as? String,
+            let key = info["SupabaseAnonKey"] as? String,
             !key.isEmpty
         else {
+            print("[CathedralOS.Config] FAIL: missingAnonKey")
             throw SupabaseConfigurationError.missingAnonKey
         }
+        print("[CathedralOS.Config] OK: url=\(url.absoluteString), anonKey.len=\(key.count)")
         return ValidatedSupabaseConfiguration(
             projectURL: url,
             anonKey: key,
