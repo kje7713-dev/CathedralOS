@@ -67,3 +67,7 @@ jobs:
       - name: Deploy Edge Function - public-sharing
         if: ${{ hashFiles('supabase/functions/public-sharing/index.ts') != '' }}
         run: supabase functions deploy public-sharing --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+
+      - name: Deploy Edge Function - outline-from-recipe
+        if: ${{ hashFiles('supabase/functions/outline-from-recipe/index.ts') != '' }}
+        run: supabase functions deploy outline-from-recipe --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
