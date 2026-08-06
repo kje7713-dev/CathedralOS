@@ -4,8 +4,11 @@ import SwiftData
 /// Review sheet for AI-generated outline suggestions (Phase 2).
 ///
 /// Shown after the edge function returns 5-15 `OutlineSuggestion` payloads.
-/// For MVP, presents suggestions as a read-only list with two actions:
-///   - Accept All: create OutlineSection records for every suggestion
+/// Two actions:
+///   - Accept All: create OutlineSection records for every suggestion AND
+///     call embed-section for each (bulk accept). Shows progress + per-section
+///     status. On success, dismisses. On partial failure, shows alert listing
+///     which sections failed.
 ///   - Cancel: dismiss the sheet (no records created)
 ///
 /// Per-suggestion edit/delete is a follow-up (Phase 2 stretch).
@@ -18,6 +21,7 @@ struct OutlineSuggestionsReviewView: View {
     let modelContext: ModelContext
 
     @State private var accepting = false
+    @State private var acceptingProgress: String = ""
     @State private var acceptErrorMessage: String?
 
     var body: some View {
@@ -64,7 +68,13 @@ struct OutlineSuggestionsReviewView: View {
                         acceptAll()
                     } label: {
                         if accepting {
-                            ProgressView()
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                Text(acceptingProgress)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         } else {
                             Text("Accept All").fontWeight(.semibold)
                         }
@@ -73,7 +83,7 @@ struct OutlineSuggestionsReviewView: View {
                 }
             }
         }
-        .alert("Could Not Accept Suggestions", isPresented: Binding(
+        .alert("Acceptance Completed", isPresented: Binding(
             get: { acceptErrorMessage != nil },
             set: { if !$0 { acceptErrorMessage = nil } }
         )) {
@@ -86,32 +96,90 @@ struct OutlineSuggestionsReviewView: View {
     private func acceptAll() {
         guard !accepting else { return }
         accepting = true
-        defer {
-            // Allow SwiftUI to render the ProgressView before we kick off work.
-        }
+        acceptingProgress = "Preparing…"
+
         Task {
+            // Step 1: Create OutlineSection records locally.
+            let basePosition = (outline.sections.map { $0.position }.max() ?? -1) + 1
+            var createdSections: [OutlineSection] = []
+            for (offset, suggestion) in suggestions.enumerated() {
+                let section = OutlineSection(
+                    position: basePosition + offset,
+                    title: suggestion.title,
+                    summary: suggestion.summary
+                )
+                section.container = suggestion.container
+                section.pov = suggestion.pov
+                section.terminalBeat = suggestion.terminalBeat
+                section.storyArcBeatID = UUID(uuidString: suggestion.storyArcBeatID)
+                section.outline = outline
+                modelContext.insert(section)
+                createdSections.append(section)
+            }
             do {
-                let basePosition = (outline.sections.map { $0.position }.max() ?? -1) + 1
-                for (offset, suggestion) in suggestions.enumerated() {
-                    let section = OutlineSection(
-                        position: basePosition + offset,
-                        title: suggestion.title,
-                        summary: suggestion.summary
-                    )
-                    section.container = suggestion.container
-                    section.pov = suggestion.pov
-                    section.terminalBeat = suggestion.terminalBeat
-                    section.storyArcBeatID = UUID(uuidString: suggestion.storyArcBeatID)
-                    section.outline = outline
-                    modelContext.insert(section)
-                }
                 try modelContext.save()
-                Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
-                accepting = false
-                dismiss()
             } catch {
                 accepting = false
-                acceptErrorMessage = error.localizedDescription
+                acceptingProgress = ""
+                acceptErrorMessage = "Could not save sections: \(error.localizedDescription)"
+                return
+            }
+
+            // Step 2: Bulk accept each section via embed-section. PR B — Kevin
+            // asked for Accept All to also trigger the embedding flow, not just
+            // create local draft rows. Each section takes ~3-5s (LLM extraction).
+            guard let baseURL = SupabaseConfiguration.projectURL else {
+                accepting = false
+                acceptingProgress = ""
+                acceptErrorMessage = "Backend not configured."
+                return
+            }
+            guard let projectID = outline.project?.id else {
+                accepting = false
+                acceptingProgress = ""
+                acceptErrorMessage = "Outline has no project."
+                return
+            }
+            let outlineID = outline.id
+            let embedURL = baseURL
+                .appendingPathComponent("functions/v1")
+                .appendingPathComponent(SupabaseConfiguration.embedSectionEdgeFunctionPath)
+
+            let service = SectionEmbedService()
+            var failedAccepts: [(OutlineSection, String)] = []
+
+            for (index, section) in createdSections.enumerated() {
+                acceptingProgress = "Accepting \(index + 1)/\(createdSections.count)…"
+                do {
+                    _ = try await service.embedSection(
+                        edgeFunctionURL: embedURL,
+                        projectID: projectID,
+                        outlineID: outlineID,
+                        section: section
+                    )
+                    section.status = "accepted"
+                    try? modelContext.save()
+                } catch {
+                    failedAccepts.append((section, error.localizedDescription))
+                }
+            }
+
+            // Step 3: Wrap up — save + sync.
+            try? modelContext.save()
+            Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+
+            accepting = false
+            acceptingProgress = ""
+
+            if failedAccepts.isEmpty {
+                dismiss()
+            } else {
+                let failedCount = failedAccepts.count
+                let totalCount = createdSections.count
+                let succeededCount = totalCount - failedCount
+                let failedTitles = failedAccepts.prefix(5).map { "• \($0.0.title)" }.joined(separator: "\n")
+                let extra = failedAccepts.count > 5 ? "\n…and \(failedAccepts.count - 5) more" : ""
+                acceptErrorMessage = "Accepted \(succeededCount) of \(totalCount). Failed:\n\n\(failedTitles)\(extra)"
             }
         }
     }
