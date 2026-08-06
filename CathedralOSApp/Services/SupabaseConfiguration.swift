@@ -49,6 +49,7 @@ struct ValidatedSupabaseConfiguration {
     let anonKey: String
     let generationEdgeFunctionPath: String
     let outlineFromRecipeEdgeFunctionPath: String
+    let embedSectionEdgeFunctionPath: String
     let sharingEdgeFunctionPath: String
     let creditStateEdgeFunctionPath: String
     let adminGrantCreditsEdgeFunctionPath: String
@@ -107,6 +108,12 @@ enum SupabaseConfiguration {
     static let generationEdgeFunctionPath = "generate-story"
     static let outlineFromRecipeEdgeFunctionPath = "outline-from-recipe"
 
+    /// Supabase Edge Function path for embedding an accepted OutlineSection
+    /// (Phase 3 of novel-building per docs/novel-building.md). Extracts the
+    /// section's text via LLM, embeds the summary, and UPSERTs into
+    /// `section_embeddings` for retrieval-augmented generation in later phases.
+    static let embedSectionEdgeFunctionPath = "embed-section"
+
     /// Supabase Edge Function path for the public sharing backend.
     static let sharingEdgeFunctionPath = "shared-outputs"
 
@@ -157,6 +164,7 @@ enum SupabaseConfiguration {
             anonKey: key,
             generationEdgeFunctionPath: generationEdgeFunctionPath,
             outlineFromRecipeEdgeFunctionPath: outlineFromRecipeEdgeFunctionPath,
+            embedSectionEdgeFunctionPath: embedSectionEdgeFunctionPath,
             sharingEdgeFunctionPath: sharingEdgeFunctionPath,
             creditStateEdgeFunctionPath: creditStateEdgeFunctionPath,
             adminGrantCreditsEdgeFunctionPath: adminGrantCreditsEdgeFunctionPath,
