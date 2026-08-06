@@ -7,6 +7,51 @@ import SwiftData
 /// updated) and the template's beats are materialized as `StoryArcBeat` rows in
 /// the same model context.
 ///
+/// Sync-state coordinator for StoryArc + beats -> server.
+///
+/// Hosts the debounce/throttle logic + pending Task so the view doesn't
+/// have to manage async lifecycle directly. Hybrid trigger (per PR #285):
+///   - syncImmediately(_:) for template-pick + explicit save
+///   - syncDebounced(_:) for beat add/remove/reorder (~500ms idle debounce)
+///   - drainSync(_:) for onDisappear (cancel pending, fire now)
+@MainActor
+final class StoryArcSyncState: ObservableObject {
+    @Published var lastSyncError: Error?
+    private var pendingTask: Task<Void, Never>?
+
+    func syncImmediately(_ arc: StoryArc) {
+        pendingTask?.cancel()
+        pendingTask = Task { await performSync(arc: arc) }
+    }
+
+    func syncDebounced(_ arc: StoryArc) {
+        pendingTask?.cancel()
+        pendingTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)  // 500ms
+            if Task.isCancelled { return }
+            await performSync(arc: arc)
+        }
+    }
+
+    func drainSync(_ arc: StoryArc) {
+        // onDisappear: cancel any pending debounced task, fire immediate.
+        pendingTask?.cancel()
+        pendingTask = Task { await performSync(arc: arc) }
+    }
+
+    private func performSync(arc: StoryArc) async {
+        do {
+            _ = try await StoryArcSyncService().syncArc(arc: arc)
+            arc.lastSyncedAt = Date()
+        } catch {
+            // Best-effort. Q4c safety-net (future follow-up) catches FK
+            // violations at the embed-section call site. Silent here so
+            // the iOS UI isn't disrupted by transient network errors.
+            print("[StoryArcSyncState] sync failed: \(error)")
+        }
+    }
+}
+
 /// PR #2b: beats are now editable. Tap to edit (sheet), swipe to delete,
 /// drag-to-reorder (long-press to lift on iOS), "+" button to add. Template
 /// switch preserves user edits via role-based merge:
@@ -21,6 +66,7 @@ struct StoryArcRegionView: View {
     @State private var selectedTemplateID: UUID?
     @State private var beatsOrder: [StoryArcBeat] = []
     @State private var editingBeat: StoryArcBeat?
+    @StateObject private var syncState = StoryArcSyncState()
 
     /// At most one StoryArc per project in Phase 0/1.
     private var currentArc: StoryArc? {
@@ -57,6 +103,9 @@ struct StoryArcRegionView: View {
             syncBeatsOrder()
         }
         .onDisappear {
+            // Drain pending debounced sync (if any) before view tears down,
+            // so user edits aren't lost when navigating away mid-debounce.
+            if let arc = currentArc { syncState.drainSync(arc) }
             Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
         }
         .sheet(item: $editingBeat) { beat in
@@ -64,6 +113,8 @@ struct StoryArcRegionView: View {
                 beat: beat,
                 onSave: {
                     try? modelContext.save()
+                    // Q1c immediate on explicit save
+                    if let arc = currentArc { syncState.syncImmediately(arc) }
                     Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
                 }
             )
@@ -157,6 +208,8 @@ struct StoryArcRegionView: View {
         newBeat.storyArc = arc
         modelContext.insert(newBeat)
         try? modelContext.save()
+        // Q1c debounced: typing sequence into one final sync
+        syncState.syncDebounced(arc)
     }
 
     private func deleteBeats(at offsets: IndexSet) {
@@ -164,6 +217,8 @@ struct StoryArcRegionView: View {
             modelContext.delete(beatsOrder[index])
         }
         try? modelContext.save()
+        // Q1c debounced + Q3a immediate on shape change
+        if let arc = currentArc { syncState.syncDebounced(arc) }
     }
 
     private func moveBeats(from offsets: IndexSet, to destination: Int) {
@@ -172,6 +227,8 @@ struct StoryArcRegionView: View {
             beat.position = index
         }
         try? modelContext.save()
+        // Q1c debounced: reordering within a beat list
+        if let arc = currentArc { syncState.syncDebounced(arc) }
     }
 
     // MARK: - Template switch (role-based merge)
@@ -180,18 +237,24 @@ struct StoryArcRegionView: View {
     private func applyTemplate(_ templateID: UUID) {
         guard let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else { return }
 
+        let arcToSync: StoryArc
         if let existing = currentArc {
             mergeBeats(template: template, into: existing)
             existing.templateID = template.id
+            arcToSync = existing
         } else {
             let arc = StoryArc()
             arc.templateID = template.id
             arc.project = project
             modelContext.insert(arc)
             materializeBeats(template: template, into: arc)
+            arcToSync = arc
         }
 
         try? modelContext.save()
+        // Q4 save-once-on-create: immediate sync so the arc + beats land
+        // on the server before any embed-section call references them.
+        syncState.syncImmediately(arcToSync)
     }
 
     /// Role-based merge: matching roles keep label/details (just update

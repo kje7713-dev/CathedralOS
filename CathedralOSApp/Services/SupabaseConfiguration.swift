@@ -50,6 +50,7 @@ struct ValidatedSupabaseConfiguration {
     let generationEdgeFunctionPath: String
     let outlineFromRecipeEdgeFunctionPath: String
     let embedSectionEdgeFunctionPath: String
+    let syncStoryArcEdgeFunctionPath: String
     let sharingEdgeFunctionPath: String
     let creditStateEdgeFunctionPath: String
     let adminGrantCreditsEdgeFunctionPath: String
@@ -114,6 +115,12 @@ enum SupabaseConfiguration {
     /// `section_embeddings` for retrieval-augmented generation in later phases.
     static let embedSectionEdgeFunctionPath = "embed-section"
 
+    /// Supabase Edge Function path for syncing a StoryArc + its beats to the
+    /// server (long-term proper beat sync per PR #285). iOS sends the full
+    /// current beat list; server upserts present and deletes missing via the
+    /// FK ON DELETE SET NULL on outline_sections.story_arc_beat_id.
+    static let syncStoryArcEdgeFunctionPath = "sync-story-arc"
+
     /// Supabase Edge Function path for the public sharing backend.
     static let sharingEdgeFunctionPath = "shared-outputs"
 
@@ -165,6 +172,7 @@ enum SupabaseConfiguration {
             generationEdgeFunctionPath: generationEdgeFunctionPath,
             outlineFromRecipeEdgeFunctionPath: outlineFromRecipeEdgeFunctionPath,
             embedSectionEdgeFunctionPath: embedSectionEdgeFunctionPath,
+            syncStoryArcEdgeFunctionPath: syncStoryArcEdgeFunctionPath,
             sharingEdgeFunctionPath: sharingEdgeFunctionPath,
             creditStateEdgeFunctionPath: creditStateEdgeFunctionPath,
             adminGrantCreditsEdgeFunctionPath: adminGrantCreditsEdgeFunctionPath,

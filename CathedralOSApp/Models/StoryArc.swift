@@ -27,10 +27,18 @@ class StoryArc {
     @Relationship(deleteRule: .cascade, inverse: \StoryArcBeat.storyArc)
     var beats: [StoryArcBeat]
 
+    /// Last time this arc was successfully synced to the server (Q4c safety net
+    /// flag - see PR #285). nil means never synced; the embed-section call
+    /// sites pre-sync with this arc when nil so outline_sections.story_arc_beat_id
+    /// always has a valid target. Updated by StoryArcSyncService after each
+    /// successful sync-story-arc response.
+    var lastSyncedAt: Date?
+
     init() {
         self.id = UUID()
         self.templateID = nil
         self.customizationsData = nil
         self.beats = []
+        self.lastSyncedAt = nil
     }
 }
