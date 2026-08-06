@@ -14,11 +14,10 @@
 // outline_sections where id = $1` and 400'd when the section didn't exist
 // in the DB. v2 (this file) UPSERTs the section from the iOS payload.
 //
-// v2.1 (2026-08-06): fixed the actual `outlines` schema columns. The real
-// table has `user_id` (FK to auth.users), `local_project_id` (text), and
-// `lineage_id` (uuid) — NOT `project_id`. v2 was guessing from the v1
-// join syntax that was never exercised. Also dropped `story_arc_beat_id`
-// from the outline_sections upsert (column doesn't exist in the table).
+// v2.2 (2026-08-06): write `story_arc_beat_id` to outline_sections now
+// that the DB column exists (migration 20260806120000). v2.1 deferred this
+// with "Future migration + function update deferred" — this is that
+// follow-up (PR #284).
 //
 // Auth: requires a valid Supabase user JWT in the Authorization header.
 // Service-role key is used server-side only (never exposed to iOS).
@@ -140,9 +139,10 @@ Deno.serve(async (req: Request) => {
     container: body.container ?? null,
     pov: body.pov ?? null,
     terminal_beat: body.terminal_beat ?? null,
-    // story_arc_beat_id omitted: the column doesn't exist in outline_sections.
-    // The iOS model has it (local SwiftData) but the DB column was never added.
-    // Future migration + function update deferred.
+    // story_arc_beat_id: column added in migration 20260806120000 (PR #284).
+    // Was deferred in v2.1 with "Future migration + function update
+    // deferred" comment.
+    story_arc_beat_id: body.story_arc_beat_id ?? null,
     status: "draft",
   }, { onConflict: "id" });
   if (sectionErr) {
