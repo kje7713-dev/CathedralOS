@@ -20,6 +20,8 @@ struct OutlineSectionsRegionView: View {
     @State private var suggestions: [OutlineSuggestion] = []
     @State private var suggestionsLoading = false
     @State private var suggestionsError: String?
+    @State private var acceptingSectionID: UUID?
+    @State private var embedError: String?
 
     /// At most one Outline per project in Phase 0/1.
     private var currentOutline: Outline? {
@@ -78,6 +80,14 @@ struct OutlineSectionsRegionView: View {
             Button("OK", role: .cancel) { suggestionsError = nil }
         } message: {
             Text(suggestionsError ?? "An unknown error occurred.")
+        }
+        .alert("Could Not Accept Section", isPresented: Binding(
+            get: { embedError != nil },
+            set: { if !$0 { embedError = nil } }
+        )) {
+            Button("OK", role: .cancel) { embedError = nil }
+        } message: {
+            Text(embedError ?? "An unknown error occurred.")
         }
         .sheet(isPresented: $showingSuggestionSheet) {
             if let outline = currentOutline {
@@ -190,7 +200,9 @@ struct OutlineSectionsRegionView: View {
             ForEach(sectionsOrder, id: \.id) { section in
                 OutlineSectionRow(
                     section: section,
-                    arcBeatLabel: arcBeatLabel(for: section)
+                    arcBeatLabel: arcBeatLabel(for: section),
+                    onAccept: { Task { await acceptSection(section) } },
+                    isAccepting: acceptingSectionID == section.id
                 )
                 .listRowBackground(CathedralTheme.Colors.background)
                 .listRowSeparator(.hidden)
@@ -277,6 +289,42 @@ struct OutlineSectionsRegionView: View {
         guard let id = section.storyArcBeatID else { return nil }
         return availableBeats.first { $0.id == id }?.label
     }
+
+    /// Accept an OutlineSection: call embed-section edge function, then flip
+    /// status to "accepted" on success. Phase 3 of novel-building per
+    /// docs/novel-building.md — makes the section indexable for later
+    /// retrieval-augmented generation. Re-accepting an already-accepted
+    /// section is not allowed by the UI (button hidden), but the backend
+    /// UPSERTs on outline_section_id so future re-embed flows will overwrite.
+    private func acceptSection(_ section: OutlineSection) async {
+        guard acceptingSectionID == nil else { return }
+        acceptingSectionID = section.id
+        defer { acceptingSectionID = nil }
+
+        guard let baseURL = SupabaseConfiguration.projectURL else {
+            embedError = "Backend not configured."
+            return
+        }
+        let embedURL = baseURL
+            .appendingPathComponent("functions/v1")
+            .appendingPathComponent(SupabaseConfiguration.embedSectionEdgeFunctionPath)
+
+        let service = SectionEmbedService()
+        do {
+            let response = try await service.embedSection(
+                edgeFunctionURL: embedURL,
+                section: section
+            )
+            section.status = "accepted"
+            try modelContext.save()
+            print("[OutlineSections] Embed OK: section=\(section.id.uuidString.prefix(8)) dim=\(response.embedding_dim) summary.len=\(response.extracted_summary.count)")
+            Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+        } catch let error as SectionEmbedError {
+            embedError = error.localizedDescription
+        } catch {
+            embedError = error.localizedDescription
+        }
+    }
 }
 
 /// Single section row in the sections list.
@@ -289,6 +337,8 @@ struct OutlineSectionRow: View {
     @Bindable var section: OutlineSection
     let arcBeatLabel: String?
     var onGenerate: (() -> Void)? = nil
+    var onAccept: (() async -> Void)? = nil
+    var isAccepting: Bool = false
 
     var body: some View {
         HStack(alignment: .top, spacing: CathedralTheme.Spacing.md) {
@@ -315,13 +365,33 @@ struct OutlineSectionRow: View {
                 }
             }
             Spacer()
-            if let onGenerate {
-                Button(action: onGenerate) {
-                    Image(systemName: "sparkles")
-                        .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                        .foregroundStyle(.tint)
+            HStack(spacing: CathedralTheme.Spacing.sm) {
+                if let onAccept, section.status != "accepted" {
+                    Button {
+                        Task { await onAccept() }
+                    } label: {
+                        if isAccepting {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "checkmark.circle")
+                                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                .foregroundStyle(CathedralTheme.Colors.accent)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(isAccepting)
+                    .accessibilityLabel("Accept section")
                 }
-                .buttonStyle(.borderless)
+                if let onGenerate {
+                    Button(action: onGenerate) {
+                        Image(systemName: "sparkles")
+                            .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                            .foregroundStyle(.tint)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Generate section")
+                }
             }
         }
         .padding(CathedralTheme.Spacing.sm)

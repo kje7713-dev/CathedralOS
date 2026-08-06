@@ -172,6 +172,7 @@
 		C000000000000000000000BE /* OutlineSectionEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C000000000000000000000BD /* OutlineSectionEditView.swift */; };
 		1F396EF4F70949FBB3759325 /* OutlineSuggestion.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3EE330364824863A746DB8C /* OutlineSuggestion.swift */; };
 		01182B640C6F421187F8DFAD /* OutlineSuggestionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */; };
+		9D0E1F2A3B4C5D6E7F8A9B0C /* SectionEmbedService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C9D0E1F2A3B4C5D6E7F8A9B /* SectionEmbedService.swift */; };
 		19FB03A4C42F49D391D349FE /* OutlineSuggestionsReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01FDB60572384C8E8B538827 /* OutlineSuggestionsReviewView.swift */; };
 /* End PBXBuildFile section */
 
@@ -354,6 +355,7 @@
 		C000000000000000000000BD /* OutlineSectionEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSectionEditView.swift; sourceTree = "<group>"; };
 		F3EE330364824863A746DB8C /* OutlineSuggestion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSuggestion.swift; sourceTree = "<group>"; };
 		81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSuggestionService.swift; sourceTree = "<group>"; };
+		8C9D0E1F2A3B4C5D6E7F8A9B /* SectionEmbedService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionEmbedService.swift; sourceTree = "<group>"; };
 		01FDB60572384C8E8B538827 /* OutlineSuggestionsReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSuggestionsReviewView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -624,6 +626,7 @@
 				00000000000000000000019C /* GenerationModelService.swift */,
 				0000000000000000000001A3 /* ProjectCloudSyncService.swift */,
 				0000000000000000000001AC /* AuthSessionResolver.swift */,		81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */,
+				8C9D0E1F2A3B4C5D6E7F8A9B /* SectionEmbedService.swift */,
 
 			);
 			path = Services;
@@ -864,6 +867,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 				0000000000000000000000F3 /* FieldLevel.swift in Sources */,
 				1F396EF4F70949FBB3759325 /* OutlineSuggestion.swift in Sources */,
 				01182B640C6F421187F8DFAD /* OutlineSuggestionService.swift in Sources */,
+				9D0E1F2A3B4C5D6E7F8A9B0C /* SectionEmbedService.swift in Sources */,
 				19FB03A4C42F49D391D349FE /* OutlineSuggestionsReviewView.swift in Sources */,
 				0000000000000000000000F7 /* FieldTemplateDefinition.swift in Sources */,
 				0000000000000000000000F9 /* FieldTemplateEngine.swift in Sources */,
