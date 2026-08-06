@@ -309,10 +309,16 @@ struct OutlineSectionsRegionView: View {
             .appendingPathComponent("functions/v1")
             .appendingPathComponent(SupabaseConfiguration.embedSectionEdgeFunctionPath)
 
+        guard let outlineID = section.outline?.id ?? currentOutline?.id else {
+            embedError = "Section has no outline. Refresh the project and try again."
+            return
+        }
         let service = SectionEmbedService()
         do {
             let response = try await service.embedSection(
                 edgeFunctionURL: embedURL,
+                projectID: project.id,
+                outlineID: outlineID,
                 section: section
             )
             section.status = "accepted"
