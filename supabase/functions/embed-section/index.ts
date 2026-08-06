@@ -14,6 +14,12 @@
 // outline_sections where id = $1` and 400'd when the section didn't exist
 // in the DB. v2 (this file) UPSERTs the section from the iOS payload.
 //
+// v2.1 (2026-08-06): fixed the actual `outlines` schema columns. The real
+// table has `user_id` (FK to auth.users), `local_project_id` (text), and
+// `lineage_id` (uuid) — NOT `project_id`. v2 was guessing from the v1
+// join syntax that was never exercised. Also dropped `story_arc_beat_id`
+// from the outline_sections upsert (column doesn't exist in the table).
+//
 // Auth: requires a valid Supabase user JWT in the Authorization header.
 // Service-role key is used server-side only (never exposed to iOS).
 //
@@ -105,11 +111,15 @@ Deno.serve(async (req: Request) => {
 
   const adminClient = createClient(supabaseUrl, supabaseServiceKey);
 
-  // Step 1: UPSERT outline (id = client-provided, project_id, name = "Outline").
+  // Step 1: UPSERT outline (id = client-provided, user_id from auth, local_project_id + lineage_id).
+  // The actual `outlines` schema uses user_id / local_project_id / lineage_id — NOT project_id
+  // (which doesn't exist; my v2 guessed wrong from the v1 join syntax that was never exercised).
   // We do this first so the outline_section FK has a target.
   const { error: outlineErr } = await adminClient.from("outlines").upsert({
     id: body.outline_id,
-    project_id: body.project_id,
+    user_id: user.id,
+    local_project_id: body.project_id,
+    lineage_id: body.project_id,
     name: "Outline",
   }, { onConflict: "id" });
   if (outlineErr) {
@@ -130,7 +140,9 @@ Deno.serve(async (req: Request) => {
     container: body.container ?? null,
     pov: body.pov ?? null,
     terminal_beat: body.terminal_beat ?? null,
-    story_arc_beat_id: body.story_arc_beat_id ?? null,
+    // story_arc_beat_id omitted: the column doesn't exist in outline_sections.
+    // The iOS model has it (local SwiftData) but the DB column was never added.
+    // Future migration + function update deferred.
     status: "draft",
   }, { onConflict: "id" });
   if (sectionErr) {

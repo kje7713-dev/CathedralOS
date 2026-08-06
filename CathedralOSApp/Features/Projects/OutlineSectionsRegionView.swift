@@ -209,6 +209,11 @@ struct OutlineSectionsRegionView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { editingSection = section }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        deleteSection(section)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
                     Button {
                         duplicateSection(section)
                     } label: {
@@ -275,6 +280,15 @@ struct OutlineSectionsRegionView: View {
         dup.outline = outline
         modelContext.insert(dup)
         try? modelContext.save()
+    }
+
+    /// Delete a section via the swipe action. The SwiftData relationship
+    /// cascade-deletes children (if any). The .onChange(sectionsKey) handler
+    /// re-syncs sectionsOrder automatically.
+    private func deleteSection(_ section: OutlineSection) {
+        modelContext.delete(section)
+        try? modelContext.save()
+        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
     }
 
     private func moveSections(from offsets: IndexSet, to destination: Int) {
