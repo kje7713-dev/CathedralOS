@@ -74,3 +74,7 @@ jobs:
       - name: Deploy Edge Function - embed-section
         if: ${{ hashFiles('supabase/functions/embed-section/index.ts') != '' }}
         run: supabase functions deploy embed-section --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy Edge Function - sync-story-arc
+        if: ${{ hashFiles('supabase/functions/sync-story-arc/index.ts') != '' }}
+        run: supabase functions deploy sync-story-arc --project-ref "$SUPABASE_PROJECT_REF"
