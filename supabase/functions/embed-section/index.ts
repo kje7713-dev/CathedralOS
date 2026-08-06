@@ -1,15 +1,27 @@
 // =============================================================================
 // embed-section Edge Function (Phase 3 of novel-building per docs/novel-building.md)
 //
-// Called from iOS on OutlineSection Accept. Three-step pipeline:
-//   1. LLM extraction pass — ~200-500 token distillation (gpt-4o-mini)
-//   2. Embed the summary (text-embedding-3-small, 1536-dim)
-//   3. UPSERT into section_embeddings via service role
+// Called from iOS on OutlineSection Accept. On-demand pipeline:
+//   1. UPSERT outline (id = client-provided outline_id, project_id)
+//   2. UPSERT outline_section (id = client-provided outline_section_id)
+//   3. LLM extraction pass — ~200-500 token distillation (gpt-4o-mini)
+//   4. Embed the summary (text-embedding-3-small, 1536-dim)
+//   5. UPSERT into section_embeddings via service role
+//
+// The function creates the outline + section on-demand. The iOS app does
+// NOT need to sync them to supabase first — this was the v1 bug: the
+// edge function did a `select outline_id, outlines!inner(project_id) from
+// outline_sections where id = $1` and 400'd when the section didn't exist
+// in the DB. v2 (this file) UPSERTs the section from the iOS payload.
 //
 // Auth: requires a valid Supabase user JWT in the Authorization header.
 // Service-role key is used server-side only (never exposed to iOS).
 //
-// Request:  POST { outline_section_id, raw_text, container?, pov? }
+// Request:  POST {
+//             outline_section_id, outline_id, project_id, position,
+//             title, summary, container?, pov?, terminal_beat?,
+//             story_arc_beat_id?, raw_text
+//           }
 // Response: 200 { outline_section_id, extracted_summary, embedding_dim }
 // =============================================================================
 
@@ -33,9 +45,16 @@ const errorResponse = (code: string, message: string, status: number): Response 
 
 interface EmbedSectionRequest {
   outline_section_id?: string;
-  raw_text?: string;
+  outline_id?: string;
+  project_id?: string;
+  position?: number;
+  title?: string;
+  summary?: string;
   container?: string;
   pov?: string;
+  terminal_beat?: string;
+  story_arc_beat_id?: string;
+  raw_text?: string;
 }
 
 Deno.serve(async (req: Request) => {
@@ -74,11 +93,53 @@ Deno.serve(async (req: Request) => {
   } catch {
     return errorResponse("invalid_request", "Body must be JSON", 400);
   }
-  if (!body.outline_section_id || !body.raw_text) {
-    return errorResponse("invalid_request", "outline_section_id and raw_text required", 400);
+  if (!body.outline_section_id || !body.outline_id || !body.project_id || !body.title || !body.raw_text) {
+    return errorResponse(
+      "invalid_request",
+      "outline_section_id, outline_id, project_id, title, and raw_text are required",
+      400
+    );
   }
 
-  // Step 1: extract summary via LLM
+  console.log(`[embed-section] start user=${user.id} section=${body.outline_section_id} outline=${body.outline_id} project=${body.project_id}`);
+
+  const adminClient = createClient(supabaseUrl, supabaseServiceKey);
+
+  // Step 1: UPSERT outline (id = client-provided, project_id, name = "Outline").
+  // We do this first so the outline_section FK has a target.
+  const { error: outlineErr } = await adminClient.from("outlines").upsert({
+    id: body.outline_id,
+    project_id: body.project_id,
+    name: "Outline",
+  }, { onConflict: "id" });
+  if (outlineErr) {
+    console.error(`[embed-section] outline upsert failed: ${outlineErr.message}`);
+    return errorResponse("database_error", `outline upsert failed: ${outlineErr.message}`, 500);
+  }
+  console.log(`[embed-section] outline upserted id=${body.outline_id}`);
+
+  // Step 2: UPSERT outline_section (id = client-provided, all fields).
+  // status stays "draft" here — the iOS app flips it to "accepted" locally
+  // on 200 response. Server-side status flips live in a future PR if needed.
+  const { error: sectionErr } = await adminClient.from("outline_sections").upsert({
+    id: body.outline_section_id,
+    outline_id: body.outline_id,
+    position: body.position ?? 0,
+    title: body.title,
+    summary: body.summary ?? "",
+    container: body.container ?? null,
+    pov: body.pov ?? null,
+    terminal_beat: body.terminal_beat ?? null,
+    story_arc_beat_id: body.story_arc_beat_id ?? null,
+    status: "draft",
+  }, { onConflict: "id" });
+  if (sectionErr) {
+    console.error(`[embed-section] section upsert failed: ${sectionErr.message}`);
+    return errorResponse("database_error", `outline_section upsert failed: ${sectionErr.message}`, 500);
+  }
+  console.log(`[embed-section] section upserted id=${body.outline_section_id}`);
+
+  // Step 3: extract summary via LLM
   let extractedSummary = "";
   try {
     const ac = new AbortController();
@@ -107,6 +168,7 @@ Deno.serve(async (req: Request) => {
     clearTimeout(t);
     if (!r.ok) {
       const errText = await r.text();
+      console.error(`[embed-section] OpenAI extract ${r.status}: ${errText.slice(0, 500)}`);
       return errorResponse(
         "provider_error",
         `OpenAI extract ${r.status}: ${errText.slice(0, 500)}`,
@@ -116,13 +178,16 @@ Deno.serve(async (req: Request) => {
     const data = await r.json();
     extractedSummary = (data.choices?.[0]?.message?.content ?? "").trim();
     if (!extractedSummary) {
+      console.error(`[embed-section] LLM extraction returned empty summary`);
       return errorResponse("provider_error", "LLM extraction returned empty summary", 502);
     }
   } catch (err) {
+    console.error(`[embed-section] LLM extract threw: ${String(err)}`);
     return errorResponse("provider_error", String(err), 502);
   }
+  console.log(`[embed-section] extract OK len=${extractedSummary.length}`);
 
-  // Step 2: embed summary
+  // Step 4: embed summary
   let embedding: number[] = [];
   try {
     const ac = new AbortController();
@@ -142,6 +207,7 @@ Deno.serve(async (req: Request) => {
     clearTimeout(t);
     if (!r.ok) {
       const errText = await r.text();
+      console.error(`[embed-section] OpenAI embed ${r.status}: ${errText.slice(0, 500)}`);
       return errorResponse(
         "provider_error",
         `OpenAI embed ${r.status}: ${errText.slice(0, 500)}`,
@@ -151,35 +217,20 @@ Deno.serve(async (req: Request) => {
     const data = await r.json();
     const vec = data.data?.[0]?.embedding;
     if (!Array.isArray(vec)) {
+      console.error(`[embed-section] Embedding API returned invalid data`);
       return errorResponse("provider_error", "Embedding API returned invalid data", 502);
     }
     embedding = vec;
   } catch (err) {
+    console.error(`[embed-section] embed threw: ${String(err)}`);
     return errorResponse("provider_error", String(err), 502);
   }
+  console.log(`[embed-section] embed OK dim=${embedding.length}`);
 
-  // Step 3: resolve project_id via outline_sections → outlines
-  const adminClient = createClient(supabaseUrl, supabaseServiceKey);
-  const { data: sectionRow, error: lookupErr } = await adminClient
-    .from("outline_sections")
-    .select("outline_id, outlines!inner(project_id)")
-    .eq("id", body.outline_section_id)
-    .single();
-  if (lookupErr || !sectionRow) {
-    return errorResponse(
-      "invalid_request",
-      `outline_section_id lookup failed: ${lookupErr?.message ?? "no row"}`,
-      400
-    );
-  }
-  const projectId = (sectionRow as { outlines: { project_id: string } | null }).outlines?.project_id;
-  if (!projectId) {
-    return errorResponse("invalid_request", "outline has no project_id", 400);
-  }
-
-  // Step 4: upsert
+  // Step 5: upsert into section_embeddings (UPSERT on outline_section_id).
+  // Re-accepting an already-accepted section overwrites the embedding.
   const { error: upsertErr } = await adminClient.from("section_embeddings").upsert({
-    project_id: projectId,
+    project_id: body.project_id,
     outline_section_id: body.outline_section_id,
     embedding,
     extracted_summary: extractedSummary,
@@ -188,8 +239,10 @@ Deno.serve(async (req: Request) => {
     pov: body.pov ?? null,
   }, { onConflict: "outline_section_id" });
   if (upsertErr) {
+    console.error(`[embed-section] section_embeddings upsert failed: ${upsertErr.message}`);
     return errorResponse("database_error", upsertErr.message, 500);
   }
+  console.log(`[embed-section] section_embeddings upserted section=${body.outline_section_id}`);
 
   return corsResponse(
     JSON.stringify({
