@@ -161,7 +161,7 @@ struct OutlineSectionsRegionView: View {
                 recipe: recipe,
                 arc: arc,
                 arcTemplate: template,
-                existingSections: outline.sections
+                existingSections: currentOutline?.sections ?? []
             )
             suggestions = result
             showingSuggestionSheet = true
