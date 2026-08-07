@@ -129,6 +129,16 @@ interface OutlineFromRecipeRequest {
   recipe: RecipeBlob;
   arcTemplate: ArcTemplateBlob;
   hint?: string;
+  existingSections?: ExistingSectionBlob[];  // iOS-side outline state at request time
+}
+
+interface ExistingSectionBlob {
+  title?: string;
+  summary?: string;
+  container?: string;
+  pov?: string;
+  terminalBeat?: string;
+  storyArcBeatID?: string;  // null for manual/free-form sections
 }
 
 interface Suggestion {
@@ -176,7 +186,12 @@ Each section should:
 
 Be specific and grounded. Use the characters' voices and the story's genre. Each section summary should be evocative enough to inspire a writer.
 
-Distribute the arc beats across the suggestions — every beat should appear in at least one suggestion's storyArcBeatID. You may reuse beats across suggestions if multiple sections handle the same beat from different angles.
+${req.existingSections && req.existingSections.length > 0
+    ? `Existing sections already in this outline (DO NOT duplicate — build on them where natural; prefer beats without existing sections):
+${req.existingSections.map(s => `- "${s.title ?? "(untitled)"}" (${s.container ?? "scene"}, ${s.pov ?? "thirdPersonLimited"}): ${s.summary ?? ""}`).join("\n")}
+
+`
+    : ""}Distribute the arc beats across the suggestions — every beat should appear in at least one suggestion's storyArcBeatID. Skip beats already covered by an existing section if possible. You may reuse beats across suggestions if multiple sections handle the same beat from different angles.
 
 Respond with structured JSON matching the schema.`;
 
