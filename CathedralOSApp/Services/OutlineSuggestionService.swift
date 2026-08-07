@@ -49,12 +49,16 @@ struct OutlineSuggestionService {
     ///   - arc: the project's StoryArc (must have beats)
     ///   - arcTemplate: the matched StoryArcTemplate (must have id/name/description)
     ///   - hint: optional user-provided guidance
+    ///   - existingSections: outline's current sections (manual + AI-accepted).
+    ///     Passed to the AI as context so it doesn't duplicate or contradict
+    ///     what's already there. Defaults to empty.
     func requestSuggestions(
         edgeFunctionURL: URL,
         recipe: PromptPack,
         arc: StoryArc,
         arcTemplate: StoryArcTemplate,
-        hint: String? = nil
+        hint: String? = nil,
+        existingSections: [OutlineSection] = []
     ) async throws -> [OutlineSuggestion] {
         guard let project = recipe.project else {
             throw OutlineSuggestionError.invalidResponse("Recipe has no project")
@@ -63,10 +67,15 @@ struct OutlineSuggestionService {
             throw OutlineSuggestionError.invalidResponse("Arc template mismatch")
         }
 
+        let existingSectionBlobs: [ExistingSectionBlob]? = existingSections.isEmpty
+            ? nil
+            : buildExistingSectionBlobs(existingSections)
+
         let request = OutlineSuggestionRequest(
             recipe: buildRecipeBlob(recipe: recipe, project: project),
             arcTemplate: buildArcTemplateBlob(arc: arc, template: arcTemplate),
-            hint: hint
+            hint: hint,
+            existingSections: existingSectionBlobs
         )
 
         let client: SupabaseBackendClient
@@ -188,5 +197,18 @@ struct OutlineSuggestionService {
             description: template.description,
             beats: beats
         )
+    }
+
+    private func buildExistingSectionBlobs(_ sections: [OutlineSection]) -> [ExistingSectionBlob] {
+        sections.map { section in
+            ExistingSectionBlob(
+                title: section.title,
+                summary: section.summary,
+                container: section.container,
+                pov: section.pov,
+                terminalBeat: section.terminalBeat,
+                storyArcBeatID: section.storyArcBeatID?.uuidString
+            )
+        }
     }
 }

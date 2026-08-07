@@ -23,6 +23,10 @@ struct OutlineSuggestionRequest: Codable {
     let recipe: RecipeBlob
     let arcTemplate: ArcTemplateBlob
     let hint: String?
+    /// Existing outline sections (manual + AI-accepted). Passed as context so
+    /// the AI doesn't duplicate or contradict them. Optional — nil/empty for
+    /// fresh outlines.
+    let existingSections: [ExistingSectionBlob]?
 }
 
 struct RecipeBlob: Codable {
@@ -79,6 +83,16 @@ struct BeatBlob: Codable {
     let role: String
     let label: String
     let description: String?
+}
+
+struct ExistingSectionBlob: Codable {
+    let title: String
+    let summary: String
+    let container: String?
+    let pov: String?
+    let terminalBeat: String?
+    /// nil for manual/free-form sections (no story arc beat linkage).
+    let storyArcBeatID: String?
 }
 
 struct OutlineSuggestionResponse: Codable {

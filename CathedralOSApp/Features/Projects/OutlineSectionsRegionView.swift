@@ -160,7 +160,8 @@ struct OutlineSectionsRegionView: View {
                 edgeFunctionURL: outlineURL,
                 recipe: recipe,
                 arc: arc,
-                arcTemplate: template
+                arcTemplate: template,
+                existingSections: outline.sections
             )
             suggestions = result
             showingSuggestionSheet = true
