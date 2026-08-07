@@ -145,6 +145,22 @@ struct OutlineSuggestionsReviewView: View {
                 .appendingPathComponent("functions/v1")
                 .appendingPathComponent(SupabaseConfiguration.embedSectionEdgeFunctionPath)
 
+            // Pre-sync: ensure arc + beats are uploaded to Supabase before
+            // embed-section runs. The 500ms debounce on addBeat/deleteBeats/
+            // moveBeats can race with Accept All, leaving beat IDs in iOS-local
+            // but not in remote story_arc_beats. Without pre-sync, embed-section's
+            // FK lookup hits "no such beat" and the beat reference is silently
+            // dropped (PR #287's defensive null fallback). Don't block on
+            // failure — embed-section handles missing beats gracefully.
+            if let arc = project.storyArcs.first {
+                let syncService = StoryArcSyncService()
+                do {
+                    _ = try await syncService.syncArc(arc: arc)
+                } catch {
+                    // Pre-sync failed; continue with Accept All.
+                }
+            }
+
             let service = SectionEmbedService()
             var failedAccepts: [(OutlineSection, String)] = []
 
