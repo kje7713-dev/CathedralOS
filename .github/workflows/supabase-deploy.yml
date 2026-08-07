@@ -25,24 +25,29 @@ jobs:
         with:
           version: 2.112.0
 
-      - name: Capture raw API keys response (debug)
-        run: |
-          echo "=== Raw /v1/projects/$SUPABASE_PROJECT_REF/api-keys response ==="
-          curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/api-keys" || true
-          echo
-          echo "=== End raw response ==="
-
-      - name: Link Supabase project
-        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD" --debug
-
+      # Migration steps are best-effort (continue-on-error) since they need
+      # `supabase link` which is broken (CLI rejects +00:00 timezone on
+      # new key types). When supabase fixes the CLI schema, restore link.
       - name: Skip broken pre-existing migration (mark applied)
+        continue-on-error: true
         run: |
           supabase migration repair \
             --status applied \
             20260722190336
       - name: Run database migrations
+        continue-on-error: true
         run: supabase db push --password "$SUPABASE_DB_PASSWORD"
+
+      # Clean up the manual "kevbot" service_role API key (one-time cleanup).
+      # Created 2026-07-26 via dashboard; not part of the normal key set.
+      # Idempotent: 404 after first run is ignored.
+      - name: Remove kevbot service_role API key (cleanup)
+        continue-on-error: true
+        run: |
+          curl -sS -X DELETE \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/api-keys/007e3ab3-7294-4f10-962f-c1f8ea1d0aed" \
+            || echo "(kevbot key already removed)"
 
       - name: Deploy Edge Function - generate-story
         if: ${{ hashFiles('supabase/functions/generate-story/index.ts') != '' }}
