@@ -83,6 +83,34 @@ private struct AppRootView: View {
             isFirstLaunchAfterUpdate: firstLaunchAfterUpdate,
             recoveryContext: recoveryContext
         )
+
+        // PR #286: sync-on-launch hook (follow-up to PR #285). Catches arcs
+        // that were created before the sync fix wired up — beats stayed local-only
+        // in iOS SwiftData, and any accept against those arcs hit the FK violation
+        // server-side. Sync runs once per launch; future enhancements (foreground
+        // hook, scenePhase observer) can be follow-ups if needed.
+        await syncUnsyncedArcs()
+    }
+
+    /// Sync any StoryArc whose beats never reached the server (lastSyncedAt == nil).
+    /// Best-effort: failures are logged but don't block app launch. Arcs without a
+    /// parent project are skipped (orphans — no server-side target to upsert).
+    private func syncUnsyncedArcs() async {
+        let descriptor = FetchDescriptor<StoryArc>()
+        let allArcs = (try? modelContext.fetch(descriptor)) ?? []
+        let unsyncedArcs = allArcs.filter { $0.lastSyncedAt == nil }
+        guard !unsyncedArcs.isEmpty else { return }
+
+        let service = StoryArcSyncService()
+        for arc in unsyncedArcs {
+            guard arc.project != nil else { continue }
+            do {
+                _ = try await service.syncArc(arc: arc)
+                arc.lastSyncedAt = Date()
+            } catch {
+                print("[CathedralOSApp] sync-on-launch failed for arc \(arc.id): \(error)")
+            }
+        }
     }
 }
 
