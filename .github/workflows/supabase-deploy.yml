@@ -25,8 +25,16 @@ jobs:
         with:
           version: latest
 
+      - name: Capture raw API keys response (debug)
+        run: |
+          echo "=== Raw /v1/projects/$SUPABASE_PROJECT_REF/api-keys response ==="
+          curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/api-keys" || true
+          echo
+          echo "=== End raw response ==="
+
       - name: Link Supabase project
-        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD" --debug
 
       - name: Skip broken pre-existing migration (mark applied)
         run: |
