@@ -177,7 +177,7 @@ struct OutlineSuggestionsReviewView: View {
                 let failedCount = failedAccepts.count
                 let totalCount = createdSections.count
                 let succeededCount = totalCount - failedCount
-                let failedTitles = failedAccepts.prefix(5).map { "• \($0.0.title)" }.joined(separator: "\n")
+                let failedTitles = failedAccepts.prefix(5).map { "• \($0.0.title): \($0.1)" }.joined(separator: "\n")
                 let extra = failedAccepts.count > 5 ? "\n…and \(failedAccepts.count - 5) more" : ""
                 acceptErrorMessage = "Accepted \(succeededCount) of \(totalCount). Failed:\n\n\(failedTitles)\(extra)"
             }

@@ -127,6 +127,27 @@ Deno.serve(async (req: Request) => {
   }
   console.log(`[embed-section] outline upserted id=${body.outline_id}`);
 
+  // Step 1.5: Validate story_arc_beat_id exists in story_arc_beats before
+  // the section upsert. iOS may send a beat UUID that wasn't synced (timing
+  // race, beat regen, missing beats in sync payload). If bogus, null it so
+  // the FK doesn't reject the upsert — Accept All succeeds even with a stale
+  // beat ID. Defensive fix; root cause of the missing beats is sync-side.
+  let validatedBeatID: string | null = body.story_arc_beat_id ?? null;
+  if (validatedBeatID) {
+    const { data: beatExists, error: beatCheckErr } = await adminClient
+      .from("story_arc_beats")
+      .select("id")
+      .eq("id", validatedBeatID)
+      .maybeSingle();
+    if (beatCheckErr) {
+      console.warn(`[embed-section] beat check error (nulling FK): ${beatCheckErr.message}`);
+      validatedBeatID = null;
+    } else if (!beatExists) {
+      console.warn(`[embed-section] dropping bogus story_arc_beat_id: ${validatedBeatID}`);
+      validatedBeatID = null;
+    }
+  }
+
   // Step 2: UPSERT outline_section (id = client-provided, all fields).
   // status stays "draft" here — the iOS app flips it to "accepted" locally
   // on 200 response. Server-side status flips live in a future PR if needed.
@@ -142,7 +163,7 @@ Deno.serve(async (req: Request) => {
     // story_arc_beat_id: column added in migration 20260806120000 (PR #284).
     // Was deferred in v2.1 with "Future migration + function update
     // deferred" comment.
-    story_arc_beat_id: body.story_arc_beat_id ?? null,
+    story_arc_beat_id: validatedBeatID,
     status: "draft",
   }, { onConflict: "id" });
   if (sectionErr) {
