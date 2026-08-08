@@ -176,13 +176,16 @@ function validateRequest(req: unknown): string | null {
 }
 
 function buildPrompt(req: OutlineFromRecipeRequest): { system: string; user: string } {
-  const system = `You are an expert story outliner. Given a recipe (a curated set of characters, sparks, themes, motifs) and a story arc template (ordered beats), suggest 5-15 outline sections that creatively sequence the arc beats.
+  const system = `You are an expert story outliner. Given a recipe (a curated set of characters, sparks, themes, motifs) and a story arc template (ordered beats), produce a comprehensive set of outline sections that fully develops the arc into novel-ready chapters.
+
+For EACH arc beat, produce 3-5 outline sections that explore different angles, sub-steps, or scenes within that beat. A 12-beat Hero\'s Journey should produce roughly 36-60 sections, not 12. Be ambitious — this is a novel outline, not a story sketch.
 
 Each section should:
-- Cover one or more arc beats (cite the beat's UUID from the supplied arc beats)
+- Belong primarily to a single arc beat (cite the beat\'s UUID from the supplied arc beats)
 - Use the characters, sparks, themes, and motifs from the recipe
 - Have a clear container (scene, vignette, chapter, etc.) and POV
 - Be a complete dramatic unit with its own climax and resolution
+- Be distinct from other sections in the same beat — different scenes, different angles, different moments within the beat\'s arc
 
 Be specific and grounded. Use the characters' voices and the story's genre. Each section summary should be evocative enough to inspire a writer.
 
@@ -308,7 +311,7 @@ function validateSuggestions(
   if (!parsed || !Array.isArray(parsed.suggestions)) {
     throw new Error("response missing suggestions array");
   }
-  const used = new Set<string>();
+  const perBeatCount = new Map<string, number>();
   const valid: Suggestion[] = [];
   for (const s of parsed.suggestions) {
     if (!s?.title || !s?.summary) {
@@ -339,12 +342,16 @@ function validateSuggestions(
       terminalBeat: String(s.terminalBeat).slice(0, 1000),
       storyArcBeatID: s.storyArcBeatID,
     });
-    used.add(s.storyArcBeatID);
+    perBeatCount.set(s.storyArcBeatID, (perBeatCount.get(s.storyArcBeatID) ?? 0) + 1);
   }
-  // Soft warning: every supplied beat should be referenced at least once
+  // Per-beat coverage check: every supplied beat should have 3+ sections.
+  // Hard-warn on 0 (beat missing), soft-warn on 1-2 (beat underdeveloped).
   for (const bid of beatIds) {
-    if (!used.has(bid)) {
+    const count = perBeatCount.get(bid) ?? 0;
+    if (count === 0) {
       warnings.push(`no suggestion references beat ${bid}`);
+    } else if (count < 3) {
+      warnings.push(`beat ${bid} only has ${count} section(s) — aim for 3+`);
     }
   }
   return { suggestions: valid, warnings };
