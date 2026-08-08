@@ -154,7 +154,9 @@ struct StoryArcRegionView: View {
         }
         .pickerStyle(.menu)
         .onChange(of: selectedTemplateID) { _, newID in
-            guard let newID, newID != currentArc?.templateID else { return }
+            guard let newID,
+                  !(newID == currentArc?.templateID && !(currentArc?.beats.isEmpty ?? true))
+            else { return }
             applyTemplate(newID)
         }
     }
