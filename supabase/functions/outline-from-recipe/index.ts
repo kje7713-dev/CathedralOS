@@ -176,18 +176,19 @@ function validateRequest(req: unknown): string | null {
 }
 
 function buildPrompt(req: OutlineFromRecipeRequest): { system: string; user: string } {
-  const system = `You are an expert story outliner. Given a recipe (a curated set of characters, sparks, themes, motifs) and a story arc template (ordered beats), produce a comprehensive set of outline sections that fully develops the arc into novel-ready chapters.
+  const system = `You are an expert novel outliner. Given a recipe (curated characters, sparks, themes, motifs) and a story arc template (ordered beats), produce a novel outline — the section-by-section blueprint a writer would actually draft over many chapters.
 
-For EACH arc beat, produce 3-5 outline sections that explore different angles, sub-steps, or scenes within that beat. A 12-beat Hero\'s Journey should produce roughly 36-60 sections, not 12. Be ambitious — this is a novel outline, not a story sketch.
+## Step 1: Envision the story
 
-Each section should:
-- Belong primarily to a single arc beat (cite the beat\'s UUID from the supplied arc beats)
-- Use the characters, sparks, themes, and motifs from the recipe
-- Have a clear container (scene, vignette, chapter, etc.) and POV
-- Be a complete dramatic unit with its own climax and resolution
-- Be distinct from other sections in the same beat — different scenes, different angles, different moments within the beat\'s arc
+Before producing any sections, think through the story as a whole:
+- What kind of novel is this — genre, tone, pacing, scale?
+- How does each arc beat actually unfold in this particular story? What specific moments, characters, conflicts, reversals does it contain?
+- Which beats are quick transitions? Which are major movements unfolding across many scenes? Decide based on the story, not a formula.
+- A novel outline covers the whole arc — every beat should have sections that belong to it.
 
-Be specific and grounded. Use the characters' voices and the story's genre. Each section summary should be evocative enough to inspire a writer.
+## Step 2: Build the sections
+
+For each beat, produce the sections the story needs. Trust your judgment of how this particular story unfolds — some beats may need one section, some may need many, and the same prompt may produce very different outlines for different recipes.
 
 ${req.existingSections && req.existingSections.length > 0
     ? `Existing sections already in this outline (DO NOT duplicate — build on them where natural; prefer beats without existing sections):
@@ -311,7 +312,7 @@ function validateSuggestions(
   if (!parsed || !Array.isArray(parsed.suggestions)) {
     throw new Error("response missing suggestions array");
   }
-  const perBeatCount = new Map<string, number>();
+  const used = new Set<string>();
   const valid: Suggestion[] = [];
   for (const s of parsed.suggestions) {
     if (!s?.title || !s?.summary) {
@@ -342,16 +343,12 @@ function validateSuggestions(
       terminalBeat: String(s.terminalBeat).slice(0, 1000),
       storyArcBeatID: s.storyArcBeatID,
     });
-    perBeatCount.set(s.storyArcBeatID, (perBeatCount.get(s.storyArcBeatID) ?? 0) + 1);
+    used.add(s.storyArcBeatID);
   }
-  // Per-beat coverage check: every supplied beat should have 3+ sections.
-  // Hard-warn on 0 (beat missing), soft-warn on 1-2 (beat underdeveloped).
+  // Soft warning: every supplied beat should be referenced at least once
   for (const bid of beatIds) {
-    const count = perBeatCount.get(bid) ?? 0;
-    if (count === 0) {
+    if (!used.has(bid)) {
       warnings.push(`no suggestion references beat ${bid}`);
-    } else if (count < 3) {
-      warnings.push(`beat ${bid} only has ${count} section(s) — aim for 3+`);
     }
   }
   return { suggestions: valid, warnings };
