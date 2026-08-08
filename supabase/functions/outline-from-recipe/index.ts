@@ -11,7 +11,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2'
 //
 // Secrets required (set via `supabase secrets set`):
 //   OPENAI_API_KEY            — OpenAI secret key
-//   OPENAI_MODEL_DEFAULT      — model used (default: gpt-4o-mini, must support structured output)
+//   OPENAI_MODEL_DEFAULT      — model used (default: gpt-5.6-luna, must support structured output)
 //   SUPABASE_URL              — Supabase project URL (auto-injected)
 //   SUPABASE_ANON_KEY         — Supabase anon key (auto-injected)
 //
@@ -39,7 +39,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2'
 // =============================================================================
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini";
+const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-5.6-luna";
 
 // JSON Schema for the structured output. gpt-4o-mini supports structured output
 // with strict: true; this enforces shape + enum + length bounds server-side.
@@ -49,7 +49,7 @@ const RESPONSE_SCHEMA = {
     "suggestions": {
       "type": "array",
       "minItems": 5,
-      "maxItems": 15,
+      "maxItems": 100,
       "items": {
         "type": "object",
         "properties": {
@@ -175,20 +175,27 @@ function validateRequest(req: unknown): string | null {
   return null;
 }
 
-function buildPrompt(req: OutlineFromRecipeRequest): { system: string; user: string } {
-  const system = `You are an expert novel outliner. Given a recipe (curated characters, sparks, themes, motifs) and a story arc template (ordered beats), produce a novel outline — the section-by-section blueprint a writer would actually draft over many chapters.
+function buildPrompt(
+  req: OutlineFromRecipeRequest,
+  allocation: Map<string, { count: number; rationale: string }>,
+): { system: string; user: string } {
+  const allocationLines = Array.from(allocation.entries())
+    .map(([beatId, info]) => {
+      const beat = req.arcTemplate.beats.find((b) => b.id === beatId);
+      return `- ${beat?.label ?? beatId}: ${info.count} sections (${info.rationale})`;
+    })
+    .join("\n");
 
-## Step 1: Envision the story
 
-Before producing any sections, think through the story as a whole:
-- What kind of novel is this — genre, tone, pacing, scale?
-- How does each arc beat actually unfold in this particular story? What specific moments, characters, conflicts, reversals does it contain?
-- Which beats are quick transitions? Which are major movements unfolding across many scenes? Decide based on the story, not a formula.
-- A novel outline covers the whole arc — every beat should have sections that belong to it.
+  const system = `You are an expert novel outliner. Given a recipe (curated characters, sparks, themes, motifs), a story arc template (ordered beats), and a per-beat section allocation plan, produce a novel outline — the section-by-section blueprint a writer would actually draft over many chapters.
 
-## Step 2: Build the sections
+## Use the allocation plan exactly
 
-For each beat, produce the sections the story needs. Trust your judgment of how this particular story unfolds — some beats may need one section, some may need many, and the same prompt may produce very different outlines for different recipes.
+This particular novel has been planned with the following per-beat allocation. For each beat, generate EXACTLY the allocated number of sections — no fewer, no more:
+
+${allocationLines}
+
+Each section should be a distinct scene/chapter within its beat, exploring different moments, characters, or sub-events.
 
 ${req.existingSections && req.existingSections.length > 0
     ? `Existing sections already in this outline (DO NOT duplicate — build on them where natural; prefer beats without existing sections):
@@ -206,6 +213,70 @@ Respond with structured JSON matching the schema.`;
   }, null, 2);
 
   return { system, user };
+}
+
+// Stage 1: planner. Decides how many sections each arc beat deserves
+// before the generation call runs. Output is a per-beat allocation
+// that the buildPrompt step consumes as context. Keeps the model from
+// defaulting to one-section-per-beat when called cold.
+async function planSectionAllocation(
+  req: OutlineFromRecipeRequest,
+  apiKey: string,
+): Promise<Map<string, { count: number; rationale: string }>> {
+  const system = `You are an expert novel outliner. Given a recipe (curated characters, sparks, themes, motifs) and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular novel.
+
+A novel outline is built from many sections per beat. Some beats are quick transitions (1-2 sections). Some are major movements unfolding across many scenes (5-10+ sections). The same arc template produces very different outlines for different recipes — a fast-paced thriller might give 1-2 sections per beat; an intimate literary novel might give 8-10 to major beats.
+
+For each beat, output a JSON object with:
+- beatID: the beat's UUID (must match exactly)
+- sectionCount: how many outline sections this beat deserves (1-10)
+- rationale: one sentence explaining why
+
+Total sections across all beats should be 30-60+ for a novel-length outline.
+
+Output JSON only. No commentary, no prose.`;
+
+  const user = JSON.stringify({
+    recipe: req.recipe,
+    arcTemplate: {
+      id: req.arcTemplate.id,
+      name: req.arcTemplate.name,
+      beats: req.arcTemplate.beats.map((b) => ({
+        id: b.id,
+        label: b.label,
+        description: b.description,
+      })),
+    },
+    existingSections: req.existingSections ?? [],
+  }, null, 2);
+
+  const raw = await callOpenAI(system, user, apiKey, {
+    maxTokens: 2048,
+    useJsonSchema: false,
+  });
+
+  let parsed: any = {};
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = {};
+  }
+
+  const allocations: any[] = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed.allocations)
+      ? parsed.allocations
+      : [];
+
+  const out = new Map<string, { count: number; rationale: string }>();
+  for (const beat of req.arcTemplate.beats) {
+    const planned = allocations.find((p: any) => p?.beatID === beat.id);
+    out.set(beat.id, {
+      count: Math.max(1, Math.min(10, Number(planned?.sectionCount) || 3)),
+      rationale: String(planned?.rationale ?? "default"),
+    });
+  }
+  return out;
 }
 
 async function checkRateLimit(
@@ -264,6 +335,12 @@ async function callOpenAI(
   system: string,
   user: string,
   apiKey: string,
+  options?: {
+    maxTokens?: number;
+    useJsonSchema?: boolean;
+    jsonSchemaName?: string;
+    jsonSchema?: Record<string, unknown>;
+  },
 ): Promise<string> {
   const ac = new AbortController();
   const timeout = setTimeout(() => ac.abort(), 90_000);
@@ -280,15 +357,17 @@ async function callOpenAI(
           { role: "system", content: system },
           { role: "user", content: user },
         ],
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "outline_suggestions",
-            strict: true,
-            schema: RESPONSE_SCHEMA,
-          },
-        },
-        max_completion_tokens: 4096,
+        max_completion_tokens: options?.maxTokens ?? 4096,
+        response_format: options?.useJsonSchema === false
+          ? { type: "json_object" }
+          : {
+              type: "json_schema",
+              json_schema: {
+                name: options?.jsonSchemaName ?? "outline_suggestions",
+                strict: true,
+                schema: options?.jsonSchema ?? RESPONSE_SCHEMA,
+              },
+            },
         temperature: 0.7,
       }),
       signal: ac.signal,
@@ -414,11 +493,22 @@ Deno.serve(async (req: Request) => {
   }
 
   const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
-  const { system, user: userPrompt } = buildPrompt(body);
+
+  // Stage 1: per-beat section allocation plan.
+  let allocation: Map<string, { count: number; rationale: string }>;
+  try {
+    allocation = await planSectionAllocation(body, openaiKey);
+  } catch (err) {
+    await logRequest(supabase, user.id, "failed", "planning_failed");
+    return errorResponse("planning_failed", String(err), 502);
+  }
+
+  // Stage 2: generate sections using the allocation plan.
+  const { system, user: userPrompt } = buildPrompt(body, allocation);
 
   let rawResponse: string;
   try {
-    rawResponse = await callOpenAI(system, userPrompt, openaiKey);
+    rawResponse = await callOpenAI(system, userPrompt, openaiKey, { maxTokens: 16000 });
   } catch (err) {
     await logRequest(supabase, user.id, "failed", "provider_error");
     return errorResponse("provider_error", String(err), 502);
