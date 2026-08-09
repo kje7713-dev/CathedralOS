@@ -22,6 +22,7 @@ struct OutlineSectionsRegionView: View {
     @State private var suggestionsError: String?
     @State private var acceptingSectionID: UUID?
     @State private var embedError: String?
+    @State private var showingDeleteAllConfirm = false
 
     /// At most one Outline per project in Phase 0/1.
     private var currentOutline: Outline? {
@@ -88,6 +89,12 @@ struct OutlineSectionsRegionView: View {
             Button("OK", role: .cancel) { embedError = nil }
         } message: {
             Text(embedError ?? "An unknown error occurred.")
+        }
+        .alert("Delete All Sections?", isPresented: $showingDeleteAllConfirm) {
+            Button("Delete All", role: .destructive) { deleteAllSections() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This will permanently delete all \(sectionsOrder.count) section\(sectionsOrder.count == 1 ? "" : "s"). This cannot be undone.")
         }
         .sheet(isPresented: $showingSuggestionSheet) {
             if let outline = currentOutline {
@@ -178,6 +185,14 @@ struct OutlineSectionsRegionView: View {
                 Text("Outline Sections")
                     .font(CathedralTheme.Typography.headline(20, weight: .semibold))
                 Spacer()
+                Button {
+                    showingDeleteAllConfirm = true
+                } label: {
+                    Label("Delete All", systemImage: "trash")
+                        .font(CathedralTheme.Typography.body(13))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                .disabled(sectionsOrder.isEmpty)
                 Button {
                     Task { await loadSuggestions() }
                 } label: {
@@ -289,6 +304,20 @@ struct OutlineSectionsRegionView: View {
     private func deleteSection(_ section: OutlineSection) {
         modelContext.delete(section)
         try? modelContext.save()
+        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+    }
+
+    /// Bulk-delete all top-level sections. Used when the user wants to
+    /// re-suggest from scratch after iterating on the recipe or arc —
+    /// avoids the duplicate-suggestions problem from PR #296's first
+    /// planner test (37 of 39 accepted cleanly, but the next Suggest
+    /// appended duplicates instead of replacing).
+    private func deleteAllSections() {
+        for section in sectionsOrder {
+            modelContext.delete(section)
+        }
+        try? modelContext.save()
+        syncSectionsOrder()
         Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
     }
 
