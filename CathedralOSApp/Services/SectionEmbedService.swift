@@ -114,7 +114,7 @@ struct SectionEmbedService {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: urlRequest)
+            (data, response) = try await Self.dataWithRetry(for: urlRequest, session: session)
         } catch {
             throw SectionEmbedError.networkError(error.localizedDescription)
         }
@@ -167,6 +167,62 @@ struct SectionEmbedService {
             parts.append("Terminal Beat: \(beat)")
         }
         return parts.joined(separator: "\n\n")
+    }
+
+    // MARK: - Transient network retry
+
+    /// Maximum number of attempts (1 initial + 3 retries).
+    private static let maxRetransmitAttempts = 4
+
+    /// Backoff schedule (seconds) before retries 1, 2, 3.
+    /// Final retry's delay is unused if the request still fails.
+    private static let retryBaseDelays: [TimeInterval] = [1.0, 2.0, 4.0]
+
+    /// Wrap `session.data(for:)` with retry logic for transient transport
+    /// failures during section acceptance. The embed-section edge function
+    /// takes 3-5s per call (LLM extraction pass), and bulk Accept All iterates
+    /// serially across 30-60+ sections. On cellular the underlying TCP
+    /// connection can drop mid-loop (URLError .networkConnectionLost is the
+    /// observed failure mode from PR #296 acceptance runs). Retries absorb
+    /// those blips without surfacing a failed item to the user.
+    ///
+    /// Retry budget: 3 retries (1s → 2s → 4s) with ±20% jitter. Non-transient
+    /// errors (auth, decoding, server 4xx/5xx) propagate immediately — only
+    /// transport-level URLErrors on the retryable list are retried.
+    static func dataWithRetry(for urlRequest: URLRequest, session: URLSession) async throws -> (Data, URLResponse) {
+        var lastError: Error = URLError(.unknown)
+        for attempt in 0..<maxRetransmitAttempts {
+            do {
+                return try await session.data(for: urlRequest)
+            } catch let urlError as URLError {
+                lastError = urlError
+                guard Self.isRetryableURLError(urlError) else { throw urlError }
+                // Don't sleep after the final attempt — we're about to throw.
+                guard attempt < retryBaseDelays.count else { throw urlError }
+                let jitter = Double.random(in: 0.8...1.2)
+                let delaySec = retryBaseDelays[attempt] * jitter
+                print("[SectionEmbedService] transient URLError \(urlError.code.rawValue), retry \(attempt + 1)/3 in \(String(format: "%.1f", delaySec))s")
+                try await Task.sleep(nanoseconds: UInt64(delaySec * 1_000_000_000))
+            }
+        }
+        throw lastError
+    }
+
+    /// Returns true for transport-level URLErrors that are safe to retry.
+    /// Server-side failures (decoded as SectionEmbedError elsewhere) are
+    /// not retryable here — they're already classified by the response
+    /// handler after the call returns a non-2xx status.
+    private static func isRetryableURLError(_ error: URLError) -> Bool {
+        switch error.code {
+        case .networkConnectionLost,   // -1005  TCP connection dropped mid-request
+             .timedOut,                // -1001  URLSession timeout exceeded
+             .notConnectedToInternet,  // -1009  Network unavailable
+             .cannotConnectToHost,     // -1004  Host unreachable
+             .dnsLookupFailed:         // -1006  DNS resolution failed
+            return true
+        default:
+            return false
+        }
     }
 }
 
