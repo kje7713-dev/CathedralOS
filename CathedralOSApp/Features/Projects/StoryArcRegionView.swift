@@ -66,6 +66,7 @@ struct StoryArcRegionView: View {
     @State private var selectedTemplateID: UUID?
     @State private var beatsOrder: [StoryArcBeat] = []
     @State private var editingBeat: StoryArcBeat?
+    @State private var showingDeleteAllBeatsConfirm = false
     @StateObject private var syncState = StoryArcSyncState()
 
     /// At most one StoryArc per project in Phase 0/1.
@@ -119,6 +120,12 @@ struct StoryArcRegionView: View {
                 }
             )
         }
+        .alert("Delete All Beats?", isPresented: $showingDeleteAllBeatsConfirm) {
+            Button("Delete All", role: .destructive) { deleteAllBeats() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(alertMessage)
+        }
     }
 
     /// Stable identity key for the beats relationship — re-sync order whenever
@@ -137,8 +144,19 @@ struct StoryArcRegionView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Story Arc")
-                .font(CathedralTheme.Typography.headline(20, weight: .semibold))
+            HStack(alignment: .firstTextBaseline) {
+                Text("Story Arc")
+                    .font(CathedralTheme.Typography.headline(20, weight: .semibold))
+                Spacer()
+                Button {
+                    showingDeleteAllBeatsConfirm = true
+                } label: {
+                    Label("Delete All", systemImage: "trash")
+                        .font(CathedralTheme.Typography.body(13))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                .disabled(beatsOrder.isEmpty)
+            }
             Text("Pick a template to populate the beats. Tap to edit, drag to reorder, swipe to delete.")
                 .font(CathedralTheme.Typography.body(13))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
@@ -221,6 +239,33 @@ struct StoryArcRegionView: View {
         try? modelContext.save()
         // Q1c debounced + Q3a immediate on shape change
         if let arc = currentArc { syncState.syncDebounced(arc) }
+    }
+
+    /// Bulk-delete all beats. Same pattern as deleteAllSections in
+    /// OutlineSectionsRegionView (PR #299). Used when the user wants to
+    /// re-pick a template or start from scratch after iterating on the story.
+    /// Sections that reference a deleted beat fall back to nil
+    /// story_arc_beat_id (embed-section handles this defensively per PR #287).
+    private func deleteAllBeats() {
+        guard let arc = currentArc else { return }
+        for beat in beatsOrder {
+            modelContext.delete(beat)
+        }
+        try? modelContext.save()
+        syncBeatsOrder()
+        // Immediate sync (not debounced). Destructive user action, don't risk
+        // a 500ms window where the user could navigate away before the sync fires.
+        syncState.syncImmediately(arc)
+        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+    }
+
+    /// Computed message for the Delete All confirmation alert. Pulled out so
+    /// the alert body is a single readable line and the pluralization lives
+    /// in one place.
+    private var alertMessage: String {
+        let n = beatsOrder.count
+        let label = n == 1 ? "beat" : "beats"
+        return "This will permanently delete all \(n) \(label). This cannot be undone."
     }
 
     private func moveBeats(from offsets: IndexSet, to destination: Int) {
