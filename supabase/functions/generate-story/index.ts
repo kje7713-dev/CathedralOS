@@ -1045,24 +1045,56 @@ Structural limits:
 }
 
 // ---------------------------------------------------------------------------
-// Phase 4: Prior context retrieval
+// Phase 4: Prior context retrieval (vector similarity)
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch the top-K summaries of accepted sections in the same project as
- * `outlineSectionId`, ordered by recency (created_at DESC). The current
- * section is excluded so it never sees its own (about-to-be-generated)
- * summary in its prior context.
+ * Embed a single text via OpenAI text-embedding-3-small (1536-dim). Returns
+ * the embedding vector or null on failure. Mirrors the embed pattern used
+ * in embed-section/index.ts.
+ */
+async function embedText(text: string): Promise<number[] | null> {
+  if (!text || text.trim().length === 0) return null;
+  const apiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!apiKey) return null;
+
+  try {
+    const resp = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: text,
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const emb = data?.data?.[0]?.embedding;
+    return Array.isArray(emb) ? emb : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch the top-K most relevant accepted sections in the same project as
+ * `outlineSectionId`, using pgvector cosine similarity (the find_similar_sections
+ * RPC created in the Phase 3 migration). The current section is excluded
+ * defensively in the filter (the RPC doesn't take exclude_section_id).
  *
- * Phase 4a heuristic — order by recency, not by embedding similarity.
- * True cosine-similarity retrieval is Phase 4b: it requires embedding the
- * new section's planned summary first, which is an extra OpenAI call per
- * generation. Recency is a safe default until the cost is justified by
- * a coherence-quality issue in the wild.
+ * Steps:
+ *   1. Resolve project_id + planned summary from outline_section_id.
+ *   2. Embed the planned summary (text-embedding-3-small, 1536-dim).
+ *   3. Call find_similar_sections(query_embedding, project_id, 0, topK).
+ *      match_threshold=0 because a brand-new planned summary may not be close
+ *      to anything yet; we still want some prior context to anchor the model.
+ *   4. Filter out the current section + null summaries.
  *
  * Returns an empty array on any error so the rest of the pipeline keeps
- * working (the model just won't have prior context). The downstream
- * buildPrompt is responsible for handling an empty list cleanly.
+ * working (the model just won't have prior context). Best-effort, never throws.
  */
 async function fetchPriorContext(
   adminClient: any,
@@ -1071,28 +1103,41 @@ async function fetchPriorContext(
 ): Promise<string[]> {
   if (!adminClient || !outlineSectionId) return [];
 
-  // 1. Resolve project_id from outline_section_id.
+  // 1. Resolve project_id + planned summary from outline_section_id.
   const sectionResp = await adminClient
     .from("outline_sections")
-    .select("project_id")
+    .select("project_id, summary")
     .eq("id", outlineSectionId)
     .single();
-  if (sectionResp.error || !sectionResp.data?.project_id) return [];
+  if (
+    sectionResp.error ||
+    !sectionResp.data?.project_id ||
+    !sectionResp.data?.summary
+  ) return [];
   const projectId: string = sectionResp.data.project_id;
+  const plannedSummary: string = sectionResp.data.summary;
 
-  // 2. Top-K prior sections in the same project, excluding the current one.
-  const rowsResp = await adminClient
-    .from("section_embeddings")
-    .select("extracted_summary")
-    .eq("project_id", projectId)
-    .neq("outline_section_id", outlineSectionId)
-    .order("created_at", { ascending: false })
-    .limit(topK);
-  if (rowsResp.error || !Array.isArray(rowsResp.data)) return [];
+  // 2. Embed the planned summary.
+  const queryEmbedding = await embedText(plannedSummary);
+  if (!queryEmbedding || queryEmbedding.length === 0) return [];
 
-  // 3. Map to non-empty summaries. Skip nulls (embedding failed during accept).
-  return rowsResp.data
-    .filter((row: any) => typeof row.extracted_summary === "string" && row.extracted_summary.length > 0)
+  // 3. Top-K most similar sections via pgvector (find_similar_sections RPC).
+  const matchResp = await adminClient.rpc("find_similar_sections", {
+    query_embedding: queryEmbedding,
+    query_project_id: projectId,
+    match_threshold: 0,
+    match_count: topK,
+  });
+  if (matchResp.error || !Array.isArray(matchResp.data)) return [];
+
+  // 4. Filter the current section + null summaries. Return the summaries
+  //    in similarity order (highest first).
+  return matchResp.data
+    .filter((row: any) =>
+      row.outline_section_id !== outlineSectionId &&
+      typeof row.extracted_summary === "string" &&
+      row.extracted_summary.length > 0
+    )
     .map((row: any) => row.extracted_summary as string);
 }
 
