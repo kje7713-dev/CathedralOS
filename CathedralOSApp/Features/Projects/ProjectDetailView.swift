@@ -36,6 +36,21 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
         case .compile: return "Compile"
         }
     }
+
+    /// SF Symbol name for the segmented picker. Icons-only display fits all
+    /// 7 tabs without truncation at iPhone widths (PR #302 follow-up to
+    /// PR #301's Recipe tab expansion).
+    var icon: String {
+        switch self {
+        case .story: return "text.book.closed"
+        case .cast: return "person.2"
+        case .themes: return "sparkles"
+        case .recipe: return "list.bullet.rectangle"
+        case .outline: return "list.number"
+        case .compile: return "wand.and.stars"
+        case .output: return "doc.text"
+        }
+    }
 }
 
 struct ProjectDetailView: View {
@@ -262,7 +277,12 @@ struct ProjectDetailView: View {
     private var modePicker: some View {
         Picker("Mode", selection: $storyEditorModeRaw) {
             ForEach(StoryEditorMode.allCases) { mode in
-                Text(mode.title).tag(mode.rawValue)
+                // Icons-only display so all 7 tabs fit at iPhone widths
+                // without truncation. VoiceOver reads the tab title via
+                // accessibilityLabel.
+                Image(systemName: mode.icon)
+                    .accessibilityLabel(mode.title)
+                    .tag(mode.rawValue)
             }
         }
         .pickerStyle(.segmented)
