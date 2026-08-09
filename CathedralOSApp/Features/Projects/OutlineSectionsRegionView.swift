@@ -94,7 +94,7 @@ struct OutlineSectionsRegionView: View {
             Button("Delete All", role: .destructive) { deleteAllSections() }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This will permanently delete all \(sectionsOrder.count) section\(sectionsOrder.count == 1 ? \"\" : \"s\"). This cannot be undone.")
+            Text("This will permanently delete all \(sectionsOrder.count) section\(sectionsOrder.count == 1 ? "" : "s"). This cannot be undone.")
         }
         .sheet(isPresented: $showingSuggestionSheet) {
             if let outline = currentOutline {
