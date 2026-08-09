@@ -202,6 +202,15 @@ interface GenerateStoryRequest {
   // in the user message so the model sees it right before the Writing Task.
   terminalBeat?: string;
   localGenerationID?: string;
+  /**
+   * Phase 4: optional reference to the OutlineSection this generation is
+   * tied to. When set, the function queries prior context from the same
+   * project's accepted sections (via section_embeddings) and injects the
+   * top-K summaries into the prompt as "Prior context from accepted
+   * sections". Optional for backwards compat — omitted => no prior context
+   * (short-story mode unchanged).
+   */
+  outlineSectionId?: string;
 }
 
 interface GenerationOutputInsert {
@@ -709,6 +718,13 @@ function buildPrompt(req: {
   terminalBeat?: string;
   projectName: string;
   promptPackName: string;
+  /**
+   * Phase 4: optional prior context lines (summaries of accepted sections
+   * in the same project). When non-empty, rendered as a "Prior context
+   * from accepted sections" block in the user message between the existing
+   * context and the Writing Task.
+   */
+  priorContextLines?: string[];
 }): { craft: string; context: string } {
   // Parse the payload — degrade gracefully if malformed.
   let payload: PromptPackPayloadShape = {};
@@ -949,6 +965,20 @@ Structural limits:
     );
   }
 
+  // Phase 4: Prior context from accepted sections in the same project.
+  // Rendered as a numbered list of summaries so the model can reference
+  // them by index. Truncated to ~1200 tokens worth of content upstream
+  // in fetchPriorContext.
+  if (req.priorContextLines && req.priorContextLines.length > 0) {
+    contextLines.push(
+      "## Prior context from accepted sections",
+      "Use these accepted-section summaries to stay consistent with what is already established in this project. Do not repeat or paraphrase them; build on them where natural.",
+      "",
+      ...req.priorContextLines.map((s, i) => `[${i + 1}] ${s}`),
+      "",
+    );
+  }
+
   // Writing Task — per-request specifics, lives in the user message.
   // Container-driven shape lives in the SYSTEM message (computed above and
   // pushed into craftLines) — the model weights system > user for structural
@@ -1012,6 +1042,58 @@ Structural limits:
     craft: craftLines.join("\n"),
     context: contextLines.join("\n"),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: Prior context retrieval
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch the top-K summaries of accepted sections in the same project as
+ * `outlineSectionId`, ordered by recency (created_at DESC). The current
+ * section is excluded so it never sees its own (about-to-be-generated)
+ * summary in its prior context.
+ *
+ * Phase 4a heuristic — order by recency, not by embedding similarity.
+ * True cosine-similarity retrieval is Phase 4b: it requires embedding the
+ * new section's planned summary first, which is an extra OpenAI call per
+ * generation. Recency is a safe default until the cost is justified by
+ * a coherence-quality issue in the wild.
+ *
+ * Returns an empty array on any error so the rest of the pipeline keeps
+ * working (the model just won't have prior context). The downstream
+ * buildPrompt is responsible for handling an empty list cleanly.
+ */
+async function fetchPriorContext(
+  adminClient: any,
+  outlineSectionId: string,
+  topK: number = 3,
+): Promise<string[]> {
+  if (!adminClient || !outlineSectionId) return [];
+
+  // 1. Resolve project_id from outline_section_id.
+  const sectionResp = await adminClient
+    .from("outline_sections")
+    .select("project_id")
+    .eq("id", outlineSectionId)
+    .single();
+  if (sectionResp.error || !sectionResp.data?.project_id) return [];
+  const projectId: string = sectionResp.data.project_id;
+
+  // 2. Top-K prior sections in the same project, excluding the current one.
+  const rowsResp = await adminClient
+    .from("section_embeddings")
+    .select("extracted_summary")
+    .eq("project_id", projectId)
+    .neq("outline_section_id", outlineSectionId)
+    .order("created_at", { ascending: false })
+    .limit(topK);
+  if (rowsResp.error || !Array.isArray(rowsResp.data)) return [];
+
+  // 3. Map to non-empty summaries. Skip nulls (embedding failed during accept).
+  return rowsResp.data
+    .filter((row: any) => typeof row.extracted_summary === "string" && row.extracted_summary.length > 0)
+    .map((row: any) => row.extracted_summary as string);
 }
 
 // ---------------------------------------------------------------------------
@@ -1436,6 +1518,18 @@ async function handler(
   // multiplier. The client cannot override model rates.
   // -------------------------------------------------------------------------
 
+  // Phase 4: fetch prior context from the same project's accepted
+  // sections. Returns [] when outlineSectionId is omitted or unavailable.
+  let priorContextLines: string[] | undefined;
+  if (body.outlineSectionId && adminClient) {
+    try {
+      priorContextLines = await fetchPriorContext(adminClient, body.outlineSectionId);
+    } catch (_err) {
+      // Best-effort: prior context is optional. Don't fail the generation.
+      priorContextLines = [];
+    }
+  }
+
   const { craft: craftPrompt, context: contextPrompt } = buildPrompt({
     sourcePayloadJSON: body.sourcePayloadJSON,
     generationAction,
@@ -1450,6 +1544,7 @@ async function handler(
     terminalBeat: body.terminalBeat,
     projectName,
     promptPackName,
+    priorContextLines,
   });
   // Phase 3: max possible credit cost for the pre-flight check
   const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
