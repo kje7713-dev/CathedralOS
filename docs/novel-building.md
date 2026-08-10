@@ -138,7 +138,7 @@ Seed 3 templates: Three-act, Hero's Journey, Mystery.
 - On Accept: run extraction pass via LLM (~200-500 token summary), embed via `text-embedding-3-small`, store both summary and raw text
 - Index on embedding column (HNSW for write-heavy workloads)
 
-### Phase 4 — RAG retrieval via the 5 structured memory layers (locked design 2026-08-10 16:28 EDT)
+### Phase 4 — RAG retrieval via the 5 structured memory layers (revised 2026-08-10 18:01 EDT, Kevin's hard rule: schema tight, pull deep)
 
 **Supersedes** the original top-K similarity design (PR #262) and the "N most recent" heuristic that PR #305 / PR #309's DAY3_NARROW_LIMIT tried. The wrong abstraction was: embed the current scene's plan → cosine similarity vs `section_embeddings.vector(1536)` → take top-K → dump their summaries. The right abstraction: **narrow, scoped queries against the 5 structured columns** that PR #304 added to `section_embeddings` (`character_deltas`, `plot_thread_deltas`, `continuity_facts`, `open_loops`, `scene_ending_state`).
 
