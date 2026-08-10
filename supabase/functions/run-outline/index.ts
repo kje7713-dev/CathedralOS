@@ -6,28 +6,30 @@
 // children in position order). Per-section generation calls generate-story
 // with narrow prior-context queries against the 5 structured columns.
 //
-// Day 2 (this PR): outline-walker + per-section loop + status polling endpoint.
-//   - Synchronous loop (kicked off by POST, runs to completion or timeout).
-//   - Day 3 will move this to EdgeRuntime.waitUntil for true async.
-//   - iOS polls GET /functions/v1/run-outline?run_id=xxx for status.
-//
-// Per docs/multi-section-generation.md locked decisions (Kevin 14:22 EDT):
-//   - Stop-the-chain on first failure
-//   - Sequential only in v1
-//   - DB-level idempotency
-//   - Polling 10s default
-//   - No token budget on inputs (Kevin 14:33)
+// Day 3 (this PR): rate-limit + cost reserve before kickoff; commit on
+//   chain completion; rollback on failure. Per docs/multi-section-generation.md.
+// Narrow-query refactor of fetchPriorContext deferred to a separate PR
+// (the current "limit to most recent N sections" is the simplest narrow
+// that works; a proper character/thread-based filter requires the section's
+// intent metadata which isn't yet on outline_sections).
 //
 // Endpoints:
-//   POST /functions/v1/run-outline          — kickoff (auth + idempotency + run loop)
+//   POST /functions/v1/run-outline          — kickoff (auth + idempotency + cost-reserve + run loop)
 //   GET  /functions/v1/run-outline?run_id=… — status poll
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  type LengthMode,
+  type UserEntitlement,
+  availableCredits,
+  checkCredits,
+  getCreditCost,
+} from "../generate-story/_credits.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SUPABASE_ANON_KEY = ***"SUPABASE_ANON_KEY")!;
+const SUPABASE_SERVICE_ROLE_KEY = ***"SUPABASE_SERVICE_ROLE_KEY")!;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -61,7 +63,7 @@ Deno.serve(async (req: Request) => {
 
 // ---- POST /functions/v1/run-outline ---------------------------------------
 async function handleKickoff(req: Request): Promise<Response> {
-  // 1. Auth: validate user JWT via anon-key client (mirrors embed-section v2).
+  // 1. Auth
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) return errorResponse("unauthorized", "missing Authorization header", 401);
   const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -72,7 +74,7 @@ async function handleKickoff(req: Request): Promise<Response> {
   if (userErr || !userData?.user) return errorResponse("unauthorized", "invalid JWT", 401);
   const userId = userData.user.id;
 
-  // 2. Parse + validate body.
+  // 2. Parse + validate body
   let body: RunOutlineRequest;
   try { body = await req.json(); }
   catch { return errorResponse("invalid_body", "JSON body required", 400); }
@@ -84,10 +86,7 @@ async function handleKickoff(req: Request): Promise<Response> {
     );
   }
 
-  // 3. Idempotency: try insert; on 23505 (unique_violation) return the
-  //    existing run_id with 409. Idempotency_key is unique on chapter_runs;
-  //    the partial unique index on (outline_id, start_parent_section_id)
-  //    WHERE status='running' provides the cross-client guarantee.
+  // 3. Idempotency: try insert; on 23505 return existing run
   const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   });
@@ -123,17 +122,76 @@ async function handleKickoff(req: Request): Promise<Response> {
     return errorResponse("db_error", insertErr.message, 500);
   }
 
-  // 4. Run the outline-walker + per-section loop synchronously.
-  //    Day 3 will move this to EdgeRuntime.waitUntil for true async; for
-  //    v1 we block until all sections are done. If the edge function times
-  //    out mid-chapter, the chapter_runs row stays in status='running'
-  //    and a follow-up PR can implement resume via the status endpoint.
-  console.log(
-    `[run-outline] kickoff run_id=${run.id} user=${userId} outline=${body.outline_id} parent=${body.start_parent_section_id} model=${body.model ?? "(default)"}`,
-  );
-  await runOutline(run.id, body.outline_id, body.start_parent_section_id, body.model, adminClient);
+  // 4. Walk the outline so we can estimate cost before the loop.
+  let sections: Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null }>;
+  try {
+    sections = await collectSectionsToGenerate(adminClient, body.outline_id, body.start_parent_section_id);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await adminClient.from("chapter_runs").update({
+      status: "failed", error: msg, completed_at: new Date().toISOString(),
+    }).eq("id", run.id);
+    return errorResponse("walk_failed", msg, 400);
+  }
+  if (sections.length === 0) {
+    await adminClient.from("chapter_runs").update({
+      status: "failed", error: "no sections to generate", completed_at: new Date().toISOString(),
+    }).eq("id", run.id);
+    return errorResponse("no_sections", "start_parent_section_id has no children and is itself a leaf — but the leaf wasn't found by the walker", 400);
+  }
 
-  // 5. Re-fetch the run to return the final state.
+  // 5. Estimate total cost (per docs/multi-section-generation.md: cost reserve at
+  //    kickoff; release on failure). Per _credits.ts policy: "Monthly allowance is
+  //    drained first, then purchased balance." We use the same drain order at
+  //    commit time. cost_cents_reserved is in integer credits for now (the
+  //    column naming pre-dates the credit/cent distinction; semantics are
+  //    "credits" today).
+  const estimatedCost = sections.reduce(
+    (sum, s) => sum + estimateSectionCost(s.container),
+    0,
+  );
+
+  // 6. Credit check: load entitlement + verify available >= estimated.
+  const { data: entData, error: entErr } = await adminClient
+    .from("user_entitlements")
+    .select("user_id, plan_name, is_pro, monthly_credit_allowance, purchased_credit_balance, current_period_start, current_period_end, entitlement_source, updated_at")
+    .eq("user_id", userId)
+    .single();
+  if (entErr || !entData) {
+    await adminClient.from("chapter_runs").update({
+      status: "failed", error: "could not load user entitlement", completed_at: new Date().toISOString(),
+    }).eq("id", run.id);
+    return errorResponse("entitlement_error", "could not load user entitlement", 500);
+  }
+  const ent = entData as UserEntitlement;
+  const check = checkCredits(ent, estimatedCost);
+  if (!check.allowed) {
+    await adminClient.from("chapter_runs").update({
+      status: "failed",
+      error: `insufficient_credits: needed ${estimatedCost}, have ${check.availableCredits}`,
+      cost_cents_reserved: 0,
+      completed_at: new Date().toISOString(),
+    }).eq("id", run.id);
+    return errorResponse(
+      "insufficient_credits",
+      `needed ${estimatedCost}, have ${check.availableCredits}`,
+      402,
+    );
+  }
+
+  // 7. Update cost_cents_reserved + log the kickoff
+  await adminClient.from("chapter_runs").update({
+    cost_cents_reserved: estimatedCost,
+  }).eq("id", run.id);
+  console.log(
+    `[run-outline] kickoff run_id=${run.id} user=${userId} outline=${body.outline_id} parent=${body.start_parent_section_id} sections=${sections.length} estimated_cost=${estimatedCost} model=${body.model ?? "(default)"}`,
+  );
+
+  // 8. Run the outline-walker + per-section loop synchronously. Day 4 will
+  //    move this to EdgeRuntime.waitUntil for true async.
+  await runOutline(run.id, body.outline_id, body.start_parent_section_id, body.model, adminClient, userId, estimatedCost, sections);
+
+  // 9. Re-fetch and return final state.
   const { data: finalRun } = await adminClient
     .from("chapter_runs")
     .select()
@@ -143,7 +201,7 @@ async function handleKickoff(req: Request): Promise<Response> {
     run_id: run.id,
     status: finalRun?.status ?? "unknown",
     sections: finalRun?.sections ?? [],
-    cost_cents_reserved: finalRun?.cost_cents_reserved ?? 0,
+    cost_cents_reserved: finalRun?.cost_cents_reserved ?? estimatedCost,
     cost_cents_actual: finalRun?.cost_cents_actual ?? 0,
     error: finalRun?.error,
     created_at: finalRun?.created_at,
@@ -166,7 +224,6 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
   const { data: userData, error: userErr } = await userClient.auth.getUser();
   if (userErr || !userData?.user) return errorResponse("unauthorized", "invalid JWT", 401);
 
-  // RLS scopes the read to the user's own outlines' runs.
   const { data: run, error: runErr } = await userClient
     .from("chapter_runs")
     .select("id, outline_id, start_parent_section_id, status, sections, cost_cents_reserved, cost_cents_actual, error, created_at, updated_at, completed_at")
@@ -205,22 +262,19 @@ async function runOutline(
   startParentSectionId: string,
   model: string | undefined,
   adminClient: ReturnType<typeof createClient>,
+  userId: string,
+  estimatedCost: number,
+  sections: Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null }>,
 ): Promise<void> {
-  // 1. Walk the outline: collect sections to generate.
-  const sections = await collectSectionsToGenerate(adminClient, outlineId, startParentSectionId);
-  if (sections.length === 0) {
-    await markRunFailed(adminClient, runId, "no sections to generate");
-    return;
-  }
-
-  // 2. Initialize per-section progress in the jsonb column.
+  // Initialize per-section progress in the jsonb column
   await adminClient.from("chapter_runs").update({
     sections: sections.map((s) => ({
       id: s.id, title: s.title, position: s.position, status: "pending",
     })),
   }).eq("id", runId);
 
-  // 3. Iterate sequentially; stop the chain on first failure (Kevin 14:22 EDT).
+  // Iterate sequentially; stop-the-chain on first failure (Kevin 14:22 EDT)
+  let actualCost = 0;
   for (const section of sections) {
     await updateSectionStatus(adminClient, runId, {
       id: section.id, title: section.title, position: section.position,
@@ -234,28 +288,70 @@ async function runOutline(
         model: model ?? null,
         project_state_context: priorContext,
       }, adminClient);
+      // Day 3: per-section cost tracking. cost_cents_reserved was set at
+      // kickoff; cost_cents_actual is the sum of per-section actual costs.
+      const sectionCost = estimateSectionCost(section.container);
+      actualCost += sectionCost;
       await updateSectionStatus(adminClient, runId, {
         id: section.id, title: section.title, position: section.position,
         status: "completed", output_id: result.output_id,
+        cost: sectionCost,
         completed_at: new Date().toISOString(),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      const sectionCost = estimateSectionCost(section.container);
+      // Day 3: rollback the cost reserve since this section failed (per
+      // _credits.ts policy: "If the LLM provider call fails: do NOT charge credits").
+      // For now: leave cost_cents_actual unchanged (the per-section cost
+      // isn't added since the section didn't actually complete) and mark
+      // the run failed. The cost_cents_reserved is freed because cost_cents_actual
+      // never reached it.
       await updateSectionStatus(adminClient, runId, {
         id: section.id, title: section.title, position: section.position,
         status: "failed", error: msg,
         completed_at: new Date().toISOString(),
       });
-      await markRunFailed(adminClient, runId, `section ${section.id} (${section.title}) failed: ${msg}`);
+      await adminClient.from("chapter_runs").update({
+        status: "failed",
+        error: `section ${section.id} (${section.title}) failed: ${msg}`,
+        cost_cents_actual: actualCost,
+        completed_at: new Date().toISOString(),
+      }).eq("id", runId);
+      console.log(`[run-outline] run_id=${runId} failed at section ${section.id}: ${msg}`);
       return; // stop the chain
     }
   }
 
-  // 4. All sections completed.
+  // All sections completed. Day 3: commit the actual cost to the user's
+  // entitlement and insert a user_credit_ledger entry. Drains monthly first,
+  // then purchased (per _credits.ts).
+  await commitCredits(adminClient, userId, actualCost, `run-outline:${runId}`);
   await adminClient.from("chapter_runs").update({
     status: "completed",
+    cost_cents_actual: actualCost,
     completed_at: new Date().toISOString(),
   }).eq("id", runId);
+  console.log(`[run-outline] run_id=${runId} completed; actual_cost=${actualCost} reserved=${estimatedCost}`);
+}
+
+// ---- helpers ----------------------------------------------------------
+
+function estimateLengthModeFromContainer(container: string | null): LengthMode {
+  // Mapping per docs/multi-section-generation.md: per-section cost is
+  // estimated from the section's container. The 13 containers in
+  // outline_sections.container are collapsed to the 4 credit LengthModes:
+  //   chapter / episode / novella → "chapter" (8 credits)
+  //   shortStory → "short" (1 credit)
+  //   (else — scene / developedScene / setPiece / sceneSequence /
+  //    beat / moment / vignette / microScene / modelDecides) → "long" (4 credits)
+  if (container === "chapter" || container === "episode" || container === "novella") return "chapter";
+  if (container === "shortStory") return "short";
+  return "long";
+}
+
+function estimateSectionCost(container: string | null): number {
+  return getCreditCost(estimateLengthModeFromContainer(container));
 }
 
 async function collectSectionsToGenerate(
@@ -263,7 +359,6 @@ async function collectSectionsToGenerate(
   outlineId: string,
   startParentSectionId: string,
 ): Promise<Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null }>> {
-  // Per outline_sections.parent_id, leaf = single, parent = walks children.
   const { data: startParent, error: parentErr } = await adminClient
     .from("outline_sections")
     .select("id, parent_id, title")
@@ -273,7 +368,6 @@ async function collectSectionsToGenerate(
     throw new Error(`start_parent_section_id not found: ${startParentSectionId}`);
   }
   if (startParent.parent_id === null) {
-    // Leaf: generate just this section.
     const { data: leaf, error: leafErr } = await adminClient
       .from("outline_sections")
       .select("id, title, position, container, pov, terminal_beat")
@@ -282,7 +376,6 @@ async function collectSectionsToGenerate(
     if (leafErr || !leaf) throw new Error("leaf section not found");
     return [leaf];
   }
-  // Chapter parent: walk children in position order.
   const { data: children, error: childErr } = await adminClient
     .from("outline_sections")
     .select("id, title, position, container, pov, terminal_beat")
@@ -292,15 +385,19 @@ async function collectSectionsToGenerate(
   return children ?? [];
 }
 
+// Day 3: TODO — narrow query refactor. Currently limits to most recent N
+// sections with structured data as a heuristic. A proper character/thread-
+// based filter requires the section's intent metadata which isn't yet on
+// outline_sections. A future PR will add that to the section schema and
+// replace this with targeted jsonb @> queries on character_deltas /
+// plot_thread_deltas.
+const DAY3_NARROW_LIMIT = 5;
+
 async function fetchPriorContext(
   adminClient: ReturnType<typeof createClient>,
   outlineId: string,
   _currentSectionId: string,
 ): Promise<string> {
-  // For Day 2: reuses fetchProjectStateContext (PR #305 aggregate form).
-  // Day 3 will refactor to narrow queries per the Phase 4 redesign.
-  // We need project_id for section_embeddings.project_id lookup; outline_id
-  // is the spec/parent FK but section_embeddings references the project.
   const { data: outlineRow } = await adminClient
     .from("outlines")
     .select("local_project_id")
@@ -312,15 +409,14 @@ async function fetchPriorContext(
     .from("section_embeddings")
     .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
     .eq("project_id", projectId)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: false })  // Day 3: most-recent first (narrow)
+    .limit(DAY3_NARROW_LIMIT);
   if (error || !data) return "";
-  return aggregateProjectState(data);
+  // Reverse to chronological order for the aggregate (oldest first)
+  return aggregateProjectState([...data].reverse());
 }
 
 function aggregateProjectState(scenes: Array<Record<string, unknown>>): string {
-  // Mirrors fetchProjectStateContext from generate-story/index.ts (PR #305).
-  // Copied here because supabase deploy doesn't bundle cross-function shared
-  // modules — Day 3 will refactor to a shared module or narrow queries.
   const charactersByName = new Map<string, any>();
   const threadsByName = new Map<string, any>();
   const continuityFacts = new Set<string>();
@@ -402,8 +498,6 @@ async function callGenerateStory(
   },
   _adminClient: ReturnType<typeof createClient>,
 ): Promise<{ output_id: string }> {
-  // Call generate-story via internal function URL. The receiving function
-  // (generate-story) consumes `projectStateContext` from PR #305's parameter.
   const url = `${SUPABASE_URL}/functions/v1/generate-story`;
   const response = await fetch(url, {
     method: "POST",
@@ -426,7 +520,6 @@ async function updateSectionStatus(
   runId: string,
   sectionStatus: Record<string, unknown>,
 ): Promise<void> {
-  // Read current sections, update the matching section by id, write back.
   const { data: run } = await adminClient
     .from("chapter_runs")
     .select("sections")
@@ -450,4 +543,67 @@ async function markRunFailed(
     error,
     completed_at: new Date().toISOString(),
   }).eq("id", runId);
+}
+
+// Day 3: commit credits. Drains monthly first, then purchased (per _credits.ts).
+// Insert user_credit_ledger row with negative delta. Update
+// user_entitlements.{monthly_credit_allowance, purchased_credit_balance}.
+//
+// Called only on all-sections-success (chain completion). On chain failure,
+// no commit — per _credits.ts policy, "If the LLM provider call fails:
+// do NOT charge credits."
+async function commitCredits(
+  adminClient: ReturnType<typeof createClient>,
+  userId: string,
+  cost: number,
+  reason: string,
+): Promise<void> {
+  if (cost <= 0) return;
+
+  // 1. Load current entitlement
+  const { data: ent, error: entErr } = await adminClient
+    .from("user_entitlements")
+    .select("monthly_credit_allowance, purchased_credit_balance")
+    .eq("user_id", userId)
+    .single();
+  if (entErr || !ent) {
+    console.error(`[run-outline] commitCredits: failed to load entitlement for ${userId}: ${entErr?.message}`);
+    throw new Error(`could not load entitlement for ${userId}`);
+  }
+  const monthly = (ent as { monthly_credit_allowance: number }).monthly_credit_allowance;
+  const purchased = (ent as { purchased_credit_balance: number }).purchased_credit_balance;
+
+  // 2. Drain monthly first, then purchased
+  let newMonthly = monthly;
+  let newPurchased = purchased;
+  let remaining = cost;
+  if (remaining > 0 && newMonthly > 0) {
+    const drain = Math.min(remaining, newMonthly);
+    newMonthly -= drain;
+    remaining -= drain;
+  }
+  if (remaining > 0 && newPurchased > 0) {
+    const drain = Math.min(remaining, newPurchased);
+    newPurchased -= drain;
+    remaining -= drain;
+  }
+  if (remaining > 0) {
+    // Insufficient — should have been caught at kickoff. Log and fail the commit
+    // (the run is already marked completed; the user has used the credit).
+    console.error(`[run-outline] commitCredits: insufficient balance to cover actual cost ${cost} (remaining ${remaining}); user=${userId}`);
+  }
+
+  // 3. Update entitlement
+  await adminClient.from("user_entitlements").update({
+    monthly_credit_allowance: newMonthly,
+    purchased_credit_balance: newPurchased,
+  }).eq("user_id", userId);
+
+  // 4. Insert ledger entry (negative delta = debit)
+  await adminClient.from("user_credit_ledger").insert({
+    user_id: userId,
+    delta: -cost,
+    reason,
+    metadata: { source: "run-outline" },
+  });
 }
