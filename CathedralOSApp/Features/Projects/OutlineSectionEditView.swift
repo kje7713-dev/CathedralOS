@@ -8,12 +8,24 @@ import SwiftData
 /// terminal beat (TextField), arc beat link (StoryArcBeat picker from the
 /// project's current arc). Status is display-only for now — "draft" until
 /// Phase 3 wires generation. Grouping via `parent` is a follow-up.
+///
+/// PR #313 follow-up: intent fields (currentCharacters, currentThreads,
+/// currentLocation) drive `run-outline`'s narrow-query refactor. iOS
+/// populates these at outline-edit time per PR #311.
 struct OutlineSectionEditView: View {
     @Bindable var section: OutlineSection
     let availableBeats: [StoryArcBeat]
     let onSave: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+
+    /// Temporary string state for the three comma-separated intent fields.
+    /// Committed to the model on Save. The model stores `[String]` for
+    /// characters/threads and `String?` for location; the comma-split
+    /// happens locally in the view.
+    @State private var currentCharactersText: String = ""
+    @State private var currentThreadsText: String = ""
+    @State private var currentLocationText: String = ""
 
     var body: some View {
         NavigationStack {
@@ -80,6 +92,47 @@ struct OutlineSectionEditView: View {
                         }
                     }
                 }
+
+                // Intent fields (PR #311 / #313). These drive run-outline's
+                // narrow-query refactor against the 5 structured
+                // section_embeddings columns. Comma-separated for free-form
+                // iOS input; split on save. Empty input is allowed (run-outline
+                // falls back to the cumulative aggregate path).
+                Section {
+                    Text("Intent")
+                        .font(CathedralTheme.Typography.headline(15))
+                } header: {
+                    Text("Intent (drives prior-context queries)")
+                } footer: {
+                    Text("Characters, threads, and location in scope for this section. Used by run-outline to fetch only relevant prior scenes. Empty is fine — the cumulative aggregate path runs as a fallback.")
+                }
+                Section("Characters in Scope") {
+                    TextField(
+                        "Comma-separated (e.g. Jon, Mara, The Buyer)",
+                        text: $currentCharactersText,
+                        axis: .vertical
+                    )
+                    .lineLimit(1...4)
+                    .textInputAutocapitalization(.words)
+                }
+                Section("Plot Threads in Scope") {
+                    TextField(
+                        "Comma-separated (e.g. heist, betrayal)",
+                        text: $currentThreadsText,
+                        axis: .vertical
+                    )
+                    .lineLimit(1...4)
+                    .textInputAutocapitalization(.never)
+                }
+                Section("Location") {
+                    TextField(
+                        "Where this section takes place",
+                        text: $currentLocationText,
+                        axis: .vertical
+                    )
+                    .lineLimit(1...2)
+                    .textInputAutocapitalization(.words)
+                }
             }
             .navigationTitle("Section")
             .navigationBarTitleDisplayMode(.inline)
@@ -89,6 +142,7 @@ struct OutlineSectionEditView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
+                        commitIntentFields()
                         onSave()
                         dismiss()
                     }
@@ -97,6 +151,37 @@ struct OutlineSectionEditView: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .onAppear {
+            // Initialize the text fields from the model on first appear.
+            // Avoid overwriting user edits if the sheet re-renders (e.g. on
+            // rotation) by only setting when empty.
+            if currentCharactersText.isEmpty {
+                currentCharactersText = section.currentCharacters.joined(separator: ", ")
+            }
+            if currentThreadsText.isEmpty {
+                currentThreadsText = section.currentThreads.joined(separator: ", ")
+            }
+            if currentLocationText.isEmpty, let loc = section.currentLocation {
+                currentLocationText = loc
+            }
+        }
+    }
+
+    /// Commit the comma-separated intent text fields to the model's
+    /// `[String]` / `String?` fields. Trims whitespace and drops empties.
+    /// This is the only place intent fields transition from local TextField
+    /// state to the persisted model.
+    private func commitIntentFields() {
+        section.currentCharacters = currentCharactersText
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        section.currentThreads = currentThreadsText
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let trimmed = currentLocationText.trimmingCharacters(in: .whitespaces)
+        section.currentLocation = trimmed.isEmpty ? nil : trimmed
     }
 
     /// Bridge `String?` (model) <-> `Container` (picker). Nil means "Model
