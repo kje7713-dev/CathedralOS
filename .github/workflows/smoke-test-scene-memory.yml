@@ -1,0 +1,169 @@
+name: Smoke Test - Scene Memory Layers
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: *** secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      SUPABASE_DB_PASSWORD: *** secrets.SUPABASE_DB_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v2
+        with:
+          version: latest
+
+      - name: Link Supabase project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPAB…WORD"
+
+      - name: Fetch service role key
+        id: keys
+        run: |
+          curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/api-keys" > /tmp/keys.json
+          python3 <<'PYEOF'
+import json
+d = json.load(open('/tmp/keys.json'))
+sr = None
+if isinstance(d, list):
+    for k in d:
+        if isinstance(k, dict) and k.get('name') == 'service_role':
+            sr = k.get('api_key')
+elif isinstance(d, dict):
+    sr = d.get('service_role_key') or d.get('service_role')
+if not sr:
+    print(f"ERROR: service_role not found. Response: {json.dumps(d)[:500]}")
+    raise SystemExit(1)
+with open('/tmp/sr_key', 'w') as f: f.write(sr)
+print("✓ service role key fetched")
+PYEOF
+
+      - name: Schema check (5 new jsonb columns on section_embeddings)
+        run: |
+          SR_KEY=$(cat /tmp/sr_key)
+          HTTP=$(curl -sS -o /dev/null -w "%{http_code}" \
+            "https://$SUPABASE_PROJECT_REF.supabase.co/rest/v1/section_embeddings?select=id&limit=1" \
+            -H "apikey: $SR_KEY" \
+            -H "Authorization: Bearer $SR_KEY")
+          if [ "$HTTP" != "200" ]; then
+            echo "ERROR: section_embeddings not accessible (HTTP $HTTP)"
+            exit 1
+          fi
+          echo "✓ section_embeddings table accessible"
+          echo ""
+          echo "Checking for 5 new jsonb columns..."
+          ALL_OK=true
+          for col in character_deltas plot_thread_deltas continuity_facts open_loops scene_ending_state; do
+            HTTP=$(curl -sS -o /dev/null -w "%{http_code}" \
+              "https://$SUPABASE_PROJECT_REF.supabase.co/rest/v1/section_embeddings?select=$col&limit=1" \
+              -H "apikey: $SR_KEY" \
+              -H "Authorization: Bearer $SR_KEY")
+            if [ "$HTTP" = "200" ]; then
+              echo "✓ $col present"
+            else
+              echo "✗ $col HTTP=$HTTP"
+              ALL_OK=false
+            fi
+          done
+          if [ "$ALL_OK" = "false" ]; then
+            echo "ERROR: schema check failed"
+            exit 1
+          fi
+          echo ""
+          echo "✓ schema check passed"
+
+      - name: Find existing outline section
+        id: section
+        run: |
+          SR_KEY=$(cat /tmp/sr_key)
+          curl -sS \
+            -H "apikey: $SR_KEY" \
+            -H "Authorization: Bearer $SR_KEY" \
+            "https://$SUPABASE_PROJECT_REF.supabase.co/rest/v1/outline_sections?select=id,project_id&limit=1" > /tmp/sections.json
+          cat /tmp/sections.json
+          echo ""
+          python3 <<'PYEOF'
+import json
+data = json.load(open('/tmp/sections.json'))
+if not data:
+    print("ERROR: no outline_sections found in DB")
+    print("Action: accept a section in TestFlight, then re-run this smoke test")
+    raise SystemExit(1)
+section = data[0]
+with open('/tmp/section_id', 'w') as f: f.write(section['id'])
+with open('/tmp/project_id', 'w') as f: f.write(section['project_id'])
+print(f"✓ using section_id={section['id']} project_id={section['project_id']}")
+PYEOF
+
+      - name: Invoke embed-section with sample text
+        run: |
+          SR_KEY=$(cat /tmp/sr_key)
+          SECTION_ID=$(cat /tmp/section_id)
+          PROJECT_ID=$(cat /tmp/project_id)
+          PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+  'project_id': '$PROJECT_ID',
+  'outline_section_id': '$SECTION_ID',
+  'raw_text': 'The hero entered the dimly lit tavern and saw the villain sitting by the fire. They exchanged hostile words. The hero demanded the stolen artifact, but the villain refused. Eventually the hero left to gather allies.'
+}))
+          ")
+          echo "Payload: $PAYLOAD"
+          HTTP_CODE=$(curl -sS -o /tmp/embed_response.json -w "%{http_code}" \
+            -X POST "https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/embed-section" \
+            -H "Authorization: Bearer $SR_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          echo "HTTP $HTTP_CODE"
+          cat /tmp/embed_response.json
+          echo ""
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: embed-section returned $HTTP_CODE"
+            exit 1
+          fi
+          echo "✓ embed-section invoked"
+
+      - name: Verify new columns populated
+        run: |
+          SR_KEY=$(cat /tmp/sr_key)
+          SECTION_ID=$(cat /tmp/section_id)
+          sleep 3
+          curl -sS \
+            -H "apikey: $SR_KEY" \
+            -H "Authorization: Bearer $SR_KEY" \
+            "https://$SUPABASE_PROJECT_REF.supabase.co/rest/v1/section_embeddings?select=character_deltas,plot_thread_deltas,continuity_facts,open_loops,scene_ending_state,extracted_summary&outline_section_id=eq.$SECTION_ID" > /tmp/row.json
+          cat /tmp/row.json
+          echo ""
+          python3 <<'PYEOF'
+import json
+data = json.load(open('/tmp/row.json'))
+if not data:
+    print("ERROR: no row found for this section")
+    raise SystemExit(1)
+row = data[0]
+print("Row snapshot:")
+print(json.dumps(row, indent=2)[:1500])
+print()
+all_ok = True
+for col in ['character_deltas', 'plot_thread_deltas', 'continuity_facts', 'open_loops', 'scene_ending_state']:
+    val = row.get(col)
+    if val is None:
+        print(f"✗ {col}: NULL")
+        all_ok = False
+    elif isinstance(val, list) and len(val) == 0:
+        print(f"⚠ {col}: empty array")
+    elif isinstance(val, dict) and len(val) == 0:
+        print(f"⚠ {col}: empty object")
+    else:
+        print(f"✓ {col}: {type(val).__name__} (len={len(val)})")
+if not all_ok:
+    raise SystemExit(1)
+print()
+print("✓ all 5 new columns populated")
+PYEOF
