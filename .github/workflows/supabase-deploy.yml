@@ -27,39 +27,37 @@ jobs:
 
       # Migration steps are best-effort (continue-on-error) since they need
       # `supabase link` which is broken (CLI rejects +00:00 timezone on
-      # Migrations use the Supabase connection pooler (session mode, port 5432)
-      # via --db-url. Direct DB connections (`db.${REF}.supabase.co`) refuse IPv6
-      # from GitHub Actions runners (ECONNREFUSED on AAAA records). The pooler
-      # handles both IPv4 and IPv6 properly. Pooler URL format:
-      #   postgres.${REF}:${PASSWORD}@aws-0-${REGION}.pooler.supabase.com:5432/postgres
-      # Region is looked up via the management API (the project ref alone
-      # doesn't tell us which region). Main migration step is NOT
-      # continue-on-error now that it actually runs.
-      - name: Get Supabase project region
-        id: project
-        run: |
-          REGION=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF" | \
-            python3 -c "import json,sys; print(json.load(sys.stdin).get('region',''))")
-          if [ -z "$REGION" ]; then
-            echo "ERROR: Could not determine region from management API"
-            exit 1
-          fi
-          echo "region=$REGION" >> "$GITHUB_OUTPUT"
-          echo "Project region: $REGION"
-      - name: Skip broken pre-existing migration (mark applied)
+      # Migrations use psql with explicit IPv4 (libpq hostaddr trick).
+      # Direct DB hostname refuses IPv6 from GitHub Actions runners (ECONNREFUSED
+      # on AAAA records) and the connection pooler returns "tenant/user not found"
+      # (not enabled for this project). Forcing IPv4 via socket.gethostbyname
+      # bypasses both issues.
+      #
+      # Marking 20260722190336 as applied (was broken on this DB) and applying the
+      # two migrations silently skipped since the link broke on 2026-08-07:
+      #   - 20260808153000_add_gpt56_models.sql (model catalog seeds)
+      #   - 20260809200500_add_scene_memory_layers.sql (5 jsonb columns, PR #304)
+      # Both use IF NOT EXISTS / ON CONFLICT so re-applying is safe.
+      - name: Mark broken migration 20260722190336 as applied
         continue-on-error: true
         run: |
-          ENCODED_PW=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['SUPABASE_DB_PASSWORD'], safe=''))")
-          DB_URL="postgresql://postgres.${SUPABASE_PROJECT_REF}:${ENCODED_PW}@aws-0-${{ steps.project.outputs.region }}.pooler.supabase.com:5432/postgres"
-          echo "Connecting to pooler..."
-          supabase migration repair --db-url "$DB_URL" --status applied 20260722190336
-      - name: Run database migrations
+          DB_HOSTNAME="db.${SUPABASE_PROJECT_REF}.supabase.co"
+          DB_IPV4=$(python3 -c "import socket; print(socket.gethostbyname('$DB_HOSTNAME'))")
+          echo "Connecting to $DB_HOSTNAME (IPv4: $DB_IPV4)..."
+          PGPASSWORD="$SUPABASE_DB_PASSWORD" psql \
+            "host=$DB_HOSTNAME hostaddr=$DB_IPV4 port=5432 user=postgres dbname=postgres sslmode=require" \
+            -c "insert into supabase_migrations.schema_migrations (version, name, statements) values ('20260722190336', 'reconcile_tombstone_linked_project_aliases', '{}') on conflict (version) do nothing"
+      - name: Run database migrations via psql
         run: |
-          ENCODED_PW=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['SUPABASE_DB_PASSWORD'], safe=''))")
-          DB_URL="postgresql://postgres.${SUPABASE_PROJECT_REF}:${ENCODED_PW}@aws-0-${{ steps.project.outputs.region }}.pooler.supabase.com:5432/postgres"
-          echo "Connecting to pooler..."
-          supabase db push --db-url "$DB_URL"
+          DB_HOSTNAME="db.${SUPABASE_PROJECT_REF}.supabase.co"
+          DB_IPV4=$(python3 -c "import socket; print(socket.gethostbyname('$DB_HOSTNAME'))")
+          echo "Connecting to $DB_HOSTNAME (IPv4: $DB_IPV4)..."
+          PGPASSWORD="$SUPABASE_DB_PASSWORD" psql \
+            "host=$DB_HOSTNAME hostaddr=$DB_IPV4 port=5432 user=postgres dbname=postgres sslmode=require" \
+            -v ON_ERROR_STOP=1 -f supabase/migrations/20260808153000_add_gpt56_models.sql
+          PGPASSWORD="$SUPABASE_DB_PASSWORD" psql \
+            "host=$DB_HOSTNAME hostaddr=$DB_IPV4 port=5432 user=postgres dbname=postgres sslmode=require" \
+            -v ON_ERROR_STOP=1 -f supabase/migrations/20260809200500_add_scene_memory_layers.sql
 
       # Clean up the manual "kevbot" service_role API key (one-time cleanup).
       # Created 2026-07-26 via dashboard; not part of the normal key set.
