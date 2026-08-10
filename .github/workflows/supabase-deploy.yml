@@ -27,16 +27,22 @@ jobs:
 
       # Migration steps are best-effort (continue-on-error) since they need
       # `supabase link` which is broken (CLI rejects +00:00 timezone on
-      # new key types). When supabase fixes the CLI schema, restore link.
+      # Migrations use --db-url (Postgres connection string from secrets).
+      # This bypasses `supabase link` which is broken (CLI rejects +00:00
+      # timezone on new key types). Works regardless of CLI schema upstream.
+      # Main migration step is NOT continue-on-error now that it actually
+      # runs: failures should fail the deploy.
       - name: Skip broken pre-existing migration (mark applied)
         continue-on-error: true
         run: |
-          supabase migration repair \
-            --status applied \
-            20260722190336
+          ENCODED_PW=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['SUPABASE_DB_PASSWORD'], safe=''))")
+          DB_URL="postgresql://postgres:${ENCODED_PW}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres"
+          supabase migration repair --db-url "$DB_URL" --status applied 20260722190336
       - name: Run database migrations
-        continue-on-error: true
-        run: supabase db push --password "$SUPABASE_DB_PASSWORD"
+        run: |
+          ENCODED_PW=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['SUPABASE_DB_PASSWORD'], safe=''))")
+          DB_URL="postgresql://postgres:${ENCODED_PW}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres"
+          supabase db push --db-url "$DB_URL"
 
       # Clean up the manual "kevbot" service_role API key (one-time cleanup).
       # Created 2026-07-26 via dashboard; not part of the normal key set.
