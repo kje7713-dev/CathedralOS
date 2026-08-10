@@ -23,81 +23,18 @@ jobs:
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v2
         with:
-          version: 2.112.0
+          version: latest
 
-      # Migration steps are best-effort (continue-on-error) since they need
-      # `supabase link` which is broken (CLI rejects +00:00 timezone on
-      # Migrations use psql with explicit IPv4 (libpq hostaddr trick).
-      # Direct DB hostname refuses IPv6 from GitHub Actions runners (ECONNREFUSED
-      # on AAAA records) and the connection pooler returns "tenant/user not found"
-      # (not enabled for this project). Forcing IPv4 via socket.gethostbyname
-      # bypasses both issues.
-      #
-      # Marking 20260722190336 as applied (was broken on this DB) and applying the
-      # two migrations silently skipped since the link broke on 2026-08-07:
-      #   - 20260808153000_add_gpt56_models.sql (model catalog seeds)
-      #   - 20260809200500_add_scene_memory_layers.sql (5 jsonb columns, PR #304)
-      # Both use IF NOT EXISTS / ON CONFLICT so re-applying is safe.
-      # Dump the full project config from the management API so we can see the
-      # EXACT pooler hostname/port/user format that Supabase returns. We're
-      # guessing at the wrong pooler URL ("tenant not found" was probably an
-      # auth/format issue, not "pooler not enabled").
-      - name: Dump Supabase project config
-        id: project
-        run: |
-          curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF" > /tmp/project.json
-          echo "=== top-level keys ==="
-          python3 -c "import json; print(list(json.load(open('/tmp/project.json')).keys()))"
-          echo "=== pooler ==="
-          python3 -c "import json; print(json.dumps(json.load(open('/tmp/project.json')).get('pooler','NOT FOUND'), indent=2))"
-          echo "=== database ==="
-          python3 -c "import json; print(json.dumps(json.load(open('/tmp/project.json')).get('database','NOT FOUND'), indent=2))"
-          echo "=== pooler-like fields ==="
-          python3 -c "
-import json
-d = json.load(open('/tmp/project.json'))
-for k, v in d.items():
-    kl = k.lower()
-    if any(t in kl for t in ['pool','supavisor','connect','endpoint']):
-        print(f'{k}:')
-        print(json.dumps(v, indent=2)[:1500])
-        print('---')
-"
-          echo "=== full project json (truncated to 4000 chars) ==="
-          head -c 4000 /tmp/project.json
-          echo ""
-      - name: Mark broken migration 20260722190336 as applied
-        continue-on-error: true
-        run: |
-          DB_HOSTNAME="db.${SUPABASE_PROJECT_REF}.supabase.co"
-          DB_IPV4=$(python3 -c "import socket; print(socket.gethostbyname('$DB_HOSTNAME'))")
-          echo "Connecting to $DB_HOSTNAME (IPv4: $DB_IPV4)..."
-          PGPASSWORD="$SUPABASE_DB_PASSWORD" psql \
-            "host=$DB_HOSTNAME hostaddr=$DB_IPV4 port=5432 user=postgres dbname=postgres sslmode=require" \
-            -c "insert into supabase_migrations.schema_migrations (version, name, statements) values ('20260722190336', 'reconcile_tombstone_linked_project_aliases', '{}') on conflict (version) do nothing"
-      - name: Run database migrations via psql
-        run: |
-          DB_HOSTNAME="db.${SUPABASE_PROJECT_REF}.supabase.co"
-          DB_IPV4=$(python3 -c "import socket; print(socket.gethostbyname('$DB_HOSTNAME'))")
-          echo "Connecting to $DB_HOSTNAME (IPv4: $DB_IPV4)..."
-          PGPASSWORD="$SUPABASE_DB_PASSWORD" psql \
-            "host=$DB_HOSTNAME hostaddr=$DB_IPV4 port=5432 user=postgres dbname=postgres sslmode=require" \
-            -v ON_ERROR_STOP=1 -f supabase/migrations/20260808153000_add_gpt56_models.sql
-          PGPASSWORD="$SUPABASE_DB_PASSWORD" psql \
-            "host=$DB_HOSTNAME hostaddr=$DB_IPV4 port=5432 user=postgres dbname=postgres sslmode=require" \
-            -v ON_ERROR_STOP=1 -f supabase/migrations/20260809200500_add_scene_memory_layers.sql
+      - name: Link Supabase project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
 
-      # Clean up the manual "kevbot" service_role API key (one-time cleanup).
-      # Created 2026-07-26 via dashboard; not part of the normal key set.
-      # Idempotent: 404 after first run is ignored.
-      - name: Remove kevbot service_role API key (cleanup)
-        continue-on-error: true
+      - name: Skip broken pre-existing migration (mark applied)
         run: |
-          curl -sS -X DELETE \
-            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/api-keys/007e3ab3-7294-4f10-962f-c1f8ea1d0aed" \
-            || echo "(kevbot key already removed)"
+          supabase migration repair \
+            --status applied \
+            20260722190336
+      - name: Run database migrations
+        run: supabase db push --password "$SUPABASE_DB_PASSWORD"
 
       - name: Deploy Edge Function - generate-story
         if: ${{ hashFiles('supabase/functions/generate-story/index.ts') != '' }}
@@ -135,7 +72,7 @@ for k, v in d.items():
         if: ${{ hashFiles('supabase/functions/outline-from-recipe/index.ts') != '' }}
         run: supabase functions deploy outline-from-recipe --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
       - name: Deploy Edge Function - embed-section
-        if: ${{ hashFiles('supabase/functions/embed-section/index.ts') != '' }}
+        if: ${{ hashFiles('supabase/functions/embed-section/index.ts') != '' && success() }}
         run: supabase functions deploy embed-section --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Deploy Edge Function - sync-story-arc
