@@ -1,23 +1,26 @@
 // =============================================================================
-// embed-section Edge Function (Phase 3 of novel-building per docs/novel-building.md)
+// embed-section Edge Function (Phase 4 redesign per locked RAG rules)
 //
 // Called from iOS on OutlineSection Accept. On-demand pipeline:
 //   1. UPSERT outline (id = client-provided outline_id, project_id)
 //   2. UPSERT outline_section (id = client-provided outline_section_id)
-//   3. LLM extraction pass — ~200-500 token distillation (gpt-4o-mini)
+//   3. LLM extraction pass — semantic content only (per Rule 1-3: no IDs,
+//      no source_section_id, no status fields from the LLM; the function
+//      adds these server-side)
 //   4. Embed the summary (text-embedding-3-small, 1536-dim)
-//   5. UPSERT into section_embeddings via service role
+//   5. UPSERT into section_embeddings via service role with the new
+//      shape: stable IDs, source_section_id, status, created_at, raw_text
 //
 // The function creates the outline + section on-demand. The iOS app does
-// NOT need to sync them to supabase first — this was the v1 bug: the
-// edge function did a `select outline_id, outlines!inner(project_id) from
-// outline_sections where id = $1` and 400'd when the section didn't exist
-// in the DB. v2 (this file) UPSERTs the section from the iOS payload.
+// NOT need to sync them to supabase first — this was the v1 bug.
 //
-// v2.2 (2026-08-06): write `story_arc_beat_id` to outline_sections now
-// that the DB column exists (migration 20260806120000). v2.1 deferred this
-// with "Future migration + function update deferred" — this is that
-// follow-up (PR #284).
+// Per Locked Design Rules (Kevin 2026-08-10 16:28 EDT, PR #306 RFC):
+//   - Rule 1: keep the 5 structured memory layers
+//   - Rule 2: character_deltas aggregate merges fields per character (not per-scene merge; the function emits per-scene character deltas and the aggregate does the merge)
+//   - Rule 3: plot_thread_deltas + open_loops have stable IDs + explicit lifecycle
+//   - Rule 4: continuity_facts have provenance + active/superseded
+//   - Rule 8: pipeline order generate → persist → extract; this function is called AFTER the output is persisted by the caller (run-outline does the persist)
+//   - Rule 9: raw_text is stored but not injected by default
 //
 // Auth: requires a valid Supabase user JWT in the Authorization header.
 // Service-role key is used server-side only (never exposed to iOS).
@@ -43,7 +46,7 @@ const CORS_HEADERS = {
 };
 
 const corsResponse = (body: string, init: ResponseInit = {}): Response =>
-  new Response(body, { ...init, headers: { ...CORS_HEADERS, ...(init.headers || {}) } });
+  new Response(body, { ...init, headers: { ...CORS_HEADERS, ...(init.headers ?? {}) } });
 
 const errorResponse = (code: string, message: string, status: number): Response =>
   corsResponse(JSON.stringify({ errorCode: code, message }), { status });
@@ -61,6 +64,20 @@ interface EmbedSectionRequest {
   story_arc_beat_id?: string;
   raw_text?: string;
 }
+
+// LLM returns semantic content only. The function adds IDs, source_section_id,
+// status, timestamps, and provenance metadata server-side per the locked rules.
+interface SceneMemory {
+  extracted_summary: string;
+  character_deltas: Array<{ character_name?: string; location?: string; knowledge_delta?: string; relationship_delta?: string; injuries?: string; goals?: string; possessions?: string; emotional_stance?: string }>;
+  plot_thread_deltas: Array<{ thread_name?: string; status?: string; description?: string }>;
+  continuity_facts: string[];
+  open_loops: Array<{ type?: string; description?: string }>;
+  scene_ending_state: { character_positions?: Array<{ character?: string; location?: string; immediate_state?: string }>; immediate_pressure?: string };
+}
+
+// Stable UUIDs for plot_thread_deltas, open_loops, continuity_facts.
+const newUuid = (): string => crypto.randomUUID();
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsResponse("", { status: 204 });
@@ -86,6 +103,7 @@ Deno.serve(async (req: Request) => {
 
   const userClient = createClient(supabaseUrl, supabaseAnonKey, {
     global: { headers: { Authorization: authHeader } },
+    auth: { persistSession: false },
   });
   const { data: { user }, error: authErr } = await userClient.auth.getUser();
   if (authErr || !user) {
@@ -98,6 +116,7 @@ Deno.serve(async (req: Request) => {
   } catch {
     return errorResponse("invalid_request", "Body must be JSON", 400);
   }
+
   if (!body.outline_section_id || !body.outline_id || !body.project_id || !body.title || !body.raw_text) {
     return errorResponse(
       "invalid_request",
@@ -111,9 +130,6 @@ Deno.serve(async (req: Request) => {
   const adminClient = createClient(supabaseUrl, supabaseServiceKey);
 
   // Step 1: UPSERT outline (id = client-provided, user_id from auth, local_project_id + lineage_id).
-  // The actual `outlines` schema uses user_id / local_project_id / lineage_id — NOT project_id
-  // (which doesn't exist; my v2 guessed wrong from the v1 join syntax that was never exercised).
-  // We do this first so the outline_section FK has a target.
   const { error: outlineErr } = await adminClient.from("outlines").upsert({
     id: body.outline_id,
     user_id: user.id,
@@ -128,10 +144,7 @@ Deno.serve(async (req: Request) => {
   console.log(`[embed-section] outline upserted id=${body.outline_id}`);
 
   // Step 1.5: Validate story_arc_beat_id exists in story_arc_beats before
-  // the section upsert. iOS may send a beat UUID that wasn't synced (timing
-  // race, beat regen, missing beats in sync payload). If bogus, null it so
-  // the FK doesn't reject the upsert — Accept All succeeds even with a stale
-  // beat ID. Defensive fix; root cause of the missing beats is sync-side.
+  // the section upsert. Defensive: null the FK if bogus.
   let validatedBeatID: string | null = body.story_arc_beat_id ?? null;
   if (validatedBeatID) {
     const { data: beatExists, error: beatCheckErr } = await adminClient
@@ -150,7 +163,7 @@ Deno.serve(async (req: Request) => {
 
   // Step 2: UPSERT outline_section (id = client-provided, all fields).
   // status stays "draft" here — the iOS app flips it to "accepted" locally
-  // on 200 response. Server-side status flips live in a future PR if needed.
+  // on 200 response.
   const { error: sectionErr } = await adminClient.from("outline_sections").upsert({
     id: body.outline_section_id,
     outline_id: body.outline_id,
@@ -160,9 +173,6 @@ Deno.serve(async (req: Request) => {
     container: body.container ?? null,
     pov: body.pov ?? null,
     terminal_beat: body.terminal_beat ?? null,
-    // story_arc_beat_id: column added in migration 20260806120000 (PR #284).
-    // Was deferred in v2.1 with "Future migration + function update
-    // deferred" comment.
     story_arc_beat_id: validatedBeatID,
     status: "draft",
   }, { onConflict: "id" });
@@ -172,26 +182,20 @@ Deno.serve(async (req: Request) => {
   }
   console.log(`[embed-section] section upserted id=${body.outline_section_id}`);
 
-  // Step 3: extract the full scene memory via LLM (one pass, JSON output).
+  // Step 3: extract the scene memory via LLM.
   //
-  // Produces all 6 layers in a single call (cheaper than 6 separate calls):
-  //   - extracted_summary      (200-500 token distillation of what happened)
-  //   - character_deltas       (per-character state changes this scene)
-  //   - plot_thread_deltas     (plot-thread open/advance/resolve/complicate)
-  //   - continuity_facts       (concrete facts future scenes must respect)
-  //   - open_loops             (promises, mysteries, unanswered questions)
-  //   - scene_ending_state     (where everyone is, immediate pressure)
+  // Per the locked rules (PR #310 RFC), the LLM returns SEMANTIC content only:
+  //   - extracted_summary
+  //   - character_deltas (per-character state changes; aggregate merges across scenes)
+  //   - plot_thread_deltas (thread_name, status, description — no IDs, no source_section_id)
+  //   - continuity_facts (strings — no IDs, no source_section_id, no active flag)
+  //   - open_loops (type, description — no IDs, no source_section_id)
+  //   - scene_ending_state (character_positions, immediate_pressure)
   //
-  // Uses OpenAI JSON mode (response_format: json_object) for structured output.
-  // Each layer defaults to an empty array/object so the schema is forgiving.
-  type SceneMemory = {
-    extracted_summary: string;
-    character_deltas: Array<Record<string, unknown>>;
-    plot_thread_deltas: Array<Record<string, unknown>>;
-    continuity_facts: string[];
-    open_loops: Array<Record<string, unknown>>;
-    scene_ending_state: Record<string, unknown>;
-  };
+  // The function adds metadata server-side: stable UUIDs (Rule 3), source_section_id
+  // (Rule 4), status defaults, created_at timestamps. Continuity_facts get active=true.
+  //
+  // Uses OpenAI JSON mode (response_format: json_object).
   let sceneMemory: SceneMemory;
   try {
     const ac = new AbortController();
@@ -211,9 +215,9 @@ Deno.serve(async (req: Request) => {
               "You are a fiction scene-memory extractor. Given a scene, output JSON with these 6 keys: " +
               "`extracted_summary` (200-500 token distillation of what happened), " +
               "`character_deltas` (array of {character_name, location?, knowledge_delta?, relationship_delta?, injuries?, goals?, possessions?, emotional_stance?}), " +
-              "`plot_thread_deltas` (array of {thread_name, status in [opened,advanced,resolved,complicated], description}), " +
+              "`plot_thread_deltas` (array of {thread_name, status in [introduced, advanced, resolved], description}), " +
               "`continuity_facts` (array of concrete fact strings future scenes must not contradict), " +
-              "`open_loops` (array of {type in [promise,mystery,question,threat,pending_action], description}), " +
+              "`open_loops` (array of {type in [promise, mystery, question, threat, pending_action], description}), " +
               "`scene_ending_state` ({character_positions: [{character, location, immediate_state}], immediate_pressure: string}). " +
               "Output ONLY valid JSON. Empty arrays/objects are fine when a layer has nothing.",
           },
@@ -270,24 +274,56 @@ Deno.serve(async (req: Request) => {
   }
   console.log(`[embed-section] extract OK summary_len=${sceneMemory.extracted_summary.length} layers=6`);
 
-  // Compute the compressed scene memory string. This is what we embed for
-  // similarity search — encodes the structured state, not just the summary.
-  // The goal is "needed context without sending tons of tokens": the retrieval
-  // ranking picks the right scenes, and the generator injects the structured
-  // fields (cheap) rather than the raw prose (expensive).
+  // Step 3.5: wrap the LLM output with server-side metadata per the locked rules.
+  // - Rule 3: stable UUIDs for plot_thread_deltas, open_loops
+  // - Rule 4: source_section_id + active=true for continuity_facts
+  // - status defaults for threads (introduced) and loops (open)
+  // - created_at timestamp for all metadata-added items
+  const nowIso = new Date().toISOString();
+  const sourceSectionId = body.outline_section_id;
+  const enrichedPlotThreads = sceneMemory.plot_thread_deltas
+    .filter((t) => t && typeof t === "object" && t.thread_name)
+    .map((t) => ({
+      id: newUuid(),
+      source_section_id: sourceSectionId,
+      thread_name: t.thread_name,
+      status: t.status ?? "introduced",
+      description: t.description ?? "",
+      created_at: nowIso,
+      resolved_at: null,
+    }));
+  const enrichedOpenLoops = sceneMemory.open_loops
+    .filter((l) => l && typeof l === "object" && l.type)
+    .map((l) => ({
+      id: newUuid(),
+      source_section_id: sourceSectionId,
+      type: l.type,
+      description: l.description ?? "",
+      created_at: nowIso,
+      resolved_at: null,
+    }));
+  const enrichedContinuityFacts = sceneMemory.continuity_facts
+    .filter((f) => typeof f === "string" && f.length > 0)
+    .map((f) => ({
+      id: newUuid(),
+      source_section_id: sourceSectionId,
+      fact: f,
+      active: true,
+      superseded_by: null,
+      created_at: nowIso,
+    }));
+
+  // Step 4: embed the compressed scene memory string.
+  // The vector encodes the structured state (per Locked Rule 9: raw_text is NOT
+  // injected by default — only the compressed summary + structured fields).
   const compressedMemory = JSON.stringify({
     summary: sceneMemory.extracted_summary,
     character_deltas: sceneMemory.character_deltas,
-    plot_thread_deltas: sceneMemory.plot_thread_deltas,
-    open_loops: sceneMemory.open_loops,
-    ending_pressure: (sceneMemory.scene_ending_state as Record<string, unknown>)?.immediate_pressure ?? "",
+    plot_thread_deltas: enrichedPlotThreads,
+    open_loops: enrichedOpenLoops,
+    ending_pressure: sceneMemory.scene_ending_state?.immediate_pressure ?? "",
   });
 
-  // Step 4: embed the compressed scene memory (not just the summary).
-  // The vector encodes the structured state — character deltas, plot thread
-  // deltas, open loops, ending pressure — so similarity search ranks scenes
-  // by relevance to the new scene's planned context, not just topical
-  // similarity in the prose.
   let embedding: number[] = [];
   try {
     const ac = new AbortController();
@@ -316,7 +352,6 @@ Deno.serve(async (req: Request) => {
     }
     const data = await r.json();
     const vec = data.data?.[0]?.embedding;
-    const extractedSummary = sceneMemory.extracted_summary;
     if (!Array.isArray(vec)) {
       console.error(`[embed-section] Embedding API returned invalid data`);
       return errorResponse("provider_error", "Embedding API returned invalid data", 502);
@@ -328,8 +363,13 @@ Deno.serve(async (req: Request) => {
   }
   console.log(`[embed-section] embed OK dim=${embedding.length}`);
 
-  // Step 5: upsert into section_embeddings (UPSERT on outline_section_id).
-  // Re-accepting an already-accepted section overwrites all 6 memory layers.
+  // Step 5: upsert into section_embeddings with the new shape.
+  // Per Locked Rules:
+  //   - plot_thread_deltas, open_loops: stable UUIDs + source_section_id + status + created_at + resolved_at
+  //   - continuity_facts: stable UUIDs + source_section_id + active + superseded_by + created_at
+  //   - raw_text: stored (Rule 9 — for re-extraction/debugging, NOT injected by default)
+  //   - character_deltas: per-scene array (Rule 2 — aggregate merges across scenes)
+  //   - scene_ending_state: same object shape
   const { error: upsertErr } = await adminClient.from("section_embeddings").upsert({
     project_id: body.project_id,
     outline_section_id: body.outline_section_id,
@@ -339,21 +379,21 @@ Deno.serve(async (req: Request) => {
     container: body.container ?? null,
     pov: body.pov ?? null,
     character_deltas: sceneMemory.character_deltas,
-    plot_thread_deltas: sceneMemory.plot_thread_deltas,
-    continuity_facts: sceneMemory.continuity_facts,
-    open_loops: sceneMemory.open_loops,
+    plot_thread_deltas: enrichedPlotThreads,
+    continuity_facts: enrichedContinuityFacts,
+    open_loops: enrichedOpenLoops,
     scene_ending_state: sceneMemory.scene_ending_state,
   }, { onConflict: "outline_section_id" });
   if (upsertErr) {
     console.error(`[embed-section] section_embeddings upsert failed: ${upsertErr.message}`);
     return errorResponse("database_error", upsertErr.message, 500);
   }
-  console.log(`[embed-section] section_embeddings upserted section=${body.outline_section_id}`);
+  console.log(`[embed-section] section_embeddings upserted section=${body.outline_section_id} threads=${enrichedPlotThreads.length} loops=${enrichedOpenLoops.length} facts=${enrichedContinuityFacts.length}`);
 
   return corsResponse(
     JSON.stringify({
       outline_section_id: body.outline_section_id,
-      extracted_summary: extractedSummary,
+      extracted_summary: sceneMemory.extracted_summary,
       embedding_dim: embedding.length,
     }),
     { status: 200 }
