@@ -393,8 +393,6 @@ struct OutlineSectionsRegionView: View {
             embedError = error.localizedDescription
         }
     }
-}
-
     // MARK: - Day 4 generation wiring
 
     /// Kick off a run for the given section and start polling for status.
@@ -457,6 +455,8 @@ struct OutlineSectionsRegionView: View {
             }
         }
     }
+
+}
 
 /// Single section row in the sections list.
 
