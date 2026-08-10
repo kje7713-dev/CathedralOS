@@ -692,45 +692,119 @@ const CONTAINER_HARD_CAPS: Record<Container, number> = {
   novella: 60000,
 };
 
-// Fetch prior scenes context from section_embeddings (new structured layers).
-// RAG retrieval: pull the 5 new structured fields (character_deltas,
-// plot_thread_deltas, continuity_facts, open_loops, scene_ending_state)
-// plus extracted_summary for the N most recent scenes in this project.
-// Format as a context block the model can use when writing the new scene.
-async function fetchPriorScenesContext(
+// Aggregate project state across ALL accepted scenes from section_embeddings
+// (PR #304's structured layers). The structured fields are per-scene snapshots,
+// but the model needs the CUMULATIVE state of the project when writing a new
+// scene — not the latest N scenes' raw text.
+//
+// Aggregation strategy:
+// - character_deltas: latest entry per character_name wins (most recent state)
+// - plot_thread_deltas: latest entry per thread_name wins (most recent status)
+// - continuity_facts: union across all scenes (cumulative — must not be contradicted)
+// - open_loops: union across all scenes (cumulative — only resolved when removed)
+// - scene_ending_state: just the latest scene's state (only the latest matters)
+async function fetchProjectStateContext(
   adminClient: any,
-  projectId: string,
-  maxScenes: number = 5
+  projectId: string
 ): Promise<string> {
   try {
     const { data, error } = await adminClient
       .from("section_embeddings")
       .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
       .eq("project_id", projectId)
-      .order("created_at", { ascending: false })
-      .limit(maxScenes);
+      .order("created_at", { ascending: true });
     if (error || !data || data.length === 0) return "";
-    const lines: string[] = ["## Prior scenes in this project (most recent first)"];
+
+    // Iterate in ascending order so later scenes overwrite earlier ones
+    // (Map.set on the same key replaces — gives us "latest entry per X").
+    const charactersByName = new Map<string, any>();
+    const threadsByName = new Map<string, any>();
+    const continuityFacts = new Set<string>();
+    const openLoopsByDesc = new Map<string, any>();
+    let latestSummary = "";
+    let latestEndingState: any = {};
+    let latestCreatedAt = "";
+
     for (const scene of data) {
+      if (Array.isArray(scene.character_deltas)) {
+        for (const delta of scene.character_deltas) {
+          if (delta && typeof delta === "object" && delta.character_name) {
+            charactersByName.set(delta.character_name, delta);
+          }
+        }
+      }
+      if (Array.isArray(scene.plot_thread_deltas)) {
+        for (const thread of scene.plot_thread_deltas) {
+          if (thread && typeof thread === "object" && thread.thread_name) {
+            threadsByName.set(thread.thread_name, thread);
+          }
+        }
+      }
+      if (Array.isArray(scene.continuity_facts)) {
+        for (const fact of scene.continuity_facts) {
+          if (typeof fact === "string") continuityFacts.add(fact);
+        }
+      }
+      if (Array.isArray(scene.open_loops)) {
+        for (const loop of scene.open_loops) {
+          if (loop && typeof loop === "object" && loop.description) {
+            openLoopsByDesc.set(loop.description, loop);
+          }
+        }
+      }
+      if (scene.created_at > latestCreatedAt) {
+        latestCreatedAt = scene.created_at;
+        latestSummary = scene.extracted_summary || "";
+        latestEndingState = scene.scene_ending_state || {};
+      }
+    }
+
+    const lines: string[] = ["## Project state (cumulative across all accepted scenes)"];
+    lines.push("");
+    if (latestSummary) {
+      lines.push(`**Latest summary:** ${latestSummary}`);
       lines.push("");
-      lines.push(`### ${scene.extracted_summary || "(no summary)"}`);
-      if (Array.isArray(scene.character_deltas) && scene.character_deltas.length > 0)
-        lines.push(`Character deltas: ${JSON.stringify(scene.character_deltas)}`);
-      if (Array.isArray(scene.plot_thread_deltas) && scene.plot_thread_deltas.length > 0)
-        lines.push(`Plot thread deltas: ${JSON.stringify(scene.plot_thread_deltas)}`);
-      if (Array.isArray(scene.open_loops) && scene.open_loops.length > 0)
-        lines.push(`Open loops: ${JSON.stringify(scene.open_loops)}`);
-      if (Array.isArray(scene.continuity_facts) && scene.continuity_facts.length > 0)
-        lines.push(`Continuity facts: ${JSON.stringify(scene.continuity_facts)}`);
-      if (scene.scene_ending_state && typeof scene.scene_ending_state === "object" && Object.keys(scene.scene_ending_state).length > 0)
-        lines.push(`Ending state: ${JSON.stringify(scene.scene_ending_state)}`);
+    }
+    if (charactersByName.size > 0) {
+      lines.push("### Characters (latest known state)");
+      for (const delta of charactersByName.values()) {
+        lines.push(`- **${delta.character_name}**: ${JSON.stringify(delta)}`);
+      }
+      lines.push("");
+    }
+    if (threadsByName.size > 0) {
+      lines.push("### Plot threads (latest status)");
+      for (const thread of threadsByName.values()) {
+        lines.push(`- **${thread.thread_name}** [${thread.status}]: ${thread.description}`);
+      }
+      lines.push("");
+    }
+    if (continuityFacts.size > 0) {
+      lines.push("### Continuity facts (must not be contradicted)");
+      for (const fact of continuityFacts) lines.push(`- ${fact}`);
+      lines.push("");
+    }
+    if (openLoopsByDesc.size > 0) {
+      lines.push("### Open loops (unresolved)");
+      for (const loop of openLoopsByDesc.values()) {
+        lines.push(`- [${loop.type}] ${loop.description}`);
+      }
+      lines.push("");
+    }
+    if (latestEndingState && typeof latestEndingState === "object" && Object.keys(latestEndingState).length > 0) {
+      lines.push("### Ending state (latest scene)");
+      lines.push("```json");
+      lines.push(JSON.stringify(latestEndingState, null, 2));
+      lines.push("```");
     }
     return lines.join("\n");
   } catch (e) {
-    console.error(`[generate-story] fetchPriorScenesContext failed: ${e}`);
+    console.error(`[generate-story] fetchProjectStateContext failed: ${e}`);
     return "";
   }
 }
+
+
 
 function buildPrompt(req: {
   sourcePayloadJSON: unknown;
@@ -749,10 +823,11 @@ function buildPrompt(req: {
   terminalBeat?: string;
   projectName: string;
   promptPackName: string;
-  // Prior scenes context — RAG retrieval against section_embeddings
-  // (PR #304's structured layers). Pre-fetched by caller (adminClient
-  // not in scope inside buildPrompt). Empty/undefined skips injection.
-  priorScenesContext?: string;
+  // Project state context — RAG retrieval across ALL accepted scenes
+  // (PR #304's structured layers), aggregated to the cumulative project
+  // state. Pre-fetched by caller (adminClient not in scope inside
+  // buildPrompt). Empty/undefined skips injection.
+  projectStateContext?: string;
 }): { craft: string; context: string } {
   // Parse the payload — degrade gracefully if malformed.
   let payload: PromptPackPayloadShape = {};
@@ -980,12 +1055,12 @@ Structural limits:
   // Structured story context — per-request context (USER message).
   contextLines.push(...buildStructuredPromptBody(payload));
 
-  // Prior scenes context — RAG retrieval against section_embeddings
-  // (PR #304's structured layers). If non-empty, inject as its own
-  // context block so the model sees continuity facts, open loops, and
-  // ending states from prior scenes when writing this one.
-  if (req.priorScenesContext) {
-    contextLines.push(req.priorScenesContext);
+  // Project state context — RAG retrieval, aggregated cumulative state.
+  // If non-empty, inject as its own context block so the model sees the
+  // full picture: characters, threads, continuity facts, open loops, and
+  // the latest ending state.
+  if (req.projectStateContext) {
+    contextLines.push(req.projectStateContext);
     contextLines.push("");
   }
 
@@ -1490,12 +1565,12 @@ async function handler(
   // multiplier. The client cannot override model rates.
   // -------------------------------------------------------------------------
 
-  // RAG retrieval — fetch prior scenes context from section_embeddings
-  // (PR #304's structured layers). Empty string if project has no prior
-  // accepted sections yet, or if adminClient isn't available.
-  let priorScenesContext = "";
+  // RAG retrieval — fetch project state context aggregated across ALL
+  // accepted scenes. Empty string if project has no accepted scenes yet,
+  // or if adminClient isn't available.
+  let projectStateContext = "";
   if (adminClient && body.project_id) {
-    priorScenesContext = await fetchPriorScenesContext(adminClient, body.project_id);
+    projectStateContext = await fetchProjectStateContext(adminClient, body.project_id);
   }
 
   const { craft: craftPrompt, context: contextPrompt } = buildPrompt({
@@ -1512,7 +1587,7 @@ async function handler(
     terminalBeat: body.terminalBeat,
     projectName,
     promptPackName,
-    priorScenesContext,
+    projectStateContext,
   });
   // Phase 3: max possible credit cost for the pre-flight check
   const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
