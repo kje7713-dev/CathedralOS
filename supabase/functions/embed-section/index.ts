@@ -172,11 +172,30 @@ Deno.serve(async (req: Request) => {
   }
   console.log(`[embed-section] section upserted id=${body.outline_section_id}`);
 
-  // Step 3: extract summary via LLM
-  let extractedSummary = "";
+  // Step 3: extract the full scene memory via LLM (one pass, JSON output).
+  //
+  // Produces all 6 layers in a single call (cheaper than 6 separate calls):
+  //   - extracted_summary      (200-500 token distillation of what happened)
+  //   - character_deltas       (per-character state changes this scene)
+  //   - plot_thread_deltas     (plot-thread open/advance/resolve/complicate)
+  //   - continuity_facts       (concrete facts future scenes must respect)
+  //   - open_loops             (promises, mysteries, unanswered questions)
+  //   - scene_ending_state     (where everyone is, immediate pressure)
+  //
+  // Uses OpenAI JSON mode (response_format: json_object) for structured output.
+  // Each layer defaults to an empty array/object so the schema is forgiving.
+  type SceneMemory = {
+    extracted_summary: string;
+    character_deltas: Array<Record<string, unknown>>;
+    plot_thread_deltas: Array<Record<string, unknown>>;
+    continuity_facts: string[];
+    open_loops: Array<Record<string, unknown>>;
+    scene_ending_state: Record<string, unknown>;
+  };
+  let sceneMemory: SceneMemory;
   try {
     const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), 90_000);
+    const t = setTimeout(() => ac.abort(), 120_000);
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -189,12 +208,20 @@ Deno.serve(async (req: Request) => {
           {
             role: "system",
             content:
-              "You are a concise fiction editor. Summarize the following section in 200-500 tokens. Capture essential characters, conflict, setting, and emotional arc. Output ONLY the summary, no preamble.",
+              "You are a fiction scene-memory extractor. Given a scene, output JSON with these 6 keys: " +
+              "`extracted_summary` (200-500 token distillation of what happened), " +
+              "`character_deltas` (array of {character_name, location?, knowledge_delta?, relationship_delta?, injuries?, goals?, possessions?, emotional_stance?}), " +
+              "`plot_thread_deltas` (array of {thread_name, status in [opened,advanced,resolved,complicated], description}), " +
+              "`continuity_facts` (array of concrete fact strings future scenes must not contradict), " +
+              "`open_loops` (array of {type in [promise,mystery,question,threat,pending_action], description}), " +
+              "`scene_ending_state` ({character_positions: [{character, location, immediate_state}], immediate_pressure: string}). " +
+              "Output ONLY valid JSON. Empty arrays/objects are fine when a layer has nothing.",
           },
           { role: "user", content: body.raw_text },
         ],
-        max_completion_tokens: 700,
-        temperature: 0.3,
+        max_completion_tokens: 1500,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
       }),
       signal: ac.signal,
     });
@@ -209,8 +236,31 @@ Deno.serve(async (req: Request) => {
       );
     }
     const data = await r.json();
-    extractedSummary = (data.choices?.[0]?.message?.content ?? "").trim();
-    if (!extractedSummary) {
+    const raw = (data.choices?.[0]?.message?.content ?? "").trim();
+    if (!raw) {
+      console.error(`[embed-section] LLM extraction returned empty content`);
+      return errorResponse("provider_error", "LLM extraction returned empty content", 502);
+    }
+    let parsed: Partial<SceneMemory>;
+    try {
+      parsed = JSON.parse(raw) as Partial<SceneMemory>;
+    } catch (parseErr) {
+      console.error(`[embed-section] LLM extraction returned invalid JSON: ${String(parseErr)} raw=${raw.slice(0, 300)}`);
+      return errorResponse("provider_error", "LLM extraction returned invalid JSON", 502);
+    }
+    // Defaults: empty arrays/objects so the schema is forgiving if a layer is missing.
+    sceneMemory = {
+      extracted_summary: typeof parsed.extracted_summary === "string" ? parsed.extracted_summary : "",
+      character_deltas: Array.isArray(parsed.character_deltas) ? parsed.character_deltas : [],
+      plot_thread_deltas: Array.isArray(parsed.plot_thread_deltas) ? parsed.plot_thread_deltas : [],
+      continuity_facts: Array.isArray(parsed.continuity_facts) ? parsed.continuity_facts : [],
+      open_loops: Array.isArray(parsed.open_loops) ? parsed.open_loops : [],
+      scene_ending_state:
+        parsed.scene_ending_state && typeof parsed.scene_ending_state === "object"
+          ? parsed.scene_ending_state
+          : {},
+    };
+    if (!sceneMemory.extracted_summary) {
       console.error(`[embed-section] LLM extraction returned empty summary`);
       return errorResponse("provider_error", "LLM extraction returned empty summary", 502);
     }
@@ -218,9 +268,26 @@ Deno.serve(async (req: Request) => {
     console.error(`[embed-section] LLM extract threw: ${String(err)}`);
     return errorResponse("provider_error", String(err), 502);
   }
-  console.log(`[embed-section] extract OK len=${extractedSummary.length}`);
+  console.log(`[embed-section] extract OK summary_len=${sceneMemory.extracted_summary.length} layers=6`);
 
-  // Step 4: embed summary
+  // Compute the compressed scene memory string. This is what we embed for
+  // similarity search — encodes the structured state, not just the summary.
+  // The goal is "needed context without sending tons of tokens": the retrieval
+  // ranking picks the right scenes, and the generator injects the structured
+  // fields (cheap) rather than the raw prose (expensive).
+  const compressedMemory = JSON.stringify({
+    summary: sceneMemory.extracted_summary,
+    character_deltas: sceneMemory.character_deltas,
+    plot_thread_deltas: sceneMemory.plot_thread_deltas,
+    open_loops: sceneMemory.open_loops,
+    ending_pressure: (sceneMemory.scene_ending_state as Record<string, unknown>)?.immediate_pressure ?? "",
+  });
+
+  // Step 4: embed the compressed scene memory (not just the summary).
+  // The vector encodes the structured state — character deltas, plot thread
+  // deltas, open loops, ending pressure — so similarity search ranks scenes
+  // by relevance to the new scene's planned context, not just topical
+  // similarity in the prose.
   let embedding: number[] = [];
   try {
     const ac = new AbortController();
@@ -233,7 +300,7 @@ Deno.serve(async (req: Request) => {
       },
       body: JSON.stringify({
         model: OPENAI_EMBED_MODEL,
-        input: extractedSummary,
+        input: compressedMemory,
       }),
       signal: ac.signal,
     });
@@ -249,6 +316,7 @@ Deno.serve(async (req: Request) => {
     }
     const data = await r.json();
     const vec = data.data?.[0]?.embedding;
+    const extractedSummary = sceneMemory.extracted_summary;
     if (!Array.isArray(vec)) {
       console.error(`[embed-section] Embedding API returned invalid data`);
       return errorResponse("provider_error", "Embedding API returned invalid data", 502);
@@ -261,15 +329,20 @@ Deno.serve(async (req: Request) => {
   console.log(`[embed-section] embed OK dim=${embedding.length}`);
 
   // Step 5: upsert into section_embeddings (UPSERT on outline_section_id).
-  // Re-accepting an already-accepted section overwrites the embedding.
+  // Re-accepting an already-accepted section overwrites all 6 memory layers.
   const { error: upsertErr } = await adminClient.from("section_embeddings").upsert({
     project_id: body.project_id,
     outline_section_id: body.outline_section_id,
     embedding,
-    extracted_summary: extractedSummary,
+    extracted_summary: sceneMemory.extracted_summary,
     raw_text: body.raw_text,
     container: body.container ?? null,
     pov: body.pov ?? null,
+    character_deltas: sceneMemory.character_deltas,
+    plot_thread_deltas: sceneMemory.plot_thread_deltas,
+    continuity_facts: sceneMemory.continuity_facts,
+    open_loops: sceneMemory.open_loops,
+    scene_ending_state: sceneMemory.scene_ending_state,
   }, { onConflict: "outline_section_id" });
   if (upsertErr) {
     console.error(`[embed-section] section_embeddings upsert failed: ${upsertErr.message}`);
