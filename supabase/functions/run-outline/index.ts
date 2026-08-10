@@ -4,14 +4,19 @@
 // Multi-section generation orchestrator. Kicks off a chapter run that walks
 // outline_sections by parent_id (leaf = single; chapter parent = walks
 // children in position order). Per-section generation calls generate-story
-// with narrow prior-context queries against the 5 structured columns.
+// with narrow prior-context queries against the 5 structured columns
+// (character_deltas, plot_thread_deltas, continuity_facts, open_loops,
+// scene_ending_state).
 //
-// Day 3 (this PR): rate-limit + cost reserve before kickoff; commit on
-//   chain completion; rollback on failure. Per docs/multi-section-generation.md.
-// Narrow-query refactor of fetchPriorContext deferred to a separate PR
-// (the current "limit to most recent N sections" is the simplest narrow
-// that works; a proper character/thread-based filter requires the section's
-// intent metadata which isn't yet on outline_sections).
+// Per Locked Design Rules (PR #306 / #310, Kevin 16:28 EDT):
+//   Rule 2: character_deltas merge fields per character_name (not latest-overwrites)
+//   Rule 3: stable thread/loop IDs across scenes
+//   Rule 4: continuity_facts provenance + active/superseded
+//   Rule 5: ALWAYS inject immediately previous section's summary + ending_state
+//   Rule 6: retrieve by outline order (position), NOT created_at
+//   Rule 7: location must actually filter (not just tie-break)
+//   Rule 8: pipeline order generate → persist → extract → next
+//   Rule 9: raw_text is stored but not injected by default
 //
 // Endpoints:
 //   POST /functions/v1/run-outline          — kickoff (auth + idempotency + cost-reserve + run loop)
@@ -28,8 +33,8 @@ import {
 } from "../generate-story/_credits.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_ANON_KEY = ***"SUPABASE_ANON_KEY")!;
-const SUPABASE_SERVICE_ROLE_KEY = ***"SUPABASE_SERVICE_ROLE_KEY")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -123,7 +128,11 @@ async function handleKickoff(req: Request): Promise<Response> {
   }
 
   // 4. Walk the outline so we can estimate cost before the loop.
-  let sections: Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null }>;
+  let sections: Array<{
+    id: string; title: string; position: number;
+    summary: string; container: string | null; pov: string | null;
+    terminal_beat: string | null; story_arc_beat_id: string | null;
+  }>;
   try {
     sections = await collectSectionsToGenerate(adminClient, body.outline_id, body.start_parent_section_id);
   } catch (err) {
@@ -264,7 +273,11 @@ async function runOutline(
   adminClient: ReturnType<typeof createClient>,
   userId: string,
   estimatedCost: number,
-  sections: Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null }>,
+  sections: Array<{
+    id: string; title: string; position: number;
+    summary: string; container: string | null; pov: string | null;
+    terminal_beat: string | null; story_arc_beat_id: string | null;
+  }>,
 ): Promise<void> {
   // Initialize per-section progress in the jsonb column
   await adminClient.from("chapter_runs").update({
@@ -272,6 +285,21 @@ async function runOutline(
       id: s.id, title: s.title, position: s.position, status: "pending",
     })),
   }).eq("id", runId);
+
+  // We need project_id for embed-section calls (Rule 8: pipeline order).
+  const { data: outlineRow } = await adminClient
+    .from("outlines")
+    .select("local_project_id")
+    .eq("id", outlineId)
+    .single();
+  const projectId = outlineRow?.local_project_id;
+  if (!projectId) {
+    await adminClient.from("chapter_runs").update({
+      status: "failed", error: "outline.local_project_id missing",
+      completed_at: new Date().toISOString(),
+    }).eq("id", runId);
+    return;
+  }
 
   // Iterate sequentially; stop-the-chain on first failure (Kevin 14:22 EDT)
   let actualCost = 0;
@@ -281,15 +309,42 @@ async function runOutline(
       status: "running", started_at: new Date().toISOString(),
     });
     try {
+      // 1. Build the prior context (narrow queries, outline order, ALWAYS-inject previous).
+      //    No K, no recency limit. The current section knows what it needs.
       const priorContext = await fetchPriorContext(adminClient, outlineId, section.id);
+
+      // 2. Generate the prose (Rule 8: generate first).
       const result = await callGenerateStory({
         outline_id: outlineId,
         outline_section_id: section.id,
         model: model ?? null,
         project_state_context: priorContext,
       }, adminClient);
-      // Day 3: per-section cost tracking. cost_cents_reserved was set at
-      // kickoff; cost_cents_actual is the sum of per-section actual costs.
+
+      // 3. Persist the output (Rule 8: generate-story has persisted to generation_outputs;
+      //    fetch raw_text by output_id to pass to embed-section for structured memory
+      //    extraction). The output is persisted BEFORE the next section reads.
+      const rawText = await fetchRawTextFromOutput(adminClient, result.output_id);
+
+      // 4. Extract structured memory (Rule 8: extract AFTER output is persisted).
+      //    This populates section_embeddings with the new shape (stable UUIDs,
+      //    source_section_id, lifecycle) so the next section's prior-context
+      //    query sees this section's structured state.
+      await callEmbedSection({
+        outline_section_id: section.id,
+        outline_id: outlineId,
+        project_id: projectId,
+        position: section.position,
+        title: section.title,
+        summary: section.summary,
+        container: section.container,
+        pov: section.pov,
+        terminal_beat: section.terminal_beat,
+        story_arc_beat_id: section.story_arc_beat_id,
+        raw_text: rawText,
+      }, adminClient);
+
+      // 5. Per-section cost tracking.
       const sectionCost = estimateSectionCost(section.container);
       actualCost += sectionCost;
       await updateSectionStatus(adminClient, runId, {
@@ -301,12 +356,8 @@ async function runOutline(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const sectionCost = estimateSectionCost(section.container);
-      // Day 3: rollback the cost reserve since this section failed (per
+      // Rollback the cost reserve since this section failed (per
       // _credits.ts policy: "If the LLM provider call fails: do NOT charge credits").
-      // For now: leave cost_cents_actual unchanged (the per-section cost
-      // isn't added since the section didn't actually complete) and mark
-      // the run failed. The cost_cents_reserved is freed because cost_cents_actual
-      // never reached it.
       await updateSectionStatus(adminClient, runId, {
         id: section.id, title: section.title, position: section.position,
         status: "failed", error: msg,
@@ -358,7 +409,11 @@ async function collectSectionsToGenerate(
   adminClient: ReturnType<typeof createClient>,
   outlineId: string,
   startParentSectionId: string,
-): Promise<Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null; current_characters: string[]; current_threads: string[]; current_location: string | null }>> {
+): Promise<Array<{
+  id: string; title: string; position: number;
+  summary: string; container: string | null; pov: string | null;
+  terminal_beat: string | null; story_arc_beat_id: string | null;
+}>> {
   const { data: startParent, error: parentErr } = await adminClient
     .from("outline_sections")
     .select("id, parent_id, title")
@@ -370,37 +425,45 @@ async function collectSectionsToGenerate(
   if (startParent.parent_id === null) {
     const { data: leaf, error: leafErr } = await adminClient
       .from("outline_sections")
-      .select("id, title, position, container, pov, terminal_beat, current_characters, current_threads, current_location")
+      .select("id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id")
       .eq("id", startParentSectionId)
       .single();
     if (leafErr || !leaf) throw new Error("leaf section not found");
-    return [leaf as { id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null; current_characters: string[]; current_threads: string[]; current_location: string | null }];
+    return [leaf as {
+      id: string; title: string; position: number;
+      summary: string; container: string | null; pov: string | null;
+      terminal_beat: string | null; story_arc_beat_id: string | null;
+    }];
   }
   const { data: children, error: childErr } = await adminClient
     .from("outline_sections")
-    .select("id, title, position, container, pov, terminal_beat")
+    .select("id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id")
     .eq("parent_id", startParentSectionId)
     .order("position", { ascending: true });
   if (childErr) throw new Error(`failed to fetch children: ${childErr.message}`);
   return children ?? [];
 }
 
-// Day 3: TODO — narrow query refactor. Currently limits to most recent N
-// sections with structured data as a heuristic. A proper character/thread-
-// based filter requires the section's intent metadata which isn't yet on
-// outline_sections. A future PR will add that to the section schema and
-// replace this with targeted jsonb @> queries on character_deltas /
-// plot_thread_deltas.
+// ---- fetchPriorContext (Locked design rules 2-7) -------------------------
+//
+// Builds the prior-context markdown for the current section. The new shape:
+//   1. Use outline order (position), NOT created_at (Rule 6).
+//   2. ALWAYS inject the immediately previous section's summary + ending_state (Rule 5).
+//   3. Apply narrow intent filters:
+//        - character_deltas mentions any of intentCharacters
+//        - plot_thread_deltas mentions any of intentThreads
+//        - location matches intentLocation (Rule 7: location must actually filter)
+//   4. The aggregate (character merge, thread lifecycle, active facts) is built
+//      from the matching scenes PLUS the immediately previous section.
 async function fetchPriorContext(
   adminClient: ReturnType<typeof createClient>,
   outlineId: string,
   currentSectionId: string,
 ): Promise<string> {
-  // 1. Get the current section's intent (iOS-populated per the migration).
-  //    No K, no recency limit. The current section knows what it needs.
+  // 1. Get the current section's intent + position.
   const { data: section } = await adminClient
     .from("outline_sections")
-    .select("current_characters, current_threads, current_location")
+    .select("current_characters, current_threads, current_location, position")
     .eq("id", currentSectionId)
     .single();
   if (!section) return "";
@@ -408,14 +471,15 @@ async function fetchPriorContext(
   const intentCharacters: string[] = (section.current_characters as string[] | null) ?? [];
   const intentThreads: string[] = (section.current_threads as string[] | null) ?? [];
   const intentLocation: string | null = (section.current_location as string | null) ?? null;
+  const currentPosition: number = (section.position as number) ?? 0;
 
   // 2. Fallback: if iOS hasn't populated intent yet, use the cumulative aggregate
-  //    across all scenes (backwards-compat with PR #304's flow).
+  //    across all scenes (backwards-compat with PR #305's flow).
   if (intentCharacters.length === 0 && intentThreads.length === 0 && !intentLocation) {
     return fetchPriorContextAggregate(adminClient, outlineId);
   }
 
-  // 3. Get the project_id
+  // 3. Get project_id.
   const { data: outlineRow } = await adminClient
     .from("outlines")
     .select("local_project_id")
@@ -424,25 +488,45 @@ async function fetchPriorContext(
   const projectId = outlineRow?.local_project_id;
   if (!projectId) return "";
 
-  // 4. Fetch all scenes for the project (filter-in-JS for v1; a future PR
-  //    can push this to a Postgres RPC for DB-side narrow query — same
-  //    design, just better performance).
+  // 4. Fetch all scenes for the project. We use a separate fetch + JS join (vs
+  //    a Postgres RPC) for v1; same design, just less performant. The Supabase
+  //    JS client doesn't support ordering by a joined column directly.
   const { data: allScenes } = await adminClient
     .from("section_embeddings")
-    .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: true });
+    .select("outline_section_id, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
+    .eq("project_id", projectId);
   if (!allScenes || allScenes.length === 0) return "";
 
-  // 5. Filter by intent. The current section's intent drives which prior
-  //    scenes are relevant. No K, no recency — just narrow WHERE semantics
-  //    in JS:
-  //    - Keep scenes whose character_deltas mentions any of intentCharacters
-  //    - Keep scenes whose plot_thread_deltas mentions any of intentThreads
-  //    - Always include the most-recent scene (for ending_state continuity)
-  //    - If intent matches nothing, fall back to all scenes (the prior
-  //      scenes still have useful state)
-  const matchesIntent = (scene: { character_deltas?: unknown; plot_thread_deltas?: unknown }): boolean => {
+  // 5. Fetch outline positions for the scenes (Rule 6: outline order, not created_at).
+  const outlineSectionIds = allScenes
+    .map((s) => s.outline_section_id)
+    .filter((id): id is string => typeof id === "string");
+  const { data: outlineSections } = await adminClient
+    .from("outline_sections")
+    .select("id, position")
+    .in("id", outlineSectionIds);
+  const positionById = new Map<string, number>();
+  for (const os of outlineSections ?? []) {
+    positionById.set(os.id, os.position);
+  }
+
+  // 6. Sort scenes by outline position (asc). This is the Rule 6 ordering.
+  const sortedScenes = allScenes
+    .filter((s) => positionById.has(s.outline_section_id))
+    .sort((a, b) => (positionById.get(a.outline_section_id) ?? 0) - (positionById.get(b.outline_section_id) ?? 0));
+
+  // 7. Filter to scenes BEFORE the current section (outline order, not timestamp).
+  const priorScenes = sortedScenes.filter((s) => (positionById.get(s.outline_section_id) ?? 0) < currentPosition);
+  if (priorScenes.length === 0) return "";
+
+  // 8. ALWAYS inject the immediately previous section's summary + ending_state (Rule 5).
+  const previousScene = priorScenes[priorScenes.length - 1];
+
+  // 9. Apply narrow intent filters (Rules 2-4, 7):
+  //    - character_deltas mentions any of intentCharacters
+  //    - plot_thread_deltas mentions any of intentThreads
+  //    - location matches intentLocation (Rule 7: actually filters, not just tie-break)
+  const matchesIntent = (scene: { character_deltas?: unknown; plot_thread_deltas?: unknown; scene_ending_state?: unknown }): boolean => {
     if (intentCharacters.length > 0) {
       const sceneChars = Array.isArray(scene.character_deltas)
         ? (scene.character_deltas as Array<{ character_name?: string }>)
@@ -459,27 +543,47 @@ async function fetchPriorContext(
         : [];
       if (sceneThreads.some((t) => intentThreads.includes(t))) return true;
     }
+    if (intentLocation) {
+      // Rule 7: location must actually filter. Scenes without a matching location
+      // are excluded; scenes with unknown location are excluded (no implicit match).
+      const sceneLocations: string[] = [];
+      if (Array.isArray(scene.character_deltas)) {
+        for (const d of scene.character_deltas) {
+          if (d && typeof d === "object" && typeof (d as { location?: unknown }).location === "string") {
+            sceneLocations.push((d as { location: string }).location);
+          }
+        }
+      }
+      const endingState = scene.scene_ending_state;
+      if (endingState && typeof endingState === "object") {
+        const positions = (endingState as { character_positions?: Array<{ location?: string }> }).character_positions;
+        if (Array.isArray(positions)) {
+          for (const p of positions) {
+            if (p && typeof p === "object" && typeof (p as { location?: unknown }).location === "string") {
+              sceneLocations.push((p as { location: string }).location);
+            }
+          }
+        }
+      }
+      if (sceneLocations.length === 0) return false; // unknown location doesn't match
+      return sceneLocations.includes(intentLocation);
+    }
     return false;
   };
 
-  const matchingScenes = allScenes.filter(matchesIntent);
-  const latestScene = allScenes[allScenes.length - 1];
+  const matchingScenes = priorScenes.filter((s) => s !== previousScene && matchesIntent(s));
 
-  // Build the prior-scenes list. If nothing matched, fall back to all
-  // (the prior scenes still have useful state, even if no character/thread
-  // overlap).
-  const priorScenes = matchingScenes.length > 0 ? matchingScenes : allScenes;
-  if (latestScene && !priorScenes.includes(latestScene)) {
-    priorScenes.push(latestScene);
-  }
+  // 10. Build the prior-scenes list. The previous scene is ALWAYS included;
+  //     matching scenes are added if any match was found.
+  const scenesToAggregate = matchingScenes.length > 0 ? [...matchingScenes, previousScene] : priorScenes;
 
-  return aggregateProjectState(priorScenes);
+  return aggregateProjectState(scenesToAggregate, previousScene);
 }
 
 // Fallback path: cumulative aggregate across all scenes for the project.
 // Used when the current section's intent isn't populated yet (i.e., for
 // sections created before the migration, or for sections where iOS hasn't
-// set intent). Mirrors PR #305's fetchProjectStateContext behavior.
+// set intent). The new shape still applies Rules 2-7 to the cumulative set.
 async function fetchPriorContextAggregate(
   adminClient: ReturnType<typeof createClient>,
   outlineId: string,
@@ -493,85 +597,162 @@ async function fetchPriorContextAggregate(
   if (!projectId) return "";
   const { data, error } = await adminClient
     .from("section_embeddings")
-    .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: true });
+    .select("outline_section_id, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
+    .eq("project_id", projectId);
   if (error || !data) return "";
-  return aggregateProjectState(data);
+
+  // Sort by outline position when we can; fall back to created_at if no
+  // outline_sections row is found (legacy data).
+  const outlineSectionIds = data
+    .map((s) => s.outline_section_id)
+    .filter((id): id is string => typeof id === "string");
+  const { data: outlineSections } = await adminClient
+    .from("outline_sections")
+    .select("id, position")
+    .in("id", outlineSectionIds);
+  const positionById = new Map<string, number>();
+  for (const os of outlineSections ?? []) {
+    positionById.set(os.id, os.position);
+  }
+  const sorted = [...data].sort((a, b) => {
+    const aPos = a.outline_section_id ? positionById.get(a.outline_section_id) : undefined;
+    const bPos = b.outline_section_id ? positionById.get(b.outline_section_id) : undefined;
+    if (aPos !== undefined && bPos !== undefined) return aPos - bPos;
+    if (aPos !== undefined) return -1;
+    if (bPos !== undefined) return 1;
+    return 0;
+  });
+
+  // For the fallback, the "previous section" is the last one in outline order.
+  const previousScene = sorted.length > 0 ? sorted[sorted.length - 1] : undefined;
+  return aggregateProjectState(sorted, previousScene);
 }
 
-function aggregateProjectState(scenes: Array<Record<string, unknown>>): string {
-  const charactersByName = new Map<string, any>();
-  const threadsByName = new Map<string, any>();
-  const continuityFacts = new Set<string>();
-  const openLoopsByDesc = new Map<string, any>();
-  let latestSummary = "";
-  let latestEndingState: any = {};
-  let latestCreatedAt = "";
-  for (const scene of scenes) {
-    if (Array.isArray(scene.character_deltas)) {
-      for (const delta of scene.character_deltas) {
-        if (delta && typeof delta === "object" && delta.character_name) {
-          charactersByName.set(delta.character_name, delta);
-        }
-      }
-    }
-    if (Array.isArray(scene.plot_thread_deltas)) {
-      for (const thread of scene.plot_thread_deltas) {
-        if (thread && typeof thread === "object" && thread.thread_name) {
-          threadsByName.set(thread.thread_name, thread);
-        }
-      }
-    }
-    if (Array.isArray(scene.continuity_facts)) {
-      for (const fact of scene.continuity_facts) {
-        if (typeof fact === "string") continuityFacts.add(fact);
-      }
-    }
-    if (Array.isArray(scene.open_loops)) {
-      for (const loop of scene.open_loops) {
-        if (loop && typeof loop === "object" && loop.description) {
-          openLoopsByDesc.set(loop.description, loop);
-        }
-      }
-    }
-    if (scene.created_at > latestCreatedAt) {
-      latestCreatedAt = scene.created_at;
-      latestSummary = scene.extracted_summary ?? "";
-      latestEndingState = scene.scene_ending_state ?? {};
-    }
-  }
+// ---- aggregateProjectState (New shape per Locked design rules 2-4) ------
+//
+// Builds the markdown emitted as `project_state_context` for the LLM.
+// Always emits the previous section's summary + ending_state first (Rule 5).
+// Then aggregates:
+//   - Characters: merge fields per character_name (Rule 2)
+//   - Plot threads: latest status by stable thread_id (Rule 3)
+//   - Continuity facts: only active (Rule 4)
+//   - Open loops: by stable loop_id (Rule 3)
+function aggregateProjectState(
+  scenes: Array<Record<string, unknown>>,
+  previousScene?: Record<string, unknown>,
+): string {
+  const charactersByName = new Map<string, Record<string, unknown>>();
+  const threadsById = new Map<string, Record<string, unknown>>();
+  const activeFactsById = new Map<string, Record<string, unknown>>();
+  const openLoopsById = new Map<string, Record<string, unknown>>();
   const lines: string[] = ["## Project state (cumulative across all accepted scenes)"];
   lines.push("");
-  if (latestSummary) { lines.push(`**Latest summary:** ${latestSummary}`); lines.push(""); }
+
+  // 1. ALWAYS emit the immediately previous section's summary + ending_state FIRST (Rule 5).
+  if (previousScene) {
+    lines.push("### Immediately previous section (always injected)");
+    lines.push("");
+    if (typeof previousScene.extracted_summary === "string" && previousScene.extracted_summary) {
+      lines.push(`**Summary:** ${previousScene.extracted_summary}`);
+      lines.push("");
+    }
+    if (previousScene.scene_ending_state && typeof previousScene.scene_ending_state === "object") {
+      lines.push("**Ending state:**");
+      lines.push("```json");
+      lines.push(JSON.stringify(previousScene.scene_ending_state, null, 2));
+      lines.push("```");
+      lines.push("");
+    }
+  }
+
+  // 2. Process all scenes for the aggregate.
+  for (const scene of scenes) {
+    // Rule 2: character_deltas merge fields per character_name (not latest-overwrites).
+    if (Array.isArray(scene.character_deltas)) {
+      for (const delta of scene.character_deltas) {
+        if (delta && typeof delta === "object" && typeof (delta as { character_name?: unknown }).character_name === "string") {
+          const name = (delta as { character_name: string }).character_name;
+          const existing = charactersByName.get(name) ?? {};
+          // Merge: existing fields preserved, new fields override (latest wins per field).
+          charactersByName.set(name, { ...existing, ...(delta as Record<string, unknown>) });
+        }
+      }
+    }
+    // Rule 3: plot_thread_deltas use stable IDs. Latest wins by thread_id.
+    if (Array.isArray(scene.plot_thread_deltas)) {
+      for (const thread of scene.plot_thread_deltas) {
+        if (thread && typeof thread === "object" && typeof (thread as { id?: unknown }).id === "string") {
+          const id = (thread as { id: string }).id;
+          threadsById.set(id, thread as Record<string, unknown>);
+        }
+      }
+    }
+    // Rule 4: continuity_facts filter by active/superseded. active=false
+    // means this fact was superseded by a later one; remove it from the set.
+    if (Array.isArray(scene.continuity_facts)) {
+      for (const fact of scene.continuity_facts) {
+        if (fact && typeof fact === "object" && typeof (fact as { id?: unknown }).id === "string") {
+          const id = (fact as { id: string }).id;
+          if ((fact as { active?: boolean }).active === true) {
+            activeFactsById.set(id, fact as Record<string, unknown>);
+          } else {
+            activeFactsById.delete(id);
+          }
+        }
+      }
+    }
+    // Rule 3: open_loops use stable IDs. Latest wins by loop_id.
+    if (Array.isArray(scene.open_loops)) {
+      for (const loop of scene.open_loops) {
+        if (loop && typeof loop === "object" && typeof (loop as { id?: unknown }).id === "string") {
+          const id = (loop as { id: string }).id;
+          openLoopsById.set(id, loop as Record<string, unknown>);
+        }
+      }
+    }
+  }
+
+  // 3. Emit the aggregate.
   if (charactersByName.size > 0) {
-    lines.push("### Characters (latest known state)");
-    for (const delta of charactersByName.values()) lines.push(`- **${delta.character_name}**: ${JSON.stringify(delta)}`);
+    lines.push("### Characters (merged across scenes — Rule 2)");
+    for (const delta of charactersByName.values()) {
+      const name = String((delta as { character_name?: string }).character_name ?? "(unnamed)");
+      lines.push(`- **${name}**: ${JSON.stringify(delta)}`);
+    }
     lines.push("");
   }
-  if (threadsByName.size > 0) {
-    lines.push("### Plot threads (latest status)");
-    for (const thread of threadsByName.values()) lines.push(`- **${thread.thread_name}** [${thread.status}]: ${thread.description}`);
+  if (threadsById.size > 0) {
+    lines.push("### Plot threads (latest status by thread_id — Rule 3)");
+    for (const thread of threadsById.values()) {
+      const name = String((thread as { thread_name?: string }).thread_name ?? "(unnamed)");
+      const status = String((thread as { status?: string }).status ?? "unknown");
+      const id = String((thread as { id: string }).id).slice(0, 8);
+      const desc = String((thread as { description?: string }).description ?? "");
+      lines.push(`- **${name}** [${status}] (id=${id}): ${desc}`);
+    }
     lines.push("");
   }
-  if (continuityFacts.size > 0) {
-    lines.push("### Continuity facts (must not be contradicted)");
-    for (const fact of continuityFacts) lines.push(`- ${fact}`);
+  if (activeFactsById.size > 0) {
+    lines.push("### Active continuity facts (must not be contradicted — Rule 4)");
+    for (const fact of activeFactsById.values()) {
+      const text = String((fact as { fact?: string }).fact ?? JSON.stringify(fact));
+      lines.push(`- ${text}`);
+    }
     lines.push("");
   }
-  if (openLoopsByDesc.size > 0) {
-    lines.push("### Open loops (unresolved)");
-    for (const loop of openLoopsByDesc.values()) lines.push(`- [${loop.type}] ${loop.description}`);
+  if (openLoopsById.size > 0) {
+    lines.push("### Open loops (unresolved — Rule 3)");
+    for (const loop of openLoopsById.values()) {
+      const type = String((loop as { type?: string }).type ?? "unknown");
+      const desc = String((loop as { description?: string }).description ?? "");
+      lines.push(`- [${type}] ${desc}`);
+    }
     lines.push("");
-  }
-  if (latestEndingState && typeof latestEndingState === "object" && Object.keys(latestEndingState).length > 0) {
-    lines.push("### Ending state (latest scene)");
-    lines.push("```json");
-    lines.push(JSON.stringify(latestEndingState, null, 2));
-    lines.push("```");
   }
   return lines.join("\n");
 }
+
+// ---- Rule 8: pipeline order (generate → persist → extract → next) ------
 
 async function callGenerateStory(
   payload: {
@@ -597,6 +778,60 @@ async function callGenerateStory(
   }
   const result = await response.json();
   return { output_id: (result as { output_id?: string }).output_id ?? (result as { id?: string }).id ?? "" };
+}
+
+// Fetch raw_text from generation_outputs given the output_id returned by
+// generate-story. This is the post-persist read in the Rule 8 pipeline.
+async function fetchRawTextFromOutput(
+  adminClient: ReturnType<typeof createClient>,
+  outputId: string,
+): Promise<string> {
+  if (!outputId) return "";
+  const { data, error } = await adminClient
+    .from("generation_outputs")
+    .select("output_text")
+    .eq("id", outputId)
+    .single();
+  if (error || !data) {
+    console.error(`[run-outline] fetchRawTextFromOutput failed for ${outputId}: ${error?.message}`);
+    return "";
+  }
+  return String((data as { output_text?: string }).output_text ?? "");
+}
+
+// Call embed-section to extract structured memory from the persisted output.
+// Per Rule 8: this happens AFTER the output is persisted to generation_outputs,
+// giving us raw_text. Per Rule 9: raw_text is passed to embed-section for
+// extraction but NOT used in the embedding vector itself.
+async function callEmbedSection(
+  payload: {
+    outline_section_id: string;
+    outline_id: string;
+    project_id: string;
+    position: number;
+    title: string;
+    summary: string;
+    container: string | null;
+    pov: string | null;
+    terminal_beat: string | null;
+    story_arc_beat_id: string | null;
+    raw_text: string;
+  },
+  _adminClient: ReturnType<typeof createClient>,
+): Promise<void> {
+  const url = `${SUPABASE_URL}/functions/v1/embed-section`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`embed-section returned ${response.status}: ${errBody.slice(0, 200)}`);
+  }
 }
 
 async function updateSectionStatus(
