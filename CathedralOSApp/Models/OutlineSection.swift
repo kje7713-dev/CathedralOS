@@ -9,6 +9,13 @@ import SwiftData
 /// `Container` and `POV` enum raw values in the model layer. Status is one of
 /// `"draft"`, `"queued"`, `"generated"`, `"accepted"` — see
 /// `outline_sections_status_valid` in the migration for the canonical list.
+///
+/// Intent fields (currentCharacters, currentThreads, currentLocation) are
+/// populated at outline-edit time per PR #311 (migration
+/// `20260810162000_add_outline_section_intent.sql`) and run-outline's
+/// `fetchPriorContext` uses them to narrow queries against the 5 structured
+/// `section_embeddings` columns (Rule 6 in
+/// `docs/multi-section-generation.md`).
 @Model
 class OutlineSection: Identifiable {
     var id: UUID
@@ -30,6 +37,15 @@ class OutlineSection: Identifiable {
     /// in `OutlineSectionEditView` against the project's current arc beats.
     var storyArcBeatID: UUID?
 
+    // Intent fields (PR #311). These populate the corresponding
+    // `outline_sections.current_characters/threads/location` columns and
+    // drive the narrow-query refactor in `run-outline`'s `fetchPriorContext`.
+    // All three default to empty/nil; run-outline falls back to the
+    // cumulative aggregate when intent is empty (backwards-compat).
+    var currentCharacters: [String]
+    var currentThreads: [String]
+    var currentLocation: String?
+
     var outline: Outline?
     /// Parent section for grouping (e.g. a scene inside a chapter). Nil for
     /// top-level sections.
@@ -47,6 +63,9 @@ class OutlineSection: Identifiable {
         self.terminalBeat = nil
         self.status = "draft"
         self.storyArcBeatID = nil
+        self.currentCharacters = []
+        self.currentThreads = []
+        self.currentLocation = nil
         self.children = []
     }
 }

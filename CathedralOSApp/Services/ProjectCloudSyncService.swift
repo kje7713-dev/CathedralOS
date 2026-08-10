@@ -1615,6 +1615,12 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                let storyArcBeatID = UUID(uuidString: storyArcBeatIDString) {
                 section.storyArcBeatID = storyArcBeatID
             }
+            // Intent fields (PR #311 / #313). Sync from payload so they
+            // round-trip through the cloud backup. Empty array is allowed
+            // (run-outline's fallback path handles empty intent).
+            section.currentCharacters = payload.currentCharacters
+            section.currentThreads = payload.currentThreads
+            section.currentLocation = payload.currentLocation
             // parentID deferred (grouping is a follow-up).
             section.outline = outline
         }

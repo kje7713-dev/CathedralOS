@@ -310,6 +310,13 @@ struct ProjectImportExportPayload: Codable {
         let status: String
         let parentID: String?
         let storyArcBeatID: String?
+        // Intent fields (PR #311 / #313). Populated at outline-edit by
+        // iOS; consumed by run-outline's fetchPriorContext to narrow
+        // queries against the 5 structured section_embeddings columns
+        // (Rule 6 in docs/multi-section-generation.md).
+        let currentCharacters: [String]
+        let currentThreads: [String]
+        let currentLocation: String?
     }
     struct PromptPackPayload: Codable {
         let id: String?
