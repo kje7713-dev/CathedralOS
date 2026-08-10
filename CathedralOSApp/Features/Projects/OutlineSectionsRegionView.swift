@@ -457,7 +457,6 @@ struct OutlineSectionsRegionView: View {
             }
         }
     }
-}
 
 /// Single section row in the sections list.
 
