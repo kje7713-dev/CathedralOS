@@ -87,8 +87,7 @@ iOS tap "Generate chapter"
      (auth, rate-limit, credit reservation at entry)
   → for each section in canonical order (children of start_parent_section_id, by `outline_sections.position`):
        1. Fetch narrow prior context (per Rules 2-7):
-          - Query section_embeddings filtered by intent (current_characters, current_threads)
-          - Apply location filter (per Rule 7)
+          - Query section_embeddings for all prior sections in outline order (Rule 6, no intent fields)
           - ALWAYS include the immediately previous section's summary + ending state (per Rule 5)
           - Use outline order (per Rule 6), not created_at
        2. Call generate-story with the section + prior context → gets the prose
@@ -109,7 +108,7 @@ Two new artifacts needed:
 - `run-outline` Edge Function — the orchestrator.
 
 Existing artifacts reused:
-- `outline_sections` (iOS already has these; PR #301) + 3 new intent fields
+- `outline_sections` (iOS already has these; PR #301) — intent fields were reverted per Kevin's hard rule 2026-08-10 18:01 EDT
 - `section_embeddings` (PR #304) — stores the 5 structured layers + raw_text
 - `generate-story` (PR #305 added the aggregate-context helper)
 - `SupabaseRateLimitStore` + credit pipeline (existing)
@@ -128,17 +127,19 @@ The immediately previous canonical section's:
 
 This is **always included**, regardless of intent. The model needs to know what just happened.
 
-### Part 2: Intent-filtered (per Rules 2-7)
-The current section's intent (3 fields, populated by iOS at outline-edit time):
-- `current_characters: text[]` — which characters are in scope
-- `current_threads: text[]` — which plot threads are in scope
-- `current_location: text` — which scene/location
+### Part 2: All prior sections (deep pull, no narrow filtering)
 
-The query filters `section_embeddings`:
-- Scenes whose `character_deltas` mentions any of `current_characters`, OR
-- Scenes whose `plot_thread_deltas` mentions any of `current_threads`
-- AND whose `scene_ending_state.character_positions[*].location` matches `current_location` (per Rule 7)
-- Use `outline_sections.position` (Rule 6), not `created_at`
+Per Kevin's hard rule (2026-08-10 18:01 EDT): schema tight, pull deep. No
+manual intent fields. No down-scoping. The query pulls ALL prior sections
+in outline order:
+
+- `section_embeddings` ordered by `outline_sections.position` (Rule 6), not `created_at`
+- No `current_characters` / `current_threads` / `current_location` filter
+- No location filter
+- The 5 structured columns (character_deltas, plot_thread_deltas,
+  continuity_facts, open_loops, scene_ending_state) ARE the design — the
+  pull returns the full structured state, and the LLM extracts + informs
+  what to store from the structured state + raw_text.
 
 ### Aggregate merge semantics (per Rules 2-4)
 - `character_deltas`: **merge fields per `character_name`** across all matching scenes (Rule 2).
