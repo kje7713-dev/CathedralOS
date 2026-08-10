@@ -138,12 +138,19 @@ Seed 3 templates: Three-act, Hero's Journey, Mystery.
 - On Accept: run extraction pass via LLM (~200-500 token summary), embed via `text-embedding-3-small`, store both summary and raw text
 - Index on embedding column (HNSW for write-heavy workloads)
 
-### Phase 4 — Retrieval-augmented `generate-story` (2 days)
+### Phase 4 — Narrow prior-context queries (for both single-section & multi-section generation)
 
-- `generate-story` accepts optional `outline_section_id`
-- When provided: query top-K most similar sections by embedding similarity, inject their summaries as "Prior context" in prompt
-- K starts at 3, tunable later
-- Token budget for prior context: ~1200 tokens (3 × ~400 token summaries)
+**Supersedes the old top-K similarity design (Kevin, 2026-08-10 14:22 EDT: "Stop with this top k shit. You should be storing well structured data in db form so token input size stays manageable.").** The wrong abstraction was: embed the current scene's plan → cosine similarity vs `section_embeddings.vector(1536)` → take top-K → dump their summaries. The right abstraction: **narrow, scoped queries against the 5 structured columns** that PR #304 added to `section_embeddings` (`character_deltas`, `plot_thread_deltas`, `continuity_facts`, `open_loops`, `scene_ending_state`).
+
+- `generate-story` (and the new `run-outline` orchestrator in Phase 8) accepts optional `outline_section_id`
+- When provided:
+  - Query narrow: "which prior scenes mention this character?", "what's the status of this plot thread?", "what open loops are unresolved?", "what's the most recent ending state for this location?"
+  - Postgres-level filters, compact rows
+- No token budget cap (Kevin: "I don't want a token budget on inputs" 14:33 EDT). Narrow queries against the structured columns produce naturally compact results — compact by design, not by an explicit cap.
+- The aggregate-form helper (`fetchProjectStateContext`, from PR #305) lives in `generate-story` for the FIRST section of a chapter (full state); a scoped variant `fetchScopedProjectState` is added for subsequent sections
+- Multi-section generation (Phase 8) consumes this same lookup shape repeatedly — once per section in a chapter
+
+**PR #305 (`feat(generate-story): RAG retrieval against section_embeddings`) is now dead-code plumbing awaiting Phase 8.** PR #305's `fetchProjectStateContext` stays in place; once Phase 8's `run-outline` exists, it becomes the consumer. The retrieval plumbing in `generate-story` now follows the narrow-query shape above, not PR #305's N-most-recent aggregation.
 
 ### Phase 5 — Remix (2 days)
 
