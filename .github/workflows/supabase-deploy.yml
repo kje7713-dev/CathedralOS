@@ -38,6 +38,35 @@ jobs:
       #   - 20260808153000_add_gpt56_models.sql (model catalog seeds)
       #   - 20260809200500_add_scene_memory_layers.sql (5 jsonb columns, PR #304)
       # Both use IF NOT EXISTS / ON CONFLICT so re-applying is safe.
+      # Dump the full project config from the management API so we can see the
+      # EXACT pooler hostname/port/user format that Supabase returns. We're
+      # guessing at the wrong pooler URL ("tenant not found" was probably an
+      # auth/format issue, not "pooler not enabled").
+      - name: Dump Supabase project config
+        id: project
+        run: |
+          curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF" > /tmp/project.json
+          echo "=== top-level keys ==="
+          python3 -c "import json; print(list(json.load(open('/tmp/project.json')).keys()))"
+          echo "=== pooler ==="
+          python3 -c "import json; print(json.dumps(json.load(open('/tmp/project.json')).get('pooler','NOT FOUND'), indent=2))"
+          echo "=== database ==="
+          python3 -c "import json; print(json.dumps(json.load(open('/tmp/project.json')).get('database','NOT FOUND'), indent=2))"
+          echo "=== pooler-like fields ==="
+          python3 -c "
+import json
+d = json.load(open('/tmp/project.json'))
+for k, v in d.items():
+    kl = k.lower()
+    if any(t in kl for t in ['pool','supavisor','connect','endpoint']):
+        print(f'{k}:')
+        print(json.dumps(v, indent=2)[:1500])
+        print('---')
+"
+          echo "=== full project json (truncated to 4000 chars) ==="
+          head -c 4000 /tmp/project.json
+          echo ""
       - name: Mark broken migration 20260722190336 as applied
         continue-on-error: true
         run: |
