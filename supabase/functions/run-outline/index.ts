@@ -342,6 +342,7 @@ async function runOutline(
         terminal_beat: section.terminal_beat,
         story_arc_beat_id: section.story_arc_beat_id,
         raw_text: rawText,
+        prior_context: priorContext,
       }, adminClient);
 
       // 5. Per-section cost tracking.
@@ -705,6 +706,10 @@ async function callEmbedSection(
     terminal_beat: string | null;
     story_arc_beat_id: string | null;
     raw_text: string;
+    // The same prior context that run-outline fetches. Passed to
+    // embed-section so the LLM extraction pass knows what is already
+    // stored and can decide what to add/update/supersede.
+    prior_context: string;
   },
   _adminClient: ReturnType<typeof createClient>,
 ): Promise<void> {

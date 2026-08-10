@@ -63,6 +63,12 @@ interface EmbedSectionRequest {
   terminal_beat?: string;
   story_arc_beat_id?: string;
   raw_text?: string;
+  // The prior context that run-outline generated for this section. Passed
+  // to the LLM so it knows what is already stored (characters, threads,
+  // active facts, open loops) and can decide what to add/update/supersede
+  // in the new structured state. The LLM is the source of truth for
+  // what to store; the prior context is its working memory.
+  prior_context?: string;
 }
 
 // LLM returns semantic content only. The function adds IDs, source_section_id,
@@ -221,7 +227,13 @@ Deno.serve(async (req: Request) => {
               "`scene_ending_state` ({character_positions: [{character, location, immediate_state}], immediate_pressure: string}). " +
               "Output ONLY valid JSON. Empty arrays/objects are fine when a layer has nothing.",
           },
-          { role: "user", content: body.raw_text },
+          { role: "user", content: body.prior_context
+            ? `Prior context (what the model already knows about prior sections — use this to inform what to add/update/supersede in the structured state):
+${body.prior_context}
+
+Now, from the current section's raw_text below, extract structured state:
+${body.raw_text}`
+            : body.raw_text },
         ],
         max_completion_tokens: 1500,
         temperature: 0.2,
