@@ -398,7 +398,10 @@ struct OutlineSectionsRegionView: View {
     /// Kick off a run for the given section and start polling for status.
     /// Called from the KickoffConfirmationSheet's onConfirm.
     private func kickoffAndStartPolling(_ section: OutlineSection) async {
-        guard let outline = currentOutline else {
+        // Use the section's own outline relationship (Day 4 smoke test fix).
+        // currentOutline is project.outlines.first which can be nil if the
+        // relationship isn't loaded or the project has no outlines collected yet.
+        guard let outline = section.outline else {
             runOutlineError = "Outline not found."
             return
         }
