@@ -15,7 +15,12 @@ struct OutlineSectionsRegionView: View {
 
     @State private var sectionsOrder: [OutlineSection] = []
     @State private var editingSection: OutlineSection?
-    @State private var showingGenerateStub = false
+    @State private var sectionToGenerate: OutlineSection?
+    @State private var activeRunStatus: RunOutlineStatus?
+    @State private var isKickingOff = false
+    @State private var runOutlineError: String?
+    @State private var pollingTask: Task<Void, Never>?
+    private let runOutlineService = RunOutlineService()
     @State private var showingSuggestionSheet = false
     @State private var suggestions: [OutlineSuggestion] = []
     @State private var suggestionsLoading = false
@@ -37,6 +42,9 @@ struct OutlineSectionsRegionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+            if let status = activeRunStatus {
+                ActiveRunBanner(status: status)
+            }
             header
             if currentOutline != nil {
                 sectionsList
@@ -69,10 +77,19 @@ struct OutlineSectionsRegionView: View {
                 }
             )
         }
-        .alert("Generate", isPresented: $showingGenerateStub) {
-            Button("OK") { }
-        } message: {
-            Text("Coming soon — generation wires in Phase 3.")
+        .sheet(item: $sectionToGenerate) { section in
+            KickoffConfirmationSheet(
+                section: section,
+                isStarting: isKickingOff,
+                runOutlineError: runOutlineError,
+                onConfirm: {
+                    await kickoffAndStartPolling(section)
+                },
+                onCancel: {
+                    sectionToGenerate = nil
+                    runOutlineError = nil
+                }
+            )
         }
         .alert("Suggest Sections Failed", isPresented: Binding(
             get: { suggestionsError != nil },
@@ -217,6 +234,7 @@ struct OutlineSectionsRegionView: View {
                 OutlineSectionRow(
                     section: section,
                     arcBeatLabel: arcBeatLabel(for: section),
+                    onGenerate: { sectionToGenerate = section },
                     onAccept: { Task { await acceptSection(section) } },
                     isAccepting: acceptingSectionID == section.id
                 )
@@ -377,7 +395,72 @@ struct OutlineSectionsRegionView: View {
     }
 }
 
+    // MARK: - Day 4 generation wiring
+
+    /// Kick off a run for the given section and start polling for status.
+    /// Called from the KickoffConfirmationSheet's onConfirm.
+    private func kickoffAndStartPolling(_ section: OutlineSection) async {
+        guard let outline = currentOutline else {
+            runOutlineError = "Outline not found."
+            return
+        }
+        isKickingOff = true
+        defer { isKickingOff = false }
+        do {
+            let response = try await runOutlineService.kickoff(
+                outlineID: outline.id.uuidString,
+                startParentSectionID: section.id.uuidString
+            )
+            activeRunStatus = RunOutlineStatus(
+                run_id: response.run_id,
+                status: response.status,
+                outline_id: outline.id.uuidString,
+                start_parent_section_id: section.id.uuidString,
+                sections_done: 0,
+                sections_total: response.sections?.count,
+                sections_failed: 0,
+                current_section: nil,
+                sections: response.sections,
+                error: response.error,
+                cost_cents_reserved: response.cost_cents_reserved,
+                cost_cents_actual: response.cost_cents_actual,
+                created_at: response.created_at,
+                updated_at: response.updated_at,
+                completed_at: response.completed_at
+            )
+            sectionToGenerate = nil
+            runOutlineError = nil
+            startPolling(runID: response.run_id)
+        } catch let error as RunOutlineError {
+            runOutlineError = error.errorDescription
+        } catch {
+            runOutlineError = error.localizedDescription
+        }
+    }
+
+    /// Poll the run-outline status endpoint every 3 seconds until the run
+    /// finishes or fails. UI updates flow through `activeRunStatus`.
+    private func startPolling(runID: String) {
+        pollingTask?.cancel()
+        pollingTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+                do {
+                    let status = try await runOutlineService.status(runID: runID)
+                    activeRunStatus = status
+                    if status.status == "completed" || status.status == "failed" {
+                        break
+                    }
+                } catch {
+                    // keep polling on transient errors
+                }
+            }
+        }
+    }
+}
+
 /// Single section row in the sections list.
+
 ///
 /// Reads from a SwiftData `@Model` directly so live edits (title, summary,
 /// status badge color) reflect immediately. Tap gesture is handled by the
@@ -467,5 +550,141 @@ struct OutlineSectionRow: View {
         case "accepted":   return .green
         default:           return .gray
         }
+    }
+}
+
+
+// MARK: - Day 4 UI: kickoff confirmation sheet + progress banner
+
+/// Bottom sheet shown before kicking off a generation run. Lets the user
+/// confirm the cost + time estimate before starting.
+struct KickoffConfirmationSheet: View {
+    let section: OutlineSection
+    let isStarting: Bool
+    let runOutlineError: String?
+    let onConfirm: () async -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: CathedralTheme.Spacing.base) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 44))
+                .foregroundStyle(.tint)
+                .padding(.top, CathedralTheme.Spacing.sm)
+            Text("Generate Section")
+                .font(CathedralTheme.Typography.headline(20, weight: .semibold))
+            Text("'\(section.title.isEmpty ? "Untitled section" : section.title)'")
+                .font(CathedralTheme.Typography.body(15))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, CathedralTheme.Spacing.base)
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Estimated cost: ~8 credits", systemImage: "creditcard")
+                    .font(CathedralTheme.Typography.body(13))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Label("Estimated time: ~30 seconds", systemImage: "clock")
+                    .font(CathedralTheme.Typography.body(13))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            .padding(.top, CathedralTheme.Spacing.sm)
+            if let error = runOutlineError {
+                Text(error)
+                    .font(CathedralTheme.Typography.body(13))
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, CathedralTheme.Spacing.base)
+            }
+            HStack(spacing: CathedralTheme.Spacing.md) {
+                Button("Cancel", role: .cancel) {
+                    onCancel()
+                }
+                .buttonStyle(.bordered)
+                .disabled(isStarting)
+                Button {
+                    Task { await onConfirm() }
+                } label: {
+                    if isStarting {
+                        ProgressView()
+                    } else {
+                        Text("Start")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isStarting)
+            }
+            .padding(.top, CathedralTheme.Spacing.md)
+        }
+        .padding(CathedralTheme.Spacing.lg)
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+/// Progress banner shown at the top of the OutlineSectionsRegionView while
+/// a generation run is active. Updates from `activeRunStatus` (polled every
+/// 3 seconds while running).
+struct ActiveRunBanner: View {
+    let status: RunOutlineStatus
+
+    var body: some View {
+        HStack(spacing: CathedralTheme.Spacing.md) {
+            if isRunning {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: isCompleted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(isCompleted ? Color.green : Color.red)
+                    .font(.title3)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                Text(subtitle)
+                    .font(CathedralTheme.Typography.caption(12))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            Spacer()
+        }
+        .padding(CathedralTheme.Spacing.md)
+        .background(CathedralTheme.Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isCompleted ? Color.green.opacity(0.3) : isFailed ? Color.red.opacity(0.3) : Color.clear, lineWidth: 1)
+        }
+    }
+
+    private var isRunning: Bool {
+        status.status == "running" || status.status == "queued"
+    }
+
+    private var isCompleted: Bool {
+        status.status == "completed"
+    }
+
+    private var isFailed: Bool {
+        status.status == "failed"
+    }
+
+    private var title: String {
+        if isCompleted { return "Generation complete" }
+        if isFailed { return "Generation failed" }
+        if let current = status.current_section {
+            return "Generating '\(current.title)'"
+        }
+        let done = status.sections_done ?? 0
+        let total = status.sections_total ?? 0
+        return "Generating section \(done + 1) of \(total)"
+    }
+
+    private var subtitle: String {
+        if let error = status.error { return error }
+        let done = status.sections_done ?? 0
+        let total = status.sections_total ?? 0
+        if isCompleted { return "Done (\(done) of \(total) sections)" }
+        if let current = status.current_section {
+            return "Section \(done + 1) of \(total): \(current.title)"
+        }
+        return "Running"
     }
 }
