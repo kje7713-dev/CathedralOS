@@ -692,6 +692,46 @@ const CONTAINER_HARD_CAPS: Record<Container, number> = {
   novella: 60000,
 };
 
+// Fetch prior scenes context from section_embeddings (new structured layers).
+// RAG retrieval: pull the 5 new structured fields (character_deltas,
+// plot_thread_deltas, continuity_facts, open_loops, scene_ending_state)
+// plus extracted_summary for the N most recent scenes in this project.
+// Format as a context block the model can use when writing the new scene.
+async function fetchPriorScenesContext(
+  adminClient: any,
+  projectId: string,
+  maxScenes: number = 5
+): Promise<string> {
+  try {
+    const { data, error } = await adminClient
+      .from("section_embeddings")
+      .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(maxScenes);
+    if (error || !data || data.length === 0) return "";
+    const lines: string[] = ["## Prior scenes in this project (most recent first)"];
+    for (const scene of data) {
+      lines.push("");
+      lines.push(`### ${scene.extracted_summary || "(no summary)"}`);
+      if (Array.isArray(scene.character_deltas) && scene.character_deltas.length > 0)
+        lines.push(`Character deltas: ${JSON.stringify(scene.character_deltas)}`);
+      if (Array.isArray(scene.plot_thread_deltas) && scene.plot_thread_deltas.length > 0)
+        lines.push(`Plot thread deltas: ${JSON.stringify(scene.plot_thread_deltas)}`);
+      if (Array.isArray(scene.open_loops) && scene.open_loops.length > 0)
+        lines.push(`Open loops: ${JSON.stringify(scene.open_loops)}`);
+      if (Array.isArray(scene.continuity_facts) && scene.continuity_facts.length > 0)
+        lines.push(`Continuity facts: ${JSON.stringify(scene.continuity_facts)}`);
+      if (scene.scene_ending_state && typeof scene.scene_ending_state === "object" && Object.keys(scene.scene_ending_state).length > 0)
+        lines.push(`Ending state: ${JSON.stringify(scene.scene_ending_state)}`);
+    }
+    return lines.join("\n");
+  } catch (e) {
+    console.error(`[generate-story] fetchPriorScenesContext failed: ${e}`);
+    return "";
+  }
+}
+
 function buildPrompt(req: {
   sourcePayloadJSON: unknown;
   generationAction: GenerationAction;
@@ -709,6 +749,10 @@ function buildPrompt(req: {
   terminalBeat?: string;
   projectName: string;
   promptPackName: string;
+  // Prior scenes context — RAG retrieval against section_embeddings
+  // (PR #304's structured layers). Pre-fetched by caller (adminClient
+  // not in scope inside buildPrompt). Empty/undefined skips injection.
+  priorScenesContext?: string;
 }): { craft: string; context: string } {
   // Parse the payload — degrade gracefully if malformed.
   let payload: PromptPackPayloadShape = {};
@@ -935,6 +979,16 @@ Structural limits:
 
   // Structured story context — per-request context (USER message).
   contextLines.push(...buildStructuredPromptBody(payload));
+
+  // Prior scenes context — RAG retrieval against section_embeddings
+  // (PR #304's structured layers). If non-empty, inject as its own
+  // context block so the model sees continuity facts, open loops, and
+  // ending states from prior scenes when writing this one.
+  if (req.priorScenesContext) {
+    contextLines.push(req.priorScenesContext);
+    contextLines.push("");
+  }
+
 
   // Previous output for continue / remix — per-request context (USER message).
   if (
@@ -1436,6 +1490,14 @@ async function handler(
   // multiplier. The client cannot override model rates.
   // -------------------------------------------------------------------------
 
+  // RAG retrieval — fetch prior scenes context from section_embeddings
+  // (PR #304's structured layers). Empty string if project has no prior
+  // accepted sections yet, or if adminClient isn't available.
+  let priorScenesContext = "";
+  if (adminClient && body.project_id) {
+    priorScenesContext = await fetchPriorScenesContext(adminClient, body.project_id);
+  }
+
   const { craft: craftPrompt, context: contextPrompt } = buildPrompt({
     sourcePayloadJSON: body.sourcePayloadJSON,
     generationAction,
@@ -1450,6 +1512,7 @@ async function handler(
     terminalBeat: body.terminalBeat,
     projectName,
     promptPackName,
+    priorScenesContext,
   });
   // Phase 3: max possible credit cost for the pre-flight check
   const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
