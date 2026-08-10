@@ -1,6 +1,8 @@
 name: Smoke Test - Scene Memory Layers
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
