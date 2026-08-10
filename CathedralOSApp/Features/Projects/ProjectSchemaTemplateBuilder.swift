@@ -806,10 +806,7 @@ enum ProjectSchemaTemplateBuilder {
                         terminalBeat: section.terminalBeat,
                         status: section.status,
                         parentID: section.parent?.id.uuidString,
-                        storyArcBeatID: section.storyArcBeatID?.uuidString,
-                        currentCharacters: section.currentCharacters,
-                        currentThreads: section.currentThreads,
-                        currentLocation: section.currentLocation
+                        storyArcBeatID: section.storyArcBeatID?.uuidString
                     )
                 }
 

@@ -444,42 +444,36 @@ async function collectSectionsToGenerate(
   return children ?? [];
 }
 
-// ---- fetchPriorContext (Locked design rules 2-7) -------------------------
+// ---- fetchPriorContext (Deep pull, no manual input) -------------------
 //
-// Builds the prior-context markdown for the current section. The new shape:
-//   1. Use outline order (position), NOT created_at (Rule 6).
-//   2. ALWAYS inject the immediately previous section's summary + ending_state (Rule 5).
-//   3. Apply narrow intent filters:
-//        - character_deltas mentions any of intentCharacters
-//        - plot_thread_deltas mentions any of intentThreads
-//        - location matches intentLocation (Rule 7: location must actually filter)
-//   4. The aggregate (character merge, thread lifecycle, active facts) is built
-//      from the matching scenes PLUS the immediately previous section.
+// Per Kevin's hard rule (2026-08-10 18:01 EDT): schema tight, pull deep.
+// The pull fetches ALL structured state from ALL prior sections (in outline
+// order) and aggregates. No manual intent fields. No narrow filtering.
+// The schema (5 structured columns: character_deltas, plot_thread_deltas,
+// continuity_facts, open_loops, scene_ending_state) IS the design.
+//
+// Per Locked Design Rules (PR #310 / #311, the structural improvements):
+//   Rule 2: character_deltas merge fields per character_name
+//   Rule 3: stable thread/loop IDs across scenes
+//   Rule 4: continuity_facts filter by active=true
+//   Rule 5: ALWAYS inject immediately previous section's summary + ending_state
+//   Rule 6: retrieve by outline order (position), NOT created_at
+//   Rule 8: pipeline order generate → persist → extract → next
 async function fetchPriorContext(
   adminClient: ReturnType<typeof createClient>,
   outlineId: string,
   currentSectionId: string,
 ): Promise<string> {
-  // 1. Get the current section's intent + position.
+  // 1. Get current section's position.
   const { data: section } = await adminClient
     .from("outline_sections")
-    .select("current_characters, current_threads, current_location, position")
+    .select("position")
     .eq("id", currentSectionId)
     .single();
   if (!section) return "";
-
-  const intentCharacters: string[] = (section.current_characters as string[] | null) ?? [];
-  const intentThreads: string[] = (section.current_threads as string[] | null) ?? [];
-  const intentLocation: string | null = (section.current_location as string | null) ?? null;
   const currentPosition: number = (section.position as number) ?? 0;
 
-  // 2. Fallback: if iOS hasn't populated intent yet, use the cumulative aggregate
-  //    across all scenes (backwards-compat with PR #305's flow).
-  if (intentCharacters.length === 0 && intentThreads.length === 0 && !intentLocation) {
-    return fetchPriorContextAggregate(adminClient, outlineId);
-  }
-
-  // 3. Get project_id.
+  // 2. Get project_id.
   const { data: outlineRow } = await adminClient
     .from("outlines")
     .select("local_project_id")
@@ -488,16 +482,15 @@ async function fetchPriorContext(
   const projectId = outlineRow?.local_project_id;
   if (!projectId) return "";
 
-  // 4. Fetch all scenes for the project. We use a separate fetch + JS join (vs
-  //    a Postgres RPC) for v1; same design, just less performant. The Supabase
-  //    JS client doesn't support ordering by a joined column directly.
+  // 3. Fetch all scenes for the project. We use a separate fetch + JS join
+  //    (vs a Postgres RPC) for v1; same design, just less performant.
   const { data: allScenes } = await adminClient
     .from("section_embeddings")
-    .select("outline_section_id, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
+    .select("outline_section_id, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state")
     .eq("project_id", projectId);
   if (!allScenes || allScenes.length === 0) return "";
 
-  // 5. Fetch outline positions for the scenes (Rule 6: outline order, not created_at).
+  // 4. Fetch outline positions (Rule 6: outline order, not created_at).
   const outlineSectionIds = allScenes
     .map((s) => s.outline_section_id)
     .filter((id): id is string => typeof id === "string");
@@ -510,122 +503,18 @@ async function fetchPriorContext(
     positionById.set(os.id, os.position);
   }
 
-  // 6. Sort scenes by outline position (asc). This is the Rule 6 ordering.
-  const sortedScenes = allScenes
+  // 5. Sort by outline position and filter to scenes BEFORE current section.
+  const priorScenes = allScenes
     .filter((s) => positionById.has(s.outline_section_id))
+    .filter((s) => (positionById.get(s.outline_section_id) ?? 0) < currentPosition)
     .sort((a, b) => (positionById.get(a.outline_section_id) ?? 0) - (positionById.get(b.outline_section_id) ?? 0));
-
-  // 7. Filter to scenes BEFORE the current section (outline order, not timestamp).
-  const priorScenes = sortedScenes.filter((s) => (positionById.get(s.outline_section_id) ?? 0) < currentPosition);
   if (priorScenes.length === 0) return "";
 
-  // 8. ALWAYS inject the immediately previous section's summary + ending_state (Rule 5).
+  // 6. The immediately previous section (Rule 5: ALWAYS inject).
   const previousScene = priorScenes[priorScenes.length - 1];
 
-  // 9. Apply narrow intent filters (Rules 2-4, 7):
-  //    - character_deltas mentions any of intentCharacters
-  //    - plot_thread_deltas mentions any of intentThreads
-  //    - location matches intentLocation (Rule 7: actually filters, not just tie-break)
-  const matchesIntent = (scene: { character_deltas?: unknown; plot_thread_deltas?: unknown; scene_ending_state?: unknown }): boolean => {
-    if (intentCharacters.length > 0) {
-      const sceneChars = Array.isArray(scene.character_deltas)
-        ? (scene.character_deltas as Array<{ character_name?: string }>)
-            .map((d) => d?.character_name)
-            .filter((n): n is string => typeof n === "string")
-        : [];
-      if (sceneChars.some((c) => intentCharacters.includes(c))) return true;
-    }
-    if (intentThreads.length > 0) {
-      const sceneThreads = Array.isArray(scene.plot_thread_deltas)
-        ? (scene.plot_thread_deltas as Array<{ thread_name?: string }>)
-            .map((t) => t?.thread_name)
-            .filter((n): n is string => typeof n === "string")
-        : [];
-      if (sceneThreads.some((t) => intentThreads.includes(t))) return true;
-    }
-    if (intentLocation) {
-      // Rule 7: location must actually filter. Scenes without a matching location
-      // are excluded; scenes with unknown location are excluded (no implicit match).
-      const sceneLocations: string[] = [];
-      if (Array.isArray(scene.character_deltas)) {
-        for (const d of scene.character_deltas) {
-          if (d && typeof d === "object" && typeof (d as { location?: unknown }).location === "string") {
-            sceneLocations.push((d as { location: string }).location);
-          }
-        }
-      }
-      const endingState = scene.scene_ending_state;
-      if (endingState && typeof endingState === "object") {
-        const positions = (endingState as { character_positions?: Array<{ location?: string }> }).character_positions;
-        if (Array.isArray(positions)) {
-          for (const p of positions) {
-            if (p && typeof p === "object" && typeof (p as { location?: unknown }).location === "string") {
-              sceneLocations.push((p as { location: string }).location);
-            }
-          }
-        }
-      }
-      if (sceneLocations.length === 0) return false; // unknown location doesn't match
-      return sceneLocations.includes(intentLocation);
-    }
-    return false;
-  };
-
-  const matchingScenes = priorScenes.filter((s) => s !== previousScene && matchesIntent(s));
-
-  // 10. Build the prior-scenes list. The previous scene is ALWAYS included;
-  //     matching scenes are added if any match was found.
-  const scenesToAggregate = matchingScenes.length > 0 ? [...matchingScenes, previousScene] : priorScenes;
-
-  return aggregateProjectState(scenesToAggregate, previousScene);
-}
-
-// Fallback path: cumulative aggregate across all scenes for the project.
-// Used when the current section's intent isn't populated yet (i.e., for
-// sections created before the migration, or for sections where iOS hasn't
-// set intent). The new shape still applies Rules 2-7 to the cumulative set.
-async function fetchPriorContextAggregate(
-  adminClient: ReturnType<typeof createClient>,
-  outlineId: string,
-): Promise<string> {
-  const { data: outlineRow } = await adminClient
-    .from("outlines")
-    .select("local_project_id")
-    .eq("id", outlineId)
-    .single();
-  const projectId = outlineRow?.local_project_id;
-  if (!projectId) return "";
-  const { data, error } = await adminClient
-    .from("section_embeddings")
-    .select("outline_section_id, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
-    .eq("project_id", projectId);
-  if (error || !data) return "";
-
-  // Sort by outline position when we can; fall back to created_at if no
-  // outline_sections row is found (legacy data).
-  const outlineSectionIds = data
-    .map((s) => s.outline_section_id)
-    .filter((id): id is string => typeof id === "string");
-  const { data: outlineSections } = await adminClient
-    .from("outline_sections")
-    .select("id, position")
-    .in("id", outlineSectionIds);
-  const positionById = new Map<string, number>();
-  for (const os of outlineSections ?? []) {
-    positionById.set(os.id, os.position);
-  }
-  const sorted = [...data].sort((a, b) => {
-    const aPos = a.outline_section_id ? positionById.get(a.outline_section_id) : undefined;
-    const bPos = b.outline_section_id ? positionById.get(b.outline_section_id) : undefined;
-    if (aPos !== undefined && bPos !== undefined) return aPos - bPos;
-    if (aPos !== undefined) return -1;
-    if (bPos !== undefined) return 1;
-    return 0;
-  });
-
-  // For the fallback, the "previous section" is the last one in outline order.
-  const previousScene = sorted.length > 0 ? sorted[sorted.length - 1] : undefined;
-  return aggregateProjectState(sorted, previousScene);
+  // 7. Aggregate: pull ALL structured state from prior sections.
+  return aggregateProjectState(priorScenes, previousScene);
 }
 
 // ---- aggregateProjectState (New shape per Locked design rules 2-4) ------
