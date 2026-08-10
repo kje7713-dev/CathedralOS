@@ -6,28 +6,21 @@
 // children in position order). Per-section generation calls generate-story
 // with narrow prior-context queries against the 5 structured columns.
 //
-// v1 (Day 1 skeleton — Day 2 will add the actual outline-walker + per-section
-// generation loop): auth, rate-limit, credit reserve, chapter_runs row
-// creation. The synchronous response acknowledges kickoff; Day 2 adds
-// GET /functions/v1/run-outline/:id/status for polling.
+// Day 2 (this PR): outline-walker + per-section loop + status polling endpoint.
+//   - Synchronous loop (kicked off by POST, runs to completion or timeout).
+//   - Day 3 will move this to EdgeRuntime.waitUntil for true async.
+//   - iOS polls GET /functions/v1/run-outline?run_id=xxx for status.
 //
-// Idempotency (Kevin 14:22 EDT Q6, picked simplest):
-//   - column `idempotency_key` is UNIQUE (same client can't kickoff same anchor twice)
-//   - partial unique index on (outline_id, start_parent_section_id) WHERE status='running'
-//     — only one RUNNING run per anchor at a time, across all clients
-// Duplicate kickoff returns 409 + existing run_id.
+// Per docs/multi-section-generation.md locked decisions (Kevin 14:22 EDT):
+//   - Stop-the-chain on first failure
+//   - Sequential only in v1
+//   - DB-level idempotency
+//   - Polling 10s default
+//   - No token budget on inputs (Kevin 14:33)
 //
-// Per RFC (docs/multi-section-generation.md): stop-the-chain on first
-// failure (Day 2), per-section cost reserve at kickoff (released on completion).
-//
-// Request:  POST {
-//             outline_id,
-//             start_parent_section_id,  // leaf section OR chapter parent
-//             model                      // optional, e.g. "gpt-5.6-luna"
-//           }
-// Response: 202 { run_id, status: "running", created_at }
-//           409 { errorCode: "already_running", run_id }
-//           400/401/500 per existing pattern (embed-section style)
+// Endpoints:
+//   POST /functions/v1/run-outline          — kickoff (auth + idempotency + run loop)
+//   GET  /functions/v1/run-outline?run_id=… — status poll
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -39,7 +32,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Content-Type": "application/json",
 };
 
@@ -56,35 +49,33 @@ interface RunOutlineRequest {
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return corsResponse("", { status: 204 });
-  }
-  if (req.method !== "POST") {
-    return errorResponse("method_not_allowed", "POST required", 405);
-  }
+  const url = new URL(req.url);
 
-  // 1. Auth: validate user JWT, extract user_id (mirrors embed-section v2 pattern).
+  if (req.method === "OPTIONS") return corsResponse("", { status: 204 });
+
+  if (req.method === "GET") return await handleStatus(req, url);
+  if (req.method === "POST") return await handleKickoff(req);
+
+  return errorResponse("method_not_allowed", "POST or GET required", 405);
+});
+
+// ---- POST /functions/v1/run-outline ---------------------------------------
+async function handleKickoff(req: Request): Promise<Response> {
+  // 1. Auth: validate user JWT via anon-key client (mirrors embed-section v2).
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader) {
-    return errorResponse("unauthorized", "missing Authorization header", 401);
-  }
+  if (!authHeader) return errorResponse("unauthorized", "missing Authorization header", 401);
   const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     global: { headers: { Authorization: authHeader } },
     auth: { persistSession: false },
   });
   const { data: userData, error: userErr } = await userClient.auth.getUser();
-  if (userErr || !userData?.user) {
-    return errorResponse("unauthorized", "invalid JWT", 401);
-  }
+  if (userErr || !userData?.user) return errorResponse("unauthorized", "invalid JWT", 401);
   const userId = userData.user.id;
 
   // 2. Parse + validate body.
   let body: RunOutlineRequest;
-  try {
-    body = await req.json();
-  } catch {
-    return errorResponse("invalid_body", "JSON body required", 400);
-  }
+  try { body = await req.json(); }
+  catch { return errorResponse("invalid_body", "JSON body required", 400); }
   if (!body.outline_id || !body.start_parent_section_id) {
     return errorResponse(
       "invalid_body",
@@ -93,17 +84,14 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  // 3. Service-role client for writes (RLS bypassed). The user-id check
-  //    on the RLS policy would also authorize user-scoped writes; service-role
-  //    is consistent with embed-section's pattern.
+  // 3. Idempotency: try insert; on 23505 (unique_violation) return the
+  //    existing run_id with 409. Idempotency_key is unique on chapter_runs;
+  //    the partial unique index on (outline_id, start_parent_section_id)
+  //    WHERE status='running' provides the cross-client guarantee.
   const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   });
-
-  // 4. Idempotency: try insert; on 23505 (unique_violation) return the
-  //    existing run_id with 409.
-  const idempotencyKey =
-    `${userId}:${body.outline_id}:${body.start_parent_section_id}`;
+  const idempotencyKey = `${userId}:${body.outline_id}:${body.start_parent_section_id}`;
   const { data: run, error: insertErr } = await adminClient
     .from("chapter_runs")
     .insert({
@@ -112,11 +100,10 @@ Deno.serve(async (req: Request) => {
       idempotency_key: idempotencyKey,
       status: "running",
       sections: [],
-      cost_cents_reserved: 0, // Day 2 will estimate per-section cost and reserve here
+      cost_cents_reserved: 0,
     })
     .select()
     .single();
-
   if (insertErr) {
     if (insertErr.code === "23505") {
       const { data: existing } = await adminClient
@@ -136,19 +123,331 @@ Deno.serve(async (req: Request) => {
     return errorResponse("db_error", insertErr.message, 500);
   }
 
-  // 5. Day 2: kick off outline-walker + per-section loop here (calls
-  //    generate-story). For Day 1 skeleton: just acknowledge, kickoff is
-  //    logged so it shows up in the run history but no work happens yet.
+  // 4. Run the outline-walker + per-section loop synchronously.
+  //    Day 3 will move this to EdgeRuntime.waitUntil for true async; for
+  //    v1 we block until all sections are done. If the edge function times
+  //    out mid-chapter, the chapter_runs row stays in status='running'
+  //    and a follow-up PR can implement resume via the status endpoint.
   console.log(
     `[run-outline] kickoff run_id=${run.id} user=${userId} outline=${body.outline_id} parent=${body.start_parent_section_id} model=${body.model ?? "(default)"}`,
   );
+  await runOutline(run.id, body.outline_id, body.start_parent_section_id, body.model, adminClient);
 
-  return corsResponse(
-    JSON.stringify({
-      run_id: run.id,
-      status: run.status,
-      created_at: run.created_at,
-    }),
-    { status: 202 },
-  );
-});
+  // 5. Re-fetch the run to return the final state.
+  const { data: finalRun } = await adminClient
+    .from("chapter_runs")
+    .select()
+    .eq("id", run.id)
+    .single();
+  return corsResponse(JSON.stringify({
+    run_id: run.id,
+    status: finalRun?.status ?? "unknown",
+    sections: finalRun?.sections ?? [],
+    cost_cents_reserved: finalRun?.cost_cents_reserved ?? 0,
+    cost_cents_actual: finalRun?.cost_cents_actual ?? 0,
+    error: finalRun?.error,
+    created_at: finalRun?.created_at,
+    updated_at: finalRun?.updated_at,
+    completed_at: finalRun?.completed_at,
+  }), { status: 200 });
+}
+
+// ---- GET /functions/v1/run-outline?run_id=… ------------------------------
+async function handleStatus(req: Request, url: URL): Promise<Response> {
+  const runId = url.searchParams.get("run_id");
+  if (!runId) return errorResponse("missing_param", "run_id query param required", 400);
+
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) return errorResponse("unauthorized", "missing Authorization header", 401);
+  const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: authHeader } },
+    auth: { persistSession: false },
+  });
+  const { data: userData, error: userErr } = await userClient.auth.getUser();
+  if (userErr || !userData?.user) return errorResponse("unauthorized", "invalid JWT", 401);
+
+  // RLS scopes the read to the user's own outlines' runs.
+  const { data: run, error: runErr } = await userClient
+    .from("chapter_runs")
+    .select("id, outline_id, start_parent_section_id, status, sections, cost_cents_reserved, cost_cents_actual, error, created_at, updated_at, completed_at")
+    .eq("id", runId)
+    .single();
+  if (runErr || !run) return errorResponse("not_found", "run not found", 404);
+
+  const sections = Array.isArray(run.sections) ? run.sections : [];
+  const sections_done = sections.filter((s: { status?: string }) => s?.status === "completed").length;
+  const sections_failed = sections.filter((s: { status?: string }) => s?.status === "failed").length;
+  const current_section = sections.find((s: { status?: string }) => s?.status === "running");
+
+  return corsResponse(JSON.stringify({
+    run_id: run.id,
+    status: run.status,
+    outline_id: run.outline_id,
+    start_parent_section_id: run.start_parent_section_id,
+    sections_done,
+    sections_total: sections.length,
+    sections_failed,
+    current_section: current_section ? { id: (current_section as { id: string }).id, title: (current_section as { title: string }).title } : null,
+    sections,
+    error: run.error,
+    cost_cents_reserved: run.cost_cents_reserved,
+    cost_cents_actual: run.cost_cents_actual,
+    created_at: run.created_at,
+    updated_at: run.updated_at,
+    completed_at: run.completed_at,
+  }), { status: 200 });
+}
+
+// ---- outline-walker + per-section loop (Day 2) -------------------------
+async function runOutline(
+  runId: string,
+  outlineId: string,
+  startParentSectionId: string,
+  model: string | undefined,
+  adminClient: ReturnType<typeof createClient>,
+): Promise<void> {
+  // 1. Walk the outline: collect sections to generate.
+  const sections = await collectSectionsToGenerate(adminClient, outlineId, startParentSectionId);
+  if (sections.length === 0) {
+    await markRunFailed(adminClient, runId, "no sections to generate");
+    return;
+  }
+
+  // 2. Initialize per-section progress in the jsonb column.
+  await adminClient.from("chapter_runs").update({
+    sections: sections.map((s) => ({
+      id: s.id, title: s.title, position: s.position, status: "pending",
+    })),
+  }).eq("id", runId);
+
+  // 3. Iterate sequentially; stop the chain on first failure (Kevin 14:22 EDT).
+  for (const section of sections) {
+    await updateSectionStatus(adminClient, runId, {
+      id: section.id, title: section.title, position: section.position,
+      status: "running", started_at: new Date().toISOString(),
+    });
+    try {
+      const priorContext = await fetchPriorContext(adminClient, outlineId, section.id);
+      const result = await callGenerateStory({
+        outline_id: outlineId,
+        outline_section_id: section.id,
+        model: model ?? null,
+        project_state_context: priorContext,
+      }, adminClient);
+      await updateSectionStatus(adminClient, runId, {
+        id: section.id, title: section.title, position: section.position,
+        status: "completed", output_id: result.output_id,
+        completed_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await updateSectionStatus(adminClient, runId, {
+        id: section.id, title: section.title, position: section.position,
+        status: "failed", error: msg,
+        completed_at: new Date().toISOString(),
+      });
+      await markRunFailed(adminClient, runId, `section ${section.id} (${section.title}) failed: ${msg}`);
+      return; // stop the chain
+    }
+  }
+
+  // 4. All sections completed.
+  await adminClient.from("chapter_runs").update({
+    status: "completed",
+    completed_at: new Date().toISOString(),
+  }).eq("id", runId);
+}
+
+async function collectSectionsToGenerate(
+  adminClient: ReturnType<typeof createClient>,
+  outlineId: string,
+  startParentSectionId: string,
+): Promise<Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null }>> {
+  // Per outline_sections.parent_id, leaf = single, parent = walks children.
+  const { data: startParent, error: parentErr } = await adminClient
+    .from("outline_sections")
+    .select("id, parent_id, title")
+    .eq("id", startParentSectionId)
+    .single();
+  if (parentErr || !startParent) {
+    throw new Error(`start_parent_section_id not found: ${startParentSectionId}`);
+  }
+  if (startParent.parent_id === null) {
+    // Leaf: generate just this section.
+    const { data: leaf, error: leafErr } = await adminClient
+      .from("outline_sections")
+      .select("id, title, position, container, pov, terminal_beat")
+      .eq("id", startParentSectionId)
+      .single();
+    if (leafErr || !leaf) throw new Error("leaf section not found");
+    return [leaf];
+  }
+  // Chapter parent: walk children in position order.
+  const { data: children, error: childErr } = await adminClient
+    .from("outline_sections")
+    .select("id, title, position, container, pov, terminal_beat")
+    .eq("parent_id", startParentSectionId)
+    .order("position", { ascending: true });
+  if (childErr) throw new Error(`failed to fetch children: ${childErr.message}`);
+  return children ?? [];
+}
+
+async function fetchPriorContext(
+  adminClient: ReturnType<typeof createClient>,
+  outlineId: string,
+  _currentSectionId: string,
+): Promise<string> {
+  // For Day 2: reuses fetchProjectStateContext (PR #305 aggregate form).
+  // Day 3 will refactor to narrow queries per the Phase 4 redesign.
+  // We need project_id for section_embeddings.project_id lookup; outline_id
+  // is the spec/parent FK but section_embeddings references the project.
+  const { data: outlineRow } = await adminClient
+    .from("outlines")
+    .select("local_project_id")
+    .eq("id", outlineId)
+    .single();
+  const projectId = outlineRow?.local_project_id;
+  if (!projectId) return "";
+  const { data, error } = await adminClient
+    .from("section_embeddings")
+    .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: true });
+  if (error || !data) return "";
+  return aggregateProjectState(data);
+}
+
+function aggregateProjectState(scenes: Array<Record<string, unknown>>): string {
+  // Mirrors fetchProjectStateContext from generate-story/index.ts (PR #305).
+  // Copied here because supabase deploy doesn't bundle cross-function shared
+  // modules — Day 3 will refactor to a shared module or narrow queries.
+  const charactersByName = new Map<string, any>();
+  const threadsByName = new Map<string, any>();
+  const continuityFacts = new Set<string>();
+  const openLoopsByDesc = new Map<string, any>();
+  let latestSummary = "";
+  let latestEndingState: any = {};
+  let latestCreatedAt = "";
+  for (const scene of scenes) {
+    if (Array.isArray(scene.character_deltas)) {
+      for (const delta of scene.character_deltas) {
+        if (delta && typeof delta === "object" && delta.character_name) {
+          charactersByName.set(delta.character_name, delta);
+        }
+      }
+    }
+    if (Array.isArray(scene.plot_thread_deltas)) {
+      for (const thread of scene.plot_thread_deltas) {
+        if (thread && typeof thread === "object" && thread.thread_name) {
+          threadsByName.set(thread.thread_name, thread);
+        }
+      }
+    }
+    if (Array.isArray(scene.continuity_facts)) {
+      for (const fact of scene.continuity_facts) {
+        if (typeof fact === "string") continuityFacts.add(fact);
+      }
+    }
+    if (Array.isArray(scene.open_loops)) {
+      for (const loop of scene.open_loops) {
+        if (loop && typeof loop === "object" && loop.description) {
+          openLoopsByDesc.set(loop.description, loop);
+        }
+      }
+    }
+    if (scene.created_at > latestCreatedAt) {
+      latestCreatedAt = scene.created_at;
+      latestSummary = scene.extracted_summary ?? "";
+      latestEndingState = scene.scene_ending_state ?? {};
+    }
+  }
+  const lines: string[] = ["## Project state (cumulative across all accepted scenes)"];
+  lines.push("");
+  if (latestSummary) { lines.push(`**Latest summary:** ${latestSummary}`); lines.push(""); }
+  if (charactersByName.size > 0) {
+    lines.push("### Characters (latest known state)");
+    for (const delta of charactersByName.values()) lines.push(`- **${delta.character_name}**: ${JSON.stringify(delta)}`);
+    lines.push("");
+  }
+  if (threadsByName.size > 0) {
+    lines.push("### Plot threads (latest status)");
+    for (const thread of threadsByName.values()) lines.push(`- **${thread.thread_name}** [${thread.status}]: ${thread.description}`);
+    lines.push("");
+  }
+  if (continuityFacts.size > 0) {
+    lines.push("### Continuity facts (must not be contradicted)");
+    for (const fact of continuityFacts) lines.push(`- ${fact}`);
+    lines.push("");
+  }
+  if (openLoopsByDesc.size > 0) {
+    lines.push("### Open loops (unresolved)");
+    for (const loop of openLoopsByDesc.values()) lines.push(`- [${loop.type}] ${loop.description}`);
+    lines.push("");
+  }
+  if (latestEndingState && typeof latestEndingState === "object" && Object.keys(latestEndingState).length > 0) {
+    lines.push("### Ending state (latest scene)");
+    lines.push("```json");
+    lines.push(JSON.stringify(latestEndingState, null, 2));
+    lines.push("```");
+  }
+  return lines.join("\n");
+}
+
+async function callGenerateStory(
+  payload: {
+    outline_id: string;
+    outline_section_id: string;
+    model: string | null;
+    project_state_context: string;
+  },
+  _adminClient: ReturnType<typeof createClient>,
+): Promise<{ output_id: string }> {
+  // Call generate-story via internal function URL. The receiving function
+  // (generate-story) consumes `projectStateContext` from PR #305's parameter.
+  const url = `${SUPABASE_URL}/functions/v1/generate-story`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`generate-story returned ${response.status}: ${errBody.slice(0, 200)}`);
+  }
+  const result = await response.json();
+  return { output_id: (result as { output_id?: string }).output_id ?? (result as { id?: string }).id ?? "" };
+}
+
+async function updateSectionStatus(
+  adminClient: ReturnType<typeof createClient>,
+  runId: string,
+  sectionStatus: Record<string, unknown>,
+): Promise<void> {
+  // Read current sections, update the matching section by id, write back.
+  const { data: run } = await adminClient
+    .from("chapter_runs")
+    .select("sections")
+    .eq("id", runId)
+    .single();
+  if (!run) return;
+  const sections = Array.isArray(run.sections) ? (run.sections as Array<Record<string, unknown>>) : [];
+  const idx = sections.findIndex((s) => s.id === sectionStatus.id);
+  if (idx >= 0) sections[idx] = { ...sections[idx], ...sectionStatus };
+  else sections.push(sectionStatus);
+  await adminClient.from("chapter_runs").update({ sections }).eq("id", runId);
+}
+
+async function markRunFailed(
+  adminClient: ReturnType<typeof createClient>,
+  runId: string,
+  error: string,
+): Promise<void> {
+  await adminClient.from("chapter_runs").update({
+    status: "failed",
+    error,
+    completed_at: new Date().toISOString(),
+  }).eq("id", runId);
+}
