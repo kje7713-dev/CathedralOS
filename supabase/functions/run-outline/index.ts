@@ -358,7 +358,7 @@ async function collectSectionsToGenerate(
   adminClient: ReturnType<typeof createClient>,
   outlineId: string,
   startParentSectionId: string,
-): Promise<Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null }>> {
+): Promise<Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null; current_characters: string[]; current_threads: string[]; current_location: string | null }>> {
   const { data: startParent, error: parentErr } = await adminClient
     .from("outline_sections")
     .select("id, parent_id, title")
@@ -370,11 +370,11 @@ async function collectSectionsToGenerate(
   if (startParent.parent_id === null) {
     const { data: leaf, error: leafErr } = await adminClient
       .from("outline_sections")
-      .select("id, title, position, container, pov, terminal_beat")
+      .select("id, title, position, container, pov, terminal_beat, current_characters, current_threads, current_location")
       .eq("id", startParentSectionId)
       .single();
     if (leafErr || !leaf) throw new Error("leaf section not found");
-    return [leaf];
+    return [leaf as { id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null; current_characters: string[]; current_threads: string[]; current_location: string | null }];
   }
   const { data: children, error: childErr } = await adminClient
     .from("outline_sections")
@@ -391,12 +391,98 @@ async function collectSectionsToGenerate(
 // outline_sections. A future PR will add that to the section schema and
 // replace this with targeted jsonb @> queries on character_deltas /
 // plot_thread_deltas.
-const DAY3_NARROW_LIMIT = 5;
-
 async function fetchPriorContext(
   adminClient: ReturnType<typeof createClient>,
   outlineId: string,
-  _currentSectionId: string,
+  currentSectionId: string,
+): Promise<string> {
+  // 1. Get the current section's intent (iOS-populated per the migration).
+  //    No K, no recency limit. The current section knows what it needs.
+  const { data: section } = await adminClient
+    .from("outline_sections")
+    .select("current_characters, current_threads, current_location")
+    .eq("id", currentSectionId)
+    .single();
+  if (!section) return "";
+
+  const intentCharacters: string[] = (section.current_characters as string[] | null) ?? [];
+  const intentThreads: string[] = (section.current_threads as string[] | null) ?? [];
+  const intentLocation: string | null = (section.current_location as string | null) ?? null;
+
+  // 2. Fallback: if iOS hasn't populated intent yet, use the cumulative aggregate
+  //    across all scenes (backwards-compat with PR #304's flow).
+  if (intentCharacters.length === 0 && intentThreads.length === 0 && !intentLocation) {
+    return fetchPriorContextAggregate(adminClient, outlineId);
+  }
+
+  // 3. Get the project_id
+  const { data: outlineRow } = await adminClient
+    .from("outlines")
+    .select("local_project_id")
+    .eq("id", outlineId)
+    .single();
+  const projectId = outlineRow?.local_project_id;
+  if (!projectId) return "";
+
+  // 4. Fetch all scenes for the project (filter-in-JS for v1; a future PR
+  //    can push this to a Postgres RPC for DB-side narrow query — same
+  //    design, just better performance).
+  const { data: allScenes } = await adminClient
+    .from("section_embeddings")
+    .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: true });
+  if (!allScenes || allScenes.length === 0) return "";
+
+  // 5. Filter by intent. The current section's intent drives which prior
+  //    scenes are relevant. No K, no recency — just narrow WHERE semantics
+  //    in JS:
+  //    - Keep scenes whose character_deltas mentions any of intentCharacters
+  //    - Keep scenes whose plot_thread_deltas mentions any of intentThreads
+  //    - Always include the most-recent scene (for ending_state continuity)
+  //    - If intent matches nothing, fall back to all scenes (the prior
+  //      scenes still have useful state)
+  const matchesIntent = (scene: { character_deltas?: unknown; plot_thread_deltas?: unknown }): boolean => {
+    if (intentCharacters.length > 0) {
+      const sceneChars = Array.isArray(scene.character_deltas)
+        ? (scene.character_deltas as Array<{ character_name?: string }>)
+            .map((d) => d?.character_name)
+            .filter((n): n is string => typeof n === "string")
+        : [];
+      if (sceneChars.some((c) => intentCharacters.includes(c))) return true;
+    }
+    if (intentThreads.length > 0) {
+      const sceneThreads = Array.isArray(scene.plot_thread_deltas)
+        ? (scene.plot_thread_deltas as Array<{ thread_name?: string }>)
+            .map((t) => t?.thread_name)
+            .filter((n): n is string => typeof n === "string")
+        : [];
+      if (sceneThreads.some((t) => intentThreads.includes(t))) return true;
+    }
+    return false;
+  };
+
+  const matchingScenes = allScenes.filter(matchesIntent);
+  const latestScene = allScenes[allScenes.length - 1];
+
+  // Build the prior-scenes list. If nothing matched, fall back to all
+  // (the prior scenes still have useful state, even if no character/thread
+  // overlap).
+  const priorScenes = matchingScenes.length > 0 ? matchingScenes : allScenes;
+  if (latestScene && !priorScenes.includes(latestScene)) {
+    priorScenes.push(latestScene);
+  }
+
+  return aggregateProjectState(priorScenes);
+}
+
+// Fallback path: cumulative aggregate across all scenes for the project.
+// Used when the current section's intent isn't populated yet (i.e., for
+// sections created before the migration, or for sections where iOS hasn't
+// set intent). Mirrors PR #305's fetchProjectStateContext behavior.
+async function fetchPriorContextAggregate(
+  adminClient: ReturnType<typeof createClient>,
+  outlineId: string,
 ): Promise<string> {
   const { data: outlineRow } = await adminClient
     .from("outlines")
@@ -409,11 +495,9 @@ async function fetchPriorContext(
     .from("section_embeddings")
     .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
     .eq("project_id", projectId)
-    .order("created_at", { ascending: false })  // Day 3: most-recent first (narrow)
-    .limit(DAY3_NARROW_LIMIT);
+    .order("created_at", { ascending: true });
   if (error || !data) return "";
-  // Reverse to chronological order for the aggregate (oldest first)
-  return aggregateProjectState([...data].reverse());
+  return aggregateProjectState(data);
 }
 
 function aggregateProjectState(scenes: Array<Record<string, unknown>>): string {
