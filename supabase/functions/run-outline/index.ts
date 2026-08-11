@@ -210,7 +210,7 @@ async function handleKickoff(req: Request): Promise<Response> {
 
   // 8. Run the outline-walker + per-section loop synchronously. Day 4 will
   //    move this to EdgeRuntime.waitUntil for true async.
-  await runOutline(run.id, body.outline_id, body.start_parent_section_id, body.model, adminClient, userId, estimatedCost, sections);
+  await runOutline(run.id, body.outline_id, body.start_parent_section_id, body.model, adminClient, userId, estimatedCost, sections, authHeader);
 
   // 9. Re-fetch and return final state.
   const { data: finalRun } = await adminClient
@@ -290,6 +290,7 @@ async function runOutline(
     summary: string; container: string | null; pov: string | null;
     terminal_beat: string | null; story_arc_beat_id: string | null;
   }>,
+  authHeader: string,
 ): Promise<void> {
   // Initialize per-section progress in the jsonb column
   await adminClient.from("chapter_runs").update({
@@ -331,7 +332,7 @@ async function runOutline(
         outline_section_id: section.id,
         model: model ?? null,
         project_state_context: priorContext,
-      }, adminClient);
+      }, adminClient, authHeader);
 
       // 3. Persist the output (Rule 8: generate-story has persisted to generation_outputs;
       //    fetch raw_text by output_id to pass to embed-section for structured memory
@@ -355,7 +356,7 @@ async function runOutline(
         story_arc_beat_id: section.story_arc_beat_id,
         raw_text: rawText,
         prior_context: priorContext,
-      }, adminClient);
+      }, adminClient, authHeader);
 
       // 5. Per-section cost tracking.
       const sectionCost = estimateSectionCost(section.container);
@@ -664,12 +665,15 @@ async function callGenerateStory(
     project_state_context: string;
   },
   _adminClient: ReturnType<typeof createClient>,
+  authHeader: string,
 ): Promise<{ output_id: string }> {
   const url = `${SUPABASE_URL}/functions/v1/generate-story`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      // Pass the user's JWT through — generate-story validates via auth.getUser(),
+      // which rejects the service role key with 401.
+      "Authorization": authHeader,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -724,12 +728,15 @@ async function callEmbedSection(
     prior_context: string;
   },
   _adminClient: ReturnType<typeof createClient>,
+  authHeader: string,
 ): Promise<void> {
   const url = `${SUPABASE_URL}/functions/v1/embed-section`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      // Pass the user's JWT through — embed-section validates the JWT the same
+      // way generate-story does, and rejects the service role key with 401.
+      "Authorization": authHeader,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
