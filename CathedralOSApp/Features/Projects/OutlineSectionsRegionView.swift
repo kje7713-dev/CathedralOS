@@ -456,7 +456,7 @@ struct OutlineSectionsRegionView: View {
                 updated_at: response.updated_at,
                 completed_at: response.completed_at
             )
-            sectionToGenerate = nil
+            generationTarget = nil
             runOutlineError = nil
             startPolling(runID: response.run_id)
         } catch let error as RunOutlineError {
