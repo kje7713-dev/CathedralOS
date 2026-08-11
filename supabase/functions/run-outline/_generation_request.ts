@@ -9,6 +9,14 @@ export const OUTPUT_BUDGETS: Record<LengthMode, number> = {
 
 type JSONObject = Record<string, unknown>;
 
+/** Match both local and canonical identities for restored/imported projects. */
+export function projectSnapshotLookupFilter(projectId: string, lineageId: unknown): string {
+  const lineage = String(lineageId ?? "").trim();
+  return lineage
+    ? `local_project_id.eq.${projectId},lineage_id.eq.${lineage}`
+    : `local_project_id.eq.${projectId}`;
+}
+
 function objects(value: unknown): JSONObject[] {
   return Array.isArray(value)
     ? value.filter((item): item is JSONObject => !!item && typeof item === "object")
