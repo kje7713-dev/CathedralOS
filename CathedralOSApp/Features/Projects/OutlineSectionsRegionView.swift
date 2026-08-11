@@ -287,8 +287,8 @@ struct OutlineSectionsRegionView: View {
             title: "New Section",
             summary: ""
         )
-        newSection.outline = outline
         modelContext.insert(newSection)
+        newSection.outline = outline
         try? modelContext.save()
     }
 
@@ -311,8 +311,8 @@ struct OutlineSectionsRegionView: View {
         dup.pov = section.pov
         dup.terminalBeat = section.terminalBeat
         dup.storyArcBeatID = section.storyArcBeatID
-        dup.outline = outline
         modelContext.insert(dup)
+        dup.outline = outline
         try? modelContext.save()
     }
 
@@ -399,9 +399,10 @@ struct OutlineSectionsRegionView: View {
     /// Called from the KickoffConfirmationSheet's onConfirm.
     private func kickoffAndStartPolling(_ section: OutlineSection) async {
         // Use the section's own outline relationship (Day 4 smoke test fix).
-        // currentOutline is project.outlines.first which can be nil if the
-        // relationship isn't loaded or the project has no outlines collected yet.
-        guard let outline = section.outline else {
+        // Fall back to currentOutline if section.outline is nil — covers cases
+        // where the assign-before-insert pattern didn't persist the inverse
+        // (see addSection/duplicateSection for the insert-first fix).
+        guard let outline = section.outline ?? currentOutline else {
             runOutlineError = "Outline not found."
             return
         }
