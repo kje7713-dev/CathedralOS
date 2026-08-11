@@ -258,7 +258,7 @@ struct OutlineSectionsRegionView: View {
                                 section: section,
                                 outlineID: outline.id
                             )
-                            print("[OutlineSections] tap: outlineID=\(outline.id.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
+                            DiagnosticLog.write("tap: outlineID=\(outline.id.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
                         }
                     },
                     onAccept: { Task { await acceptSection(section) } },
@@ -431,7 +431,7 @@ struct OutlineSectionsRegionView: View {
     private func kickoffAndStartPolling(_ target: OutlineGenerationTarget) async {
         let section = target.section
         let outlineID = target.outlineID
-        print("[OutlineSections] kickoff: outlineID=\(outlineID.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
+        DiagnosticLog.write("kickoff: outlineID=\(outlineID.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
         isKickingOff = true
         defer { isKickingOff = false }
         do {
