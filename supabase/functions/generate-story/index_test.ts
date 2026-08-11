@@ -1579,6 +1579,7 @@ Deno.test("handler: finish_reason stop remains complete", async () => {
 
   assertEquals(resp.status, 200);
   assertEquals(body.status, "complete");
+  assertEquals(body.cloudGenerationOutputID, FAKE_OUTPUT_ID);
   assertEquals(body.wasTruncated, false);
   assertEquals(body.finishReason, "stop");
   assertEquals(
