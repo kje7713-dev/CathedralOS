@@ -328,6 +328,7 @@ async function runOutline(
 
       // 2. Generate the prose (Rule 8: generate first).
       const result = await callGenerateStory({
+        action: "generate",
         outline_id: outlineId,
         outline_section_id: section.id,
         model: model ?? null,
@@ -659,6 +660,7 @@ function aggregateProjectState(
 
 async function callGenerateStory(
   payload: {
+    action: string;
     outline_id: string;
     outline_section_id: string;
     model: string | null;
