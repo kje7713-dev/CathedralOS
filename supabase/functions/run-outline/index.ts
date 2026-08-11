@@ -34,6 +34,7 @@ import {
 import {
   buildGenerateStoryRequest,
   generationOutputId,
+  projectSnapshotLookupFilter,
 } from "./_generation_request.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -306,7 +307,7 @@ async function runOutline(
   // We need project_id for embed-section calls (Rule 8: pipeline order).
   const { data: outlineRow } = await adminClient
     .from("outlines")
-    .select("local_project_id")
+    .select("local_project_id, lineage_id")
     .eq("id", outlineId)
     .single();
   const projectId = outlineRow?.local_project_id;
@@ -322,8 +323,13 @@ async function runOutline(
     .from("project_snapshots")
     .select("snapshot_json")
     .eq("user_id", userId)
-    .eq("local_project_id", projectId)
-    .single();
+    // Restored/imported projects can retain a local ID that differs from the
+    // canonical snapshot row.  The outline and snapshot still share lineage,
+    // so accept either identity instead of incorrectly reporting no snapshot.
+    .or(projectSnapshotLookupFilter(projectId, outlineRow.lineage_id))
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
   if (snapshotError || !snapshotRow?.snapshot_json) {
     await markRunFailed(adminClient, runId, "project snapshot / prompt-pack data missing");
     return;

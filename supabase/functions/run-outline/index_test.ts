@@ -2,6 +2,7 @@ import { assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert
 import {
   buildGenerateStoryRequest,
   generationOutputId,
+  projectSnapshotLookupFilter,
   shouldChargeAtRunCompletion,
 } from "./_generation_request.ts";
 
@@ -45,4 +46,15 @@ Deno.test("uses cloudGenerationOutputID as the output handoff", () => {
 
 Deno.test("run completion never charges outputs a second time", () => {
   assertEquals(shouldChargeAtRunCompletion(), false);
+});
+
+Deno.test("finds a project snapshot through either local ID or lineage", () => {
+  assertEquals(
+    projectSnapshotLookupFilter("local-1", "lineage-1"),
+    "local_project_id.eq.local-1,lineage_id.eq.lineage-1",
+  );
+  assertEquals(
+    projectSnapshotLookupFilter("local-1", null),
+    "local_project_id.eq.local-1",
+  );
 });
