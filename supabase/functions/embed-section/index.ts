@@ -38,6 +38,90 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini";
 const OPENAI_EMBED_MODEL = "text-embedding-3-small";
 
+// Keep extraction constrained to the shape consumed below. JSON mode can still
+// return a truncated object when the completion budget is exhausted; Structured
+// Outputs prevents syntactically invalid output and makes missing layers explicit.
+const SCENE_MEMORY_RESPONSE_FORMAT = {
+  type: "json_schema",
+  json_schema: {
+    name: "scene_memory",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["extracted_summary", "character_deltas", "plot_thread_deltas", "continuity_facts", "open_loops", "scene_ending_state"],
+      properties: {
+        extracted_summary: { type: "string" },
+        character_deltas: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["character_name", "location", "knowledge_delta", "relationship_delta", "injuries", "goals", "possessions", "emotional_stance"],
+            properties: {
+              character_name: { type: "string" },
+              location: { type: ["string", "null"] },
+              knowledge_delta: { type: ["string", "null"] },
+              relationship_delta: { type: ["string", "null"] },
+              injuries: { type: ["string", "null"] },
+              goals: { type: ["string", "null"] },
+              possessions: { type: ["string", "null"] },
+              emotional_stance: { type: ["string", "null"] },
+            },
+          },
+        },
+        plot_thread_deltas: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["thread_name", "status", "description"],
+            properties: {
+              thread_name: { type: "string" },
+              status: { type: "string", enum: ["introduced", "advanced", "resolved"] },
+              description: { type: "string" },
+            },
+          },
+        },
+        continuity_facts: { type: "array", items: { type: "string" } },
+        open_loops: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["type", "description"],
+            properties: {
+              type: { type: "string", enum: ["promise", "mystery", "question", "threat", "pending_action"] },
+              description: { type: "string" },
+            },
+          },
+        },
+        scene_ending_state: {
+          type: "object",
+          additionalProperties: false,
+          required: ["character_positions", "immediate_pressure"],
+          properties: {
+            character_positions: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["character", "location", "immediate_state"],
+                properties: {
+                  character: { type: "string" },
+                  location: { type: "string" },
+                  immediate_state: { type: "string" },
+                },
+              },
+            },
+            immediate_pressure: { type: "string" },
+          },
+        },
+      },
+    },
+  },
+};
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -201,7 +285,8 @@ Deno.serve(async (req: Request) => {
   // The function adds metadata server-side: stable UUIDs (Rule 3), source_section_id
   // (Rule 4), status defaults, created_at timestamps. Continuity_facts get active=true.
   //
-  // Uses OpenAI JSON mode (response_format: json_object).
+  // Uses OpenAI Structured Outputs so a successful, complete response always
+  // conforms to the scene-memory JSON schema.
   let sceneMemory: SceneMemory;
   try {
     const ac = new AbortController();
@@ -235,9 +320,11 @@ Now, from the current section's raw_text below, extract structured state:
 ${body.raw_text}`
             : body.raw_text },
         ],
-        max_completion_tokens: 1500,
+        // Reasoning models consume part of this budget before emitting JSON.
+        // 1500 could truncate the object and surface as "invalid JSON".
+        max_completion_tokens: 4096,
         temperature: 0.2,
-        response_format: { type: "json_object" },
+        response_format: SCENE_MEMORY_RESPONSE_FORMAT,
       }),
       signal: ac.signal,
     });
@@ -252,6 +339,11 @@ ${body.raw_text}`
       );
     }
     const data = await r.json();
+    const finishReason = data.choices?.[0]?.finish_reason;
+    if (finishReason === "length") {
+      console.error(`[embed-section] LLM extraction exhausted completion budget`);
+      return errorResponse("provider_error", "LLM extraction exceeded its completion budget", 502);
+    }
     const raw = (data.choices?.[0]?.message?.content ?? "").trim();
     if (!raw) {
       console.error(`[embed-section] LLM extraction returned empty content`);
