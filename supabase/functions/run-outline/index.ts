@@ -31,6 +31,10 @@ import {
   checkCredits,
   getCreditCost,
 } from "../generate-story/_credits.ts";
+import {
+  buildGenerateStoryRequest,
+  generationOutputId,
+} from "./_generation_request.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -314,6 +318,17 @@ async function runOutline(
     return;
   }
 
+  const { data: snapshotRow, error: snapshotError } = await adminClient
+    .from("project_snapshots")
+    .select("snapshot_json")
+    .eq("user_id", userId)
+    .eq("local_project_id", projectId)
+    .single();
+  if (snapshotError || !snapshotRow?.snapshot_json) {
+    await markRunFailed(adminClient, runId, "project snapshot / prompt-pack data missing");
+    return;
+  }
+
   // Iterate sequentially; stop-the-chain on first failure (Kevin 14:22 EDT)
   let actualCost = 0;
   for (const section of sections) {
@@ -327,13 +342,14 @@ async function runOutline(
       const priorContext = await fetchPriorContext(adminClient, outlineId, section.id);
 
       // 2. Generate the prose (Rule 8: generate first).
-      const result = await callGenerateStory({
-        action: "generate",
-        outline_id: outlineId,
-        outline_section_id: section.id,
-        model: model ?? null,
-        project_state_context: priorContext,
-      }, adminClient, authHeader);
+      const generationRequest = buildGenerateStoryRequest({
+        snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
+        section,
+        projectId,
+        selectedModelId: model,
+        lengthMode: estimateLengthModeFromContainer(section.container),
+      });
+      const result = await callGenerateStory(generationRequest, authHeader);
 
       // 3. Persist the output (Rule 8: generate-story has persisted to generation_outputs;
       //    fetch raw_text by output_id to pass to embed-section for structured memory
@@ -389,10 +405,8 @@ async function runOutline(
     }
   }
 
-  // All sections completed. Day 3: commit the actual cost to the user's
-  // entitlement and insert a user_credit_ledger entry. Drains monthly first,
-  // then purchased (per _credits.ts).
-  await commitCredits(adminClient, userId, actualCost, `run-outline:${runId}`);
+  // generate-story charges each successfully persisted output. This run keeps
+  // the estimate/actual values for progress reporting but must not debit again.
   await adminClient.from("chapter_runs").update({
     status: "completed",
     cost_cents_actual: actualCost,
@@ -659,14 +673,7 @@ function aggregateProjectState(
 // ---- Rule 8: pipeline order (generate → persist → extract → next) ------
 
 async function callGenerateStory(
-  payload: {
-    action: string;
-    outline_id: string;
-    outline_section_id: string;
-    model: string | null;
-    project_state_context: string;
-  },
-  _adminClient: ReturnType<typeof createClient>,
+  payload: Record<string, unknown>,
   authHeader: string,
 ): Promise<{ output_id: string }> {
   const url = `${SUPABASE_URL}/functions/v1/generate-story`;
@@ -685,7 +692,9 @@ async function callGenerateStory(
     throw new Error(`generate-story returned ${response.status}: ${errBody.slice(0, 200)}`);
   }
   const result = await response.json();
-  return { output_id: (result as { output_id?: string }).output_id ?? (result as { id?: string }).id ?? "" };
+  const outputId = generationOutputId(result);
+  if (!outputId) throw new Error("generate-story response missing cloudGenerationOutputID");
+  return { output_id: outputId };
 }
 
 // Fetch raw_text from generation_outputs given the output_id returned by
@@ -701,10 +710,13 @@ async function fetchRawTextFromOutput(
     .eq("id", outputId)
     .single();
   if (error || !data) {
-    console.error(`[run-outline] fetchRawTextFromOutput failed for ${outputId}: ${error?.message}`);
-    return "";
+    throw new Error(
+      `persisted generation output ${outputId} could not be read: ${error?.message ?? "not found"}`,
+    );
   }
-  return String((data as { output_text?: string }).output_text ?? "");
+  const outputText = String((data as { output_text?: string }).output_text ?? "");
+  if (!outputText) throw new Error(`persisted generation output ${outputId} has no prose`);
+  return outputText;
 }
 
 // Call embed-section to extract structured memory from the persisted output.
@@ -777,67 +789,4 @@ async function markRunFailed(
     error,
     completed_at: new Date().toISOString(),
   }).eq("id", runId);
-}
-
-// Day 3: commit credits. Drains monthly first, then purchased (per _credits.ts).
-// Insert user_credit_ledger row with negative delta. Update
-// user_entitlements.{monthly_credit_allowance, purchased_credit_balance}.
-//
-// Called only on all-sections-success (chain completion). On chain failure,
-// no commit — per _credits.ts policy, "If the LLM provider call fails:
-// do NOT charge credits."
-async function commitCredits(
-  adminClient: ReturnType<typeof createClient>,
-  userId: string,
-  cost: number,
-  reason: string,
-): Promise<void> {
-  if (cost <= 0) return;
-
-  // 1. Load current entitlement
-  const { data: ent, error: entErr } = await adminClient
-    .from("user_entitlements")
-    .select("monthly_credit_allowance, purchased_credit_balance")
-    .eq("user_id", userId)
-    .single();
-  if (entErr || !ent) {
-    console.error(`[run-outline] commitCredits: failed to load entitlement for ${userId}: ${entErr?.message}`);
-    throw new Error(`could not load entitlement for ${userId}`);
-  }
-  const monthly = (ent as { monthly_credit_allowance: number }).monthly_credit_allowance;
-  const purchased = (ent as { purchased_credit_balance: number }).purchased_credit_balance;
-
-  // 2. Drain monthly first, then purchased
-  let newMonthly = monthly;
-  let newPurchased = purchased;
-  let remaining = cost;
-  if (remaining > 0 && newMonthly > 0) {
-    const drain = Math.min(remaining, newMonthly);
-    newMonthly -= drain;
-    remaining -= drain;
-  }
-  if (remaining > 0 && newPurchased > 0) {
-    const drain = Math.min(remaining, newPurchased);
-    newPurchased -= drain;
-    remaining -= drain;
-  }
-  if (remaining > 0) {
-    // Insufficient — should have been caught at kickoff. Log and fail the commit
-    // (the run is already marked completed; the user has used the credit).
-    console.error(`[run-outline] commitCredits: insufficient balance to cover actual cost ${cost} (remaining ${remaining}); user=${userId}`);
-  }
-
-  // 3. Update entitlement
-  await adminClient.from("user_entitlements").update({
-    monthly_credit_allowance: newMonthly,
-    purchased_credit_balance: newPurchased,
-  }).eq("user_id", userId);
-
-  // 4. Insert ledger entry (negative delta = debit)
-  await adminClient.from("user_credit_ledger").insert({
-    user_id: userId,
-    delta: -cost,
-    reason,
-    metadata: { source: "run-outline" },
-  });
 }

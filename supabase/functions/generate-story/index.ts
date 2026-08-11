@@ -1933,6 +1933,7 @@ async function handler(
   return corsResponse(
     JSON.stringify({
       generatedText,
+      cloudGenerationOutputID: outputRow.id,
       title,
       modelName: llmResult.modelName,
       generationAction,
