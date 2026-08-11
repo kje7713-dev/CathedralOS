@@ -96,6 +96,32 @@ async function handleKickoff(req: Request): Promise<Response> {
     auth: { persistSession: false },
   });
   const idempotencyKey = `${userId}:${body.outline_id}:${body.start_parent_section_id}`;
+
+  // Idempotency: check for existing run first.
+  // - running → return 409 already_running
+  // - terminal (failed/completed) → delete it, then insert a fresh run
+  const { data: existing } = await adminClient
+    .from("chapter_runs")
+    .select("id, status")
+    .eq("idempotency_key", idempotencyKey)
+    .maybeSingle();
+  if (existing && existing.status === "running") {
+    return corsResponse(
+      JSON.stringify({ errorCode: "already_running", run_id: existing.id }),
+      { status: 409 },
+    );
+  }
+  if (existing) {
+    const { error: delErr } = await adminClient
+      .from("chapter_runs")
+      .delete()
+      .eq("id", existing.id);
+    if (delErr) {
+      console.error(`[run-outline] stale run delete failed: ${delErr.message}`);
+      return errorResponse("db_error", `Stale run cleanup failed: ${delErr.message}`, 500);
+    }
+  }
+
   const { data: run, error: insertErr } = await adminClient
     .from("chapter_runs")
     .insert({
@@ -109,20 +135,6 @@ async function handleKickoff(req: Request): Promise<Response> {
     .select()
     .single();
   if (insertErr) {
-    if (insertErr.code === "23505") {
-      const { data: existing } = await adminClient
-        .from("chapter_runs")
-        .select()
-        .eq("idempotency_key", idempotencyKey)
-        .eq("status", "running")
-        .maybeSingle();
-      if (existing) {
-        return corsResponse(
-          JSON.stringify({ errorCode: "already_running", run_id: existing.id }),
-          { status: 409 },
-        );
-      }
-    }
     console.error(`[run-outline] insert failed: ${insertErr.message}`);
     return errorResponse("db_error", insertErr.message, 500);
   }
