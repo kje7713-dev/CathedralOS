@@ -408,7 +408,14 @@ struct OutlineSectionsRegionView: View {
             ?? currentOutline
             ?? project.outlines.first(where: { $0.sections.contains { $0.id == section.id } })
         guard let outline = outline else {
-            runOutlineError = "Outline not found."
+            // Debug: surface the actual state so we can see why every lookup failed.
+            let sectionID = section.id.uuidString.prefix(8)
+            let sectionOutlineID = section.outline?.id.uuidString.prefix(8) ?? "nil"
+            let currentOutlineID = currentOutline?.id.uuidString.prefix(8) ?? "nil"
+            let outlinesCount = project.outlines.count
+            let outlineIDs = project.outlines.map { $0.id.uuidString.prefix(8) }.joined(separator: ",")
+            let matchingSection = project.outlines.flatMap { $0.sections }.first(where: { $0.id == section.id })
+            runOutlineError = "Outline not found.\nDebug: section=\(sectionID) section.outline=\(sectionOutlineID) currentOutline=\(currentOutlineID) outlines.count=\(outlinesCount) outlineIDs=[\(outlineIDs)] outlineHasSection=\(matchingSection != nil)"
             return
         }
         isKickingOff = true
