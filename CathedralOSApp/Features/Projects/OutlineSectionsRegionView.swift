@@ -13,6 +13,33 @@ struct OutlineGenerationTarget: Identifiable {
     let outlineID: UUID
 }
 
+
+/// Writes diagnostic events to a file in the app's Documents directory.
+/// The user pulls the file via Files app → On My iPhone → CathedralOS →
+/// cathedral-diagnostic-log.txt. Required because Kevin is iOS-only with
+/// no Mac access — print() to the Xcode console is wasted work.
+enum DiagnosticLog {
+    static let url: URL = {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return docs.appendingPathComponent("cathedral-diagnostic-log.txt")
+    }()
+
+    static func write(_ event: String) {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let line = "[" + formatter.string(from: Date()) + "] " + event + "\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if FileManager.default.fileExists(atPath: url.path) {
+            guard let handle = try? FileHandle(forWritingTo: url) else { return }
+            defer { try? handle.close() }
+            try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: url)
+        }
+    }
+}
+
 /// Outline Sections region (bottom of the Outline tab).
 ///
 /// PR #2c: manual CRUD with flat top-level sections (no grouping yet —
