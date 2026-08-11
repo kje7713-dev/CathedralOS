@@ -1,6 +1,18 @@
 import SwiftUI
 import SwiftData
 
+
+/// Captured at Generate-tap time. Stores the outline ID so the kickoff
+/// never has to re-resolve the outline through `section.outline`,
+/// `currentOutline`, or `project.outlines` — those lookups were returning
+/// nil at kickoff time even though the outline was clearly there at tap
+/// time (the section list rendered, so the outline existed).
+struct OutlineGenerationTarget: Identifiable {
+    let id = UUID()
+    let section: OutlineSection
+    let outlineID: UUID
+}
+
 /// Outline Sections region (bottom of the Outline tab).
 ///
 /// PR #2c: manual CRUD with flat top-level sections (no grouping yet —
@@ -15,7 +27,7 @@ struct OutlineSectionsRegionView: View {
 
     @State private var sectionsOrder: [OutlineSection] = []
     @State private var editingSection: OutlineSection?
-    @State private var sectionToGenerate: OutlineSection?
+    @State private var generationTarget: OutlineGenerationTarget?
     @State private var activeRunStatus: RunOutlineStatus?
     @State private var isKickingOff = false
     @State private var runOutlineError: String?
@@ -77,19 +89,23 @@ struct OutlineSectionsRegionView: View {
                 }
             )
         }
-        .sheet(item: $sectionToGenerate) { section in
+        .sheet(item: $generationTarget) { target in
             KickoffConfirmationSheet(
-                section: section,
+                section: target.section,
                 isStarting: isKickingOff,
                 runOutlineError: runOutlineError,
                 onConfirm: {
-                    await kickoffAndStartPolling(section)
+                    await kickoffAndStartPolling(target)
                 },
                 onCancel: {
-                    sectionToGenerate = nil
+                    generationTarget = nil
                     runOutlineError = nil
                 }
             )
+            .onAppear {
+                // Clear any stale "Outline not found." from the previous attempt.
+                runOutlineError = nil
+            }
         }
         .alert("Suggest Sections Failed", isPresented: Binding(
             get: { suggestionsError != nil },
@@ -234,7 +250,17 @@ struct OutlineSectionsRegionView: View {
                 OutlineSectionRow(
                     section: section,
                     arcBeatLabel: arcBeatLabel(for: section),
-                    onGenerate: { sectionToGenerate = section },
+                    onGenerate: {
+                        if let outline = currentOutline {
+                            // Capture outlineID at tap time — never re-resolve later.
+                            runOutlineError = nil
+                            generationTarget = OutlineGenerationTarget(
+                                section: section,
+                                outlineID: outline.id
+                            )
+                            print("[OutlineSections] tap: outlineID=\(outline.id.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
+                        }
+                    },
                     onAccept: { Task { await acceptSection(section) } },
                     isAccepting: acceptingSectionID == section.id
                 )
@@ -395,40 +421,28 @@ struct OutlineSectionsRegionView: View {
     }
     // MARK: - Day 4 generation wiring
 
-    /// Kick off a run for the given section and start polling for status.
+    /// Kick off a run for the given generation target and start polling for status.
     /// Called from the KickoffConfirmationSheet's onConfirm.
-    private func kickoffAndStartPolling(_ section: OutlineSection) async {
-        // Use the section's own outline relationship (Day 4 smoke test fix).
-        // Fall back to currentOutline if section.outline is nil — covers cases
-        // where the assign-before-insert pattern didn't persist the inverse
-        // (see addSection/duplicateSection/ensureOutline for the insert-first fix).
-        // Final fallback: scan all of the project's outlines for one that
-        // contains this section by ID.
-        let outline = section.outline
-            ?? currentOutline
-            ?? project.outlines.first(where: { $0.sections.contains { $0.id == section.id } })
-        guard let outline = outline else {
-            // Debug: surface the actual state so we can see why every lookup failed.
-            let sectionID = section.id.uuidString.prefix(8)
-            let sectionOutlineID = section.outline?.id.uuidString.prefix(8) ?? "nil"
-            let currentOutlineID = currentOutline?.id.uuidString.prefix(8) ?? "nil"
-            let outlinesCount = project.outlines.count
-            let outlineIDs = project.outlines.map { $0.id.uuidString.prefix(8) }.joined(separator: ",")
-            let matchingSection = project.outlines.flatMap { $0.sections }.first(where: { $0.id == section.id })
-            runOutlineError = "Outline not found.\nDebug: section=\(sectionID) section.outline=\(sectionOutlineID) currentOutline=\(currentOutlineID) outlines.count=\(outlinesCount) outlineIDs=[\(outlineIDs)] outlineHasSection=\(matchingSection != nil)"
-            return
-        }
+    ///
+    /// The outlineID is captured at Generate-tap time and passed through here.
+    /// We intentionally do NOT re-resolve the outline through `section.outline`,
+    /// `currentOutline`, or `project.outlines` — those lookups were returning
+    /// nil at kickoff time even though the outline existed at tap time.
+    private func kickoffAndStartPolling(_ target: OutlineGenerationTarget) async {
+        let section = target.section
+        let outlineID = target.outlineID
+        print("[OutlineSections] kickoff: outlineID=\(outlineID.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
         isKickingOff = true
         defer { isKickingOff = false }
         do {
             let response = try await runOutlineService.kickoff(
-                outlineID: outline.id.uuidString,
+                outlineID: outlineID.uuidString,
                 startParentSectionID: section.id.uuidString
             )
             activeRunStatus = RunOutlineStatus(
                 run_id: response.run_id,
                 status: response.status,
-                outline_id: outline.id.uuidString,
+                outline_id: outlineID.uuidString,
                 start_parent_section_id: section.id.uuidString,
                 sections_done: 0,
                 sections_total: response.sections?.count,
