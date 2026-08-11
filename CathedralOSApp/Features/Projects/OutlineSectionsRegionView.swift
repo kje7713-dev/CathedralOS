@@ -148,8 +148,8 @@ struct OutlineSectionsRegionView: View {
     private func ensureOutline() {
         guard project.outlines.isEmpty else { return }
         let outline = Outline(name: "Outline")
-        outline.project = project
         modelContext.insert(outline)
+        outline.project = project
         try? modelContext.save()
     }
 
@@ -401,8 +401,13 @@ struct OutlineSectionsRegionView: View {
         // Use the section's own outline relationship (Day 4 smoke test fix).
         // Fall back to currentOutline if section.outline is nil — covers cases
         // where the assign-before-insert pattern didn't persist the inverse
-        // (see addSection/duplicateSection for the insert-first fix).
-        guard let outline = section.outline ?? currentOutline else {
+        // (see addSection/duplicateSection/ensureOutline for the insert-first fix).
+        // Final fallback: scan all of the project's outlines for one that
+        // contains this section by ID.
+        let outline = section.outline
+            ?? currentOutline
+            ?? project.outlines.first(where: { $0.sections.contains { $0.id == section.id } })
+        guard let outline = outline else {
             runOutlineError = "Outline not found."
             return
         }
