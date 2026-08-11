@@ -30,6 +30,7 @@ class OutlineSection: Identifiable {
     /// in `OutlineSectionEditView` against the project's current arc beats.
     var storyArcBeatID: UUID?
 
+    @Relationship(inverse: \Outline.sections)
     var outline: Outline?
     /// Parent section for grouping (e.g. a scene inside a chapter). Nil for
     /// top-level sections.
