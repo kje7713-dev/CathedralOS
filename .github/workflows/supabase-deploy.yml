@@ -71,6 +71,9 @@ jobs:
       - name: Deploy Edge Function - outline-from-recipe
         if: ${{ hashFiles('supabase/functions/outline-from-recipe/index.ts') != '' }}
         run: supabase functions deploy outline-from-recipe --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+      - name: Deploy Edge Function - run-outline
+        if: ${{ hashFiles('supabase/functions/run-outline/index.ts') != '' }}
+        run: supabase functions deploy run-outline --project-ref "$SUPABASE_PROJECT_REF"
       - name: Deploy Edge Function - embed-section
         if: ${{ hashFiles('supabase/functions/embed-section/index.ts') != '' && success() }}
         run: supabase functions deploy embed-section --project-ref "$SUPABASE_PROJECT_REF"

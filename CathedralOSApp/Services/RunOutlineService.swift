@@ -191,7 +191,18 @@ struct RunOutlineService {
             throw RunOutlineError.insufficientCredits(needed: 0, available: 0)
         }
         if httpResponse.statusCode == 404 {
-            throw RunOutlineError.noOutline
+            // Do NOT assume 404 means "outline not found". The Edge Function
+            // may not be deployed (live Supabase was missing this one), or the
+            // path may be wrong. Surface the response body so the real error
+            // is visible. Only throw noOutline if the backend explicitly says
+            // the outline is missing (JSON body with an outline-related error).
+            let body = String(data: data, encoding: .utf8) ?? ""
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let error = json["error"] as? String,
+               error.lowercased().contains("outline") {
+                throw RunOutlineError.noOutline
+            }
+            throw RunOutlineError.serverError(statusCode: 404, body: body)
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
