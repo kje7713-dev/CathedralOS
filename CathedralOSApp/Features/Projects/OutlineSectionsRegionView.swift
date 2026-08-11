@@ -462,6 +462,14 @@ struct OutlineSectionsRegionView: View {
         isKickingOff = true
         defer { isKickingOff = false }
         do {
+            // Sync the outline to the cloud before kickoff. The edge function
+            // looks up the outline by ID and returns 404 if it doesn't exist yet.
+            // (addSection doesn't trigger a sync on its own — only
+            // modelContext.save() — so an outline added manually can be
+            // local-only at kickoff time.)
+            DiagnosticLog.write("kickoff: syncing project to cloud")
+            try await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
+            DiagnosticLog.write("kickoff: sync complete")
             let response = try await runOutlineService.kickoff(
                 outlineID: outlineID.uuidString,
                 startParentSectionID: section.id.uuidString
