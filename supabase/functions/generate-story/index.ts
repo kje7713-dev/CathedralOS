@@ -202,6 +202,11 @@ interface GenerateStoryRequest {
   // in the user message so the model sees it right before the Writing Task.
   terminalBeat?: string;
   localGenerationID?: string;
+  // UUID string of the outline_sections row that this generation belongs to.
+  // Persisted verbatim onto generation_outputs.outline_section_id so the iOS
+  // sync roundtrips it into GenerationOutput.outlineSectionID (PR #325 wire).
+  // Optional for backwards compat — omitted => null.
+  outline_section_id?: string;
 }
 
 interface GenerationOutputInsert {
@@ -218,6 +223,10 @@ interface GenerationOutputInsert {
   output_budget: number;
   status: "complete" | "draft";
   visibility: "private";
+  // `outline_sections.id` (nullable; older rows or non-section generations
+  // leave it null). Cloud schema column added by migration
+  // 20260812170000_add_outline_section_id_to_generation_outputs.sql.
+  outline_section_id: string | null;
 }
 
 interface GenerationUsageEventInsert {
@@ -1797,6 +1806,7 @@ async function handler(
     output_budget: maxCompletionTokens,
     status: outputStatus,
     visibility: "private",
+    outline_section_id: body.outline_section_id ?? null,
   });
 
   if (outputInsertError || !outputRow?.id) {

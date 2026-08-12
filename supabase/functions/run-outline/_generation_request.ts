@@ -65,7 +65,11 @@ export function buildSourcePayloadJSON(
 
 export function buildGenerateStoryRequest(args: {
   snapshot: JSONObject;
-  section: { title: string; summary: string; container: string | null; pov: string | null; terminal_beat: string | null };
+  // `id` is the outline_sections.id (mirrors the chapter_run.start_parent_section_id
+  // the run loop passes in). Added in the PR-#327 backend fix-forward so generate-story
+  // can persist `outline_section_id` on the generation_outputs row it inserts, which is
+  // what the iOS-side `GenerationOutput.outlineSectionID` field expects on sync.
+  section: { id: string; title: string; summary: string; container: string | null; pov: string | null; terminal_beat: string | null };
   projectId: string;
   selectedModelId?: string;
   lengthMode: LengthMode;
@@ -87,6 +91,7 @@ export function buildGenerateStoryRequest(args: {
     projectName: project?.name ?? "",
     promptPackID: promptPack.id ?? "",
     promptPackName: promptPack.name ?? "",
+    outline_section_id: args.section.id,
   };
 }
 
