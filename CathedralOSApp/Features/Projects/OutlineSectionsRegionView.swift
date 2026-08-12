@@ -60,6 +60,8 @@ struct OutlineSectionsRegionView: View {
     @State private var runOutlineError: String?
     @State private var pollingTask: Task<Void, Never>?
     private let runOutlineService = RunOutlineService()
+    private let generationModelService: any GenerationModelServiceProtocol = BackendGenerationModelService()
+    private let estimateService: any GenerationCostEstimateServiceProtocol = SupabaseGenerationService()
     @State private var showingSuggestionSheet = false
     @State private var suggestions: [OutlineSuggestion] = []
     @State private var suggestionsLoading = false
@@ -118,11 +120,12 @@ struct OutlineSectionsRegionView: View {
         }
         .sheet(item: $generationTarget) { target in
             KickoffConfirmationSheet(
+                project: project,
                 section: target.section,
                 isStarting: isKickingOff,
                 runOutlineError: runOutlineError,
-                onConfirm: {
-                    await kickoffAndStartPolling(target)
+                onConfirm: { selectedModelId in
+                    await kickoffAndStartPolling(target, model: selectedModelId)
                 },
                 onCancel: {
                     generationTarget = nil
@@ -455,7 +458,7 @@ struct OutlineSectionsRegionView: View {
     /// We intentionally do NOT re-resolve the outline through `section.outline`,
     /// `currentOutline`, or `project.outlines` — those lookups were returning
     /// nil at kickoff time even though the outline existed at tap time.
-    private func kickoffAndStartPolling(_ target: OutlineGenerationTarget) async {
+    private func kickoffAndStartPolling(_ target: OutlineGenerationTarget, model: String? = nil) async {
         let section = target.section
         let outlineID = target.outlineID
         DiagnosticLog.write("kickoff: outlineID=\(outlineID.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
@@ -472,7 +475,8 @@ struct OutlineSectionsRegionView: View {
             DiagnosticLog.write("kickoff: sync complete")
             let response = try await runOutlineService.kickoff(
                 outlineID: outlineID.uuidString,
-                startParentSectionID: section.id.uuidString
+                startParentSectionID: section.id.uuidString,
+                model: model
             )
             activeRunStatus = RunOutlineStatus(
                 run_id: response.run_id,
@@ -623,11 +627,50 @@ struct OutlineSectionRow: View {
 /// Bottom sheet shown before kicking off a generation run. Lets the user
 /// confirm the cost + time estimate before starting.
 struct KickoffConfirmationSheet: View {
+    let project: StoryProject
     let section: OutlineSection
     let isStarting: Bool
     let runOutlineError: String?
-    let onConfirm: () async -> Void
+    let onConfirm: (String?) async -> Void
     let onCancel: () -> Void
+
+    @State private var generationModels: [GenerationModelOption] = []
+    @State private var selectedModelId: String?
+    @State private var costEstimate: GenerationCostEstimate?
+    @State private var isEstimating = false
+    @State private var estimateError: String?
+
+    private var firstPack: PromptPack? {
+        project.promptPacks.sorted(by: { $0.name < $1.name }).first
+    }
+
+    private var selectedModel: GenerationModelOption? {
+        generationModels.first(where: { $0.id == selectedModelId })
+    }
+
+    /// Mirrors `estimateLengthModeFromContainer` in supabase/functions/run-outline/index.ts.
+    /// chapter / episode / novella → .chapter; shortStory → .short; else → .long.
+    private var lengthModeForContainer: GenerationLengthMode {
+        switch section.container {
+        case "chapter", "episode", "novella": return .chapter
+        case "shortStory": return .short
+        default: return .long
+        }
+    }
+
+    private var selectedContainerEnum: Container? {
+        section.container.flatMap(Container.init(rawValue:))
+    }
+
+    private var selectedPOVEnum: POV? {
+        section.pov.flatMap(POV.init(rawValue:))
+    }
+
+    private var canStart: Bool {
+        guard !isStarting else { return false }
+        if let est = costEstimate { return est.allowed }
+        return true // optimistic until estimate arrives
+    }
 
     var body: some View {
         VStack(spacing: CathedralTheme.Spacing.base) {
@@ -642,15 +685,10 @@ struct KickoffConfirmationSheet: View {
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, CathedralTheme.Spacing.base)
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Estimated cost: ~8 credits", systemImage: "creditcard")
-                    .font(CathedralTheme.Typography.body(13))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                Label("Estimated time: ~30 seconds", systemImage: "clock")
-                    .font(CathedralTheme.Typography.body(13))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            }
-            .padding(.top, CathedralTheme.Spacing.sm)
+            modelPicker
+                .padding(.top, CathedralTheme.Spacing.sm)
+            estimateRow
+                .padding(.top, CathedralTheme.Spacing.xs)
             if let error = runOutlineError {
                 Text(error)
                     .font(CathedralTheme.Typography.body(13))
@@ -665,7 +703,7 @@ struct KickoffConfirmationSheet: View {
                 .buttonStyle(.bordered)
                 .disabled(isStarting)
                 Button {
-                    Task { await onConfirm() }
+                    Task { await onConfirm(selectedModelId) }
                 } label: {
                     if isStarting {
                         ProgressView()
@@ -674,13 +712,127 @@ struct KickoffConfirmationSheet: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(isStarting)
+                .disabled(!canStart)
             }
             .padding(.top, CathedralTheme.Spacing.md)
         }
         .padding(CathedralTheme.Spacing.lg)
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
+        .task { await loadModelsAndEstimate() }
+        .onChange(of: selectedModelId) { _, _ in
+            Task { await refreshEstimate() }
+        }
+    }
+
+    // MARK: - Model picker + estimate (mirrors ProjectDetailView's picker/creditEstimateRow)
+
+    @ViewBuilder
+    private var modelPicker: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("MODEL".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            if generationModels.isEmpty {
+                Text("Loading models…")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            } else {
+                Picker("Model", selection: $selectedModelId) {
+                    ForEach(generationModels) { model in
+                        Text(model.displayName).tag(Optional(model.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                if let selectedModel {
+                    Text(selectedModel.description ?? "No description.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var estimateRow: some View {
+        if isEstimating {
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                ProgressView().scaleEffect(0.7)
+                Text("Estimating cost…")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if let err = estimateError {
+            HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+                Text(err)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if let estimate = costEstimate {
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                Image(systemName: "bolt.circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(estimate.allowed
+                        ? CathedralTheme.Colors.secondaryText
+                        : CathedralTheme.Colors.destructive)
+                if estimate.allowed {
+                    Text("Up to: \(estimate.estimatedCredits) \(estimate.estimatedCredits <= 1 ? "credit" : "credits") · \(estimate.availableCredits) remaining")
+                        .font(CathedralTheme.Typography.label(11, weight: .regular))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                } else {
+                    Text("Need \(estimate.estimatedCredits) \(estimate.estimatedCredits <= 1 ? "credit" : "credits"), you have \(estimate.availableCredits)")
+                        .font(CathedralTheme.Typography.label(11, weight: .regular))
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @MainActor
+    private func loadModelsAndEstimate() async {
+        do {
+            generationModels = try await generationModelService.fetchEnabledModels()
+            if selectedModelId == nil, let first = generationModels.first {
+                selectedModelId = first.id
+            }
+        } catch {
+            // Models failed to load -- continue with empty list; user can still attempt kickoff
+            // and the run-outline endpoint will use its own default model.
+        }
+        await refreshEstimate()
+    }
+
+    @MainActor
+    private func refreshEstimate() async {
+        guard let pack = firstPack else {
+            // No prompt pack on the project -- nothing to estimate against.
+            return
+        }
+        isEstimating = true
+        estimateError = nil
+        do {
+            costEstimate = try await estimateService.estimateGenerationCost(
+                project: project,
+                pack: pack,
+                lengthMode: lengthModeForContainer,
+                selectedContainer: selectedContainerEnum,
+                selectedPOV: selectedPOVEnum,
+                terminalBeat: section.terminalBeat,
+                selectedModelId: selectedModelId
+            )
+        } catch {
+            estimateError = error.localizedDescription
+            costEstimate = nil
+        }
+        isEstimating = false
     }
 }
 
