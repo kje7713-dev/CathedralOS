@@ -197,9 +197,11 @@ struct GenerationOutputDetailView: View {
             sourceSection = nil
             return
         }
+        // `outlineSectionID` is a primary key, so the predicate returns at most one row;
+        // SwiftData.FetchDescriptor doesn't expose `fetchLimit:` as an init parameter
+        // (it's a mutable property only), but we don't need it here.
         let descriptor = FetchDescriptor<OutlineSection>(
-            predicate: #Predicate<OutlineSection> { $0.id == id },
-            fetchLimit: 1
+            predicate: #Predicate<OutlineSection> { $0.id == id }
         )
         sourceSection = (try? modelContext.fetch(descriptor))?.first
     }
