@@ -21,6 +21,7 @@ struct DiagnosticsView: View {
 
     @Environment(\.modelContext) private var modelContext
     @StateObject private var viewModel: DiagnosticsViewModel
+    @ObservedObject private var syncProbe = SyncProbe.shared
     @State private var copyConfirmation = false
 
     init(
@@ -53,6 +54,7 @@ struct DiagnosticsView: View {
                 backendHealthSection
                 preflightSection
                 outputRecoverySection
+                lastSyncProbeSection
                 lastErrorsSection
                 copySection
             }
@@ -378,6 +380,38 @@ struct DiagnosticsView: View {
         }
     }
 
+    private var lastSyncProbeSection: some View {
+        Section("Last Sync Probe (PR-#331)") {
+            if let lastSync = syncProbe.lastSyncDate {
+                Text("Last: \(lastSync.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if syncProbe.totalRowsFetched > 0 {
+                    Text("Fetched: \(syncProbe.totalRowsFetched) - Surviving @Query: \(syncProbe.survivingPredicateCount)")
+                        .font(.subheadline.bold())
+                }
+                ForEach(syncProbe.sampleRows) { row in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.title).font(.caption.bold()).lineLimit(1)
+                        Text("raw      : \(row.rawOutlineSectionID ?? "nil")").font(.system(.caption2, design: .monospaced))
+                        Text("decoded : \(row.decodedFromRaw?.uuidString ?? "nil")").font(.system(.caption2, design: .monospaced))
+                        Text("stored   : \(row.swiftDataStored?.uuidString ?? "nil")").font(.system(.caption2, design: .monospaced))
+                    }
+                }
+                if syncProbe.sampleRows.isEmpty && syncProbe.totalRowsFetched == 0 {
+                    Text("(no rows fetched yet)").font(.caption).foregroundStyle(.secondary)
+                }
+                if !syncProbe.sectionPairingsDebug.isEmpty {
+                    Text("sections: \(syncProbe.sectionPairingsDebug)").font(.system(.caption2, design: .monospaced)).lineLimit(4)
+                }
+                if let err = syncProbe.lastError {
+                    Text("err: \(err)").font(.caption).foregroundStyle(.red)
+                }
+            } else {
+                Text("No sync has run yet.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
     private var lastErrorsSection: some View {
         Section("Last Cloud Errors") {
             if let snap = viewModel.snapshot {

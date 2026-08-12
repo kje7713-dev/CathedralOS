@@ -1,0 +1,335 @@
+[14:25:51]: Sending anonymous analytics information
+[14:25:51]: Learn more at https://docs.fastlane.tools/#metrics
+[14:25:51]: No personal or sensitive data is sent.
+[14:25:51]: You can disable this by adding `opt_out_usage` at the top of your Fastfile
+[14:25:52]: [32m------------------------------[0m
+[14:25:52]: [32m--- Step: default_platform ---[0m
+[14:25:52]: [32m------------------------------[0m
+[14:25:52]: [32mDriving the lane 'ios beta' 🚀[0m
+[14:25:52]: [32m-------------------[0m
+[14:25:52]: [32m--- Step: is_ci ---[0m
+[14:25:52]: [32m-------------------[0m
+[14:25:52]: [32m---------------------------------------[0m
+[14:25:52]: [32m--- Step: app_store_connect_api_key ---[0m
+[14:25:52]: [32m---------------------------------------[0m
+[14:25:52]: [32m-----------------------------[0m
+[14:25:52]: [32m--- Step: create_keychain ---[0m
+[14:25:52]: [32m-----------------------------[0m
+[14:25:52]: [36m$ security list-keychains -d user[0m
+[14:25:52]: ▸ [35m"/Users/runner/Library/Keychains/ci_keychain-db"[0m
+[14:25:52]: [33mFound keychain '/Users/runner/Library/Keychains/ci_keychain-db' in list-keychains, adding to search list skipped[0m
+[14:25:53]: [32m-------------------[0m
+[14:25:53]: [32m--- Step: match ---[0m
+[14:25:53]: [32m-------------------[0m
+[14:25:53]: [32mSuccessfully loaded '/Users/runner/work/CathedralOS/CathedralOS/fastlane/Matchfile' 📄[0m
+
++-----------------------------------------------------------------------+
+|              Detected Values from './fastlane/Matchfile'              |
++----------------+------------------------------------------------------+
+| git_url        | https://github.com/kje7713-dev/CathedralOS-certs.git |
+| storage_mode   | git                                                  |
+| type           | appstore                                             |
+| app_identifier | com.savagesbydesign.CathedralOS                      |
+| team_id        | 3W77JDM5X2                                           |
++----------------+------------------------------------------------------+
+
+
++-----------------------------------------------------------------------------------------------+
+|                                   [32mSummary for match 2.235.0[0m                                   |
++----------------------------------------+------------------------------------------------------+
+| type                                   | appstore                                             |
+| readonly                               | true                                                 |
+| keychain_name                          | ci_keychain                                          |
+| keychain_password                      | ********                                             |
+| git_basic_authorization                | ********                                             |
+| api_key                                | ********                                             |
+| generate_apple_certs                   | true                                                 |
+| skip_provisioning_profiles             | false                                                |
+| app_identifier                         | ["com.savagesbydesign.CathedralOS"]                  |
+| team_id                                | 3W77JDM5X2                                           |
+| storage_mode                           | git                                                  |
+| git_url                                | https://github.com/kje7713-dev/CathedralOS-certs.git |
+| git_branch                             | master                                               |
+| shallow_clone                          | false                                                |
+| clone_branch_directly                  | false                                                |
+| skip_google_cloud_account_confirmation | false                                                |
+| s3_skip_encryption                     | false                                                |
+| gitlab_host                            | https://gitlab.com                                   |
+| force                                  | false                                                |
+| force_for_new_devices                  | false                                                |
+| include_mac_in_profiles                | false                                                |
+| include_all_certificates               | false                                                |
+| force_for_new_certificates             | false                                                |
+| skip_confirmation                      | false                                                |
+| safe_remove_certs                      | false                                                |
+| skip_docs                              | false                                                |
+| platform                               | ios                                                  |
+| derive_catalyst_app_identifier         | false                                                |
+| fail_on_name_taken                     | false                                                |
+| skip_certificate_matching              | false                                                |
+| skip_set_partition_list                | false                                                |
+| force_legacy_encryption                | false                                                |
+| verbose                                | false                                                |
++----------------------------------------+------------------------------------------------------+
+
+[14:25:53]: Cloning remote git repo...
+[14:25:53]: If cloning the repo takes too long, you can use the `clone_branch_directly` option in match.
+[14:25:54]: Checking out branch master...
+[14:25:54]: [32m🔓  Successfully decrypted certificates repo[0m
+[14:25:54]: Installing certificate...
+[14:25:56]: [31mThere are no local code signing identities found.
+You can run `security find-identity -v -p codesigning /Users/runner/Library/Keychains/ci_keychain-db` to get this output.
+This Stack Overflow thread has more information: https://stackoverflow.com/q/35390072/774.
+(Check in Keychain Access for an expired WWDR certificate: https://stackoverflow.com/a/35409835/774 has more info.)[0m
+[14:25:56]: Setting key partition list... (this can take a minute if there are a lot of keys installed)
+[14:25:56]: [31msecurity: SecItemCopyMatching: The specified item could not be found in the keychain.[0m
+[14:25:56]: Setting key partition list... (this can take a minute if there are a lot of keys installed)
+
++------------------------------------------------------------------+
+|                      [32mInstalled Certificate[0m                       |
++-------------------+----------------------------------------------+
+| User ID           | 3W77JDM5X2                                   |
+| Common Name       | Apple Distribution: Kevin Ehatt (3W77JDM5X2) |
+| Organisation Unit | 3W77JDM5X2                                   |
+| Organisation      | Kevin Ehatt                                  |
+| Country           | US                                           |
+| Start Datetime    | 2026-04-15 18:21:32 UTC                      |
+| End Datetime      | 2027-04-15 18:21:31 UTC                      |
++-------------------+----------------------------------------------+
+
+[14:25:57]: Installing provisioning profile...
+
++------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                          [32mInstalled Provisioning Profile[0m                                                                                          |
++---------------------+----------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------+
+| Parameter           | Environment Variable                                           | Value                                                                                                                     |
++---------------------+----------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------+
+| App Identifier      |                                                                | com.savagesbydesign.CathedralOS                                                                                           |
+| Type                |                                                                | appstore                                                                                                                  |
+| Platform            |                                                                | ios                                                                                                                       |
+| Profile UUID        | sigh_com.savagesbydesign.CathedralOS_appstore                  | 9d3877a6-e269-4455-92c0-56bc2bd9bdd2                                                                                      |
+| Profile Name        | sigh_com.savagesbydesign.CathedralOS_appstore_profile-name     | match AppStore com.savagesbydesign.CathedralOS                                                                            |
+| Profile Path        | sigh_com.savagesbydesign.CathedralOS_appstore_profile-path     | /Users/runner/Library/Developer/Xcode/UserData/Provisioning Profiles/9d3877a6-e269-4455-92c0-56bc2bd9bdd2.mobileprovision |
+| Development Team ID | sigh_com.savagesbydesign.CathedralOS_appstore_team-id          | 3W77JDM5X2                                                                                                                |
+| Certificate Name    | sigh_com.savagesbydesign.CathedralOS_appstore_certificate-name | Apple Distribution: Kevin Ehatt (3W77JDM5X2)                                                                              |
++---------------------+----------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------+
+
+[14:25:57]: [32m[32mAll required keys, certificates and provisioning profiles are installed 🙌[0m
+[14:25:57]: Setting Provisioning Profile type to 'app-store'
+[14:25:57]: [32m------------------------------------------------[0m
+[14:25:57]: [32m--- Step: agvtool new-version 20260728142557 ---[0m
+[14:25:57]: [32m------------------------------------------------[0m
+[14:25:57]: [36m$ agvtool new-version 20260728142557[0m
+[14:26:02]: ▸ [35mSetting version of project CathedralOSApp to:[0m
+[14:26:02]: ▸ [35m20260728142557.[0m
+[14:26:02]: Skipping Active Release INFOPLIST_KEY_* diagnostic; built IPA Info.plist verification is the source of truth.
+[14:26:02]: [32m-----------------[0m
+[14:26:02]: [32m--- Step: gym ---[0m
+[14:26:02]: [32m-----------------[0m
+[14:26:02]: [33mResolving Swift Package Manager dependencies...[0m
+[14:26:02]: [36m$ xcodebuild -resolvePackageDependencies -scheme CathedralOSApp -project CathedralOSApp.xcodeproj -configuration Release[0m
+[14:26:06]: ▸ [35mCommand line invocation:[0m
+[14:26:06]: ▸ [35m    /Applications/Xcode_26.5.app/Contents/Developer/usr/bin/xcodebuild -resolvePackageDependencies -scheme CathedralOSApp -project CathedralOSApp.xcodeproj -configuration Release[0m
+[14:26:25]: ▸ [35mresolved source packages: [0m
+[14:26:25]: [36m$ xcodebuild -showBuildSettings -scheme CathedralOSApp -project CathedralOSApp.xcodeproj -configuration Release 2>&1[0m
+[14:26:29]: [33mCommand timed out after 3 seconds on try 1 of 4, trying again with a 6 second timeout...[0m
+[14:26:35]: [33mCommand timed out after 6 seconds on try 2 of 4, trying again with a 12 second timeout...[0m
+[14:26:45]: Detected provisioning profile mapping: {:"com.savagesbydesign.CathedralOS"=>"match AppStore com.savagesbydesign.CathedralOS"}
+
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+|                                                                                                                                      [32mSummary for gym 2.235.0[0m                                                                                                                                       |
++---------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| project                                                             | CathedralOSApp.xcodeproj                                                                                                                                                                                                     |
+| scheme                                                              | CathedralOSApp                                                                                                                                                                                                               |
+| configuration                                                       | Release                                                                                                                                                                                                                      |
+| sdk                                                                 | iphoneos                                                                                                                                                                                                                     |
+| export_method                                                       | app-store                                                                                                                                                                                                                    |
+| export_options.provisioningProfiles.com.savagesbydesign.CathedralOS | match AppStore com.savagesbydesign.CathedralOS                                                                                                                                                                               |
+| output_directory                                                    | ./build                                                                                                                                                                                                                      |
+| output_name                                                         | CathedralOSApp                                                                                                                                                                                                               |
+| clean                                                               | true                                                                                                                                                                                                                         |
+| xcargs                                                              | SUPABASE_PROJECT_URL=https://vrzlwukuslpnqebaakxy.supabase.co/ SUPABASE_ANON_KEY=sb_publishable_ZJOhE4G7HyhEpp_51vDMfQ_O0b_my2Z PUBLIC_SHARING_BASE_URL=https://vrzlwukuslpnqebaakxy.supabase.co/functions/v1/public-sharing |
+| export_xcargs                                                       | -allowProvisioningUpdates                                                                                                                                                                                                    |
+| silent                                                              | false                                                                                                                                                                                                                        |
+| skip_package_ipa                                                    | false                                                                                                                                                                                                                        |
+| skip_package_pkg                                                    | false                                                                                                                                                                                                                        |
+| build_path                                                          | /Users/runner/Library/Developer/Xcode/Archives/2026-07-28                                                                                                                                                                    |
+| result_bundle                                                       | false                                                                                                                                                                                                                        |
+| buildlog_path                                                       | ~/Library/Logs/gym                                                                                                                                                                                                           |
+| destination                                                         | generic/platform=iOS                                                                                                                                                                                                         |
+| xcodebuild_formatter                                                | xcbeautify                                                                                                                                                                                                                   |
+| build_timing_summary                                                | false                                                                                                                                                                                                                        |
+| skip_profile_detection                                              | false                                                                                                                                                                                                                        |
+| xcodebuild_command                                                  | xcodebuild                                                                                                                                                                                                                   |
+| skip_package_dependencies_resolution                                | false                                                                                                                                                                                                                        |
+| disable_package_automatic_updates                                   | false                                                                                                                                                                                                                        |
+| skip_package_repository_fetches                                     | false                                                                                                                                                                                                                        |
+| use_system_scm                                                      | false                                                                                                                                                                                                                        |
+| generate_appstore_info                                              | false                                                                                                                                                                                                                        |
+| xcode_path                                                          | /Applications/Xcode_26.5.app                                                                                                                                                                                                 |
++---------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+[14:26:45]: [36m$ set -o pipefail && xcodebuild -scheme CathedralOSApp -project CathedralOSApp.xcodeproj -configuration Release -sdk 'iphoneos' -destination 'generic/platform=iOS' -archivePath /Users/runner/Library/Developer/Xcode/Archives/2026-07-28/CathedralOSApp\ 2026-07-28\ 14.26.45.xcarchive SUPABASE_PROJECT_URL=https://vrzlwukuslpnqebaakxy.supabase.co/ SUPABASE_ANON_KEY=sb_publishable_ZJOhE4G7HyhEpp_51vDMfQ_O0b_my2Z PUBLIC_SHARING_BASE_URL=https://vrzlwukuslpnqebaakxy.supabase.co/functions/v1/public-sharing clean archive | tee /Users/runner/Library/Logs/gym/CathedralOSApp-CathedralOSApp.log | xcbeautify[0m
+[14:26:45]: ▸ [35m----- xcbeautify -----[0m
+[14:26:45]: ▸ [35mVersion: 3.2.1[0m
+[14:26:45]: ▸ [35m----------------------[0m
+[14:26:50]: ▸ [35m[32;1mClean Succeeded[0m
+[14:26:51]: ▸ [35m[36;1mnote: [0mBuilding targets in dependency order[0m
+[14:26:51]: ▸ [35m[36;1mnote: [0mTarget dependency graph (1 target)[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m Script-00000000000000000000019B.sh[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m empty-CathedralOSApp.plist[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp_const_extract_protocols.json[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp.SwiftFileList[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp.SwiftConstValuesFileList[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp.LinkFileList[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp-OutputFileMap.json[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m Entitlements.plist[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp.hmap[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp.DependencyStaticMetadataFileList[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp.DependencyMetadataFileList[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp-project-headers.hmap[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp-own-target-headers.hmap[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp-generated-files.hmap[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp-all-target-headers.hmap[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mWrite Auxiliary File[0m CathedralOSApp-all-non-framework-target-headers.hmap[0m
+[14:27:12]: ▸ [35m[[36mCathedralOSApp[0m] [1mGenerate Asset Symbols[0m Assets.xcassets[0m
+[14:27:24]: ▸ [35m/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift:258:5: error: extraneous '}' at top level[0m
+[14:27:24]: ▸ [35m    }[0m
+[14:27:24]: ▸ [35m    ^[0m
+[14:27:24]: ▸ [35m    [0m
+[14:27:24]: ▸ [35m/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift:259:5: error: extraneous '}' at top level[0m
+[14:27:24]: ▸ [35m    }[0m
+[14:27:24]: ▸ [35m    ^[0m
+[14:27:24]: ▸ [35m    [0m
+[14:27:24]: ▸ [35m/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift:260:5: error: extraneous '}' at top level[0m
+[14:27:24]: ▸ [35m    }[0m
+[14:27:24]: ▸ [35m    ^[0m
+[14:27:24]: ▸ [35m    [0m
+[14:27:24]: ▸ [35m/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift:308:20: error: static properties may only be declared on a type[0m
+[14:27:24]: ▸ [35m    private static let readingLevels: [(label: String, value: String)] = [[0m
+[14:27:24]: ▸ [35m            ~~~~~~~^[0m
+[14:27:24]: ▸ [35m            [0m
+[14:27:24]: ▸ [35m/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift:317:20: error: static properties may only be declared on a type[0m
+[14:27:24]: ▸ [35m    private static let contentRatings: [(label: String, value: String)] = [[0m
+[14:27:24]: ▸ [35m            ~~~~~~~^[0m
+[14:27:24]: ▸ [35m            [0m
+[14:27:24]: ▸ [35m/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift:758:1: error: extraneous '}' at top level[0m
+[14:27:24]: ▸ [35m}[0m
+[14:27:24]: ▸ [35m^[0m
+[14:27:24]: ▸ [35m::error file=/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift,line=258,col=5::Extraneous '}' at top level[0m
+[14:27:24]: ▸ [35m    }[0m
+[14:27:24]: ▸ [35m    ^[0m
+[14:27:24]: ▸ [35m::error file=/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift,line=259,col=5::Extraneous '}' at top level[0m
+[14:27:24]: ▸ [35m    }[0m
+[14:27:24]: ▸ [35m    ^[0m
+[14:27:24]: ▸ [35m::error file=/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift,line=260,col=5::Extraneous '}' at top level[0m
+[14:27:24]: ▸ [35m    }[0m
+[14:27:24]: ▸ [35m    ^[0m
+[14:27:24]: ▸ [35m::error file=/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift,line=308,col=20::Static properties may only be declared on a type[0m
+[14:27:24]: ▸ [35m    private static let readingLevels: [(label: String, value: String)] = [[0m
+[14:27:24]: ▸ [35m            ~~~~~~~^[0m
+[14:27:24]: ▸ [35m::error file=/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift,line=317,col=20::Static properties may only be declared on a type[0m
+[14:27:24]: ▸ [35m    private static let contentRatings: [(label: String, value: String)] = [[0m
+[14:27:24]: ▸ [35m            ~~~~~~~^[0m
+[14:27:24]: ▸ [35m::error file=/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift,line=758,col=1::Extraneous '}' at top level[0m
+[14:27:24]: ▸ [35m}[0m
+[14:27:24]: ▸ [35m^ (in target 'CathedralOSApp' from project 'CathedralOSApp')[0m
+[14:27:24]: ▸ [35m::warning ::Run script build phase 'Inject runtime config into Info.plist' will be run during every build because it does not specify any outputs. To address this issue, either add output dependencies to the script phase, or configure it to run in every build by unchecking "Based on dependency analysis" in the script phase. (in target 'CathedralOSApp' from project 'CathedralOSApp')[0m
+[14:27:24]: ▸ [35m** ARCHIVE FAILED **[0m
+[14:27:24]: ▸ [35mThe following build commands failed:[0m
+[14:27:24]: ▸ [35m	SwiftDriver CathedralOSApp normal arm64 com.apple.xcode.tools.swift.compiler (in target 'CathedralOSApp' from project 'CathedralOSApp')[0m
+[14:27:24]: ▸ [35m	Archiving project CathedralOSApp with scheme CathedralOSApp[0m
+[14:27:24]: ▸ [35m(2 failures)[0m
+[14:27:25]: [31mExit status: 65[0m
+[14:27:25]: 
+[14:27:25]: [33mMaybe the error shown is caused by using the wrong version of Xcode[0m
+[14:27:25]: [33mFound multiple versions of Xcode in '/Applications/'[0m
+[14:27:25]: [33mMake sure you selected the right version for your project[0m
+[14:27:25]: [33mThis build process was executed using '/Applications/Xcode_26.5.app'[0m
+[14:27:25]: [33mIf you want to update your Xcode path, either[0m
+[14:27:25]: 
+[14:27:25]: - Specify the Xcode version in your Fastfile
+[14:27:25]: ▸ [35mxcversion(version: "8.1") # Selects Xcode 8.1.0[0m
+[14:27:25]: 
+[14:27:25]: - Specify an absolute path to your Xcode installation in your Fastfile
+[14:27:25]: ▸ [35mxcode_select "/Applications/Xcode8.app"[0m
+[14:27:25]: 
+[14:27:25]: - Manually update the path using
+[14:27:25]: ▸ [35msudo xcode-select -s /Applications/Xcode.app[0m
+[14:27:25]: 
+
++----------------------------------------------+
+|              [32m[33mBuild environment[0m               |
++---------------+------------------------------+
+| xcode_path    | /Applications/Xcode_26.5.app |
+| gym_version   | 2.235.0                      |
+| export_method | app-store                    |
+| sdk           | iPhoneOS26.5.sdk             |
++---------------+------------------------------+
+
+[14:27:25]: ▸ [35m/Users/runner/work/CathedralOS/CathedralOS/CathedralOSApp/Features/Projects/ProjectDetailView.swift:758:1: error: Extraneous '}' at top level[0m
+[14:27:25]: ▸ [35m}[0m
+[14:27:25]: ▸ [35m^ (in target 'CathedralOSApp' from project 'CathedralOSApp')[0m
+[14:27:25]: ▸ [35mwarning: Run script build phase 'Inject runtime config into Info.plist' will be run during every build because it does not specify any outputs. To address this issue, either add output dependencies to the script phase, or configure it to run in every build by unchecking "Based on dependency analysis" in the script phase. (in target 'CathedralOSApp' from project 'CathedralOSApp')[0m
+[14:27:25]: 
+[14:27:25]: [31m⬆️  Check out the few lines of raw `xcodebuild` output above for potential hints on how to solve this error[0m
+[14:27:25]: [33m📋  For the complete and more detailed error log, check the full log at:[0m
+[14:27:25]: [33m📋  /Users/runner/Library/Logs/gym/CathedralOSApp-CathedralOSApp.log[0m
+[14:27:25]: 
+[14:27:25]: [31mLooks like fastlane ran into a build/archive error with your project[0m
+[14:27:25]: [31mIt's hard to tell what's causing the error, so we wrote some guides on how[0m
+[14:27:25]: [31mto troubleshoot build and signing issues: https://docs.fastlane.tools/codesigning/getting-started/[0m
+[14:27:25]: [31mBefore submitting an issue on GitHub, please follow the guide above and make[0m
+[14:27:25]: [31msure your project is set up correctly.[0m
+[14:27:25]: [31mfastlane uses `xcodebuild` commands to generate your binary, you can see the[0m
+[14:27:25]: [31mthe full commands printed out in yellow in the above log.[0m
+[14:27:25]: [31mMake sure to inspect the output above, as usually you'll find more error information there[0m
+[14:27:25]: 
+[14:27:25]: [32m-----------------------------[0m
+[14:27:25]: [32m--- Step: delete_keychain ---[0m
+[14:27:25]: [32m-----------------------------[0m
++----------------------------------------------------------------------------------------------------------------------------+
+|                                                        [33mLane Context[0m                                                        |
++------------------------------------+---------------------------------------------------------------------------------------+
+| DEFAULT_PLATFORM                   | ios                                                                                   |
+| PLATFORM_NAME                      | ios                                                                                   |
+| LANE_NAME                          | ios beta                                                                              |
+| KEYCHAIN_PATH                      | ~/Library/Keychains/ci_keychain                                                       |
+| ORIGINAL_DEFAULT_KEYCHAIN          | "/Users/runner/Library/Keychains/login.keychain-db"                                   |
+| SIGH_PROFILE_TYPE                  | app-store                                                                             |
+| MATCH_PROVISIONING_PROFILE_MAPPING | {"com.savagesbydesign.CathedralOS"=>"match AppStore com.savagesbydesign.CathedralOS"} |
++------------------------------------+---------------------------------------------------------------------------------------+
+[14:27:25]: [31mCalled from Fastfile at line 114[0m
+[14:27:25]: [31m```[0m
+[14:27:25]: [31m    112:	    UI.message("Skipping Active Release INFOPLIST_KEY_* diagnostic; built IPA Info.plist verification is the source of truth.")[0m
+[14:27:25]: [31m    113:	[0m
+[14:27:25]: [31m => 114:	    gym([0m
+[14:27:25]: [31m    115:	      project:          "CathedralOSApp.xcodeproj",[0m
+[14:27:25]: [31m    116:	      scheme:           "CathedralOSApp",[0m
+[14:27:25]: [31m```[0m
+[14:27:25]: [31mError building the application - see the log above[0m
+
++---------------------------------------------------------+
+|                    [32mfastlane summary[0m                     |
++------+------------------------------------+-------------+
+| Step | Action                             | Time (in s) |
++------+------------------------------------+-------------+
+| 1    | default_platform                   | 0           |
+| 2    | is_ci                              | 0           |
+| 3    | app_store_connect_api_key          | 0           |
+| 4    | create_keychain                    | 0           |
+| 5    | match                              | 4           |
+| 6    | agvtool new-version 20260728142557 | 4           |
+| 💥   | [31mgym[0m                                | 82          |
+| 8    | delete_keychain                    | 0           |
++------+------------------------------------+-------------+
+
+[14:27:25]: [31mfastlane finished with errors[0m
+[31m
+[!] Error building the application - see the log above[0m
+
+#######################################################################
+# fastlane 2.237.0 is available. You are on 2.235.0.
+# You should use the latest version.
+# Please update using `bundle update fastlane`.
+#######################################################################
