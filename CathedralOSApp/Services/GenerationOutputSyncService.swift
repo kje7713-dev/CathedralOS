@@ -123,6 +123,8 @@ final class SyncProbe: ObservableObject {
     @Published private(set) var sampleRowsWithSection: [SyncProbeRow] = []
     /// Up to 3 sample rows whose raw `outlineSectionID` was nil (the opposite case).
     @Published private(set) var sampleRowsWithoutSection: [SyncProbeRow] = []
+    /// Legacy first-3-by-JSON-order samples. Kept for any consumer that still reads `sampleRows`. The 3+3 split samples above are the more useful view.
+    @Published private(set) var sampleRows: [SyncProbeRow] = []
     @Published private(set) var sectionPairingsDebug: String = ""
     /// The effective Supabase project URL the TestFlight build is hitting.
     /// Surfaced so the "wrong TestFlight secret / different project" theory
