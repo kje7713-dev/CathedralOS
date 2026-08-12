@@ -592,12 +592,15 @@ struct OutlineSectionRow: View {
                         Button {
                             onTapOutput(firstOutput)
                         } label: {
-                            Image(systemName: "eye")
-                                .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                                .foregroundStyle(.tint)
+                            HStack(spacing: 2) {
+                                latestOutputStatusIcon
+                                Image(systemName: "eye")
+                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                    .foregroundStyle(.tint)
+                            }
                         }
                         .buttonStyle(.borderless)
-                        .accessibilityLabel("View output for this section")
+                        .accessibilityLabel("View output for this section (\(latestOutputStatusLabel))")
                     } else if outputs.count > 1 {
                         Menu {
                             ForEach(outputs.sorted(by: { $0.createdAt > $1.createdAt })) { output in
@@ -609,6 +612,7 @@ struct OutlineSectionRow: View {
                             }
                         } label: {
                             HStack(spacing: 2) {
+                                latestOutputStatusIcon
                                 Image(systemName: "eye")
                                     .font(CathedralTheme.Typography.body(15, weight: .semibold))
                                     .foregroundStyle(.tint)
@@ -617,7 +621,7 @@ struct OutlineSectionRow: View {
                                     .foregroundStyle(.tint)
                             }
                         }
-                        .accessibilityLabel("View \(outputs.count) outputs for this section")
+                        .accessibilityLabel("View \(outputs.count) outputs for this section (latest: \(latestOutputStatusLabel))")
                     }
                 }
                 if let onAccept, section.status != "accepted" {
@@ -671,6 +675,50 @@ struct OutlineSectionRow: View {
         case "accepted":   return .green
         default:           return .gray
         }
+    }
+
+    /// Most recent output for this section (driven by the parent `\@Query`'s
+    /// `sort: \\GenerationOutput.createdAt, order: .reverse`).
+    private var latestOutput: GenerationOutput? { outputs.first }
+
+    /// Latest output's `GenerationStatus`, or nil if the section has no outputs
+    /// or the persisted status string doesn't decode (older migration rows).
+    private var latestOutputStatus: GenerationStatus? {
+        latestOutput.flatMap { GenerationStatus(rawValue: $0.status) }
+    }
+
+    /// SF Symbol + color for the latest output's status. Rendered beside the eye
+    /// in both the single-output Button and multi-output Menu, so the user sees
+    /// "in-flight / failed / complete" at a glance without tapping.
+    @ViewBuilder
+    private var latestOutputStatusIcon: some View {
+        if let status = latestOutputStatus {
+            switch status {
+            case .complete:
+                Image(systemName: "checkmark.circle.fill")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.green)
+            case .generating:
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.blue)
+            case .failed:
+                Image(systemName: "xmark.octagon.fill")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.red)
+            case .draft:
+                Image(systemName: "circle.dashed")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// User-facing string for accessibility (`"complete"`, `"generating"`, etc).
+    /// Returns `""` when there is no latest output so VoiceOver reads no extra
+    /// sentence instead of a confusing "unknown".
+    private var latestOutputStatusLabel: String {
+        latestOutputStatus?.displayName ?? ""
     }
 
     /// Single-line label for the multi-output `Menu`: title (if present) + abbreviated date.

@@ -162,6 +162,12 @@ struct GenerationOutputDetailView: View {
     @State private var isProcessingCoverImage = false
     @State private var isSyncingOutput = false
 
+    /// Reverse-direction visibility: when this output has an `outlineSectionID`,
+    /// show the linked section's position + title above the rest of the view.
+    /// Fetched on demand — the section may live behind a different SwiftData
+    /// store than the outputs (kickoff sheet, sibling pager, etc.).
+    @State private var sourceSection: OutlineSection?
+
     // MARK: Action state
     @State private var isActioning  = false
     @State private var actionError: String?
@@ -180,6 +186,44 @@ struct GenerationOutputDetailView: View {
 
     private var hasSufficientCredits: Bool {
         creditState.availableCredits >= selectedCreditCost
+    }
+
+    /// Looks up the source `OutlineSection` for this output's `outlineSectionID`
+    /// and caches the result in `sourceSection`. Called from `scrollContent`'s
+    /// `onAppear` so the header is populated on first render. The fetch is cheap
+    /// (one row, predicate by primary key) so no debouncing is needed.
+    private func loadSourceSection() {
+        guard let id = output.outlineSectionID else {
+            sourceSection = nil
+            return
+        }
+        let descriptor = FetchDescriptor<OutlineSection>(
+            predicate: #Predicate<OutlineSection> { $0.id == id },
+            fetchLimit: 1
+        )
+        sourceSection = (try? modelContext.fetch(descriptor))?.first
+    }
+
+    /// Header chip rendering the linked section, or nothing when the output has
+    /// no `outlineSectionID` (older records from before the field existed, or
+    /// free-form generations that the user kicked off without a section).
+    @ViewBuilder
+    private var sourceSectionHeader: some View {
+        if let section = sourceSection {
+            HStack(spacing: 6) {
+                Image(systemName: "link")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.tint)
+                Text("Section \(section.position + 1): \(section.title.isEmpty ? "Untitled section" : section.title)")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.tint)
+                Spacer(minLength: 0)
+            }
+            .padding(CathedralTheme.Spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CathedralTheme.Colors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+        }
     }
 
     private static let dateFormatter: DateFormatter = {
@@ -226,6 +270,7 @@ struct GenerationOutputDetailView: View {
     private var scrollContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
+                sourceSectionHeader
                 metadataSection
                 provenanceSection
                 outputTextSection
@@ -250,6 +295,7 @@ struct GenerationOutputDetailView: View {
             if publishError == nil, let persisted = output.publishErrorMessage, !persisted.isEmpty {
                 publishError = persisted
             }
+            loadSourceSection()
         }
         .confirmationDialog(
             output.cloudGenerationOutputID.isEmpty ? "Delete this local output?" : "Delete this output everywhere?",
