@@ -59,6 +59,19 @@ struct OutlineSectionsRegionView: View {
     @State private var isKickingOff = false
     @State private var runOutlineError: String?
     @State private var pollingTask: Task<Void, Never>?
+    @Query(filter: #Predicate<GenerationOutput> { $0.outlineSectionID != nil }, sort: \GenerationOutput.createdAt, order: .reverse)
+    private var allLinkedOutputs: [GenerationOutput]
+    @State private var generationToView: GenerationOutput?
+
+    private var outputsBySection: [UUID: [GenerationOutput]] {
+        var dict: [UUID: [GenerationOutput]] = [:]
+        for output in allLinkedOutputs {
+            if let sectionID = output.outlineSectionID {
+                dict[sectionID, default: []].append(output)
+            }
+        }
+        return dict
+    }
     private let runOutlineService = RunOutlineService()
     @State private var showingSuggestionSheet = false
     @State private var suggestions: [OutlineSuggestion] = []
@@ -115,6 +128,11 @@ struct OutlineSectionsRegionView: View {
                     Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
                 }
             )
+        }
+        .sheet(item: $generationToView) { output in
+            NavigationStack {
+                GenerationOutputDetailView(output: output, hidePager: true)
+            }
         }
         .sheet(item: $generationTarget) { target in
             KickoffConfirmationSheet(
@@ -278,6 +296,7 @@ struct OutlineSectionsRegionView: View {
                 OutlineSectionRow(
                     section: section,
                     arcBeatLabel: arcBeatLabel(for: section),
+                    outputs: outputsBySection[section.id] ?? [],
                     onGenerate: {
                         if let outline = currentOutline {
                             // Capture outlineID at tap time — never re-resolve later.
@@ -290,6 +309,7 @@ struct OutlineSectionsRegionView: View {
                         }
                     },
                     onAccept: { Task { await acceptSection(section) } },
+                    onTapOutput: { output in generationToView = output },
                     isAccepting: acceptingSectionID == section.id
                 )
                 .listRowBackground(CathedralTheme.Colors.background)
@@ -535,8 +555,10 @@ struct OutlineSectionsRegionView: View {
 struct OutlineSectionRow: View {
     @Bindable var section: OutlineSection
     let arcBeatLabel: String?
+    var outputs: [GenerationOutput] = []
     var onGenerate: (() -> Void)? = nil
     var onAccept: (() async -> Void)? = nil
+    var onTapOutput: ((GenerationOutput) -> Void)? = nil
     var isAccepting: Bool = false
 
     var body: some View {
@@ -565,6 +587,43 @@ struct OutlineSectionRow: View {
             }
             Spacer()
             HStack(spacing: CathedralTheme.Spacing.sm) {
+                if !outputs.isEmpty, let onTapOutput {
+                    if outputs.count == 1, let firstOutput = outputs.first {
+                        Button {
+                            onTapOutput(firstOutput)
+                        } label: {
+                            HStack(spacing: 2) {
+                                latestOutputStatusIcon
+                                Image(systemName: "eye")
+                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("View output for this section (\(latestOutputStatusLabel))")
+                    } else if outputs.count > 1 {
+                        Menu {
+                            ForEach(outputs.sorted(by: { $0.createdAt > $1.createdAt })) { output in
+                                Button {
+                                    onTapOutput(output)
+                                } label: {
+                                    Text(outputMenuLabel(for: output))
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 2) {
+                                latestOutputStatusIcon
+                                Image(systemName: "eye")
+                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                    .foregroundStyle(.tint)
+                                Text("\(outputs.count)")
+                                    .font(CathedralTheme.Typography.caption(11, weight: .semibold))
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                        .accessibilityLabel("View \(outputs.count) outputs for this section (latest: \(latestOutputStatusLabel))")
+                    }
+                }
                 if let onAccept, section.status != "accepted" {
                     Button {
                         Task { await onAccept() }
@@ -616,6 +675,60 @@ struct OutlineSectionRow: View {
         case "accepted":   return .green
         default:           return .gray
         }
+    }
+
+    /// Most recent output for this section (driven by the parent `\@Query`'s
+    /// `sort: \\GenerationOutput.createdAt, order: .reverse`).
+    private var latestOutput: GenerationOutput? { outputs.first }
+
+    /// Latest output's `GenerationStatus`, or nil if the section has no outputs
+    /// or the persisted status string doesn't decode (older migration rows).
+    private var latestOutputStatus: GenerationStatus? {
+        latestOutput.flatMap { GenerationStatus(rawValue: $0.status) }
+    }
+
+    /// SF Symbol + color for the latest output's status. Rendered beside the eye
+    /// in both the single-output Button and multi-output Menu, so the user sees
+    /// "in-flight / failed / complete" at a glance without tapping.
+    @ViewBuilder
+    private var latestOutputStatusIcon: some View {
+        if let status = latestOutputStatus {
+            switch status {
+            case .complete:
+                Image(systemName: "checkmark.circle.fill")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.green)
+            case .generating:
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.blue)
+            case .failed:
+                Image(systemName: "xmark.octagon.fill")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.red)
+            case .draft:
+                Image(systemName: "circle.dashed")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// User-facing string for accessibility (`"complete"`, `"generating"`, etc).
+    /// Returns `""` when there is no latest output so VoiceOver reads no extra
+    /// sentence instead of a confusing "unknown".
+    private var latestOutputStatusLabel: String {
+        latestOutputStatus?.displayName ?? ""
+    }
+
+    /// Single-line label for the multi-output `Menu`: title (if present) + abbreviated date.
+    /// Empty titles fall back to a date-only label so the menu is never just a list of UUIDs.
+    private func outputMenuLabel(for output: GenerationOutput) -> String {
+        let date = output.createdAt.formatted(date: .abbreviated, time: .shortened)
+        if output.title.isEmpty {
+            return "Output from \(date)"
+        }
+        return "\(output.title) — \(date)"
     }
 }
 

@@ -19,6 +19,8 @@ struct GenerationOutputUploadRequest: Codable {
     let projectLocalID: String?
     let projectName: String
     let promptPackName: String
+    /// UUID string of the outline section this output is for (server-side `outline_section_id` FK).
+    let outlineSectionID: String?
 
     // MARK: Content
     let title: String
@@ -49,6 +51,7 @@ struct GenerationOutputUploadRequest: Codable {
         self.projectLocalID       = output.project?.id.uuidString
         self.projectName          = output.project?.name ?? ""
         self.promptPackName       = output.sourcePromptPackName
+        self.outlineSectionID     = output.outlineSectionID?.uuidString
         self.title                = output.title
         self.outputText           = output.outputText
         self.sourcePayloadJson    = output.sourcePayloadJSON
@@ -69,6 +72,7 @@ struct GenerationOutputUploadRequest: Codable {
         case projectLocalID       = "project_local_id"
         case projectName          = "project_name"
         case promptPackName       = "prompt_pack_name"
+        case outlineSectionID     = "outline_section_id"
         case title
         case outputText           = "output_text"
         case sourcePayloadJson    = "source_payload_json"
@@ -95,6 +99,8 @@ struct GenerationOutputCloudRecord: Codable {
     let projectLocalID: String?
     let projectName: String
     let promptPackName: String
+    /// UUID string of the outline section this output is for (server-side `outline_section_id` FK).
+    let outlineSectionID: String?
     let title: String
     let outputText: String
     let modelName: String
@@ -115,6 +121,7 @@ struct GenerationOutputCloudRecord: Codable {
         projectLocalID      = try c.decodeIfPresent(String.self, forKey: .projectLocalID)
         projectName         = try c.decodeIfPresent(String.self, forKey: .projectName) ?? ""
         promptPackName      = try c.decodeIfPresent(String.self, forKey: .promptPackName) ?? ""
+        outlineSectionID    = try c.decodeIfPresent(String.self, forKey: .outlineSectionID)
         title               = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         outputText          = try c.decodeIfPresent(String.self, forKey: .outputText) ?? ""
         modelName           = try c.decodeIfPresent(String.self, forKey: .modelName) ?? ""
@@ -136,6 +143,7 @@ struct GenerationOutputCloudRecord: Codable {
         case projectLocalID      = "project_local_id"
         case projectName         = "project_name"
         case promptPackName      = "prompt_pack_name"
+        case outlineSectionID    = "outline_section_id"
         case title
         case outputText          = "output_text"
         case modelName           = "model_name"

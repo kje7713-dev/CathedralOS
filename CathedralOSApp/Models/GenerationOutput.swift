@@ -175,6 +175,9 @@ class GenerationOutput {
     var syncErrorMessage: String?
 
     var project: StoryProject?
+    /// UUID of the outline section this output belongs to (server-side `outline_section_id`).
+    /// Populated by sync from cloud; nil for outputs that haven't synced or predate the field.
+    var outlineSectionID: UUID?
 
     init(
         title: String = "",
@@ -231,5 +234,6 @@ class GenerationOutput {
         self.syncStatus = SyncStatus.localOnly.rawValue
         self.lastSyncedAt = nil
         self.syncErrorMessage = nil
+        self.outlineSectionID = nil
     }
 }
