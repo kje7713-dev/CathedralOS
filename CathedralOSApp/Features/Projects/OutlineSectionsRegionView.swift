@@ -60,8 +60,6 @@ struct OutlineSectionsRegionView: View {
     @State private var runOutlineError: String?
     @State private var pollingTask: Task<Void, Never>?
     private let runOutlineService = RunOutlineService()
-    private let generationModelService: any GenerationModelServiceProtocol = BackendGenerationModelService()
-    private let estimateService: any GenerationCostEstimateServiceProtocol = SupabaseGenerationService()
     @State private var showingSuggestionSheet = false
     @State private var suggestions: [OutlineSuggestion] = []
     @State private var suggestionsLoading = false
@@ -633,6 +631,9 @@ struct KickoffConfirmationSheet: View {
     let runOutlineError: String?
     let onConfirm: (String?) async -> Void
     let onCancel: () -> Void
+
+    private let generationModelService: any GenerationModelServiceProtocol = BackendGenerationModelService()
+    private let estimateService: any GenerationCostEstimateServiceProtocol = SupabaseGenerationService()
 
     @State private var generationModels: [GenerationModelOption] = []
     @State private var selectedModelId: String?
