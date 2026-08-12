@@ -111,8 +111,23 @@ final class SyncProbe: ObservableObject {
     @Published private(set) var lastSyncDate: Date?
     @Published private(set) var totalRowsFetched: Int = 0
     @Published private(set) var survivingPredicateCount: Int = 0
-    @Published private(set) var sampleRows: [SyncProbeRow] = []
+    /// Number of fetched `GenerationOutputCloudRecord`s whose `outlineSectionID` was non-nil.
+    /// Evaluated across ALL records returned by the GET, not a `prefix(3)` sample.
+    @Published private(set) var rawOutlineNonNilCount: Int = 0
+    /// Number of fetched `GenerationOutputCloudRecord`s whose `outlineSectionID` was nil.
+    @Published private(set) var rawOutlineNilCount: Int = 0
+    /// Up to 3 sample rows whose raw `outlineSectionID` was non-nil. Lets the
+    /// diagnostic catch the case where the first 3 happen to be NULL
+    /// (per primary-key order in the cloud) and a `prefix(3)` probe would
+    /// otherwise look 100% empty.
+    @Published private(set) var sampleRowsWithSection: [SyncProbeRow] = []
+    /// Up to 3 sample rows whose raw `outlineSectionID` was nil (the opposite case).
+    @Published private(set) var sampleRowsWithoutSection: [SyncProbeRow] = []
     @Published private(set) var sectionPairingsDebug: String = ""
+    /// The effective Supabase project URL the TestFlight build is hitting.
+    /// Surfaced so the "wrong TestFlight secret / different project" theory
+    /// can be ruled out from the device itself.
+    @Published private(set) var projectURL: String = ""
     @Published private(set) var lastError: String?
 
     private init() {}
@@ -123,15 +138,25 @@ final class SyncProbe: ObservableObject {
     func update(
         totalFetched: Int,
         survivingPredicate: Int,
+        rawOutlineNonNilCount: Int,
+        rawOutlineNilCount: Int,
+        sampleRowsWithSection: [SyncProbeRow],
+        sampleRowsWithoutSection: [SyncProbeRow],
         samples: [SyncProbeRow],
         pairingsDebug: String,
+        projectURL: String,
         error: String? = nil
     ) {
         lastSyncDate = Date()
         totalRowsFetched = totalFetched
         survivingPredicateCount = survivingPredicate
+        self.rawOutlineNonNilCount = rawOutlineNonNilCount
+        self.rawOutlineNilCount = rawOutlineNilCount
+        self.sampleRowsWithSection = sampleRowsWithSection
+        self.sampleRowsWithoutSection = sampleRowsWithoutSection
         sampleRows = samples
         sectionPairingsDebug = pairingsDebug
+        self.projectURL = projectURL
         lastError = error
     }
 }
@@ -293,7 +318,15 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
                         storedByRecordId[linkedRow.cloudGenerationOutputID] = sid
                     }
                 }
-                let samples: [SyncProbeRow] = records.prefix(3).map { rec -> SyncProbeRow in
+                // Evaluate across ALL fetched records, not `records.prefix(3)`. The first
+                // three rows by primary-key order apparently all carry NULL
+                // `outline_section_id` in the cloud, so a prefix-based probe would
+                // falsely show 0/0 even when the rest of the dataset is populated.
+                let rawNonNil = records.filter { $0.outlineSectionID != nil }
+                let rawNil   = records.filter { $0.outlineSectionID == nil }
+                let rawOutlineNonNilCount = rawNonNil.count
+                let rawOutlineNilCount    = rawNil.count
+                func probeRow(for rec: GenerationOutputCloudRecord) -> SyncProbeRow {
                     let raw = rec.outlineSectionID
                     let decoded = raw.flatMap { UUID(uuidString: $0) }
                     return SyncProbeRow(
@@ -302,6 +335,10 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
                         swiftDataStored: storedByRecordId[rec.id]
                     )
                 }
+                let samplesWithSection    = Array(rawNonNil.prefix(3)).map(probeRow(for:))
+                let samplesWithoutSection = Array(rawNil.prefix(3)).map(probeRow(for:))
+                // Keep the legacy `sampleRows` for any consumer that still reads it.
+                let samples = Array(records.prefix(3)).map(probeRow(for:))
                 let surviving = allLinked.count
                 let pairings = ((try? context.fetch(FetchDescriptor<OutlineSection>())) ?? [])
                     .map { sec -> String in
@@ -309,11 +346,17 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
                         return "\(sec.title)=\(n)"
                     }
                     .joined(separator: ", ")
+                let effectiveProjectURL = client.configuration.projectURL.absoluteString
                 await SyncProbe.shared.update(
                     totalFetched: records.count,
                     survivingPredicate: surviving,
+                    rawOutlineNonNilCount: rawOutlineNonNilCount,
+                    rawOutlineNilCount: rawOutlineNilCount,
+                    sampleRowsWithSection: samplesWithSection,
+                    sampleRowsWithoutSection: samplesWithoutSection,
                     samples: samples,
-                    pairingsDebug: pairings.isEmpty ? "(none)" : pairings
+                    pairingsDebug: pairings.isEmpty ? "(none)" : pairings,
+                    projectURL: effectiveProjectURL
                 )
             }
             OutputSyncActivityStore.shared.recordSuccess("Restored \(records.count) cloud outputs.")
@@ -538,6 +581,17 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
                         in: context,
                         recoverySource: "cloud recovery"
                     )
+                }
+                // Backfill outlineSectionID independently of the timestamp rule.
+                // The SQL backfill that populated `outline_section_id` did not advance
+                // `generation_outputs.updated_at`, so `applyCloudUpdate()` (gated by
+                // `record.updatedAt > local.updatedAt`) would never propagate the
+                // new column value to existing local rows. Filling it here strictly
+                // when the local slot is nil preserves the "cloud-newer wins" semantics
+                // for every other field via the unchanged timestamp check below.
+                if local.outlineSectionID == nil,
+                   let cloudSectionID = record.outlineSectionID.flatMap(UUID.init(uuidString:)) {
+                    local.outlineSectionID = cloudSectionID
                 }
                 // Update only if the cloud record is strictly newer.
                 if record.updatedAt > local.updatedAt {
