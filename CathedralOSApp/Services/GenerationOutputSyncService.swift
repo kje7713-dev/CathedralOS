@@ -509,6 +509,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         if let budget = record.outputBudget { output.outputBudget = budget }
         output.status              = record.status
         output.visibility          = record.visibility
+        output.outlineSectionID     = record.outlineSectionID.flatMap(UUID.init(uuidString:))
         output.allowRemix          = record.allowRemix
         output.updatedAt           = record.updatedAt
         output.syncStatus          = SyncStatus.synced.rawValue

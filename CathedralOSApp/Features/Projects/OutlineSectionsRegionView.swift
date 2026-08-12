@@ -59,6 +59,19 @@ struct OutlineSectionsRegionView: View {
     @State private var isKickingOff = false
     @State private var runOutlineError: String?
     @State private var pollingTask: Task<Void, Never>?
+    @Query(filter: #Predicate<GenerationOutput> { $0.outlineSectionID != nil }, sort: \GenerationOutput.createdAt, order: .reverse)
+    private var allLinkedOutputs: [GenerationOutput]
+    @State private var generationToView: GenerationOutput?
+
+    private var outputsBySection: [UUID: [GenerationOutput]] {
+        var dict: [UUID: [GenerationOutput]] = [:]
+        for output in allLinkedOutputs {
+            if let sectionID = output.outlineSectionID {
+                dict[sectionID, default: []].append(output)
+            }
+        }
+        return dict
+    }
     private let runOutlineService = RunOutlineService()
     @State private var showingSuggestionSheet = false
     @State private var suggestions: [OutlineSuggestion] = []
@@ -115,6 +128,11 @@ struct OutlineSectionsRegionView: View {
                     Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
                 }
             )
+        }
+        .sheet(item: $generationToView) { output in
+            NavigationStack {
+                GenerationOutputDetailView(output: output, hidePager: true)
+            }
         }
         .sheet(item: $generationTarget) { target in
             KickoffConfirmationSheet(
@@ -278,6 +296,7 @@ struct OutlineSectionsRegionView: View {
                 OutlineSectionRow(
                     section: section,
                     arcBeatLabel: arcBeatLabel(for: section),
+                    outputs: outputsBySection[section.id] ?? [],
                     onGenerate: {
                         if let outline = currentOutline {
                             // Capture outlineID at tap time — never re-resolve later.
@@ -290,6 +309,7 @@ struct OutlineSectionsRegionView: View {
                         }
                     },
                     onAccept: { Task { await acceptSection(section) } },
+                    onTapOutput: { output in generationToView = output },
                     isAccepting: acceptingSectionID == section.id
                 )
                 .listRowBackground(CathedralTheme.Colors.background)
@@ -535,8 +555,10 @@ struct OutlineSectionsRegionView: View {
 struct OutlineSectionRow: View {
     @Bindable var section: OutlineSection
     let arcBeatLabel: String?
+    var outputs: [GenerationOutput] = []
     var onGenerate: (() -> Void)? = nil
     var onAccept: (() async -> Void)? = nil
+    var onTapOutput: ((GenerationOutput) -> Void)? = nil
     var isAccepting: Bool = false
 
     var body: some View {
@@ -565,6 +587,24 @@ struct OutlineSectionRow: View {
             }
             Spacer()
             HStack(spacing: CathedralTheme.Spacing.sm) {
+                if !outputs.isEmpty, let onTapOutput, let firstOutput = outputs.first {
+                    Button {
+                        onTapOutput(firstOutput)
+                    } label: {
+                        HStack(spacing: 2) {
+                            Image(systemName: "eye")
+                                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                .foregroundStyle(.tint)
+                            if outputs.count > 1 {
+                                Text("\(outputs.count)")
+                                    .font(CathedralTheme.Typography.caption(11, weight: .semibold))
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("View \(outputs.count) output\(outputs.count == 1 ? "" : "s") for this section")
+                }
                 if let onAccept, section.status != "accepted" {
                     Button {
                         Task { await onAccept() }
