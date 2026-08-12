@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import os
 
 
 /// Captured at Generate-tap time. Stores the outline ID so the kickoff
@@ -49,6 +50,8 @@ enum DiagnosticLog {
 /// project's `Outline` if it doesn't exist yet, so users can start
 /// adding sections immediately after picking an arc template.
 struct OutlineSectionsRegionView: View {
+    private static let logger = Logger(subsystem: "CathedralOS", category: "OutlineOutputs")
+
     @Bindable var project: StoryProject
     let modelContext: ModelContext
 
@@ -59,14 +62,20 @@ struct OutlineSectionsRegionView: View {
     @State private var isKickingOff = false
     @State private var runOutlineError: String?
     @State private var pollingTask: Task<Void, Never>?
-    @Query(filter: #Predicate<GenerationOutput> { $0.outlineSectionID != nil }, sort: \GenerationOutput.createdAt, order: .reverse)
-    private var allLinkedOutputs: [GenerationOutput]
+    // Deliberately filter in memory. Stores created before outlineSectionID was
+    // added can fail to return rows when SwiftData pushes this predicate down to
+    // SQLite, even after sync has populated the model property.
+    @Query(sort: \GenerationOutput.createdAt, order: .reverse)
+    private var allOutputs: [GenerationOutput]
     @State private var generationToView: GenerationOutput?
 
     private var outputsBySection: [UUID: [GenerationOutput]] {
         var dict: [UUID: [GenerationOutput]] = [:]
-        for output in allLinkedOutputs {
+        for output in allOutputs {
             if let sectionID = output.outlineSectionID {
+                Self.logger.debug(
+                    "Output \(output.id, privacy: .public) decoded outlineSectionID=\(sectionID, privacy: .public); local section match=\(sectionsOrder.contains { $0.id == sectionID }, privacy: .public)"
+                )
                 dict[sectionID, default: []].append(output)
             }
         }
