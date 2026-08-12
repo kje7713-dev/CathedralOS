@@ -74,6 +74,68 @@ enum OutputSyncActivityState: String {
     }
 }
 
+/// PR-#331 sync probe: captured at the end of every successful `pullOutputs` and surfaced
+/// on Account -> Diagnostics -> Generated Outputs Recovery so the iOS-side chain breaks
+/// down to (a)/(b)/(c)/(d) on the next screenshot.
+///
+/// Three checks per row:
+///   1. rawToDecoded: did `UUID(uuidString: raw)` succeed?            (diagnoses option b)
+///   2. decodedToStored: did SwiftData persist the resolved UUID?      (diagnoses option c)
+///   3. survivingPredicateCount (cross-row): does the `@Query` see them? (diagnoses option d)
+/// If rawOutlineSectionID is nil for all rows, that diagnoses option a (DTO missing the field).
+///
+/// Defined inline in this file (instead of a separate SyncProbe.swift) so cathedralos's
+/// hand-rolled `project.pbxproj` doesn't need a new-file registration. Same target,
+/// same module, so the view's `SyncProbe.shared` reference still resolves.
+struct SyncProbeRow: Identifiable {
+    let id = UUID()
+    let recordID: String
+    let title: String
+    let rawOutlineSectionID: String?
+    let decodedFromRaw: UUID?
+    let swiftDataStored: UUID?
+
+    var rawToDecoded: Bool {
+        guard let raw = rawOutlineSectionID else { return decodedFromRaw == nil }
+        return UUID(uuidString: raw) == decodedFromRaw
+    }
+
+    var decodedToStored: Bool {
+        decodedFromRaw == swiftDataStored
+    }
+}
+
+final class SyncProbe: ObservableObject {
+    static let shared = SyncProbe()
+
+    @Published private(set) var lastSyncDate: Date?
+    @Published private(set) var totalRowsFetched: Int = 0
+    @Published private(set) var survivingPredicateCount: Int = 0
+    @Published private(set) var sampleRows: [SyncProbeRow] = []
+    @Published private(set) var sectionPairingsDebug: String = ""
+    @Published private(set) var lastError: String?
+
+    private init() {}
+
+    /// Main-actor isolated update. Called from any non-main context (e.g. background pull)
+    /// by a `Task { @MainActor in ... }` hop in `pullOutputs`.
+    @MainActor
+    func update(
+        totalFetched: Int,
+        survivingPredicate: Int,
+        samples: [SyncProbeRow],
+        pairingsDebug: String,
+        error: String? = nil
+    ) {
+        lastSyncDate = Date()
+        totalRowsFetched = totalFetched
+        survivingPredicateCount = survivingPredicate
+        sampleRows = samples
+        sectionPairingsDebug = pairingsDebug
+        lastError = error
+    }
+}
+
 struct OutputSyncActivitySnapshot {
     let state: OutputSyncActivityState
     let message: String?
@@ -215,6 +277,45 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             let tombstones = outputTombstones.merged(with: projectTombstones)
             reconcile(records, tombstones: tombstones, into: context)
             try persistContext(context, stage: "cloud restore")
+
+            // === PR-#331: capture sync probe state for Diagnostics surface ===
+            Task { @MainActor in
+                // Fetch all outputs with non-nil outlineSectionID once. Build a dict
+                // by record id so we can look up the stored UUID for each sample
+                // row in plain Swift — avoids the `#Predicate` macro's prohibition on
+                // method calls inside predicate closure bodies (e.g. `$0.id.uuidString`).
+                let allLinked = (try? context.fetch(FetchDescriptor<GenerationOutput>(
+                    predicate: #Predicate<GenerationOutput> { $0.outlineSectionID != nil }
+                ))) ?? []
+                var storedByRecordId: [String: UUID] = [:]
+                for linkedRow in allLinked {
+                    if let sid = linkedRow.outlineSectionID {
+                        storedByRecordId[linkedRow.cloudGenerationOutputID] = sid
+                    }
+                }
+                let samples: [SyncProbeRow] = records.prefix(3).map { rec -> SyncProbeRow in
+                    let raw = rec.outlineSectionID
+                    let decoded = raw.flatMap { UUID(uuidString: $0) }
+                    return SyncProbeRow(
+                        recordID: rec.id, title: rec.title,
+                        rawOutlineSectionID: raw, decodedFromRaw: decoded,
+                        swiftDataStored: storedByRecordId[rec.id]
+                    )
+                }
+                let surviving = allLinked.count
+                let pairings = ((try? context.fetch(FetchDescriptor<OutlineSection>())) ?? [])
+                    .map { sec -> String in
+                        let n = allLinked.filter { $0.outlineSectionID == sec.id }.count
+                        return "\(sec.title)=\(n)"
+                    }
+                    .joined(separator: ", ")
+                await SyncProbe.shared.update(
+                    totalFetched: records.count,
+                    survivingPredicate: surviving,
+                    samples: samples,
+                    pairingsDebug: pairings.isEmpty ? "(none)" : pairings
+                )
+            }
             OutputSyncActivityStore.shared.recordSuccess("Restored \(records.count) cloud outputs.")
         } catch {
             OutputSyncActivityStore.shared.recordFailure(localizedMessage(for: error))
