@@ -316,25 +316,6 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
                     pairingsDebug: pairings.isEmpty ? "(none)" : pairings
                 )
             }
-                let surviving = (try? context.fetch(FetchDescriptor<GenerationOutput>(
-                    predicate: #Predicate<GenerationOutput> { $0.outlineSectionID != nil }
-                )))?.count ?? 0
-                let pairings = ((try? context.fetch(FetchDescriptor<OutlineSection>())) ?? [])
-                    .map { sec -> String in
-                        let secId = sec.id
-                        let n = (try? context.fetch(FetchDescriptor<GenerationOutput>(
-                            predicate: #Predicate<GenerationOutput> { $0.outlineSectionID == secId }
-                        )))?.count ?? 0
-                        return "\(sec.title)=\(n)"
-                    }
-                    .joined(separator: ", ")
-                await SyncProbe.shared.update(
-                    totalFetched: records.count,
-                    survivingPredicate: surviving,
-                    samples: samples,
-                    pairingsDebug: pairings.isEmpty ? "(none)" : pairings
-                )
-            }
             OutputSyncActivityStore.shared.recordSuccess("Restored \(records.count) cloud outputs.")
         } catch {
             OutputSyncActivityStore.shared.recordFailure(localizedMessage(for: error))
