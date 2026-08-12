@@ -534,6 +534,17 @@ struct OutlineSectionsRegionView: View {
                     let status = try await runOutlineService.status(runID: runID)
                     activeRunStatus = status
                     if status.status == "completed" || status.status == "failed" {
+                        // PR #327+ chains: after a kickoff completes in cloud, refresh
+                        // generation_outputs so the @Query for `outlineSectionID != nil`
+                        // picks up the freshly-persisted rows (with `outline_section_id`
+                        // populated by run-outline). The prior code never triggered a sync
+                        // post-kickoff, so the eye button stayed dark until the user
+                        // happened to pull-to-refresh manually. This wires it in.
+                        Task { @MainActor in
+                            DiagnosticLog.write("poll: run finished (\(status.status)); triggering output sync")
+                            try? await DataDurabilityCoordinator.shared.performOutputSync(context: modelContext)
+                            DiagnosticLog.write("poll: output sync complete")
+                        }
                         break
                     }
                 } catch {
