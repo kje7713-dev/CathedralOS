@@ -587,23 +587,38 @@ struct OutlineSectionRow: View {
             }
             Spacer()
             HStack(spacing: CathedralTheme.Spacing.sm) {
-                if !outputs.isEmpty, let onTapOutput, let firstOutput = outputs.first {
-                    Button {
-                        onTapOutput(firstOutput)
-                    } label: {
-                        HStack(spacing: 2) {
+                if !outputs.isEmpty, let onTapOutput {
+                    if outputs.count == 1, let firstOutput = outputs.first {
+                        Button {
+                            onTapOutput(firstOutput)
+                        } label: {
                             Image(systemName: "eye")
                                 .font(CathedralTheme.Typography.body(15, weight: .semibold))
                                 .foregroundStyle(.tint)
-                            if outputs.count > 1 {
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("View output for this section")
+                    } else if outputs.count > 1 {
+                        Menu {
+                            ForEach(outputs.sorted(by: { $0.createdAt > $1.createdAt })) { output in
+                                Button {
+                                    onTapOutput(output)
+                                } label: {
+                                    Text(outputMenuLabel(for: output))
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 2) {
+                                Image(systemName: "eye")
+                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                    .foregroundStyle(.tint)
                                 Text("\(outputs.count)")
                                     .font(CathedralTheme.Typography.caption(11, weight: .semibold))
                                     .foregroundStyle(.tint)
                             }
                         }
+                        .accessibilityLabel("View \(outputs.count) outputs for this section")
                     }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("View \(outputs.count) output\(outputs.count == 1 ? "" : "s") for this section")
                 }
                 if let onAccept, section.status != "accepted" {
                     Button {
@@ -656,6 +671,16 @@ struct OutlineSectionRow: View {
         case "accepted":   return .green
         default:           return .gray
         }
+    }
+
+    /// Single-line label for the multi-output `Menu`: title (if present) + abbreviated date.
+    /// Empty titles fall back to a date-only label so the menu is never just a list of UUIDs.
+    private func outputMenuLabel(for output: GenerationOutput) -> String {
+        let date = output.createdAt.formatted(date: .abbreviated, time: .shortened)
+        if output.title.isEmpty {
+            return "Output from \(date)"
+        }
+        return "\(output.title) — \(date)"
     }
 }
 
