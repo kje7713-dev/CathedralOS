@@ -112,7 +112,11 @@ struct RunOutlineService {
 
     /// Kick off a run. The function returns when the run finishes or fails.
     /// For long runs, the status poll endpoint is the primary way to track progress.
-    func kickoff(outlineID: String, startParentSectionID: String) async throws -> RunOutlineKickoffResponse {
+    func kickoff(
+        outlineID: String,
+        startParentSectionID: String,
+        model: String? = nil
+    ) async throws -> RunOutlineKickoffResponse {
         let client = try requireClient()
         guard let token = authService.currentAccessToken else {
             throw RunOutlineError.notAuthenticated
@@ -122,10 +126,13 @@ struct RunOutlineService {
         urlRequest.httpMethod = "POST"
         urlRequest.timeoutInterval = 180 // long runs; the function returns on completion
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "outline_id": outlineID,
             "start_parent_section_id": startParentSectionID,
         ]
+        if let model, !model.isEmpty {
+            body["model"] = model
+        }
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
 
         let (data, response) = try await performRequest(urlRequest)
