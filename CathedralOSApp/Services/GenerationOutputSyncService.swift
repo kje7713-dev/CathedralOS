@@ -287,17 +287,17 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
                 let allLinked = (try? context.fetch(FetchDescriptor<GenerationOutput>(
                     predicate: #Predicate<GenerationOutput> { $0.outlineSectionID != nil }
                 ))) ?? []
-                var storedByRecordId: [UUID: UUID] = [:]
+                var storedByRecordId: [String: UUID] = [:]
                 for linkedRow in allLinked {
                     if let sid = linkedRow.outlineSectionID {
-                        storedByRecordId[linkedRow.id] = sid
+                        storedByRecordId[linkedRow.cloudGenerationOutputID] = sid
                     }
                 }
                 let samples: [SyncProbeRow] = records.prefix(3).map { rec -> SyncProbeRow in
                     let raw = rec.outlineSectionID
                     let decoded = raw.flatMap { UUID(uuidString: $0) }
                     return SyncProbeRow(
-                        recordID: rec.id.uuidString, title: rec.title,
+                        recordID: rec.id, title: rec.title,
                         rawOutlineSectionID: raw, decodedFromRaw: decoded,
                         swiftDataStored: storedByRecordId[rec.id]
                     )
