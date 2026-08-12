@@ -1792,6 +1792,24 @@ async function handler(
       ? JSON.parse(body.sourcePayloadJSON)
       : body.sourcePayloadJSON;
 
+  // === Diagnose PR #327 write path ===
+  // One-line probe: log the value `body.outline_section_id` actually carries at insert time
+  // plus the request body's keys. Three branches surface from the probe:
+  //   1. value is a UUID, body keys include `outline_section_id` -> value reaches generate-story
+  //      but DB write silently fails -> RLS / column-grant / schema-cache issue
+  //   2. value is undefined, body keys OMIT `outline_section_id` -> run-outline emission bug
+  //   3. value is null, body keys include `outline_section_id` -> run-outline is emitting null
+  //      explicitly -> `section.id` missing in the loop / collection step
+  // Re-deploy this file with `gh workflow run "Supabase Deploy" --ref main` (already shipped
+  // by PR #327), kick off any fresh generation, then read the function log
+  // (`gh run view <deploy-run-id> --log`) to see what printed here.
+  console.log(
+    "[generate-story] inserting output with outline_section_id:",
+    body.outline_section_id,
+    "| body keys:",
+    Object.keys(body).sort().join(","),
+  );
+
   const { data: outputRow, error: outputInsertError } = await persistence.insertOutput({
     user_id: userId,
     local_generation_id: body.localGenerationID ?? null,
