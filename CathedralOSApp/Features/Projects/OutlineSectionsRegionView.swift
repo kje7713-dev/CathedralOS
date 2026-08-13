@@ -76,11 +76,21 @@ struct OutlineSectionsRegionView: View {
     @State private var isKickingOff = false
     @State private var runOutlineError: String?
     @State private var pollingTask: Task<Void, Never>?
-    // Deliberately filter in memory. Stores created before outlineSectionID was
-    // added can fail to return rows when SwiftData pushes this predicate down to
-    // SQLite, even after sync has populated the model property.
-    @Query(sort: \GenerationOutput.createdAt, order: .reverse)
-    private var allOutputs: [GenerationOutput]
+    // PR #341: bypass SwiftData's @Query auto-refresh path. The @Query has been
+    // failing silently to refresh for programmatic inserts (a known SwiftData
+    // issue in iOS 17.x). Replace with @State + manual fetch via
+    // refreshAllOutputs() called after every sync (manual OR polling) and on
+    // view appear. Assigning to @State triggers SwiftUI view body re-evaluation,
+    // so outputsBySection recomputes and the eye button appears. This addresses
+    // H1 (stale @Query) from the Codex investigation directly.
+    @State private var allOutputs: [GenerationOutput] = []
+
+    private func refreshAllOutputs() {
+        let descriptor = FetchDescriptor<GenerationOutput>(
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        allOutputs = (try? modelContext.fetch(descriptor)) ?? []
+    }
     @State private var generationToView: GenerationOutput?
 
     private var outputsBySection: [UUID: [GenerationOutput]] {
@@ -135,6 +145,7 @@ struct OutlineSectionsRegionView: View {
         .task {
             ensureOutline()
             syncSectionsOrder()
+            refreshAllOutputs()
         }
         .onChange(of: sectionsKey) { _, _ in
             syncSectionsOrder()
@@ -576,10 +587,21 @@ struct OutlineSectionsRegionView: View {
                         // but it goes through DataDurabilityCoordinator.runOperation so
                         // the @Published state flips, and the polling path now mirrors
                         // the working manual-sync path exactly.
-                        Task { @MainActor in
+                        // PR #341: Task.detached so this inner Task survives view
+                        // lifecycle. Previously a child of `pollingTask` (via plain
+                        // `Task { ... }`); when Kevin navigates to Diagnostics while
+                        // the run completes, `pollingTask`'s @State is released and
+                        // child tasks are cancelled before performManualSyncAll
+                        // completes. Detaching ensures the sync + refresh + eye-debug
+                        // block all run to completion regardless of view lifecycle.
+                        Task.detached(priority: .userInitiated) { @MainActor in
                             DiagnosticLog.write("poll: run finished (\(status.status)); triggering syncAll")
                             _ = await DataDurabilityCoordinator.shared.performManualSyncAll(context: modelContext)
                             DiagnosticLog.write("poll: syncAll complete")
+                            // PR #341: refresh @State allOutputs from modelContext so the
+                            // view body re-evaluates and outputsBySection picks up the
+                            // newly-pulled rows. Bypasses the broken @Query auto-refresh.
+                            refreshAllOutputs()
                             // PR #339 (Codex investigation, no fix): compare @Query vs fresh
                             // modelContext.fetch after the sync to identify which layer is
                             // stale. Interpretation:
