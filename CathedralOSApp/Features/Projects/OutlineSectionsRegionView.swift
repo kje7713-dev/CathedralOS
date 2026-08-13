@@ -158,6 +158,12 @@ struct OutlineSectionsRegionView: View {
         )) { _ in
             refreshAllOutputs()
         }
+        // Notifications are transient. Keep a durable coordinator revision as
+        // the authoritative refresh signal so a view that briefly loses its
+        // subscription still observes the latest completed sync.
+        .onChange(of: durabilityCoordinator.outputRefreshRevision) { _, _ in
+            refreshAllOutputs()
+        }
         .onChange(of: sectionsKey) { _, _ in
             syncSectionsOrder()
         }

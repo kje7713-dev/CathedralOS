@@ -486,6 +486,20 @@ final class DataDurabilityTests: XCTestCase {
         XCTAssertTrue(message.contains("Projects restored"))
     }
 
+    func testCompletedSyncAdvancesOutputRefreshRevision() async throws {
+        let context = try makeInMemoryContext()
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: SpyProjectSyncService(),
+            outputSyncService: SpyOutputSyncService()
+        )
+
+        let initialRevision = coordinator.outputRefreshRevision
+        _ = await coordinator.performOutputSync(context: context)
+
+        XCTAssertEqual(coordinator.outputRefreshRevision, initialRevision + 1)
+    }
+
     func testPendingTombstoneStorePersistsAndDeduplicatesDeleteIntent() throws {
         let suiteName = "DataDurabilityTests.pending-tombstones.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
