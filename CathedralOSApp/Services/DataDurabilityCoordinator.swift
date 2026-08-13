@@ -92,6 +92,10 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var lastSyncStartedAt: Date?
     @Published private(set) var lastSyncFinishedAt: Date?
     @Published private(set) var lastSyncError: String?
+    /// Monotonically increases after each completed sync operation. Unlike a
+    /// transient notification, this state remains observable when a view is
+    /// recreated or temporarily unsubscribed.
+    @Published private(set) var outputRefreshRevision: UInt = 0
     @Published private(set) var storeMode: StoreMode = .normal
     @Published private(set) var storePath: String?
 
@@ -254,6 +258,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         isRunning = false
         lastSyncFinishedAt = Date()
         lastSyncError = result.errorMessage
+        outputRefreshRevision &+= 1
         // Post notification so observing views (e.g. OutlineSectionsRegionView)
         // can re-fetch and re-render. The notification fires regardless of
         // success/failure so the view sees the latest modelContext state
