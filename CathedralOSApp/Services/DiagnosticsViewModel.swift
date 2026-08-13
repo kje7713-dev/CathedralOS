@@ -89,6 +89,11 @@ struct DiagnosticsSnapshot {
 
     /// Returns a plain-text diagnostics summary suitable for clipboard copy.
     /// Guaranteed to contain no secrets, tokens, or private keys.
+    ///
+    /// `@MainActor` is required to read `EyeDebugStore.shared.latest` for the
+    /// `--- Eye Debug (latest) ---` section. The DiagnosticsView copy button
+    /// runs on MainActor, so the call site satisfies this isolation.
+    @MainActor
     func copyText() -> String {
         var lines: [String] = []
         let dateStr = ISO8601DateFormatter().string(from: capturedAt)
