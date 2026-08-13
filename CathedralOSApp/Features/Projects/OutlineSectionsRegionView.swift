@@ -550,9 +550,13 @@ struct OutlineSectionsRegionView: View {
                         // post-kickoff, so the eye button stayed dark until the user
                         // happened to pull-to-refresh manually. This wires it in.
                         Task { @MainActor in
-                            DiagnosticLog.write("poll: run finished (\(status.status)); triggering output sync")
-                            try? await DataDurabilityCoordinator.shared.performOutputSync(context: modelContext)
-                            DiagnosticLog.write("poll: output sync complete")
+                            DiagnosticLog.write("poll: run finished (\(status.status)); pulling outputs")
+                            do {
+                                try await SupabaseGenerationOutputSyncService.shared.pullOutputs(into: modelContext)
+                                DiagnosticLog.write("poll: pullOutputs complete")
+                            } catch {
+                                DiagnosticLog.write("poll: pullOutputs failed: \(error.localizedDescription)")
+                            }
                         }
                         break
                     }
