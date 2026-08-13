@@ -601,6 +601,24 @@ querySectionIDs=\(allOutputs.compactMap(\.outlineSectionID))
 fetchSectionIDs=\(fetchedOutputs.compactMap(\.outlineSectionID))
 visibleSectionIDs=\(sectionsOrder.map(\.id))
 """)
+                                // PR #340: also record into EyeDebugStore so the snapshot
+                                // surfaces in the copyable Diagnostics text. The DiagnosticLog
+                                // file is not accessible from the Files app on TestFlight builds
+                                // (UIFileSharingEnabled is off in Info.plist) — the only reliable
+                                // way for Kevin to share the diagnostic data is to paste the
+                                // Diagnostics screen's copy output. EyeDebugStore is read by
+                                // DiagnosticsViewModel.buildLines() to add an --- Eye Debug ---
+                                // section that mirrors the above log block.
+                                EyeDebugStore.shared.record(
+                                    EyeDebugStore.Snapshot(
+                                        timestamp: Date(),
+                                        queryCount: allOutputs.count,
+                                        fetchCount: fetchedOutputs.count,
+                                        querySectionIDs: allOutputs.compactMap(\.outlineSectionID),
+                                        fetchSectionIDs: fetchedOutputs.compactMap(\.outlineSectionID),
+                                        visibleSectionIDs: sectionsOrder.map(\.id)
+                                    )
+                                )
                             } catch {
                                 DiagnosticLog.write("eye-debug: fetch failed: \(error.localizedDescription)")
                             }
