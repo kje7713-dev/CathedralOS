@@ -89,6 +89,11 @@ struct DiagnosticsSnapshot {
 
     /// Returns a plain-text diagnostics summary suitable for clipboard copy.
     /// Guaranteed to contain no secrets, tokens, or private keys.
+    ///
+    /// `@MainActor` is required to read `EyeDebugStore.shared.latest` for the
+    /// `--- Eye Debug (latest) ---` section. The DiagnosticsView copy button
+    /// runs on MainActor, so the call site satisfies this isolation.
+    @MainActor
     func copyText() -> String {
         var lines: [String] = []
         let dateStr = ISO8601DateFormatter().string(from: capturedAt)
@@ -182,6 +187,18 @@ struct DiagnosticsSnapshot {
         if let lastOutputSyncMessage {
             lines.append("Last output sync detail: \(lastOutputSyncMessage)")
         }
+        if let eyeDebug = EyeDebugStore.shared.latest {
+            lines += [
+                "",
+                "--- Eye Debug (latest) ---",
+                "Timestamp: \(ISO8601DateFormatter().string(from: eyeDebug.timestamp))",
+                "queryCount: \(eyeDebug.queryCount)",
+                "fetchCount: \(eyeDebug.fetchCount)",
+                "querySectionIDs: \(eyeDebug.querySectionIDs)",
+                "fetchSectionIDs: \(eyeDebug.fetchSectionIDs)",
+                "visibleSectionIDs: \(eyeDebug.visibleSectionIDs)",
+            ]
+        }
         lines += [
             "",
             "--- Store ---",
@@ -192,6 +209,35 @@ struct DiagnosticsSnapshot {
         }
         lines.append("=== End Diagnostics ===")
         return lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - EyeDebugStore
+
+/// Stores the latest eye-debug snapshot from OutlineSectionsRegionView's polling
+/// Task. The DiagnosticsViewModel reads from this when building the copyable
+/// diagnostic text, so users can paste it directly into support channels
+/// without fishing for log files (the DiagnosticLog file at
+/// Files -> On My iPhone -> CathedralOS -> cathedral-diagnostic-log.txt is
+/// not visible in the Files app on TestFlight builds because UIFileSharingEnabled
+/// is not set in Info.plist — Kevin's call 2026-08-13 11:06 EDT).
+@MainActor
+final class EyeDebugStore {
+    static let shared = EyeDebugStore()
+
+    struct Snapshot {
+        let timestamp: Date
+        let queryCount: Int
+        let fetchCount: Int
+        let querySectionIDs: [UUID]
+        let fetchSectionIDs: [UUID]
+        let visibleSectionIDs: [UUID]
+    }
+
+    private(set) var latest: Snapshot?
+
+    func record(_ snapshot: Snapshot) {
+        latest = snapshot
     }
 }
 
