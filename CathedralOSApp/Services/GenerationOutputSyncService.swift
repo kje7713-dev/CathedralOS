@@ -302,8 +302,21 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             let outputTombstones = try await tombstoneService.fetchGenerationOutputTombstones()
             let projectTombstones = try await tombstoneService.fetchProjectTombstones()
             let tombstones = outputTombstones.merged(with: projectTombstones)
-            reconcile(records, tombstones: tombstones, into: context)
-            try persistContext(context, stage: "cloud restore")
+            // PR-#335: hop to MainActor before touching the SwiftData ModelContext.
+            // When pullOutputs is called from `Task { @MainActor in ... }` (the
+            // post-kickoff polling path) the synchronous portion inherits MainActor
+            // isolation, but after the first network await (`validatedClientAndUser`,
+            // `fetch`, `tombstoneService.fetchGenerationOutputTombstones`) this
+            // function resumes on the cooperative executor. `context.insert(...)`
+            // and `context.save()` off MainActor don't notify the MainActor-bound
+            // `@Query` observer in OutlineSectionsRegionView, so the eye button
+            // stayed dark until the user navigated away and back. Running the
+            // SwiftData ops on MainActor closes that gap without changing what
+            // gets written.
+            try await MainActor.run {
+                reconcile(records, tombstones: tombstones, into: context)
+                try persistContext(context, stage: "cloud restore")
+            }
 
             // === PR-#331: capture sync probe state for Diagnostics surface ===
             Task { @MainActor in
