@@ -2,6 +2,21 @@ import Foundation
 import SwiftData
 import os
 
+// MARK: - Generation outputs refresh notification
+
+extension Notification.Name {
+    /// Posted by `DataDurabilityCoordinator` after any sync operation (manual
+    /// or polling) completes. Observed by `OutlineSectionsRegionView` to call
+    /// `refreshAllOutputs()` and trigger view body re-evaluation. Decouples the
+    /// view refresh from the @State lifecycle, which is the root cause of
+    /// the eye button not appearing after polling-driven syncs (the polling
+    /// inner Task is `Task.detached` and the view's @State storage can be
+    /// released before the Task completes).
+    static let cathedralOSGenerationOutputsChanged = Notification.Name(
+        "cathedralos.generation_outputs.changed"
+    )
+}
+
 // MARK: - ProjectSaveResult
 
 /// The outcome of an explicit user-initiated project save through the cloud-first helper.
@@ -239,6 +254,14 @@ final class DataDurabilityCoordinator: ObservableObject {
         isRunning = false
         lastSyncFinishedAt = Date()
         lastSyncError = result.errorMessage
+        // Post notification so observing views (e.g. OutlineSectionsRegionView)
+        // can re-fetch and re-render. The notification fires regardless of
+        // success/failure so the view sees the latest modelContext state
+        // (which may be partially updated if the sync failed partway).
+        NotificationCenter.default.post(
+            name: .cathedralOSGenerationOutputsChanged,
+            object: nil
+        )
         if let errorMessage = result.errorMessage {
             operationState = .failed(result.kind, message: errorMessage)
             logger.error("\(result.kind.rawValue, privacy: .public) failed: \(errorMessage, privacy: .public)")

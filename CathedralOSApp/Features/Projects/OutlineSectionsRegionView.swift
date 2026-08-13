@@ -147,6 +147,17 @@ struct OutlineSectionsRegionView: View {
             syncSectionsOrder()
             refreshAllOutputs()
         }
+        // PR #342: observe the cathedralOSGenerationOutputsChanged notification
+        // posted by DataDurabilityCoordinator.runOperation after any sync (manual
+        // OR polling) completes. Decouples the view refresh from the @State
+        // lifecycle, which is the root cause of the eye button not appearing
+        // after polling-driven syncs (the polling inner Task captures `self`
+        // and the @State storage can be released before the Task completes).
+        .onReceive(NotificationCenter.default.publisher(
+            for: .cathedralOSGenerationOutputsChanged
+        )) { _ in
+            refreshAllOutputs()
+        }
         .onChange(of: sectionsKey) { _, _ in
             syncSectionsOrder()
         }
