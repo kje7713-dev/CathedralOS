@@ -212,6 +212,7 @@ final class DiagnosticsViewModel: ObservableObject {
     private let creditStateService: any CreditStateServiceProtocol
     private let healthService: any BackendHealthServiceProtocol
     private let syncService: any GenerationOutputSyncServiceProtocol
+    private let projectSyncService: any ProjectCloudSyncServiceProtocol
     private var lastFetchedCreditState: BackendCreditState?
     private var localProjectCount = 0
     private var localProjectBackupCount = 0
@@ -252,7 +253,8 @@ final class DiagnosticsViewModel: ObservableObject {
         entitlementService: any StoreKitEntitlementServiceProtocol,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
         healthService: any BackendHealthServiceProtocol = BackendHealthService.shared,
-        syncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
+        syncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
+        projectSyncService: any ProjectCloudSyncServiceProtocol = ProjectCloudSyncService.shared
     ) {
         self.authService = authService
         self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
@@ -261,6 +263,7 @@ final class DiagnosticsViewModel: ObservableObject {
         self.creditStateService = creditStateService
         self.healthService = healthService
         self.syncService = syncService
+        self.projectSyncService = projectSyncService
     }
 
     // MARK: - Public API
@@ -379,6 +382,35 @@ final class DiagnosticsViewModel: ObservableObject {
             cloudGeneratedOutputCount = try await syncService.fetchCloudOutputCount()
         } catch {
             outputRecoveryError = (error as? GenerationOutputSyncError)?.errorDescription ?? error.localizedDescription
+        }
+        snapshot = buildSnapshot()
+    }
+
+    /// Mirrors `refreshCloudOutputCountIfPossible()` for project snapshots. The
+    /// `cloudProjectSnapshotCount` field was previously hardcoded to nil
+    /// (PR #336) because nothing fetched the count — `DiagnosticsSnapshot`
+    /// declared it but no caller assigned. This closes that gap.
+    func refreshCloudProjectCountIfPossible() async {
+        guard SupabaseConfiguration.isConfigured else {
+            cloudProjectSnapshotCount = nil
+            snapshot = buildSnapshot()
+            return
+        }
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard authService.authState.isSignedIn else {
+            cloudProjectSnapshotCount = nil
+            snapshot = buildSnapshot()
+            return
+        }
+        do {
+            cloudProjectSnapshotCount = try await projectSyncService.fetchCloudProjectSnapshotCount()
+        } catch {
+            // Count-refresh errors don't surface a UI banner (no equivalent of
+            // outputRecoveryError). Leave nil so the diagnostics screen shows
+            // "Unavailable" — same behavior as before for the failure case.
+            cloudProjectSnapshotCount = nil
         }
         snapshot = buildSnapshot()
     }

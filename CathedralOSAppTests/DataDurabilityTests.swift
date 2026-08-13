@@ -88,6 +88,7 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     }
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {}
     func cloudSnapshotPresence() async -> CloudSnapshotPresence { .none }
+    func fetchCloudProjectSnapshotCount() async throws -> Int { 0 }
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
         restoreCalled = true
