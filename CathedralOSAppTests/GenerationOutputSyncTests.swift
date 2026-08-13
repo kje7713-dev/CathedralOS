@@ -562,6 +562,51 @@ final class GenerationOutputSyncPullTests: XCTestCase {
         )
     }
 
+    // MARK: - makeLocalOutput new-row path
+
+    func testReconcileCreatesNewLocalOutputWithOutlineSectionIDFromCloud() throws {
+        let realService = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+        let cloudID = UUID().uuidString
+        let cloudSectionID = "b5f058bd-06aa-45e6-9e6c-8453419e77f3"
+
+        // No existing local row — reconcile must call makeLocalOutput.
+        let record = makeCloudRecord(
+            id: cloudID,
+            title: "New Story",
+            outlineSectionID: cloudSectionID
+        )
+        realService.reconcile([record], into: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertEqual(
+            outputs.first?.outlineSectionID?.uuidString.lowercased(),
+            cloudSectionID.lowercased(),
+            "makeLocalOutput must seed outlineSectionID from the cloud record for new rows."
+        )
+    }
+
+    func testReconcileCreatesNewLocalOutputWithNilOutlineSectionIDWhenCloudIsNil() throws {
+        let realService = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+        let cloudID = UUID().uuidString
+
+        let record = makeCloudRecord(
+            id: cloudID,
+            title: "New Story",
+            outlineSectionID: nil
+        )
+        realService.reconcile([record], into: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertNil(
+            outputs.first?.outlineSectionID,
+            "makeLocalOutput must leave outlineSectionID nil when the cloud record has no section."
+        )
+    }
+
     func testCloudRecordDTODecoding() throws {
         let cloudID = UUID().uuidString
         let localID = UUID().uuidString

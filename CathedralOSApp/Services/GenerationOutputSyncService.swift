@@ -695,6 +695,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         )
         output.cloudGenerationOutputID = record.id
         output.cloudOwnerUserID = record.userID
+        output.outlineSectionID = record.outlineSectionID.flatMap(UUID.init(uuidString:))
         output.visibility    = record.visibility
         output.allowRemix    = record.allowRemix
         output.createdAt     = record.createdAt
