@@ -606,6 +606,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                             }
                         }
                         break
+                    }
 
                 } catch {
                     // keep polling on transient errors
