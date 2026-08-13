@@ -543,20 +543,29 @@ struct OutlineSectionsRegionView: View {
                     let status = try await runOutlineService.status(runID: runID)
                     activeRunStatus = status
                     if status.status == "completed" || status.status == "failed" {
-                        // PR #327+ chains: after a kickoff completes in cloud, refresh
+                        // PR #327+ chain: after a kickoff completes in cloud, refresh
                         // generation_outputs so the @Query for `outlineSectionID != nil`
                         // picks up the freshly-persisted rows (with `outline_section_id`
-                        // populated by run-outline). The prior code never triggered a sync
-                        // post-kickoff, so the eye button stayed dark until the user
-                        // happened to pull-to-refresh manually. This wires it in.
+                        // populated by run-outline).
+                        //
+                        // PR #334 routed this through direct pullOutputs, and PR #335
+                        // added a MainActor.run wrap on top. Both failed to surface the
+                        // eye button while the view was already attached — direct
+                        // pullOutputs bypasses DataDurabilityCoordinator's @Published
+                        // state changes that drive the manual-sync path's view refresh,
+                        // and the MainActor.run wrap was a no-op because CathedralOS
+                        // runs on Swift 5 (nonisolated async inherits MainActor anyway).
+                        //
+                        // Kevin's call: route through the proven-working manual-sync
+                        // path — performManualSyncAll — which is what the Account →
+                        // "Sync Everything" button uses. Same pullOutputs under the hood,
+                        // but it goes through DataDurabilityCoordinator.runOperation so
+                        // the @Published state flips, and the polling path now mirrors
+                        // the working manual-sync path exactly.
                         Task { @MainActor in
-                            DiagnosticLog.write("poll: run finished (\(status.status)); pulling outputs")
-                            do {
-                                try await SupabaseGenerationOutputSyncService.shared.pullOutputs(into: modelContext)
-                                DiagnosticLog.write("poll: pullOutputs complete")
-                            } catch {
-                                DiagnosticLog.write("poll: pullOutputs failed: \(error.localizedDescription)")
-                            }
+                            DiagnosticLog.write("poll: run finished (\(status.status)); triggering syncAll")
+                            _ = await DataDurabilityCoordinator.shared.performManualSyncAll(context: modelContext)
+                            DiagnosticLog.write("poll: syncAll complete")
                         }
                         break
                     }
