@@ -580,9 +580,34 @@ struct OutlineSectionsRegionView: View {
                             DiagnosticLog.write("poll: run finished (\(status.status)); triggering syncAll")
                             _ = await DataDurabilityCoordinator.shared.performManualSyncAll(context: modelContext)
                             DiagnosticLog.write("poll: syncAll complete")
+                            // PR #339 (Codex investigation, no fix): compare @Query vs fresh
+                            // modelContext.fetch after the sync to identify which layer is
+                            // stale. Interpretation:
+                            //  - fetch contains new row but @Query does not -> H1: @Query stale
+                            //  - both contain it but eye is missing -> UUID mismatch in outputsBySection
+                            //  - neither contains it -> write went through a different ModelContext
+                            //  - row exists but outlineSectionID == nil -> makeLocalOutput or backend
+                            do {
+                                let fetchedOutputs = try modelContext.fetch(
+                                    FetchDescriptor<GenerationOutput>(
+                                        sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+                                    )
+                                )
+                                DiagnosticLog.write("""
+eye-debug:
+queryCount=\(allOutputs.count)
+fetchCount=\(fetchedOutputs.count)
+querySectionIDs=\(allOutputs.compactMap(\.outlineSectionID))
+fetchSectionIDs=\(fetchedOutputs.compactMap(\.outlineSectionID))
+visibleSectionIDs=\(sectionsOrder.map(\.id))
+""")
+                            } catch {
+                                DiagnosticLog.write("eye-debug: fetch failed: \(error.localizedDescription)")
+                            }
                         }
                         break
                     }
+
                 } catch {
                     // keep polling on transient errors
                 }
