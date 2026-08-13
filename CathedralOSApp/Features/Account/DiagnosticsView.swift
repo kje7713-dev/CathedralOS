@@ -30,7 +30,8 @@ struct DiagnosticsView: View {
         entitlementService: any StoreKitEntitlementServiceProtocol,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
         healthService: any BackendHealthServiceProtocol = BackendHealthService.shared,
-        syncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
+        syncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
+        projectSyncService: any ProjectCloudSyncServiceProtocol = ProjectCloudSyncService.shared
     ) {
         _viewModel = StateObject(wrappedValue: DiagnosticsViewModel(
             authService: authService,
@@ -38,7 +39,8 @@ struct DiagnosticsView: View {
             entitlementService: entitlementService,
             creditStateService: creditStateService,
             healthService: healthService,
-            syncService: syncService
+            syncService: syncService,
+            projectSyncService: projectSyncService
         ))
     }
 
@@ -65,11 +67,13 @@ struct DiagnosticsView: View {
                 viewModel.refresh(modelContext: modelContext)
                 await viewModel.refreshCreditStateIfPossible()
                 await viewModel.refreshCloudOutputCountIfPossible()
+                await viewModel.refreshCloudProjectCountIfPossible()
             }
             .refreshable {
                 viewModel.refresh(modelContext: modelContext)
                 await viewModel.refreshCreditStateIfPossible()
                 await viewModel.refreshCloudOutputCountIfPossible()
+                await viewModel.refreshCloudProjectCountIfPossible()
             }
         }
     }

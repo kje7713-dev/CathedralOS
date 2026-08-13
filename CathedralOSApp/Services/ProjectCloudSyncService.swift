@@ -86,6 +86,12 @@ protocol ProjectCloudSyncServiceProtocol {
     ) async throws
     func deleteProjectLineage(lineageID: String, localProjectID: String) async throws
     func cloudSnapshotPresence() async -> CloudSnapshotPresence
+
+    /// Returns the current count of `project_snapshots` rows in Supabase for the
+    /// signed-in user. Used to populate the Diagnostics "Cloud project snapshots"
+    /// field — that field had been hardcoded to nil because nothing fetched the
+    /// count. Mirrors `GenerationOutputSyncServiceProtocol.fetchCloudOutputCount`.
+    func fetchCloudProjectSnapshotCount() async throws -> Int
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport
     /// Reconcile local SwiftData projects against a tombstone set BEFORE upload.
@@ -607,6 +613,30 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         } catch {
             return .failed(error)
         }
+    }
+
+    // MARK: - Cloud count
+
+    /// Mirrors `SupabaseGenerationOutputSyncService.fetchCloudOutputCount()` so
+    /// the Diagnostics screen's "Cloud project snapshots" line stops showing
+    /// "Unavailable" forever. Hits `project_snapshots?select=local_project_id`
+    /// with the same bearer-token / validatedClientAndSession plumbing as the
+    /// presence + restore flows above. The `select` column is intentionally
+    /// `local_project_id` rather than `id` because RLS exposes only the
+    /// user-owned `local_project_id` (and `id` would force PostgREST to deny
+    /// when the policy hides `id`). The actual column choice doesn't affect
+    /// the row count we return.
+    func fetchCloudProjectSnapshotCount() async throws -> Int {
+        let (client, _, accessToken) = try await validatedClientAndSession()
+        var components = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "select", value: "local_project_id")]
+        guard let url = components?.url else {
+            throw ProjectCloudSyncError.notConfigured
+        }
+        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
+        request.httpMethod = "GET"
+        let rows = try await fetch([ProjectSnapshotCountRecord].self, request: request)
+        return rows.count
     }
 
     @MainActor
@@ -1990,6 +2020,14 @@ private enum ProjectSnapshotJSONValue: Decodable, Equatable {
 
 private enum ProjectSnapshotDeleteVerificationError: Error {
     case unverified
+}
+
+private struct ProjectSnapshotCountRecord: Decodable {
+    let localProjectID: String
+
+    enum CodingKeys: String, CodingKey {
+        case localProjectID = "local_project_id"
+    }
 }
 
 private struct ProjectSnapshotPresenceRow: Decodable {
