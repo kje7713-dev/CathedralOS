@@ -55,6 +55,20 @@ struct OutlineSectionsRegionView: View {
     @Bindable var project: StoryProject
     let modelContext: ModelContext
 
+    // PR #338: observe DataDurabilityCoordinator so the @Published flips from
+    // runOperation (isRunning, operationState, lastSyncFinishedAt, etc.) trigger
+    // a view body re-evaluation here. PR #337 routed the polling path through
+    // performManualSyncAll so runOperation fires, but the view didn't observe
+    // the coordinator, so those flips never propagated to OutlineSectionsRegionView
+    // and the eye button still didn't appear after PR #337.
+    //
+    // AccountView already observes via @ObservedObject — that's why the manual
+    // Sync Everything button works (the AccountView re-renders when @Published
+    // flips). Account → Diagnostics → back-to-Outline navigation is what was
+    // forcing the @Query re-fetch on PR #335-era manual sync. This @ObservedObject
+    // wires the same re-render hook into this view directly, without navigation.
+    @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator = .shared
+
     @State private var sectionsOrder: [OutlineSection] = []
     @State private var editingSection: OutlineSection?
     @State private var generationTarget: OutlineGenerationTarget?
