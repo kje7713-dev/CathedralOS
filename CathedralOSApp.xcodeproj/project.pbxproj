@@ -455,6 +455,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000031 /* CathedralView.swift */,
+			);
 			path = CathedralEditor;
 			sourceTree = "<group>";
 		};
@@ -1012,11 +1013,10 @@ echo \"Runtime config plist injection completed: keys present\"";
 				00000000000000000000019A /* DiagnosticsTests.swift in Sources */,
 				0000000000000000000001A4 /* ProjectCloudSyncTests.swift in Sources */,
 				0000000000000000000001B0 /* TestSupabaseConfiguration.swift in Sources */,
-
+				FF0000000000000000000A02 /* ChapterReaderView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-			FF0000000000000000000A02 /* ChapterReaderView.swift in Sources */,
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
