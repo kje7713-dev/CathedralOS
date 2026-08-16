@@ -604,16 +604,32 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 updated_at: response.updated_at,
                 completed_at: response.completed_at
             )
-            durabilityCoordinator.startPolling(
-                runID: response.run_id,
-                initialStatus: initialStatus,
-                runOutlineService: runOutlineService,
-                context: modelContext,
-                onSyncCompleted: { [self] context in
-                    self.refreshAllOutputs()
-                    self.recordEyeDebug(context: context)
-                }
-            )
+            // Kickoff is synchronous on the server: it returns when the run
+            // finishes (or fails). If the response already has a terminal
+            // status, sync immediately rather than waiting for a polling
+            // Task to detect it -- PR #345 attempted that and the polling
+            // path was silently failing in practice.
+            if response.status == "completed" || response.status == "failed" {
+                DiagnosticLog.write("kickoff: run finished during kickoff (\(response.status)); triggering syncAll")
+                _ = await DataDurabilityCoordinator.shared.performManualSyncAll(context: modelContext)
+                DiagnosticLog.write("kickoff: syncAll complete")
+                refreshAllOutputs()
+                recordEyeDebug(context: modelContext)
+            } else {
+                // Long-running kickoff (multi-section runs that exceed the
+                // 180s kickoff timeout, or async backend). Fall back to the
+                // coordinator's polling Task.
+                durabilityCoordinator.startPolling(
+                    runID: response.run_id,
+                    initialStatus: initialStatus,
+                    runOutlineService: runOutlineService,
+                    context: modelContext,
+                    onSyncCompleted: { [self] context in
+                        self.refreshAllOutputs()
+                        self.recordEyeDebug(context: context)
+                    }
+                )
+            }
         } catch let error as RunOutlineError {
             runOutlineError = error.errorDescription
         } catch {
