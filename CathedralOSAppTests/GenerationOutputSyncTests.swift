@@ -141,13 +141,15 @@ private func makeCloudRecord(
     projectLocalID: String? = nil,
     projectName: String = "Test Project",
     title: String = "Cloud Story",
-    updatedAt: Date = Date()
+    updatedAt: Date = Date(),
+    outlineSectionID: String? = nil
 ) -> GenerationOutputCloudRecord {
     let iso = ISO8601DateFormatter()
     let updatedStr = iso.string(from: updatedAt)
     let createdStr = iso.string(from: updatedAt.addingTimeInterval(-60))
     let localIDField = localID.map { "\"local_generation_id\": \"\($0)\"" } ?? "\"local_generation_id\": null"
     let projectLocalIDField = projectLocalID.map { "\"project_local_id\": \"\($0)\"" } ?? "\"project_local_id\": null"
+    let outlineSectionIDField = outlineSectionID.map { "\"outline_section_id\": \"\($0)\"" } ?? "\"outline_section_id\": null"
     let json = """
     {
       "id": "\(id)",
@@ -156,6 +158,7 @@ private func makeCloudRecord(
       \(projectLocalIDField),
       "project_name": "\(projectName)",
       "prompt_pack_name": "Test Pack",
+      \(outlineSectionIDField),
       "title": "\(title)",
       "output_text": "Generated content.",
       "model_name": "gpt-4o",
@@ -424,6 +427,184 @@ final class GenerationOutputSyncPullTests: XCTestCase {
         let projects = try context.fetch(FetchDescriptor<StoryProject>())
         XCTAssertEqual(projects.count, 1)
         XCTAssertEqual(projects.first?.name, "Recovered Outputs")
+    }
+
+    // MARK: - PR-#331 outline-section backfill regression tests
+    //
+    // The cloud SQL backfill that populated `outline_section_id` did not advance
+    // `generation_outputs.updated_at`. Naive reconcile would skip the applyCloudUpdate
+    // path because `record.updatedAt > local.updatedAt` is false. The narrow fix
+    // backfills `outlineSectionID` only when the local slot is nil and the cloud
+    // value parses to a UUID, without disturbing the existing cloud-newer field
+    // overwrite semantics.
+
+    func testReconcileBackfillsOutlineSectionIDWhenLocalNewerAndLocalIsNil() throws {
+        let realService = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+        let cloudID = UUID().uuidString
+        let cloudSectionID = "b5f058bd-06aa-45e6-9e6c-8453419e77f3"
+
+        let existing = GenerationOutput(title: "Local Title")
+        existing.cloudGenerationOutputID = cloudID
+        existing.syncStatus = SyncStatus.synced.rawValue
+        // Local is NEWER than cloud, so `applyCloudUpdate` would NOT be called.
+        existing.updatedAt = Date(timeIntervalSinceNow: 0)
+        XCTAssertNil(existing.outlineSectionID)
+        context.insert(existing)
+
+        let olderRecord = makeCloudRecord(
+            id: cloudID,
+            title: "Cloud Title (would-be-overwritten)",
+            updatedAt: Date(timeIntervalSinceNow: -120),
+            outlineSectionID: cloudSectionID
+        )
+        realService.reconcile([olderRecord], into: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertEqual(
+            outputs.first?.outlineSectionID?.uuidString.lowercased(),
+            cloudSectionID.lowercased(),
+            "Cloud outline_section_id must be backfilled even when local is newer."
+        )
+        // ApplyCloudUpdate did NOT run, so the title is preserved.
+        XCTAssertEqual(outputs.first?.title, "Local Title")
+    }
+
+    func testReconcilePreservesLocalOutlineSectionIDWhenLocalNewerAndLocalNonNil() throws {
+        let realService = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+        let cloudID = UUID().uuidString
+        let localSectionUUID = UUID()
+        let cloudSectionID   = "b5f058bd-06aa-45e6-9e6c-8453419e77f3"
+
+        let existing = GenerationOutput(title: "Local Title")
+        existing.cloudGenerationOutputID = cloudID
+        existing.syncStatus = SyncStatus.synced.rawValue
+        existing.updatedAt = Date(timeIntervalSinceNow: 0)
+        existing.outlineSectionID = localSectionUUID
+        context.insert(existing)
+
+        let olderRecord = makeCloudRecord(
+            id: cloudID,
+            title: "Cloud Title",
+            updatedAt: Date(timeIntervalSinceNow: -120),
+            outlineSectionID: cloudSectionID
+        )
+        realService.reconcile([olderRecord], into: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertEqual(
+            outputs.first?.outlineSectionID,
+            localSectionUUID,
+            "Non-nil local outlineSectionID must be preserved when cloud is older."
+        )
+    }
+
+    func testReconcileApplyCloudUpdateStillRunsWhenCloudIsNewer() throws {
+        let realService = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+        let cloudID = UUID().uuidString
+        let cloudSectionID = "b5f058bd-06aa-45e6-9e6c-8453419e77f3"
+
+        let existing = GenerationOutput(title: "Old Title")
+        existing.cloudGenerationOutputID = cloudID
+        existing.syncStatus = SyncStatus.synced.rawValue
+        existing.updatedAt = Date(timeIntervalSinceNow: -120)
+        context.insert(existing)
+
+        let newerRecord = makeCloudRecord(
+            id: cloudID,
+            title: "Updated Title",
+            updatedAt: Date(timeIntervalSinceNow: 0),
+            outlineSectionID: cloudSectionID
+        )
+        realService.reconcile([newerRecord], into: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertEqual(outputs.first?.title, "Updated Title")
+        XCTAssertEqual(
+            outputs.first?.outlineSectionID?.uuidString.lowercased(),
+            cloudSectionID.lowercased(),
+            "Cloud-newer path must still flow outlineSectionID through applyCloudUpdate."
+        )
+    }
+
+    func testReconcileDoesNotEraseLocalOutlineSectionIDWhenCloudSectionIDIsNil() throws {
+        let realService = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+        let cloudID = UUID().uuidString
+        let localSectionUUID = UUID()
+
+        let existing = GenerationOutput(title: "Local Title")
+        existing.cloudGenerationOutputID = cloudID
+        existing.syncStatus = SyncStatus.synced.rawValue
+        existing.updatedAt = Date(timeIntervalSinceNow: 0)
+        existing.outlineSectionID = localSectionUUID
+        context.insert(existing)
+
+        let olderRecord = makeCloudRecord(
+            id: cloudID,
+            title: "Cloud Title",
+            updatedAt: Date(timeIntervalSinceNow: -120),
+            outlineSectionID: nil
+        )
+        realService.reconcile([olderRecord], into: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertEqual(
+            outputs.first?.outlineSectionID,
+            localSectionUUID,
+            "The backfill path must not clear a non-nil local outlineSectionID when the cloud value is nil."
+        )
+    }
+
+    // MARK: - makeLocalOutput new-row path
+
+    func testReconcileCreatesNewLocalOutputWithOutlineSectionIDFromCloud() throws {
+        let realService = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+        let cloudID = UUID().uuidString
+        let cloudSectionID = "b5f058bd-06aa-45e6-9e6c-8453419e77f3"
+
+        // No existing local row — reconcile must call makeLocalOutput.
+        let record = makeCloudRecord(
+            id: cloudID,
+            title: "New Story",
+            outlineSectionID: cloudSectionID
+        )
+        realService.reconcile([record], into: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertEqual(
+            outputs.first?.outlineSectionID?.uuidString.lowercased(),
+            cloudSectionID.lowercased(),
+            "makeLocalOutput must seed outlineSectionID from the cloud record for new rows."
+        )
+    }
+
+    func testReconcileCreatesNewLocalOutputWithNilOutlineSectionIDWhenCloudIsNil() throws {
+        let realService = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+        let cloudID = UUID().uuidString
+
+        let record = makeCloudRecord(
+            id: cloudID,
+            title: "New Story",
+            outlineSectionID: nil
+        )
+        realService.reconcile([record], into: context)
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1)
+        XCTAssertNil(
+            outputs.first?.outlineSectionID,
+            "makeLocalOutput must leave outlineSectionID nil when the cloud record has no section."
+        )
     }
 
     func testCloudRecordDTODecoding() throws {

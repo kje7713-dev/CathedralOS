@@ -821,13 +821,21 @@ struct ProjectDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if project.promptPacks.isEmpty {
-                HStack(spacing: CathedralTheme.Spacing.sm) {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    Text("Add a recipe to enable generation.")
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+                    HStack(spacing: CathedralTheme.Spacing.sm) {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        Text("Add a recipe to enable generation.")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
+                    CathedralPrimaryButton(
+                        "Create first recipe",
+                        systemImage: "plus.circle"
+                    ) {
+                        showAddPromptPack = true
+                    }
                 }
             } else {
                 VStack(spacing: CathedralTheme.Spacing.sm) {

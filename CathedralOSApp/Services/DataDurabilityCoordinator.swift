@@ -2,6 +2,21 @@ import Foundation
 import SwiftData
 import os
 
+// MARK: - Generation outputs refresh notification
+
+extension Notification.Name {
+    /// Posted by `DataDurabilityCoordinator` after any sync operation (manual
+    /// or polling) completes. Observed by `OutlineSectionsRegionView` to call
+    /// `refreshAllOutputs()` and trigger view body re-evaluation. Decouples the
+    /// view refresh from the @State lifecycle, which is the root cause of
+    /// the eye button not appearing after polling-driven syncs (the polling
+    /// inner Task is `Task.detached` and the view's @State storage can be
+    /// released before the Task completes).
+    static let cathedralOSGenerationOutputsChanged = Notification.Name(
+        "cathedralos.generation_outputs.changed"
+    )
+}
+
 // MARK: - ProjectSaveResult
 
 /// The outcome of an explicit user-initiated project save through the cloud-first helper.
@@ -77,6 +92,13 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var lastSyncStartedAt: Date?
     @Published private(set) var lastSyncFinishedAt: Date?
     @Published private(set) var lastSyncError: String?
+    /// Monotonically increases after each completed sync operation. Unlike a
+    /// transient notification, this state remains observable when a view is
+    /// recreated or temporarily unsubscribed.
+    @Published private(set) var outputRefreshRevision: UInt = 0
+    /// Latest status for an active generation run. Updated by `startPolling`
+    /// on the coordinator's detached polling Task. Survives view destruction.
+    @Published private(set) var activeRunStatus: RunOutlineStatus?
     @Published private(set) var storeMode: StoreMode = .normal
     @Published private(set) var storePath: String?
 
@@ -201,6 +223,77 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
     }
 
+    // MARK: - Run polling
+
+    /// Polling Task for an in-flight generation run. Detached from the view's
+    /// lifecycle so it survives view destruction (e.g., when the user
+    /// navigates to Diagnostics while a run completes). Multiple consecutive
+    /// calls cancel any previous polling task. To stop polling without
+    /// starting a new one, call `stopPolling()`.
+    private var pollingTask: Task<Void, Never>?
+
+    /// Start polling the run-outline status endpoint every 3 seconds until
+    /// the run finishes or fails. When the run reaches a terminal state, the
+    /// coordinator runs `performManualSyncAll` to pull the new outputs from
+    /// the cloud, then invokes `onSyncCompleted` on the main actor so the
+    /// calling view can record diagnostic snapshots and refresh its
+    /// `@State`.
+    ///
+    /// - Parameters:
+    ///   - runID: The run identifier returned by the kickoff endpoint.
+    ///   - runOutlineService: The service used to poll status. Captured by
+    ///     value in the detached Task.
+    ///   - context: The `ModelContext` used by `performManualSyncAll` and
+    ///     passed through to `onSyncCompleted`. Held by strong reference in
+    ///     the closure so it outlives the view's
+    ///     `@Environment(\.modelContext)`.
+    ///   - onSyncCompleted: Invoked on the main actor after
+    ///     `performManualSyncAll` completes (success or failure). The view
+    ///     uses this hook to record eye-debug snapshots and refresh
+    ///     `@State`.
+    func startPolling(
+        runID: String,
+        initialStatus: RunOutlineStatus?,
+        runOutlineService: RunOutlineService,
+        context: ModelContext,
+        onSyncCompleted: @escaping @MainActor (ModelContext) -> Void
+    ) {
+        pollingTask?.cancel()
+        activeRunStatus = initialStatus
+
+        let coordinator = self
+        pollingTask = Task.detached(priority: .userInitiated) { @MainActor in
+            let service = runOutlineService
+            let modelContext = context
+            let callback = onSyncCompleted
+
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                do {
+                    let status = try await service.status(runID: runID)
+                    coordinator.activeRunStatus = status
+                    if status.status == "completed" || status.status == "failed" {
+                        DiagnosticLog.write("poll: run finished (\(status.status)); triggering syncAll")
+                        _ = await coordinator.performManualSyncAll(context: modelContext)
+                        DiagnosticLog.write("poll: syncAll complete")
+                        callback(modelContext)
+                        coordinator.pollingTask = nil
+                        break
+                    }
+                } catch {
+                    // keep polling on transient errors
+                }
+            }
+        }
+    }
+
+    /// Cancel the active polling task if any. Does not affect in-flight syncs.
+    func stopPolling() {
+        pollingTask?.cancel()
+        pollingTask = nil
+        activeRunStatus = nil
+    }
+
     private func runOperation(
         kind: SyncOperationKind,
         operation: @escaping @MainActor () async throws -> String
@@ -239,6 +332,15 @@ final class DataDurabilityCoordinator: ObservableObject {
         isRunning = false
         lastSyncFinishedAt = Date()
         lastSyncError = result.errorMessage
+        outputRefreshRevision &+= 1
+        // Post notification so observing views (e.g. OutlineSectionsRegionView)
+        // can re-fetch and re-render. The notification fires regardless of
+        // success/failure so the view sees the latest modelContext state
+        // (which may be partially updated if the sync failed partway).
+        NotificationCenter.default.post(
+            name: .cathedralOSGenerationOutputsChanged,
+            object: nil
+        )
         if let errorMessage = result.errorMessage {
             operationState = .failed(result.kind, message: errorMessage)
             logger.error("\(result.kind.rawValue, privacy: .public) failed: \(errorMessage, privacy: .public)")

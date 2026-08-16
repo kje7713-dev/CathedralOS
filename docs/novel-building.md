@@ -138,9 +138,21 @@ Seed 3 templates: Three-act, Hero's Journey, Mystery.
 - On Accept: run extraction pass via LLM (~200-500 token summary), embed via `text-embedding-3-small`, store both summary and raw text
 - Index on embedding column (HNSW for write-heavy workloads)
 
-### Phase 4 — Narrow prior-context queries (for both single-section & multi-section generation)
+### Phase 4 — RAG retrieval via the 5 structured memory layers (revised 2026-08-10 18:01 EDT, Kevin's hard rule: schema tight, pull deep)
 
-**Supersedes the old top-K similarity design (Kevin, 2026-08-10 14:22 EDT: "Stop with this top k shit. You should be storing well structured data in db form so token input size stays manageable.").** The wrong abstraction was: embed the current scene's plan → cosine similarity vs `section_embeddings.vector(1536)` → take top-K → dump their summaries. The right abstraction: **narrow, scoped queries against the 5 structured columns** that PR #304 added to `section_embeddings` (`character_deltas`, `plot_thread_deltas`, `continuity_facts`, `open_loops`, `scene_ending_state`).
+**Supersedes** the original top-K similarity design (PR #262) and the "N most recent" heuristic that PR #305 / PR #309's DAY3_NARROW_LIMIT tried. The wrong abstraction was: embed the current scene's plan → cosine similarity vs `section_embeddings.vector(1536)` → take top-K → dump their summaries. The right abstraction: **narrow, scoped queries against the 5 structured columns** that PR #304 added to `section_embeddings` (`character_deltas`, `plot_thread_deltas`, `continuity_facts`, `open_loops`, `scene_ending_state`).
+
+**Locked design rules** (from `docs/multi-section-generation.md`):
+
+1. **Keep the 5 structured memory layers.** Don't drop or rename.
+2. **`character_deltas`: merge fields, don't let the latest entry overwrite earlier fields.** Scene 1: `{character_name: "Jon", knowledge: "X"}`. Scene 2: `{character_name: "Jon", goal: "Y"}`. Aggregate: `{character_name: "Jon", knowledge: "X", goal: "Y"}` — both fields merged.
+3. **`plot_thread_deltas` + `open_loops`: stable IDs + explicit lifecycle/status.** Each thread/loop has a stable UUID that persists across scenes. Status: `introduced` / `advanced` / `resolved`. When resolved, mark with `resolved_at` timestamp.
+4. **`continuity_facts`: provenance + active/superseded.** Each fact: `{id, fact, source_section_id, active, superseded_by?, created_at}`. When a fact is no longer true, mark `active=false` or `superseded_by=<other_fact_id>`.
+5. **ALWAYS inject the immediately previous canonical section's summary + ending state**, regardless of intent filtering. The model needs what just happened.
+6. **Retrieve by outline order / current accepted revision**, NOT `created_at`. Use `outline_sections.position`.
+7. **`location` must actually filter** (not just tie-break). Other-location scenes are excluded from the prior context.
+8. **Pipeline order: generate → persist output → extract/store scene memory → next.** The output is persisted BEFORE the next section can read it.
+9. **`raw_text` is stored for re-extraction/debugging** but **NOT injected by default**. Only the compressed summary + structured state are sent to the model.
 
 - `generate-story` (and the new `run-outline` orchestrator in Phase 8) accepts optional `outline_section_id`
 - When provided:

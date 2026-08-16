@@ -94,6 +94,7 @@ private final class SpyProjectCloudSyncService: ProjectCloudSyncServiceProtocol 
         deletedLineages.append((lineageID, localProjectID))
     }
     func cloudSnapshotPresence() async -> CloudSnapshotPresence { .none }
+    func fetchCloudProjectSnapshotCount() async throws -> Int { 0 }
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
         ProjectRestoreReport(

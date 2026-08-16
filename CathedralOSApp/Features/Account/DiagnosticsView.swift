@@ -21,6 +21,7 @@ struct DiagnosticsView: View {
 
     @Environment(\.modelContext) private var modelContext
     @StateObject private var viewModel: DiagnosticsViewModel
+    @ObservedObject private var syncProbe = SyncProbe.shared
     @State private var copyConfirmation = false
 
     init(
@@ -29,7 +30,8 @@ struct DiagnosticsView: View {
         entitlementService: any StoreKitEntitlementServiceProtocol,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
         healthService: any BackendHealthServiceProtocol = BackendHealthService.shared,
-        syncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
+        syncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
+        projectSyncService: any ProjectCloudSyncServiceProtocol = ProjectCloudSyncService.shared
     ) {
         _viewModel = StateObject(wrappedValue: DiagnosticsViewModel(
             authService: authService,
@@ -37,7 +39,8 @@ struct DiagnosticsView: View {
             entitlementService: entitlementService,
             creditStateService: creditStateService,
             healthService: healthService,
-            syncService: syncService
+            syncService: syncService,
+            projectSyncService: projectSyncService
         ))
     }
 
@@ -53,6 +56,7 @@ struct DiagnosticsView: View {
                 backendHealthSection
                 preflightSection
                 outputRecoverySection
+                lastSyncProbeSection
                 lastErrorsSection
                 copySection
             }
@@ -63,11 +67,13 @@ struct DiagnosticsView: View {
                 viewModel.refresh(modelContext: modelContext)
                 await viewModel.refreshCreditStateIfPossible()
                 await viewModel.refreshCloudOutputCountIfPossible()
+                await viewModel.refreshCloudProjectCountIfPossible()
             }
             .refreshable {
                 viewModel.refresh(modelContext: modelContext)
                 await viewModel.refreshCreditStateIfPossible()
                 await viewModel.refreshCloudOutputCountIfPossible()
+                await viewModel.refreshCloudProjectCountIfPossible()
             }
         }
     }
@@ -378,6 +384,63 @@ struct DiagnosticsView: View {
         }
     }
 
+    private var lastSyncProbeSection: some View {
+        Section("Last Sync Probe (PR-#331)") {
+            if let lastSync = syncProbe.lastSyncDate {
+                Text("Last: \(lastSync.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if !syncProbe.projectURL.isEmpty {
+                    Text("URL: \(syncProbe.projectURL)")
+                        .font(.system(.caption2, design: .monospaced))
+                        .lineLimit(2)
+                }
+                if syncProbe.totalRowsFetched > 0 {
+                    Text("Fetched: \(syncProbe.totalRowsFetched) - Surviving @Query: \(syncProbe.survivingPredicateCount)")
+                        .font(.subheadline.bold())
+                    Text("Raw non-nil: \(syncProbe.rawOutlineNonNilCount)  Raw nil: \(syncProbe.rawOutlineNilCount)")
+                        .font(.system(.caption2, design: .monospaced))
+                }
+                if !syncProbe.sampleRowsWithSection.isEmpty {
+                    Text("With section (first 3):")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    ForEach(syncProbe.sampleRowsWithSection) { row in
+                        probeRowView(row)
+                    }
+                }
+                if !syncProbe.sampleRowsWithoutSection.isEmpty {
+                    Text("Without section (first 3):")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    ForEach(syncProbe.sampleRowsWithoutSection) { row in
+                        probeRowView(row)
+                    }
+                }
+                if syncProbe.totalRowsFetched == 0 {
+                    Text("(no rows fetched yet)").font(.caption).foregroundStyle(.secondary)
+                }
+                if !syncProbe.sectionPairingsDebug.isEmpty {
+                    Text("sections: \(syncProbe.sectionPairingsDebug)").font(.system(.caption2, design: .monospaced)).lineLimit(4)
+                }
+                if let err = syncProbe.lastError {
+                    Text("err: \(err)").font(.caption).foregroundStyle(.red)
+                }
+            } else {
+                Text("No sync has run yet.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func probeRowView(_ row: SyncProbeRow) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(row.title).font(.caption.bold()).lineLimit(1)
+            Text("raw      : \(row.rawOutlineSectionID ?? "nil")").font(.system(.caption2, design: .monospaced))
+            Text("decoded : \(row.decodedFromRaw?.uuidString ?? "nil")").font(.system(.caption2, design: .monospaced))
+            Text("stored   : \(row.swiftDataStored?.uuidString ?? "nil")").font(.system(.caption2, design: .monospaced))
+        }
+    }
     private var lastErrorsSection: some View {
         Section("Last Cloud Errors") {
             if let snap = viewModel.snapshot {

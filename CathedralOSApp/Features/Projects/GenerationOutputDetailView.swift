@@ -162,6 +162,17 @@ struct GenerationOutputDetailView: View {
     @State private var isProcessingCoverImage = false
     @State private var isSyncingOutput = false
 
+    /// Reverse-direction visibility context for this output's source.
+    /// `.section` is the precise link (set via `output.outlineSectionID`); `.project`
+    /// is the graceful fallback for pre-#325 outputs whose section link is
+    /// permanently `nil` (see `loadSourceContext()` for the backfill-history note).
+    private enum SourceContext {
+        case section(OutlineSection)
+        case project(StoryProject)
+    }
+
+    @State private var sourceContext: SourceContext?
+
     // MARK: Action state
     @State private var isActioning  = false
     @State private var actionError: String?
@@ -180,6 +191,89 @@ struct GenerationOutputDetailView: View {
 
     private var hasSufficientCredits: Bool {
         creditState.availableCredits >= selectedCreditCost
+    }
+
+    /// Resolves the reverse-direction link for this output. Called from
+    /// `scrollContent`'s `onAppear` so the header is populated on first render.
+    ///
+    /// Resolution order:
+    /// 1. Section-level (precise) — when `output.outlineSectionID` is set,
+    ///    fetch the `OutlineSection` and surface "Section N: <title>".
+    /// 2. Project-level (graceful fallback) — when the section link is `nil`
+    ///    but `output.sourcePromptPackID` is set, walk through the prompt pack
+    ///    to reach the owning project and surface "From <Project>'s outline".
+    ///    Used for pre-#325 outputs where the cloud `outline_section_id`
+    ///    column is permanently NULL (no derivation path; the column was not
+    ///    written by `run-outline` until PR #325). Without this fallback,
+    ///    those rows would render no header at all.
+    /// 3. No link — neither ID available; nothing is rendered.
+    private func loadSourceContext() {
+        // 1. Precise section link
+        if let id = output.outlineSectionID {
+            let descriptor = FetchDescriptor<OutlineSection>(
+                predicate: #Predicate<OutlineSection> { $0.id == id }
+            )
+            if let section = (try? modelContext.fetch(descriptor))?.first {
+                sourceContext = .section(section)
+                return
+            }
+        }
+        // 2. Project-level fallback
+        if let packID = output.sourcePromptPackID {
+            let descriptor = FetchDescriptor<PromptPack>(
+                predicate: #Predicate<PromptPack> { $0.id == packID }
+            )
+            if let pack = (try? modelContext.fetch(descriptor))?.first,
+               let project = pack.project {
+                sourceContext = .project(project)
+                return
+            }
+        }
+        sourceContext = nil
+    }
+
+    /// Header chip rendering the reverse-direction link for this output.
+    /// Renders one of two shapes (or nothing):
+    /// - Precise section pill (tint-strong, "link" icon) when `outlineSectionID`
+    ///   resolves to an `OutlineSection`. Used for new generations wired through
+    ///   `run-outline/index.ts:370`.
+    /// - Soft project-level pill (tint-dimmed, "rectangle.stack" icon) when only
+    ///   the prompt pack → project chain is available. Used for pre-#325 outputs
+    ///   whose cloud `outline_section_id` is permanently NULL.
+    @ViewBuilder
+    private var sourceContextHeader: some View {
+        switch sourceContext {
+        case .section(let section):
+            HStack(spacing: 6) {
+                Image(systemName: "link")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.tint)
+                Text("Section \(section.position + 1): \(section.title.isEmpty ? "Untitled section" : section.title)")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.tint)
+                Spacer(minLength: 0)
+            }
+            .padding(CathedralTheme.Spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CathedralTheme.Colors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+        case .project(let project):
+            HStack(spacing: 6) {
+                Image(systemName: "rectangle.stack")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.tint.opacity(0.7))
+                Text("From \(project.name)’s outline")
+                    .font(CathedralTheme.Typography.body(13))
+                    .foregroundStyle(.tint.opacity(0.85))
+                Spacer(minLength: 0)
+            }
+            .padding(CathedralTheme.Spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CathedralTheme.Colors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+        case .none:
+            EmptyView()
+        }
     }
 
     private static let dateFormatter: DateFormatter = {
@@ -226,6 +320,7 @@ struct GenerationOutputDetailView: View {
     private var scrollContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
+                sourceContextHeader
                 metadataSection
                 provenanceSection
                 outputTextSection
@@ -250,6 +345,7 @@ struct GenerationOutputDetailView: View {
             if publishError == nil, let persisted = output.publishErrorMessage, !persisted.isEmpty {
                 publishError = persisted
             }
+            loadSourceContext()
         }
         .confirmationDialog(
             output.cloudGenerationOutputID.isEmpty ? "Delete this local output?" : "Delete this output everywhere?",

@@ -88,6 +88,7 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     }
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {}
     func cloudSnapshotPresence() async -> CloudSnapshotPresence { .none }
+    func fetchCloudProjectSnapshotCount() async throws -> Int { 0 }
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
         restoreCalled = true
@@ -483,6 +484,20 @@ final class DataDurabilityTests: XCTestCase {
             return XCTFail("Expected one authoritative success state, got \(coordinator.operationState)")
         }
         XCTAssertTrue(message.contains("Projects restored"))
+    }
+
+    func testCompletedSyncAdvancesOutputRefreshRevision() async throws {
+        let context = try makeInMemoryContext()
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: SpyProjectSyncService(),
+            outputSyncService: SpyOutputSyncService()
+        )
+
+        let initialRevision = coordinator.outputRefreshRevision
+        _ = await coordinator.performOutputSync(context: context)
+
+        XCTAssertEqual(coordinator.outputRefreshRevision, initialRevision + 1)
     }
 
     func testPendingTombstoneStorePersistsAndDeduplicatesDeleteIntent() throws {

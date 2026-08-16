@@ -4,14 +4,20 @@
 // Multi-section generation orchestrator. Kicks off a chapter run that walks
 // outline_sections by parent_id (leaf = single; chapter parent = walks
 // children in position order). Per-section generation calls generate-story
-// with narrow prior-context queries against the 5 structured columns.
+// with narrow prior-context queries against the 5 structured columns
+// (character_deltas, plot_thread_deltas, continuity_facts, open_loops,
+// scene_ending_state).
 //
-// Day 3 (this PR): rate-limit + cost reserve before kickoff; commit on
+// Per Locked Design Rules (PR #306 / #310, Kevin 16:28 EDT):
+//   Rule 2: character_deltas merge fields per character_name (not latest-overwrites)
+//   Rule 3: stable thread/loop IDs across scenes
+//   Rule 4: continuity_facts provenance + active/superseded
+//   Rule 5: ALWAYS inject immediately previous section's summary + ending_state
+//
+// Day 3 (PR #309): rate-limit + cost reserve before kickoff; commit on
 //   chain completion; rollback on failure. Per docs/multi-section-generation.md.
-// Narrow-query refactor of fetchPriorContext deferred to a separate PR
-// (the current "limit to most recent N sections" is the simplest narrow
-// that works; a proper character/thread-based filter requires the section's
-// intent metadata which isn't yet on outline_sections).
+// Day 4 (PR #309 amendment): narrow-query fetchPriorContext uses section intent
+//   (current_characters, current_threads, current_location) instead of recency.
 //
 // Endpoints:
 //   POST /functions/v1/run-outline          — kickoff (auth + idempotency + cost-reserve + run loop)
@@ -24,6 +30,14 @@ import {
   type UserEntitlement,
   availableCredits,
   checkCredits,
+  getCreditCost,
+} from "../generate-story/_credits.ts";
+import {
+  buildGenerateStoryRequest,
+  generationOutputId,
+  projectSnapshotLookupFilter,
+} from "./_generation_request.ts";
+import {
   getCreditCost,
 } from "../generate-story/_credits.ts";
 
@@ -91,6 +105,32 @@ async function handleKickoff(req: Request): Promise<Response> {
     auth: { persistSession: false },
   });
   const idempotencyKey = `${userId}:${body.outline_id}:${body.start_parent_section_id}`;
+
+  // Idempotency: check for existing run first.
+  // - running → return 409 already_running
+  // - terminal (failed/completed) → delete it, then insert a fresh run
+  const { data: existing } = await adminClient
+    .from("chapter_runs")
+    .select("id, status")
+    .eq("idempotency_key", idempotencyKey)
+    .maybeSingle();
+  if (existing && existing.status === "running") {
+    return corsResponse(
+      JSON.stringify({ errorCode: "already_running", run_id: existing.id }),
+      { status: 409 },
+    );
+  }
+  if (existing) {
+    const { error: delErr } = await adminClient
+      .from("chapter_runs")
+      .delete()
+      .eq("id", existing.id);
+    if (delErr) {
+      console.error(`[run-outline] stale run delete failed: ${delErr.message}`);
+      return errorResponse("db_error", `Stale run cleanup failed: ${delErr.message}`, 500);
+    }
+  }
+
   const { data: run, error: insertErr } = await adminClient
     .from("chapter_runs")
     .insert({
@@ -104,26 +144,17 @@ async function handleKickoff(req: Request): Promise<Response> {
     .select()
     .single();
   if (insertErr) {
-    if (insertErr.code === "23505") {
-      const { data: existing } = await adminClient
-        .from("chapter_runs")
-        .select()
-        .eq("idempotency_key", idempotencyKey)
-        .eq("status", "running")
-        .maybeSingle();
-      if (existing) {
-        return corsResponse(
-          JSON.stringify({ errorCode: "already_running", run_id: existing.id }),
-          { status: 409 },
-        );
-      }
-    }
     console.error(`[run-outline] insert failed: ${insertErr.message}`);
     return errorResponse("db_error", insertErr.message, 500);
   }
 
   // 4. Walk the outline so we can estimate cost before the loop.
-  let sections: Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null }>;
+  let sections: Array<{
+    id: string; title: string; position: number;
+    summary: string; container: string | null; pov: string | null;
+    terminal_beat: string | null; story_arc_beat_id: string | null;
+    current_characters: string[]; current_threads: string[]; current_location: string | null;
+  }>;
   try {
     sections = await collectSectionsToGenerate(adminClient, body.outline_id, body.start_parent_section_id);
   } catch (err) {
@@ -189,7 +220,7 @@ async function handleKickoff(req: Request): Promise<Response> {
 
   // 8. Run the outline-walker + per-section loop synchronously. Day 4 will
   //    move this to EdgeRuntime.waitUntil for true async.
-  await runOutline(run.id, body.outline_id, body.start_parent_section_id, body.model, adminClient, userId, estimatedCost, sections);
+  await runOutline(run.id, body.outline_id, body.start_parent_section_id, body.model, adminClient, userId, estimatedCost, sections, authHeader);
 
   // 9. Re-fetch and return final state.
   const { data: finalRun } = await adminClient
@@ -264,7 +295,13 @@ async function runOutline(
   adminClient: ReturnType<typeof createClient>,
   userId: string,
   estimatedCost: number,
-  sections: Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null }>,
+  sections: Array<{
+    id: string; title: string; position: number;
+    summary: string; container: string | null; pov: string | null;
+    terminal_beat: string | null; story_arc_beat_id: string | null;
+    current_characters: string[]; current_threads: string[]; current_location: string | null;
+  }>,
+  authHeader: string,
 ): Promise<void> {
   // Initialize per-section progress in the jsonb column
   await adminClient.from("chapter_runs").update({
@@ -273,6 +310,15 @@ async function runOutline(
     })),
   }).eq("id", runId);
 
+  // We need project_id for embed-section calls (Rule 8: pipeline order).
+  const { data: outlineRow } = await adminClient
+    .from("outlines")
+    .select("local_project_id, lineage_id")
+    .eq("id", outlineId)
+    .single();
+  const projectId = outlineRow?.local_project_id;
+  if (!projectId) {
+    await adminClient.from("chapter_runs").update({
   // Iterate sequentially; stop-the-chain on first failure (Kevin 14:22 EDT)
   let actualCost = 0;
   for (const section of sections) {
@@ -281,10 +327,39 @@ async function runOutline(
       status: "running", started_at: new Date().toISOString(),
     });
     try {
+      // 1. Build the prior context (narrow queries, outline order, ALWAYS-inject previous).
+      //    No K, no recency limit. The current section knows what it needs.
       const priorContext = await fetchPriorContext(adminClient, outlineId, section.id);
-      const result = await callGenerateStory({
-        outline_id: outlineId,
+
+      // 2. Generate the prose (Rule 8: generate first).
+      const generationRequest = buildGenerateStoryRequest({
+        snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
+        section,
+        projectId,
+        selectedModelId: model,
+        lengthMode: estimateLengthModeFromContainer(section.container),
+      });
+      const result = await callGenerateStory(generationRequest, authHeader);
+
+      // 3. Persist the output (Rule 8: generate-story has persisted to generation_outputs;
+      //    fetch raw_text by output_id to pass to embed-section for structured memory
+      //    extraction). The output is persisted BEFORE the next section reads.
+      const rawText = await fetchRawTextFromOutput(adminClient, result.output_id);
+
+      // 4. Extract structured memory (Rule 8: extract AFTER output is persisted).
+      //    This populates section_embeddings with the new shape (stable UUIDs,
+      //    source_section_id, lifecycle) so the next section's prior-context
+      //    query sees this section's structured state.
+      await callEmbedSection({
         outline_section_id: section.id,
+      await callEmbedSection({
+        outline_section_id: section.id,
+        outline_id: outlineId,
+        project_id: projectId,
+        position: section.position,
+        title: section.title,
+        summary: section.summary,
+        container: section.container,
         model: model ?? null,
         project_state_context: priorContext,
       }, adminClient);
@@ -323,10 +398,8 @@ async function runOutline(
     }
   }
 
-  // All sections completed. Day 3: commit the actual cost to the user's
-  // entitlement and insert a user_credit_ledger entry. Drains monthly first,
-  // then purchased (per _credits.ts).
-  await commitCredits(adminClient, userId, actualCost, `run-outline:${runId}`);
+  // generate-story charges each successfully persisted output. This run keeps
+  // the estimate/actual values for progress reporting but must not debit again.
   await adminClient.from("chapter_runs").update({
     status: "completed",
     cost_cents_actual: actualCost,
@@ -358,7 +431,12 @@ async function collectSectionsToGenerate(
   adminClient: ReturnType<typeof createClient>,
   outlineId: string,
   startParentSectionId: string,
-): Promise<Array<{ id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null; current_characters: string[]; current_threads: string[]; current_location: string | null }>> {
+): Promise<Array<{
+  id: string; title: string; position: number;
+  summary: string; container: string | null; pov: string | null;
+  terminal_beat: string | null; story_arc_beat_id: string | null;
+  current_characters: string[]; current_threads: string[]; current_location: string | null;
+}>> {
   const { data: startParent, error: parentErr } = await adminClient
     .from("outline_sections")
     .select("id, parent_id, title")
@@ -370,27 +448,38 @@ async function collectSectionsToGenerate(
   if (startParent.parent_id === null) {
     const { data: leaf, error: leafErr } = await adminClient
       .from("outline_sections")
-      .select("id, title, position, container, pov, terminal_beat, current_characters, current_threads, current_location")
+      .select("id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id, current_characters, current_threads, current_location")
       .eq("id", startParentSectionId)
       .single();
     if (leafErr || !leaf) throw new Error("leaf section not found");
-    return [leaf as { id: string; title: string; position: number; container: string | null; pov: string | null; terminal_beat: string | null; current_characters: string[]; current_threads: string[]; current_location: string | null }];
+    return [leaf as {
+      id: string; title: string; position: number;
+      summary: string; container: string | null; pov: string | null;
+      terminal_beat: string | null; story_arc_beat_id: string | null;
+      current_characters: string[]; current_threads: string[]; current_location: string | null;
+    }];
   }
   const { data: children, error: childErr } = await adminClient
     .from("outline_sections")
-    .select("id, title, position, container, pov, terminal_beat")
+    .select("id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id")
     .eq("parent_id", startParentSectionId)
     .order("position", { ascending: true });
   if (childErr) throw new Error(`failed to fetch children: ${childErr.message}`);
   return children ?? [];
 }
 
-// Day 3: TODO — narrow query refactor. Currently limits to most recent N
-// sections with structured data as a heuristic. A proper character/thread-
-// based filter requires the section's intent metadata which isn't yet on
-// outline_sections. A future PR will add that to the section schema and
-// replace this with targeted jsonb @> queries on character_deltas /
-// plot_thread_deltas.
+// ---- fetchPriorContext (Day 4 narrow-queries amendment per PR #309) ----
+//
+// Per Kevin's hard rule (2026-08-10 18:01 EDT): schema tight, pull deep.
+// The pull fetches ALL structured state from ALL prior sections (in outline
+// order) and aggregates. No manual intent fields. No narrow filtering.
+// The schema (5 structured columns: character_deltas, plot_thread_deltas,
+// continuity_facts, open_loops, scene_ending_state) IS the design.
+//
+// Day 4 amendment: replaced recency-based top-N with intent-based filtering
+// using outline_sections.current_characters / current_threads / current_location
+// (iOS-populated, migration 20260810162000). Falls back to the cumulative
+// aggregate when intent is not yet populated.
 async function fetchPriorContext(
   adminClient: ReturnType<typeof createClient>,
   outlineId: string,
@@ -491,13 +580,40 @@ async function fetchPriorContextAggregate(
     .single();
   const projectId = outlineRow?.local_project_id;
   if (!projectId) return "";
-  const { data, error } = await adminClient
+
+  // 3. Fetch all scenes for the project. We use a separate fetch + JS join
+  //    (vs a Postgres RPC) for v1; same design, just less performant.
+  const { data: allScenes } = await adminClient
     .from("section_embeddings")
-    .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: true });
-  if (error || !data) return "";
-  return aggregateProjectState(data);
+    .select("outline_section_id, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state")
+    .eq("project_id", projectId);
+  if (!allScenes || allScenes.length === 0) return "";
+
+  // 4. Fetch outline positions (Rule 6: outline order, not created_at).
+  const outlineSectionIds = allScenes
+    .map((s) => s.outline_section_id)
+    .filter((id): id is string => typeof id === "string");
+  const { data: outlineSections } = await adminClient
+    .from("outline_sections")
+    .select("id, position")
+    .in("id", outlineSectionIds);
+  const positionById = new Map<string, number>();
+  for (const os of outlineSections ?? []) {
+    positionById.set(os.id, os.position);
+  }
+
+  // 5. Sort by outline position and filter to scenes BEFORE current section.
+  const priorScenes = allScenes
+    .filter((s) => positionById.has(s.outline_section_id))
+    .filter((s) => (positionById.get(s.outline_section_id) ?? 0) < currentPosition)
+    .sort((a, b) => (positionById.get(a.outline_section_id) ?? 0) - (positionById.get(b.outline_section_id) ?? 0));
+  if (priorScenes.length === 0) return "";
+
+  // 6. The immediately previous section (Rule 5: ALWAYS inject).
+  const previousScene = priorScenes[priorScenes.length - 1];
+
+  // 7. Aggregate: pull ALL structured state from prior sections.
+  return aggregateProjectState(priorScenes, previousScene);
 }
 
 function aggregateProjectState(scenes: Array<Record<string, unknown>>): string {
@@ -543,50 +659,124 @@ function aggregateProjectState(scenes: Array<Record<string, unknown>>): string {
   }
   const lines: string[] = ["## Project state (cumulative across all accepted scenes)"];
   lines.push("");
-  if (latestSummary) { lines.push(`**Latest summary:** ${latestSummary}`); lines.push(""); }
+
+  // 1. ALWAYS emit the immediately previous section's summary + ending_state FIRST (Rule 5).
+  if (previousScene) {
+    lines.push("### Immediately previous section (always injected)");
+    lines.push("");
+    if (typeof previousScene.extracted_summary === "string" && previousScene.extracted_summary) {
+      lines.push(`**Summary:** ${previousScene.extracted_summary}`);
+      lines.push("");
+    }
+    if (previousScene.scene_ending_state && typeof previousScene.scene_ending_state === "object") {
+      lines.push("**Ending state:**");
+      lines.push("```json");
+      lines.push(JSON.stringify(previousScene.scene_ending_state, null, 2));
+      lines.push("```");
+      lines.push("");
+    }
+  }
+
+  // 2. Process all scenes for the aggregate.
+  for (const scene of scenes) {
+    // Rule 2: character_deltas merge fields per character_name (not latest-overwrites).
+    if (Array.isArray(scene.character_deltas)) {
+      for (const delta of scene.character_deltas) {
+        if (delta && typeof delta === "object" && typeof (delta as { character_name?: unknown }).character_name === "string") {
+          const name = (delta as { character_name: string }).character_name;
+          const existing = charactersByName.get(name) ?? {};
+          // Merge: existing fields preserved, new fields override (latest wins per field).
+          charactersByName.set(name, { ...existing, ...(delta as Record<string, unknown>) });
+        }
+      }
+    }
+    // Rule 3: plot_thread_deltas use stable IDs. Latest wins by thread_id.
+    if (Array.isArray(scene.plot_thread_deltas)) {
+      for (const thread of scene.plot_thread_deltas) {
+        if (thread && typeof thread === "object" && typeof (thread as { id?: unknown }).id === "string") {
+          const id = (thread as { id: string }).id;
+          threadsById.set(id, thread as Record<string, unknown>);
+        }
+      }
+    }
+    // Rule 4: continuity_facts filter by active/superseded. active=false
+    // means this fact was superseded by a later one; remove it from the set.
+    if (Array.isArray(scene.continuity_facts)) {
+      for (const fact of scene.continuity_facts) {
+        if (fact && typeof fact === "object" && typeof (fact as { id?: unknown }).id === "string") {
+          const id = (fact as { id: string }).id;
+          if ((fact as { active?: boolean }).active === true) {
+            activeFactsById.set(id, fact as Record<string, unknown>);
+          } else {
+            activeFactsById.delete(id);
+          }
+        }
+      }
+    }
+    // Rule 3: open_loops use stable IDs. Latest wins by loop_id.
+    if (Array.isArray(scene.open_loops)) {
+      for (const loop of scene.open_loops) {
+        if (loop && typeof loop === "object" && typeof (loop as { id?: unknown }).id === "string") {
+          const id = (loop as { id: string }).id;
+          openLoopsById.set(id, loop as Record<string, unknown>);
+        }
+      }
+    }
+  }
+
+  // 3. Emit the aggregate.
   if (charactersByName.size > 0) {
-    lines.push("### Characters (latest known state)");
-    for (const delta of charactersByName.values()) lines.push(`- **${delta.character_name}**: ${JSON.stringify(delta)}`);
+    lines.push("### Characters (merged across scenes — Rule 2)");
+    for (const delta of charactersByName.values()) {
+      const name = String((delta as { character_name?: string }).character_name ?? "(unnamed)");
+      lines.push(`- **${name}**: ${JSON.stringify(delta)}`);
+    }
     lines.push("");
   }
-  if (threadsByName.size > 0) {
-    lines.push("### Plot threads (latest status)");
-    for (const thread of threadsByName.values()) lines.push(`- **${thread.thread_name}** [${thread.status}]: ${thread.description}`);
+  if (threadsById.size > 0) {
+    lines.push("### Plot threads (latest status by thread_id — Rule 3)");
+    for (const thread of threadsById.values()) {
+      const name = String((thread as { thread_name?: string }).thread_name ?? "(unnamed)");
+      const status = String((thread as { status?: string }).status ?? "unknown");
+      const id = String((thread as { id: string }).id).slice(0, 8);
+      const desc = String((thread as { description?: string }).description ?? "");
+      lines.push(`- **${name}** [${status}] (id=${id}): ${desc}`);
+    }
     lines.push("");
   }
-  if (continuityFacts.size > 0) {
-    lines.push("### Continuity facts (must not be contradicted)");
-    for (const fact of continuityFacts) lines.push(`- ${fact}`);
+  if (activeFactsById.size > 0) {
+    lines.push("### Active continuity facts (must not be contradicted — Rule 4)");
+    for (const fact of activeFactsById.values()) {
+      const text = String((fact as { fact?: string }).fact ?? JSON.stringify(fact));
+      lines.push(`- ${text}`);
+    }
     lines.push("");
   }
-  if (openLoopsByDesc.size > 0) {
-    lines.push("### Open loops (unresolved)");
-    for (const loop of openLoopsByDesc.values()) lines.push(`- [${loop.type}] ${loop.description}`);
+  if (openLoopsById.size > 0) {
+    lines.push("### Open loops (unresolved — Rule 3)");
+    for (const loop of openLoopsById.values()) {
+      const type = String((loop as { type?: string }).type ?? "unknown");
+      const desc = String((loop as { description?: string }).description ?? "");
+      lines.push(`- [${type}] ${desc}`);
+    }
     lines.push("");
-  }
-  if (latestEndingState && typeof latestEndingState === "object" && Object.keys(latestEndingState).length > 0) {
-    lines.push("### Ending state (latest scene)");
-    lines.push("```json");
-    lines.push(JSON.stringify(latestEndingState, null, 2));
-    lines.push("```");
   }
   return lines.join("\n");
 }
 
+// ---- Rule 8: pipeline order (generate → persist → extract → next) ------
+
 async function callGenerateStory(
-  payload: {
-    outline_id: string;
-    outline_section_id: string;
-    model: string | null;
-    project_state_context: string;
-  },
-  _adminClient: ReturnType<typeof createClient>,
+  payload: Record<string, unknown>,
+  authHeader: string,
 ): Promise<{ output_id: string }> {
   const url = `${SUPABASE_URL}/functions/v1/generate-story`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      // Pass the user's JWT through — generate-story validates via auth.getUser(),
+      // which rejects the service role key with 401.
+      "Authorization": authHeader,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -596,7 +786,73 @@ async function callGenerateStory(
     throw new Error(`generate-story returned ${response.status}: ${errBody.slice(0, 200)}`);
   }
   const result = await response.json();
-  return { output_id: (result as { output_id?: string }).output_id ?? (result as { id?: string }).id ?? "" };
+  const outputId = generationOutputId(result);
+  if (!outputId) throw new Error("generate-story response missing cloudGenerationOutputID");
+  return { output_id: outputId };
+}
+
+// Fetch raw_text from generation_outputs given the output_id returned by
+// generate-story. This is the post-persist read in the Rule 8 pipeline.
+async function fetchRawTextFromOutput(
+  adminClient: ReturnType<typeof createClient>,
+  outputId: string,
+): Promise<string> {
+  if (!outputId) return "";
+  const { data, error } = await adminClient
+    .from("generation_outputs")
+    .select("output_text")
+    .eq("id", outputId)
+    .single();
+  if (error || !data) {
+    throw new Error(
+      `persisted generation output ${outputId} could not be read: ${error?.message ?? "not found"}`,
+    );
+  }
+  const outputText = String((data as { output_text?: string }).output_text ?? "");
+  if (!outputText) throw new Error(`persisted generation output ${outputId} has no prose`);
+  return outputText;
+}
+
+// Call embed-section to extract structured memory from the persisted output.
+// Per Rule 8: this happens AFTER the output is persisted to generation_outputs,
+// giving us raw_text. Per Rule 9: raw_text is passed to embed-section for
+// extraction but NOT used in the embedding vector itself.
+async function callEmbedSection(
+  payload: {
+    outline_section_id: string;
+    outline_id: string;
+    project_id: string;
+    position: number;
+    title: string;
+    summary: string;
+    container: string | null;
+    pov: string | null;
+    terminal_beat: string | null;
+    story_arc_beat_id: string | null;
+    raw_text: string;
+    // The same prior context that run-outline fetches. Passed to
+    // embed-section so the LLM extraction pass knows what is already
+    // stored and can decide what to add/update/supersede.
+    prior_context: string;
+  },
+  _adminClient: ReturnType<typeof createClient>,
+  authHeader: string,
+): Promise<void> {
+  const url = `${SUPABASE_URL}/functions/v1/embed-section`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      // Pass the user's JWT through — embed-section validates the JWT the same
+      // way generate-story does, and rejects the service role key with 401.
+      "Authorization": authHeader,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`embed-section returned ${response.status}: ${errBody.slice(0, 200)}`);
+  }
 }
 
 async function updateSectionStatus(

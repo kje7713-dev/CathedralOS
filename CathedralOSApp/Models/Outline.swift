@@ -16,7 +16,6 @@ class Outline {
 
     var project: StoryProject?
 
-    @Relationship(deleteRule: .cascade, inverse: \OutlineSection.outline)
     var sections: [OutlineSection]
 
     init(name: String = "Outline") {

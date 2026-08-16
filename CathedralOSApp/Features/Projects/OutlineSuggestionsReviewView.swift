@@ -108,12 +108,12 @@ struct OutlineSuggestionsReviewView: View {
                     title: suggestion.title,
                     summary: suggestion.summary
                 )
+                modelContext.insert(section)
                 section.container = suggestion.container
                 section.pov = suggestion.pov
                 section.terminalBeat = suggestion.terminalBeat
                 section.storyArcBeatID = UUID(uuidString: suggestion.storyArcBeatID)
                 section.outline = outline
-                modelContext.insert(section)
                 createdSections.append(section)
             }
             do {

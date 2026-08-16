@@ -1,0 +1,15 @@
+diff --git a/CathedralOSApp/Features/Projects/ProjectDetailView.swift b/CathedralOSApp/Features/Projects/ProjectDetailView.swift
+index 2f11720..1111111 100644
+--- a/CathedralOSApp/Features/Projects/ProjectDetailView.swift
++++ b/CathedralOSApp/Features/Projects/ProjectDetailView.swift
+@@ -253,10 +253,6 @@ struct ProjectDetailView: View {
+         }
+     }
+     }
+-    }
+-    }
+-    }
+-    }
+ 
+     // MARK: - Mode Picker / First-run hint
+ 

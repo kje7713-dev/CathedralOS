@@ -220,7 +220,7 @@ export function snapshotPricing(
     outputCreditRatePer1k:
       (model.provider_output_usd_per_1m ?? 0) * multiplier / 10,
     billingMultiplier: multiplier,
-    minimumChargeCredits: defaults.minimumChargeCredits,
+    minimumChargeCredits: model.minimum_charge_credits ?? defaults.minimumChargeCredits,
     creditValueUsd: defaults.creditValueUsd,
     effectiveAt: model.pricing_effective_at,
   };

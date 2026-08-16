@@ -1,5 +1,45 @@
 import SwiftUI
 import SwiftData
+import os
+
+
+/// Captured at Generate-tap time. Stores the outline ID so the kickoff
+/// never has to re-resolve the outline through `section.outline`,
+/// `currentOutline`, or `project.outlines` — those lookups were returning
+/// nil at kickoff time even though the outline was clearly there at tap
+/// time (the section list rendered, so the outline existed).
+struct OutlineGenerationTarget: Identifiable {
+    let id = UUID()
+    let section: OutlineSection
+    let outlineID: UUID
+}
+
+
+/// Writes diagnostic events to a file in the app's Documents directory.
+/// The user pulls the file via Files app → On My iPhone → CathedralOS →
+/// cathedral-diagnostic-log.txt. Required because Kevin is iOS-only with
+/// no Mac access — print() to the Xcode console is wasted work.
+enum DiagnosticLog {
+    static let url: URL = {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return docs.appendingPathComponent("cathedral-diagnostic-log.txt")
+    }()
+
+    static func write(_ event: String) {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let line = "[" + formatter.string(from: Date()) + "] " + event + "\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if FileManager.default.fileExists(atPath: url.path) {
+            guard let handle = try? FileHandle(forWritingTo: url) else { return }
+            defer { try? handle.close() }
+            try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: url)
+        }
+    }
+}
 
 /// Outline Sections region (bottom of the Outline tab).
 ///
@@ -10,12 +50,100 @@ import SwiftData
 /// project's `Outline` if it doesn't exist yet, so users can start
 /// adding sections immediately after picking an arc template.
 struct OutlineSectionsRegionView: View {
+    private static let logger = Logger(subsystem: "CathedralOS", category: "OutlineOutputs")
+
     @Bindable var project: StoryProject
     let modelContext: ModelContext
 
+    // PR #338: observe DataDurabilityCoordinator so the @Published flips from
+    // runOperation (isRunning, operationState, lastSyncFinishedAt, etc.) trigger
+    // a view body re-evaluation here. PR #337 routed the polling path through
+    // performManualSyncAll so runOperation fires, but the view didn't observe
+    // the coordinator, so those flips never propagated to OutlineSectionsRegionView
+    // and the eye button still didn't appear after PR #337.
+    //
+    // AccountView already observes via @ObservedObject — that's why the manual
+    // Sync Everything button works (the AccountView re-renders when @Published
+    // flips). Account → Diagnostics → back-to-Outline navigation is what was
+    // forcing the @Query re-fetch on PR #335-era manual sync. This @ObservedObject
+    // wires the same re-render hook into this view directly, without navigation.
+    @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator = .shared
+
     @State private var sectionsOrder: [OutlineSection] = []
     @State private var editingSection: OutlineSection?
-    @State private var showingGenerateStub = false
+    @State private var generationTarget: OutlineGenerationTarget?
+    @State private var isKickingOff = false
+    @State private var runOutlineError: String?
+    // PR #341: bypass SwiftData's @Query auto-refresh path. The @Query has been
+    // failing silently to refresh for programmatic inserts (a known SwiftData
+    // issue in iOS 17.x). Replace with @State + manual fetch via
+    // refreshAllOutputs() called after every sync (manual OR polling) and on
+    // view appear. Assigning to @State triggers SwiftUI view body re-evaluation,
+    // so outputsBySection recomputes and the eye button appears. This addresses
+    // H1 (stale @Query) from the Codex investigation directly.
+    @State private var allOutputs: [GenerationOutput] = []
+
+    private func refreshAllOutputs() {
+        let descriptor = FetchDescriptor<GenerationOutput>(
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        allOutputs = (try? modelContext.fetch(descriptor)) ?? []
+    }
+
+    /// Eye-debug snapshot record. Invoked from the coordinator's polling Task
+    /// on the main actor after `performManualSyncAll` completes. Compares the
+    /// view's `@State` snapshot against a fresh `modelContext.fetch` and
+    /// records the diff into `EyeDebugStore` (surfaces in the copyable
+    /// Diagnostics text) and `DiagnosticLog`.
+    ///
+    /// Extracted from the inline closure so the type-checker can resolve
+    /// `kickoffAndStartPolling` without timing out (Swift's type-checker has
+    /// a budget per expression; inline closures inside complex call sites
+    /// can blow the budget).
+    private func recordEyeDebug(context: ModelContext) {
+        do {
+            let fetchedOutputs = try context.fetch(
+                FetchDescriptor<GenerationOutput>(
+                    sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+                )
+            )
+            DiagnosticLog.write("""
+eye-debug:
+queryCount=\(allOutputs.count)
+fetchCount=\(fetchedOutputs.count)
+querySectionIDs=\(allOutputs.compactMap(\.outlineSectionID))
+fetchSectionIDs=\(fetchedOutputs.compactMap(\.outlineSectionID))
+visibleSectionIDs=\(sectionsOrder.map(\.id))
+""")
+            EyeDebugStore.shared.record(
+                EyeDebugStore.Snapshot(
+                    timestamp: Date(),
+                    queryCount: allOutputs.count,
+                    fetchCount: fetchedOutputs.count,
+                    querySectionIDs: allOutputs.compactMap(\.outlineSectionID),
+                    fetchSectionIDs: fetchedOutputs.compactMap(\.outlineSectionID),
+                    visibleSectionIDs: sectionsOrder.map(\.id)
+                )
+            )
+        } catch {
+            DiagnosticLog.write("eye-debug: fetch failed: \(error.localizedDescription)")
+        }
+    }
+    @State private var generationToView: GenerationOutput?
+
+    private var outputsBySection: [UUID: [GenerationOutput]] {
+        var dict: [UUID: [GenerationOutput]] = [:]
+        for output in allOutputs {
+            if let sectionID = output.outlineSectionID {
+                Self.logger.debug(
+                    "Output \(output.id, privacy: .public) decoded outlineSectionID=\(sectionID, privacy: .public); local section match=\(sectionsOrder.contains { $0.id == sectionID }, privacy: .public)"
+                )
+                dict[sectionID, default: []].append(output)
+            }
+        }
+        return dict
+    }
+    private let runOutlineService = RunOutlineService()
     @State private var showingSuggestionSheet = false
     @State private var suggestions: [OutlineSuggestion] = []
     @State private var suggestionsLoading = false
@@ -37,6 +165,9 @@ struct OutlineSectionsRegionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+            if let status = durabilityCoordinator.activeRunStatus {
+                ActiveRunBanner(status: status)
+            }
             header
             if currentOutline != nil {
                 sectionsList
@@ -52,6 +183,24 @@ struct OutlineSectionsRegionView: View {
         .task {
             ensureOutline()
             syncSectionsOrder()
+            refreshAllOutputs()
+        }
+        // PR #342: observe the cathedralOSGenerationOutputsChanged notification
+        // posted by DataDurabilityCoordinator.runOperation after any sync (manual
+        // OR polling) completes. Decouples the view refresh from the @State
+        // lifecycle, which is the root cause of the eye button not appearing
+        // after polling-driven syncs (the polling inner Task captures `self`
+        // and the @State storage can be released before the Task completes).
+        .onReceive(NotificationCenter.default.publisher(
+            for: .cathedralOSGenerationOutputsChanged
+        )) { _ in
+            refreshAllOutputs()
+        }
+        // Notifications are transient. Keep a durable coordinator revision as
+        // the authoritative refresh signal so a view that briefly loses its
+        // subscription still observes the latest completed sync.
+        .onChange(of: durabilityCoordinator.outputRefreshRevision) { _, _ in
+            refreshAllOutputs()
         }
         .onChange(of: sectionsKey) { _, _ in
             syncSectionsOrder()
@@ -69,10 +218,29 @@ struct OutlineSectionsRegionView: View {
                 }
             )
         }
-        .alert("Generate", isPresented: $showingGenerateStub) {
-            Button("OK") { }
-        } message: {
-            Text("Coming soon — generation wires in Phase 3.")
+        .sheet(item: $generationToView) { output in
+            NavigationStack {
+                GenerationOutputDetailView(output: output, hidePager: true)
+            }
+        }
+        .sheet(item: $generationTarget) { target in
+            KickoffConfirmationSheet(
+                project: project,
+                section: target.section,
+                isStarting: isKickingOff,
+                runOutlineError: runOutlineError,
+                onConfirm: { selectedModelId in
+                    await kickoffAndStartPolling(target, model: selectedModelId)
+                },
+                onCancel: {
+                    generationTarget = nil
+                    runOutlineError = nil
+                }
+            )
+            .onAppear {
+                // Clear any stale "Outline not found." from the previous attempt.
+                runOutlineError = nil
+            }
         }
         .alert("Suggest Sections Failed", isPresented: Binding(
             get: { suggestionsError != nil },
@@ -131,8 +299,8 @@ struct OutlineSectionsRegionView: View {
     private func ensureOutline() {
         guard project.outlines.isEmpty else { return }
         let outline = Outline(name: "Outline")
-        outline.project = project
         modelContext.insert(outline)
+        outline.project = project
         try? modelContext.save()
     }
 
@@ -217,7 +385,20 @@ struct OutlineSectionsRegionView: View {
                 OutlineSectionRow(
                     section: section,
                     arcBeatLabel: arcBeatLabel(for: section),
+                    outputs: outputsBySection[section.id] ?? [],
+                    onGenerate: {
+                        if let outline = currentOutline {
+                            // Capture outlineID at tap time — never re-resolve later.
+                            runOutlineError = nil
+                            generationTarget = OutlineGenerationTarget(
+                                section: section,
+                                outlineID: outline.id
+                            )
+                            DiagnosticLog.write("tap: outlineID=\(outline.id.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
+                        }
+                    },
                     onAccept: { Task { await acceptSection(section) } },
+                    onTapOutput: { output in generationToView = output },
                     isAccepting: acceptingSectionID == section.id
                 )
                 .listRowBackground(CathedralTheme.Colors.background)
@@ -269,8 +450,8 @@ struct OutlineSectionsRegionView: View {
             title: "New Section",
             summary: ""
         )
-        newSection.outline = outline
         modelContext.insert(newSection)
+        newSection.outline = outline
         try? modelContext.save()
     }
 
@@ -293,8 +474,8 @@ struct OutlineSectionsRegionView: View {
         dup.pov = section.pov
         dup.terminalBeat = section.terminalBeat
         dup.storyArcBeatID = section.storyArcBeatID
-        dup.outline = outline
         modelContext.insert(dup)
+        dup.outline = outline
         try? modelContext.save()
     }
 
@@ -375,9 +556,92 @@ struct OutlineSectionsRegionView: View {
             embedError = error.localizedDescription
         }
     }
+    // MARK: - Day 4 generation wiring
+
+    /// Kick off a run for the given generation target and start polling for status.
+    /// Called from the KickoffConfirmationSheet's onConfirm.
+    ///
+    /// The outlineID is captured at Generate-tap time and passed through here.
+    /// We intentionally do NOT re-resolve the outline through `section.outline`,
+    /// `currentOutline`, or `project.outlines` — those lookups were returning
+    /// nil at kickoff time even though the outline existed at tap time.
+    private func kickoffAndStartPolling(_ target: OutlineGenerationTarget, model: String? = nil) async {
+        let section = target.section
+        let outlineID = target.outlineID
+        DiagnosticLog.write("kickoff: outlineID=\(outlineID.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
+        isKickingOff = true
+        defer { isKickingOff = false }
+        do {
+            // Sync the outline to the cloud before kickoff. The edge function
+            // looks up the outline by ID and returns 404 if it doesn't exist yet.
+            // (addSection doesn't trigger a sync on its own — only
+            // modelContext.save() — so an outline added manually can be
+            // local-only at kickoff time.)
+            DiagnosticLog.write("kickoff: syncing project to cloud")
+            try await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
+            DiagnosticLog.write("kickoff: sync complete")
+            let response = try await runOutlineService.kickoff(
+                outlineID: outlineID.uuidString,
+                startParentSectionID: section.id.uuidString,
+                model: model
+            )
+            generationTarget = nil
+            runOutlineError = nil
+            let initialStatus = RunOutlineStatus(
+                run_id: response.run_id,
+                status: response.status,
+                outline_id: outlineID.uuidString,
+                start_parent_section_id: section.id.uuidString,
+                sections_done: 0,
+                sections_total: response.sections?.count,
+                sections_failed: 0,
+                current_section: nil,
+                sections: response.sections,
+                error: response.error,
+                cost_cents_reserved: response.cost_cents_reserved,
+                cost_cents_actual: response.cost_cents_actual,
+                created_at: response.created_at,
+                updated_at: response.updated_at,
+                completed_at: response.completed_at
+            )
+            // Kickoff is synchronous on the server: it returns when the run
+            // finishes (or fails). If the response already has a terminal
+            // status, sync immediately rather than waiting for a polling
+            // Task to detect it -- PR #345 attempted that and the polling
+            // path was silently failing in practice.
+            if response.status == "completed" || response.status == "failed" {
+                DiagnosticLog.write("kickoff: run finished during kickoff (\(response.status)); triggering syncAll")
+                _ = await DataDurabilityCoordinator.shared.performManualSyncAll(context: modelContext)
+                DiagnosticLog.write("kickoff: syncAll complete")
+                refreshAllOutputs()
+                recordEyeDebug(context: modelContext)
+            } else {
+                // Long-running kickoff (multi-section runs that exceed the
+                // 180s kickoff timeout, or async backend). Fall back to the
+                // coordinator's polling Task.
+                durabilityCoordinator.startPolling(
+                    runID: response.run_id,
+                    initialStatus: initialStatus,
+                    runOutlineService: runOutlineService,
+                    context: modelContext,
+                    onSyncCompleted: { [self] context in
+                        self.refreshAllOutputs()
+                        self.recordEyeDebug(context: context)
+                    }
+                )
+            }
+        } catch let error as RunOutlineError {
+            runOutlineError = error.errorDescription
+        } catch {
+            runOutlineError = error.localizedDescription
+        }
+    }
+
+
 }
 
 /// Single section row in the sections list.
+
 ///
 /// Reads from a SwiftData `@Model` directly so live edits (title, summary,
 /// status badge color) reflect immediately. Tap gesture is handled by the
@@ -386,8 +650,10 @@ struct OutlineSectionsRegionView: View {
 struct OutlineSectionRow: View {
     @Bindable var section: OutlineSection
     let arcBeatLabel: String?
+    var outputs: [GenerationOutput] = []
     var onGenerate: (() -> Void)? = nil
     var onAccept: (() async -> Void)? = nil
+    var onTapOutput: ((GenerationOutput) -> Void)? = nil
     var isAccepting: Bool = false
 
     var body: some View {
@@ -416,6 +682,43 @@ struct OutlineSectionRow: View {
             }
             Spacer()
             HStack(spacing: CathedralTheme.Spacing.sm) {
+                if !outputs.isEmpty, let onTapOutput {
+                    if outputs.count == 1, let firstOutput = outputs.first {
+                        Button {
+                            onTapOutput(firstOutput)
+                        } label: {
+                            HStack(spacing: 2) {
+                                latestOutputStatusIcon
+                                Image(systemName: "eye")
+                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("View output for this section (\(latestOutputStatusLabel))")
+                    } else if outputs.count > 1 {
+                        Menu {
+                            ForEach(outputs.sorted(by: { $0.createdAt > $1.createdAt })) { output in
+                                Button {
+                                    onTapOutput(output)
+                                } label: {
+                                    Text(outputMenuLabel(for: output))
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 2) {
+                                latestOutputStatusIcon
+                                Image(systemName: "eye")
+                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                    .foregroundStyle(.tint)
+                                Text("\(outputs.count)")
+                                    .font(CathedralTheme.Typography.caption(11, weight: .semibold))
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                        .accessibilityLabel("View \(outputs.count) outputs for this section (latest: \(latestOutputStatusLabel))")
+                    }
+                }
                 if let onAccept, section.status != "accepted" {
                     Button {
                         Task { await onAccept() }
@@ -467,5 +770,346 @@ struct OutlineSectionRow: View {
         case "accepted":   return .green
         default:           return .gray
         }
+    }
+
+    /// Most recent output for this section (driven by the parent `\@Query`'s
+    /// `sort: \\GenerationOutput.createdAt, order: .reverse`).
+    private var latestOutput: GenerationOutput? { outputs.first }
+
+    /// Latest output's `GenerationStatus`, or nil if the section has no outputs
+    /// or the persisted status string doesn't decode (older migration rows).
+    private var latestOutputStatus: GenerationStatus? {
+        latestOutput.flatMap { GenerationStatus(rawValue: $0.status) }
+    }
+
+    /// SF Symbol + color for the latest output's status. Rendered beside the eye
+    /// in both the single-output Button and multi-output Menu, so the user sees
+    /// "in-flight / failed / complete" at a glance without tapping.
+    @ViewBuilder
+    private var latestOutputStatusIcon: some View {
+        if let status = latestOutputStatus {
+            switch status {
+            case .complete:
+                Image(systemName: "checkmark.circle.fill")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.green)
+            case .generating:
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.blue)
+            case .failed:
+                Image(systemName: "xmark.octagon.fill")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.red)
+            case .draft:
+                Image(systemName: "circle.dashed")
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// User-facing string for accessibility (`"complete"`, `"generating"`, etc).
+    /// Returns `""` when there is no latest output so VoiceOver reads no extra
+    /// sentence instead of a confusing "unknown".
+    private var latestOutputStatusLabel: String {
+        latestOutputStatus?.displayName ?? ""
+    }
+
+    /// Single-line label for the multi-output `Menu`: title (if present) + abbreviated date.
+    /// Empty titles fall back to a date-only label so the menu is never just a list of UUIDs.
+    private func outputMenuLabel(for output: GenerationOutput) -> String {
+        let date = output.createdAt.formatted(date: .abbreviated, time: .shortened)
+        if output.title.isEmpty {
+            return "Output from \(date)"
+        }
+        return "\(output.title) — \(date)"
+    }
+}
+
+
+// MARK: - Day 4 UI: kickoff confirmation sheet + progress banner
+
+/// Bottom sheet shown before kicking off a generation run. Lets the user
+/// confirm the cost + time estimate before starting.
+struct KickoffConfirmationSheet: View {
+    let project: StoryProject
+    let section: OutlineSection
+    let isStarting: Bool
+    let runOutlineError: String?
+    let onConfirm: (String?) async -> Void
+    let onCancel: () -> Void
+
+    private let generationModelService: any GenerationModelServiceProtocol = BackendGenerationModelService()
+    private let estimateService: any GenerationCostEstimateServiceProtocol = SupabaseGenerationService()
+
+    @State private var generationModels: [GenerationModelOption] = []
+    @State private var selectedModelId: String?
+    @State private var costEstimate: GenerationCostEstimate?
+    @State private var isEstimating = false
+    @State private var estimateError: String?
+
+    private var firstPack: PromptPack? {
+        project.promptPacks.sorted(by: { $0.name < $1.name }).first
+    }
+
+    private var selectedModel: GenerationModelOption? {
+        generationModels.first(where: { $0.id == selectedModelId })
+    }
+
+    /// Mirrors `estimateLengthModeFromContainer` in supabase/functions/run-outline/index.ts.
+    /// chapter / episode / novella → .chapter; shortStory → .short; else → .long.
+    private var lengthModeForContainer: GenerationLengthMode {
+        switch section.container {
+        case "chapter", "episode", "novella": return .chapter
+        case "shortStory": return .short
+        default: return .long
+        }
+    }
+
+    private var selectedContainerEnum: Container? {
+        section.container.flatMap(Container.init(rawValue:))
+    }
+
+    private var selectedPOVEnum: POV? {
+        section.pov.flatMap(POV.init(rawValue:))
+    }
+
+    private var canStart: Bool {
+        guard !isStarting else { return false }
+        if let est = costEstimate { return est.allowed }
+        return true // optimistic until estimate arrives
+    }
+
+    var body: some View {
+        VStack(spacing: CathedralTheme.Spacing.base) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 44))
+                .foregroundStyle(.tint)
+                .padding(.top, CathedralTheme.Spacing.sm)
+            Text("Generate Section")
+                .font(CathedralTheme.Typography.headline(20, weight: .semibold))
+            Text("'\(section.title.isEmpty ? "Untitled section" : section.title)'")
+                .font(CathedralTheme.Typography.body(15))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, CathedralTheme.Spacing.base)
+            modelPicker
+                .padding(.top, CathedralTheme.Spacing.sm)
+            estimateRow
+                .padding(.top, CathedralTheme.Spacing.xs)
+            if let error = runOutlineError {
+                Text(error)
+                    .font(CathedralTheme.Typography.body(13))
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, CathedralTheme.Spacing.base)
+            }
+            HStack(spacing: CathedralTheme.Spacing.md) {
+                Button("Cancel", role: .cancel) {
+                    onCancel()
+                }
+                .buttonStyle(.bordered)
+                .disabled(isStarting)
+                Button {
+                    Task { await onConfirm(selectedModelId) }
+                } label: {
+                    if isStarting {
+                        ProgressView()
+                    } else {
+                        Text("Start")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canStart)
+            }
+            .padding(.top, CathedralTheme.Spacing.md)
+        }
+        .padding(CathedralTheme.Spacing.lg)
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+        .task { await loadModelsAndEstimate() }
+        .onChange(of: selectedModelId) { _, _ in
+            Task { await refreshEstimate() }
+        }
+    }
+
+    // MARK: - Model picker + estimate (mirrors ProjectDetailView's picker/creditEstimateRow)
+
+    @ViewBuilder
+    private var modelPicker: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("MODEL".uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            if generationModels.isEmpty {
+                Text("Loading models…")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            } else {
+                Picker("Model", selection: $selectedModelId) {
+                    ForEach(generationModels) { model in
+                        Text(model.displayName).tag(Optional(model.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                if let selectedModel {
+                    Text(selectedModel.description ?? "No description.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var estimateRow: some View {
+        if isEstimating {
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                ProgressView().scaleEffect(0.7)
+                Text("Estimating cost…")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if let err = estimateError {
+            HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+                Text(err)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if let estimate = costEstimate {
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                Image(systemName: "bolt.circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(estimate.allowed
+                        ? CathedralTheme.Colors.secondaryText
+                        : CathedralTheme.Colors.destructive)
+                if estimate.allowed {
+                    Text("Up to: \(estimate.estimatedCredits) \(estimate.estimatedCredits <= 1 ? "credit" : "credits") · \(estimate.availableCredits) remaining")
+                        .font(CathedralTheme.Typography.label(11, weight: .regular))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                } else {
+                    Text("Need \(estimate.estimatedCredits) \(estimate.estimatedCredits <= 1 ? "credit" : "credits"), you have \(estimate.availableCredits)")
+                        .font(CathedralTheme.Typography.label(11, weight: .regular))
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @MainActor
+    private func loadModelsAndEstimate() async {
+        do {
+            generationModels = try await generationModelService.fetchEnabledModels()
+            if selectedModelId == nil, let first = generationModels.first {
+                selectedModelId = first.id
+            }
+        } catch {
+            // Models failed to load -- continue with empty list; user can still attempt kickoff
+            // and the run-outline endpoint will use its own default model.
+        }
+        await refreshEstimate()
+    }
+
+    @MainActor
+    private func refreshEstimate() async {
+        guard let pack = firstPack else {
+            // No prompt pack on the project -- nothing to estimate against.
+            return
+        }
+        isEstimating = true
+        estimateError = nil
+        do {
+            costEstimate = try await estimateService.estimateGenerationCost(
+                project: project,
+                pack: pack,
+                lengthMode: lengthModeForContainer,
+                selectedContainer: selectedContainerEnum,
+                selectedPOV: selectedPOVEnum,
+                terminalBeat: section.terminalBeat,
+                selectedModelId: selectedModelId
+            )
+        } catch {
+            estimateError = error.localizedDescription
+            costEstimate = nil
+        }
+        isEstimating = false
+    }
+}
+
+/// Progress banner shown at the top of the OutlineSectionsRegionView while
+/// a generation run is active. Updates from `activeRunStatus` (polled every
+/// 3 seconds while running).
+struct ActiveRunBanner: View {
+    let status: RunOutlineStatus
+
+    var body: some View {
+        HStack(spacing: CathedralTheme.Spacing.md) {
+            if isRunning {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: isCompleted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(isCompleted ? Color.green : Color.red)
+                    .font(.title3)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                Text(subtitle)
+                    .font(CathedralTheme.Typography.caption(12))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            Spacer()
+        }
+        .padding(CathedralTheme.Spacing.md)
+        .background(CathedralTheme.Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isCompleted ? Color.green.opacity(0.3) : isFailed ? Color.red.opacity(0.3) : Color.clear, lineWidth: 1)
+        }
+    }
+
+    private var isRunning: Bool {
+        status.status == "running" || status.status == "queued"
+    }
+
+    private var isCompleted: Bool {
+        status.status == "completed"
+    }
+
+    private var isFailed: Bool {
+        status.status == "failed"
+    }
+
+    private var title: String {
+        if isCompleted { return "Generation complete" }
+        if isFailed { return "Generation failed" }
+        if let current = status.current_section {
+            return "Generating '\(current.title)'"
+        }
+        let done = status.sections_done ?? 0
+        let total = status.sections_total ?? 0
+        return "Generating section \(done + 1) of \(total)"
+    }
+
+    private var subtitle: String {
+        if let error = status.error { return error }
+        let done = status.sections_done ?? 0
+        let total = status.sections_total ?? 0
+        if isCompleted { return "Done (\(done) of \(total) sections)" }
+        if let current = status.current_section {
+            return "Section \(done + 1) of \(total): \(current.title)"
+        }
+        return "Running"
     }
 }

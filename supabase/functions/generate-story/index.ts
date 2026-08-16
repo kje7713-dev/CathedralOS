@@ -202,6 +202,11 @@ interface GenerateStoryRequest {
   // in the user message so the model sees it right before the Writing Task.
   terminalBeat?: string;
   localGenerationID?: string;
+  // UUID string of the outline_sections row that this generation belongs to.
+  // Persisted verbatim onto generation_outputs.outline_section_id so the iOS
+  // sync roundtrips it into GenerationOutput.outlineSectionID (PR #325 wire).
+  // Optional for backwards compat — omitted => null.
+  outline_section_id?: string;
 }
 
 interface GenerationOutputInsert {
@@ -218,6 +223,10 @@ interface GenerationOutputInsert {
   output_budget: number;
   status: "complete" | "draft";
   visibility: "private";
+  // `outline_sections.id` (nullable; older rows or non-section generations
+  // leave it null). Cloud schema column added by migration
+  // 20260812170000_add_outline_section_id_to_generation_outputs.sql.
+  outline_section_id: string | null;
 }
 
 interface GenerationUsageEventInsert {
@@ -1783,6 +1792,24 @@ async function handler(
       ? JSON.parse(body.sourcePayloadJSON)
       : body.sourcePayloadJSON;
 
+  // === Diagnose PR #327 write path ===
+  // One-line probe: log the value `body.outline_section_id` actually carries at insert time
+  // plus the request body's keys. Three branches surface from the probe:
+  //   1. value is a UUID, body keys include `outline_section_id` -> value reaches generate-story
+  //      but DB write silently fails -> RLS / column-grant / schema-cache issue
+  //   2. value is undefined, body keys OMIT `outline_section_id` -> run-outline emission bug
+  //   3. value is null, body keys include `outline_section_id` -> run-outline is emitting null
+  //      explicitly -> `section.id` missing in the loop / collection step
+  // Re-deploy this file with `gh workflow run "Supabase Deploy" --ref main` (already shipped
+  // by PR #327), kick off any fresh generation, then read the function log
+  // (`gh run view <deploy-run-id> --log`) to see what printed here.
+  console.log(
+    "[generate-story] inserting output with outline_section_id:",
+    body.outline_section_id,
+    "| body keys:",
+    Object.keys(body).sort().join(","),
+  );
+
   const { data: outputRow, error: outputInsertError } = await persistence.insertOutput({
     user_id: userId,
     local_generation_id: body.localGenerationID ?? null,
@@ -1797,6 +1824,7 @@ async function handler(
     output_budget: maxCompletionTokens,
     status: outputStatus,
     visibility: "private",
+    outline_section_id: body.outline_section_id ?? null,
   });
 
   if (outputInsertError || !outputRow?.id) {
@@ -1933,6 +1961,7 @@ async function handler(
   return corsResponse(
     JSON.stringify({
       generatedText,
+      cloudGenerationOutputID: outputRow.id,
       title,
       modelName: llmResult.modelName,
       generationAction,
