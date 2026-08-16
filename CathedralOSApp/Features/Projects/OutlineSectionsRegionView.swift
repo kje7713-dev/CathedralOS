@@ -72,10 +72,8 @@ struct OutlineSectionsRegionView: View {
     @State private var sectionsOrder: [OutlineSection] = []
     @State private var editingSection: OutlineSection?
     @State private var generationTarget: OutlineGenerationTarget?
-    @State private var activeRunStatus: RunOutlineStatus?
     @State private var isKickingOff = false
     @State private var runOutlineError: String?
-    @State private var pollingTask: Task<Void, Never>?
     // PR #341: bypass SwiftData's @Query auto-refresh path. The @Query has been
     // failing silently to refresh for programmatic inserts (a known SwiftData
     // issue in iOS 17.x). Replace with @State + manual fetch via
@@ -90,6 +88,46 @@ struct OutlineSectionsRegionView: View {
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
         allOutputs = (try? modelContext.fetch(descriptor)) ?? []
+    }
+
+    /// Eye-debug snapshot record. Invoked from the coordinator's polling Task
+    /// on the main actor after `performManualSyncAll` completes. Compares the
+    /// view's `@State` snapshot against a fresh `modelContext.fetch` and
+    /// records the diff into `EyeDebugStore` (surfaces in the copyable
+    /// Diagnostics text) and `DiagnosticLog`.
+    ///
+    /// Extracted from the inline closure so the type-checker can resolve
+    /// `kickoffAndStartPolling` without timing out (Swift's type-checker has
+    /// a budget per expression; inline closures inside complex call sites
+    /// can blow the budget).
+    private func recordEyeDebug(context: ModelContext) {
+        do {
+            let fetchedOutputs = try context.fetch(
+                FetchDescriptor<GenerationOutput>(
+                    sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+                )
+            )
+            DiagnosticLog.write("""
+eye-debug:
+queryCount=\(allOutputs.count)
+fetchCount=\(fetchedOutputs.count)
+querySectionIDs=\(allOutputs.compactMap(\.outlineSectionID))
+fetchSectionIDs=\(fetchedOutputs.compactMap(\.outlineSectionID))
+visibleSectionIDs=\(sectionsOrder.map(\.id))
+""")
+            EyeDebugStore.shared.record(
+                EyeDebugStore.Snapshot(
+                    timestamp: Date(),
+                    queryCount: allOutputs.count,
+                    fetchCount: fetchedOutputs.count,
+                    querySectionIDs: allOutputs.compactMap(\.outlineSectionID),
+                    fetchSectionIDs: fetchedOutputs.compactMap(\.outlineSectionID),
+                    visibleSectionIDs: sectionsOrder.map(\.id)
+                )
+            )
+        } catch {
+            DiagnosticLog.write("eye-debug: fetch failed: \(error.localizedDescription)")
+        }
     }
     @State private var generationToView: GenerationOutput?
 
@@ -127,7 +165,7 @@ struct OutlineSectionsRegionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
-            if let status = activeRunStatus {
+            if let status = durabilityCoordinator.activeRunStatus {
                 ActiveRunBanner(status: status)
             }
             header
@@ -547,7 +585,9 @@ struct OutlineSectionsRegionView: View {
                 startParentSectionID: section.id.uuidString,
                 model: model
             )
-            activeRunStatus = RunOutlineStatus(
+            generationTarget = nil
+            runOutlineError = nil
+            let initialStatus = RunOutlineStatus(
                 run_id: response.run_id,
                 status: response.status,
                 outline_id: outlineID.uuidString,
@@ -564,9 +604,16 @@ struct OutlineSectionsRegionView: View {
                 updated_at: response.updated_at,
                 completed_at: response.completed_at
             )
-            generationTarget = nil
-            runOutlineError = nil
-            startPolling(runID: response.run_id)
+            durabilityCoordinator.startPolling(
+                runID: response.run_id,
+                initialStatus: initialStatus,
+                runOutlineService: runOutlineService,
+                context: modelContext,
+                onSyncCompleted: { [self] context in
+                    self.refreshAllOutputs()
+                    self.recordEyeDebug(context: context)
+                }
+            )
         } catch let error as RunOutlineError {
             runOutlineError = error.errorDescription
         } catch {
@@ -574,103 +621,6 @@ struct OutlineSectionsRegionView: View {
         }
     }
 
-    /// Poll the run-outline status endpoint every 3 seconds until the run
-    /// finishes or fails. UI updates flow through `activeRunStatus`.
-    private func startPolling(runID: String) {
-        pollingTask?.cancel()
-        pollingTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-                do {
-                    let status = try await runOutlineService.status(runID: runID)
-                    activeRunStatus = status
-                    if status.status == "completed" || status.status == "failed" {
-                        // PR #327+ chain: after a kickoff completes in cloud, refresh
-                        // generation_outputs so the @Query for `outlineSectionID != nil`
-                        // picks up the freshly-persisted rows (with `outline_section_id`
-                        // populated by run-outline).
-                        //
-                        // PR #334 routed this through direct pullOutputs, and PR #335
-                        // added a MainActor.run wrap on top. Both failed to surface the
-                        // eye button while the view was already attached — direct
-                        // pullOutputs bypasses DataDurabilityCoordinator's @Published
-                        // state changes that drive the manual-sync path's view refresh,
-                        // and the MainActor.run wrap was a no-op because CathedralOS
-                        // runs on Swift 5 (nonisolated async inherits MainActor anyway).
-                        //
-                        // Kevin's call: route through the proven-working manual-sync
-                        // path — performManualSyncAll — which is what the Account →
-                        // "Sync Everything" button uses. Same pullOutputs under the hood,
-                        // but it goes through DataDurabilityCoordinator.runOperation so
-                        // the @Published state flips, and the polling path now mirrors
-                        // the working manual-sync path exactly.
-                        // PR #341: Task.detached so this inner Task survives view
-                        // lifecycle. Previously a child of `pollingTask` (via plain
-                        // `Task { ... }`); when Kevin navigates to Diagnostics while
-                        // the run completes, `pollingTask`'s @State is released and
-                        // child tasks are cancelled before performManualSyncAll
-                        // completes. Detaching ensures the sync + refresh + eye-debug
-                        // block all run to completion regardless of view lifecycle.
-                        Task.detached(priority: .userInitiated) { @MainActor in
-                            DiagnosticLog.write("poll: run finished (\(status.status)); triggering syncAll")
-                            _ = await DataDurabilityCoordinator.shared.performManualSyncAll(context: modelContext)
-                            DiagnosticLog.write("poll: syncAll complete")
-                            // PR #341: refresh @State allOutputs from modelContext so the
-                            // view body re-evaluates and outputsBySection picks up the
-                            // newly-pulled rows. Bypasses the broken @Query auto-refresh.
-                            refreshAllOutputs()
-                            // PR #339 (Codex investigation, no fix): compare @Query vs fresh
-                            // modelContext.fetch after the sync to identify which layer is
-                            // stale. Interpretation:
-                            //  - fetch contains new row but @Query does not -> H1: @Query stale
-                            //  - both contain it but eye is missing -> UUID mismatch in outputsBySection
-                            //  - neither contains it -> write went through a different ModelContext
-                            //  - row exists but outlineSectionID == nil -> makeLocalOutput or backend
-                            do {
-                                let fetchedOutputs = try modelContext.fetch(
-                                    FetchDescriptor<GenerationOutput>(
-                                        sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
-                                    )
-                                )
-                                DiagnosticLog.write("""
-eye-debug:
-queryCount=\(allOutputs.count)
-fetchCount=\(fetchedOutputs.count)
-querySectionIDs=\(allOutputs.compactMap(\.outlineSectionID))
-fetchSectionIDs=\(fetchedOutputs.compactMap(\.outlineSectionID))
-visibleSectionIDs=\(sectionsOrder.map(\.id))
-""")
-                                // PR #340: also record into EyeDebugStore so the snapshot
-                                // surfaces in the copyable Diagnostics text. The DiagnosticLog
-                                // file is not accessible from the Files app on TestFlight builds
-                                // (UIFileSharingEnabled is off in Info.plist) — the only reliable
-                                // way for Kevin to share the diagnostic data is to paste the
-                                // Diagnostics screen's copy output. EyeDebugStore is read by
-                                // DiagnosticsViewModel.buildLines() to add an --- Eye Debug ---
-                                // section that mirrors the above log block.
-                                EyeDebugStore.shared.record(
-                                    EyeDebugStore.Snapshot(
-                                        timestamp: Date(),
-                                        queryCount: allOutputs.count,
-                                        fetchCount: fetchedOutputs.count,
-                                        querySectionIDs: allOutputs.compactMap(\.outlineSectionID),
-                                        fetchSectionIDs: fetchedOutputs.compactMap(\.outlineSectionID),
-                                        visibleSectionIDs: sectionsOrder.map(\.id)
-                                    )
-                                )
-                            } catch {
-                                DiagnosticLog.write("eye-debug: fetch failed: \(error.localizedDescription)")
-                            }
-                        }
-                        break
-                    }
-
-                } catch {
-                    // keep polling on transient errors
-                }
-            }
-        }
-    }
 
 }
 
