@@ -379,44 +379,58 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         }
     }
 
+    @ViewBuilder
+    private func sectionRowContent(_ section: OutlineSection) -> some View {
+        OutlineSectionRow(
+            section: section,
+            arcBeatLabel: arcBeatLabel(for: section),
+            outputs: outputsBySection[section.id] ?? [],
+            onGenerate: {
+                if let outline = currentOutline {
+                    runOutlineError = nil
+                    generationTarget = OutlineGenerationTarget(
+                        section: section,
+                        outlineID: outline.id
+                    )
+                    DiagnosticLog.write("tap: outlineID=\(outline.id.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
+                }
+            },
+            onAccept: { Task { await acceptSection(section) } },
+            onTapOutput: { output in generationToView = output },
+            isAccepting: acceptingSectionID == section.id
+        )
+        .listRowBackground(CathedralTheme.Colors.background)
+        .listRowSeparator(.hidden)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) {
+                deleteSection(section)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            Button {
+                duplicateSection(section)
+            } label: {
+                Label("Duplicate", systemImage: "doc.on.doc")
+            }
+            .tint(.blue)
+        }
+    }
+
     private var sectionsList: some View {
         List {
             ForEach(sectionsOrder, id: \.id) { section in
-                OutlineSectionRow(
-                    section: section,
-                    arcBeatLabel: arcBeatLabel(for: section),
-                    outputs: outputsBySection[section.id] ?? [],
-                    onGenerate: {
-                        if let outline = currentOutline {
-                            // Capture outlineID at tap time — never re-resolve later.
-                            runOutlineError = nil
-                            generationTarget = OutlineGenerationTarget(
-                                section: section,
-                                outlineID: outline.id
-                            )
-                            DiagnosticLog.write("tap: outlineID=\(outline.id.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
-                        }
-                    },
-                    onAccept: { Task { await acceptSection(section) } },
-                    onTapOutput: { output in generationToView = output },
-                    isAccepting: acceptingSectionID == section.id
-                )
-                .listRowBackground(CathedralTheme.Colors.background)
-                .listRowSeparator(.hidden)
-                .contentShape(Rectangle())
-                .onTapGesture { editingSection = section }
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) {
-                        deleteSection(section)
+                if section.parent == nil {
+                    // Chapter row (top-level) -- wrap in NavigationLink to chapter reader
+                    NavigationLink {
+                        ChapterReaderView(chapter: section, project: project)
                     } label: {
-                        Label("Delete", systemImage: "trash")
+                        sectionRowContent(section)
                     }
-                    Button {
-                        duplicateSection(section)
-                    } label: {
-                        Label("Duplicate", systemImage: "doc.on.doc")
-                    }
-                    .tint(.blue)
+                } else {
+                    // Sub-section row -- current behavior (tap to edit)
+                    sectionRowContent(section)
+                        .contentShape(Rectangle())
+                        .onTapGesture { editingSection = section }
                 }
             }
             .onMove(perform: moveSections)
