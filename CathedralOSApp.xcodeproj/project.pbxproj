@@ -444,6 +444,7 @@
 				000000000000000000000098 /* Ask */,
 				0000000000000000000000AA /* Templates */,
 				0000000000000000000000D3 /* Projects */,
+				FF0000000000000000000A03 /* Reader */,
 				00000000000000000000015A /* Account */,
 				000000000000000000000FF4 /* Home */,
 			);
@@ -454,8 +455,6 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000031 /* CathedralView.swift */,
-					FF0000000000000000000A03 /* Reader */,
-);
 			path = CathedralEditor;
 			sourceTree = "<group>";
 		};
