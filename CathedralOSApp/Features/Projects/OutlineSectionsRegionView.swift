@@ -838,7 +838,7 @@ struct KickoffConfirmationSheet: View {
     let section: OutlineSection
     let isStarting: Bool
     let runOutlineError: String?
-    let onConfirm: (String?) async -> Void
+    let onConfirm: (String?, String?) async -> Void
     let onCancel: () -> Void
 
     private let generationModelService: any GenerationModelServiceProtocol = BackendGenerationModelService()
@@ -848,6 +848,7 @@ struct KickoffConfirmationSheet: View {
     @State private var selectedModelId: String?
     @State private var costEstimate: GenerationCostEstimate?
     @State private var isEstimating = false
+    @State private var selectedScope: String
     @State private var estimateError: String?
 
     private var firstPack: PromptPack? {
@@ -897,6 +898,8 @@ struct KickoffConfirmationSheet: View {
                 .padding(.horizontal, CathedralTheme.Spacing.base)
             modelPicker
                 .padding(.top, CathedralTheme.Spacing.sm)
+            scopePicker
+                .padding(.top, CathedralTheme.Spacing.xs)
             estimateRow
                 .padding(.top, CathedralTheme.Spacing.xs)
             if let error = runOutlineError {
@@ -1003,6 +1006,44 @@ struct KickoffConfirmationSheet: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    init(
+        project: StoryProject,
+        section: OutlineSection,
+        isStarting: Bool,
+        runOutlineError: String?,
+        onConfirm: @escaping (String?, String?) async -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.project = project
+        self.section = section
+        self.isStarting = isStarting
+        self.runOutlineError = runOutlineError
+        self.onConfirm = onConfirm
+        self.onCancel = onCancel
+        self._generationModels = State(initialValue: [])
+        self._selectedModelId = State(initialValue: nil)
+        self._costEstimate = State(initialValue: nil)
+        self._isEstimating = State(initialValue: false)
+        self._estimateError = State(initialValue: nil)
+        // Default scope: chapter rows start at "chapter" (multi-section), sub-sections at "single" (current behavior).
+        self._selectedScope = State(initialValue: section.parent == nil ? "chapter" : "single")
+    }
+
+    /// Scope picker UI. Three modes: single (just this section), chapter (this chapter + all
+    /// descendants), from_here (this section + all subsequent sections in outline order).
+    private var scopePicker: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("Scope")
+                .font(CathedralTheme.Typography.caption(13, weight: .semibold))
+            Picker("Scope", selection: $selectedScope) {
+                Text("This section").tag("single")
+                Text("This chapter").tag("chapter")
+                Text("From here").tag("from_here")
+            }
+            .pickerStyle(.segmented)
         }
     }
 
