@@ -716,7 +716,7 @@
 		FF0000000000000000000A03 /* Reader */ = {
 			isa = PBXGroup;
 			children = (
-			FF0000000000000000000A01 /* ChapterReaderView.swift */,
+				FF0000000000000000000A01 /* ChapterReaderView.swift */,
 			);
 			path = Reader;
 			sourceTree = "<group>";
