@@ -229,8 +229,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 section: target.section,
                 isStarting: isKickingOff,
                 runOutlineError: runOutlineError,
-                onConfirm: { selectedModelId in
-                    await kickoffAndStartPolling(target, model: selectedModelId)
+                onConfirm: { selectedModelId, selectedScope in
+                    await kickoffAndStartPolling(target, model: selectedModelId, scope: selectedScope)
                 },
                 onCancel: {
                     generationTarget = nil
@@ -565,7 +565,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     /// We intentionally do NOT re-resolve the outline through `section.outline`,
     /// `currentOutline`, or `project.outlines` — those lookups were returning
     /// nil at kickoff time even though the outline existed at tap time.
-    private func kickoffAndStartPolling(_ target: OutlineGenerationTarget, model: String? = nil) async {
+    private func kickoffAndStartPolling(_ target: OutlineGenerationTarget, model: String? = nil, scope: String? = nil) async {
         let section = target.section
         let outlineID = target.outlineID
         DiagnosticLog.write("kickoff: outlineID=\(outlineID.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
@@ -583,7 +583,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             let response = try await runOutlineService.kickoff(
                 outlineID: outlineID.uuidString,
                 startParentSectionID: section.id.uuidString,
-                model: model
+                model: model,
+                scope: scope
             )
             generationTarget = nil
             runOutlineError = nil
@@ -912,7 +913,7 @@ struct KickoffConfirmationSheet: View {
                 .buttonStyle(.bordered)
                 .disabled(isStarting)
                 Button {
-                    Task { await onConfirm(selectedModelId) }
+                    Task { await onConfirm(selectedModelId, selectedScope) }
                 } label: {
                     if isStarting {
                         ProgressView()

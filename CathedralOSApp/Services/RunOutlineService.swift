@@ -115,7 +115,8 @@ struct RunOutlineService {
     func kickoff(
         outlineID: String,
         startParentSectionID: String,
-        model: String? = nil
+        model: String? = nil,
+        scope: String? = nil
     ) async throws -> RunOutlineKickoffResponse {
         let client = try requireClient()
         guard let token = authService.currentAccessToken else {
@@ -132,6 +133,9 @@ struct RunOutlineService {
         ]
         if let model, !model.isEmpty {
             body["model"] = model
+        }
+        if let scope, !scope.isEmpty {
+            body["scope"] = scope
         }
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
 

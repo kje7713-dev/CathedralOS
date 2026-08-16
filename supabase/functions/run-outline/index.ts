@@ -58,6 +58,13 @@ interface RunOutlineRequest {
   outline_id: string;
   start_parent_section_id: string;
   model?: string;
+  /**
+   * Generation scope. Determines which sections the run walks.
+   *   "single"    -- just the start section (default, current behavior)
+   *   "chapter"   -- the chapter (top-level ancestor) containing start, plus all its descendants
+   *   "from_here" -- start + all subsequent sections in outline order (by position)
+   */
+  scope?: string;
 }
 
 Deno.serve(async (req: Request) => {
@@ -151,7 +158,8 @@ async function handleKickoff(req: Request): Promise<Response> {
     terminal_beat: string | null; story_arc_beat_id: string | null;
   }>;
   try {
-    sections = await collectSectionsToGenerate(adminClient, body.outline_id, body.start_parent_section_id);
+    const scope = body.scope || "single";
+    sections = await collectSectionsToGenerate(adminClient, body.outline_id, body.start_parent_section_id, scope);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await adminClient.from("chapter_runs").update({
@@ -444,20 +452,24 @@ async function collectSectionsToGenerate(
   adminClient: ReturnType<typeof createClient>,
   outlineId: string,
   startParentSectionId: string,
+  scope: string = "single",
 ): Promise<Array<{
   id: string; title: string; position: number;
   summary: string; container: string | null; pov: string | null;
   terminal_beat: string | null; story_arc_beat_id: string | null;
 }>> {
-  const { data: startParent, error: parentErr } = await adminClient
+  // Look up the start section (need parent_id for chapter walk + position for from_here)
+  const { data: startSection, error: parentErr } = await adminClient
     .from("outline_sections")
-    .select("id, parent_id, title")
+    .select("id, parent_id, position")
     .eq("id", startParentSectionId)
     .single();
-  if (parentErr || !startParent) {
+  if (parentErr || !startSection) {
     throw new Error(`start_parent_section_id not found: ${startParentSectionId}`);
   }
-  if (startParent.parent_id === null) {
+
+  // 'single' scope: return just the start section (default, preserves current behavior)
+  if (scope === "single") {
     const { data: leaf, error: leafErr } = await adminClient
       .from("outline_sections")
       .select("id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id")
@@ -470,13 +482,60 @@ async function collectSectionsToGenerate(
       terminal_beat: string | null; story_arc_beat_id: string | null;
     }];
   }
-  const { data: children, error: childErr } = await adminClient
+
+  // 'chapter' and 'from_here' need every section in the outline (parent_id for the tree walk, position for ordering)
+  const { data: allSections, error: allErr } = await adminClient
+    .from("outline_sections")
+    .select("id, parent_id, position, title, summary, container, pov, terminal_beat, story_arc_beat_id")
+    .eq("outline_id", outlineId)
+    .order("position", { ascending: true });
+  if (allErr) throw new Error(`failed to fetch outline sections: ${allErr.message}`);
+  if (!allSections || allSections.length === 0) return [];
+
+  if (scope === "from_here") {
+    // Start + every section that comes after it in outline order (by position)
+    return allSections.filter((s) => s.position >= startSection.position);
+  }
+
+  if (scope === "chapter") {
+    // Walk up to find the chapter (top-level ancestor). If start is already top-level, it's the chapter.
+    let chapterId = startSection.id;
+    let current: { id: string; parent_id: string | null } = startSection;
+    while (current.parent_id !== null) {
+      const parent = allSections.find((s) => s.id === current.parent_id);
+      if (!parent) break;
+      chapterId = parent.id;
+      current = parent;
+    }
+    // Walk down: collect every descendant of the chapter (including the chapter itself)
+    const chapterDescendants = new Set<string>([chapterId]);
+    let added = true;
+    while (added) {
+      added = false;
+      for (const s of allSections) {
+        if (s.parent_id && chapterDescendants.has(s.parent_id) && !chapterDescendants.has(s.id)) {
+          chapterDescendants.add(s.id);
+          added = true;
+        }
+      }
+    }
+    return allSections
+      .filter((s) => chapterDescendants.has(s.id))
+      .sort((a, b) => a.position - b.position);
+  }
+
+  // Unknown scope: fall back to single-section (safe default)
+  const { data: leaf, error: leafErr } = await adminClient
     .from("outline_sections")
     .select("id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id")
-    .eq("parent_id", startParentSectionId)
-    .order("position", { ascending: true });
-  if (childErr) throw new Error(`failed to fetch children: ${childErr.message}`);
-  return children ?? [];
+    .eq("id", startParentSectionId)
+    .single();
+  if (leafErr || !leaf) throw new Error("leaf section not found");
+  return [leaf as {
+    id: string; title: string; position: number;
+    summary: string; container: string | null; pov: string | null;
+    terminal_beat: string | null; story_arc_beat_id: string | null;
+  }];
 }
 
 // ---- fetchPriorContext (Deep pull, no manual input) -------------------
