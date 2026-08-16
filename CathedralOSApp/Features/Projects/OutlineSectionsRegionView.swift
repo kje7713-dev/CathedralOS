@@ -72,10 +72,8 @@ struct OutlineSectionsRegionView: View {
     @State private var sectionsOrder: [OutlineSection] = []
     @State private var editingSection: OutlineSection?
     @State private var generationTarget: OutlineGenerationTarget?
-    // activeRunStatus + pollingTask moved to DataDurabilityCoordinator
-    // (PR #345). See `durabilityCoordinator.activeRunStatus` and
-    // `durabilityCoordinator.startPolling(...)`. isKickingOff and
-    // runOutlineError stay here -- still used by kickoffAndStartPolling.
+    @State private var isKickingOff = false
+    @State private var runOutlineError: String?
     // PR #341: bypass SwiftData's @Query auto-refresh path. The @Query has been
     // failing silently to refresh for programmatic inserts (a known SwiftData
     // issue in iOS 17.x). Replace with @State + manual fetch via
@@ -90,6 +88,46 @@ struct OutlineSectionsRegionView: View {
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
         allOutputs = (try? modelContext.fetch(descriptor)) ?? []
+    }
+
+    /// Eye-debug snapshot record. Invoked from the coordinator's polling Task
+    /// on the main actor after `performManualSyncAll` completes. Compares the
+    /// view's `@State` snapshot against a fresh `modelContext.fetch` and
+    /// records the diff into `EyeDebugStore` (surfaces in the copyable
+    /// Diagnostics text) and `DiagnosticLog`.
+    ///
+    /// Extracted from the inline closure so the type-checker can resolve
+    /// `kickoffAndStartPolling` without timing out (Swift's type-checker has
+    /// a budget per expression; inline closures inside complex call sites
+    /// can blow the budget).
+    private func recordEyeDebug(context: ModelContext) {
+        do {
+            let fetchedOutputs = try context.fetch(
+                FetchDescriptor<GenerationOutput>(
+                    sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+                )
+            )
+            DiagnosticLog.write("""
+eye-debug:
+queryCount=\(allOutputs.count)
+fetchCount=\(fetchedOutputs.count)
+querySectionIDs=\(allOutputs.compactMap(\.outlineSectionID))
+fetchSectionIDs=\(fetchedOutputs.compactMap(\.outlineSectionID))
+visibleSectionIDs=\(sectionsOrder.map(\.id))
+""")
+            EyeDebugStore.shared.record(
+                EyeDebugStore.Snapshot(
+                    timestamp: Date(),
+                    queryCount: allOutputs.count,
+                    fetchCount: fetchedOutputs.count,
+                    querySectionIDs: allOutputs.compactMap(\.outlineSectionID),
+                    fetchSectionIDs: fetchedOutputs.compactMap(\.outlineSectionID),
+                    visibleSectionIDs: sectionsOrder.map(\.id)
+                )
+            )
+        } catch {
+            DiagnosticLog.write("eye-debug: fetch failed: \(error.localizedDescription)")
+        }
     }
     @State private var generationToView: GenerationOutput?
 
@@ -547,23 +585,6 @@ struct OutlineSectionsRegionView: View {
                 startParentSectionID: section.id.uuidString,
                 model: model
             )
-            activeRunStatus = RunOutlineStatus(
-                run_id: response.run_id,
-                status: response.status,
-                outline_id: outlineID.uuidString,
-                start_parent_section_id: section.id.uuidString,
-                sections_done: 0,
-                sections_total: response.sections?.count,
-                sections_failed: 0,
-                current_section: nil,
-                sections: response.sections,
-                error: response.error,
-                cost_cents_reserved: response.cost_cents_reserved,
-                cost_cents_actual: response.cost_cents_actual,
-                created_at: response.created_at,
-                updated_at: response.updated_at,
-                completed_at: response.completed_at
-            )
             generationTarget = nil
             runOutlineError = nil
             let initialStatus = RunOutlineStatus(
@@ -583,41 +604,14 @@ struct OutlineSectionsRegionView: View {
                 updated_at: response.updated_at,
                 completed_at: response.completed_at
             )
-            durabilityCoordinator.activeRunStatus = initialStatus
             durabilityCoordinator.startPolling(
                 runID: response.run_id,
+                initialStatus: initialStatus,
                 runOutlineService: runOutlineService,
                 context: modelContext,
-                onSyncCompleted: { [weak self] context in
-                    guard let self else { return }
+                onSyncCompleted: { [self] context in
                     self.refreshAllOutputs()
-                    do {
-                        let fetchedOutputs = try context.fetch(
-                            FetchDescriptor<GenerationOutput>(
-                                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
-                            )
-                        )
-                        DiagnosticLog.write("""
-eye-debug:
-queryCount=\(self.allOutputs.count)
-fetchCount=\(fetchedOutputs.count)
-querySectionIDs=\(self.allOutputs.compactMap(\.outlineSectionID))
-fetchSectionIDs=\(fetchedOutputs.compactMap(\.outlineSectionID))
-visibleSectionIDs=\(self.sectionsOrder.map(\.id))
-""")
-                        EyeDebugStore.shared.record(
-                            EyeDebugStore.Snapshot(
-                                timestamp: Date(),
-                                queryCount: self.allOutputs.count,
-                                fetchCount: fetchedOutputs.count,
-                                querySectionIDs: self.allOutputs.compactMap(\.outlineSectionID),
-                                fetchSectionIDs: fetchedOutputs.compactMap(\.outlineSectionID),
-                                visibleSectionIDs: self.sectionsOrder.map(\.id)
-                            )
-                        )
-                    } catch {
-                        DiagnosticLog.write("eye-debug: fetch failed: \(error.localizedDescription)")
-                    }
+                    self.recordEyeDebug(context: context)
                 }
             )
         } catch let error as RunOutlineError {

@@ -253,12 +253,13 @@ final class DataDurabilityCoordinator: ObservableObject {
     ///     `@State`.
     func startPolling(
         runID: String,
+        initialStatus: RunOutlineStatus?,
         runOutlineService: RunOutlineService,
         context: ModelContext,
         onSyncCompleted: @escaping @MainActor (ModelContext) -> Void
     ) {
         pollingTask?.cancel()
-        activeRunStatus = nil
+        activeRunStatus = initialStatus
 
         let coordinator = self
         pollingTask = Task.detached(priority: .userInitiated) { @MainActor in
