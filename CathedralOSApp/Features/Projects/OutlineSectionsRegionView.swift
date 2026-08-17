@@ -697,12 +697,12 @@ struct OutlineSectionRow: View {
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 .frame(width: 24, alignment: .trailing)
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: CathedralTheme.Spacing.sm) {
-                    Text(section.title.isEmpty ? "Untitled section" : section.title)
-                        .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
+                // Title: full card width, wraps to 2 lines if needed.
+                Text(section.title.isEmpty ? "Untitled section" : section.title)
+                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 if let arcBeatLabel {
                     Label(arcBeatLabel, systemImage: "link")
                         .font(CathedralTheme.Typography.caption(12))
