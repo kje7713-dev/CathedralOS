@@ -957,6 +957,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 				C000000000000000000000B8 /* OutlineSectionsRegionView.swift in Sources */,
 				C000000000000000000000BC /* StoryArcBeatEditView.swift in Sources */,
 				C000000000000000000000BE /* OutlineSectionEditView.swift in Sources */,
+				FF0000000000000000000A02 /* ChapterReaderView.swift in Sources */,
 
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1005,7 +1006,6 @@ echo \"Runtime config plist injection completed: keys present\"";
 				00000000000000000000019A /* DiagnosticsTests.swift in Sources */,
 				0000000000000000000001A4 /* ProjectCloudSyncTests.swift in Sources */,
 				0000000000000000000001B0 /* TestSupabaseConfiguration.swift in Sources */,
-				FF0000000000000000000A02 /* ChapterReaderView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
