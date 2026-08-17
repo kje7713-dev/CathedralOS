@@ -354,6 +354,7 @@
 		C000000000000000000000B3 /* OutlineTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineTabView.swift; sourceTree = "<group>"; };
 		C000000000000000000000B5 /* StoryArcRegionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcRegionView.swift; sourceTree = "<group>"; };
 		C000000000000000000000B7 /* OutlineSectionsRegionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSectionsRegionView.swift; sourceTree = "<group>"; };
+				FF0000000000000000000A01 /* ChapterReaderView.swift */,
 		C000000000000000000000BB /* StoryArcBeatEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcBeatEditView.swift; sourceTree = "<group>"; };
 		C000000000000000000000BD /* OutlineSectionEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSectionEditView.swift; sourceTree = "<group>"; };
 		F3EE330364824863A746DB8C /* OutlineSuggestion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSuggestion.swift; sourceTree = "<group>"; };
@@ -444,7 +445,6 @@
 				000000000000000000000098 /* Ask */,
 				0000000000000000000000AA /* Templates */,
 				0000000000000000000000D3 /* Projects */,
-				FF0000000000000000000A03 /* Reader */,
 				00000000000000000000015A /* Account */,
 				000000000000000000000FF4 /* Home */,
 			);
@@ -714,15 +714,6 @@
 			path = Home;
 			sourceTree = "<group>";
 		};
-		FF0000000000000000000A03 /* Reader */ = {
-			isa = PBXGroup;
-			children = (
-				FF0000000000000000000A01 /* ChapterReaderView.swift */,
-			);
-			path = Reader;
-			sourceTree = "<group>";
-		};
-
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
