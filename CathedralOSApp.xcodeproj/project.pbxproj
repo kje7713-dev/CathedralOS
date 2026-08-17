@@ -176,6 +176,7 @@
 		10621F3654A24EB7BD4AD2CA /* RunOutlineService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5430CDF96B54F2DB1EA9DB3 /* RunOutlineService.swift */; };
 		01579AB3A87A416FB3A782AEC98BBD0F /* StoryArcSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 208FD465CC98402DAB1F888587871DC2 /* StoryArcSyncService.swift */; };
 		19FB03A4C42F49D391D349FE /* OutlineSuggestionsReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01FDB60572384C8E8B538827 /* OutlineSuggestionsReviewView.swift */; };
+		FF0000000000000000000A02 /* ChapterReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0000000000000000000A01 /* ChapterReaderView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -361,6 +362,7 @@
 		D5430CDF96B54F2DB1EA9DB3 /* RunOutlineService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunOutlineService.swift; sourceTree = "<group>"; };
 		208FD465CC98402DAB1F888587871DC2 /* StoryArcSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcSyncService.swift; sourceTree = "<group>"; };
 		01FDB60572384C8E8B538827 /* OutlineSuggestionsReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSuggestionsReviewView.swift; sourceTree = "<group>"; };
+		FF0000000000000000000A01 /* ChapterReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChapterReaderView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -686,8 +688,10 @@
 				C000000000000000000000B3 /* OutlineTabView.swift */,
 				C000000000000000000000B5 /* StoryArcRegionView.swift */,
 				C000000000000000000000B7 /* OutlineSectionsRegionView.swift */,
+				FF0000000000000000000A01 /* ChapterReaderView.swift */,
 				C000000000000000000000BB /* StoryArcBeatEditView.swift */,
-				C000000000000000000000BD /* OutlineSectionEditView.swift */,		01FDB60572384C8E8B538827 /* OutlineSuggestionsReviewView.swift */,
+				C000000000000000000000BD /* OutlineSectionEditView.swift */,
+				01FDB60572384C8E8B538827 /* OutlineSuggestionsReviewView.swift */,
 
 			);
 			path = Projects;
@@ -953,6 +957,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 				C000000000000000000000B8 /* OutlineSectionsRegionView.swift in Sources */,
 				C000000000000000000000BC /* StoryArcBeatEditView.swift in Sources */,
 				C000000000000000000000BE /* OutlineSectionEditView.swift in Sources */,
+				FF0000000000000000000A02 /* ChapterReaderView.swift in Sources */,
 
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1001,7 +1006,6 @@ echo \"Runtime config plist injection completed: keys present\"";
 				00000000000000000000019A /* DiagnosticsTests.swift in Sources */,
 				0000000000000000000001A4 /* ProjectCloudSyncTests.swift in Sources */,
 				0000000000000000000001B0 /* TestSupabaseConfiguration.swift in Sources */,
-
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
