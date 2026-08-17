@@ -865,6 +865,12 @@ struct KickoffConfirmationSheet: View {
     @State private var selectedScope: String
     @State private var estimateError: String?
 
+    // Phase 7: free, non-blocking pre-flight check. See CoherenceCheckService.
+    private let coherenceCheckService = CoherenceCheckService()
+    @State private var coherenceWarnings: [CoherenceWarning] = []
+    @State private var coherenceChecking = false
+    @State private var coherenceError: String?
+
     private var firstPack: PromptPack? {
         project.promptPacks.sorted(by: { $0.name < $1.name }).first
     }
@@ -916,6 +922,8 @@ struct KickoffConfirmationSheet: View {
                 .padding(.top, CathedralTheme.Spacing.xs)
             estimateRow
                 .padding(.top, CathedralTheme.Spacing.xs)
+            coherenceWarningsRow
+                .padding(.top, CathedralTheme.Spacing.xs)
             if let error = runOutlineError {
                 Text(error)
                     .font(CathedralTheme.Typography.body(13))
@@ -946,7 +954,10 @@ struct KickoffConfirmationSheet: View {
         .padding(CathedralTheme.Spacing.lg)
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
-        .task { await loadModelsAndEstimate() }
+        .task {
+            await loadModelsAndEstimate()
+            await loadCoherence()
+        }
         .onChange(of: selectedModelId) { _, _ in
             Task { await refreshEstimate() }
         }
@@ -1098,6 +1109,101 @@ struct KickoffConfirmationSheet: View {
             costEstimate = nil
         }
         isEstimating = false
+    }
+
+    // MARK: - Coherence check (Phase 7)
+
+    /// View model for the soft-warn callout. Renders:
+    ///   - loading spinner while the check is running,
+    ///   - yellow callout with one row per warning when there are any,
+    ///   - nothing when the check returned empty (no contradictions found
+    ///     OR no accepted neighbors yet).
+    @ViewBuilder
+    private var coherenceWarningsRow: some View {
+        if coherenceChecking {
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                ProgressView().scaleEffect(0.7)
+                Text("Checking for conflicts with existing sections…")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if !coherenceWarnings.isEmpty {
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                HStack(spacing: CathedralTheme.Spacing.xs) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.yellow)
+                    Text("Possible conflicts with accepted sections")
+                        .font(CathedralTheme.Typography.label(11, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+                ForEach(coherenceWarnings) { warning in
+                    HStack(alignment: .top, spacing: CathedralTheme.Spacing.xs) {
+                        Text("•").font(.caption).foregroundStyle(.yellow)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(warning.section_title)
+                                .font(CathedralTheme.Typography.label(11, weight: .semibold))
+                            Text(warning.reason)
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        }
+                    }
+                }
+                Text("These are soft warnings. Starting the run is your call — review the conflicts first if you agree.")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .padding(.top, 2)
+            }
+            .padding(CathedralTheme.Spacing.sm)
+            .background(Color.yellow.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        // else: no warnings, no error -> render nothing (clean sheet)
+        // Errors are silently swallowed — coherence check is best-effort
+        // and must never block the user from kicking off a run.
+    }
+
+    /// Fire the free, non-blocking coherence pre-flight. Soft-warns only;
+    /// never surfaces an error to the user (failures are just dropped).
+    @MainActor
+    private func loadCoherence() async {
+        // Don't double-fire when the user reopens the sheet.
+        guard coherenceWarnings.isEmpty, !coherenceChecking else { return }
+
+        // Skip if the section has no premise to check (empty title and summary).
+        let trimmedTitle = section.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSummary = section.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty || !trimmedSummary.isEmpty else { return }
+
+        coherenceChecking = true
+        defer { coherenceChecking = false }
+
+        let beatLabel: String? = {
+            guard let beatID = section.storyArcBeatID else { return nil }
+            return availableBeats.first(where: { $0.id == beatID })?.label
+        }()
+
+        do {
+            let warnings = try await coherenceCheckService.checkCoherence(
+                projectID: project.id.uuidString,
+                title: trimmedTitle.isEmpty ? "Untitled section" : trimmedTitle,
+                summary: trimmedSummary.isEmpty ? "(no summary yet)" : trimmedSummary,
+                container: section.container,
+                pov: section.pov,
+                beatLabel: beatLabel,
+                characters: [],
+                promptPackNotes: nil,
+                topK: 5
+            )
+            coherenceWarnings = warnings
+        } catch {
+            // Per Phase 7 spec: soft warning only. Errors are best-effort --
+            // never block the user from starting the generation run.
+            coherenceError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            coherenceWarnings = []
+        }
     }
 }
 

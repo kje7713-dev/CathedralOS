@@ -178,12 +178,23 @@ Seed 3 templates: Three-act, Hero's Journey, Mystery.
 - Auto-links in outline (sets `parent_id` or appends as next-sibling)
 - New `continue-from-section` edge function
 
-### Phase 7 — Coherence check (later)
+### Phase 7 — Coherence check ✅ Shipped 2026-08-17 (PR #350, branch `feat/phase-7-coherence-check`)
 
-- Pre-generation check: compare proposed section's premise against accepted sections
-- If high-similarity contradiction detected, surface as soft warning
-- "This section might contradict 'Section X' which says Y. Proceed anyway?"
-- User accepts and proceeds, or revises
+Shipped as a **soft** check (per the original "soft warn first" decision): a yellow callout in `KickoffConfirmationSheet` surfaces any contradictions the LLM finds between the proposed section's premise and the project's top-5 most recent `accepted` sections. The Start button is never blocked; the user can proceed anyway.
+
+**Implementation pieces:**
+- New edge function `supabase/functions/coherence-check/index.ts` — POST, user JWT, free (no credit charge), top-K = 5 by default, cap at 10. Calls OpenAI Structured Outputs (`gpt-5-mini`, json_schema strict, `max_completion_tokens` 1500). Server-side guard drops any LLM-hallucinated warning whose `section_id` is not in the neighbors list (defense against hallucination).
+- New iOS service `CathedralOSApp/Features/Projects/CoherenceCheckService.swift` — mirrors `RunOutlineService`. New `CoherenceWarning` Codable, `CoherenceCheckError` enum.
+- `KickoffConfirmationSheet` (in `OutlineSectionsRegionView.swift`) extended: new `@State` for warnings + checking state, new `coherenceWarningsRow` callout (icon + section title + reason per warning, soft-yellow background), new `loadCoherence()` fires in `.task` parallel to `loadModelsAndEstimate`.
+- `docs/novel-building.md` updated (this section).
+
+**No credit charge.** The check is free; users can run it as often as they want. Errors are swallowed silently — coherence failures never block a generation run.
+
+**Future iteration hooks:**
+- Add `characters` and `prompt_pack_notes` to the request payload (currently we pass only title + summary + container + pov + beat_label — the LLM is plenty capable without explicit character metadata for v1).
+- Tighten the prompt to surface near-miss continuity issues vs only hard contradictions.
+- Hard-block tier (severity: `"block"`) if data shows false positives are negligible.
+- Vector-similarity neighbor retrieval (right now we sort by `created_at desc`). Worth it once projects grow past ~50 accepted sections.
 
 ---
 
@@ -221,4 +232,4 @@ Smaller items that get addressed during the build:
 
 ---
 
-**Last updated:** 2026-08-04 07:13 EDT (initial spec, awaiting implementation start)
+**Last updated:** 2026-08-17 11:1x EDT — Phase 7 (coherence check) shipped.
