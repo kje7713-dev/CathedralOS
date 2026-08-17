@@ -690,7 +690,8 @@
 				C000000000000000000000B7 /* OutlineSectionsRegionView.swift */,
 				FF0000000000000000000A01 /* ChapterReaderView.swift */,
 				C000000000000000000000BB /* StoryArcBeatEditView.swift */,
-				C000000000000000000000BD /* OutlineSectionEditView.swift */,		01FDB60572384C8E8B538827 /* OutlineSuggestionsReviewView.swift */,
+				C000000000000000000000BD /* OutlineSectionEditView.swift */,
+				01FDB60572384C8E8B538827 /* OutlineSuggestionsReviewView.swift */,
 
 			);
 			path = Projects;
