@@ -402,17 +402,27 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         .listRowBackground(CathedralTheme.Colors.background)
         .listRowSeparator(.hidden)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button(role: .destructive) {
-                deleteSection(section)
+            // Edit first (non-destructive), Duplicate middle, Delete last (destructive).
+            // Edit sets editingSection, which triggers the existing .sheet(item: $editingSection)
+            // modifier to open OutlineSectionEditView. Restores the edit affordance PR #348
+            // accidentally obscured by wrapping chapter rows in NavigationLink.
+            Button {
+                editingSection = section
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label("Edit", systemImage: "pencil")
             }
+            .tint(.indigo)
             Button {
                 duplicateSection(section)
             } label: {
                 Label("Duplicate", systemImage: "doc.on.doc")
             }
             .tint(.blue)
+            Button(role: .destructive) {
+                deleteSection(section)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
         }
     }
 
@@ -420,12 +430,16 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         List {
             ForEach(sectionsOrder, id: \.id) { section in
                 if section.parent == nil {
-                    // Chapter row (top-level) -- wrap in NavigationLink to chapter reader
+                    // Chapter row (top-level) -- wrap in NavigationLink to chapter reader.
+                    // .buttonStyle(.plain) is required so the List's drag gesture (for
+                    // .onMove reorder) can win against the NavigationLink's default
+                    // button-style tap handler. Without it, drag-to-reorder is dead.
                     NavigationLink {
                         ChapterReaderView(chapter: section, project: project)
                     } label: {
                         sectionRowContent(section)
                     }
+                    .buttonStyle(.plain)
                 } else {
                     // Sub-section row -- current behavior (tap to edit)
                     sectionRowContent(section)
