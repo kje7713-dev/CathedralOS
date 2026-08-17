@@ -875,6 +875,17 @@ struct KickoffConfirmationSheet: View {
         project.promptPacks.sorted(by: { $0.name < $1.name }).first
     }
 
+    /// Beat picker source — current arc's beats (empty if no arc picked yet).
+    /// Mirror of OutlineSectionsRegionView.availableBeats. Defined locally
+    /// here because Swift struct-scope doesn't reach across view boundaries:
+    /// KickoffConfirmationSheet can't see a private computed property on
+    /// the parent view, even though both hold the same `project` reference.
+    /// Per PR #352's lesson + the pre-PR survey protocol (kevbot-brain #227).
+    private var availableBeats: [StoryArcBeat] {
+        guard let arc = project.storyArcs.first else { return [] }
+        return arc.beats.sorted(by: { $0.position < $1.position })
+    }
+
     private var selectedModel: GenerationModelOption? {
         generationModels.first(where: { $0.id == selectedModelId })
     }
