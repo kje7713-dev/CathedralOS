@@ -396,6 +396,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 }
             },
             onAccept: { Task { await acceptSection(section) } },
+            onEdit: { editingSection = section },
             onTapOutput: { output in generationToView = output },
             isAccepting: acceptingSectionID == section.id
         )
@@ -680,6 +681,7 @@ struct OutlineSectionRow: View {
     @Bindable var section: OutlineSection
     let arcBeatLabel: String?
     var outputs: [GenerationOutput] = []
+    var onEdit: (() -> Void)? = nil
     var onGenerate: (() -> Void)? = nil
     var onAccept: (() async -> Void)? = nil
     var onTapOutput: ((GenerationOutput) -> Void)? = nil
@@ -711,6 +713,17 @@ struct OutlineSectionRow: View {
             }
             Spacer()
             HStack(spacing: CathedralTheme.Spacing.sm) {
+                // Edit first (visible without swiping — PR #353 only added the swipe action,
+                // which is not discoverable). Followed by the existing view-output / accept / generate.
+                if let onEdit {
+                    Button(action: onEdit) {
+                        Image(systemName: "pencil")
+                            .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                            .foregroundStyle(CathedralTheme.Colors.accent)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Edit section")
+                }
                 if !outputs.isEmpty, let onTapOutput {
                     if outputs.count == 1, let firstOutput = outputs.first {
                         Button {
@@ -775,6 +788,11 @@ struct OutlineSectionRow: View {
                     .accessibilityLabel("Generate section")
                 }
             }
+            // .fixedSize pins the action icons to their intrinsic content width so the
+            // surrounding Spacer can push them to the right and the title column gets full
+            // width back. Without this, the icons over-allocate and force the title to
+            // wrap char-by-char.
+            .fixedSize(horizontal: true, vertical: false)
         }
         .padding(CathedralTheme.Spacing.sm)
         .background(CathedralTheme.Colors.background)
