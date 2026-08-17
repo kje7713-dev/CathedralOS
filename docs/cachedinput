@@ -1,0 +1,238 @@
+Review the current CathedralOS generation architecture and plan a small sequence of PRs to implement provider-aware prompt caching. Do not code yet. Return the proposed PR breakdown, files affected, migrations, tests, risks, and acceptance criteria for each PR.
+
+Goal
+
+Reduce Cathedral’s actual LLM COGS when users perform multiple generations against the same project/context.
+
+Important business rule: cache savings belong to Cathedral. Do not reduce the customer’s generation charge because a provider cache hit occurred.
+
+Customer billing should continue using Cathedral’s normal published input/output rates.
+
+Internally, separately track the true provider cost using:
+
+* normal input tokens
+* cached-read input tokens
+* cache-write input tokens
+* output tokens
+* tool costs
+
+This lets caching increase Cathedral’s margin without changing user-facing pricing.
+
+Current architecture to preserve
+
+Relevant backend files include:
+
+* supabase/functions/generate-story/_provider.ts
+* supabase/functions/generate-story/_generation_models.ts
+* supabase/functions/generate-story/index.ts
+
+Existing infrastructure already includes:
+
+* provider abstraction
+* OpenAI Responses API
+* cachedInputTokens
+* provider normal/cached/output pricing fields
+* Phase 3 credit pricing
+* generation usage telemetry
+
+Extend this architecture. Do not build a parallel caching/billing system.
+
+Desired prompt architecture
+
+Refactor prompt assembly conceptually into:
+
+1. Craft instructions
+    * Cathedral writing behavior
+    * general generation/container instructions
+2. Stable project context
+    * premise
+    * characters
+    * relationships
+    * setting/world rules
+    * themes
+    * motifs
+    * story spark
+    * prompt-pack/project-level instructions
+    * other long-lived project context
+3. Current story state
+    * cumulative character state
+    * plot threads
+    * continuity facts
+    * open loops
+    * latest ending state
+4. Current generation request
+    * generate/regenerate/continue/remix
+    * previous output
+    * terminal beat
+    * current section
+    * current writing task
+    * other volatile generation-specific data
+
+The stable prefix must be deterministic. No timestamps, request UUIDs, random ordering, or transient values should appear before the cache boundary.
+
+Initial caching strategy
+
+Start conservatively with one cache boundary:
+
+Craft + Stable Project Context -> CACHE BREAKPOINT -> Story State + Current Request
+
+Do not initially implement multiple cache layers unless the current provider API makes that materially simpler.
+
+For OpenAI models that support explicit caching:
+
+* use a stable project-scoped prompt_cache_key
+* use explicit caching/breakpoint behavior
+* avoid caching volatile request-specific content
+
+Caching must be an optimization only. Unsupported providers/models must continue generating normally.
+
+Provider abstraction
+
+Do not make Cathedral business logic OpenAI-specific.
+
+The Cathedral-side abstraction should express concepts such as:
+
+* stable project context
+* volatile generation context
+* caching enabled/disabled
+* project cache identity
+
+The provider adapter should translate those concepts into OpenAI/Anthropic/Gemini-specific mechanisms later.
+
+OpenAI support should be implemented first.
+
+Architect the interface so Anthropic/Gemini can be added without rewriting prompt assembly.
+
+Critical token-accounting fix
+
+Verify current OpenAI usage semantics.
+
+Do not treat total input_tokens as uncached input when cached_tokens are also reported.
+
+Track at least:
+
+* totalInputTokens
+* uncachedInputTokens
+* cachedInputTokens
+* cacheWriteInputTokens
+* outputTokens
+
+Conceptually:
+
+uncached = total input - cached reads - cache writes
+
+Clamp safely at zero.
+
+Add provider cache-write pricing support where required.
+
+Billing rule
+
+Keep two calculations separate:
+
+Customer charge
+
+Use Cathedral’s normal generation pricing.
+
+Do not discount the user’s credits because the provider returned cached input.
+
+Actual provider COGS
+
+Calculate using the provider’s real reported usage:
+
+uncached input × normal provider rate
++ cached reads × cached provider rate
++ cache writes × cache-write provider rate
++ output × provider output rate
++ tool costs
+
+Persist enough telemetry to calculate:
+
+* customer revenue
+* actual provider COGS
+* cache savings
+* actual margin
+* cache hit ratio
+
+Do not let cached-input pricing feed into the customer charge.
+
+Preflight
+
+Continue assuming zero cache savings during affordability/preflight checks.
+
+A cache hit is not guaranteed.
+
+Use actual cache usage only after the provider responds.
+
+Telemetry / migrations
+
+Plan any required schema changes to generation_usage_events and/or model pricing so we can eventually query:
+
+* total input tokens
+* uncached input tokens
+* cached-read tokens
+* cache-write tokens
+* output tokens
+* cache hit ratio
+* nominal provider cost without caching
+* actual provider cost
+* cache savings
+* customer revenue
+* actual margin
+
+Avoid storing giant cached prompts in Supabase. The model provider owns the transient cache.
+
+Required tests
+
+At minimum plan tests proving:
+
+1. Same unchanged project produces byte-identical stable prefixes.
+2. Changing terminal beat does not alter the stable prefix.
+3. Changing previous output does not alter the stable prefix.
+4. Changing project/character data does alter the stable prefix.
+5. Request IDs/timestamps never enter cached content.
+6. Supported OpenAI request receives the intended cache key/breakpoint.
+7. Unsupported models/providers still generate normally.
+8. Total/cached/cache-write input token accounting cannot double-count.
+9. Customer charge is unchanged whether the provider reports a cache hit or miss.
+10. Actual provider COGS decreases on cache hits.
+11. Preflight assumes no cache hit.
+12. Existing generation persistence, credits, output sync, and error behavior remain intact.
+
+Preferred PR sequencing
+
+Evaluate the codebase and improve this sequence if necessary, but bias toward:
+
+PR 1 — Cache-aware accounting and telemetry
+
+Fix token classification/double-counting risk, add cache-write usage/pricing, migrations, COGS telemetry, and tests.
+
+No prompt behavior changes.
+
+PR 2 — Deterministic stable prompt prefix + OpenAI caching
+
+Refactor prompt assembly into stable/volatile sections, add project cache identity, enable the first explicit cache boundary, and test deterministic behavior.
+
+No user-visible pricing changes.
+
+PR 3 — Provider-neutral caching abstraction
+
+Clean up provider capabilities/interfaces so future Anthropic/Gemini caching can plug into the same Cathedral prompt plan.
+
+Do not add providers unless doing so is necessary to prove the abstraction.
+
+Deliverable
+
+Return:
+
+* recommended PR sequence
+* purpose of each PR
+* exact files/modules likely affected
+* DB migrations required
+* interface/type changes
+* tests per PR
+* deployment order
+* rollback strategy
+* major risks
+* anything in the existing Cathedral implementation that conflicts with this plan
+
+Do not implement anything yet.
