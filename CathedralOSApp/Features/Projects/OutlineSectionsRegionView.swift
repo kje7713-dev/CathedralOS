@@ -702,7 +702,6 @@ struct OutlineSectionRow: View {
                         .font(CathedralTheme.Typography.body(15, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    statusBadge
                 }
                 if let arcBeatLabel {
                     Label(arcBeatLabel, systemImage: "link")
@@ -718,6 +717,9 @@ struct OutlineSectionRow: View {
             }
             // Action icons get their own row below the title column.
             HStack(spacing: CathedralTheme.Spacing.sm) {
+                // Status badge — moved out of the title row so the title can be full-width
+                // horizontal. Now lives on the same row as the action icons.
+                statusBadge
                 // Edit first (visible without swiping — PR #353 only added the swipe action,
                 // which is not discoverable). Followed by the existing view-output / accept / generate.
                 if let onEdit {
