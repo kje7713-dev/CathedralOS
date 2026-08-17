@@ -385,6 +385,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             section: section,
             arcBeatLabel: arcBeatLabel(for: section),
             outputs: outputsBySection[section.id] ?? [],
+            onEdit: { editingSection = section },
             onGenerate: {
                 if let outline = currentOutline {
                     runOutlineError = nil
@@ -396,7 +397,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 }
             },
             onAccept: { Task { await acceptSection(section) } },
-            onEdit: { editingSection = section },
             onTapOutput: { output in generationToView = output },
             isAccepting: acceptingSectionID == section.id
         )
