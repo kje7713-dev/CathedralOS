@@ -38,12 +38,14 @@ struct ChapterReaderView: View {
             Text(chapter.title.isEmpty ? "Untitled chapter" : chapter.title)
                 .font(CathedralTheme.Typography.headline(24, weight: .semibold))
             HStack(spacing: CathedralTheme.Spacing.sm) {
-                if let beat = chapter.storyArcBeatID, let label = arcBeatLabel(for: beat) {
+                if let beat = chapter.storyArcBeat,
+                   let role = beat.role.isEmpty ? nil : beat.role,
+                   let label = arcBeatLabel(for: role) {
                     Text(label)
                         .font(CathedralTheme.Typography.caption(12, weight: .semibold))
                         .padding(.horizontal, CathedralTheme.Spacing.sm)
                         .padding(.vertical, 2)
-                        .background(CathedralTheme.Colors.tint.opacity(0.15))
+                        .background(CathedralTheme.Colors.accent.opacity(0.15))
                         .clipShape(Capsule())
                 }
                 if let container = chapter.container, !container.isEmpty {
@@ -125,12 +127,12 @@ struct ChapterReaderView: View {
         return (try? modelContext.fetch(descriptor))?.first
     }
 
-    private func arcBeatLabel(for beatID: UUID) -> String? {
+    private func arcBeatLabel(for role: String) -> String? {
         guard let arc = project.storyArcs.first,
               let templateID = arc.templateID,
               let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
             return nil
         }
-        return template.beats.first { $0.id == beatID }?.label
+        return template.beats.first { $0.id == role }?.label
     }
 }
