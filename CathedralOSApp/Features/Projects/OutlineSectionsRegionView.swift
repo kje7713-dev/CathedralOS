@@ -688,7 +688,10 @@ struct OutlineSectionRow: View {
     var isAccepting: Bool = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: CathedralTheme.Spacing.md) {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            // Top row: position + title column. Title gets full width now (was being
+            // squeezed to ~20pt by the action icons HStack to its right in the old layout).
+            HStack(alignment: .top, spacing: CathedralTheme.Spacing.md) {
             Text("\(section.position + 1)")
                 .font(CathedralTheme.Typography.body(13, weight: .semibold))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
@@ -697,6 +700,8 @@ struct OutlineSectionRow: View {
                 HStack(spacing: CathedralTheme.Spacing.sm) {
                     Text(section.title.isEmpty ? "Untitled section" : section.title)
                         .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     statusBadge
                 }
                 if let arcBeatLabel {
@@ -711,7 +716,7 @@ struct OutlineSectionRow: View {
                         .lineLimit(2)
                 }
             }
-            Spacer()
+            // Action icons get their own row below the title column.
             HStack(spacing: CathedralTheme.Spacing.sm) {
                 // Edit first (visible without swiping — PR #353 only added the swipe action,
                 // which is not discoverable). Followed by the existing view-output / accept / generate.
@@ -788,11 +793,8 @@ struct OutlineSectionRow: View {
                     .accessibilityLabel("Generate section")
                 }
             }
-            // .fixedSize pins the action icons to their intrinsic content width so the
-            // surrounding Spacer can push them to the right and the title column gets full
-            // width back. Without this, the icons over-allocate and force the title to
-            // wrap char-by-char.
-            .fixedSize(horizontal: true, vertical: false)
+            // Close the inner HStack (added by the VStack refactor).
+            }
         }
         .padding(CathedralTheme.Spacing.sm)
         .background(CathedralTheme.Colors.background)
