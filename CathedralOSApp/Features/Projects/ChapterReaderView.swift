@@ -27,8 +27,26 @@ struct ChapterReaderView: View {
 
     // MARK: - Sections
 
+    /// Sections that belong to this chapter. With the flat outline model used
+    /// by the suggestion flow (every section is a top-level sibling in
+    /// `outline.sections` with `parent == nil`), the "chapter" is a
+    /// position-range: this section plus all subsequent sections in
+    /// `position` order, stopping at the next section whose container is
+    /// `"chapter"`. If no next chapter exists, the range extends to the end
+    /// of the outline. Matches the "chapter" scope semantics from the
+    /// kickoff scope picker (PR #347).
     private var subSections: [OutlineSection] {
-        chapter.children.sorted(by: { $0.position < $1.position })
+        guard let outline = chapter.outline else {
+            return [chapter]
+        }
+        let allSections = outline.sections.sorted(by: { $0.position < $1.position })
+        guard let chapterIndex = allSections.firstIndex(where: { $0.id == chapter.id }) else {
+            return [chapter]
+        }
+        // Subsequent sections in outline order, stopping at the next chapter container.
+        let subsequent = allSections[(chapterIndex + 1)...]
+        let stopAt = subsequent.firstIndex(where: { $0.container == "chapter" }) ?? subsequent.endIndex
+        return Array(allSections[chapterIndex..<stopAt])
     }
 
     // MARK: - Header
