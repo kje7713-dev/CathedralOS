@@ -793,6 +793,8 @@ struct OutlineSectionRow: View {
                     .accessibilityLabel("Generate section")
                 }
             }
+            // Close the inner HStack (added by the VStack refactor).
+            }
         }
         .padding(CathedralTheme.Spacing.sm)
         .background(CathedralTheme.Colors.background)
