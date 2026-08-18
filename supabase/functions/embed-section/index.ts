@@ -147,6 +147,10 @@ interface EmbedSectionRequest {
   terminal_beat?: string;
   story_arc_beat_id?: string;
   raw_text?: string;
+  // Optional: tag every llm_prompts row this call writes with this
+  // generation output's id so the iOS debug box can show the prompt + response
+  // for the output that triggered the embedding. PR-XXX-H.
+  output_id?: string;
   // The prior context that run-outline generated for this section. Passed
   // to the LLM so it knows what is already stored (characters, threads,
   // active facts, open loops) and can decide what to add/update/supersede
@@ -357,6 +361,7 @@ ${body.raw_text}`
     try {
       await adminClient.from("llm_prompts").insert({
         call_type: "embed-section",
+        output_id: body.output_id ?? null,
         project_id: body.project_id ?? null,
         outline_section_id: body.outline_section_id ?? null,
         model: OPENAI_MODEL_DEFAULT,
@@ -494,6 +499,7 @@ ${body.raw_text}`
     try {
       await adminClient.from("llm_prompts").insert({
         call_type: "embed-section",
+        output_id: body.output_id ?? null,
         project_id: body.project_id ?? null,
         outline_section_id: body.outline_section_id ?? null,
         model: OPENAI_EMBED_MODEL,
