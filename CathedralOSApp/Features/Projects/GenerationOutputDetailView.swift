@@ -332,6 +332,13 @@ struct GenerationOutputDetailView: View {
                     payloadJSONSection
                 }
                 actionButtons
+#if DEBUG
+                // Temporary debug aid (Kevin 2026-08-18 08:43 EDT): show the LLM prompt
+                // that produced this output. Remove this entire block before shipping.
+                if !output.cloudGenerationOutputID.isEmpty {
+                    LLMPromptDebugView(outputID: output.cloudGenerationOutputID)
+                }
+#endif
             }
             .padding(CathedralTheme.Spacing.base)
         }
