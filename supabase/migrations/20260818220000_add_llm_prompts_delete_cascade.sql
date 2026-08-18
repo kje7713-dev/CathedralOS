@@ -1,4 +1,4 @@
--- PR-XXX-H: cascade-delete llm_prompts when generation_outputs is deleted.
+-- PR-XXX-I: cascade-delete llm_prompts when generation_outputs is deleted.
 -- The FK on output_id was inline REFERENCES public.generation_outputs(id)
 -- with no ON DELETE clause, so deleting a generation_output left orphan
 -- llm_prompts rows behind. The debug-box prompt log then kept showing the
