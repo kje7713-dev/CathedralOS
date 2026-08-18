@@ -696,39 +696,43 @@ struct OutlineSectionRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-            // Top row: position + title column. Title gets full width now (was being
-            // squeezed to ~20pt by the action icons HStack to its right in the old layout).
-            HStack(alignment: .top, spacing: CathedralTheme.Spacing.md) {
-            Text("\(section.position + 1)")
-                .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                .frame(width: 24, alignment: .trailing)
-            VStack(alignment: .leading, spacing: 2) {
-                // Title: full card width, wraps to 2 lines if needed.
-                Text(section.title.isEmpty ? "Untitled section" : section.title)
-                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            // Row 1: Title (full card width, no position number competing for space).
+            // Wraps to 2 lines if needed.
+            Text(section.title.isEmpty ? "Untitled section" : section.title)
+                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Row 2: Status badge + beat label (own row, left-aligned, Spacer pushes
+            // any remaining width to the right).
+            HStack(spacing: CathedralTheme.Spacing.sm) {
+                statusBadge
                 if let arcBeatLabel {
                     Label(arcBeatLabel, systemImage: "link")
                         .font(CathedralTheme.Typography.caption(12))
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        .lineLimit(1)
                 }
-                if !section.summary.isEmpty {
-                    Text(section.summary)
-                        .font(CathedralTheme.Typography.body(13))
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        .lineLimit(2)
-                }
+                Spacer()
             }
-            // Action icons get their own row below the title column.
+
+            // Row 3: Summary (full width, 1-2 lines).
+            if !section.summary.isEmpty {
+                Text(section.summary)
+                    .font(CathedralTheme.Typography.body(13))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            // Row 4: Action icons (clean bottom toolbar — NO statusBadge here, no
+            // position number, no NavigationLink chevron). Edit is visible without
+            // swiping; followed by view-output / accept / generate.
             HStack(spacing: CathedralTheme.Spacing.sm) {
-                // Status badge — moved out of the title row so the title can be full-width
-                // horizontal. Now lives on the same row as the action icons.
-                statusBadge
-                // Edit first (visible without swiping — PR #353 only added the swipe action,
-                // which is not discoverable). Followed by the existing view-output / accept / generate.
+                // Edit first (visible without swiping — PR #353 only added the swipe
+                // action, which is not discoverable).
                 if let onEdit {
                     Button(action: onEdit) {
                         Image(systemName: "pencil")
@@ -801,8 +805,6 @@ struct OutlineSectionRow: View {
                     .buttonStyle(.borderless)
                     .accessibilityLabel("Generate section")
                 }
-            }
-            // Close the inner HStack (added by the VStack refactor).
             }
         }
         .padding(CathedralTheme.Spacing.sm)
