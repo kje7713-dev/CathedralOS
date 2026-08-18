@@ -150,11 +150,24 @@ Deno.serve(async (req: Request) => {
   const topK = Math.max(1, Math.min(body.top_k ?? 5, 10));
 
   // 3. Fetch accepted-section neighbors for this project.
+  //
+  // Phase 7 fix (Kevin 2026-08-17 20:01 EDT): pull the structured memory
+  // layers too (character_deltas, continuity_facts, plot_thread_deltas,
+  // scene_ending_state). The LLM distillation in `extracted_summary` is
+  // 200-500 tokens and routinely loses character-state facts like
+  // "Fred is alive and eating breakfast at the diner". When the user
+  // proposes "all the characters are dead", the LLM has nothing to
+  // compare against without these structured fields. (Per migration
+  // 20260809200500_add_scene_memory_layers.sql.)
   const { data: neighborRows, error: qErr } = await userClient
     .from("section_embeddings")
     .select(`
       outline_section_id,
       summary,
+      character_deltas,
+      continuity_facts,
+      plot_thread_deltas,
+      scene_ending_state,
       created_at,
       outline_sections!inner(
         id,
@@ -183,13 +196,78 @@ Deno.serve(async (req: Request) => {
     return corsResponse(JSON.stringify({ warnings: [] }), { status: 200 });
   }
 
-  // 4. Build the prompt. Keep it small + focused.
+  // 4. Build the prompt. Include the structured memory layers (character_deltas,
+  // continuity_facts, plot_thread_deltas, scene_ending_state) so the LLM has
+  // concrete character-state facts to compare against. The extracted_summary
+  // alone (200-500 tokens) routinely drops alive/dead/injury facts — that's
+  // how "all the characters are dead" was missed against alive characters in
+  // accepted scenes. (Per Phase 7 fix, Kevin 2026-08-17 20:01 EDT.)
+  const formatCharacterDelta = (c: any): string => {
+    if (!c || typeof c !== "object") return "";
+    const name = c.character_name ?? c.name ?? "(unnamed)";
+    const parts: string[] = [`  - ${name}:`];
+    if (c.location) parts.push(`location=${c.location}`);
+    if (c.injuries) parts.push(`injuries=${c.injuries}`);
+    if (c.knowledge_delta) parts.push(`knowledge=${c.knowledge_delta}`);
+    if (c.relationship_delta) parts.push(`relationships=${c.relationship_delta}`);
+    if (c.goals) parts.push(`goals=${c.goals}`);
+    if (c.possessions) parts.push(`possessions=${c.possessions}`);
+    if (c.emotional_stance) parts.push(`stance=${c.emotional_stance}`);
+    return parts.join(" ");
+  };
+  const formatSceneEndingState = (s: any): string => {
+    if (!s || typeof s !== "object" || !Array.isArray(s.character_positions)) {
+      return "";
+    }
+    const positions = s.character_positions
+      .map((p: any) => {
+        if (!p || typeof p !== "object") return "";
+        const who = p.character ?? "(unnamed)";
+        const where = p.location ? ` @ ${p.location}` : "";
+        const state = p.immediate_state ? ` (${p.immediate_state})` : "";
+        return `  - ${who}${where}${state}`;
+      })
+      .filter((s: string) => s.length > 0)
+      .join("\n");
+    const pressure = s.immediate_pressure ? `\n  Pressure: ${s.immediate_pressure}` : "";
+    return positions.length > 0 ? `Character positions at end:\n${positions}${pressure}` : "";
+  };
+
   const neighborText = neighbors
     .map((row: any, i: number) => {
       const sec = row.outline_sections;
-      return `[#${i + 1}] "${sec.title}" (id: ${sec.id}, position ${sec.position})\n${
-        row.summary ?? "(no summary available)"
-      }`;
+      const sections: string[] = [
+        `[#${i + 1}] "${sec.title}" (id: ${sec.id}, position ${sec.position})`,
+        `Summary: ${row.summary ?? "(no summary available)"}`,
+      ];
+      // Structured memory: this is what catches "characters alive vs dead" misses.
+      if (Array.isArray(row.character_deltas) && row.character_deltas.length > 0) {
+        const charLines = row.character_deltas
+          .map(formatCharacterDelta)
+          .filter((s: string) => s.length > 0);
+        if (charLines.length > 0) {
+          sections.push(`Characters:\n${charLines.join("\n")}`);
+        }
+      }
+      if (Array.isArray(row.continuity_facts) && row.continuity_facts.length > 0) {
+        const factLines = row.continuity_facts
+          .filter((f: any) => typeof f === "string" && f.length > 0)
+          .map((f: string) => `  - ${f}`);
+        if (factLines.length > 0) {
+          sections.push(`Continuity facts:\n${factLines.join("\n")}`);
+        }
+      }
+      if (Array.isArray(row.plot_thread_deltas) && row.plot_thread_deltas.length > 0) {
+        const threadLines = row.plot_thread_deltas
+          .filter((t: any) => t && typeof t === "object" && (t.thread_name || t.description))
+          .map((t: any) => `  - [${t.status ?? "?"}] ${t.thread_name ?? "(unnamed)"}: ${t.description ?? ""}`);
+        if (threadLines.length > 0) {
+          sections.push(`Plot threads:\n${threadLines.join("\n")}`);
+        }
+      }
+      const ending = formatSceneEndingState(row.scene_ending_state);
+      if (ending.length > 0) sections.push(ending);
+      return sections.join("\n\n");
     })
     .join("\n\n");
 
@@ -205,7 +283,26 @@ Deno.serve(async (req: Request) => {
     body.section.prompt_pack_notes ? `Prompt pack notes: ${body.section.prompt_pack_notes}` : null,
   ].filter(Boolean).join("\n");
 
-  const systemPrompt = `You are a story-coherence assistant. Compare a proposed outline section against the project's already-accepted sections. Surface only GENUINE, HIGH-CONFIDENCE contradictions: state drift, broken continuity, character actions that contradict established facts, POV drift, or major tone inconsistencies. Do NOT surface stylistic preferences, weak thematic echoes, or speculative concerns. If there are no real contradictions, return {warnings: []}. Be sparing and accurate.`;
+  // Phase 7 fix (Kevin 2026-08-17 20:01 EDT): lead with character-state checks.
+  // Before this fix the LLM only saw 200-500 token summaries that routinely
+  // dropped alive/dead/injury facts, so "all the characters are dead" was
+  // missed against scenes where the characters were explicitly alive. Now
+  // the prompt carries per-character state (location, knowledge, injuries,
+  // goals, possessions, emotional_stance) + continuity facts + scene-ending
+  // state, so a proposed dead-character claim MUST be checked against each
+  // character's last known state.
+  const systemPrompt = `You are a story-coherence assistant. Compare a proposed outline section against the project's already-accepted sections.
+
+PRIORITY contradiction checks (always run these first):
+1. Character-state contradictions: a proposed section claims a character is dead / gone / injured / has lost knowledge, but earlier scenes show that character alive, healthy, or in possession of that knowledge. Cite the section whose character state is contradicted.
+2. Continuity-fact contradictions: the proposed section asserts a fact that breaks an established continuity fact from an earlier scene.
+3. Scene-ending-state contradictions: the proposed section starts from a location or situation that does not match where characters were at the end of the prior accepted scene.
+4. POV drift: the proposed section shifts POV without justification.
+5. Plot-thread contradictions: a thread the earlier scenes marked as resolved is reopened, or vice versa, without setup.
+
+Do NOT surface: stylistic preferences, weak thematic echoes, speculative concerns, "this could be inconsistent in some interpretation" worries. Only real, specific, citation-backed contradictions.
+
+If there are no real contradictions, return {"warnings": []}. Be sparing and accurate — every warning you emit will be shown to the writer as a soft-warn before they commit credits to a generation run, so false positives are costly.`;
 
   const userPrompt = `PROPOSED SECTION:
 ${proposedDesc}
