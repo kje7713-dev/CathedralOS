@@ -333,23 +333,38 @@ struct GenerationOutputDetailView: View {
         .toolbar { toolbarContent }
     }
 
-    /// PR-360-Y: fetch this output's post-gen coherence warnings. Best-effort;
-    /// silent on failure - mirrors the kickoff sheet's loadCoherence behavior.
+    /// PR-360-Y: fetch this output's post-gen coherence warnings via Supabase
+    /// REST (PostgREST). Mirrors LLMPromptService's URLSession pattern.
+    /// Best-effort, silent on failure.
     @MainActor
     private func loadPostGenWarnings() async {
-        guard let cloudID = output.cloudGenerationOutputID, !cloudID.isEmpty else { return }
+        let cloudID = output.cloudGenerationOutputID
+        guard !cloudID.isEmpty else { return }
         postGenLoading = true
         defer { postGenLoading = false }
         do {
             guard let client = try? SupabaseBackendClient() else { return }
-            let warnings: [PostGenWarning] = try await client
-                .from("generation_output_warnings")
-                .select("id, warning_type, severity, message, conflicting_section_ids")
-                .eq("generation_output_id", cloudID)
-                .order("created_at", ascending: false)
-                .execute()
-                .value
-            postGenWarnings = warnings
+            guard let token = BackendAuthService.shared.currentAccessToken else { return }
+            let url = client.configuration.projectURL
+                .appendingPathComponent("rest")
+                .appendingPathComponent("v1")
+                .appendingPathComponent("generation_output_warnings")
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+            components.queryItems = [
+                URLQueryItem(name: "generation_output_id", value: "eq.\(cloudID)"),
+                URLQueryItem(name: "order", value: "created_at.desc"),
+            ]
+            let finalURL = components.url!
+            var request = client.authorizedRequest(for: finalURL, userAccessToken: token)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 15
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                postGenWarnings = []
+                return
+            }
+            postGenWarnings = try JSONDecoder().decode([PostGenWarning].self, from: data)
         } catch {
             postGenWarnings = []
         }
@@ -431,6 +446,7 @@ struct GenerationOutputDetailView: View {
         .navigationBarTitleDisplayMode(.large)
         .tint(CathedralTheme.Colors.accent)
         .toolbar { toolbarContent }
+        .task { await loadPostGenWarnings() }
         .onAppear {
             // Restore any persisted publish error so it is visible on re-entry.
             if publishError == nil, let persisted = output.publishErrorMessage, !persisted.isEmpty {
