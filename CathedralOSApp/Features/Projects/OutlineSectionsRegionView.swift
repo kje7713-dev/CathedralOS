@@ -71,6 +71,7 @@ struct OutlineSectionsRegionView: View {
 
     @State private var sectionsOrder: [OutlineSection] = []
     @State private var editingSection: OutlineSection?
+    @State private var readerSection: OutlineSection?
     @State private var generationTarget: OutlineGenerationTarget?
     @State private var isKickingOff = false
     @State private var runOutlineError: String?
@@ -180,6 +181,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         .background(CathedralTheme.Colors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, CathedralTheme.Spacing.base)
+        // State-driven chapter reader navigation. The Button in sectionsList sets
+        // readerSection; this destination presents ChapterReaderView without the
+        // chevron disclosure indicator that NavigationLink adds.
+        .navigationDestination(item: $readerSection) { section in
+            ChapterReaderView(chapter: section, project: project)
+        }
         .task {
             ensureOutline()
             syncSectionsOrder()
@@ -435,8 +442,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     // .buttonStyle(.plain) is required so the List's drag gesture (for
                     // .onMove reorder) can win against the NavigationLink's default
                     // button-style tap handler. Without it, drag-to-reorder is dead.
-                    NavigationLink {
-                        ChapterReaderView(chapter: section, project: project)
+                    Button {
+                        readerSection = section
                     } label: {
                         sectionRowContent(section)
                     }
