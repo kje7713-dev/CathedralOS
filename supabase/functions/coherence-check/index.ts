@@ -550,6 +550,17 @@ Deno.serve(async (req: Request) => {
 
   // PR-360-X: CANON MEMORY block — explicit field surface so the LLM
   // sees what fields are available (and doesn't have to infer them).
+  // PR-360-Y: post-gen category 6 only fires when the LLM's actual
+  // output is being checked (mode === "post-generation"). Pre-gen skips.
+  const postGenCategory = mode === "post-generation"
+    ? `
+6. Output-vs-premise consistency (post-generation mode only): the LLM's actual output_text drifts from the section's premise or from canon. Flag:
+   - POV drift (output shifts POV mid-section without justification, e.g. 1st-person -> 3rd-person)
+   - Premise inversion (the proposal said "X is dead", "all are dead", etc.; output writes X alive or vice-versa)
+   - Invented characters (names that do not appear in the proposal or any prior accepted section)
+   - Name contradicts canon (output uses a name variant that is already established as different in canon)`
+    : "";
+
   const canonMemoryBlock =
     `CANON MEMORY (use this for contradiction checks, never invent names):\n` +
     `- Each accepted section lists characters as ALIVE / DEAD / INJURED (positive-inference: ALIVE is the default unless structured memory explicitly says otherwise).\n` +
@@ -572,9 +583,9 @@ PRIORITY contradiction checks (always run these first):
 2. Continuity-fact contradictions: the proposed section asserts a fact that breaks an established continuity fact from an earlier scene.
 3. Scene-ending-state contradictions: the proposed section starts from a location or situation that does not match where characters were at the end of the prior accepted scene.
 4. POV drift: the proposed section shifts POV without justification.
-5. Plot-thread contradictions: a thread the earlier scenes marked as resolved is reopened, or vice versa, without setup.
+5. Plot-thread contradictions: a thread the earlier scenes marked as resolved is reopened, or vice versa, without setup.${postGenCategory}
 
-Severity rules (PR-360-X + hotfix):
+Severity rules (PR-360-X + hotfix + PR-360-Y):
 - severity: "high" — Use for EXPLICIT death/killing claims where the claimed character appears in the ALIVE list of any accepted section. This is a HIGH-confidence flag and MUST be emitted; never silently dropped.
 - severity: "warn" — Use for any of:
   - Location shifts (e.g., "Ted and Fred are in Paris" when canon has them at a diner)

@@ -1852,6 +1852,61 @@ async function handler(
     outline_section_id: body.outline_section_id ?? null,
   });
 
+  // PR-360-Y: fire-and-forget post-gen coherence pass. 10s budget; never
+  // blocks generation. Persists warnings to generation_output_warnings so
+  // iOS GenerationOutputDetailView can render the yellow soft-warn card.
+  if (outputRow?.id && !outputInsertError) {
+    void (async () => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 10_000);
+      try {
+        const coRes = await fetch(`${SUPABASE_URL}/functions/v1/coherence-check`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            project_id: body.project_id ?? projectId,
+            section: {
+              title: title,
+              summary: body.section?.summary ?? title,
+              container: body.container ?? null,
+              pov: body.pov ?? null,
+            },
+            mode: "post-generation",
+            output_text: generatedText,
+          }),
+          signal: ctrl.signal,
+        });
+        if (!coRes.ok) {
+          console.error(`[generate-story] post-gen coherence-check returned ${coRes.status}`);
+          return;
+        }
+        const coData = await coRes.json();
+        const warnings = Array.isArray(coData.warnings) ? coData.warnings : [];
+        if (warnings.length === 0) return;
+        const rows = warnings.map((w: any) => ({
+          generation_output_id: outputRow.id,
+          warning_type: "output_vs_premise",
+          severity: w.severity === "high" ? "high" : "warn",
+          message: String(w.reason ?? "(no reason provided)"),
+          conflicting_section_ids: w.section_id ? [w.section_id] : [],
+        }));
+        const { error: persistErr } = await adminClient
+          .from("generation_output_warnings")
+          .insert(rows);
+        if (persistErr) {
+          console.error("[generate-story] post-gen warnings persist failed:", persistErr.message);
+        }
+      } catch (err) {
+        console.error("[generate-story] post-gen coherence check error:", (err as Error).message);
+      } finally {
+        clearTimeout(t);
+      }
+    })();
+  }
+
   if (outputInsertError || !outputRow?.id) {
     const persistenceFailure =
       outputInsertError ?? new Error("generation_outputs insert returned no row");
