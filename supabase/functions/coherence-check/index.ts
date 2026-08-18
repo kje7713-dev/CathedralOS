@@ -608,6 +608,8 @@ Return JSON {"warnings": []} if no genuine conflicts.`;
 
   // 5. Call OpenAI with Structured Outputs (strict schema).
   let openaiRes: Response;
+  // PR-XXX-A: track LLM call duration for llm_prompts log
+  const llmStartMs = Date.now();
   try {
     openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -649,6 +651,30 @@ Return JSON {"warnings": []} if no genuine conflicts.`;
   const content = openaiData.choices?.[0]?.message?.content;
   if (typeof content !== "string") {
     return errorResponse("openai_empty", "OpenAI returned no content", 502);
+  }
+
+  // PR-XXX-A: log the prompt + response to llm_prompts (best-effort).
+  // Uses userClient since the edge function already has it in scope and
+  // the user owns the project.
+  const llmDurationMs = Date.now() - llmStartMs;
+  try {
+    await userClient.from("llm_prompts").insert({
+      call_type: "coherence-check",
+      project_id: body.project_id ?? null,
+      outline_section_id: null,
+      model: OPENAI_MODEL_DEFAULT,
+      prompt: JSON.stringify({
+        system: systemPrompt,
+        user: userPrompt,
+      }),
+      response: content,
+      prompt_tokens: openaiData.usage?.prompt_tokens ?? null,
+      completion_tokens: openaiData.usage?.completion_tokens ?? null,
+      total_tokens: openaiData.usage?.total_tokens ?? null,
+      duration_ms: llmDurationMs,
+    });
+  } catch (logErr) {
+    console.error(`[coherence-check] llm_prompts insert failed: ${(logErr as Error).message}`);
   }
 
   let parsed: {

@@ -1689,6 +1689,8 @@ async function handler(
     toolCostUsd?: number;
   };
   let llmResult: LlmResult | null = null;
+  // PR-XXX-A: track LLM call duration for llm_prompts log
+  const llmStartMs = Date.now();
 
   try {
     llmResult = await llm.complete(
@@ -1769,6 +1771,29 @@ async function handler(
         ...(failureResponse.headers ? { headers: failureResponse.headers } : {}),
       },
     );
+  }
+
+  const llmDurationMs = Date.now() - llmStartMs;
+
+  // PR-XXX-A: log the prompt + response to llm_prompts (best-effort, do not fail the main call)
+  try {
+    await adminClient.from("llm_prompts").insert({
+      call_type: "generate-story",
+      project_id: body.project_id ?? null,
+      outline_section_id: body.outline_section_id ?? null,
+      model: selectedModel.provider_model,
+      prompt: JSON.stringify({
+        system: craftPrompt,
+        user: contextPrompt,
+      }),
+      response: llmResult?.content ?? null,
+      prompt_tokens: llmResult?.inputTokens ?? null,
+      completion_tokens: llmResult?.outputTokens ?? null,
+      total_tokens: llmResult?.totalTokens ?? null,
+      duration_ms: llmDurationMs,
+    });
+  } catch (logErr) {
+    console.error(`[generate-story] llm_prompts insert failed: ${(logErr as Error).message}`);
   }
 
   // Phase 3 removed: llmResult is the single response, not stitched from segments.
