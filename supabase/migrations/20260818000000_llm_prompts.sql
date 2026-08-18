@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS public.llm_prompts (
   call_type text NOT NULL CHECK (call_type IN ('generate-story','coherence-check','embed-section','rag-pull')),
   output_id uuid REFERENCES public.generation_outputs(id),
   outline_section_id uuid REFERENCES public.outline_sections(id),
-  project_id uuid REFERENCES public.projects(id),
+  project_id uuid, -- CathedralOS does not have a public.projects table; projects are tracked via generation_outputs.local_project_id. See 20260805193000 migration.
   model text NOT NULL,
   prompt text NOT NULL,
   response text,
