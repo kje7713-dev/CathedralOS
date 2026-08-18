@@ -57,7 +57,13 @@ const SCENE_MEMORY_RESPONSE_FORMAT = {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["character_name", "location", "knowledge_delta", "relationship_delta", "injuries", "goals", "possessions", "emotional_stance"],
+            // PR-360-X.5 RAG fix (Kevin 2026-08-18 07:32 EDT): only character_name
+            // is required. Previously all 8 fields were required, which forced
+            // the LLM to drop characters it couldn't fully populate (e.g., Steve
+            // was dropped because the LLM didn't have his location). Now the LLM
+            // can emit a character with just character_name (and null for
+            // unknown fields), preserving the full cast in canon.
+            required: ["character_name"],
             properties: {
               character_name: { type: "string" },
               location: { type: ["string", "null"] },
@@ -305,7 +311,10 @@ Deno.serve(async (req: Request) => {
             content:
               "You are a fiction scene-memory extractor. Given a scene, output JSON with these 6 keys: " +
               "`extracted_summary` (200-500 token distillation of what happened), " +
-              "`character_deltas` (array of {character_name, location?, knowledge_delta?, relationship_delta?, injuries?, goals?, possessions?, emotional_stance?}), " +
+              "`character_deltas` (array of {character_name, location?, knowledge_delta?, relationship_delta?, injuries?, goals?, possessions?, emotional_stance?}). " +
+              "CRITICAL: include EVERY character mentioned in the scene, even if only the name is known. " +
+              "If a field is unknown for a character, emit null for that field — do NOT drop the character. " +
+              "ALWAYS include `location` for each character (use null if the scene doesn't specify it). " +
               "`plot_thread_deltas` (array of {thread_name, status in [introduced, advanced, resolved], description}), " +
               "`continuity_facts` (array of concrete fact strings future scenes must not contradict), " +
               "`open_loops` (array of {type in [promise, mystery, question, threat, pending_action], description}), " +
