@@ -5,6 +5,18 @@ import UIKit
 
 let sharedOutputCoverAspectRatio: CGFloat = 16.0 / 9.0
 
+/// PR-360-Y: one post-generation coherence warning. Persisted by
+/// generate-story's fire-and-forget post-gen coherence pass to
+/// `generation_output_warnings`. Queried by iOS to render the soft-warn
+/// yellow card on the output detail view.
+struct PostGenWarning: Codable, Identifiable, Hashable {
+    let id: String
+    let warning_type: String
+    let severity: String
+    let message: String
+    let conflicting_section_ids: [String]
+}
+
 struct SharedOutputCoverImage: View {
     let url: URL
     let metadataWidth: Int?
@@ -161,6 +173,10 @@ struct GenerationOutputDetailView: View {
     @State private var removeCoverImageOnPublish = false
     @State private var isProcessingCoverImage = false
     @State private var isSyncingOutput = false
+    // PR-360-Y: post-gen coherence warnings fetched from
+    // generation_output_warnings for this output.
+    @State private var postGenWarnings: [PostGenWarning] = []
+    @State private var postGenLoading: Bool = false
 
     /// Reverse-direction visibility context for this output's source.
     /// `.section` is the precise link (set via `output.outlineSectionID`); `.project`
@@ -317,9 +333,77 @@ struct GenerationOutputDetailView: View {
         .toolbar { toolbarContent }
     }
 
+    /// PR-360-Y: fetch this output's post-gen coherence warnings. Best-effort;
+    /// silent on failure - mirrors the kickoff sheet's loadCoherence behavior.
+    @MainActor
+    private func loadPostGenWarnings() async {
+        guard let cloudID = output.cloudGenerationOutputID, !cloudID.isEmpty else { return }
+        postGenLoading = true
+        defer { postGenLoading = false }
+        do {
+            guard let client = try? SupabaseBackendClient() else { return }
+            let warnings: [PostGenWarning] = try await client
+                .from("generation_output_warnings")
+                .select("id, warning_type, severity, message, conflicting_section_ids")
+                .eq("generation_output_id", cloudID)
+                .order("created_at", ascending: false)
+                .execute()
+                .value
+            postGenWarnings = warnings
+        } catch {
+            postGenWarnings = []
+        }
+    }
+
+    /// PR-360-Y: yellow soft-warn card for post-gen coherence warnings.
+    /// Mirrors the kickoff sheet's `coherenceWarningsRow` style (CathedralOS theme).
+    @ViewBuilder
+    private var postGenWarningsCard: some View {
+        if postGenLoading {
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                ProgressView().scaleEffect(0.7)
+                Text("Checking output for conflicts with canon…")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if !postGenWarnings.isEmpty {
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                HStack(spacing: CathedralTheme.Spacing.xs) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.yellow)
+                    Text("Output conflicts with canon or premise")
+                        .font(CathedralTheme.Typography.label(11, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+                ForEach(postGenWarnings) { warning in
+                    HStack(alignment: .top, spacing: CathedralTheme.Spacing.xs) {
+                        Text("•").font(.caption).foregroundStyle(.yellow)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(warning.warning_type.replacingOccurrences(of: "_", with: " "))
+                                .font(CathedralTheme.Typography.label(11, weight: .semibold))
+                            Text(warning.message)
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        }
+                    }
+                }
+                Text("These are post-generation warnings. The output was already saved; review the conflicts and decide whether to regenerate.")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .padding(.top, 2)
+            }
+            .padding(CathedralTheme.Spacing.sm)
+            .background(Color.yellow.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
     private var scrollContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
+                postGenWarningsCard
                 sourceContextHeader
                 metadataSection
                 provenanceSection
