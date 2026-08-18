@@ -81,3 +81,13 @@ jobs:
       - name: Deploy Edge Function - sync-story-arc
         if: ${{ hashFiles('supabase/functions/sync-story-arc/index.ts') != '' }}
         run: supabase functions deploy sync-story-arc --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy Edge Function - coherence-check
+        # Added 2026-08-17: PR #361 ships new coherence-check logic (extends
+        # .select() to include character_deltas + continuity_facts + scene
+        # state, rewords system prompt to lead with character-state checks).
+        # Was missing from this workflow, so the prior deploy run went green
+        # but never pushed the new logic live. Without this step every
+        # coherence-check fix is a no-op until someone manually redeploys.
+        if: ${{ hashFiles('supabase/functions/coherence-check/index.ts') != '' }}
+        run: supabase functions deploy coherence-check --project-ref "$SUPABASE_PROJECT_REF"
