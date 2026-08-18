@@ -227,6 +227,10 @@ interface GenerationOutputInsert {
   // leave it null). Cloud schema column added by migration
   // 20260812170000_add_outline_section_id_to_generation_outputs.sql.
   outline_section_id: string | null;
+  // PR-XXX-F: explicit row id. Reserved locally so llm_prompts.output_id and
+  // generation_outputs.id share the same UUID (the iOS debug box queries
+  // llm_prompts by output_id).
+  id?: string;
 }
 
 interface GenerationUsageEventInsert {
@@ -1691,6 +1695,9 @@ async function handler(
   let llmResult: LlmResult | null = null;
   // PR-XXX-A: track LLM call duration for llm_prompts log
   const llmStartMs = Date.now();
+  // PR-XXX-F: reserve output id locally so llm_prompts.output_id and
+  // generation_outputs.id share the same UUID (iOS debug box queries by it).
+  const outputId = crypto.randomUUID();
 
   try {
     llmResult = await llm.complete(
@@ -1779,6 +1786,7 @@ async function handler(
   try {
     await adminClient.from("llm_prompts").insert({
       call_type: "generate-story",
+      output_id: outputId,
       project_id: body.project_id ?? null,
       outline_section_id: body.outline_section_id ?? null,
       model: selectedModel.provider_model,
@@ -1836,6 +1844,7 @@ async function handler(
   );
 
   const { data: outputRow, error: outputInsertError } = await persistence.insertOutput({
+    id: outputId,
     user_id: userId,
     local_generation_id: body.localGenerationID ?? null,
     project_name: projectName,
