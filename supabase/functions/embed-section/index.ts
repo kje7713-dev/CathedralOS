@@ -288,6 +288,8 @@ Deno.serve(async (req: Request) => {
   // Uses OpenAI Structured Outputs so a successful, complete response always
   // conforms to the scene-memory JSON schema.
   let sceneMemory: SceneMemory;
+  // PR-XXX-A: track LLM call duration for llm_prompts log
+  const extractStartMs = Date.now();
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 120_000);
@@ -349,6 +351,29 @@ ${body.raw_text}`
       console.error(`[embed-section] LLM extraction returned empty content`);
       return errorResponse("provider_error", "LLM extraction returned empty content", 502);
     }
+
+    // PR-XXX-A: log the extraction prompt + response to llm_prompts (best-effort)
+    const extractDurationMs = Date.now() - extractStartMs;
+    try {
+      await adminClient.from("llm_prompts").insert({
+        call_type: "embed-section",
+        project_id: body.project_id ?? null,
+        outline_section_id: body.outline_section_id ?? null,
+        model: OPENAI_MODEL_DEFAULT,
+        prompt: JSON.stringify({
+          input: body.raw_text,
+          prior_context: body.prior_context ?? null,
+        }),
+        response: raw,
+        prompt_tokens: data.usage?.prompt_tokens ?? null,
+        completion_tokens: data.usage?.completion_tokens ?? null,
+        total_tokens: data.usage?.total_tokens ?? null,
+        duration_ms: extractDurationMs,
+      });
+    } catch (logErr) {
+      console.error(`[embed-section] llm_prompts insert failed: ${(logErr as Error).message}`);
+    }
+
     let parsed: Partial<SceneMemory>;
     try {
       parsed = JSON.parse(raw) as Partial<SceneMemory>;
@@ -429,6 +454,8 @@ ${body.raw_text}`
   });
 
   let embedding: number[] = [];
+  // PR-XXX-A: track embedding call duration
+  const embedStartMs = Date.now();
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 60_000);
@@ -461,6 +488,27 @@ ${body.raw_text}`
       return errorResponse("provider_error", "Embedding API returned invalid data", 502);
     }
     embedding = vec;
+
+    // PR-XXX-A: log the embedding call to llm_prompts (best-effort)
+    const embedDurationMs = Date.now() - embedStartMs;
+    try {
+      await adminClient.from("llm_prompts").insert({
+        call_type: "embed-section",
+        project_id: body.project_id ?? null,
+        outline_section_id: body.outline_section_id ?? null,
+        model: OPENAI_EMBED_MODEL,
+        prompt: JSON.stringify({
+          input: compressedMemory,
+        }),
+        response: `embedding_dim=${vec.length}`,
+        prompt_tokens: data.usage?.prompt_tokens ?? null,
+        completion_tokens: null,
+        total_tokens: data.usage?.total_tokens ?? null,
+        duration_ms: embedDurationMs,
+      });
+    } catch (logErr) {
+      console.error(`[embed-section] embeddings llm_prompts insert failed: ${(logErr as Error).message}`);
+    }
   } catch (err) {
     console.error(`[embed-section] embed threw: ${String(err)}`);
     return errorResponse("provider_error", String(err), 502);
