@@ -91,7 +91,7 @@ interface CoherenceWarning {
 
 interface ExplicitClaim {
   character_name: string;
-  claim_kind: "dead" | "killed" | "missing" | "dying" | "injured";
+  claim_kind: "dead" | "killed" | "missing" | "dying" | "injured" | "location";
   source_text: string;
 }
 
@@ -149,21 +149,50 @@ const SKIP_NAME_WORDS = new Set([
   "Who", "Whom", "Whose", "After", "Before", "During", "Until",
 ]);
 
-const extractNamesFromContext = (context: string): string[] => {
-  const namePattern = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/g;
+const extractNamesFromContext = (
+  context: string,
+  canonicalNames: Set<string>,
+): string[] => {
   const names: string[] = [];
+  const seen = new Set<string>();
+
+  // Pass 1: Capitalized names (existing behavior — catches new characters like "Steve").
+  const capPattern = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/g;
   let nm: RegExpExecArray | null;
-  while ((nm = namePattern.exec(context)) !== null) {
+  while ((nm = capPattern.exec(context)) !== null) {
     const name = nm[1].trim();
     if (SKIP_NAME_WORDS.has(name)) continue;
-    if (!names.includes(name)) names.push(name);
+    if (!seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
   }
+
+  // Pass 2 (hotfix): Case-insensitive match against canonical names from
+  // neighbors. Catches typos like "ted" → "Ted" before any explicit claim
+  // is even attached. Only matches if the lowercase form is in the canon.
+  const lowerPattern = /\b([a-z]+)\b/g;
+  while ((nm = lowerPattern.exec(context)) !== null) {
+    const lowerName = nm[1].trim();
+    if (SKIP_NAME_WORDS.has(lowerName)) continue;
+    for (const canonical of canonicalNames) {
+      if (canonical.toLowerCase() === lowerName) {
+        if (!seen.has(canonical)) {
+          seen.add(canonical);
+          names.push(canonical);
+        }
+        break;
+      }
+    }
+  }
+
   return names;
 };
 
 const extractExplicitClaims = (
   title: string,
   summary: string,
+  canonicalNames: Set<string>,
 ): ExplicitClaim[] => {
   const text = `${title} ${summary}`;
   const claims: ExplicitClaim[] = [];
@@ -177,6 +206,11 @@ const extractExplicitClaims = (
     { regex: /\b(killed|kills|murdered|executed|assassinated|wiped(?:\s+out)?|massacred|destroyed|slain|slays)\b/gi, kind: "killed" },
     // "X is dying / X is injured / X is wounded"
     { regex: /\b(is|are|was|were)\s+(dying|injured|wounded)\b/gi, kind: "dying" },
+    // HOTFIX: "X is in/at/on [Place]" — location shift from canon.
+    // Matches "Ted and Fred are in Paris" / "Steve is at the cathedral".
+    // Does NOT match malformed "are is paris" (no "in" preposition) — that's
+    // caught by the LLM prompt's "be charitable with typos" rule.
+    { regex: /\b(is|are|was|were)\s+(in|at|on|inside|outside|near)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/g, kind: "location" },
   ];
 
   for (const { regex, kind } of claimKinds) {
@@ -185,7 +219,7 @@ const extractExplicitClaims = (
       const start = Math.max(0, m.index - 60);
       const end = Math.min(text.length, m.index + m[0].length + 60);
       const context = text.slice(start, end);
-      const names = extractNamesFromContext(context);
+      const names = extractNamesFromContext(context, canonicalNames);
       for (const name of names) {
         const key = `${name}|${kind}`;
         if (seen.has(key)) continue;
@@ -472,10 +506,36 @@ Deno.serve(async (req: Request) => {
       : null,
   ].filter(Boolean).join("\n");
 
+  // PR-360-X hotfix: extract canonical character names from neighbors so
+  // case-insensitive name matching catches typos like "ted" → "Ted".
+  const canonicalNames = new Set<string>();
+  for (const row of neighbors) {
+    if (Array.isArray(row.character_deltas)) {
+      for (const c of row.character_deltas) {
+        const name = c.character_name ?? c.name;
+        if (typeof name === "string" && name.length > 0) {
+          canonicalNames.add(name);
+        }
+      }
+    }
+    if (row.scene_ending_state && typeof row.scene_ending_state === "object") {
+      const positions = row.scene_ending_state.character_positions;
+      if (Array.isArray(positions)) {
+        for (const p of positions) {
+          const name = p.character;
+          if (typeof name === "string" && name.length > 0) {
+            canonicalNames.add(name);
+          }
+        }
+      }
+    }
+  }
+
   // PR-360-X: Extract explicit claims from the proposed summary/title.
   const explicitClaims = extractExplicitClaims(
     body.section.title,
     body.section.summary,
+    canonicalNames,
   );
   const explicitClaimsBlock = explicitClaims.length > 0
     ? `EXPLICIT CLAIMS DETECTED IN PROPOSED SECTION:\n` +
@@ -514,9 +574,15 @@ PRIORITY contradiction checks (always run these first):
 4. POV drift: the proposed section shifts POV without justification.
 5. Plot-thread contradictions: a thread the earlier scenes marked as resolved is reopened, or vice versa, without setup.
 
-Severity rules (PR-360-X):
-- severity: "high" — Use for EXPLICIT claims in the proposed section (e.g., "Ted is dead", "Fred killed Y", "X is missing") where the claimed character appears in the ALIVE list of any accepted section. This is a HIGH-confidence flag and MUST be emitted; never silently dropped.
-- severity: "warn" — Use for weak/implicit signals (theme echoes, stylistic proximity, speculative concerns, "this could be inconsistent in some interpretation" worries). Be sparing.
+Severity rules (PR-360-X + hotfix):
+- severity: "high" — Use for EXPLICIT death/killing claims where the claimed character appears in the ALIVE list of any accepted section. This is a HIGH-confidence flag and MUST be emitted; never silently dropped.
+- severity: "warn" — Use for any of:
+  - Location shifts (e.g., "Ted and Fred are in Paris" when canon has them at a diner)
+  - New characters with established state (e.g., "Steve is dead" when Steve is not in any prior section's ALIVE/DEAD/INJURED list) — flag as "no canon context, claim is ungrounded"
+  - Weak/implicit signals (theme echoes, stylistic proximity)
+  - Typos/grammar corrections (e.g., "are is paris" = "are in Paris")
+
+Be aggressive about flagging ANY explicit claim that contradicts or shifts from canon. Missing a real contradiction is worse than a false positive.
 
 Do NOT surface: stylistic preferences, vague thematic echoes, things that "could be inconsistent in some interpretation". Only real, specific, citation-backed contradictions.
 
