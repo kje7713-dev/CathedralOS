@@ -56,7 +56,7 @@ struct LLMPromptService {
 
     /// Fetch all LLM prompts for a given output, newest first.
     func fetchPrompts(outputID: String) async throws -> [LLMPrompt] {
-        guard let client = SupabaseBackendClient.shared else {
+        guard let client = try? SupabaseBackendClient() else {
             throw LLMPromptError.notConfigured(reason: "Supabase client not configured")
         }
         guard let token = authService.currentAccessToken else {
