@@ -68,7 +68,11 @@ struct SectionEmbedService {
         edgeFunctionURL: URL,
         projectID: UUID,
         outlineID: UUID,
-        section: OutlineSection
+        section: OutlineSection,
+        // PR-XXX-H: optional generation output id to tag the llm_prompts
+        // rows this embedding call writes. Pass nil for outline-accept
+        // flows that aren't tied to a specific generation output.
+        outputID: String? = nil
     ) async throws -> EmbedSectionResponse {
         let rawText = Self.buildRawText(for: section)
         let request = EmbedSectionRequest(
@@ -82,7 +86,8 @@ struct SectionEmbedService {
             pov: section.pov,
             terminal_beat: section.terminalBeat,
             story_arc_beat_id: section.storyArcBeatID?.uuidString,
-            raw_text: rawText
+            raw_text: rawText,
+            output_id: outputID
         )
 
         let client: SupabaseBackendClient
@@ -240,6 +245,10 @@ struct EmbedSectionRequest: Codable {
     let terminal_beat: String?
     let story_arc_beat_id: String?
     let raw_text: String
+    // PR-XXX-H: tag the llm_prompts rows this call writes with the
+    // generation output's id so the iOS debug box can correlate them.
+    // Nil for outline-accept flows (no generation output context).
+    let output_id: String?
 }
 
 struct EmbedSectionResponse: Codable {
