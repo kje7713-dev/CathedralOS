@@ -259,8 +259,14 @@ struct StoryArcRegionView: View {
             for beat in beats where deletedIDs.contains(beat.id) {
                 modelContext.delete(beat)
             }
-            try? modelContext.save()
-            if let arc = currentArc { syncState.syncDebounced(arc) }
+            do {
+                try modelContext.save()
+                await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
+                if let arc = currentArc { syncState.syncDebounced(arc) }
+            } catch {
+                deleteError = "Failed to save beat delete: \(error.localizedDescription)"
+                return
+            }
         }
     }
 
@@ -288,12 +294,17 @@ struct StoryArcRegionView: View {
             for beat in beats {
                 modelContext.delete(beat)
             }
-            try? modelContext.save()
-            syncBeatsOrder()
-            // Immediate sync (not debounced). Destructive user action, don't risk
-            // a 500ms window where the user could navigate away before the sync fires.
-            syncState.syncImmediately(arc)
-            await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
+            do {
+                try modelContext.save()
+                syncBeatsOrder()
+                // Immediate sync (not debounced). Destructive user action, don't risk
+                // a 500ms window where the user could navigate away before the sync fires.
+                syncState.syncImmediately(arc)
+                await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
+            } catch {
+                deleteError = "Failed to save beats delete: \(error.localizedDescription)"
+                return
+            }
         }
     }
 
