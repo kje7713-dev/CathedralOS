@@ -41,10 +41,10 @@ final class StoryArcSyncState: ObservableObject {
 
     private func performSync(arc: StoryArc) async {
         do {
-            // PR-XXX-O: force-refresh arc from persistent store before syncArc reads
-            // its beats. Fix for the beat-resurrection bug where syncArc read stale
-            // in-memory beats after a local delete and re-pushed them via UPSERT.
-            try? modelContext.refresh(arc)
+            // Note: modelContext.refresh(arc) is called at the View-level call
+            // sites (syncImmediately/syncDebounced/drainSync callers) where
+            // modelContext is in scope. StoryArcSyncState is a class without
+            // SwiftData access; refresh belongs at the View.
             _ = try await StoryArcSyncService().syncArc(arc: arc)
             arc.lastSyncedAt = Date()
         } catch {
@@ -111,7 +111,13 @@ struct StoryArcRegionView: View {
         .onDisappear {
             // Drain pending debounced sync (if any) before view tears down,
             // so user edits aren't lost when navigating away mid-debounce.
-            if let arc = currentArc { syncState.drainSync(arc) }
+            if let arc = currentArc {
+                // PR-XXX-O: refresh arc from persistent store before sync — prevents
+                // SwiftData @Relationship stale-reference bug where syncArc re-pushes
+                // deleted beats via UPSERT.
+                try? modelContext.refresh(arc)
+                syncState.drainSync(arc)
+            }
             Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
         }
         .sheet(item: $editingBeat) { beat in
@@ -120,7 +126,11 @@ struct StoryArcRegionView: View {
                 onSave: {
                     try? modelContext.save()
                     // Q1c immediate on explicit save
-                    if let arc = currentArc { syncState.syncImmediately(arc) }
+                    if let arc = currentArc {
+                        // PR-XXX-O: refresh before sync — see comment in moveBeats above.
+                        try? modelContext.refresh(arc)
+                        syncState.syncImmediately(arc)
+                    }
                     Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
                 }
             )
@@ -242,6 +252,8 @@ struct StoryArcRegionView: View {
         modelContext.insert(newBeat)
         try? modelContext.save()
         // Q1c debounced: typing sequence into one final sync
+        // PR-XXX-O: refresh before sync — see comment above.
+        try? modelContext.refresh(arc)
         syncState.syncDebounced(arc)
     }
 
@@ -370,7 +382,11 @@ struct StoryArcRegionView: View {
         }
         try? modelContext.save()
         // Q1c debounced: reordering within a beat list
-        if let arc = currentArc { syncState.syncDebounced(arc) }
+        if let arc = currentArc {
+            // PR-XXX-O: refresh before sync — see comment in moveBeats above.
+            try? modelContext.refresh(arc)
+            syncState.syncDebounced(arc)
+        }
     }
 
     // MARK: - Template switch (role-based merge)
@@ -396,6 +412,8 @@ struct StoryArcRegionView: View {
         try? modelContext.save()
         // Q4 save-once-on-create: immediate sync so the arc + beats land
         // on the server before any embed-section call references them.
+        // PR-XXX-O: refresh before sync — see comment in moveBeats above.
+        try? modelContext.refresh(arcToSync)
         syncState.syncImmediately(arcToSync)
     }
 
