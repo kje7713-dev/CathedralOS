@@ -155,7 +155,7 @@ struct OutlineSuggestionsReviewView: View {
             if let arc = project.storyArcs.first {
                 let syncService = StoryArcSyncService()
                 do {
-                    _ = try await syncService.syncArc(arc: arc)
+                    _ = try await syncService.syncArc(arc: arc, modelContext: modelContext)
                 } catch {
                     // Pre-sync failed; continue with Accept All.
                 }
