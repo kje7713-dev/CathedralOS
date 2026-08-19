@@ -73,6 +73,28 @@ struct StoryArcSyncService {
     ///   the project's UUID is used for both `local_project_id` and
     ///   `lineage_id` (matches the convention embed-section uses).
     /// - Returns: SyncArcResponse with upsert/delete counts.
+
+// MARK: - Authoritative root-fetch helper
+/// Establish one helper to fetch authoritative persisted beats.
+/// Use root StoryArcBeat fetches anywhere deletion correctness matters.
+/// SwiftData's @Relationship collection can retain deleted objects after
+/// modelContext.delete + save; a direct StoryArcBeat fetch reflects the
+/// persisted rows and makes the result authoritative for the replace-beats
+/// API and snapshot serialization.
+static func fetchAuthoritativeBeats(
+    arc: StoryArc,
+    modelContext: ModelContext
+) -> [StoryArcBeat] {
+    let arcID = arc.id
+    let descriptor = FetchDescriptor<StoryArcBeat>(
+        predicate: #Predicate<StoryArcBeat> { beat in
+            beat.storyArc?.id == arcID
+        },
+        sortBy: [SortDescriptor(\.position)]
+    )
+    return (try? modelContext.fetch(descriptor)) ?? []
+}
+
     func syncArc(
         arc: StoryArc,
         modelContext: ModelContext

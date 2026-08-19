@@ -281,8 +281,8 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         self.tombstoneService = tombstoneService
     }
 
-    func syncProject(_ project: StoryProject) async throws {
-        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+    func syncProject(_ project: StoryProject, modelContext: ModelContext) async throws {
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: modelContext)
         try await syncProjectSnapshot(localProjectID: project.id.uuidString, payload: payload)
     }
 
@@ -316,7 +316,9 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         let candidates = projects.map { project in
             ProjectSnapshotSyncInput(
                 localProjectID: project.id.uuidString,
-                payload: ProjectSchemaTemplateBuilder.build(project: project)
+                // Root-fetch beats via modelContext — arc.beats can retain deleted
+                // SwiftData objects and resurrect them on upload.
+                payload: ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
             )
         }
         try await mutationGate.run {
@@ -1565,6 +1567,11 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             arc.project = project
             reconcileStoryArcBeats(payload.beats, for: arc, in: context)
         }
+        // Replace semantics: local arc set must exactly equal snapshot arc set.
+        // Any arc not consumed by a payload is a ghost and must be deleted.
+        for orphan in existingByID.values {
+            context.delete(orphan)
+        }
     }
 
     private func reconcileStoryArcBeats(
@@ -1572,9 +1579,13 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         for arc: StoryArc,
         in context: ModelContext
     ) {
+        // Root-fetch beats (not arc.beats) — the @Relationship cache can retain
+        // deleted SwiftData objects and resurrect them on restore.
+        let authoritativeBeats = StoryArcSyncService.fetchAuthoritativeBeats(
+            arc: arc, modelContext: context
+        )
         var existingByID = Dictionary(
-            arc.beats.map { ($0.id, $0) },
-            uniquingKeysWith: { _, later in later }
+            uniqueKeysWithValues: authoritativeBeats.map { ($0.id, $0) }
         )
         for payload in payloads {
             let parsedID = payload.id.flatMap(UUID.init(uuidString:))
@@ -1590,6 +1601,12 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             beat.label = payload.label
             beat.details = payload.details
             beat.storyArc = arc
+        }
+        // Replace semantics: local beat set must exactly equal snapshot beat set.
+        // Any beat that was in existingByID but not consumed by a payload is an
+        // orphan and must be deleted (otherwise stale beats resurrect).
+        for orphan in existingByID.values {
+            context.delete(orphan)
         }
     }
 

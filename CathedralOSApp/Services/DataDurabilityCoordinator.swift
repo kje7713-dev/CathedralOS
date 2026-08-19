@@ -438,7 +438,8 @@ final class DataDurabilityCoordinator: ObservableObject {
 
         // 4. Attempt cloud sync.
         do {
-            try await projectSyncService.syncProject(project)
+            // Root-fetch beats via modelContext — arc.beats can retain deleted SwiftData objects and resurrect them.
+            try await projectSyncService.syncProject(project, modelContext: context)
             logger.log("saveProject: cloud sync succeeded for \(project.id.uuidString, privacy: .public)")
             return .cloudSaved
         } catch {

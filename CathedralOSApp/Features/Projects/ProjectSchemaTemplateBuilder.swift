@@ -551,7 +551,7 @@ enum ProjectSchemaTemplateBuilder {
 
     // MARK: - Build From Project
 
-    static func build(project: StoryProject) -> ProjectImportExportPayload {
+    static func build(project: StoryProject, modelContext: ModelContext) -> ProjectImportExportPayload {
         let settingPayload: ProjectImportExportPayload.SettingPayload?
         if let s = project.projectSetting {
             let historicalPressure: String = s.historicalPressure ?? ""
@@ -768,8 +768,10 @@ enum ProjectSchemaTemplateBuilder {
                 String(data: data, encoding: .utf8)
             }
 
-            let beatPayloads: [ProjectImportExportPayload.StoryArcBeatPayload] = arc.beats
-                .sorted(by: { $0.position < $1.position })
+            // Use root StoryArcBeat fetch (not arc.beats) — the @Relationship
+            // collection can retain deleted SwiftData objects and resurrect them.
+            let beatPayloads: [ProjectImportExportPayload.StoryArcBeatPayload] = StoryArcSyncService
+                .fetchAuthoritativeBeats(arc: arc, modelContext: modelContext)
                 .map { beat in
                     ProjectImportExportPayload.StoryArcBeatPayload(
                         id: beat.id.uuidString,
