@@ -68,6 +68,9 @@ struct StoryArcRegionView: View {
     @State private var editingBeat: StoryArcBeat?
     @State private var showingDeleteAllBeatsConfirm = false
     @State private var deleteError: String?
+    // PR-XXX-O/persistence: single-flight guard so concurrent deleteBeats /
+    // deleteAllBeats Tasks can't race on the shared SwiftData ModelContext.
+    @State private var isDeletingInFlight: Bool = false
     @StateObject private var syncState = StoryArcSyncState()
 
     /// At most one StoryArc per project in Phase 0/1.
@@ -249,8 +252,20 @@ struct StoryArcRegionView: View {
     /// in-app "Copy Diagnostics" clipboard output exposes the actual values
     /// (HTTP DELETE result, beats.count before/after save, saveProject result).
     private func deleteBeats(at offsets: IndexSet) {
+        // PR-XXX-O/persistence: single-flight guard. If a delete is already in
+        // flight, bail silently (the in-flight task will pick up the user's tap
+        // if they retry). Without this, two concurrent Tasks race on the same
+        // SwiftData ModelContext and the second one crashes nondeterministically.
+        guard !isDeletingInFlight else {
+            BeatDeleteDiagnostics.shared.append(
+                "deleteBeats: skipped, another delete already in flight"
+            )
+            return
+        }
         let beats = offsets.map { beatsOrder[$0] }
+        isDeletingInFlight = true
         Task {
+            defer { isDeletingInFlight = false }
             let countBeforeDelete = currentArc?.beats.count ?? 0
             BeatDeleteDiagnostics.shared.append(
                 "deleteBeats started: deleting \(beats.count) beat(s); relationship count before DELETE is \(countBeforeDelete)"
@@ -279,7 +294,14 @@ struct StoryArcRegionView: View {
             BeatDeleteDiagnostics.shared.append(
                 "deleteBeats: local mirror complete; relationship count before ModelContext.save is \(countBeforeSave)"
             )
-            try? modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                NSLog("[BEAT-DELETE] save FAILED in deleteBeats: %@", error.localizedDescription)
+                BeatDeleteDiagnostics.shared.append(
+                    "deleteBeats: ModelContext.save FAILED: \(error.localizedDescription)"
+                )
+            }
             let countAfterSave = currentArc?.beats.count ?? 0
             BeatDeleteDiagnostics.shared.append(
                 "deleteBeats: ModelContext.save complete; relationship count after save is \(countAfterSave)"
@@ -295,8 +317,17 @@ struct StoryArcRegionView: View {
     /// Sections that reference a deleted beat fall back to nil
     /// story_arc_beat_id (embed-section handles this defensively per PR #287).
     private func deleteAllBeats() {
+        // PR-XXX-O/persistence: same single-flight guard as deleteBeats.
+        guard !isDeletingInFlight else {
+            BeatDeleteDiagnostics.shared.append(
+                "deleteAllBeats: skipped, another delete already in flight"
+            )
+            return
+        }
         let beats = beatsOrder
+        isDeletingInFlight = true
         Task {
+            defer { isDeletingInFlight = false }
             let countBefore = currentArc?.beats.count ?? 0
             BeatDeleteDiagnostics.shared.append(
                 "deleteAllBeats started: deleting \(beats.count) beats; relationship count before is \(countBefore)"
@@ -323,7 +354,14 @@ struct StoryArcRegionView: View {
             BeatDeleteDiagnostics.shared.append(
                 "deleteAllBeats: local mirror complete; relationship count before ModelContext.save is \(countBeforeSave)"
             )
-            try? modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                NSLog("[BEAT-DELETE] save FAILED in deleteAllBeats: %@", error.localizedDescription)
+                BeatDeleteDiagnostics.shared.append(
+                    "deleteAllBeats: ModelContext.save FAILED: \(error.localizedDescription)"
+                )
+            }
             let countAfterSave = currentArc?.beats.count ?? 0
             BeatDeleteDiagnostics.shared.append(
                 "deleteAllBeats: ModelContext.save complete; relationship count after save is \(countAfterSave)"
