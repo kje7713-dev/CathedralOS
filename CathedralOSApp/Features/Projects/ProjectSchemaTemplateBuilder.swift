@@ -926,8 +926,10 @@ final class LocalProjectBackupService: ProjectBackupDeletionServiceProtocol {
     private init() {}
 
     @discardableResult
-    func backup(project: StoryProject) -> URL? {
-        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+    func backup(project: StoryProject, context: ModelContext) -> URL? {
+        // Root-fetch beats via modelContext — arc.beats can retain deleted
+        // SwiftData objects and resurrect them in the local backup.
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
         let json = ProjectSchemaTemplateBuilder.encodePayload(payload)
         guard let data = json.data(using: .utf8) else {
             logger.error("Backup skipped: JSON encoding failed for project \(project.id.uuidString, privacy: .public)")
