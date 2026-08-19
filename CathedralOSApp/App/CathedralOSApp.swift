@@ -105,6 +105,13 @@ private struct AppRootView: View {
         for arc in unsyncedArcs {
             guard arc.project != nil else { continue }
             do {
+                // PR-XXX-O: force-refresh arc from persistent store before syncArc reads
+                // its beats. SwiftData's @Relationship cache was returning stale beats
+                // after a delete (verified live DB: cloud story_arc_beats went 0 → 9 after
+                // sync, but snapshot's beats stayed [] — syncArc was re-pushing stale local
+                // beats via direct UPSERT into story_arc_beats table). The refresh fixes
+                // the stale in-memory reference.
+                try? modelContext.refresh(arc)
                 _ = try await service.syncArc(arc: arc)
                 arc.lastSyncedAt = Date()
             } catch {

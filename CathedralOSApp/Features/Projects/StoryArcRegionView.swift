@@ -41,6 +41,10 @@ final class StoryArcSyncState: ObservableObject {
 
     private func performSync(arc: StoryArc) async {
         do {
+            // PR-XXX-O: force-refresh arc from persistent store before syncArc reads
+            // its beats. Fix for the beat-resurrection bug where syncArc read stale
+            // in-memory beats after a local delete and re-pushed them via UPSERT.
+            try? modelContext.refresh(arc)
             _ = try await StoryArcSyncService().syncArc(arc: arc)
             arc.lastSyncedAt = Date()
         } catch {

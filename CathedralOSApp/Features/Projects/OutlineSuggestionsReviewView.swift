@@ -155,6 +155,10 @@ struct OutlineSuggestionsReviewView: View {
             if let arc = project.storyArcs.first {
                 let syncService = StoryArcSyncService()
                 do {
+                    // PR-XXX-O: force-refresh arc from persistent store before syncArc.
+                    // Fix for the beat-resurrection bug where syncArc read stale
+                    // in-memory beats after a local delete and re-pushed them.
+                    try? modelContext.refresh(arc)
                     _ = try await syncService.syncArc(arc: arc)
                 } catch {
                     // Pre-sync failed; continue with Accept All.
