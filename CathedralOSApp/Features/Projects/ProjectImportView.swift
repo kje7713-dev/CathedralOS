@@ -155,7 +155,7 @@ struct ProjectImportView: View {
     private func importProject(_ payload: ProjectImportExportPayload) {
         let project = ProjectImportMapper.map(payload)
         modelContext.insert(project)
-        _ = LocalProjectBackupService.shared.backup(project: project, context: context)
+        _ = LocalProjectBackupService.shared.backup(project: project, context: modelContext)
         onImported(project)
         dismiss()
     }
