@@ -261,8 +261,14 @@ struct StoryArcRegionView: View {
             }
             do {
                 try modelContext.save()
+                // PR-XXX-M: removed syncDebounced(syncArc) — the cloud DELETE we just
+                // fired removed the beat from story_arc_beats server-side, and the
+                // syncArc read of arc.beats was resurrecting the beat from local
+                // state when the local relationship hadn't refreshed. saveProject
+                // (via syncProject → syncProjectSnapshot) is sufficient: it rebuilds
+                // snapshot_json from the up-to-date StoryProject and pushes to the
+                // server. Mirrors OutlineSectionsRegionView.deleteSection pattern.
                 await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
-                if let arc = currentArc { syncState.syncDebounced(arc) }
             } catch {
                 deleteError = "Failed to save beat delete: \(error.localizedDescription)"
                 return
@@ -297,9 +303,12 @@ struct StoryArcRegionView: View {
             do {
                 try modelContext.save()
                 syncBeatsOrder()
-                // Immediate sync (not debounced). Destructive user action, don't risk
-                // a 500ms window where the user could navigate away before the sync fires.
-                syncState.syncImmediately(arc)
+                // PR-XXX-M: removed syncImmediately(arc) — same root cause as
+                // deleteBeats. The cloud DELETE per beat just fired (loop above) is
+                // sufficient; re-syncing the whole arc via syncArc was the path that
+                // re-created the deleted beat from local state. saveProject handles
+                // the snapshot push. Mirrors deleteAllSections in
+                // OutlineSectionsRegionView (PR #299).
                 await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
             } catch {
                 deleteError = "Failed to save beats delete: \(error.localizedDescription)"
