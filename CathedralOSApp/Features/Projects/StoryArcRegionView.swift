@@ -67,6 +67,7 @@ struct StoryArcRegionView: View {
     @State private var beatsOrder: [StoryArcBeat] = []
     @State private var editingBeat: StoryArcBeat?
     @State private var showingDeleteAllBeatsConfirm = false
+    @State private var deleteError: String?
     @StateObject private var syncState = StoryArcSyncState()
 
     /// At most one StoryArc per project in Phase 0/1.
@@ -125,6 +126,14 @@ struct StoryArcRegionView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text(alertMessage)
+        }
+        .alert("Delete Error", isPresented: Binding(
+            get: { deleteError != nil },
+            set: { if !$0 { deleteError = nil } }
+        )) {
+            Button("OK") { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "")
         }
     }
 
@@ -232,13 +241,27 @@ struct StoryArcRegionView: View {
         syncState.syncDebounced(arc)
     }
 
+    /// PR-XXX-K: cloud DELETE per beat first, then local mirror.
     private func deleteBeats(at offsets: IndexSet) {
-        for index in offsets {
-            modelContext.delete(beatsOrder[index])
+        let beats = offsets.map { beatsOrder[$0] }
+        Task {
+            let deletion = StoryArcBeatCloudDeletion()
+            var deletedIDs: Set<UUID> = []
+            for beat in beats {
+                do {
+                    try await deletion.deleteBeat(id: beat.id)
+                    deletedIDs.insert(beat.id)
+                } catch {
+                    deleteError = error.localizedDescription
+                    return
+                }
+            }
+            for beat in beats where deletedIDs.contains(beat.id) {
+                modelContext.delete(beat)
+            }
+            try? modelContext.save()
+            if let arc = currentArc { syncState.syncDebounced(arc) }
         }
-        try? modelContext.save()
-        // Q1c debounced + Q3a immediate on shape change
-        if let arc = currentArc { syncState.syncDebounced(arc) }
     }
 
     /// Bulk-delete all beats. Same pattern as deleteAllSections in
@@ -246,17 +269,32 @@ struct StoryArcRegionView: View {
     /// re-pick a template or start from scratch after iterating on the story.
     /// Sections that reference a deleted beat fall back to nil
     /// story_arc_beat_id (embed-section handles this defensively per PR #287).
+    /// PR-XXX-K: cloud DELETE per beat first, then local mirror.
+    /// The "Delete All" alert (alertMessage) is now honest — the server rows
+    /// are gone before the local mirror fires.
     private func deleteAllBeats() {
         guard let arc = currentArc else { return }
-        for beat in beatsOrder {
-            modelContext.delete(beat)
+        let beats = beatsOrder
+        Task {
+            let deletion = StoryArcBeatCloudDeletion()
+            for beat in beats {
+                do {
+                    try await deletion.deleteBeat(id: beat.id)
+                } catch {
+                    deleteError = error.localizedDescription
+                    return
+                }
+            }
+            for beat in beats {
+                modelContext.delete(beat)
+            }
+            try? modelContext.save()
+            syncBeatsOrder()
+            // Immediate sync (not debounced). Destructive user action, don't risk
+            // a 500ms window where the user could navigate away before the sync fires.
+            syncState.syncImmediately(arc)
+            await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
         }
-        try? modelContext.save()
-        syncBeatsOrder()
-        // Immediate sync (not debounced). Destructive user action, don't risk
-        // a 500ms window where the user could navigate away before the sync fires.
-        syncState.syncImmediately(arc)
-        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
     }
 
     /// Computed message for the Delete All confirmation alert. Pulled out so
