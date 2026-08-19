@@ -151,6 +151,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestionsError: String?
     @State private var acceptingSectionID: UUID?
     @State private var embedError: String?
+    @State private var deleteError: String?
     @State private var showingDeleteAllConfirm = false
 
     /// At most one Outline per project in Phase 0/1.
@@ -265,11 +266,19 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         } message: {
             Text(embedError ?? "An unknown error occurred.")
         }
+        .alert("Delete Error", isPresented: Binding(
+            get: { deleteError != nil },
+            set: { if !$0 { deleteError = nil } }
+        )) {
+            Button("OK") { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "")
+        }
         .alert("Delete All Sections?", isPresented: $showingDeleteAllConfirm) {
             Button("Delete All", role: .destructive) { deleteAllSections() }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This will permanently delete all \(sectionsOrder.count) section\(sectionsOrder.count == 1 ? "" : "s"). This cannot be undone.")
+            Text("This will permanently delete all \(sectionsOrder.count) section\(sectionsOrder.count == 1 ? "" : "s") from the server. This cannot be undone.")
         }
         .sheet(isPresented: $showingSuggestionSheet) {
             if let outline = currentOutline {
@@ -491,11 +500,26 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         try? modelContext.save()
     }
 
+    /// PR-XXX-K: cloud DELETE first per section, then local mirror.
     private func deleteSections(at offsets: IndexSet) {
-        for index in offsets {
-            modelContext.delete(sectionsOrder[index])
+        let sections = offsets.map { sectionsOrder[$0] }
+        Task {
+            let deletion = OutlineSectionCloudDeletion()
+            var deletedIDs: Set<UUID> = []
+            for section in sections {
+                do {
+                    try await deletion.deleteSection(id: section.id)
+                    deletedIDs.insert(section.id)
+                } catch {
+                    deleteError = error.localizedDescription
+                    return
+                }
+            }
+            for section in sections where deletedIDs.contains(section.id) {
+                modelContext.delete(section)
+            }
+            try? modelContext.save()
         }
-        try? modelContext.save()
     }
 
     private func duplicateSection(_ section: OutlineSection) {
@@ -515,13 +539,21 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         try? modelContext.save()
     }
 
-    /// Delete a section via the swipe action. The SwiftData relationship
-    /// cascade-deletes children (if any). The .onChange(sectionsKey) handler
-    /// re-syncs sectionsOrder automatically.
+    /// Delete a section via the swipe action. PR-XXX-K: was local-only —
+    /// now does a cloud DELETE first (relying on PR #376's cascade for
+    /// section_embeddings), then mirrors to local SwiftData.
     private func deleteSection(_ section: OutlineSection) {
-        modelContext.delete(section)
-        try? modelContext.save()
-        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+        let id = section.id
+        Task {
+            do {
+                try await OutlineSectionCloudDeletion().deleteSection(id: id)
+                modelContext.delete(section)
+                try? modelContext.save()
+                await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
+            } catch {
+                deleteError = error.localizedDescription
+            }
+        }
     }
 
     /// Bulk-delete all top-level sections. Used when the user wants to
@@ -529,13 +561,28 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     /// avoids the duplicate-suggestions problem from PR #296's first
     /// planner test (37 of 39 accepted cleanly, but the next Suggest
     /// appended duplicates instead of replacing).
+    /// PR-XXX-K: cloud DELETE per section first, then local mirror.
+    /// "Cannot be undone" alert is now honest — the server rows are gone
+    /// before the local mirror fires.
     private func deleteAllSections() {
-        for section in sectionsOrder {
-            modelContext.delete(section)
+        let sections = sectionsOrder
+        Task {
+            let deletion = OutlineSectionCloudDeletion()
+            for section in sections {
+                do {
+                    try await deletion.deleteSection(id: section.id)
+                } catch {
+                    deleteError = error.localizedDescription
+                    return
+                }
+            }
+            for section in sections {
+                modelContext.delete(section)
+            }
+            try? modelContext.save()
+            syncSectionsOrder()
+            await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
         }
-        try? modelContext.save()
-        syncSectionsOrder()
-        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
     }
 
     private func moveSections(from offsets: IndexSet, to destination: Int) {
