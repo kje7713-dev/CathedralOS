@@ -245,9 +245,16 @@ struct StoryArcRegionView: View {
     /// Cloud DELETE per beat first, then local mirror, then silent save.
     /// No saveProject here (matches the section multi/swipe path which also
     /// relies on the next full sync to refresh the snapshot).
+    /// PR-XXX-N diagnostics: each step appends to BeatDeleteDiagnostics so the
+    /// in-app "Copy Diagnostics" clipboard output exposes the actual values
+    /// (HTTP DELETE result, beats.count before/after save, saveProject result).
     private func deleteBeats(at offsets: IndexSet) {
         let beats = offsets.map { beatsOrder[$0] }
         Task {
+            let countBeforeDelete = currentArc?.beats.count ?? 0
+            BeatDeleteDiagnostics.shared.append(
+                "deleteBeats started: deleting \(beats.count) beat(s); relationship count before DELETE is \(countBeforeDelete)"
+            )
             let deletion = StoryArcBeatCloudDeletion()
             var deletedIDs: Set<UUID> = []
             for beat in beats {
@@ -255,14 +262,28 @@ struct StoryArcRegionView: View {
                     try await deletion.deleteBeat(id: beat.id)
                     deletedIDs.insert(beat.id)
                 } catch {
+                    BeatDeleteDiagnostics.shared.append(
+                        "deleteBeats: cloud DELETE failed for beat id=\(beat.id): \(error.localizedDescription)"
+                    )
                     deleteError = error.localizedDescription
                     return
                 }
             }
+            BeatDeleteDiagnostics.shared.append(
+                "deleteBeats: cloud DELETE succeeded for \(deletedIDs.count) beat(s)"
+            )
             for beat in beats where deletedIDs.contains(beat.id) {
                 modelContext.delete(beat)
             }
+            let countBeforeSave = currentArc?.beats.count ?? 0
+            BeatDeleteDiagnostics.shared.append(
+                "deleteBeats: local mirror complete; relationship count before ModelContext.save is \(countBeforeSave)"
+            )
             try? modelContext.save()
+            let countAfterSave = currentArc?.beats.count ?? 0
+            BeatDeleteDiagnostics.shared.append(
+                "deleteBeats: ModelContext.save complete; relationship count after save is \(countAfterSave)"
+            )
         }
     }
 
@@ -276,21 +297,56 @@ struct StoryArcRegionView: View {
     private func deleteAllBeats() {
         let beats = beatsOrder
         Task {
+            let countBefore = currentArc?.beats.count ?? 0
+            BeatDeleteDiagnostics.shared.append(
+                "deleteAllBeats started: deleting \(beats.count) beats; relationship count before is \(countBefore)"
+            )
             let deletion = StoryArcBeatCloudDeletion()
             for beat in beats {
                 do {
                     try await deletion.deleteBeat(id: beat.id)
                 } catch {
+                    BeatDeleteDiagnostics.shared.append(
+                        "deleteAllBeats: cloud DELETE failed for beat id=\(beat.id): \(error.localizedDescription)"
+                    )
                     deleteError = error.localizedDescription
                     return
                 }
             }
+            BeatDeleteDiagnostics.shared.append(
+                "deleteAllBeats: cloud DELETE loop complete"
+            )
             for beat in beats {
                 modelContext.delete(beat)
             }
+            let countBeforeSave = currentArc?.beats.count ?? 0
+            BeatDeleteDiagnostics.shared.append(
+                "deleteAllBeats: local mirror complete; relationship count before ModelContext.save is \(countBeforeSave)"
+            )
             try? modelContext.save()
+            let countAfterSave = currentArc?.beats.count ?? 0
+            BeatDeleteDiagnostics.shared.append(
+                "deleteAllBeats: ModelContext.save complete; relationship count after save is \(countAfterSave)"
+            )
             syncBeatsOrder()
-            await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
+            let result = await DataDurabilityCoordinator.shared.saveProject(
+                project,
+                context: modelContext
+            )
+            switch result {
+            case .cloudSaved:
+                BeatDeleteDiagnostics.shared.append(
+                    "deleteAllBeats: project snapshot cloud save SUCCEEDED"
+                )
+            case .localFallback(let msg):
+                BeatDeleteDiagnostics.shared.append(
+                    "deleteAllBeats: project snapshot cloud save FAILED; local fallback: \(msg)"
+                )
+            case .localOnly(let reason):
+                BeatDeleteDiagnostics.shared.append(
+                    "deleteAllBeats: project snapshot saved locally only: \(reason)"
+                )
+            }
         }
     }
 

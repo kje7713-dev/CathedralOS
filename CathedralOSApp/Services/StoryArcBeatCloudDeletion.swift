@@ -59,8 +59,14 @@ struct StoryArcBeatCloudDeletion {
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
+            BeatDeleteDiagnostics.shared.append(
+                "DELETE story_arc_beats id=\(id.uuidString) received a non-HTTP response"
+            )
             throw StoryArcBeatCloudDeletionError.serverError(statusCode: -1, body: "Non-HTTP response")
         }
+        BeatDeleteDiagnostics.shared.append(
+            "DELETE story_arc_beats id=\(id.uuidString) returned HTTP \(http.statusCode)"
+        )
         guard (200..<300).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8)
             throw StoryArcBeatCloudDeletionError.serverError(statusCode: http.statusCode, body: body)
