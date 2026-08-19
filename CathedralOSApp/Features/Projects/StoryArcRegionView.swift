@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import os
 
 /// Story Arc region (top of the Outline tab).
 ///
@@ -60,6 +61,11 @@ final class StoryArcSyncState: ObservableObject {
 ///   - User-added beats (empty role) survive as orphans at the end.
 ///   - Template beats whose role vanished in the new template are dropped.
 struct StoryArcRegionView: View {
+    private static let deletionLogger = Logger(
+        subsystem: "CathedralOS",
+        category: "StoryArcBeatDeletion"
+    )
+
     @Bindable var project: StoryProject
     let modelContext: ModelContext
 
@@ -245,6 +251,10 @@ struct StoryArcRegionView: View {
     private func deleteBeats(at offsets: IndexSet) {
         let beats = offsets.map { beatsOrder[$0] }
         Task {
+            let countBeforeDelete = currentArc?.beats.count ?? 0
+            Self.deletionLogger.log(
+                "deleteBeats started: deleting \(beats.count, privacy: .public) beat(s); relationship count before DELETE is \(countBeforeDelete, privacy: .public)"
+            )
             let deletion = StoryArcBeatCloudDeletion()
             var deletedIDs: Set<UUID> = []
             for beat in beats {
@@ -259,8 +269,20 @@ struct StoryArcRegionView: View {
             for beat in beats where deletedIDs.contains(beat.id) {
                 modelContext.delete(beat)
             }
+            let countBeforeSave = currentArc?.beats.count ?? 0
+            Self.deletionLogger.log(
+                "deleteBeats local mirror complete: relationship count before ModelContext.save is \(countBeforeSave, privacy: .public)"
+            )
             try? modelContext.save()
-            if let arc = currentArc { syncState.syncDebounced(arc) }
+            let countAfterSave = currentArc?.beats.count ?? 0
+            Self.deletionLogger.log(
+                "deleteBeats ModelContext.save complete: relationship count after save is \(countAfterSave, privacy: .public)"
+            )
+            let result = await DataDurabilityCoordinator.shared.saveProject(
+                project,
+                context: modelContext
+            )
+            logSaveResult(result, operation: "deleteBeats")
         }
     }
 
@@ -288,12 +310,39 @@ struct StoryArcRegionView: View {
             for beat in beats {
                 modelContext.delete(beat)
             }
+            let countBeforeSave = currentArc?.beats.count ?? 0
+            Self.deletionLogger.log(
+                "deleteAllBeats local mirror complete: relationship count before ModelContext.save is \(countBeforeSave, privacy: .public)"
+            )
             try? modelContext.save()
+            let countAfterSave = currentArc?.beats.count ?? 0
+            Self.deletionLogger.log(
+                "deleteAllBeats ModelContext.save complete: relationship count after save is \(countAfterSave, privacy: .public)"
+            )
             syncBeatsOrder()
             // Immediate sync (not debounced). Destructive user action, don't risk
             // a 500ms window where the user could navigate away before the sync fires.
             syncState.syncImmediately(arc)
-            await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
+            let result = await DataDurabilityCoordinator.shared.saveProject(
+                project,
+                context: modelContext
+            )
+            logSaveResult(result, operation: "deleteAllBeats")
+        }
+    }
+
+    private func logSaveResult(_ result: ProjectSaveResult, operation: String) {
+        switch result {
+        case .cloudSaved:
+            Self.deletionLogger.log("\(operation, privacy: .public): project snapshot cloud save succeeded")
+        case .localFallback(let errorMessage):
+            Self.deletionLogger.error(
+                "\(operation, privacy: .public): project snapshot cloud save failed; local fallback written: \(errorMessage, privacy: .public)"
+            )
+        case .localOnly(let reason):
+            Self.deletionLogger.notice(
+                "\(operation, privacy: .public): project snapshot was saved locally only: \(reason, privacy: .public)"
+            )
         }
     }
 
