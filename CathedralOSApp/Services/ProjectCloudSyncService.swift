@@ -76,7 +76,7 @@ enum CloudSnapshotPresence {
 }
 
 protocol ProjectCloudSyncServiceProtocol {
-    func syncProject(_ project: StoryProject) async throws
+    func syncProject(_ project: StoryProject, modelContext: ModelContext) async throws
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws
     func syncAllProjects(in context: ModelContext) async throws
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws
