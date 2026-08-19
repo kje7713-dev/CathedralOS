@@ -369,7 +369,12 @@ struct StoryArcRegionView: View {
             syncBeatsOrder()
             // Immediate sync (not debounced). Destructive user action, don't risk
             // a 500ms window where the user could navigate away before the sync fires.
-            syncState.syncImmediately(arc, modelContext: modelContext)
+            // PR #383's text referenced `arc` here; the local in this scope is the
+            // View's computed `currentArc`, so guard against it being nil before the
+            // syncArc call (which needs a non-nil arc to attach to a project).
+            if let arc = currentArc {
+                syncState.syncImmediately(arc, modelContext: modelContext)
+            }
             let result = await DataDurabilityCoordinator.shared.saveProject(
                 project,
                 context: modelContext
