@@ -122,10 +122,15 @@ struct StoryArcRegionView: View {
                         // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
                         // reconciles the complete persisted beat set to the server.
                         arc.lastSyncedAt = nil
-                        try modelContext.save()
+                        do {
+                            try modelContext.save()
+                        } catch {
+                            // Save failed; lastSyncedAt stays nil so app-launch recovery
+                            // retries this arc on the next launch.
+                        }
                         Task {
                             do {
-                                try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                                _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
                                 arc.lastSyncedAt = Date()
                                 try modelContext.save()
                             } catch {
@@ -255,11 +260,15 @@ struct StoryArcRegionView: View {
         // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
         // reconciles the complete persisted beat set to the server.
         arc.lastSyncedAt = nil
-        try modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            return
+        }
 
         Task {
             do {
-                try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
                 arc.lastSyncedAt = Date()
                 try modelContext.save()
             } catch {
@@ -295,13 +304,22 @@ struct StoryArcRegionView: View {
             }
 
             arc.lastSyncedAt = nil
-            try modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                return
+            }
 
             syncBeatsOrder()
 
-            try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
-            arc.lastSyncedAt = Date()
-            try modelContext.save()
+            do {
+                _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                arc.lastSyncedAt = Date()
+                try modelContext.save()
+            } catch {
+                // Sync failed; lastSyncedAt stays nil so app-launch recovery
+                // retries this arc on the next launch.
+            }
         }
     }
 
@@ -331,13 +349,22 @@ struct StoryArcRegionView: View {
             }
 
             arc.lastSyncedAt = nil
-            try modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                return
+            }
 
             syncBeatsOrder()
 
-            try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
-            arc.lastSyncedAt = Date()
-            try modelContext.save()
+            do {
+                _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                arc.lastSyncedAt = Date()
+                try modelContext.save()
+            } catch {
+                // Sync failed; lastSyncedAt stays nil so app-launch recovery
+                // retries this arc on the next launch.
+            }
         }
     }
 
@@ -360,11 +387,15 @@ struct StoryArcRegionView: View {
             // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
             // reconciles the complete persisted beat set to the server.
             arc.lastSyncedAt = nil
-            try modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                return
+            }
 
             Task {
                 do {
-                    try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                    _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
                     arc.lastSyncedAt = Date()
                     try modelContext.save()
                 } catch {
@@ -411,7 +442,11 @@ struct StoryArcRegionView: View {
             arcToSync = existing
         }
 
-        try modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            return
+        }
         syncBeatsOrder()
 
         // StoryArcSyncService.syncArc is the sole cloud mutation authority
@@ -420,7 +455,7 @@ struct StoryArcRegionView: View {
         // Do not introduce per-beat cloud mutation paths.
         Task {
             do {
-                try await StoryArcSyncService().syncArc(arc: arcToSync, modelContext: modelContext)
+                _ = try await StoryArcSyncService().syncArc(arc: arcToSync, modelContext: modelContext)
                 arcToSync.lastSyncedAt = Date()
                 try modelContext.save()
             } catch {
