@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum StoryArcBeatCloudDeletionError: Error, LocalizedError {
     case notConfigured(reason: String)
@@ -24,6 +25,11 @@ enum StoryArcBeatCloudDeletionError: Error, LocalizedError {
 /// outline_sections.story_arc_beat_id has ON DELETE SET NULL, so referencing
 /// sections automatically lose their arc link when a beat goes.
 struct StoryArcBeatCloudDeletion {
+    private static let logger = Logger(
+        subsystem: "CathedralOS",
+        category: "StoryArcBeatDeletion"
+    )
+
     private let authService: AuthService
     private let session: URLSession
 
@@ -59,8 +65,14 @@ struct StoryArcBeatCloudDeletion {
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
+            Self.logger.error(
+                "DELETE story_arc_beats id=\(id.uuidString, privacy: .public) received a non-HTTP response"
+            )
             throw StoryArcBeatCloudDeletionError.serverError(statusCode: -1, body: "Non-HTTP response")
         }
+        Self.logger.log(
+            "DELETE story_arc_beats id=\(id.uuidString, privacy: .public) returned HTTP \(http.statusCode, privacy: .public)"
+        )
         guard (200..<300).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8)
             throw StoryArcBeatCloudDeletionError.serverError(statusCode: http.statusCode, body: body)
