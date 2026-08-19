@@ -155,11 +155,16 @@ struct OutlineSuggestionsReviewView: View {
             if let arc = project.storyArcs.first {
                 let syncService = StoryArcSyncService()
                 do {
-                    // PR-XXX-O: force-refresh arc from persistent store before syncArc.
+                    // PR-XXX-O: re-fetch arc from persistent store before syncArc.
                     // Fix for the beat-resurrection bug where syncArc read stale
                     // in-memory beats after a local delete and re-pushed them.
-                    try? modelContext.refresh(arc)
-                    _ = try await syncService.syncArc(arc: arc)
+                    // SwiftData's ModelContext has no refresh(_:), so re-fetch via
+                    // FetchDescriptor.
+                    let arcId = arc.id
+                    let freshArc = (try? modelContext.fetch(
+                        FetchDescriptor<StoryArc>(predicate: #Predicate<StoryArc> { $0.id == arcId })
+                    ).first) ?? arc
+                    _ = try await syncService.syncArc(arc: freshArc)
                 } catch {
                     // Pre-sync failed; continue with Accept All.
                 }
