@@ -965,7 +965,7 @@ final class LocalProjectBackupService: ProjectBackupDeletionServiceProtocol {
         let descriptor = FetchDescriptor<StoryProject>()
         guard let projects = try? modelContext.fetch(descriptor) else { return }
         for project in projects {
-            _ = backup(project: project)
+            _ = backup(project: project, context: modelContext)
         }
     }
 
