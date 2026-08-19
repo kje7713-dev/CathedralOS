@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import os
 
 /// Story Arc region (top of the Outline tab).
 ///
@@ -61,11 +60,6 @@ final class StoryArcSyncState: ObservableObject {
 ///   - User-added beats (empty role) survive as orphans at the end.
 ///   - Template beats whose role vanished in the new template are dropped.
 struct StoryArcRegionView: View {
-    private static let deletionLogger = Logger(
-        subsystem: "CathedralOS",
-        category: "StoryArcBeatDeletion"
-    )
-
     @Bindable var project: StoryProject
     let modelContext: ModelContext
 
@@ -74,6 +68,9 @@ struct StoryArcRegionView: View {
     @State private var editingBeat: StoryArcBeat?
     @State private var showingDeleteAllBeatsConfirm = false
     @State private var deleteError: String?
+    // PR-XXX-O/persistence: single-flight guard so concurrent deleteBeats /
+    // deleteAllBeats Tasks can't race on the shared SwiftData ModelContext.
+    @State private var isDeletingInFlight: Bool = false
     @StateObject private var syncState = StoryArcSyncState()
 
     /// At most one StoryArc per project in Phase 0/1.
@@ -247,13 +244,31 @@ struct StoryArcRegionView: View {
         syncState.syncDebounced(arc, modelContext: modelContext)
     }
 
-    /// PR-XXX-K: cloud DELETE per beat first, then local mirror.
+    /// PR-XXX-N: mirror OutlineSectionsRegionView.deleteSections exactly.
+    /// Cloud DELETE per beat first, then local mirror, then silent save.
+    /// No saveProject here (matches the section multi/swipe path which also
+    /// relies on the next full sync to refresh the snapshot).
+    /// PR-XXX-N diagnostics: each step appends to BeatDeleteDiagnostics so the
+    /// in-app "Copy Diagnostics" clipboard output exposes the actual values
+    /// (HTTP DELETE result, beats.count before/after save, saveProject result).
     private func deleteBeats(at offsets: IndexSet) {
+        // PR-XXX-O/persistence: single-flight guard. If a delete is already in
+        // flight, bail silently (the in-flight task will pick up the user's tap
+        // if they retry). Without this, two concurrent Tasks race on the same
+        // SwiftData ModelContext and the second one crashes nondeterministically.
+        guard !isDeletingInFlight else {
+            BeatDeleteDiagnostics.shared.append(
+                "deleteBeats: skipped, another delete already in flight"
+            )
+            return
+        }
         let beats = offsets.map { beatsOrder[$0] }
+        isDeletingInFlight = true
         Task {
+            defer { isDeletingInFlight = false }
             let countBeforeDelete = currentArc?.beats.count ?? 0
-            Self.deletionLogger.log(
-                "deleteBeats started: deleting \(beats.count, privacy: .public) beat(s); relationship count before DELETE is \(countBeforeDelete, privacy: .public)"
+            BeatDeleteDiagnostics.shared.append(
+                "deleteBeats started: deleting \(beats.count) beat(s); relationship count before DELETE is \(countBeforeDelete)"
             )
             let deletion = StoryArcBeatCloudDeletion()
             var deletedIDs: Set<UUID> = []
@@ -262,87 +277,122 @@ struct StoryArcRegionView: View {
                     try await deletion.deleteBeat(id: beat.id)
                     deletedIDs.insert(beat.id)
                 } catch {
+                    BeatDeleteDiagnostics.shared.append(
+                        "deleteBeats: cloud DELETE failed for beat id=\(beat.id): \(error.localizedDescription)"
+                    )
                     deleteError = error.localizedDescription
                     return
                 }
             }
+            BeatDeleteDiagnostics.shared.append(
+                "deleteBeats: cloud DELETE succeeded for \(deletedIDs.count) beat(s)"
+            )
             for beat in beats where deletedIDs.contains(beat.id) {
                 modelContext.delete(beat)
             }
             let countBeforeSave = currentArc?.beats.count ?? 0
-            Self.deletionLogger.log(
-                "deleteBeats local mirror complete: relationship count before ModelContext.save is \(countBeforeSave, privacy: .public)"
+            BeatDeleteDiagnostics.shared.append(
+                "deleteBeats: local mirror complete; relationship count before ModelContext.save is \(countBeforeSave)"
             )
-            try? modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                NSLog("[BEAT-DELETE] save FAILED in deleteBeats: %@", error.localizedDescription)
+                BeatDeleteDiagnostics.shared.append(
+                    "deleteBeats: ModelContext.save FAILED: \(error.localizedDescription)"
+                )
+            }
             let countAfterSave = currentArc?.beats.count ?? 0
-            Self.deletionLogger.log(
-                "deleteBeats ModelContext.save complete: relationship count after save is \(countAfterSave, privacy: .public)"
+            BeatDeleteDiagnostics.shared.append(
+                "deleteBeats: ModelContext.save complete; relationship count after save is \(countAfterSave)"
             )
-            let result = await DataDurabilityCoordinator.shared.saveProject(
-                project,
-                context: modelContext
-            )
-            logSaveResult(result, operation: "deleteBeats")
         }
     }
 
-    /// Bulk-delete all beats. Same pattern as deleteAllSections in
-    /// OutlineSectionsRegionView (PR #299). Used when the user wants to
-    /// re-pick a template or start from scratch after iterating on the story.
+    /// Bulk-delete all beats. PR-XXX-N: mirror OutlineSectionsRegionView.
+    /// deleteAllSections exactly. Cloud DELETE per beat first, local mirror,
+    /// silent save, then syncBeatsOrder + saveProject to refresh the snapshot.
+    /// Used when the user wants to re-pick a template or start from scratch
+    /// after iterating on the story.
     /// Sections that reference a deleted beat fall back to nil
     /// story_arc_beat_id (embed-section handles this defensively per PR #287).
-    /// PR-XXX-K: cloud DELETE per beat first, then local mirror.
-    /// The "Delete All" alert (alertMessage) is now honest — the server rows
-    /// are gone before the local mirror fires.
     private func deleteAllBeats() {
-        guard let arc = currentArc else { return }
+        // PR-XXX-O/persistence: same single-flight guard as deleteBeats.
+        guard !isDeletingInFlight else {
+            BeatDeleteDiagnostics.shared.append(
+                "deleteAllBeats: skipped, another delete already in flight"
+            )
+            return
+        }
         let beats = beatsOrder
+        isDeletingInFlight = true
         Task {
+            defer { isDeletingInFlight = false }
+            let countBefore = currentArc?.beats.count ?? 0
+            BeatDeleteDiagnostics.shared.append(
+                "deleteAllBeats started: deleting \(beats.count) beats; relationship count before is \(countBefore)"
+            )
             let deletion = StoryArcBeatCloudDeletion()
             for beat in beats {
                 do {
                     try await deletion.deleteBeat(id: beat.id)
                 } catch {
+                    BeatDeleteDiagnostics.shared.append(
+                        "deleteAllBeats: cloud DELETE failed for beat id=\(beat.id): \(error.localizedDescription)"
+                    )
                     deleteError = error.localizedDescription
                     return
                 }
             }
+            BeatDeleteDiagnostics.shared.append(
+                "deleteAllBeats: cloud DELETE loop complete"
+            )
             for beat in beats {
                 modelContext.delete(beat)
             }
             let countBeforeSave = currentArc?.beats.count ?? 0
-            Self.deletionLogger.log(
-                "deleteAllBeats local mirror complete: relationship count before ModelContext.save is \(countBeforeSave, privacy: .public)"
+            BeatDeleteDiagnostics.shared.append(
+                "deleteAllBeats: local mirror complete; relationship count before ModelContext.save is \(countBeforeSave)"
             )
-            try? modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                NSLog("[BEAT-DELETE] save FAILED in deleteAllBeats: %@", error.localizedDescription)
+                BeatDeleteDiagnostics.shared.append(
+                    "deleteAllBeats: ModelContext.save FAILED: \(error.localizedDescription)"
+                )
+            }
             let countAfterSave = currentArc?.beats.count ?? 0
-            Self.deletionLogger.log(
-                "deleteAllBeats ModelContext.save complete: relationship count after save is \(countAfterSave, privacy: .public)"
+            BeatDeleteDiagnostics.shared.append(
+                "deleteAllBeats: ModelContext.save complete; relationship count after save is \(countAfterSave)"
             )
             syncBeatsOrder()
             // Immediate sync (not debounced). Destructive user action, don't risk
             // a 500ms window where the user could navigate away before the sync fires.
-            syncState.syncImmediately(arc, modelContext: modelContext)
+            // PR #383's text referenced `arc` here; the local in this scope is the
+            // View's computed `currentArc`, so guard against it being nil before the
+            // syncArc call (which needs a non-nil arc to attach to a project).
+            if let arc = currentArc {
+                syncState.syncImmediately(arc, modelContext: modelContext)
+            }
             let result = await DataDurabilityCoordinator.shared.saveProject(
                 project,
                 context: modelContext
             )
-            logSaveResult(result, operation: "deleteAllBeats")
-        }
-    }
-
-    private func logSaveResult(_ result: ProjectSaveResult, operation: String) {
-        switch result {
-        case .cloudSaved:
-            Self.deletionLogger.log("\(operation, privacy: .public): project snapshot cloud save succeeded")
-        case .localFallback(let errorMessage):
-            Self.deletionLogger.error(
-                "\(operation, privacy: .public): project snapshot cloud save failed; local fallback written: \(errorMessage, privacy: .public)"
-            )
-        case .localOnly(let reason):
-            Self.deletionLogger.notice(
-                "\(operation, privacy: .public): project snapshot was saved locally only: \(reason, privacy: .public)"
-            )
+            switch result {
+            case .cloudSaved:
+                BeatDeleteDiagnostics.shared.append(
+                    "deleteAllBeats: project snapshot cloud save SUCCEEDED"
+                )
+            case .localFallback(let msg):
+                BeatDeleteDiagnostics.shared.append(
+                    "deleteAllBeats: project snapshot cloud save FAILED; local fallback: \(msg)"
+                )
+            case .localOnly(let reason):
+                BeatDeleteDiagnostics.shared.append(
+                    "deleteAllBeats: project snapshot saved locally only: \(reason)"
+                )
+            }
         }
     }
 

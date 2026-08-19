@@ -199,6 +199,14 @@ struct DiagnosticsSnapshot {
                 "visibleSectionIDs: \(eyeDebug.visibleSectionIDs)",
             ]
         }
+        let beatDeleteDiag = BeatDeleteDiagnostics.shared.lines
+        if !beatDeleteDiag.isEmpty {
+            lines += [
+                "",
+                "--- Beat Delete Diagnostics ---",
+            ]
+            lines += beatDeleteDiag
+        }
         lines += [
             "",
             "--- Store ---",
