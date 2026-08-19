@@ -10,7 +10,7 @@ import Foundation
 ///
 /// Thread-safety: NSLock around `lines` access. The singleton is intentionally
 /// NOT `@MainActor` — call sites include non-isolated async contexts
-/// (e.g. the URLSession callback in `StoryArcBeatCloudDeletion.deleteBeat`),
+/// (e.g. the URLSession callback in `StoryArcSyncService.syncArc`),
 /// where a `@MainActor` annotation would force every append to be `await`-ed
 /// and emit "expression is 'async' but is not marked with 'await'" compile
 /// errors. Mirrors the actor-isolation lesson from PR #335 (memory id 208).
