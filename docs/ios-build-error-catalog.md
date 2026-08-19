@@ -76,7 +76,46 @@ Recurring build errors observed in the iOS pipeline (PR #348, #350-#354 series, 
 
 **Pre-PR survey reminder:** When wrapping an HStack with action icons inside a NavigationLink, use `.fixedSize(horizontal: true, vertical: false)` to prevent the title column from being squeezed.
 
-## Masked error detection
+## 7. `@MainActor` class/method called from non-isolated context — `expression is 'async' but is not marked with 'await'`
+
+**Seen in:** PR #383 (and the lead-up to it on 2026-08-19 with `BeatDeleteDiagnostics`)
+
+**Root cause:** Marking a singleton or helper as `@MainActor` makes all its methods MainActor-isolated. Calling those methods from a URLSession callback, non-MainActor Task, or any non-isolated async context produces the compile error `expression is 'async' but is not marked with 'await'`. Easy to hit if you want a thread-safe shared state but don't think about every call site in advance.
+
+**Fix pattern (choose one):**
+1. **Drop `@MainActor`, use NSLock.** If the singleton needs to be called from any context, remove the `@MainActor` annotation and use an explicit lock for thread safety. Example: `private let lock = NSLock(); private var _lines: [String]; var lines: [String] { lock.lock(); defer { lock.unlock() }; return _lines }; func append(_ line: String) { lock.lock(); _lines.append(line); lock.unlock() }`. Best for: pure data containers, loggers, diagnostic buffers.
+2. **Make it an `actor`.** Use Swift's `actor` keyword for thread-safe state with async isolation. All access becomes `await` — forces call sites to think about isolation. Best for: state that has its own async operations.
+3. **Pass the modelContext/dependency into the call site.** If the call site is on MainActor (e.g., a SwiftUI View body), get the dependency there and pass it down — don't put `@MainActor` on a service that the call site can't satisfy. Best for: View-driven services.
+
+**Pre-PR survey reminder:** Before marking a new class as `@MainActor`, grep for all its call sites and verify each is on MainActor. If any call site is in a URLSession callback, non-MainActor Task, or any async-non-isolated context, use option 1 (drop + NSLock) instead.
+
+## 8. SwiftData `@Relationship` cache is SHARED — child rows appear "stale" after delete
+
+**Seen in:** PR #383 (beat-resurrection bug, Codex's fix)
+
+**Root cause:** SwiftData's `@Relationship` collections are cached in memory and SHARED across all references to the same entity. After `modelContext.delete(child)` + `modelContext.save()`, the parent's `parent.children` collection can STILL contain the deleted child if the in-memory cache wasn't refreshed. Any sync/edge function that reads `parent.children` (e.g., `arc.beats`, `parent.attachments`) will re-push the deleted child via UPSERT, resurrecting it on the server.
+
+**Failed fix attempts:**
+- `try? modelContext.refresh(parent)` — does not exist on SwiftData `ModelContext` (it's a Core Data API on `NSManagedObjectContext`). Compile error: `value of type 'ModelContext' has no member 'refresh'`.
+- `FetchDescriptor<Parent>(predicate: #Predicate { $0.id == parentID })` re-fetch — the fresh parent still shares the SAME @Relationship cache for its children. The deleted child is still there. Bug not fixed.
+- Pass `ModelContext` into the sync function and try to refresh — same cache, same problem.
+
+**Fix pattern (the only one that works):**
+Fetch the CHILD rows directly, not the parent. Don't traverse the relationship at all:
+```swift
+let childDescriptor = FetchDescriptor<ChildType>(
+    predicate: #Predicate<ChildType> { child in
+        child.parent?.id == parentID
+    },
+    sortBy: [SortDescriptor(\.position)]
+)
+let freshChildren = try modelContext.fetch(childDescriptor)
+```
+Now `freshChildren` is a brand-new collection that bypasses the parent's @Relationship cache. Use `freshChildren` (not `parent.children`) for any sync/edge function payload.
+
+**Pre-PR survey reminder:** Any sync/edge function that reads `entity.beats` / `entity.children` / `entity.attachments` should fetch the child type directly via `FetchDescriptor<ChildType>`, NOT traverse the relationship. This is a class of bug, not a one-off. Apply proactively to all sync/edge functions that read relationship collections.
+
+## ## Masked error detection
 
 Some build errors mask others — the next error only surfaces after the first is fixed:
 - File location error masked the scope error (PR #350 → PR #351)

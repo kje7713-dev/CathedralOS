@@ -117,9 +117,28 @@ struct StoryArcRegionView: View {
             StoryArcBeatEditView(
                 beat: beat,
                 onSave: {
-                    try? modelContext.save()
-                    // Q1c immediate on explicit save
-                    if let arc = currentArc { syncState.syncImmediately(arc, modelContext: modelContext) }
+                    if let arc = currentArc {
+                        // StoryArcSyncService.syncArc is the sole cloud mutation authority
+                        // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
+                        // reconciles the complete persisted beat set to the server.
+                        arc.lastSyncedAt = nil
+                        do {
+                            try modelContext.save()
+                        } catch {
+                            // Save failed; lastSyncedAt stays nil so app-launch recovery
+                            // retries this arc on the next launch.
+                        }
+                        Task {
+                            do {
+                                _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                                arc.lastSyncedAt = Date()
+                                try modelContext.save()
+                            } catch {
+                                // Sync failed; lastSyncedAt stays nil so app-launch recovery
+                                // retries this arc on the next launch.
+                            }
+                        }
+                    }
                     Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
                 }
             )
@@ -184,9 +203,6 @@ struct StoryArcRegionView: View {
         }
         .pickerStyle(.menu)
         .onChange(of: selectedTemplateID) { _, newID in
-            guard let newID,
-                  !(newID == currentArc?.templateID && !(currentArc?.beats.isEmpty ?? true))
-            else { return }
             applyTemplate(newID)
         }
     }
@@ -239,9 +255,27 @@ struct StoryArcRegionView: View {
         )
         newBeat.storyArc = arc
         modelContext.insert(newBeat)
-        try? modelContext.save()
-        // Q1c debounced: typing sequence into one final sync
-        syncState.syncDebounced(arc, modelContext: modelContext)
+
+        // StoryArcSyncService.syncArc is the sole cloud mutation authority
+        // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
+        // reconciles the complete persisted beat set to the server.
+        arc.lastSyncedAt = nil
+        do {
+            try modelContext.save()
+        } catch {
+            return
+        }
+
+        Task {
+            do {
+                _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                arc.lastSyncedAt = Date()
+                try modelContext.save()
+            } catch {
+                // Sync failed; lastSyncedAt stays nil so app-launch recovery
+                // retries this arc on the next launch.
+            }
+        }
     }
 
     /// PR-XXX-N: mirror OutlineSectionsRegionView.deleteSections exactly.
@@ -252,60 +286,40 @@ struct StoryArcRegionView: View {
     /// in-app "Copy Diagnostics" clipboard output exposes the actual values
     /// (HTTP DELETE result, beats.count before/after save, saveProject result).
     private func deleteBeats(at offsets: IndexSet) {
-        // PR-XXX-O/persistence: single-flight guard. If a delete is already in
-        // flight, bail silently (the in-flight task will pick up the user's tap
-        // if they retry). Without this, two concurrent Tasks race on the same
-        // SwiftData ModelContext and the second one crashes nondeterministically.
-        guard !isDeletingInFlight else {
-            BeatDeleteDiagnostics.shared.append(
-                "deleteBeats: skipped, another delete already in flight"
-            )
-            return
-        }
+        // Single-flight guard so concurrent deletes don't race the shared
+        // SwiftData ModelContext.
+        guard !isDeletingInFlight else { return }
         let beats = offsets.map { beatsOrder[$0] }
         isDeletingInFlight = true
         Task {
             defer { isDeletingInFlight = false }
-            let countBeforeDelete = currentArc?.beats.count ?? 0
-            BeatDeleteDiagnostics.shared.append(
-                "deleteBeats started: deleting \(beats.count) beat(s); relationship count before DELETE is \(countBeforeDelete)"
-            )
-            let deletion = StoryArcBeatCloudDeletion()
-            var deletedIDs: Set<UUID> = []
+            guard let arc = currentArc else { return }
+
+            // StoryArcSyncService.syncArc is the sole cloud mutation authority
+            // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
+            // reconciles the complete persisted beat set to the server. Do not
+            // introduce per-beat cloud mutation paths.
             for beat in beats {
-                do {
-                    try await deletion.deleteBeat(id: beat.id)
-                    deletedIDs.insert(beat.id)
-                } catch {
-                    BeatDeleteDiagnostics.shared.append(
-                        "deleteBeats: cloud DELETE failed for beat id=\(beat.id): \(error.localizedDescription)"
-                    )
-                    deleteError = error.localizedDescription
-                    return
-                }
-            }
-            BeatDeleteDiagnostics.shared.append(
-                "deleteBeats: cloud DELETE succeeded for \(deletedIDs.count) beat(s)"
-            )
-            for beat in beats where deletedIDs.contains(beat.id) {
                 modelContext.delete(beat)
             }
-            let countBeforeSave = currentArc?.beats.count ?? 0
-            BeatDeleteDiagnostics.shared.append(
-                "deleteBeats: local mirror complete; relationship count before ModelContext.save is \(countBeforeSave)"
-            )
+
+            arc.lastSyncedAt = nil
             do {
                 try modelContext.save()
             } catch {
-                NSLog("[BEAT-DELETE] save FAILED in deleteBeats: %@", error.localizedDescription)
-                BeatDeleteDiagnostics.shared.append(
-                    "deleteBeats: ModelContext.save FAILED: \(error.localizedDescription)"
-                )
+                return
             }
-            let countAfterSave = currentArc?.beats.count ?? 0
-            BeatDeleteDiagnostics.shared.append(
-                "deleteBeats: ModelContext.save complete; relationship count after save is \(countAfterSave)"
-            )
+
+            syncBeatsOrder()
+
+            do {
+                _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                arc.lastSyncedAt = Date()
+                try modelContext.save()
+            } catch {
+                // Sync failed; lastSyncedAt stays nil so app-launch recovery
+                // retries this arc on the next launch.
+            }
         }
     }
 
@@ -317,81 +331,39 @@ struct StoryArcRegionView: View {
     /// Sections that reference a deleted beat fall back to nil
     /// story_arc_beat_id (embed-section handles this defensively per PR #287).
     private func deleteAllBeats() {
-        // PR-XXX-O/persistence: same single-flight guard as deleteBeats.
-        guard !isDeletingInFlight else {
-            BeatDeleteDiagnostics.shared.append(
-                "deleteAllBeats: skipped, another delete already in flight"
-            )
-            return
-        }
-        let beats = beatsOrder
+        // Single-flight guard so concurrent deletes don't race the shared
+        // SwiftData ModelContext.
+        guard !isDeletingInFlight else { return }
         isDeletingInFlight = true
         Task {
             defer { isDeletingInFlight = false }
-            let countBefore = currentArc?.beats.count ?? 0
-            BeatDeleteDiagnostics.shared.append(
-                "deleteAllBeats started: deleting \(beats.count) beats; relationship count before is \(countBefore)"
-            )
-            let deletion = StoryArcBeatCloudDeletion()
-            for beat in beats {
-                do {
-                    try await deletion.deleteBeat(id: beat.id)
-                } catch {
-                    BeatDeleteDiagnostics.shared.append(
-                        "deleteAllBeats: cloud DELETE failed for beat id=\(beat.id): \(error.localizedDescription)"
-                    )
-                    deleteError = error.localizedDescription
-                    return
-                }
-            }
-            BeatDeleteDiagnostics.shared.append(
-                "deleteAllBeats: cloud DELETE loop complete"
-            )
-            for beat in beats {
+            guard let arc = currentArc else { return }
+
+            // StoryArcSyncService.syncArc is the sole cloud mutation authority
+            // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
+            // (with PR #383's FetchDescriptor<StoryArcBeat>) reconciles the
+            // complete persisted beat set to the server. Do not introduce
+            // per-beat cloud mutation paths.
+            for beat in arc.beats {
                 modelContext.delete(beat)
             }
-            let countBeforeSave = currentArc?.beats.count ?? 0
-            BeatDeleteDiagnostics.shared.append(
-                "deleteAllBeats: local mirror complete; relationship count before ModelContext.save is \(countBeforeSave)"
-            )
+
+            arc.lastSyncedAt = nil
             do {
                 try modelContext.save()
             } catch {
-                NSLog("[BEAT-DELETE] save FAILED in deleteAllBeats: %@", error.localizedDescription)
-                BeatDeleteDiagnostics.shared.append(
-                    "deleteAllBeats: ModelContext.save FAILED: \(error.localizedDescription)"
-                )
+                return
             }
-            let countAfterSave = currentArc?.beats.count ?? 0
-            BeatDeleteDiagnostics.shared.append(
-                "deleteAllBeats: ModelContext.save complete; relationship count after save is \(countAfterSave)"
-            )
+
             syncBeatsOrder()
-            // Immediate sync (not debounced). Destructive user action, don't risk
-            // a 500ms window where the user could navigate away before the sync fires.
-            // PR #383's text referenced `arc` here; the local in this scope is the
-            // View's computed `currentArc`, so guard against it being nil before the
-            // syncArc call (which needs a non-nil arc to attach to a project).
-            if let arc = currentArc {
-                syncState.syncImmediately(arc, modelContext: modelContext)
-            }
-            let result = await DataDurabilityCoordinator.shared.saveProject(
-                project,
-                context: modelContext
-            )
-            switch result {
-            case .cloudSaved:
-                BeatDeleteDiagnostics.shared.append(
-                    "deleteAllBeats: project snapshot cloud save SUCCEEDED"
-                )
-            case .localFallback(let msg):
-                BeatDeleteDiagnostics.shared.append(
-                    "deleteAllBeats: project snapshot cloud save FAILED; local fallback: \(msg)"
-                )
-            case .localOnly(let reason):
-                BeatDeleteDiagnostics.shared.append(
-                    "deleteAllBeats: project snapshot saved locally only: \(reason)"
-                )
+
+            do {
+                _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                arc.lastSyncedAt = Date()
+                try modelContext.save()
+            } catch {
+                // Sync failed; lastSyncedAt stays nil so app-launch recovery
+                // retries this arc on the next launch.
             }
         }
     }
@@ -410,35 +382,87 @@ struct StoryArcRegionView: View {
         for (index, beat) in beatsOrder.enumerated() {
             beat.position = index
         }
-        try? modelContext.save()
-        // Q1c debounced: reordering within a beat list
-        if let arc = currentArc { syncState.syncDebounced(arc, modelContext: modelContext) }
+        if let arc = currentArc {
+            // StoryArcSyncService.syncArc is the sole cloud mutation authority
+            // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
+            // reconciles the complete persisted beat set to the server.
+            arc.lastSyncedAt = nil
+            do {
+                try modelContext.save()
+            } catch {
+                return
+            }
+
+            Task {
+                do {
+                    _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                    arc.lastSyncedAt = Date()
+                    try modelContext.save()
+                } catch {
+                    // Sync failed; lastSyncedAt stays nil so app-launch recovery
+                    // retries this arc on the next launch.
+                }
+            }
+        }
     }
 
     // MARK: - Template switch (role-based merge)
 
-    /// Apply the chosen template to the project's `StoryArc`.
-    private func applyTemplate(_ templateID: UUID) {
-        guard let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else { return }
-
+    /// Apply the chosen template to the project's `StoryArc`. `nil` selects
+    /// the "None" template — clears every persisted beat, sets
+    /// `arc.templateID = nil`, and syncs the empty set to the server.
+    private func applyTemplate(_ templateID: UUID?) {
         let arcToSync: StoryArc
-        if let existing = currentArc {
-            mergeBeats(template: template, into: existing)
-            existing.templateID = template.id
-            arcToSync = existing
+        if let templateID = templateID {
+            guard let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else { return }
+
+            if let existing = currentArc {
+                mergeBeats(template: template, into: existing)
+                existing.templateID = template.id
+                existing.lastSyncedAt = nil
+                arcToSync = existing
+            } else {
+                let arc = StoryArc()
+                arc.templateID = template.id
+                arc.lastSyncedAt = nil
+                arc.project = project
+                modelContext.insert(arc)
+                materializeBeats(template: template, into: arc)
+                arcToSync = arc
+            }
         } else {
-            let arc = StoryArc()
-            arc.templateID = template.id
-            arc.project = project
-            modelContext.insert(arc)
-            materializeBeats(template: template, into: arc)
-            arcToSync = arc
+            // None template — keep the existing StoryArc, clear its beats,
+            // let syncArc send `{ template_id: null, beats: [] }`.
+            guard let existing = currentArc else { return }
+            existing.templateID = nil
+            existing.lastSyncedAt = nil
+            for beat in existing.beats {
+                modelContext.delete(beat)
+            }
+            arcToSync = existing
         }
 
-        try? modelContext.save()
-        // Q4 save-once-on-create: immediate sync so the arc + beats land
-        // on the server before any embed-section call references them.
-        syncState.syncImmediately(arcToSync, modelContext: modelContext)
+        do {
+            try modelContext.save()
+        } catch {
+            return
+        }
+        syncBeatsOrder()
+
+        // StoryArcSyncService.syncArc is the sole cloud mutation authority
+        // for StoryArc beats. Template application mutates SwiftData first;
+        // syncArc reconciles the complete persisted beat set to the server.
+        // Do not introduce per-beat cloud mutation paths.
+        Task {
+            do {
+                _ = try await StoryArcSyncService().syncArc(arc: arcToSync, modelContext: modelContext)
+                arcToSync.lastSyncedAt = Date()
+                try modelContext.save()
+            } catch {
+                // Sync failed; lastSyncedAt stays nil so app-launch recovery
+                // retries this arc on the next launch.
+            }
+        }
     }
 
     /// Role-based merge: matching roles keep label/details (just update

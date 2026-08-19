@@ -174,7 +174,6 @@
 		01182B640C6F421187F8DFAD /* OutlineSuggestionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */; };
 		9D0E1F2A3B4C5D6E7F8A9B0C /* SectionEmbedService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C9D0E1F2A3B4C5D6E7F8A9B /* SectionEmbedService.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* OutlineSectionCloudDeletion.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* OutlineSectionCloudDeletion.swift */; };
-		A1B2C3D4E5F60718293A4B5E /* StoryArcBeatCloudDeletion.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5F /* StoryArcBeatCloudDeletion.swift */; };
 		E406DFF81C0E46BD926E0CE4 /* BeatDeleteDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = B110FAB43E574B3BBA7EBAFE /* BeatDeleteDiagnostics.swift */; };
 		10621F3654A24EB7BD4AD2CA /* RunOutlineService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5430CDF96B54F2DB1EA9DB3 /* RunOutlineService.swift */; };
 		B57D17CE59E045069C5D828D /* CoherenceCheckService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2441A0041644967A1E289EC /* CoherenceCheckService.swift */; };
@@ -366,7 +365,6 @@
 		81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSuggestionService.swift; sourceTree = "<group>"; };
 		8C9D0E1F2A3B4C5D6E7F8A9B /* SectionEmbedService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionEmbedService.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60718293A4B5D /* OutlineSectionCloudDeletion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSectionCloudDeletion.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60718293A4B5F /* StoryArcBeatCloudDeletion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcBeatCloudDeletion.swift; sourceTree = "<group>"; };
 		B110FAB43E574B3BBA7EBAFE /* BeatDeleteDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeatDeleteDiagnostics.swift; sourceTree = "<group>"; };
 		D5430CDF96B54F2DB1EA9DB3 /* RunOutlineService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunOutlineService.swift; sourceTree = "<group>"; };
 		C2441A0041644967A1E289EC /* CoherenceCheckService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoherenceCheckService.swift; sourceTree = "<group>"; };
@@ -646,7 +644,6 @@
 				0000000000000000000001AC /* AuthSessionResolver.swift */,		81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */,
 				8C9D0E1F2A3B4C5D6E7F8A9B /* SectionEmbedService.swift */,
 				A1B2C3D4E5F60718293A4B5D /* OutlineSectionCloudDeletion.swift */,
-				A1B2C3D4E5F60718293A4B5F /* StoryArcBeatCloudDeletion.swift */,
 				B110FAB43E574B3BBA7EBAFE /* BeatDeleteDiagnostics.swift */,
 				D5430CDF96B54F2DB1EA9DB3 /* RunOutlineService.swift */,
 				C2441A0041644967A1E289EC /* CoherenceCheckService.swift */,
@@ -897,7 +894,6 @@ echo \"Runtime config plist injection completed: keys present\"";
 				01182B640C6F421187F8DFAD /* OutlineSuggestionService.swift in Sources */,
 				9D0E1F2A3B4C5D6E7F8A9B0C /* SectionEmbedService.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* OutlineSectionCloudDeletion.swift in Sources */,
-				A1B2C3D4E5F60718293A4B5E /* StoryArcBeatCloudDeletion.swift in Sources */,
 				E406DFF81C0E46BD926E0CE4 /* BeatDeleteDiagnostics.swift in Sources */,
 				10621F3654A24EB7BD4AD2CA /* RunOutlineService.swift in Sources */,
 				B57D17CE59E045069C5D828D /* CoherenceCheckService.swift in Sources */,
