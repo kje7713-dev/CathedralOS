@@ -241,7 +241,10 @@ struct StoryArcRegionView: View {
         syncState.syncDebounced(arc)
     }
 
-    /// PR-XXX-K: cloud DELETE per beat first, then local mirror.
+    /// PR-XXX-N: mirror OutlineSectionsRegionView.deleteSections exactly.
+    /// Cloud DELETE per beat first, then local mirror, then silent save.
+    /// No saveProject here (matches the section multi/swipe path which also
+    /// relies on the next full sync to refresh the snapshot).
     private func deleteBeats(at offsets: IndexSet) {
         let beats = offsets.map { beatsOrder[$0] }
         Task {
@@ -259,33 +262,18 @@ struct StoryArcRegionView: View {
             for beat in beats where deletedIDs.contains(beat.id) {
                 modelContext.delete(beat)
             }
-            do {
-                try modelContext.save()
-                // PR-XXX-M: removed syncDebounced(syncArc) — the cloud DELETE we just
-                // fired removed the beat from story_arc_beats server-side, and the
-                // syncArc read of arc.beats was resurrecting the beat from local
-                // state when the local relationship hadn't refreshed. saveProject
-                // (via syncProject → syncProjectSnapshot) is sufficient: it rebuilds
-                // snapshot_json from the up-to-date StoryProject and pushes to the
-                // server. Mirrors OutlineSectionsRegionView.deleteSection pattern.
-                await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
-            } catch {
-                deleteError = "Failed to save beat delete: \(error.localizedDescription)"
-                return
-            }
+            try? modelContext.save()
         }
     }
 
-    /// Bulk-delete all beats. Same pattern as deleteAllSections in
-    /// OutlineSectionsRegionView (PR #299). Used when the user wants to
-    /// re-pick a template or start from scratch after iterating on the story.
+    /// Bulk-delete all beats. PR-XXX-N: mirror OutlineSectionsRegionView.
+    /// deleteAllSections exactly. Cloud DELETE per beat first, local mirror,
+    /// silent save, then syncBeatsOrder + saveProject to refresh the snapshot.
+    /// Used when the user wants to re-pick a template or start from scratch
+    /// after iterating on the story.
     /// Sections that reference a deleted beat fall back to nil
     /// story_arc_beat_id (embed-section handles this defensively per PR #287).
-    /// PR-XXX-K: cloud DELETE per beat first, then local mirror.
-    /// The "Delete All" alert (alertMessage) is now honest — the server rows
-    /// are gone before the local mirror fires.
     private func deleteAllBeats() {
-        guard let arc = currentArc else { return }
         let beats = beatsOrder
         Task {
             let deletion = StoryArcBeatCloudDeletion()
@@ -300,20 +288,9 @@ struct StoryArcRegionView: View {
             for beat in beats {
                 modelContext.delete(beat)
             }
-            do {
-                try modelContext.save()
-                syncBeatsOrder()
-                // PR-XXX-M: removed syncImmediately(arc) — same root cause as
-                // deleteBeats. The cloud DELETE per beat just fired (loop above) is
-                // sufficient; re-syncing the whole arc via syncArc was the path that
-                // re-created the deleted beat from local state. saveProject handles
-                // the snapshot push. Mirrors deleteAllSections in
-                // OutlineSectionsRegionView (PR #299).
-                await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
-            } catch {
-                deleteError = "Failed to save beats delete: \(error.localizedDescription)"
-                return
-            }
+            try? modelContext.save()
+            syncBeatsOrder()
+            await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
         }
     }
 
