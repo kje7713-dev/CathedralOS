@@ -105,7 +105,7 @@ private struct AppRootView: View {
         for arc in unsyncedArcs {
             guard arc.project != nil else { continue }
             do {
-_ = try await service.syncArc(arc: arc, modelContext: modelContext)
+                _ = try await service.syncArc(arc: arc, modelContext: modelContext)
                 arc.lastSyncedAt = Date()
             } catch {
                 print("[CathedralOSApp] sync-on-launch failed for arc \(arc.id): \(error)")
