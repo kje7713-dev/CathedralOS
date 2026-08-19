@@ -1215,7 +1215,7 @@ struct ProjectDetailView: View {
             isGenerating = false
             return
         }
-        _ = LocalProjectBackupService.shared.backup(project: project)
+        _ = LocalProjectBackupService.shared.backup(project: project, context: modelContext)
         lastGeneratedOutput = gen
 
         defer { isGenerating = false }
@@ -1276,7 +1276,7 @@ struct ProjectDetailView: View {
             try? persistGeneration(stage: "saving the failed output")
             generationError = localizedGenerationError(error)
         }
-        _ = LocalProjectBackupService.shared.backup(project: project)
+        _ = LocalProjectBackupService.shared.backup(project: project, context: modelContext)
     }
 
     private func scheduleEstimate() {

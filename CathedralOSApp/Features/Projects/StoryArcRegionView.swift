@@ -170,7 +170,11 @@ struct StoryArcRegionView: View {
             beatsOrder = []
             return
         }
-        beatsOrder = arc.beats.sorted(by: { $0.position < $1.position })
+        // Use root fetch — arc.beats can retain deleted SwiftData objects
+        // and show stale UI rows after a delete.
+        beatsOrder = StoryArcSyncService.fetchAuthoritativeBeats(
+            arc: arc, modelContext: modelContext
+        )
     }
 
     private var header: some View {
@@ -246,7 +250,12 @@ struct StoryArcRegionView: View {
 
     private func addBeat() {
         guard let arc = currentArc else { return }
-        let nextPosition = (arc.beats.map { $0.position }.max() ?? -1) + 1
+        // Root-fetch beats (not arc.beats) to compute next position from the
+        // persisted set, not the stale @Relationship cache.
+        let authoritativeBeats = StoryArcSyncService.fetchAuthoritativeBeats(
+            arc: arc, modelContext: modelContext
+        )
+        let nextPosition = (authoritativeBeats.map { $0.position }.max() ?? -1) + 1
         let newBeat = StoryArcBeat(
             position: nextPosition,
             role: "",
@@ -265,6 +274,7 @@ struct StoryArcRegionView: View {
         } catch {
             return
         }
+        syncBeatsOrder()
 
         Task {
             do {
@@ -291,27 +301,34 @@ struct StoryArcRegionView: View {
         guard !isDeletingInFlight else { return }
         let beats = offsets.map { beatsOrder[$0] }
         isDeletingInFlight = true
+
+        // Synchronous local mutation. The local delete + save MUST complete on
+        // MainActor before any async network Task starts — otherwise a user
+        // action (like Sync Everything) can race the delete Task and resurrect
+        // the beat via the snapshot path.
+        guard let arc = currentArc else {
+            isDeletingInFlight = false
+            return
+        }
+        // StoryArcSyncService.syncArc is the sole cloud mutation authority
+        // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
+        // reconciles the complete persisted beat set to the server. Do not
+        // introduce per-beat cloud mutation paths.
+        for beat in beats {
+            modelContext.delete(beat)
+        }
+        arc.lastSyncedAt = nil
+        do {
+            try modelContext.save()
+        } catch {
+            isDeletingInFlight = false
+            return
+        }
+        syncBeatsOrder()
+
+        // Async cloud sync happens AFTER local mutation is durable.
         Task {
             defer { isDeletingInFlight = false }
-            guard let arc = currentArc else { return }
-
-            // StoryArcSyncService.syncArc is the sole cloud mutation authority
-            // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
-            // reconciles the complete persisted beat set to the server. Do not
-            // introduce per-beat cloud mutation paths.
-            for beat in beats {
-                modelContext.delete(beat)
-            }
-
-            arc.lastSyncedAt = nil
-            do {
-                try modelContext.save()
-            } catch {
-                return
-            }
-
-            syncBeatsOrder()
-
             do {
                 _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
                 arc.lastSyncedAt = Date()
@@ -335,28 +352,39 @@ struct StoryArcRegionView: View {
         // SwiftData ModelContext.
         guard !isDeletingInFlight else { return }
         isDeletingInFlight = true
+
+        // Synchronous local mutation. The local delete + save MUST complete on
+        // MainActor before any async network Task starts — otherwise a user
+        // action (like Sync Everything) can race the delete Task and resurrect
+        // the beat via the snapshot path.
+        guard let arc = currentArc else {
+            isDeletingInFlight = false
+            return
+        }
+        // Root-fetch beats (not arc.beats) to avoid stale @Relationship cache.
+        let authoritativeBeats = StoryArcSyncService.fetchAuthoritativeBeats(
+            arc: arc, modelContext: modelContext
+        )
+        // StoryArcSyncService.syncArc is the sole cloud mutation authority
+        // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
+        // (with PR #383's FetchDescriptor<StoryArcBeat>) reconciles the
+        // complete persisted beat set to the server. Do not introduce
+        // per-beat cloud mutation paths.
+        for beat in authoritativeBeats {
+            modelContext.delete(beat)
+        }
+        arc.lastSyncedAt = nil
+        do {
+            try modelContext.save()
+        } catch {
+            isDeletingInFlight = false
+            return
+        }
+        syncBeatsOrder()
+
+        // Async cloud sync happens AFTER local mutation is durable.
         Task {
             defer { isDeletingInFlight = false }
-            guard let arc = currentArc else { return }
-
-            // StoryArcSyncService.syncArc is the sole cloud mutation authority
-            // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
-            // (with PR #383's FetchDescriptor<StoryArcBeat>) reconciles the
-            // complete persisted beat set to the server. Do not introduce
-            // per-beat cloud mutation paths.
-            for beat in arc.beats {
-                modelContext.delete(beat)
-            }
-
-            arc.lastSyncedAt = nil
-            do {
-                try modelContext.save()
-            } catch {
-                return
-            }
-
-            syncBeatsOrder()
-
             do {
                 _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
                 arc.lastSyncedAt = Date()
@@ -392,6 +420,7 @@ struct StoryArcRegionView: View {
             } catch {
                 return
             }
+            syncBeatsOrder()
 
             Task {
                 do {
@@ -436,7 +465,11 @@ struct StoryArcRegionView: View {
             guard let existing = currentArc else { return }
             existing.templateID = nil
             existing.lastSyncedAt = nil
-            for beat in existing.beats {
+            // Root-fetch beats (not existing.beats) to avoid stale @Relationship cache.
+            let authoritativeBeats = StoryArcSyncService.fetchAuthoritativeBeats(
+                arc: existing, modelContext: modelContext
+            )
+            for beat in authoritativeBeats {
                 modelContext.delete(beat)
             }
             arcToSync = existing
@@ -469,8 +502,12 @@ struct StoryArcRegionView: View {
     /// position); unmatched template roles create new rows; user-added beats
     /// (empty role) survive as orphans at the end.
     private func mergeBeats(template: StoryArcTemplate, into arc: StoryArc) {
+        // Root-fetch beats (not arc.beats) to avoid stale @Relationship cache.
+        let authoritativeBeats = StoryArcSyncService.fetchAuthoritativeBeats(
+            arc: arc, modelContext: modelContext
+        )
         let existingByRole: [String: StoryArcBeat] = Dictionary(uniqueKeysWithValues:
-            arc.beats.compactMap { beat in
+            authoritativeBeats.compactMap { beat in
                 beat.role.isEmpty ? nil : (beat.role, beat)
             }
         )
@@ -499,7 +536,7 @@ struct StoryArcRegionView: View {
         //    Keep user-added beats (empty role) as orphans at the end.
         let templateRoles = Set(template.beats.map { $0.role })
         var orphanPosition = template.beats.count
-        for beat in arc.beats where !preserved.contains(beat.id) {
+        for beat in authoritativeBeats where !preserved.contains(beat.id) {
             if beat.role.isEmpty {
                 beat.position = orphanPosition
                 orphanPosition += 1

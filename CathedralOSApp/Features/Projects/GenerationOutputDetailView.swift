@@ -1476,7 +1476,7 @@ struct GenerationOutputDetailView: View {
         newGen.project = project
         modelContext.insert(newGen)
         project.generations.append(newGen)
-        _ = LocalProjectBackupService.shared.backup(project: project)
+        _ = LocalProjectBackupService.shared.backup(project: project, context: modelContext)
         newOutput = newGen
 
         do {
@@ -1509,7 +1509,7 @@ struct GenerationOutputDetailView: View {
                 creditCost: Double(mode.creditCost),
                 lengthMode: mode
             )
-            _ = LocalProjectBackupService.shared.backup(project: project)
+            _ = LocalProjectBackupService.shared.backup(project: project, context: modelContext)
 
         } catch {
             newGen.status = GenerationStatus.failed.rawValue
@@ -1518,7 +1518,7 @@ struct GenerationOutputDetailView: View {
             // MVP policy: do not charge credits on generation failure.
             actionError = (error as? GenerationServiceError)?.errorDescription
                 ?? error.localizedDescription
-            _ = LocalProjectBackupService.shared.backup(project: project)
+            _ = LocalProjectBackupService.shared.backup(project: project, context: modelContext)
         }
     }
 }

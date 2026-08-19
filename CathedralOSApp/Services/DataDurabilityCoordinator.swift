@@ -424,27 +424,28 @@ final class DataDurabilityCoordinator: ObservableObject {
             await authService.checkSession()
         }
         guard authService.authState.isSignedIn else {
-            LocalProjectBackupService.shared.backup(project: project)
+            LocalProjectBackupService.shared.backup(project: project, context: context)
             logger.log("saveProject: not signed in — wrote local backup for \(project.id.uuidString, privacy: .public)")
             return .localOnly(reason: "User is not signed in.")
         }
 
         // 3. Check Supabase configuration.
         guard SupabaseConfiguration.isConfigured else {
-            LocalProjectBackupService.shared.backup(project: project)
+            LocalProjectBackupService.shared.backup(project: project, context: context)
             logger.log("saveProject: Supabase not configured — wrote local backup for \(project.id.uuidString, privacy: .public)")
             return .localOnly(reason: "Cloud sync is not configured.")
         }
 
         // 4. Attempt cloud sync.
         do {
-            try await projectSyncService.syncProject(project)
+            // Root-fetch beats via modelContext — arc.beats can retain deleted SwiftData objects and resurrect them.
+            try await projectSyncService.syncProject(project, modelContext: context)
             logger.log("saveProject: cloud sync succeeded for \(project.id.uuidString, privacy: .public)")
             return .cloudSaved
         } catch {
             let msg = error.localizedDescription
             logger.error("saveProject: cloud sync failed for \(project.id.uuidString, privacy: .public): \(msg, privacy: .public)")
-            LocalProjectBackupService.shared.backup(project: project)
+            LocalProjectBackupService.shared.backup(project: project, context: context)
             return .localFallback(errorMessage: msg)
         }
     }

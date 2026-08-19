@@ -551,7 +551,7 @@ enum ProjectSchemaTemplateBuilder {
 
     // MARK: - Build From Project
 
-    static func build(project: StoryProject) -> ProjectImportExportPayload {
+    static func build(project: StoryProject, modelContext: ModelContext) -> ProjectImportExportPayload {
         let settingPayload: ProjectImportExportPayload.SettingPayload?
         if let s = project.projectSetting {
             let historicalPressure: String = s.historicalPressure ?? ""
@@ -768,8 +768,10 @@ enum ProjectSchemaTemplateBuilder {
                 String(data: data, encoding: .utf8)
             }
 
-            let beatPayloads: [ProjectImportExportPayload.StoryArcBeatPayload] = arc.beats
-                .sorted(by: { $0.position < $1.position })
+            // Use root StoryArcBeat fetch (not arc.beats) — the @Relationship
+            // collection can retain deleted SwiftData objects and resurrect them.
+            let beatPayloads: [ProjectImportExportPayload.StoryArcBeatPayload] = StoryArcSyncService
+                .fetchAuthoritativeBeats(arc: arc, modelContext: modelContext)
                 .map { beat in
                     ProjectImportExportPayload.StoryArcBeatPayload(
                         id: beat.id.uuidString,
@@ -924,8 +926,10 @@ final class LocalProjectBackupService: ProjectBackupDeletionServiceProtocol {
     private init() {}
 
     @discardableResult
-    func backup(project: StoryProject) -> URL? {
-        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+    func backup(project: StoryProject, context: ModelContext) -> URL? {
+        // Root-fetch beats via modelContext — arc.beats can retain deleted
+        // SwiftData objects and resurrect them in the local backup.
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
         let json = ProjectSchemaTemplateBuilder.encodePayload(payload)
         guard let data = json.data(using: .utf8) else {
             logger.error("Backup skipped: JSON encoding failed for project \(project.id.uuidString, privacy: .public)")
@@ -961,7 +965,7 @@ final class LocalProjectBackupService: ProjectBackupDeletionServiceProtocol {
         let descriptor = FetchDescriptor<StoryProject>()
         guard let projects = try? modelContext.fetch(descriptor) else { return }
         for project in projects {
-            _ = backup(project: project)
+            _ = backup(project: project, context: modelContext)
         }
     }
 
