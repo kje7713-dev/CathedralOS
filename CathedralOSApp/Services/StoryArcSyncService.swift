@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 // MARK: - StoryArcSyncService
 // Client for the `sync-story-arc` Supabase Edge Function (long-term proper beat
@@ -33,6 +34,7 @@ enum StoryArcSyncError: Error, LocalizedError {
     case serverError(statusCode: Int, body: String?)
     case networkError(String)
     case arcMissingProject
+    case localBeatsUnavailable(String)
 
     var errorDescription: String? {
         switch self {
@@ -48,6 +50,8 @@ enum StoryArcSyncError: Error, LocalizedError {
             return "Server error \(c)."
         case .networkError(let m):   return "Network error: \(m)"
         case .arcMissingProject:     return "Story arc is not attached to a project. Open the project and try again."
+        case .localBeatsUnavailable(let message):
+            return "Could not read the current story arc beats. \(message)"
         }
     }
 }
@@ -70,14 +74,33 @@ struct StoryArcSyncService {
     ///   `lineage_id` (matches the convention embed-section uses).
     /// - Returns: SyncArcResponse with upsert/delete counts.
     func syncArc(
-        arc: StoryArc
+        arc: StoryArc,
+        modelContext: ModelContext
     ) async throws -> SyncArcResponse {
         guard let project = arc.project else {
             throw StoryArcSyncError.arcMissingProject
         }
 
-        let beatsArray: [[String: Any]] = arc.beats
-            .sorted { $0.position < $1.position }
+        // Fetch beats as root models instead of traversing arc.beats. SwiftData's
+        // relationship collection can retain deleted objects after save; using it
+        // here can therefore resurrect beats that the user just deleted. A direct
+        // StoryArcBeat fetch reflects the persisted rows and makes an empty result
+        // authoritative for the replace-beats API.
+        let arcID = arc.id
+        let beatDescriptor = FetchDescriptor<StoryArcBeat>(
+            predicate: #Predicate<StoryArcBeat> { beat in
+                beat.storyArc?.id == arcID
+            },
+            sortBy: [SortDescriptor(\.position)]
+        )
+        let currentBeats: [StoryArcBeat]
+        do {
+            currentBeats = try modelContext.fetch(beatDescriptor)
+        } catch {
+            throw StoryArcSyncError.localBeatsUnavailable(error.localizedDescription)
+        }
+
+        let beatsArray: [[String: Any]] = currentBeats
             .map { beat in
                 [
                     "id": beat.id.uuidString,

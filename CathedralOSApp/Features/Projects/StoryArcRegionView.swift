@@ -19,33 +19,29 @@ final class StoryArcSyncState: ObservableObject {
     @Published var lastSyncError: Error?
     private var pendingTask: Task<Void, Never>?
 
-    func syncImmediately(_ arc: StoryArc) {
+    func syncImmediately(_ arc: StoryArc, modelContext: ModelContext) {
         pendingTask?.cancel()
-        pendingTask = Task { await performSync(arc: arc) }
+        pendingTask = Task { await performSync(arc: arc, modelContext: modelContext) }
     }
 
-    func syncDebounced(_ arc: StoryArc) {
+    func syncDebounced(_ arc: StoryArc, modelContext: ModelContext) {
         pendingTask?.cancel()
         pendingTask = Task {
             try? await Task.sleep(nanoseconds: 500_000_000)  // 500ms
             if Task.isCancelled { return }
-            await performSync(arc: arc)
+            await performSync(arc: arc, modelContext: modelContext)
         }
     }
 
-    func drainSync(_ arc: StoryArc) {
+    func drainSync(_ arc: StoryArc, modelContext: ModelContext) {
         // onDisappear: cancel any pending debounced task, fire immediate.
         pendingTask?.cancel()
-        pendingTask = Task { await performSync(arc: arc) }
+        pendingTask = Task { await performSync(arc: arc, modelContext: modelContext) }
     }
 
-    private func performSync(arc: StoryArc) async {
+    private func performSync(arc: StoryArc, modelContext: ModelContext) async {
         do {
-            // Note: modelContext.refresh(arc) is called at the View-level call
-            // sites (syncImmediately/syncDebounced/drainSync callers) where
-            // modelContext is in scope. StoryArcSyncState is a class without
-            // SwiftData access; refresh belongs at the View.
-            _ = try await StoryArcSyncService().syncArc(arc: arc)
+            _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
             arc.lastSyncedAt = Date()
         } catch {
             // Best-effort. Q4c safety-net (future follow-up) catches FK
@@ -111,17 +107,7 @@ struct StoryArcRegionView: View {
         .onDisappear {
             // Drain pending debounced sync (if any) before view tears down,
             // so user edits aren't lost when navigating away mid-debounce.
-            if let arc = currentArc {
-                // PR-XXX-O: re-fetch arc from persistent store before sync — prevents
-                // SwiftData @Relationship stale-reference bug where syncArc re-pushes
-                // deleted beats via UPSERT. SwiftData's ModelContext has no refresh(_:),
-                // so we re-fetch via FetchDescriptor.
-                let arcId = arc.id
-                let freshArc = (try? modelContext.fetch(
-                    FetchDescriptor<StoryArc>(predicate: #Predicate<StoryArc> { $0.id == arcId })
-                ).first) ?? arc
-                syncState.drainSync(freshArc)
-            }
+            if let arc = currentArc { syncState.drainSync(arc, modelContext: modelContext) }
             Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
         }
         .sheet(item: $editingBeat) { beat in
@@ -130,14 +116,7 @@ struct StoryArcRegionView: View {
                 onSave: {
                     try? modelContext.save()
                     // Q1c immediate on explicit save
-                    if let arc = currentArc {
-                        // PR-XXX-O: re-fetch before sync — see comment in moveBeats above.
-                        let arcId = arc.id
-                        let freshArc = (try? modelContext.fetch(
-                            FetchDescriptor<StoryArc>(predicate: #Predicate<StoryArc> { $0.id == arcId })
-                        ).first) ?? arc
-                        syncState.syncImmediately(freshArc)
-                    }
+                    if let arc = currentArc { syncState.syncImmediately(arc, modelContext: modelContext) }
                     Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
                 }
             )
@@ -259,13 +238,7 @@ struct StoryArcRegionView: View {
         modelContext.insert(newBeat)
         try? modelContext.save()
         // Q1c debounced: typing sequence into one final sync
-        // PR-XXX-O: re-fetch before sync — see comment above. SwiftData's
-        // ModelContext has no refresh(_:), so we re-fetch via FetchDescriptor.
-        let arcId = arc.id
-        let freshArc = (try? modelContext.fetch(
-            FetchDescriptor<StoryArc>(predicate: #Predicate<StoryArc> { $0.id == arcId })
-        ).first) ?? arc
-        syncState.syncDebounced(freshArc)
+        syncState.syncDebounced(arc, modelContext: modelContext)
     }
 
     /// PR-XXX-N: mirror OutlineSectionsRegionView.deleteSections exactly.
@@ -356,6 +329,9 @@ struct StoryArcRegionView: View {
                 "deleteAllBeats: ModelContext.save complete; relationship count after save is \(countAfterSave)"
             )
             syncBeatsOrder()
+            // Immediate sync (not debounced). Destructive user action, don't risk
+            // a 500ms window where the user could navigate away before the sync fires.
+            syncState.syncImmediately(arc, modelContext: modelContext)
             let result = await DataDurabilityCoordinator.shared.saveProject(
                 project,
                 context: modelContext
@@ -393,14 +369,7 @@ struct StoryArcRegionView: View {
         }
         try? modelContext.save()
         // Q1c debounced: reordering within a beat list
-        if let arc = currentArc {
-            // PR-XXX-O: re-fetch before sync — see comment in moveBeats above.
-            let arcId = arc.id
-            let freshArc = (try? modelContext.fetch(
-                FetchDescriptor<StoryArc>(predicate: #Predicate<StoryArc> { $0.id == arcId })
-            ).first) ?? arc
-            syncState.syncDebounced(freshArc)
-        }
+        if let arc = currentArc { syncState.syncDebounced(arc, modelContext: modelContext) }
     }
 
     // MARK: - Template switch (role-based merge)
@@ -426,12 +395,7 @@ struct StoryArcRegionView: View {
         try? modelContext.save()
         // Q4 save-once-on-create: immediate sync so the arc + beats land
         // on the server before any embed-section call references them.
-        // PR-XXX-O: re-fetch before sync — see comment in moveBeats above.
-        let arcId = arcToSync.id
-        let freshArc = (try? modelContext.fetch(
-            FetchDescriptor<StoryArc>(predicate: #Predicate<StoryArc> { $0.id == arcId })
-        ).first) ?? arcToSync
-        syncState.syncImmediately(freshArc)
+        syncState.syncImmediately(arcToSync, modelContext: modelContext)
     }
 
     /// Role-based merge: matching roles keep label/details (just update
