@@ -63,7 +63,6 @@ struct StoryArcRegionView: View {
     @Bindable var project: StoryProject
     let modelContext: ModelContext
 
-    @State private var selectedTemplateID: UUID?
     @State private var beatsOrder: [StoryArcBeat] = []
     @State private var editingBeat: StoryArcBeat?
     @State private var showingDeleteAllBeatsConfirm = false
@@ -99,9 +98,6 @@ struct StoryArcRegionView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, CathedralTheme.Spacing.base)
         .task {
-            if selectedTemplateID == nil {
-                selectedTemplateID = currentArc?.templateID
-            }
             syncBeatsOrder()
         }
         .onChange(of: beatsKey) { _, _ in
@@ -198,17 +194,34 @@ struct StoryArcRegionView: View {
         }
     }
 
+    /// Picker selection for the arc's template. The getter reflects the
+    /// persisted `currentArc?.templateID` (no duplicated state). The setter only
+    /// applies a template when the user actually changes the value — picker
+    /// hydration on view initialization must NOT trigger `applyTemplate`, which
+    /// would call `mergeBeats` and resurrect deleted template-default beats.
+    ///
+    /// A persisted templateID means "this arc originated from / currently uses
+    /// this template." It must NOT mean "continuously enforce that every
+    /// default template beat exists." Deleting a template-derived beat is a
+    /// valid user customization and must remain deleted.
+    private var templateSelection: Binding<UUID?> {
+        Binding(
+            get: { currentArc?.templateID },
+            set: { newID in
+                guard newID != currentArc?.templateID else { return }
+                applyTemplate(newID)
+            }
+        )
+    }
+
     private var templatePicker: some View {
-        Picker("Template", selection: $selectedTemplateID) {
+        Picker("Template", selection: templateSelection) {
             Text("None").tag(UUID?.none)
             ForEach(StoryArcTemplate.allTemplates) { template in
                 Text(template.name).tag(UUID?.some(template.id))
             }
         }
         .pickerStyle(.menu)
-        .onChange(of: selectedTemplateID) { _, newID in
-            applyTemplate(newID)
-        }
     }
 
     private func beatsList(arc: StoryArc, template: StoryArcTemplate) -> some View {
