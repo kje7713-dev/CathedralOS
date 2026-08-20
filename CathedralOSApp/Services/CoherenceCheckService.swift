@@ -67,7 +67,11 @@ struct CoherenceRagContext: Codable {
     let continuity_facts: [CoherenceRagValue]
     let open_loops: [CoherenceRagValue]
     let scene_ending_state: CoherenceRagValue?
-    let extracted_summary: String?
+    // PR-388 follow-up: extracted_summary isn't a column on section_embeddings
+    // (PostgREST surfaced PGRST108 when we requested it). Use `summary` instead,
+    // which is the real column. If we later want LLM summaries to flow in,
+    // that's a separate migration to add an extracted_summary column.
+    let summary: String?
 
     init(
         character_deltas: [CoherenceRagValue] = [],
@@ -75,21 +79,21 @@ struct CoherenceRagContext: Codable {
         continuity_facts: [CoherenceRagValue] = [],
         open_loops: [CoherenceRagValue] = [],
         scene_ending_state: CoherenceRagValue? = nil,
-        extracted_summary: String? = nil
+        summary: String? = nil
     ) {
         self.character_deltas = character_deltas
         self.plot_thread_deltas = plot_thread_deltas
         self.continuity_facts = continuity_facts
         self.open_loops = open_loops
         self.scene_ending_state = scene_ending_state
-        self.extracted_summary = extracted_summary
+        self.summary = summary
     }
 
     // Codable conformance for JSON with arbitrary nested values.
     // We use JSONValue as a passthrough so the LLM sees the raw structure.
     enum CodingKeys: String, CodingKey {
         case character_deltas, plot_thread_deltas, continuity_facts
-        case open_loops, scene_ending_state, extracted_summary
+        case open_loops, scene_ending_state, summary
     }
 }
 
@@ -232,7 +236,7 @@ struct CoherenceCheckService {
             URLQueryItem(name: "limit", value: "20"),
             URLQueryItem(
                 name: "select",
-                value: "character_deltas,plot_thread_deltas,continuity_facts,open_loops,scene_ending_state,extracted_summary"
+                value: "outline_sections!inner(id,project_id,status),character_deltas,plot_thread_deltas,continuity_facts,open_loops,scene_ending_state,summary"
             ),
         ]
         let finalURL = components.url!
@@ -265,7 +269,7 @@ struct CoherenceCheckService {
         let continuity_facts: [JSONValue]?
         let open_loops: [JSONValue]?
         let scene_ending_state: JSONValue?
-        let extracted_summary: String?
+        let summary: String?
     }
 
     /// Flatten multiple section_embeddings rows into a single RagContext.
@@ -283,7 +287,7 @@ struct CoherenceCheckService {
             facts.append(contentsOf: (row.continuity_facts ?? []).map(CoherenceRagValue.init))
             loops.append(contentsOf: (row.open_loops ?? []).map(CoherenceRagValue.init))
             if let s = row.scene_ending_state { lastEndingState = CoherenceRagValue(s) }
-            if let s = row.extracted_summary { lastSummary = s }
+            if let s = row.summary { lastSummary = s }
         }
         return CoherenceRagContext(
             character_deltas: characters,
@@ -291,7 +295,7 @@ struct CoherenceCheckService {
             continuity_facts: facts,
             open_loops: loops,
             scene_ending_state: lastEndingState,
-            extracted_summary: lastSummary
+            summary: lastSummary
         )
     }
 
