@@ -75,6 +75,17 @@ struct GenerationRequest: Codable {
     /// Sent so the backend can correlate and optionally echo it back in the response.
     let localGenerationID: String?
 
+    // PR-360-Z: canonical explicit section context fields. Populated by
+    // both iOS direct generation and run-outline generation (see also
+    // run-outline/_generation_request.ts) — replaces the "smuggle section
+    // into promptPack.notes" pattern. The generate-story prompt assembly
+    // reads these fields directly and renders them as the authoritative
+    // Section Contract block in SYSTEM (sanitized via sanitizeTitleForLLM).
+    // Optional for backwards compat — missing values degrade to no Section
+    // Contract block in the prompt.
+    let sectionTitle: String?
+    let sectionSummary: String?
+
     // MARK: CodingKeys
     // Maps Swift property names to the JSON keys expected by the Edge Function.
     enum CodingKeys: String, CodingKey {
@@ -100,6 +111,8 @@ struct GenerationRequest: Codable {
         case parentGenerationID
         case previousOutputText
         case localGenerationID
+        case sectionTitle
+        case sectionSummary
     }
 
     init(
@@ -124,7 +137,14 @@ struct GenerationRequest: Codable {
         action: String = "generate",
         parentGenerationID: String? = nil,
         previousOutputText: String? = nil,
-        localGenerationID: String? = nil
+        localGenerationID: String? = nil,
+        // PR-360-Z: canonical section context fields. Both iOS direct
+        // generation AND run-outline generation populate these. Callers
+        // without section context (legacy iOS builds mid-rollout) leave
+        // them nil — generate-story's prompt assembly degrades gracefully
+        // (no Section Contract block, all other blocks render normally).
+        sectionTitle: String? = nil,
+        sectionSummary: String? = nil
     ) {
         self.schema = schema
         self.version = version
@@ -148,6 +168,8 @@ struct GenerationRequest: Codable {
         self.parentGenerationID = parentGenerationID
         self.previousOutputText = previousOutputText
         self.localGenerationID = localGenerationID
+        self.sectionTitle = sectionTitle
+        self.sectionSummary = sectionSummary
     }
 }
 
