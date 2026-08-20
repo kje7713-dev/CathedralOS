@@ -343,7 +343,13 @@ struct CoherenceCheckService {
         let (data, response) = try await performRequest(urlRequest)
         try checkStatus(response: response, data: data)
         let decoded = try decode(CoherenceCheckResponseBody.self, from: data)
-        return decoded.warnings ?? []
+        let warnings = decoded.warnings ?? []
+        // Diagnostic: log the raw response body so we can see exactly what the
+        // edge function returned. Useful for debugging "nothing comes back vs
+        // random hit" cases. No auth tokens — only the edge function's response.
+        let rawBody = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
+        print("[CoherenceCheck] edge function returned \(warnings.count) warning(s). body=\(rawBody.prefix(500))")
+        return warnings
     }
 
     // MARK: - helpers (mirror RunOutlineService helpers)
