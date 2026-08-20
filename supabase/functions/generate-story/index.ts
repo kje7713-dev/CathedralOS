@@ -854,6 +854,15 @@ function buildPrompt(req: {
   // state. Pre-fetched by caller (adminClient not in scope inside
   // buildPrompt). Empty/undefined skips injection.
   projectStateContext?: string;
+  // PR-360-Z: Section Contract inputs (canonical explicit fields). Both iOS
+  // direct generation AND run-outline generation must populate these
+  // (replacing the old "smuggle section title + summary into promptPack.notes"
+  // pattern in run-outline/_generation_request.ts). Sanitized via
+  // sanitizeTitleForLLM before rendering as the authoritative Section
+  // Contract block in SYSTEM. Missing / empty values degrade to no Section
+  // Contract block — callers that lack section context simply omit it.
+  sectionTitle?: string;
+  sectionSummary?: string;
 }): { craft: string; context: string } {
   // Parse the payload — degrade gracefully if malformed.
   let payload: PromptPackPayloadShape = {};
@@ -1017,10 +1026,20 @@ function buildPrompt(req: {
     },
   };
 
-  // Narrative shape: server infers from recipe for v1. Hardcoded to
-  // Confrontation because the recipe's dramatic seed is the strongest
-  // signal. Future: model-picked in a quick first call.
-  const inferredShape = "Confrontation";
+  // PR-360-Z: drop `inferredShape = "Confrontation"`. That hardcode was the
+  // root cause of "every output reads like a fight scene". No replacement:
+  // the Section Contract (SYSTEM, authoritative) carries the section premise
+  // + character state; the model now infers the right shape from those
+  // inputs rather than receiving a hardcoded "Confrontation" hint that
+  // overrode everything.
+
+  // PR-360-Z: sanitize the section title before rendering as the Section
+  // Contract block. Strips leaked editor annotations like (copy) / (test) /
+  // (draft) per sanitizeTitleForLLM(). Empty / non-string inputs degrade to
+  // empty string so the Section Contract block is omitted when the caller
+  // has no section info (legacy clients, smoke tests, etc.).
+  const sanitizedSectionTitle = sanitizeTitleForLLM(req.sectionTitle);
+  const hasSectionContext = sanitizedSectionTitle !== "" || nonEmpty(req.sectionSummary);
 
   // Container-aware scene instructions. The model gets:
   //  - the container's "what it contains" so it knows the shape
@@ -1066,6 +1085,41 @@ Structural limits:
     containerInstructions(cfg.name, cfg.whatItContains, cfg.naturalStoppingPoint, cfg.expectedRange),
     "",
   ];
+
+  // PR-360-Z: Section Contract (AUTHORITATIVE) — system-level anchor for
+  // premise + POV + container invariants + authority rules. The model
+  // weights SYSTEM instructions higher than user; placing this here makes
+  // the contract inalterable rather than a soft "INPUT CONTEXT" hint that
+  // the model may soften or summarize. Skipped entirely when the caller
+  // supplies no section context (legacy iOS builds, direct smoke tests).
+  if (hasSectionContext) {
+    craftLines.push(
+      "## Section Contract (AUTHORITATIVE — DO NOT INVERT)",
+      "",
+      `Title: ${sanitizedSectionTitle || "(no title provided)"}`,
+      `Summary: ${nonEmpty(req.sectionSummary) ? req.sectionSummary! : "(no summary provided)"}`,
+      "",
+      "The summary above describes the END STATE of this scene. If it says a character is dead, the scene is set AFTER their death (memorial, investigation, afterlife). DO NOT write the character as alive in this scene.",
+      "",
+      `POV: ${povInstruction(req.pov)}`,
+      "",
+      "Container invariants:",
+      `- Container: ${cfg.name}`,
+      `- What it contains: ${cfg.whatItContains}`,
+      `- Natural stopping point: ${cfg.naturalStoppingPoint}`,
+      `- Expected range: ${cfg.expectedRange}`,
+      `- Hard cap: ${cfg.hardCap} tokens`,
+      "",
+      "Authority rules (state explicitly):",
+      "- do not contradict the section premise",
+      "- dead characters remain dead unless the section explicitly establishes otherwise",
+      "- do not invent named characters outside canon unless explicitly authorized",
+      "- obey requested POV",
+      "- do not reproduce the section title as prose / dialogue",
+      "- stay within container shape and stop naturally",
+      "",
+    );
+  }
 
   // Per-request context — sent as the USER message.
   const contextLines: string[] = [];
@@ -1120,11 +1174,32 @@ Structural limits:
       "",
     );
   }
+  // PR-360-Z: Writing Task trimmed. The `Narrative shape: <hardcoded>`
+  // hint is GONE (let premise + character state determine scene shape
+  // rather than forcing every output into one shape). POV was MOVED to
+  // SYSTEM Section Contract above (structural limits weight higher there).
+  // What remains here is just the per-request action — the rest of the
+  // contract is already anchored in craftLines.
   contextLines.push(
     "## Writing Task",
     actionTask[req.generationAction],
-    `Narrative shape: ${inferredShape}.`,
-    `POV: ${povInstruction(req.pov)}`,
+    "",
+  );
+
+  // PR-360-Z: silent pre-return self-check. A short checklist the LLM
+  // performs internally right before returning. The checklist itself is
+  // NEVER returned to the caller (kept silent per corrections rule #6) —
+  // the LLM is told to do the verification, not to surface it. Inserted
+  // before Writing Instructions so the model sees it as the final gate
+  // before producing prose.
+  craftLines.push(
+    "## Pre-Return Self-Check (CRITICAL)",
+    "Before you return your response, verify (silently — do not include this checklist in your output):",
+    "- POV: the entire output is in the requested POV (no drift first-person to third-person).",
+    "- Premise: the scene is consistent with the section premise above. If the premise says a character is dead, that character does NOT appear alive in the scene.",
+    "- Characters: every named character comes from the proposal or an accepted prior section. Names not in canon are PROHIBITED unless the user explicitly introduces them via the proposal.",
+    "- Title leakage: the section title does not appear as prose or dialogue in the output.",
+    "- Container shape: end within the container's expected range and at the natural stopping point. Do not pad or sprawl past it.",
     "",
   );
 
@@ -1502,9 +1577,17 @@ async function handler(
       { status: 400 },
     );
   }
+  // PR-360-Z: container owns the output limit. Per corrections rule #6,
+  // max_tokens = min(containerHardCap, modelMaxOutputTokens). Drops the
+  // legacy reliance on outputBudget here so the cap is determined by the
+  // container (single source of truth), not the legacy length-mode budget.
+  // OUTPUT_BUDGETS in run-outline/_generation_request.ts is also deleted
+  // (Commit 3). CONTAINER_HARD_CAPS already mirrors containerConfig.hardCap
+  // in buildPrompt — if those values diverge, this formula reads stale.
+  const containerHardCap = CONTAINER_HARD_CAPS[container];
   const maxCompletionTokens = Math.min(
-    outputBudget,
-    selectedModel.max_output_tokens ?? outputBudget,
+    containerHardCap,
+    selectedModel.max_output_tokens ?? containerHardCap ?? 4096,
   );
 
   // previousOutputText is required for "continue" to avoid a no-op generation.
