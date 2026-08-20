@@ -178,13 +178,14 @@ struct CoherenceCheckService {
     /// Run the user-initiated coherence check. Fetches the project's full
     /// RAG context (all structured-memory layers from accepted sections),
     /// then calls the coherence-check edge function with output_text + RAG.
-    /// Returns warnings (empty array if no inconsistencies found).
+    /// Returns a tuple of (warnings, rawResponseBody) so the caller can
+    /// display the actual response (e.g., for diagnostics on TestFlight).
     /// Throws on network / server / auth errors.
     func check(
         outputText: String,
         projectID: String,
         sectionID: UUID? = nil
-    ) async throws -> [CoherenceWarning] {
+    ) async throws -> (warnings: [CoherenceWarning], rawResponseBody: String) {
         let ragContext = try await fetchRagContext(projectID: projectID, sectionID: sectionID)
         return try await callEdgeFunction(
             outputText: outputText,
@@ -199,7 +200,7 @@ struct CoherenceCheckService {
         outputText: String,
         ragContext: CoherenceRagContext,
         projectID: String? = nil
-    ) async throws -> [CoherenceWarning] {
+    ) async throws -> (warnings: [CoherenceWarning], rawResponseBody: String) {
         return try await callEdgeFunction(
             outputText: outputText,
             ragContext: ragContext,
@@ -322,7 +323,7 @@ struct CoherenceCheckService {
         outputText: String,
         ragContext: CoherenceRagContext,
         projectID: String?
-    ) async throws -> [CoherenceWarning] {
+    ) async throws -> (warnings: [CoherenceWarning], rawResponseBody: String) {
         let client = try requireClient()
         guard let token = authService.currentAccessToken else {
             throw CoherenceCheckError.notAuthenticated
@@ -344,12 +345,12 @@ struct CoherenceCheckService {
         try checkStatus(response: response, data: data)
         let decoded = try decode(CoherenceCheckResponseBody.self, from: data)
         let warnings = decoded.warnings ?? []
-        // Diagnostic: log the raw response body so we can see exactly what the
-        // edge function returned. Useful for debugging "nothing comes back vs
-        // random hit" cases. No auth tokens — only the edge function's response.
-        let rawBody = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-        print("[CoherenceCheck] edge function returned \(warnings.count) warning(s). body=\(rawBody.prefix(500))")
-        return warnings
+        // Return the raw response body so the caller can surface it in the UI
+        // for diagnostics. We deliberately do NOT log to console here — the
+        // TestFlight build can't reach a console, so the only way to see the
+        // response is to show it in the build itself.
+        let rawBody = String(data: data, encoding: .utf8) ?? ""
+        return (warnings, rawBody)
     }
 
     // MARK: - helpers (mirror RunOutlineService helpers)
