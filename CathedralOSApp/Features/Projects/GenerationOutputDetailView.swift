@@ -178,6 +178,10 @@ struct GenerationOutputDetailView: View {
     @State private var coherenceCheckResult: [CoherenceWarning] = []
     @State private var coherenceCheckLoading: Bool = false
     @State private var coherenceCheckError: String?
+    // Raw response body from the edge function — surfaced in the UI so
+    // diagnostic info is visible without an iOS console (which TestFlight
+    // builds can't reach). Empty string when no check has run yet.
+    @State private var coherenceCheckRawBody: String = ""
 
     /// Reverse-direction visibility context for this output's source.
     /// `.section` is the precise link (set via `output.outlineSectionID`); `.project`
@@ -348,16 +352,18 @@ struct GenerationOutputDetailView: View {
             return
         }
         do {
-            let warnings = try await CoherenceCheckService().check(
+            let result = try await CoherenceCheckService().check(
                 outputText: output.outputText,
                 projectID: projectID,
                 sectionID: output.outlineSectionID
             )
-            coherenceCheckResult = warnings
+            coherenceCheckResult = result.warnings
+            coherenceCheckRawBody = result.rawResponseBody
         } catch {
             coherenceCheckError = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
             coherenceCheckResult = []
+            coherenceCheckRawBody = ""
         }
     }
 
@@ -439,11 +445,35 @@ struct GenerationOutputDetailView: View {
         .disabled(coherenceCheckLoading)
     }
 
+    /// Diagnostic: surfaces the raw edge function response in the build itself
+    /// so it's visible without an iOS console. Shows warning count + the
+    /// actual JSON body. Helps distinguish "0 warnings returned" (edge
+    /// function said nothing) from "no response" (would have errored).
+    @ViewBuilder
+    private var coherenceCheckDebugLabel: some View {
+        if !coherenceCheckRawBody.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Last response: \(coherenceCheckResult.count) warning(s).")
+                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Text(coherenceCheckRawBody.prefix(400))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .lineLimit(4)
+            }
+            .padding(CathedralTheme.Spacing.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CathedralTheme.Colors.surface.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+        }
+    }
+
     private var scrollContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
                 coherenceCheckCard
                 coherenceCheckButton
+                coherenceCheckDebugLabel
                 sourceContextHeader
                 metadataSection
                 provenanceSection
