@@ -173,10 +173,11 @@ struct GenerationOutputDetailView: View {
     @State private var removeCoverImageOnPublish = false
     @State private var isProcessingCoverImage = false
     @State private var isSyncingOutput = false
-    // PR-360-Y: post-gen coherence warnings fetched from
-    // generation_output_warnings for this output.
-    @State private var postGenWarnings: [PostGenWarning] = []
-    @State private var postGenLoading: Bool = false
+    // Coherence v2 (2026-08-20): user-initiated "Check for inconsistencies"
+    // button triggers CoherenceCheckService.check(). No auto-fire on appear.
+    @State private var coherenceCheckResult: [CoherenceWarning] = []
+    @State private var coherenceCheckLoading: Bool = false
+    @State private var coherenceCheckError: String?
 
     /// Reverse-direction visibility context for this output's source.
     /// `.section` is the precise link (set via `output.outlineSectionID`); `.project`
@@ -333,81 +334,81 @@ struct GenerationOutputDetailView: View {
         .toolbar { toolbarContent }
     }
 
-    /// PR-360-Y: fetch this output's post-gen coherence warnings via Supabase
-    /// REST (PostgREST). Mirrors LLMPromptService's URLSession pattern.
-    /// Best-effort, silent on failure.
+    /// Coherence v2: run the user-initiated opt-in coherence check.
+    /// Calls CoherenceCheckService.check(), which fetches the project's full
+    /// RAG retrieval and posts it + the output text to the edge function.
+    /// Errors are surfaced to the user (not silently swallowed).
     @MainActor
-    private func loadPostGenWarnings() async {
-        let cloudID = output.cloudGenerationOutputID
-        guard !cloudID.isEmpty else { return }
-        postGenLoading = true
-        defer { postGenLoading = false }
+    private func runCoherenceCheck() async {
+        coherenceCheckLoading = true
+        coherenceCheckError = nil
+        defer { coherenceCheckLoading = false }
+        guard let projectID = output.project?.id.uuidString else {
+            coherenceCheckError = "No project linked to this output."
+            return
+        }
         do {
-            guard let client = try? SupabaseBackendClient() else { return }
-            guard let token = BackendAuthService.shared.currentAccessToken else { return }
-            let url = client.configuration.projectURL
-                .appendingPathComponent("rest")
-                .appendingPathComponent("v1")
-                .appendingPathComponent("generation_output_warnings")
-            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-            components.queryItems = [
-                URLQueryItem(name: "generation_output_id", value: "eq.\(cloudID)"),
-                URLQueryItem(name: "order", value: "created_at.desc"),
-            ]
-            let finalURL = components.url!
-            var request = client.authorizedRequest(for: finalURL, userAccessToken: token)
-            request.httpMethod = "GET"
-            request.timeoutInterval = 15
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                postGenWarnings = []
-                return
-            }
-            postGenWarnings = try JSONDecoder().decode([PostGenWarning].self, from: data)
+            let warnings = try await CoherenceCheckService().check(
+                outputText: output.outputText,
+                projectID: projectID,
+                sectionID: output.outlineSectionID
+            )
+            coherenceCheckResult = warnings
         } catch {
-            postGenWarnings = []
+            coherenceCheckError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            coherenceCheckResult = []
         }
     }
 
-    /// PR-360-Y: yellow soft-warn card for post-gen coherence warnings.
-    /// Mirrors the kickoff sheet's `coherenceWarningsRow` style (CathedralOS theme).
+    /// Coherence v2: yellow soft-warn card for coherence check results.
+    /// Shows loading spinner during the check, the warnings after it completes,
+    /// or an error message if the check fails.
     @ViewBuilder
-    private var postGenWarningsCard: some View {
-        if postGenLoading {
+    private var coherenceCheckCard: some View {
+        if coherenceCheckLoading {
             HStack(spacing: CathedralTheme.Spacing.xs) {
                 ProgressView().scaleEffect(0.7)
-                Text("Checking output for conflicts with canon…")
+                Text("Checking output for inconsistencies with canon…")
                     .font(CathedralTheme.Typography.caption())
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-        } else if !postGenWarnings.isEmpty {
+        } else if let error = coherenceCheckError {
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                HStack(spacing: CathedralTheme.Spacing.xs) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.orange)
+                    Text("Coherence check failed")
+                        .font(CathedralTheme.Typography.label(11, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+                Text(error)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            .padding(CathedralTheme.Spacing.sm)
+            .background(Color.orange.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else if !coherenceCheckResult.isEmpty {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
                 HStack(spacing: CathedralTheme.Spacing.xs) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.yellow)
-                    Text("Output conflicts with canon or premise")
+                    Text("Output inconsistencies with canon")
                         .font(CathedralTheme.Typography.label(11, weight: .semibold))
                         .foregroundStyle(.primary)
                 }
-                ForEach(postGenWarnings) { warning in
+                ForEach(coherenceCheckResult) { warning in
                     HStack(alignment: .top, spacing: CathedralTheme.Spacing.xs) {
                         Text("•").font(.caption).foregroundStyle(.yellow)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(warning.warning_type.replacingOccurrences(of: "_", with: " "))
-                                .font(CathedralTheme.Typography.label(11, weight: .semibold))
-                            Text(warning.message)
-                                .font(CathedralTheme.Typography.caption())
-                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        }
+                        Text(warning.reason)
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
                     }
                 }
-                Text("These are post-generation warnings. The output was already saved; review the conflicts and decide whether to regenerate.")
-                    .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .padding(.top, 2)
             }
             .padding(CathedralTheme.Spacing.sm)
             .background(Color.yellow.opacity(0.12))
@@ -415,10 +416,34 @@ struct GenerationOutputDetailView: View {
         }
     }
 
+    /// Coherence v2: button that triggers the user-initiated coherence check.
+    /// Renders inline near the LLMPromptDebugView so the user has a discoverable
+    /// way to opt in. Each tap is a fresh LLM call (and a fresh charge).
+    @ViewBuilder
+    private var coherenceCheckButton: some View {
+        Button {
+            Task { await runCoherenceCheck() }
+        } label: {
+            HStack(spacing: CathedralTheme.Spacing.xs) {
+                Image(systemName: "checklist")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Check for inconsistencies")
+                    .font(CathedralTheme.Typography.label(12, weight: .semibold))
+            }
+            .padding(.horizontal, CathedralTheme.Spacing.sm)
+            .padding(.vertical, CathedralTheme.Spacing.xs)
+            .background(CathedralTheme.Colors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+        }
+        .buttonStyle(.plain)
+        .disabled(coherenceCheckLoading)
+    }
+
     private var scrollContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
-                postGenWarningsCard
+                coherenceCheckCard
+                coherenceCheckButton
                 sourceContextHeader
                 metadataSection
                 provenanceSection
@@ -444,7 +469,6 @@ struct GenerationOutputDetailView: View {
         .navigationBarTitleDisplayMode(.large)
         .tint(CathedralTheme.Colors.accent)
         .toolbar { toolbarContent }
-        .task { await loadPostGenWarnings() }
         .onAppear {
             // Restore any persisted publish error so it is visible on re-entry.
             if publishError == nil, let persisted = output.publishErrorMessage, !persisted.isEmpty {
