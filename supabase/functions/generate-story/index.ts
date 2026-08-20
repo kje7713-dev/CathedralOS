@@ -207,6 +207,19 @@ interface GenerateStoryRequest {
   // sync roundtrips it into GenerationOutput.outlineSectionID (PR #325 wire).
   // Optional for backwards compat — omitted => null.
   outline_section_id?: string;
+  // PR-360-Z: camelCase alias for `project_id`. iOS sends `projectID` (explicit
+  // CodingKeys; no convertToSnakeCase). Run-outline sends both. Normalized
+  // once after body parse into a single canonical `projectID` variable.
+  // Optional for backwards compat — omitted => null.
+  projectID?: string;
+  // PR-360-Z: canonical explicit section context fields. Replaces the old
+  // pattern of smuggling the outline section into `promptPack.notes`.
+  // Both iOS direct generation AND run-outline generation must populate
+  // the same canonical fields (see `run-outline/_generation_request.ts`).
+  // Optional for backwards compat — missing values degrade to no Section
+  // Contract block in the prompt.
+  sectionTitle?: string;
+  sectionSummary?: string;
 }
 
 interface GenerationOutputInsert {
@@ -1166,6 +1179,25 @@ function extractTitle(text: string, fallback: string): string {
   return fallback || "";
 }
 
+// PR-360-Z: Section title sanitizer. Strips (copy) / (test) / (draft)
+// variants case-insensitive anywhere in the title, trims whitespace, and
+// returns the empty string when nothing useful is left. No arbitrary
+// truncation — that is a separate UX concern, deferred. The sanitizer is
+// used to render the Section Contract block in the prompt so leaked
+// editor-side annotations never make the the model as dialogue or
+// scene title (a real bug class observed on the 2026-08-15 smoke test).
+function sanitizeTitleForLLM(title: string | undefined | null): string {
+  if (typeof title !== "string") return "";
+  // Strip the three known-leak suffixes anywhere in the title, case-insensitive.
+  // Anchored on word boundaries so "(copy)" inside a legitimate title like
+  // "The (copy) shop" still gets cleaned, but "copycat" stays intact.
+  const stripped = title
+    .replace(/\s*\((copy|test|draft)\)\s*/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped;
+}
+
 function describeError(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string" && error.length > 0) return error;
@@ -1337,6 +1369,17 @@ async function handler(
       { status: 400 },
     );
   }
+
+  // PR-360-Z Bug A fix: normalize the project identifier across both calling
+  // paths. iOS direct generation sends `projectID` (camelCase, explicit
+  // CodingKeys; no convertToSnakeCase). Run-outline sends both `projectID`
+  // and `project_id`. The legacy code only read `body.project_id`, so iOS
+  // direct calls silently lost the project-state context block. We now
+  // accept both names and canonicalize to a single `projectID` variable
+  // used everywhere downstream. Cost: one extra `?? null` chain at parse
+  // time. Benefit: iOS direct generation now reaches the same project-state
+  // RAG retrieval as run-outline (no behavior change for run-outline).
+  const projectID: string | null = body.project_id ?? body.projectID ?? null;
 
   // -------------------------------------------------------------------------
   // Server-side validation
@@ -1582,8 +1625,8 @@ async function handler(
   // accepted scenes. Empty string if project has no accepted scenes yet,
   // or if adminClient isn't available.
   let projectStateContext = "";
-  if (adminClient && body.project_id) {
-    projectStateContext = await fetchProjectStateContext(adminClient, body.project_id);
+  if (adminClient && projectID) {
+    projectStateContext = await fetchProjectStateContext(adminClient, projectID);
   }
 
   const { craft: craftPrompt, context: contextPrompt } = buildPrompt({
@@ -1849,7 +1892,7 @@ async function handler(
       await adminClient.from("llm_prompts").insert({
         call_type: "generate-story",
         output_id: outputId,
-        project_id: body.project_id ?? null,
+        project_id: projectID,
         outline_section_id: body.outline_section_id ?? null,
         model: selectedModel.provider_model,
         prompt: JSON.stringify({
