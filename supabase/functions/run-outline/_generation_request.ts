@@ -1,11 +1,12 @@
 import type { LengthMode } from "../generate-story/_credits.ts";
 
-export const OUTPUT_BUDGETS: Record<LengthMode, number> = {
-  short: 800,
-  medium: 1600,
-  long: 3000,
-  chapter: 6000,
-};
+// PR-360-Z: OUTPUT_BUDGETS removed. The container (section.container) now
+// owns the output limit — see generate-story's CONTAINER_HARD_CAPS lookup
+// and the new max_tokens formula
+//   min(containerHardCap, modelMaxOutputTokens ?? containerHardCap ?? 4096).
+// The length-mode budget was a legacy signal that pre-dated the container
+// taxonomy. OutputBudget is no longer in buildGenerateStoryRequest's
+// returned payload.
 
 type JSONObject = Record<string, unknown>;
 
@@ -31,7 +32,6 @@ function selectedByIds(items: unknown, ids: unknown): JSONObject[] {
 /** Convert the synced ProjectImportExportPayload into the canonical prompt-pack payload. */
 export function buildSourcePayloadJSON(
   snapshot: JSONObject,
-  section: { title: string; summary: string },
 ): JSONObject {
   const packs = objects(snapshot.promptPacks);
   if (packs.length === 0) throw new Error("project snapshot has no prompt pack");
@@ -39,7 +39,13 @@ export function buildSourcePayloadJSON(
   const setting = snapshot.setting && typeof snapshot.setting === "object"
     ? snapshot.setting as JSONObject
     : {};
-  const sectionInstruction = `Outline section: ${section.title}\n${section.summary}`.trim();
+  // PR-360-Z: sectionInstruction (the "Outline section: ...\n... " smuggling
+  // into promptPack.notes) is GONE. Section context now travels as explicit
+  // top-level `sectionTitle` + `sectionSummary` fields on the generate-story
+  // request payload (see buildGenerateStoryRequest below). Prompt assembly
+  // reads sectionTitle + sectionSummary directly from the body — never from
+  // promptPack.notes. This also stops the editor-side annotations
+  // (copy / test / draft) from leaking into the LLM prompt via notes.
   const packNotes = String(pack.notes ?? "").trim();
 
   return {
@@ -57,7 +63,7 @@ export function buildSourcePayloadJSON(
       id: pack.id,
       name: pack.name,
       includeProjectSetting: pack.includeProjectSetting === true,
-      notes: [packNotes, sectionInstruction].filter(Boolean).join("\n\n"),
+      notes: packNotes,
       instructionBias: pack.instructionBias ?? "",
     },
   };
@@ -75,23 +81,41 @@ export function buildGenerateStoryRequest(args: {
   lengthMode: LengthMode;
 }): JSONObject {
   const project = args.snapshot.project as JSONObject | undefined;
-  const payload = buildSourcePayloadJSON(args.snapshot, args.section);
+  // PR-360-Z: buildSourcePayloadJSON no longer takes the section (section
+  // context is now explicit top-level fields on the generate-story request,
+  // not embedded in promptPack.notes).
+  const payload = buildSourcePayloadJSON(args.snapshot);
   const promptPack = payload.promptPack as JSONObject;
   return {
     generationAction: "generate",
     generationLengthMode: args.lengthMode,
     sourcePayloadJSON: payload,
-    outputBudget: OUTPUT_BUDGETS[args.lengthMode],
+    // PR-360-Z: outputBudget removed. The container (section.container) now
+    // owns the output cap via CONTAINER_HARD_CAPS in generate-story. The
+    // length-mode budget is no longer sent.
     selectedModelId: args.selectedModelId,
     container: args.section.container ?? "scene",
     pov: args.section.pov ?? "thirdPersonLimited",
     terminalBeat: args.section.terminal_beat ?? undefined,
     projectID: args.projectId,
+    // PR-360-Z Bug A: send BOTH `projectID` (camelCase, what iOS reads)
+    // AND `project_id` (snake_case, what run-outline used to send and what
+    // generate-story reads via the normalized projectID variable in Commit 1).
+    // The backend accepts either; this is belt-and-suspenders while iOS
+    // direct generation migrates to canonical sectionTitle + sectionSummary.
     project_id: args.projectId,
     projectName: project?.name ?? "",
     promptPackID: promptPack.id ?? "",
     promptPackName: promptPack.name ?? "",
     outline_section_id: args.section.id,
+    // PR-360-Z: canonical explicit section context fields. Replaces the
+    // "smuggle section into promptPack.notes" pattern. The prompt assembly
+    // reads from these fields directly (with sanitizeTitleForLLM applied
+    // to sectionTitle). Both iOS direct generation AND run-outline
+    // generation must populate the same canonical fields — iOS is wired
+    // up in Commit 4.
+    sectionTitle: args.section.title,
+    sectionSummary: args.section.summary,
   };
 }
 
