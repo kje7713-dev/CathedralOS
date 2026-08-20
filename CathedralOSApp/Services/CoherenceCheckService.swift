@@ -232,13 +232,13 @@ struct CoherenceCheckService {
                 projectID: projectID,
                 excludeSectionID: sectionID
             )
-            currentSection = await currentSectionTask
-            priorCanon = await priorCanonTask
+            currentSection = try await currentSectionTask
+            priorCanon = try await priorCanonTask
         } else {
             // No sectionID = no current_section intent. Prior canon still useful
             // if the project has accepted sections.
             currentSection = nil
-            priorCanon = await fetchPriorCanon(
+            priorCanon = try await fetchPriorCanon(
                 projectID: projectID,
                 excludeSectionID: nil
             )
