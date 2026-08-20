@@ -225,19 +225,17 @@ struct CoherenceCheckService {
             .appendingPathComponent("section_embeddings")
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            URLQueryItem(
-                name: "outline_sections.project_id",
-                value: "eq.\(projectID)"
-            ),
-            URLQueryItem(
-                name: "outline_sections.status",
-                value: "eq.accepted"
-            ),
+            // Filter on section_embeddings.project_id directly (NOT outline_sections.project_id —
+            // outline_sections does not have a project_id column; it has outline_id).
+            // The status filter goes through the outline_section_id → outline_sections.id FK,
+            // which is the only thing that needs an embedded join.
+            URLQueryItem(name: "project_id", value: "eq.\(projectID)"),
+            URLQueryItem(name: "outline_sections.status", value: "eq.accepted"),
             URLQueryItem(name: "order", value: "created_at.desc"),
             URLQueryItem(name: "limit", value: "20"),
             URLQueryItem(
                 name: "select",
-                value: "outline_sections!inner(id,project_id,status),character_deltas,plot_thread_deltas,continuity_facts,open_loops,scene_ending_state,extracted_summary"
+                value: "outline_sections!inner(id,status),character_deltas,plot_thread_deltas,continuity_facts,open_loops,scene_ending_state,extracted_summary"
             ),
         ]
         let finalURL = components.url!
@@ -249,8 +247,26 @@ struct CoherenceCheckService {
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                throw CoherenceCheckError.ragFetchFailed("HTTP \(response)")
+                // Surface the actual PostgREST error so we can diagnose without
+                // re-running into the same wall. PostgREST returns a JSON body
+                // with `code`, `message`, `details`, `hint` fields when the
+                // query shape is wrong (e.g., referencing a column that doesn't
+                // exist on the embedded resource).
+                let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+                let rawBody = String(data: data, encoding: .utf8) ?? ""
+                var parsedDetail = ""
+                if let bodyData = rawBody.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
+                    let code = json["code"] as? String ?? ""
+                    let message = json["message"] as? String ?? ""
+                    let details = json["details"] as? String ?? ""
+                    let hint = json["hint"] as? String ?? ""
+                    parsedDetail = " [code=\(code) message=\(message) details=\(details) hint=\(hint)]"
+                }
+                // Log to console (no auth tokens here — only PostgREST's response body,
+                // which is safe to surface).
+                print("[CoherenceCheck] RAG fetch failed status=\(status) url=\(finalURL.absoluteString) body=\(rawBody.prefix(500))")
+                throw CoherenceCheckError.ragFetchFailed("HTTP \(status)\(parsedDetail)")
             }
             // Parse the array of rows. Each row has the 6 fields we selected.
             // Flatten into a single RAG context by collecting all entries across rows.
