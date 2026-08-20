@@ -1,8 +1,8 @@
 import Foundation
 
 // MARK: - CoherenceCheckService
-// Client for the `coherence-check` Supabase Edge Function (Coherence v2,
-// locked 2026-08-20 09:01 EDT). User-initiated opt-in check called from
+// Client for the `coherence-check` Supabase Edge Function (Coherence v2.1,
+// 2026-08-20). General-purpose user-initiated coherence check called from
 // the section output detail view's "Check for inconsistencies" button.
 //
 // Auth: signed-in user's JWT via Authorization header (NOT service role).
@@ -11,8 +11,16 @@ import Foundation
 //       normal rate, NEVER discount per cachedinput business rule).
 // Timeout: 30s (single OpenAI structured output call).
 //
-// Request body: { output_text: String, rag_context: RagRetrieval, project_id?: String }
-// Response body: { warnings: [{ reason: String, severity: "warn" | "high" }] }
+// Request body: { output_text, current_section, prior_canon, project_id? }
+//   - current_section: section intent (id, title, summary, pov, container, beat_label)
+//   - prior_canon: section-aware RAG (sections[], each with identity + structured layers)
+//   - The current section is excluded from prior_canon so the output is compared
+//     against prior canon, not against itself.
+//
+// Response body: { warnings: [{reason, severity}], diagnostics: {...} }
+//   - diagnostics includes raw_content, finish_reason, model, pre/post filter counts,
+//     prompt_tokens, completion_tokens — so we can distinguish "LLM returned []"
+//     from "warnings were filtered" from "LLM truncated."
 //
 // Mirrors RunOutlineService's structure: SupabaseBackendClient + URLSession.
 
@@ -23,6 +31,8 @@ enum CoherenceCheckError: Error, LocalizedError {
     case serverError(statusCode: Int, body: String?)
     case networkError(String)
     case ragFetchFailed(String)
+    // Legacy alias — keep for callers that still key off old diagnostic text.
+    case currentSectionFetchFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -36,12 +46,13 @@ enum CoherenceCheckError: Error, LocalizedError {
             return "Coherence server error \(c)."
         case .networkError(let m): return "Coherence network error: \(m)"
         case .ragFetchFailed(let m): return "Could not load canon context: \(m)"
+        case .currentSectionFetchFailed(let m): return "Could not load section intent: \(m)"
         }
     }
 }
 
 /// One warning returned by the coherence-check endpoint.
-/// v2 simplified: no section_id / section_title (the LLM cites canon
+/// v2.1 simplified: no section_id / section_title (the LLM cites canon
 /// elements in the reason field instead of referencing specific section IDs).
 struct CoherenceWarning: Codable, Identifiable, Hashable {
     let reason: String
@@ -59,64 +70,87 @@ struct CoherenceWarning: Codable, Identifiable, Hashable {
     }
 }
 
-/// Full RAG retrieval the caller provides to coherence-check.
-/// iOS fetches this via PostgREST (mirrors LLMPromptService's URLSession pattern).
-struct CoherenceRagContext: Codable {
-    let character_deltas: [CoherenceRagValue]
-    let plot_thread_deltas: [CoherenceRagValue]
-    let continuity_facts: [CoherenceRagValue]
-    let open_loops: [CoherenceRagValue]
-    let scene_ending_state: CoherenceRagValue?
-    // PR-389 follow-up #2: section_embeddings DOES have an `extracted_summary`
-    // column (created in migration 20260805193000_enable_pgvector_and_add_
-    // section_embeddings.sql). PR #389 mistakenly renamed it to `summary`,
-    // which broke the PostgREST query (42703 undefined_column). PR #390 reverts
-    // to the real column name. The inner-join addition from PR #389 stays.
+/// Current section's intent — what this section was supposed to be.
+/// Sent separately so the LLM has a comparison frame.
+struct CurrentSection: Codable {
+    let id: String
+    let title: String
+    let summary: String
+    let pov: String?
+    let container: String?
+    let beat_label: String?
+}
+
+/// One section's worth of canon. Section-aware so the LLM sees section identity,
+/// recency, and which section established which fact. Replaces the flattened
+/// RAG that destroyed provenance.
+struct SectionRag: Codable {
+    let section_id: String
+    let title: String
+    let summary: String
+    let pov: String?
+    let container: String?
+    let created_at: String
     let extracted_summary: String?
+    let character_deltas: [JSONValue]
+    let plot_thread_deltas: [JSONValue]
+    let continuity_facts: [JSONValue]
+    let open_loops: [JSONValue]
+    let scene_ending_state: JSONValue?
 
     init(
-        character_deltas: [CoherenceRagValue] = [],
-        plot_thread_deltas: [CoherenceRagValue] = [],
-        continuity_facts: [CoherenceRagValue] = [],
-        open_loops: [CoherenceRagValue] = [],
-        scene_ending_state: CoherenceRagValue? = nil,
-        extracted_summary: String? = nil
+        section_id: String,
+        title: String,
+        summary: String,
+        pov: String?,
+        container: String?,
+        created_at: String,
+        extracted_summary: String?,
+        character_deltas: [JSONValue] = [],
+        plot_thread_deltas: [JSONValue] = [],
+        continuity_facts: [JSONValue] = [],
+        open_loops: [JSONValue] = [],
+        scene_ending_state: JSONValue? = nil
     ) {
+        self.section_id = section_id
+        self.title = title
+        self.summary = summary
+        self.pov = pov
+        self.container = container
+        self.created_at = created_at
+        self.extracted_summary = extracted_summary
         self.character_deltas = character_deltas
         self.plot_thread_deltas = plot_thread_deltas
         self.continuity_facts = continuity_facts
         self.open_loops = open_loops
         self.scene_ending_state = scene_ending_state
-        self.extracted_summary = extracted_summary
-    }
-
-    // Codable conformance for JSON with arbitrary nested values.
-    // We use JSONValue as a passthrough so the LLM sees the raw structure.
-    enum CodingKeys: String, CodingKey {
-        case character_deltas, plot_thread_deltas, continuity_facts
-        case open_loops, scene_ending_state, extracted_summary
     }
 }
 
-/// Passthrough type for arbitrary JSON values in the RAG context.
-/// Lets us ship the raw structured memory to the LLM without re-shaping it.
-struct CoherenceRagValue: Codable {
-    let raw: JSONValue
+/// Prior canon = an ordered list of sections (newest first).
+/// Each section has its own summary + structured layers — no flattening.
+struct PriorCanon: Codable {
+    let sections: [SectionRag]
 
-    init(_ raw: JSONValue) { self.raw = raw }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        self.raw = try container.decode(JSONValue.self)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(raw)
+    init(sections: [SectionRag] = []) {
+        self.sections = sections
     }
 }
 
-/// Minimal JSON value passthrough for the RAG context.
+/// Provider-response diagnostics so we can distinguish "LLM said nothing" from
+/// "warnings were filtered" from "LLM truncated." All fields optional so the
+/// decoder doesn't break if the edge function adds or removes fields.
+struct CoherenceDiagnostics: Codable {
+    let raw_content: String?
+    let finish_reason: String?
+    let model: String?
+    let pre_filter_count: Int?
+    let post_filter_count: Int?
+    let prompt_tokens: Int?
+    let completion_tokens: Int?
+}
+
+/// Minimal JSON value passthrough for arbitrary structured values.
 enum JSONValue: Codable {
     case null
     case bool(Bool)
@@ -149,16 +183,18 @@ enum JSONValue: Codable {
     }
 }
 
-/// Request body posted to /functions/v1/coherence-check. v2 shape.
+/// Request body posted to /functions/v1/coherence-check. v2.1 shape.
 struct CoherenceCheckRequestBody: Codable {
     let output_text: String
-    let rag_context: CoherenceRagContext
+    let current_section: CurrentSection?
+    let prior_canon: PriorCanon
     let project_id: String?
 }
 
-/// Response body returned from /functions/v1/coherence-check. v2 shape.
+/// Response body returned from /functions/v1/coherence-check. v2.1 shape.
 struct CoherenceCheckResponseBody: Codable {
     let warnings: [CoherenceWarning]?
+    let diagnostics: CoherenceDiagnostics?
 }
 
 struct CoherenceCheckService {
@@ -175,57 +211,150 @@ struct CoherenceCheckService {
 
     // MARK: - Public API
 
-    /// Run the user-initiated coherence check. Fetches the project's full
-    /// RAG context (all structured-memory layers from accepted sections),
-    /// then calls the coherence-check edge function with output_text + RAG.
-    /// Returns a tuple of (warnings, rawResponseBody) so the caller can
-    /// display the actual response (e.g., for diagnostics on TestFlight).
-    /// Throws on network / server / auth errors.
+    /// Run the user-initiated coherence check. Fetches the current section's
+    /// intent + the project's prior canon (both in parallel), then calls the
+    /// coherence-check edge function. Returns a tuple of (warnings,
+    /// rawResponseBody) so the caller can display the actual response (e.g.,
+    /// for diagnostics on TestFlight). Throws on network / server / auth errors.
     func check(
         outputText: String,
         projectID: String,
         sectionID: UUID? = nil
     ) async throws -> (warnings: [CoherenceWarning], rawResponseBody: String) {
-        let ragContext = try await fetchRagContext(projectID: projectID, sectionID: sectionID)
+        let currentSection: CurrentSection?
+        let priorCanon: PriorCanon
+
+        if let sectionID = sectionID {
+            // Parallel fetches — current_section intent + prior_canon retrieval
+            // are independent network calls.
+            async let currentSectionTask = fetchCurrentSection(sectionID: sectionID)
+            async let priorCanonTask = fetchPriorCanon(
+                projectID: projectID,
+                excludeSectionID: sectionID
+            )
+            currentSection = try await currentSectionTask
+            priorCanon = try await priorCanonTask
+        } else {
+            // No sectionID = no current_section intent. Prior canon still useful
+            // if the project has accepted sections.
+            currentSection = nil
+            priorCanon = try await fetchPriorCanon(
+                projectID: projectID,
+                excludeSectionID: nil
+            )
+        }
+
         return try await callEdgeFunction(
             outputText: outputText,
-            ragContext: ragContext,
+            currentSection: currentSection,
+            priorCanon: priorCanon,
             projectID: projectID
         )
     }
 
-    /// Lower-level entry point for callers that already have a RAG context
-    /// (e.g., tests, or callers that pre-fetch via a different path).
-    func checkWithRag(
+    /// Lower-level entry point for callers that already have current_section
+    /// + prior_canon (e.g., tests, or callers that pre-fetch via a different path).
+    func checkWithContext(
         outputText: String,
-        ragContext: CoherenceRagContext,
+        currentSection: CurrentSection?,
+        priorCanon: PriorCanon,
         projectID: String? = nil
     ) async throws -> (warnings: [CoherenceWarning], rawResponseBody: String) {
         return try await callEdgeFunction(
             outputText: outputText,
-            ragContext: ragContext,
+            currentSection: currentSection,
+            priorCanon: priorCanon,
             projectID: projectID
         )
     }
 
-    // MARK: - RAG retrieval (PostgREST via section_embeddings, mirrors LLMPromptService pattern)
+    // MARK: - Current section intent (PostgREST on outline_sections)
 
-    private func fetchRagContext(
-        projectID: String,
-        sectionID: UUID?
-    ) async throws -> CoherenceRagContext {
+    private func fetchCurrentSection(sectionID: UUID) async throws -> CurrentSection? {
         guard let token = authService.currentAccessToken else {
             throw CoherenceCheckError.notAuthenticated
         }
         guard let client = try? SupabaseBackendClient() else {
-            return CoherenceRagContext()  // not configured -> empty context
+            return nil  // not configured -> no intent
+        }
+        let url = client.configuration.projectURL
+            .appendingPathComponent("rest")
+            .appendingPathComponent("v1")
+            .appendingPathComponent("outline_sections")
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "id", value: "eq.\(sectionID.uuidString.lowercased())"),
+            URLQueryItem(
+                name: "select",
+                value: "id,title,summary,pov,container,terminal_beat"
+            ),
+            URLQueryItem(name: "limit", value: "1"),
+        ]
+        let finalURL = components.url!
+        var request = client.authorizedRequest(for: finalURL, userAccessToken: token)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let rawBody = String(data: data, encoding: .utf8) ?? ""
+            print("[CoherenceCheck] current_section fetch failed status=\(status) url=\(finalURL.absoluteString) body=\(rawBody.prefix(500))")
+            // Surface non-2xx as an error so the iOS UI shows the orange card —
+            // per PR #319-#322 lesson: do not silently convert to failures.
+            // For 404 (no row) the edge function handles null current_section
+            // gracefully, but for 5xx we want to surface.
+            if status >= 500 {
+                throw CoherenceCheckError.currentSectionFetchFailed("HTTP \(status)")
+            }
+            return nil
+        }
+        let rows = try JSONDecoder().decode([CurrentSectionRow].self, from: data)
+        return rows.first.map { row in
+            CurrentSection(
+                id: row.id,
+                title: row.title,
+                summary: row.summary,
+                pov: row.pov,
+                container: row.container,
+                beat_label: row.terminal_beat
+            )
+        }
+    }
+
+    private struct CurrentSectionRow: Decodable {
+        let id: String
+        let title: String
+        let summary: String
+        let pov: String?
+        let container: String?
+        let terminal_beat: String?
+    }
+
+    // MARK: - Prior canon retrieval (PostgREST on section_embeddings, mirrors LLMPromptService)
+
+    /// Fetches prior canon as a section-aware list. Each section preserves its
+    /// identity (section_id, title, summary, pov, container, created_at) and
+    /// its own structured layers — no flattening, no recency bug.
+    ///
+    /// - excludeSectionID: when checking a section, exclude it from its own
+    ///   comparison so the output isn't compared against itself.
+    private func fetchPriorCanon(
+        projectID: String,
+        excludeSectionID: UUID?
+    ) async throws -> PriorCanon {
+        guard let token = authService.currentAccessToken else {
+            throw CoherenceCheckError.notAuthenticated
+        }
+        guard let client = try? SupabaseBackendClient() else {
+            return PriorCanon()  // not configured -> empty canon
         }
         let url = client.configuration.projectURL
             .appendingPathComponent("rest")
             .appendingPathComponent("v1")
             .appendingPathComponent("section_embeddings")
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        components.queryItems = [
+        var queryItems: [URLQueryItem] = [
             // Filter on section_embeddings.project_id directly (NOT outline_sections.project_id —
             // outline_sections does not have a project_id column; it has outline_id).
             // The status filter goes through the outline_section_id → outline_sections.id FK,
@@ -233,12 +362,19 @@ struct CoherenceCheckService {
             URLQueryItem(name: "project_id", value: "eq.\(projectID)"),
             URLQueryItem(name: "outline_sections.status", value: "eq.accepted"),
             URLQueryItem(name: "order", value: "created_at.desc"),
-            URLQueryItem(name: "limit", value: "20"),
+            URLQueryItem(name: "limit", value: "10"),
             URLQueryItem(
                 name: "select",
-                value: "outline_sections!inner(id,status),character_deltas,plot_thread_deltas,continuity_facts,open_loops,scene_ending_state,extracted_summary"
+                value: "outline_sections!inner(id,title,summary,pov,container),character_deltas,plot_thread_deltas,continuity_facts,open_loops,scene_ending_state,extracted_summary,outline_section_id,created_at"
             ),
         ]
+        if let excludeSectionID = excludeSectionID {
+            queryItems.append(
+                URLQueryItem(name: "outline_section_id", value: "neq.\(excludeSectionID.uuidString.lowercased())")
+            )
+        }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.queryItems = queryItems
         let finalURL = components.url!
         var request = client.authorizedRequest(for: finalURL, userAccessToken: token)
         request.httpMethod = "GET"
@@ -264,15 +400,13 @@ struct CoherenceCheckService {
                     let hint = json["hint"] as? String ?? ""
                     parsedDetail = " [code=\(code) message=\(message) details=\(details) hint=\(hint)]"
                 }
-                // Log to console (no auth tokens here — only PostgREST's response body,
-                // which is safe to surface).
+                // Log to console (no auth tokens — only PostgREST's response body).
                 print("[CoherenceCheck] RAG fetch failed status=\(status) url=\(finalURL.absoluteString) body=\(rawBody.prefix(500))")
                 throw CoherenceCheckError.ragFetchFailed("HTTP \(status)\(parsedDetail)")
             }
-            // Parse the array of rows. Each row has the 6 fields we selected.
-            // Flatten into a single RAG context by collecting all entries across rows.
-            let rows = try JSONDecoder().decode([RagRow].self, from: data)
-            return Self.flatten(rows: rows)
+            // Parse the array of rows. Each row has section metadata + 6 fields.
+            let rows = try JSONDecoder().decode([CanonRow].self, from: data)
+            return Self.toPriorCanon(rows: rows)
         } catch let e as CoherenceCheckError {
             throw e
         } catch {
@@ -280,8 +414,11 @@ struct CoherenceCheckService {
         }
     }
 
-    /// Single row from section_embeddings select.
-    private struct RagRow: Decodable {
+    /// Single row from section_embeddings select (section-aware shape).
+    private struct CanonRow: Decodable {
+        let outline_section_id: String?
+        let created_at: String
+        let outline_sections: CanonSectionMetadata
         let character_deltas: [JSONValue]?
         let plot_thread_deltas: [JSONValue]?
         let continuity_facts: [JSONValue]?
@@ -290,38 +427,46 @@ struct CoherenceCheckService {
         let extracted_summary: String?
     }
 
-    /// Flatten multiple section_embeddings rows into a single RagContext.
-    /// We concatenate arrays across rows so the LLM sees the full canon.
-    private static func flatten(rows: [RagRow]) -> CoherenceRagContext {
-        var characters: [CoherenceRagValue] = []
-        var threads: [CoherenceRagValue] = []
-        var facts: [CoherenceRagValue] = []
-        var loops: [CoherenceRagValue] = []
-        var lastEndingState: CoherenceRagValue?
-        var lastSummary: String?
-        for row in rows {
-            characters.append(contentsOf: (row.character_deltas ?? []).map(CoherenceRagValue.init))
-            threads.append(contentsOf: (row.plot_thread_deltas ?? []).map(CoherenceRagValue.init))
-            facts.append(contentsOf: (row.continuity_facts ?? []).map(CoherenceRagValue.init))
-            loops.append(contentsOf: (row.open_loops ?? []).map(CoherenceRagValue.init))
-            if let s = row.scene_ending_state { lastEndingState = CoherenceRagValue(s) }
-            if let s = row.extracted_summary { lastSummary = s }
+    /// Section metadata joined from outline_sections.
+    private struct CanonSectionMetadata: Decodable {
+        let id: String
+        let title: String
+        let summary: String
+        let pov: String?
+        let container: String?
+    }
+
+    /// Convert section_embeddings rows to PriorCanon. Each row becomes a
+    /// SectionRag with its own identity + structured layers. No flattening,
+    /// no recency bug — each section's own scene_ending_state and
+    /// extracted_summary are preserved per-section.
+    private static func toPriorCanon(rows: [CanonRow]) -> PriorCanon {
+        let sections = rows.compactMap { row -> SectionRag? in
+            guard let sectionID = row.outline_section_id else { return nil }
+            return SectionRag(
+                section_id: sectionID,
+                title: row.outline_sections.title,
+                summary: row.outline_sections.summary,
+                pov: row.outline_sections.pov,
+                container: row.outline_sections.container,
+                created_at: row.created_at,
+                extracted_summary: row.extracted_summary,
+                character_deltas: row.character_deltas ?? [],
+                plot_thread_deltas: row.plot_thread_deltas ?? [],
+                continuity_facts: row.continuity_facts ?? [],
+                open_loops: row.open_loops ?? [],
+                scene_ending_state: row.scene_ending_state
+            )
         }
-        return CoherenceRagContext(
-            character_deltas: characters,
-            plot_thread_deltas: threads,
-            continuity_facts: facts,
-            open_loops: loops,
-            scene_ending_state: lastEndingState,
-            extracted_summary: lastSummary
-        )
+        return PriorCanon(sections: sections)
     }
 
     // MARK: - Edge function call
 
     private func callEdgeFunction(
         outputText: String,
-        ragContext: CoherenceRagContext,
+        currentSection: CurrentSection?,
+        priorCanon: PriorCanon,
         projectID: String?
     ) async throws -> (warnings: [CoherenceWarning], rawResponseBody: String) {
         let client = try requireClient()
@@ -336,7 +481,8 @@ struct CoherenceCheckService {
 
         let body = CoherenceCheckRequestBody(
             output_text: outputText,
-            rag_context: ragContext,
+            current_section: currentSection,
+            prior_canon: priorCanon,
             project_id: projectID
         )
         urlRequest.httpBody = try JSONEncoder().encode(body)
