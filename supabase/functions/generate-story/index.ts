@@ -964,57 +964,90 @@ async function fetchOutlineSectionContext(
   };
 }> {
   if (!outlineSectionId) return { section: null, storyArc: {} };
+  let section: {
+    id: string;
+    title: string;
+    summary: string;
+    container: string | null;
+    pov: string | null;
+    terminal_beat: string | null;
+    position: number;
+    outline_id: string;
+    story_arc_beat_id: string | null;
+  } | null = null;
+  let storyArc: {
+    name?: string;
+    beatLabel?: string;
+    beatPurpose?: string;
+    position?: number;
+    totalBeats?: number;
+  } = {};
   try {
-    // One PostgREST query: section + beat (if linked) + arc + template name.
-    // LEFT JOIN on story_arc_beats — sections without a beat still resolve.
-    const { data, error } = await adminClient
+    // Query 1: section row only (1-level fetch, reliable).
+    // 3-level nested embeds in a single query (outline_sections →
+    // story_arc_beats → story_arcs → story_arc_templates) silently failed
+    // in production, returning error, which short-circuited the fire-and-
+    // forget embed-section. Splitting into two queries fixes this.
+    const { data: sectionRow, error: sectionErr } = await adminClient
       .from("outline_sections")
-      .select("id, title, summary, container, pov, terminal_beat, position, outline_id, story_arc_beat_id, story_arc_beats(position, label, details, story_arc_id, story_arcs(template_id, story_arc_templates(name)))")
+      .select("id, title, summary, container, pov, terminal_beat, position, outline_id, story_arc_beat_id")
       .eq("id", outlineSectionId)
       .maybeSingle();
-    if (error || !data) {
-      console.error(`[generate-story] fetchOutlineSectionContext failed: ${error?.message ?? "no data"}`);
+    if (sectionErr) {
+      console.error(`[generate-story] fetchOutlineSectionContext (section fetch) failed: ${sectionErr.message ?? JSON.stringify(sectionErr)}`);
       return { section: null, storyArc: {} };
     }
-    const section = {
-      id: String(data.id),
-      title: String(data.title ?? ""),
-      summary: String(data.summary ?? ""),
-      container: (data.container ?? null) as string | null,
-      pov: (data.pov ?? null) as string | null,
-      terminal_beat: (data.terminal_beat ?? null) as string | null,
-      position: Number(data.position ?? 0),
-      outline_id: String(data.outline_id),
-      story_arc_beat_id: (data.story_arc_beat_id ?? null) as string | null,
+    if (!sectionRow) {
+      // Section doesn't exist (or was deleted between kickoff and this call).
+      // Treat as non-section; skip the fire-and-forget + Story Arc Context.
+      console.error(`[generate-story] fetchOutlineSectionContext: section not found for id=${outlineSectionId}`);
+      return { section: null, storyArc: {} };
+    }
+    section = {
+      id: String(sectionRow.id),
+      title: String(sectionRow.title ?? ""),
+      summary: String(sectionRow.summary ?? ""),
+      container: (sectionRow.container ?? null) as string | null,
+      pov: (sectionRow.pov ?? null) as string | null,
+      terminal_beat: (sectionRow.terminal_beat ?? null) as string | null,
+      position: Number(sectionRow.position ?? 0),
+      outline_id: String(sectionRow.outline_id),
+      story_arc_beat_id: (sectionRow.story_arc_beat_id ?? null) as string | null,
     };
-    let storyArc: {
-      name?: string;
-      beatLabel?: string;
-      beatPurpose?: string;
-      position?: number;
-      totalBeats?: number;
-    } = {};
-    const beat = (data as any).story_arc_beats;
-    if (beat) {
-      const arc = beat.story_arcs;
-      const template = arc?.story_arc_templates;
-      let totalBeats: number | undefined;
-      if (beat.story_arc_id) {
-        const { count, countErr } = await adminClient
-          .from("story_arc_beats")
-          .select("id", { count: "exact", head: true })
-          .eq("story_arc_id", beat.story_arc_id);
-        if (!countErr && typeof count === "number") {
-          totalBeats = count;
+
+    // Query 2: story arc context — only if the section is linked to a beat.
+    // 2-level nested embed (beat + arc + template), within PostgREST's
+    // depth limit. Sections without a beat skip this entirely.
+    if (section.story_arc_beat_id) {
+      const { data: beat, error: beatErr } = await adminClient
+        .from("story_arc_beats")
+        .select("position, label, details, story_arc_id, story_arcs(template_id, story_arc_templates(name))")
+        .eq("id", section.story_arc_beat_id)
+        .maybeSingle();
+      if (beatErr) {
+        console.error(`[generate-story] fetchOutlineSectionContext (beat fetch) failed: ${beatErr.message ?? JSON.stringify(beatErr)}`);
+        // Section metadata is intact; Story Arc Context will be omitted.
+      } else if (beat) {
+        const arc = (beat as any).story_arcs;
+        const template = arc?.story_arc_templates;
+        let totalBeats: number | undefined;
+        if (beat.story_arc_id) {
+          const { count, countErr } = await adminClient
+            .from("story_arc_beats")
+            .select("id", { count: "exact", head: true })
+            .eq("story_arc_id", beat.story_arc_id);
+          if (!countErr && typeof count === "number") {
+            totalBeats = count;
+          }
         }
+        storyArc = {
+          name: template?.name ?? undefined,
+          beatLabel: beat.label ?? undefined,
+          beatPurpose: (typeof beat.details === "string" && beat.details.length > 0) ? beat.details : undefined,
+          position: typeof beat.position === "number" ? beat.position : undefined,
+          totalBeats,
+        };
       }
-      storyArc = {
-        name: template?.name ?? undefined,
-        beatLabel: beat.label ?? undefined,
-        beatPurpose: (typeof beat.details === "string" && beat.details.length > 0) ? beat.details : undefined,
-        position: typeof beat.position === "number" ? beat.position : undefined,
-        totalBeats,
-      };
     }
     return { section, storyArc };
   } catch (e) {
@@ -2174,6 +2207,11 @@ async function handler(
   // benefit equally from this resolution.
   // -------------------------------------------------------------------------
   const outlineSectionCtx = await fetchOutlineSectionContext(adminClient, body.outline_section_id);
+  // Explicit diagnostic log so we can see whether the fetch succeeded
+  // (Kevin 19:24 EDT smoke test showed RAG fields missing on Section 2,
+  // suggesting the fire-and-forget never entered — either outline_section_id
+  // is null or the fetch returned section: null).
+  console.log(`[generate-story] resolved outline section context: body.outline_section_id=${body.outline_section_id ?? "null"}, section=${outlineSectionCtx.section ? "found" : "null"}, storyArc=${Object.keys(outlineSectionCtx.storyArc).length > 0 ? "found" : "empty"}`);
 
   // -------------------------------------------------------------------------
   // Credit enforcement -- must happen BEFORE the LLM provider call
@@ -2521,6 +2559,11 @@ async function handler(
         outlineSectionCtx.section.position,
       );
 
+      // PR-360-Z cleanup pass (Kevin 2026-08-21 19:24 EDT): explicit
+      // logging so we can see whether the fire-and-forget is actually entered
+      // and the result. Without this, silent failures (PostgREST depth limit,
+      // missing section, etc.) leave us guessing.
+      console.log(`[generate-story] post-generation extraction: outline_section_id=${outlineSectionCtx.section?.id ?? "null"}, llmResult.content.length=${llmResult?.content?.length ?? 0}, priorContext.length=${priorContext.length}`);
       // Fire-and-forget — extraction failure must NOT fail the main call.
       void callEmbedSectionForGeneratedOutput(
         adminClient,
