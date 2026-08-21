@@ -2546,49 +2546,65 @@ async function handler(
     //   - body.outline_section_id is missing (genuinely non-section gen)
     //   - llmResult.content is empty (extraction would have nothing to extract)
     //   - persistence.insertOutput failed (no row to point at)
-    if (outlineSectionCtx.section && llmResult?.content) {
-      // Fetch prior context for embed-section's LLM extraction.
-      // Mirrors run-outline's fetchPriorContext logic but inlined here to
-      // avoid the cross-function plumbing; the helper would be shared if a
-      // third caller appears.
-      const priorContext = await fetchPriorContextForEmbedSection(
-        adminClient,
-        projectID,
-        outlineSectionCtx.section.id,
-        outlineSectionCtx.section.outline_id,
-        outlineSectionCtx.section.position,
-      );
+    // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT, hardened 19:43 EDT):
+    // The fire-and-forget embed-section call is the architectural fix for the
+    // RAG fields bug. It used to be conditional on `outlineSectionCtx.section`
+    // being set, which made it fragile — if the Story Arc Context fetch
+    // returned null (PostgREST depth limit, RLS, etc.), the fire-and-forget
+    // never entered and Section 2's Project State stayed empty.
+    //
+    // Now we ALWAYS fire if body.outline_section_id is set. We do a fresh,
+    // lightweight section fetch inline (just the fields embed-section needs).
+    // If that fetch also fails, log and skip — but try first.
+    if (body.outline_section_id && llmResult?.content) {
+      console.log(`[generate-story] post-generation extraction: body.outline_section_id=${body.outline_section_id}, llmResult.content.length=${llmResult?.content?.length ?? 0}, outlineSectionCtx.section=${outlineSectionCtx.section ? "found" : "null"}`);
 
-      // PR-360-Z cleanup pass (Kevin 2026-08-21 19:24 EDT): explicit
-      // logging so we can see whether the fire-and-forget is actually entered
-      // and the result. Without this, silent failures (PostgREST depth limit,
-      // missing section, etc.) leave us guessing.
-      console.log(`[generate-story] post-generation extraction: outline_section_id=${outlineSectionCtx.section?.id ?? "null"}, llmResult.content.length=${llmResult?.content?.length ?? 0}, priorContext.length=${priorContext.length}`);
-      // Fire-and-forget — extraction failure must NOT fail the main call.
-      void callEmbedSectionForGeneratedOutput(
-        adminClient,
-        adminClient,
-        authHeader,
-        {
-          outline_section_id: outlineSectionCtx.section.id,
-          outline_id: outlineSectionCtx.section.outline_id,
-          project_id: projectID,
-          position: outlineSectionCtx.section.position,
-          title: outlineSectionCtx.section.title,
-          summary: outlineSectionCtx.section.summary,
-          container: outlineSectionCtx.section.container,
-          pov: outlineSectionCtx.section.pov,
-          terminal_beat: outlineSectionCtx.section.terminal_beat,
-          story_arc_beat_id: outlineSectionCtx.section.story_arc_beat_id,
-          raw_text: llmResult.content,
-          output_id: outputId,
-          prior_context: priorContext,
-        },
-      ).catch((e) => {
-        console.error(
-          `[generate-story] post-generation embed-section failed: ${(e as Error)?.message ?? String(e)}`,
+      // Fresh section fetch for the embed-section payload.
+      const { data: sectionForEmbed, error: sectionEmbedErr } = await adminClient
+        .from("outline_sections")
+        .select("id, title, summary, container, pov, terminal_beat, position, outline_id, story_arc_beat_id")
+        .eq("id", body.outline_section_id)
+        .maybeSingle();
+      if (sectionEmbedErr) {
+        console.error(`[generate-story] post-generation embed-section section fetch failed: ${sectionEmbedErr.message ?? JSON.stringify(sectionEmbedErr)}`);
+      } else if (!sectionForEmbed) {
+        console.error(`[generate-story] post-generation embed-section: section not found for id=${body.outline_section_id}`);
+      } else {
+        // Fetch prior context for embed-section's LLM extraction.
+        const priorContext = await fetchPriorContextForEmbedSection(
+          adminClient,
+          projectID,
+          String(sectionForEmbed.id),
+          String(sectionForEmbed.outline_id),
+          Number(sectionForEmbed.position ?? 0),
         );
-      });
+
+        // Fire-and-forget — extraction failure must NOT fail the main call.
+        void callEmbedSectionForGeneratedOutput(
+          adminClient,
+          adminClient,
+          authHeader,
+          {
+            outline_section_id: String(sectionForEmbed.id),
+            outline_id: String(sectionForEmbed.outline_id),
+            project_id: projectID,
+            position: Number(sectionForEmbed.position ?? 0),
+            title: String(sectionForEmbed.title ?? ""),
+            summary: String(sectionForEmbed.summary ?? ""),
+            container: (sectionForEmbed.container ?? null) as string | null,
+            pov: (sectionForEmbed.pov ?? null) as string | null,
+            terminal_beat: (sectionForEmbed.terminal_beat ?? null) as string | null,
+            story_arc_beat_id: (sectionForEmbed.story_arc_beat_id ?? null) as string | null,
+            raw_text: llmResult.content,
+            output_id: outputId,
+            prior_context: priorContext,
+          },
+        ).catch((e) => {
+          console.error(
+            `[generate-story] post-generation embed-section failed: ${(e as Error)?.message ?? String(e)}`,
+          );
+        });
+      }
     }
   }
 
