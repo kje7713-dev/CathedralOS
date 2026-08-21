@@ -157,6 +157,11 @@ final class StoryGenerationService: GenerationService {
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
         selectedModelId: String? = nil,
+        // PR-360-Z smoke-test fix: explicit canonical section POV. See
+        // GenerationBackendService.swift for the rationale. StoryGenerationService
+        // is the legacy non-Supabase backend path; threading pov through keeps
+        // the Section Contract block consistent across backends.
+        pov: String? = nil,
         // PR-360-Z: canonical section context fields. Defaults nil so existing
         // call sites compile unchanged.
         sectionTitle: String? = nil,
@@ -201,7 +206,10 @@ final class StoryGenerationService: GenerationService {
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedModelId: String? = nil,
+        // PR-360-Z smoke-test fix: explicit canonical section POV. See
+        // generate() above for rationale.
+        pov: String? = nil
     ) async throws -> GenerationResponse {
 
         // Decode the frozen payload to reconstruct the full request.

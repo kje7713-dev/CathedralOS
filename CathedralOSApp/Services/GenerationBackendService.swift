@@ -233,6 +233,14 @@ protocol GenerationBackendServiceProtocol {
         selectedPOV: POV?,
         terminalBeat: String?,
         selectedModelId: String?,
+        // PR-360-Z smoke-test fix: explicit canonical section POV. When
+        // present, takes priority over selectedPOV (the kickoff sheet
+        // selection) so the Section Contract block renders the section's
+        // authoritative POV. nil falls back to selectedPOV. Without this,
+        // Kevin's 2026-08-21 smoke test saw "POV is not actually populated"
+        // because the regenerate/continue/remix path looked up the section
+        // for title + summary but never fetched POV.
+        pov: String?,
         // PR-360-Z: canonical section context fields. Defaults nil so existing
         // call sites compile unchanged. Wired through to the generate-story
         // body as top-level fields on the request payload.
