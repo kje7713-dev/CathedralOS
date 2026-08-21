@@ -3340,24 +3340,73 @@ Deno.test({
 // =============================================================================
 
 Deno.test({
-  name: "Section-memory lineage fix: embed-section persists generation_output_id in section_embeddings UPSERT",
+  name: "Section-memory lineage fix (REVISED): FK on generation_output_id replaces trigger + backfill handles legacy rows",
   fn: async () => {
-    // We can't directly observe the section_embeddings row in a deno test
-    // (it requires a live Supabase connection). But we CAN assert that the
-    // embed-section payload schema includes the output_id and that the
-    // section_embeddings row is built with it.
-    // The migration + Supabase Deploy handle the actual persistence;
-    // the Supabase Deploy job verifies the migration applied.
-    // The key invariant: the migration is in the migrations directory and
-    // named with the right timestamp, the embed-section function calls the
-    // upsert with generation_output_id, and run-outline passes the output_id.
-    const embedSectionPath = "supabase/functions/embed-section/index.ts";
-    const runOutlinePath = "supabase/functions/run-outline/index.ts";
+    // Per Kevin 2026-08-21 13:05 EDT feedback, the Round 4 migration was revised:
+    // - Drop the custom output-delete trigger (replaced by FK + ON DELETE CASCADE)
+    // - Backfill NULL generation_output_id from surviving generation_outputs
+    //   per outline_section_id (don't blindly delete NULL rows)
+    // - Add a behavioral DB regression test file
+    //
+    // Assert the migration contains the canonical FK + backfill pattern, and
+    // does NOT contain the dropped trigger.
     const migrationPath = "supabase/migrations/20260821120000_add_generation_output_id_to_section_embeddings.sql";
-    // Verify all three artifacts exist.
+    const testPath = "supabase/migrations/test_section_memory_lineage.sql";
     const exists = (await import("node:fs")).existsSync;
-    assertEquals(exists(embedSectionPath), true, "embed-section function must exist");
-    assertEquals(exists(runOutlinePath), true, "run-outline function must exist");
-    assertEquals(exists(migrationPath), true, "migration must exist");
+    if (!exists(migrationPath)) {
+      throw new Error(`Migration file missing: ${migrationPath}`);
+    }
+    if (!exists(testPath)) {
+      throw new Error(`Behavioral DB regression test file missing: ${testPath}`);
+    }
+    const migrationText = (await import("node:fs")).readFileSync(migrationPath, "utf8");
+    // FK + ON DELETE CASCADE present.
+    assertStringIncludes(
+      migrationText,
+      "ON DELETE CASCADE",
+      "Migration must use ON DELETE CASCADE (the canonical approach per Kevin 13:05 EDT)",
+    );
+    assertStringIncludes(
+      migrationText,
+      "references public.generation_outputs(id)",
+      "Migration must have FK referencing generation_outputs(id)",
+    );
+    // Backfill pattern present (don't blindly delete NULL rows).
+    // Use case-insensitive matching since the migration uses lowercase "update".
+    assertEquals(
+      migrationText.toLowerCase().includes("update public.section_embeddings"),
+      true,
+      "Migration must backfill NULL generation_output_id before deleting orphaned rows",
+    );
+    // Trigger dropped (replaced by FK). The migration DOES reference the
+    // trigger name in the DROP statement, but it must NOT CREATE the trigger
+    // (only DROP it). The FK is the canonical approach per Kevin's spec.
+    assertEquals(
+      migrationText.includes("create trigger generation_outputs_delete_source_memory"),
+      false,
+      "Migration must NOT CREATE the custom trigger (replaced by FK CASCADE per Kevin 13:05 EDT)",
+    );
+    assertEquals(
+      migrationText.includes("create or replace function public.delete_source_section_embedding"),
+      false,
+      "Migration must NOT CREATE the custom trigger function (replaced by FK CASCADE per Kevin 13:05 EDT)",
+    );
+    // The migration SHOULD drop the trigger + function (so the FK can take over).
+    assertStringIncludes(
+      migrationText,
+      "drop trigger if exists generation_outputs_delete_source_memory",
+      "Migration SHOULD drop the existing trigger (so the FK can take over)",
+    );
+    assertStringIncludes(
+      migrationText,
+      "drop function if exists public.delete_source_section_embedding",
+      "Migration SHOULD drop the existing trigger function",
+    );
+    // Invariant wording updated to Kevin's spec.
+    assertStringIncludes(
+      migrationText,
+      "current section memory must point to a surviving source generation",
+      "Invariant wording must be updated to Kevin's spec (not 'active/accepted')",
+    );
   },
 });
