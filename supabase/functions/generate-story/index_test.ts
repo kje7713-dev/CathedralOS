@@ -1950,11 +1950,14 @@ Deno.test({
   },
 });
 
-// PR-360-Z regression 3: explicit sectionTitle + sectionSummary reach the
-// Section Contract block in SYSTEM. The Section Contract is the authoritative
-// anchor for the per-generation contract (per corrections rule #2).
+// PR-360-Z regression 3 (smoke-test fix 2026-08-21): SYSTEM now carries the
+// Section Contract AUTHORITY block (UNTRUSTED, CACHEABLE) — NOT a duplicate
+// of the volatile title + summary + POV (those moved to USER for caching
+// architecture per Kevin 09:37 EDT spec). The 6 authority rules are
+// stated inside the Authority block alongside the new Section Contract
+// outranks-all-creative-guidance principle.
 Deno.test({
-  name: "PR-360-Z regression 3: sectionTitle + sectionSummary → Section Contract in SYSTEM",
+  name: "PR-360-Z regression 3 (smoke-test fix): SYSTEM has Section Contract Authority block; volatile values moved to USER",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -1963,16 +1966,32 @@ Deno.test({
     });
     assertEquals(c !== null, true);
     const sysMsg = c!.messages[0].content;
-    assertStringIncludes(sysMsg, "## Section Contract (AUTHORITATIVE");
-    assertStringIncludes(sysMsg, "Test Section");
-    assertStringIncludes(sysMsg, "A test section summary");
-    // The 6 authority rules must be stated explicitly in SYSTEM.
-    assertStringIncludes(sysMsg, "do not contradict the section premise");
-    assertStringIncludes(sysMsg, "dead characters remain dead");
-    assertStringIncludes(sysMsg, "do not invent named characters outside canon");
-    assertStringIncludes(sysMsg, "obey requested POV");
-    assertStringIncludes(sysMsg, "do not reproduce the section title as prose");
-    assertStringIncludes(sysMsg, "stay within container shape and stop naturally");
+    // New SYSTEM block (UNTRUSTED, CACHEABLE).
+    assertStringIncludes(sysMsg, "## Section Contract Authority");
+    assertStringIncludes(sysMsg, "UNTRUSTED, CACHEABLE");
+    assertStringIncludes(sysMsg, "outranks ALL other creative guidance");
+    // Death rule kept separately (Kevin 09:37 EDT spec).
+    assertStringIncludes(sysMsg, "character as already dead");
+    // Container invariants still in SYSTEM (stable across sections, cacheable).
+    assertStringIncludes(sysMsg, "Container invariants:");
+    assertStringIncludes(sysMsg, "Natural stopping point:");
+    // The 6 old per-rule authority statements were dropped from SYSTEM in
+    // Kevin 09:37 EDT's prompt restructure — SYSTEM is the "stable authority
+    // rule" (caching architecture), USER carries the volatile per-section
+    // details. The rules themselves are still enforced via the user's
+    // Section Contract block + the Writing Task fallback + Writing
+    // Instructions; they're just not enumerated in SYSTEM anymore.
+    // Volatile Title/Summary moved out of SYSTEM to USER (caching architecture).
+    assertEquals(
+      sysMsg.includes("Title: Test Section"),
+      false,
+      "Volatile Title moved out of SYSTEM (should be in USER only)",
+    );
+    assertEquals(
+      sysMsg.includes("A test section summary"),
+      false,
+      "Volatile summary moved out of SYSTEM (should be in USER only)",
+    );
   },
 });
 
@@ -1982,21 +2001,23 @@ Deno.test({
 // Contract block specifically (other parts of the prompt might legitimately
 // reference "test" or "draft" — the assertion scopes to the contract).
 Deno.test({
-  name: "PR-360-Z regression 4: sanitizeTitleForLLM strips (copy)/(test)/(draft) in Section Contract",
+  name: "PR-360-Z regression 4 (smoke-test fix): sanitizeTitleForLLM strips (copy)/(test)/(draft) in USER Section Contract Title",
   fn: async () => {
+    // Kevin 09:37 EDT prompt restructure: the volatile Title is now in
+    // USER Section Contract (not SYSTEM). Switch the assertion to userMsg.
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
       sectionTitle: "Real Section Title (copy)",
       sectionSummary: "Test summary",
     });
     assertEquals(c !== null, true);
-    const sysMsg = c!.messages[0].content;
-    // Sanitized title is present.
-    assertStringIncludes(sysMsg, "Real Section Title");
-    // "(copy)" should NOT appear inside the Section Contract block.
-    const contractIdx = sysMsg.indexOf("## Section Contract");
-    assertEquals(contractIdx >= 0, true);
-    const contractBlock = sysMsg.slice(contractIdx, contractIdx + 800);
+    const userMsg = c!.messages[1].content;
+    // Sanitized title is present in USER.
+    assertStringIncludes(userMsg, "Real Section Title");
+    // "(copy)" should NOT appear inside the USER Section Contract block.
+    const contractIdx = userMsg.indexOf("## Section Contract");
+    assertNotEquals(contractIdx, -1, "USER Section Contract must render");
+    const contractBlock = userMsg.slice(contractIdx, contractIdx + 800);
     assertEquals(contractBlock.includes("(copy)"), false);
     // Also test the (test) + (draft) variants — combined assertions.
     const c2 = await runPR360ZCapture({
@@ -2004,9 +2025,10 @@ Deno.test({
       sectionTitle: "Other Title (test) and (draft)",
       sectionSummary: "S",
     });
-    const sys2 = c2!.messages[0].content;
-    const contractIdx2 = sys2.indexOf("## Section Contract");
-    const block2 = sys2.slice(contractIdx2, contractIdx2 + 800);
+    const userMsg2 = c2!.messages[1].content;
+    const contractIdx2 = userMsg2.indexOf("## Section Contract");
+    assertNotEquals(contractIdx2, -1);
+    const block2 = userMsg2.slice(contractIdx2, contractIdx2 + 800);
     assertEquals(block2.includes("(test)"), false);
     assertEquals(block2.includes("(draft)"), false);
   },
@@ -2021,8 +2043,11 @@ Deno.test({
 // The Writing Task line itself should not duplicate "POV:" inline; it just
 // references the Section Contract.
 Deno.test({
-  name: "PR-360-Z regression 5 (smoke-test fix): POV is in Section Contract blocks (system + user), not inline in Writing Task",
+  name: "PR-360-Z regression 5 (smoke-test fix): POV is in USER Section Contract block (volatile), not inline in Writing Task",
   fn: async () => {
+    // Kevin 09:37 EDT: POV instruction moved to USER Section Contract
+    // (volatile, per-section). SYSTEM no longer duplicates it (caching
+    // architecture: SYSTEM = stable authority only).
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
       sectionTitle: "Test",
@@ -2030,12 +2055,13 @@ Deno.test({
       pov: "firstPerson",
     });
     assertEquals(c !== null, true);
-    const sysMsg = c!.messages[0].content;
     const userMsg = c!.messages[1].content;
-    // POV instruction in SYSTEM Section Contract block.
-    assertStringIncludes(sysMsg, "first person");
-    // POV instruction also in USER Section Contract block (Kevin 2026-08-21 #4).
-    assertStringIncludes(userMsg, "first person");
+    // POV instruction in USER Section Contract block (Kevin 2026-08-21 #4).
+    assertStringIncludes(
+      userMsg,
+      "first person",
+      "USER Section Contract must contain the POV instruction",
+    );
     // Writing Task line itself must NOT have "POV:" inline.
     const writingTaskIdx = userMsg.indexOf("## Writing Task");
     assertNotEquals(writingTaskIdx, -1);
@@ -2239,7 +2265,7 @@ Deno.test({
 // the explicit generation request. (The SYSTEM-level Section Contract
 // remains as the authoritative anchor; this is the user-content version.)
 Deno.test({
-  name: "PR-360-Z roll-in 5: Section Contract appears in USER content when sectionTitle + sectionSummary passed",
+  name: "PR-360-Z roll-in 5 (smoke-test fix): Section Contract volatile values in USER; SYSTEM carries authority only",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2249,18 +2275,26 @@ Deno.test({
     assertEquals(c !== null, true);
     const sysMsg = c!.messages[0].content;
     const userMsg = c!.messages[1].content;
-    // Section Contract in SYSTEM (anchor) — still present.
-    assertStringIncludes(sysMsg, "## Section Contract (AUTHORITATIVE");
-    // Section Contract in USER (explicit generation request) — newly added.
-    assertStringIncludes(userMsg, "## Section Contract (AUTHORITATIVE)");
-    // Sanitized title appears in user content.
+    // SYSTEM has the Authority block (new structure).
+    assertStringIncludes(sysMsg, "## Section Contract Authority");
+    // USER has the volatile Section Contract block (Kevin 09:37 EDT spec).
+    assertStringIncludes(userMsg, "## Section Contract");
+    // Volatile values appear in USER (title + summary + POV).
     assertStringIncludes(userMsg, "Test Section");
-    // Premise appears in user content.
     assertStringIncludes(userMsg, "Test summary for the section");
-    // POV appears in user content.
     assertStringIncludes(userMsg, "third person limited");
-    // The "Section Contract governs what happens now" framing appears in user.
-    assertStringIncludes(userMsg, "The Section Contract governs what happens now");
+    // New "must happen now" framing (replaces old "governs what happens now").
+    assertStringIncludes(
+      userMsg,
+      "premise describes what must happen in the current section",
+      "USER Section Contract must use the new 'must happen now' framing",
+    );
+    // USER does NOT have the old "AUTHORITATIVE" suffix (that's the new SYSTEM block).
+    assertEquals(
+      userMsg.includes("## Section Contract (AUTHORITATIVE)"),
+      false,
+      "Old '## Section Contract (AUTHORITATIVE)' header removed from USER (volatile values only)",
+    );
   },
 });
 
@@ -2302,7 +2336,7 @@ Characters in play:
 // containing: sanitized section title, current section summary/premise,
 // requested POV"). Fails if the USER Section Contract is missing.
 Deno.test({
-  name: "PR-360-Z smoke-test 1: USER message contains ## Section Contract when sectionTitle + sectionSummary + pov are passed",
+  name: "PR-360-Z smoke-test 1 (smoke-test fix): USER message contains ## Section Contract (volatile values) when section context passed",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2316,8 +2350,16 @@ Deno.test({
     const userMsg = c!.messages[1].content;
     assertStringIncludes(
       userMsg,
-      "## Section Contract (AUTHORITATIVE)",
-      "USER message must include ## Section Contract when section context is present (Kevin #9423 #1)",
+      "## Section Contract",
+      "USER message must include ## Section Contract (volatile block) when section context is present",
+    );
+    // Old header "## Section Contract (AUTHORITATIVE)" is gone — replaced by
+    // the new SYSTEM "## Section Contract Authority" + USER "## Section Contract"
+    // split (caching architecture).
+    assertEquals(
+      userMsg.includes("## Section Contract (AUTHORITATIVE)"),
+      false,
+      "Old USER ## Section Contract (AUTHORITATIVE) header removed (replaced by plain ## Section Contract)",
     );
     assertStringIncludes(userMsg, "Maya at the bar", "Section title must appear in USER Section Contract");
     assertStringIncludes(
@@ -2390,11 +2432,13 @@ Deno.test({
     const userMsg = c!.messages[1].content;
 
     // USER Section Contract block exists (sanity check from test 1).
-    const contractIdx = userMsg.indexOf("## Section Contract (AUTHORITATIVE)");
+    // Kevin 09:37 EDT: the volatile block header dropped the "(AUTHORITATIVE)"
+    // suffix — the new Section Contract Authority block lives in SYSTEM (UNTRUSTED).
+    const contractIdx = userMsg.indexOf("## Section Contract");
     assertNotEquals(
       contractIdx,
       -1,
-      "USER message must contain ## Section Contract (AUTHORITATIVE) — see PR-360-Z smoke-test 1",
+      "USER message must contain ## Section Contract — see PR-360-Z smoke-test 1",
     );
     // Slice the block until the next ## heading or end-of-message.
     const afterContract = userMsg.slice(contractIdx);
@@ -2449,7 +2493,7 @@ const TURTLE_SMOKE_TEST_STATE_PR360Z = {
 // system + user) contains the exact Turtle section title + summary + POV in
 // the Section Contract block. Asserts the data path end-to-end.
 Deno.test({
-  name: "Turtle smoke-test: stored prompt contains section title + summary + POV in Section Contract block (data-path)",
+  name: "Turtle smoke-test (smoke-test fix): stored prompt contains Section Contract with title + summary + POV; new framing applied",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2461,17 +2505,16 @@ Deno.test({
     });
     assertEquals(c !== null, true);
 
-    // The actual stored prompt shape (matches llm_prompts.prompt JSON column).
     const storedPrompt = {
       system: c!.messages[0].content,
       user: c!.messages[1].content,
     };
 
-    // Section Contract in USER content (the explicit generation request).
+    // Section Contract in USER content (the volatile per-section values).
     assertStringIncludes(
       storedPrompt.user,
-      "## Section Contract (AUTHORITATIVE)",
-      "USER must contain ## Section Contract (AUTHORITATIVE) — data-path regression target",
+      "## Section Contract",
+      "USER must contain ## Section Contract — data-path regression target",
     );
     // Title (sanitized).
     assertStringIncludes(
@@ -2496,13 +2539,17 @@ Deno.test({
       "third person limited",
       "USER Section Contract must contain the POV instruction",
     );
+    // New "must happen now" framing applied.
+    assertStringIncludes(
+      storedPrompt.user,
+      "premise describes what must happen in the current section",
+      "USER Section Contract must use new 'must happen now' framing",
+    );
 
     // Section Contract must appear BEFORE Project State (per Kevin's spec).
-    const contractIdx = storedPrompt.user.indexOf("## Section Contract (AUTHORITATIVE)");
+    const contractIdx = storedPrompt.user.indexOf("## Section Contract");
     const projectStateIdx = storedPrompt.user.indexOf("## Project State");
     assertNotEquals(contractIdx, -1, "USER Section Contract must render");
-    // Project State may legitimately be absent (projectStateContext: "") so
-    // only assert ordering when both are present.
     if (projectStateIdx !== -1) {
       assertEquals(
         contractIdx < projectStateIdx,
@@ -2578,3 +2625,369 @@ Deno.test({
     );
   },
 });
+
+
+// =============================================================================
+// PR-360-Z prompt-authority regression (added 2026-08-21 after Kevin's Turtle
+// smoke test on the data-path fix still failed with "output continues Ted/Betty
+// instead of advancing DMT/turtle"). This is a prompt AUTHORITY conflict, not
+// a data-path bug: Section Contract reached the prompt but Project State +
+// "Spark is the primary dramatic engine" language both outranked it. Fix
+// split Section Contract between SYSTEM (authority rule) + USER (volatile
+// title + summary + POV) for caching architecture, added Section Contract
+// precedence notes to Themes / Motifs / Relationships / Ending Instruction /
+// Dramatic Seed, replaced the "END STATE" wording with "Begin advancing
+// immediately", added a Project State transition rule, added a Beat-specific
+// rule, and tightened Beat's max_tokens cap to 250.
+//
+// These tests assert the prompt structure is correct. They would fail BEFORE
+// the fix (e.g., "primary dramatic engine" present, "END STATE" present,
+// no transition rule, no Beat rule). They pass after.
+// =============================================================================
+
+const TURTLE_AUTHORITY_FIXTURE = {
+  container: "beat",
+  pov: "thirdPersonLimited",
+  sectionTitle: "The Turtle",
+  sectionSummary:
+    "Ted, Betty, and the team smoke DMT in Ted's basement. They're visited by a prophetic turtle who tells them they're the only ones who can save America from itself. They have to decide whether to listen.",
+  // Prior Project State ends with Ted/Betty kissing — the exact failure
+  // mode Kevin's smoke test exposed. The new transition rule must tell the
+  // model to start the Section Contract, not continue the prior interaction.
+  projectStateContext: `## Project State (prior accepted scenes)
+
+5 scenes accepted. Last scene ended with: Ted and Betty's lips met in the dim light of the basement. Betty's hand found his chest. The moment stretched, warm and uncertain. Outside, a truck rumbled past.
+
+Characters in play:
+- Maya Chen — protagonist
+- Ted — Maya's brother
+- Betty — Maya's best friend
+- (no other characters on stage in this beat)`,
+};
+
+// Regression 1: USER Section Contract has the new "must happen now" framing.
+//   Before the fix: "summary above describes the END STATE of this scene".
+//   After the fix:  "premise describes what must happen in the current section".
+Deno.test({
+  name: "Authority fix: USER Section Contract uses 'must happen now' framing (not END STATE)",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: TURTLE_AUTHORITY_FIXTURE.container,
+      pov: TURTLE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: TURTLE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: TURTLE_AUTHORITY_FIXTURE.sectionSummary,
+      projectStateContext: TURTLE_AUTHORITY_FIXTURE.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    // New framing present.
+    assertStringIncludes(
+      userMsg,
+      "premise describes what must happen in the current section",
+      "USER Section Contract must use the new 'must happen now' framing",
+    );
+    assertStringIncludes(
+      userMsg,
+      "Begin advancing it immediately",
+      "USER Section Contract must say to begin advancing immediately",
+    );
+    // Old framing gone.
+    assertEquals(
+      userMsg.includes("END STATE of this scene"),
+      false,
+      "Old 'summary describes END STATE' language must be removed",
+    );
+  },
+});
+
+// Regression 2: SYSTEM has the Section Contract Authority block that
+//   says Section Contract outranks ALL other creative guidance.
+Deno.test({
+  name: "Authority fix: SYSTEM has Section Contract Authority block (outranks ALL other creative guidance)",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: TURTLE_AUTHORITY_FIXTURE.container,
+      pov: TURTLE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: TURTLE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: TURTLE_AUTHORITY_FIXTURE.sectionSummary,
+      projectStateContext: TURTLE_AUTHORITY_FIXTURE.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    assertStringIncludes(
+      sysMsg,
+      "## Section Contract Authority",
+      "SYSTEM must have the Section Contract Authority block (not the old 'AUTHORITATIVE — DO NOT INVERT' duplicate)",
+    );
+    assertStringIncludes(
+      sysMsg,
+      "outranks ALL other creative guidance",
+      "SYSTEM authority must explicitly say Section Contract outranks ALL other creative guidance",
+    );
+    assertStringIncludes(
+      sysMsg,
+      "Dramatic Seed, Themes, Motifs, Relationships, Ending Instruction",
+      "SYSTEM authority must enumerate what Section Contract outranks",
+    );
+    // Death rule kept separately as Kevin required.
+    assertStringIncludes(
+      sysMsg,
+      "character as already dead",
+      "Death rule must be kept separately (Kevin 09:37 EDT spec)",
+    );
+    // Old SYSTEM block (with title/summary duplicates) gone.
+    assertEquals(
+      sysMsg.includes("AUTHORITATIVE — DO NOT INVERT"),
+      false,
+      "Old SYSTEM Section Contract header 'AUTHORITATIVE — DO NOT INVERT' must be removed (caching architecture: SYSTEM = authority only)",
+    );
+  },
+});
+
+// Regression 3: Dramatic Seed language no longer says "primary dramatic engine".
+//   This was the authority conflict — Spark outranked Section Contract.
+//   Per Kevin 09:37 EDT spec: replaced with "Use this spark only when
+//   relevant to the current Section Contract".
+Deno.test({
+  name: "Authority fix: Dramatic Seed no longer claims to be the primary engine",
+  fn: async () => {
+    // POPULATED_FULL_PAYLOAD_PR360Z has a selectedStorySpark so the Spark
+    // section renders. POPULATED_PAYLOAD_PR360Z leaves spark empty.
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_FULL_PAYLOAD_PR360Z,
+      container: TURTLE_AUTHORITY_FIXTURE.container,
+      pov: TURTLE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: TURTLE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: TURTLE_AUTHORITY_FIXTURE.sectionSummary,
+      projectStateContext: TURTLE_AUTHORITY_FIXTURE.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    // Old "primary dramatic engine" gone — that was the root cause of the
+    // model outranking the Section Contract with the Spark.
+    assertEquals(
+      userMsg.includes("primary dramatic engine of the scene"),
+      false,
+      "Dramatic Seed must not claim to be the primary dramatic engine (Kevin 09:37 EDT spec)",
+    );
+    // New conditional phrasing present.
+    assertStringIncludes(
+      userMsg,
+      "Use this spark only when relevant to the current Section Contract",
+      "Dramatic Seed must say 'Use this spark only when relevant to the current Section Contract'",
+    );
+    assertStringIncludes(
+      userMsg,
+      "The Section Contract always takes precedence",
+      "Dramatic Seed must include 'The Section Contract always takes precedence'",
+    );
+  },
+});
+
+// Regression 4: Themes + Motifs + Relationships carry the "Supporting context
+//   only — Section Contract always takes precedence" precedence note.
+Deno.test({
+  name: "Authority fix: Themes / Motifs / Relationships carry Section Contract precedence note",
+  fn: async () => {
+    // POPULATED_FULL_PAYLOAD_PR360Z has selectedThemeQuestions,
+    // selectedMotifs, and selectedRelationships so those sections render.
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_FULL_PAYLOAD_PR360Z,
+      container: TURTLE_AUTHORITY_FIXTURE.container,
+      pov: TURTLE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: TURTLE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: TURTLE_AUTHORITY_FIXTURE.sectionSummary,
+      projectStateContext: TURTLE_AUTHORITY_FIXTURE.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    // Themes precedence note.
+    assertStringIncludes(
+      userMsg,
+      "## Themes",
+      "Themes section header present",
+    );
+    const themesIdx = userMsg.indexOf("## Themes");
+    const themesBlock = userMsg.slice(themesIdx, themesIdx + 350);
+    assertStringIncludes(
+      themesBlock,
+      "Supporting context only",
+      "Themes block must contain the 'Supporting context only' precedence note",
+    );
+    // Motifs precedence note.
+    const motifsIdx = userMsg.indexOf("## Motifs");
+    const motifsBlock = userMsg.slice(motifsIdx, motifsIdx + 350);
+    assertStringIncludes(
+      motifsBlock,
+      "Supporting context only",
+      "Motifs block must contain the 'Supporting context only' precedence note",
+    );
+    // Ending Instruction: selectedAftertaste is set in POPULATED_FULL_PAYLOAD_PR360Z
+    // so the Ending Instruction block renders with the precedence prefix.
+    assertStringIncludes(
+      userMsg,
+      "## Ending Instruction",
+      "Ending Instruction block must render (selectedAftertaste populated)",
+    );
+    const endingIdx = userMsg.indexOf("## Ending Instruction");
+    const endingBlock = userMsg.slice(endingIdx, endingIdx + 350);
+    assertStringIncludes(
+      endingBlock,
+      "The current Section Contract always takes precedence",
+      "Ending Instruction must say 'The current Section Contract always takes precedence'",
+    );
+  },
+});
+
+// Regression 5: Project State has the transition rule.
+//   This is the rule that prevents the model from "continuing the prior
+//   interaction merely because it was the latest event" — the exact
+//   failure mode Kevin's smoke test exposed (Ted/Betty kissing).
+Deno.test({
+  name: "Authority fix: Project State transition rule prevents continuing prior interaction",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: TURTLE_AUTHORITY_FIXTURE.container,
+      pov: TURTLE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: TURTLE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: TURTLE_AUTHORITY_FIXTURE.sectionSummary,
+      projectStateContext: TURTLE_AUTHORITY_FIXTURE.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    assertStringIncludes(
+      userMsg,
+      "Project State establishes continuity, not the required subject of the next prose",
+      "USER prompt must contain the Project State transition rule",
+    );
+    assertStringIncludes(
+      userMsg,
+      "Do not continue the previous interaction merely because it was the latest event",
+      "Transition rule must explicitly forbid continuing the prior interaction just because it was the latest event",
+    );
+  },
+});
+
+// Regression 6: Beat-specific rule is emitted for Beat container only.
+//   "The first beat must materially advance the Section Contract" — the
+//   guardrail that catches the exact Kevin-smoke-test failure mode in
+//   future regressions.
+Deno.test({
+  name: "Authority fix: Beat Rule emitted for Beat container only — first beat must materially advance Section Contract",
+  fn: async () => {
+    // Beat container — rule must be present.
+    const cBeat = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: "beat",
+      pov: TURTLE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: TURTLE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: TURTLE_AUTHORITY_FIXTURE.sectionSummary,
+    });
+    assertEquals(cBeat !== null, true);
+    const beatUserMsg = cBeat!.messages[1].content;
+    assertStringIncludes(
+      beatUserMsg,
+      "## Beat Rule (CRITICAL)",
+      "Beat container must emit the Beat Rule (first beat must materially advance Section Contract)",
+    );
+    assertStringIncludes(
+      beatUserMsg,
+      "At least one action/discovery/exchange in the output must come directly from the section summary",
+      "Beat Rule must require at least one action/discovery/exchange directly from section summary",
+    );
+
+    // Non-Beat container — rule must NOT be present.
+    const cScene = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: "scene",
+      pov: TURTLE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: TURTLE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: TURTLE_AUTHORITY_FIXTURE.sectionSummary,
+    });
+    assertEquals(cScene !== null, true);
+    const sceneUserMsg = cScene!.messages[1].content;
+    assertEquals(
+      sceneUserMsg.includes("## Beat Rule (CRITICAL)"),
+      false,
+      "Non-Beat container must NOT emit the Beat Rule (only Beat containers do)",
+    );
+  },
+});
+
+// Regression 7: full prompt integrity — assert no conflicting legacy language
+// remains anywhere in the assembled prompt (catch regressions where the
+// old primary-engine / END STATE / AUTHORITATIVE — DO NOT INVERT strings
+// creep back in via a future change).
+Deno.test({
+  name: "Authority fix: legacy 'primary dramatic engine' / 'END STATE' / 'AUTHORITATIVE — DO NOT INVERT' strings absent",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: TURTLE_AUTHORITY_FIXTURE.container,
+      pov: TURTLE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: TURTLE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: TURTLE_AUTHORITY_FIXTURE.sectionSummary,
+      projectStateContext: TURTLE_AUTHORITY_FIXTURE.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const allText = c!.messages.map((m) => m.content).join("\n");
+    assertEquals(
+      allText.includes("primary dramatic engine of the scene"),
+      false,
+      "Old 'primary dramatic engine of the scene' string must be absent everywhere",
+    );
+    assertEquals(
+      allText.includes("END STATE of this scene"),
+      false,
+      "Old 'END STATE of this scene' string must be absent everywhere",
+    );
+    assertEquals(
+      allText.includes("AUTHORITATIVE — DO NOT INVERT"),
+      false,
+      "Old 'AUTHORITATIVE — DO NOT INVERT' header must be absent (caching architecture: SYSTEM = authority only)",
+    );
+    // Old Writing Task fallback that referenced the Section Contract
+    // unconditionally is gone too — the new fallback only references
+    // Section Contract when hasSectionContext is true.
+    // (Covered by the Writing Task guardrail test in the earlier block.)
+  },
+});
+
+
+// PR-360-Z authority-fix fixture: structured story context populated
+// (selectedStorySpark, selectedThemeQuestions, selectedMotifs,
+// selectedRelationships) so the Section Contract precedence notes actually
+// render in buildStructuredPromptBody. POPULATED_PAYLOAD_PR360Z leaves
+// those empty (its regression targets are character names + project state).
+const POPULATED_FULL_PAYLOAD_PR360Z = {
+  schema: "cathedralos.prompt_pack_export",
+  version: 1,
+  project: { id: FAKE_USER_ID, name: "Test", summary: "A test summary" },
+  promptPack: { id: FAKE_USER_ID, name: "Pack", prompts: [] },
+  selectedCharacters: [
+    { name: "TestAlice", roles: ["protagonist"], goals: ["solve mystery"] },
+  ],
+  selectedRelationships: [
+    { nameA: "TestAlice", nameB: "TestBob", loyalty: "deep trust" },
+  ],
+  selectedThemeQuestions: [
+    { question: "Can trust survive betrayal?", coreTension: "loyalty vs evidence" },
+  ],
+  selectedMotifs: [
+    { label: "flickering candle", meaning: "hope in darkness" },
+  ],
+  selectedStorySpark: {
+    title: "The Whisper",
+    situation: "A secret is kept that should not be.",
+    stakes: "everything the protagonist loves",
+    twist: "the secret is about them",
+  },
+  selectedAftertaste: {
+    label: "haunting recognition",
+    emotionalResidue: "something shifts inside the reader",
+  },
+};
+

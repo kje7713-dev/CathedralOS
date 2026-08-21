@@ -548,6 +548,7 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   const rels = p.selectedRelationships;
   if (rels?.length) {
     out.push("## Relationships");
+    out.push("(Supporting context only — the current Section Contract always takes precedence. Do not let relationships redirect the section.)");
     for (const r of rels) {
       if (nonEmpty(r.name)) out.push(`### ${r.name}`);
       if (nonEmpty(r.relationshipType)) out.push(`Type: ${r.relationshipType}`);
@@ -575,6 +576,7 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   const themes = p.selectedThemeQuestions;
   if (themes?.length) {
     out.push("## Themes");
+    out.push("(Supporting context only — the current Section Contract always takes precedence. Do not let these questions redirect the section.)");
     for (const t of themes) {
       if (nonEmpty(t.question))      out.push(`- ${t.question}`);
       if (nonEmpty(t.coreTension))   out.push(`  Core tension: ${t.coreTension}`);
@@ -591,6 +593,7 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   const motifs = p.selectedMotifs;
   if (motifs?.length) {
     out.push("## Motifs");
+    out.push("(Supporting context only — the current Section Contract always takes precedence. Do not let motifs redirect the section.)");
     for (const m of motifs) {
       out.push(`- ${m.label ?? ""}${nonEmpty(m.meaning) ? ": " + m.meaning : ""}`);
       // Fields captured by PromptPackExportBuilder.build() but previously dropped.
@@ -601,16 +604,19 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
     out.push("");
   }
 
-  // 6. Dramatic Seed — spark is the primary engine; rendered with explicit direction
-  //    so the model knows every line of the scene should serve this conflict/event.
+  // 6. Dramatic Seed — Kevin 2026-08-21 09:37 EDT fix: drop "primary
+  //    dramatic engine" language that outranked the Section Contract.
+  //    Spark is SUPPORTING CONTEXT only — it informs the Section Contract
+  //    but must NEVER redirect it. Same rule applies to relationships,
+  //    themes, motifs, ending instruction, intimacy, and prior open loops.
   const spark = p.selectedStorySpark;
   if (spark) {
     const sparkLines: string[] = [];
     sparkLines.push(
-      `This spark is the primary dramatic engine of the scene: "${spark.title ?? ""}"`,
+      `Use this spark only when relevant to the current Section Contract: "${spark.title ?? ""}"`,
     );
     sparkLines.push(
-      "Express it as the central conflict, event, reveal, or pressure — everything in the scene should serve this.",
+      "The Section Contract always takes precedence. Do not let the spark redirect, replace, or override the section premise — if the section calls for something other than this spark, follow the Section Contract.",
     );
     if (nonEmpty(spark.situation))        sparkLines.push(`Situation: ${spark.situation}`);
     if (nonEmpty(spark.stakes))           sparkLines.push(`Stakes: ${spark.stakes}`);
@@ -654,11 +660,13 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
     out.push(...section("## World & Constraints", settingLines));
   }
 
-  // 8. Ending Instruction — aftertaste as a direct emotional residue directive
+  // 8. Ending Instruction — Kevin 2026-08-21 09:37 EDT fix: supporting
+  //    context only, must NEVER redirect the Section Contract. Aftertaste
+  //    shapes HOW the Section Contract closes, not WHAT closes.
   const at = p.selectedAftertaste;
   if (at) {
     const atLines: string[] = [];
-    atLines.push(`Leave the reader with ${at.label ?? ""} — shape the final image, tone, and consequence to produce this emotional residue.`);
+    atLines.push(`Leave the reader with ${at.label ?? ""} — shape the final image, tone, and consequence to produce this emotional residue. The current Section Contract always takes precedence.`);
     if (nonEmpty(at.note))                  atLines.push(at.note!);
     if (nonEmpty(at.emotionalResidue))      atLines.push(`Emotional residue: ${at.emotionalResidue}`);
     if (nonEmpty(at.endingTexture))         atLines.push(`Ending texture: ${at.endingTexture}`);
@@ -938,7 +946,11 @@ function buildPrompt(req: {
       whatItContains: "One action, reaction, discovery, or exchange",
       naturalStoppingPoint: "The immediate action completes",
       expectedRange: "75–250",
-      hardCap: 350,
+      // PR-360-Z re-tighten (Kevin 2026-08-21 09:37 EDT): Beat's max_tokens
+      // must match the 75–250 target range. PR #396 bumped this to 1200
+      // for runway; the prompt authority fix (Section Contract outranks
+      // Project State) makes that workaround unnecessary. Setting to 250.
+      hardCap: 250,
     },
     moment: {
       name: "Moment",
@@ -1111,15 +1123,18 @@ Structural limits:
   // the model may soften or summarize. Skipped entirely when the caller
   // supplies no section context (legacy iOS builds, direct smoke tests).
   if (hasSectionContext) {
+    // Kevin 2026-08-21 09:37 EDT: split Section Contract between SYSTEM and USER
+    // for caching architecture. SYSTEM carries only the stable authority
+    // rule (untrusted, cacheable across sections). USER carries the volatile
+    // per-section values: title + summary + POV + container.
     craftLines.push(
-      "## Section Contract (AUTHORITATIVE — DO NOT INVERT)",
+      "## Section Contract Authority (UNTRUSTED, CACHEABLE)",
       "",
-      `Title: ${sanitizedSectionTitle || "(no title provided)"}`,
-      `Summary: ${nonEmpty(req.sectionSummary) ? req.sectionSummary! : "(no summary provided)"}`,
+      "The current Section Contract is the authoritative writing directive for this scene. It outranks ALL other creative guidance in this prompt — Dramatic Seed, Themes, Motifs, Relationships, Ending Instruction, Intimacy guidance, and Project State (prior scenes).",
       "",
-      "The summary above describes the END STATE of this scene. If it says a character is dead, the scene is set AFTER their death (memorial, investigation, afterlife). DO NOT write the character as alive in this scene.",
+      "These are supporting context only and must NEVER redirect the current section. If they conflict with the Section Contract, follow the Section Contract.",
       "",
-      `POV: ${povInstruction(req.pov)}`,
+      "Death rule (kept separately as required): if the Section Contract summary establishes a character as already dead, do not depict that character alive unless the summary explicitly requires a flashback, memory, or similar device.",
       "",
       "Container invariants:",
       `- Container: ${cfg.name}`,
@@ -1127,14 +1142,6 @@ Structural limits:
       `- Natural stopping point: ${cfg.naturalStoppingPoint}`,
       `- Expected range: ${cfg.expectedRange}`,
       `- Hard cap: ${cfg.hardCap} tokens`,
-      "",
-      "Authority rules (state explicitly):",
-      "- do not contradict the section premise",
-      "- dead characters remain dead unless the section explicitly establishes otherwise",
-      "- do not invent named characters outside canon unless explicitly authorized",
-      "- obey requested POV",
-      "- do not reproduce the section title as prose / dialogue",
-      "- stay within container shape and stop naturally",
       "",
     );
   }
@@ -1163,24 +1170,32 @@ Structural limits:
   // summary, POV, and "section contract governs" framing that the
   // SYSTEM block carries.
   if (hasSectionContext) {
+    // Kevin 2026-08-21 09:37 EDT: USER carries the volatile per-section
+    // values. Premise describes what MUST happen now, NOT an end state
+    // to postpone toward.
     contextLines.push(
-      "## Section Contract (AUTHORITATIVE)",
+      "## Section Contract",
       "",
       `Title: ${sanitizedSectionTitle || "(no title provided)"}`,
       `Premise: ${nonEmpty(req.sectionSummary) ? req.sectionSummary! : "(no summary provided)"}`,
-      `POV: ${povInstruction(req.pov)}`,
       "",
-      "The Section Contract governs what happens now. Project context and prior state provide continuity but must not replace or redirect the section premise.",
+      "The premise describes what must happen in the current section. Begin advancing it immediately. Do not postpone it in order to continue prior plot threads.",
+      "",
+      `POV: ${povInstruction(req.pov)}`,
       "",
     );
   }
 
   // Project state context — RAG retrieval, aggregated cumulative state.
-  // If non-empty, inject as its own context block so the model sees the
-  // full picture: characters, threads, continuity facts, open loops, and
-  // the latest ending state.
+  // Kevin 2026-08-21 09:37 EDT: add transition rule. Project State is
+  // CONTINUITY, not the required subject of the next prose. The Section
+  // Contract outranks it.
   if (req.projectStateContext) {
     contextLines.push(req.projectStateContext);
+    contextLines.push("");
+    contextLines.push(
+      "Project State establishes continuity, not the required subject of the next prose. Transition from prior state into the Section Contract as directly as necessary. Do not continue the previous interaction merely because it was the latest event."
+    );
     contextLines.push("");
   }
 
@@ -1232,6 +1247,21 @@ Structural limits:
   // cannot recover from. The fallback is the original "described by the premise
   // and selected elements" phrasing, which doesn't reference the Section
   // Contract and works fine without one (this matches the legacy behavior).
+  // Kevin 2026-08-21 09:37 EDT: Beat-specific rule (only emitted for
+  // Beat container). The first beat must materially advance the Section
+  // Contract — at least one action/discovery/exchange must come directly
+  // from the section summary. Without this rule the model can satisfy
+  // "write a beat" by continuing the prior scene's interaction (Kevin's
+  // Turtle smoke test failure mode: prior state ended Ted/Betty kissing,
+  // model wrote another kiss beat instead of advancing DMT/turtle).
+  if (cfg.name === "Beat" && hasSectionContext) {
+    contextLines.push(
+      "## Beat Rule (CRITICAL)",
+      "The first beat must materially advance the Section Contract. At least one action/discovery/exchange in the output must come directly from the section summary. Do not write a continuation beat of the prior scene's last interaction — begin the Section Contract instead.",
+      "",
+    );
+  }
+
   contextLines.push(
     "## Writing Task",
     hasSectionContext
@@ -1781,10 +1811,13 @@ async function handler(
   // -------------------------------------------------------------------------
 
   // RAG retrieval — fetch project state context aggregated across ALL
-  // accepted scenes. Empty string if project has no accepted scenes yet,
-  // or if adminClient isn't available.
+  // accepted scenes. Tests can override via body.projectStateContext
+  // (so unit tests don't need to mock adminClient). Production always
+  // fetches from the DB unless the caller explicitly passes one.
   let projectStateContext = "";
-  if (adminClient && projectID) {
+  if (body.projectStateContext !== undefined && body.projectStateContext !== null) {
+    projectStateContext = body.projectStateContext;
+  } else if (adminClient && projectID) {
     projectStateContext = await fetchProjectStateContext(adminClient, projectID);
   }
 
