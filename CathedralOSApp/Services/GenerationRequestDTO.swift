@@ -86,6 +86,15 @@ struct GenerationRequest: Codable {
     let sectionTitle: String?
     let sectionSummary: String?
 
+    // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
+    // identity. UUID string of the OutlineSection that originated this
+    // generation. Populated whenever generation originates from an
+    // OutlineSection (direct-gen from a section OR run-outline). Stays nil
+    // for genuinely non-section generation (project-level recipes etc.).
+    //
+    // Encodes as "outline_section_id" to match the Edge Function contract.
+    let outlineSectionID: String?
+
     // MARK: CodingKeys
     // Maps Swift property names to the JSON keys expected by the Edge Function.
     enum CodingKeys: String, CodingKey {
@@ -113,6 +122,7 @@ struct GenerationRequest: Codable {
         case localGenerationID
         case sectionTitle
         case sectionSummary
+        case outlineSectionID     = "outline_section_id"
     }
 
     init(
