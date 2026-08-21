@@ -50,7 +50,13 @@ protocol GenerationService {
         // SupabaseGenerationService for the wired-up implementation; default impl in the
         // extension below forwards them when present.
         sectionTitle: String?,
-        sectionSummary: String?
+        sectionSummary: String?,
+        // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
+        // identity. UUID string of the OutlineSection that originated this
+        // generation. Required for backend-owned post-generation extraction
+        // (single owner = generate-story). Without it, section_embeddings
+        // never gets populated for this generation.
+        outlineSectionID: String?
     ) async throws -> GenerationResponse
 
     /// Submits a derived generation action (regenerate / continue / remix) using
@@ -92,7 +98,10 @@ extension GenerationService {
         pov: String? = nil,
         // PR-360-Z: canonical section context fields (defaults to nil).
         sectionTitle: String? = nil,
-        sectionSummary: String? = nil
+        sectionSummary: String? = nil,
+        // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
+        // identity forwarded to the underlying generate() implementation.
+        outlineSectionID: String? = nil
     ) async throws -> GenerationResponse {
         try await generate(
             project: project,
@@ -105,7 +114,8 @@ extension GenerationService {
             selectedModelId: nil,
             pov: pov,
             sectionTitle: sectionTitle,
-            sectionSummary: sectionSummary
+            sectionSummary: sectionSummary,
+            outlineSectionID: outlineSectionID
         )
     }
 
@@ -162,10 +172,15 @@ final class StoryGenerationService: GenerationService {
         // is the legacy non-Supabase backend path; threading pov through keeps
         // the Section Contract block consistent across backends.
         pov: String? = nil,
-        // PR-360-Z: canonical section context fields. Defaults nil so existing
-        // call sites compile unchanged.
         sectionTitle: String? = nil,
-        sectionSummary: String? = nil
+        sectionSummary: String? = nil,
+        // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
+        // identity. UUID string of the OutlineSection that originated this
+        // generation. StoryGenerationService is the legacy non-Supabase
+        // backend path; thread outlineSectionID through to the DTO so
+        // backend-owned post-generation extraction works regardless of
+        // backend choice.
+        outlineSectionID: String? = nil
     ) async throws -> GenerationResponse {
 
         // Build canonical frozen payload.
@@ -190,7 +205,10 @@ final class StoryGenerationService: GenerationService {
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId,
             sectionTitle: sectionTitle,
-            sectionSummary: sectionSummary
+            sectionSummary: sectionSummary,
+            // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): forward
+            // outline section identity for backend-owned extraction.
+            outlineSectionID: outlineSectionID
         )
 
         return try await post(requestBody)
