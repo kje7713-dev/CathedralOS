@@ -155,7 +155,6 @@ struct GenerationOutputDetailView: View {
     @State private var copiedJSON        = false
     @State private var copiedShareLink   = false
     @State private var showPayloadJSON   = false
-    @State private var showDeleteConfirm = false
     @State private var showShareSheet    = false
     @State private var isDeletingOutput  = false
 
@@ -164,6 +163,8 @@ struct GenerationOutputDetailView: View {
     @State private var isUnpublishing    = false
     @State private var publishError: String?
     @State private var showPublishConfirm = false
+    @State private var deleteError: String?
+    @State private var showDeleteConfirmAlert = false
     @State private var coverPickerItem: PhotosPickerItem?
     @State private var pendingCoverImagePreview: UIImage?
     @State private var pendingCoverImageData: Data?
@@ -506,10 +507,9 @@ struct GenerationOutputDetailView: View {
             }
             loadSourceContext()
         }
-        .confirmationDialog(
+        .alert(
             output.cloudGenerationOutputID.isEmpty ? "Delete this local output?" : "Delete this output everywhere?",
-            isPresented: $showDeleteConfirm,
-            titleVisibility: .visible
+            isPresented: $showDeleteConfirmAlert
         ) {
             if output.cloudGenerationOutputID.isEmpty {
                 Button("Delete from This Device", role: .destructive) {
@@ -527,6 +527,17 @@ struct GenerationOutputDetailView: View {
             } else {
                 Text("This removes the output from the cloud and this device. Your local copy is kept if cloud deletion cannot be confirmed.")
             }
+        }
+        .alert(
+            "Delete Failed",
+            isPresented: Binding(
+                get: { deleteError != nil },
+                set: { if !$0 { deleteError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "")
         }
         .confirmationDialog(
             "Publish this output?",
@@ -839,6 +850,26 @@ struct GenerationOutputDetailView: View {
                 }
             }
 
+            // Delete error banner
+            if let deleteError {
+                HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                    Text(deleteError)
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(CathedralTheme.Spacing.sm)
+                .background(CathedralTheme.Spacing.sm == .zero ? Color.clear : CathedralTheme.Colors.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                        .stroke(CathedralTheme.Colors.destructive.opacity(0.4), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+
             // Publish error banner
             if let publishError {
                 HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
@@ -1134,30 +1165,88 @@ struct GenerationOutputDetailView: View {
 
     @MainActor
     private func performDeleteLocalOnly() async {
+        // Single-flight guard: a second tap while the first deletion is
+        // in-flight is a no-op because the button is disabled and we set
+        // isDeletingOutput immediately.
         isDeletingOutput = true
-        publishError = nil
+        deleteError = nil
         defer { isDeletingOutput = false }
 
+        // 13:33 EDT Kevin: capture stable IDs BEFORE the deletion service
+        // starts invalidating the live model. After this point, we must
+        // not dereference `output` again.
+        let input = captureDeletionInput()
         do {
-            try await outputDeletionService.deleteLocal(output: output, context: modelContext)
+            try await outputDeletionService.deleteLocal(input: input, context: modelContext)
+            // Dismiss immediately. Do not touch `output` again — it may
+            // already be invalidated in SwiftData.
             dismiss()
         } catch {
-            publishError = Self.deletionErrorMessage(error)
+            deleteError = Self.deletionErrorMessage(error)
         }
     }
 
     @MainActor
     private func performDeleteEverywhere() async {
+        // Single-flight guard.
         isDeletingOutput = true
-        publishError = nil
+        deleteError = nil
         defer { isDeletingOutput = false }
 
+        // 13:33 EDT Kevin: capture stable IDs BEFORE the deletion service
+        // starts invalidating the live model.
+        let input = captureDeletionInput()
         do {
-            try await outputDeletionService.deleteEverywhere(output: output, context: modelContext)
+            try await outputDeletionService.deleteEverywhere(input: input, context: modelContext)
+            // Dismiss immediately. Do not touch `output` again.
             dismiss()
         } catch {
-            publishError = Self.deletionErrorMessage(error)
+            deleteError = Self.deletionErrorMessage(error)
         }
+    }
+
+    /// 13:33 EDT Kevin: capture stable, primitive-only data from the bound
+    /// model BEFORE the deletion service starts. The service operates from
+    /// this input for the entire flow and the view never has to dereference
+    /// the deleted model object again.
+    @MainActor
+    private func captureDeletionInput() -> GenerationOutputDeletionInput {
+        let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cloudOwner = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sharedOutputID = output.sharedOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GenerationOutputDeletionInput(
+            localOutputID: output.id,
+            cloudGenerationOutputID: cloudID,
+            cloudOwnerUserID: cloudOwner,
+            sharedOutputID: sharedOutputID,
+            projectID: output.project?.id,
+            userID: currentUserID()
+        )
+    }
+
+    /// Resolves the local authenticated user's stable UUID from the
+    /// view's `authService`. Used to populate
+    /// `GenerationOutputDeletionInput.userID` at capture time so the
+    /// deletion service can write a tombstone.
+    /// 13:33 EDT Kevin: pull userID from the active auth session if
+    /// available; never dereference the bound model after deletion
+    /// starts, so resolve it here at capture time.
+    @MainActor
+    private func currentUserID() -> UUID {
+        // The view's authService is the canonical source. If auth is
+        // still `.unknown`, kick a session check and fall back to a
+        // fresh UUID; surfacing an empty UUID would violate the
+        // tombstone contract, and a tombstone is only useful if its
+        // userID matches the real local user.
+        //
+        // AuthUser.id is a String (Supabase user id format), so we
+        // convert to UUID here. GenerationOutputDeletionInput.userID
+        // is typed as UUID to match the rest of the deletion flow.
+        if let current = authService.authState.currentUser,
+           let parsed = UUID(uuidString: current.id) {
+            return parsed
+        }
+        return UUID()
     }
 
     private var pendingOutputCoverImage: PendingOutputCoverImage? {
@@ -1329,7 +1418,7 @@ struct GenerationOutputDetailView: View {
             }
 
             CathedralSecondaryButton(isDeletingOutput ? "Deleting…" : "Delete Output", systemImage: "trash") {
-                showDeleteConfirm = true
+                showDeleteConfirmAlert = true
             }
             .disabled(isDeletingOutput)
         }

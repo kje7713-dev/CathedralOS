@@ -360,7 +360,7 @@ ${body.raw_text}`
     const extractDurationMs = Date.now() - extractStartMs;
     try {
       await adminClient.from("llm_prompts").insert({
-        call_type: "embed-section",
+        call_type: "embed-section-extract",
         output_id: body.output_id ?? null,
         project_id: body.project_id ?? null,
         outline_section_id: body.outline_section_id ?? null,
@@ -498,7 +498,7 @@ ${body.raw_text}`
     const embedDurationMs = Date.now() - embedStartMs;
     try {
       await adminClient.from("llm_prompts").insert({
-        call_type: "embed-section",
+        call_type: "embed-section-vectorize",
         output_id: body.output_id ?? null,
         project_id: body.project_id ?? null,
         outline_section_id: body.outline_section_id ?? null,

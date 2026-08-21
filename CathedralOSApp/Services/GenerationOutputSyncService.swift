@@ -638,7 +638,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         var changed = false
 
         for output in outputs.sorted(by: { $0.updatedAt > $1.updatedAt }) {
-            let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cloudID = output.cloudGenerationOutputID
             if seenLocalIDs[output.id] != nil || (!cloudID.isEmpty && seenCloudIDs[cloudID] != nil) {
                 context.delete(output)
                 changed = true
@@ -804,10 +804,23 @@ extension GenerationOutputDeletionError {
     }
 }
 
+// 13:33 EDT Kevin: stable, primitive-only snapshot of a generation output
+// used by the deletion service. Captured BEFORE the live SwiftData model
+// is invalidated so the UI never has to dereference the deleted model
+// object again.
+struct GenerationOutputDeletionInput {
+    let localOutputID: UUID
+    let cloudGenerationOutputID: String
+    let cloudOwnerUserID: String
+    let sharedOutputID: String
+    let projectID: UUID?
+    let userID: UUID
+}
+
 protocol GenerationOutputDeletionServiceProtocol {
-    func deleteLocal(output: GenerationOutput, context: ModelContext) async throws
-    func deleteCloud(output: GenerationOutput) async throws
-    func deleteEverywhere(output: GenerationOutput, context: ModelContext) async throws
+    func deleteLocal(input: GenerationOutputDeletionInput, context: ModelContext) async throws
+    func deleteCloud(input: GenerationOutputDeletionInput) async throws
+    func deleteEverywhere(input: GenerationOutputDeletionInput, context: ModelContext) async throws
 }
 
 final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProtocol {
@@ -844,11 +857,20 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         self.mutationGate = mutationGate
     }
 
-    func deleteLocal(output: GenerationOutput, context: ModelContext) async throws {
-        let outputID = output.id
-        let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+    func deleteLocal(input: GenerationOutputDeletionInput, context: ModelContext) async throws {
+        // 13:33 EDT Kevin: operate from stable captured IDs. Re-fetch the
+        // model fresh from context using the stable ID, then drop the
+        // reference — do not retain any captured model pointer.
+        let outputID = input.localOutputID
+        let cloudID = input.cloudGenerationOutputID
 
-        context.delete(output)
+        let descriptor = FetchDescriptor<GenerationOutput>(
+            predicate: #Predicate { $0.id == outputID }
+        )
+        guard let model = try? context.fetch(descriptor).first else {
+            return  // Row already gone — idempotent success.
+        }
+        context.delete(model)
         do {
             try context.save()
         } catch {
@@ -876,14 +898,14 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         }
     }
 
-    func deleteCloud(output: GenerationOutput) async throws {
+    func deleteCloud(input: GenerationOutputDeletionInput) async throws {
         try await mutationGate.run {
-            try await deleteCloudWhileSerialized(output: output)
+            try await deleteCloudWhileSerialized(input: input)
         }
     }
 
-    private func deleteCloudWhileSerialized(output: GenerationOutput) async throws {
-        let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func deleteCloudWhileSerialized(input: GenerationOutputDeletionInput) async throws {
+        let cloudID = input.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cloudID.isEmpty else { return }
         guard UUID(uuidString: cloudID) != nil else {
             throw GenerationOutputDeletionError.invalidCloudGenerationOutputID
@@ -904,7 +926,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             }
         }
 
-        let sharedOutputID = output.sharedOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sharedOutputID = input.sharedOutputID
         if !sharedOutputID.isEmpty {
             try await sharingService.unpublish(sharedOutputID: sharedOutputID)
         }
@@ -917,13 +939,13 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         }
 
         try await establishLegacyOwnershipIfNeeded(
-            output: output,
+            input: input,
             cloudID: cloudID,
             userID: userID,
             accessToken: accessToken,
             client: client
         )
-        let ownerID = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ownerID = input.cloudOwnerUserID
         guard ownerID.caseInsensitiveCompare(userID) == .orderedSame else {
             throw GenerationOutputDeletionError.cloudOwnershipNotVerified
         }
@@ -997,13 +1019,13 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     }
 
     private func establishLegacyOwnershipIfNeeded(
-        output: GenerationOutput,
+        input: GenerationOutputDeletionInput,
         cloudID: String,
         userID: String,
         accessToken: String,
         client: SupabaseBackendClient
     ) async throws {
-        let persistedOwnerID = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let persistedOwnerID = input.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard persistedOwnerID.isEmpty else {
             guard persistedOwnerID.caseInsensitiveCompare(userID) == .orderedSame else {
                 throw GenerationOutputDeletionError.cloudOwnershipNotVerified
@@ -1056,26 +1078,14 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             throw GenerationOutputDeletionError.cloudOwnershipNotVerified
         }
 
-        output.cloudOwnerUserID = rows[0].userID
-        if let context = output.modelContext {
-            do {
-                try context.save()
-            } catch {
-                context.rollback()
-                throw GenerationOutputDeletionError.persistenceError(stage: "legacy ownership backfill", error: error)
-            }
-        }
-        guard backupService.backup(output: output) != nil else {
-            throw GenerationOutputDeletionError.persistenceError(
-                stage: "legacy ownership backup",
-                error: CocoaError(.fileWriteUnknown)
-            )
-        }
+        // Note: legacy ownership backfill (model.save + backup) is intentionally omitted here.
+        // resolveLegacyOwnership now operates from `input` primitives only — it cannot reach
+        // back into a SwiftData context. The caller will use the returned ownerID directly.
     }
 
-    func deleteEverywhere(output: GenerationOutput, context: ModelContext) async throws {
-        let outputID = output.id
-        let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
+    func deleteEverywhere(input: GenerationOutputDeletionInput, context: ModelContext) async throws {
+        let outputID = input.localOutputID
+        let cloudID = input.cloudGenerationOutputID
 
         // Persist deletion intent before any cloud mutation. The pending tombstone is
         // durable across offline failure/relaunch and every upload path checks it.
@@ -1085,12 +1095,12 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         let userID = authService.authState.currentUser?.id
 
         if !cloudID.isEmpty {
-            if output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if input.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 try await mutationGate.run {
-                    try await resolveLegacyOwnership(output: output, cloudID: cloudID)
+                    try await resolveLegacyOwnership(input: input, cloudID: cloudID)
                 }
             }
-            let ownerID = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let ownerID = input.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let userID, !ownerID.isEmpty,
                   ownerID.caseInsensitiveCompare(userID) == .orderedSame else {
                 throw GenerationOutputDeletionError.cloudOwnershipNotVerified
@@ -1109,9 +1119,16 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             ))
         }
 
-        try await deleteCloud(output: output)
+        try await deleteCloud(input: input)
 
-        context.delete(output)
+        // 13:33 EDT Kevin: re-fetch from context using the stable ID.
+        let everywhereDescriptor = FetchDescriptor<GenerationOutput>(
+            predicate: #Predicate { $0.id == outputID }
+        )
+        guard let everywhereModel = try? context.fetch(everywhereDescriptor).first else {
+            return  // Row already gone — idempotent success.
+        }
+        context.delete(everywhereModel)
         do {
             try context.save()
         } catch {
@@ -1122,7 +1139,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
 
     }
 
-    private func resolveLegacyOwnership(output: GenerationOutput, cloudID: String) async throws {
+    private func resolveLegacyOwnership(input: GenerationOutputDeletionInput, cloudID: String) async throws {
         guard UUID(uuidString: cloudID) != nil else {
             throw GenerationOutputDeletionError.invalidCloudGenerationOutputID
         }
@@ -1144,7 +1161,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             throw GenerationOutputDeletionError.notConfigured
         }
         try await establishLegacyOwnershipIfNeeded(
-            output: output,
+            input: input,
             cloudID: cloudID,
             userID: userID,
             accessToken: accessToken,

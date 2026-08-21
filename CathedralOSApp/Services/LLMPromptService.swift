@@ -54,8 +54,18 @@ struct LLMPromptService {
         self.session = session
     }
 
-    /// Fetch all LLM prompts for a given output, newest first.
-    func fetchPrompts(outputID: String) async throws -> [LLMPrompt] {
+    /// Fetch LLM prompts for a given output, newest first.
+    /// - Parameter `callTypes`: filter to specific call_type values. Default is
+    ///   `["generate-story"]` so the debug UI shows only the generation prompt
+    ///   (matches the 13:33 EDT spec — the LLM Prompt Debug view should default
+    ///   to the generation prompt, with optional Pipeline Diagnostics for
+    ///   post-generation calls like embed-section-extract/vectorize).
+    /// - Pass an empty array to fetch ALL call_types (used by Pipeline
+    ///   Diagnostics).
+    func fetchPrompts(
+        outputID: String,
+        callTypes: [String] = ["generate-story"]
+    ) async throws -> [LLMPrompt] {
         guard let client = try? SupabaseBackendClient() else {
             throw LLMPromptError.notConfigured(reason: "Supabase client not configured")
         }
@@ -69,10 +79,16 @@ struct LLMPromptService {
             .appendingPathComponent("llm_prompts")
 
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        components.queryItems = [
+        var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "output_id", value: "eq.\(outputID)"),
             URLQueryItem(name: "order", value: "created_at.desc"),
         ]
+        if !callTypes.isEmpty {
+            // PostgREST `in` filter: call_type=in.(a,b,c)
+            let csv = callTypes.map { "\($0)" }.joined(separator: ",")
+            queryItems.append(URLQueryItem(name: "call_type", value: "in.(\(csv))"))
+        }
+        components.queryItems = queryItems
         let finalURL = components.url!
 
         var request = client.authorizedRequest(for: finalURL, userAccessToken: token)

@@ -7,23 +7,30 @@ import SwiftUI
 struct LLMPromptDebugView: View {
     let outputID: String
 
-    @State private var prompts: [LLMPrompt] = []
+    // Default: show only the generate-story call_type (matches the 13:33 EDT
+    // spec — the LLM Prompt Debug view should default to the Generation
+    // Prompt, with optional Pipeline Diagnostics for post-generation calls
+    // like embed-section-extract / embed-section-vectorize).
+    @State private var generationPrompts: [LLMPrompt] = []
+    @State private var pipelinePrompts: [LLMPrompt] = []
     @State private var isLoading = false
     @State private var error: String?
     @State private var isExpanded = false
+    @State private var isPipelineExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Generation Prompt section — defaults to call_type=generate-story.
             Button(action: {
                 isExpanded.toggle()
-                if isExpanded && prompts.isEmpty && !isLoading {
+                if isExpanded && generationPrompts.isEmpty && pipelinePrompts.isEmpty && !isLoading {
                     Task { await loadPrompts() }
                 }
             }) {
                 HStack(spacing: 6) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption)
-                    Text("LLM Prompt (debug)")
+                    Text("Generation Prompt")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
@@ -40,60 +47,81 @@ struct LLMPromptDebugView: View {
                     Text("Error: \(error)")
                         .font(.caption)
                         .foregroundColor(.red)
-                } else if prompts.isEmpty && !isLoading {
+                } else if generationPrompts.isEmpty && pipelinePrompts.isEmpty && !isLoading {
                     Text("No LLM prompts logged for this output")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 } else {
-                    ForEach(prompts) { prompt in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 8) {
-                                Text(prompt.call_type)
-                                    .font(.caption.bold())
-                                Text(prompt.model)
-                                    .font(.caption2)
+                    // Render the first generation prompt as SYSTEM + USER + Response.
+                    if let gen = generationPrompts.first {
+                        promptBlock(label: "SYSTEM", text: extractField(from: gen.prompt, key: "system"))
+                        promptBlock(label: "USER", text: extractField(from: gen.prompt, key: "user"))
+                        if let response = gen.response, !response.isEmpty {
+                            promptBlock(label: "Response", text: response)
+                        }
+                    }
+
+                    // Pipeline Diagnostics — only renders if there are
+                    // post-generation prompts (embed-section-extract,
+                    // embed-section-vectorize, etc.). Optional subsection so
+                    // the user can see the cascade without it being the
+                    // primary view.
+                    if !pipelinePrompts.isEmpty {
+                        Button(action: { isPipelineExpanded.toggle() }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: isPipelineExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.caption)
+                                Text("Pipeline Diagnostics")
+                                    .font(.caption)
                                     .foregroundColor(.secondary)
-                                Spacer()
-                                if let tokens = prompt.total_tokens {
-                                    Text("\(tokens) tok")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                if let ms = prompt.duration_ms {
-                                    Text("\(ms)ms")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            Text("Prompt")
-                                .font(.caption2.bold())
-                                .foregroundColor(.secondary)
-                            Text(prompt.prompt)
-                                .font(.system(.caption2, design: .monospaced))
-                                .padding(8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.gray.opacity(0.1))
-                                .cornerRadius(4)
-                                .textSelection(.enabled)
-                            if let response = prompt.response, !response.isEmpty {
-                                Text("Response")
-                                    .font(.caption2.bold())
-                                    .foregroundColor(.secondary)
-                                Text(response)
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .padding(8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.gray.opacity(0.1))
-                                    .cornerRadius(4)
-                                    .textSelection(.enabled)
                             }
                         }
-                        .padding(.vertical, 4)
-                        Divider()
+                        if isPipelineExpanded {
+                            Divider()
+                            ForEach(pipelinePrompts) { p in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(p.call_type)
+                                        .font(.caption.bold())
+                                        .foregroundColor(.secondary)
+                                    promptBlock(label: "Prompt", text: p.prompt)
+                                    if let r = p.response, !r.isEmpty {
+                                        promptBlock(label: "Response", text: r)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                                Divider()
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func promptBlock(label: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption2.bold())
+                .foregroundColor(.secondary)
+            Text(text)
+                .font(.system(.caption2, design: .monospaced))
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(4)
+                .textSelection(.enabled)
+        }
+    }
+
+    /// Extracts a string field from the JSON-encoded prompt blob. The
+    /// generate-story call stores `{"system":..., "user":...}`.
+    private func extractField(from json: String, key: String) -> String {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return json  // fall back to raw blob if not parseable
+        }
+        return (obj[key] as? String) ?? json
     }
 
     private func loadPrompts() async {
@@ -102,7 +130,16 @@ struct LLMPromptDebugView: View {
         defer { isLoading = false }
         do {
             let service = LLMPromptService()
-            prompts = try await service.fetchPrompts(outputID: outputID)
+            // Default: only the generation prompt (per 13:33 EDT spec).
+            generationPrompts = try await service.fetchPrompts(
+                outputID: outputID,
+                callTypes: ["generate-story"]
+            )
+            // Pipeline diagnostics: post-generation calls only.
+            pipelinePrompts = try await service.fetchPrompts(
+                outputID: outputID,
+                callTypes: ["embed-section-extract", "embed-section-vectorize"]
+            )
         } catch {
             self.error = error.localizedDescription
         }
