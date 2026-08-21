@@ -2012,12 +2012,16 @@ Deno.test({
   },
 });
 
-// PR-360-Z regression 5: POV is system-level (in Section Contract), NOT in
-// the user message. Per corrections rule #2: "POV → SYSTEM message (alongside
-// container instructions), not user message. Structural limits weight higher
-// in system."
+// PR-360-Z regression 5 (smoke-test fix 2026-08-21): POV is in Section Contract
+// block (in BOTH SYSTEM and USER content) — NOT inline in the Writing Task
+// line itself. Per corrections rule #2: POV is authoritative (Section Contract).
+// Per Kevin 2026-08-21 #9423 #4: "Ensure POV is actually populated, not merely
+// referenced by SYSTEM" — POV must reach the model in the Section Contract
+// block, which now renders in BOTH system and user messages per PR #398.
+// The Writing Task line itself should not duplicate "POV:" inline; it just
+// references the Section Contract.
 Deno.test({
-  name: "PR-360-Z regression 5: POV is system-level, not user-level",
+  name: "PR-360-Z regression 5 (smoke-test fix): POV is in Section Contract blocks (system + user), not inline in Writing Task",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2028,12 +2032,19 @@ Deno.test({
     assertEquals(c !== null, true);
     const sysMsg = c!.messages[0].content;
     const userMsg = c!.messages[1].content;
-    // POV instruction appears in SYSTEM (the Section Contract renders the
-    // povConfig[pov].instruction string for firstPerson = "Write in first
-    // person (I, me, my)...").
+    // POV instruction in SYSTEM Section Contract block.
     assertStringIncludes(sysMsg, "first person");
-    // But NOT in USER (no "POV:" line in Writing Task anymore).
-    assertEquals(userMsg.includes("POV: "), false);
+    // POV instruction also in USER Section Contract block (Kevin 2026-08-21 #4).
+    assertStringIncludes(userMsg, "first person");
+    // Writing Task line itself must NOT have "POV:" inline.
+    const writingTaskIdx = userMsg.indexOf("## Writing Task");
+    assertNotEquals(writingTaskIdx, -1);
+    const writingTaskBlock = userMsg.slice(writingTaskIdx);
+    assertEquals(
+      writingTaskBlock.includes("POV: "),
+      false,
+      "Writing Task line must not duplicate 'POV:' inline — Section Contract carries it",
+    );
   },
 });
 
@@ -2399,6 +2410,171 @@ Deno.test({
       sectionBlock,
       "first person",
       "POV instruction for 'firstPerson' should expand to 'first person ...' — empty instruction means the model lost its POV anchor",
+    );
+  },
+});
+
+
+// =============================================================================
+// Turtle smoke-test regression (added 2026-08-21 after Kevin's actual TestFlight
+// smoke test on PR #398 still failed). PR #398 dropped the legacy "opening
+// story scene..." instruction and added Section Contract plumbing on the iOS
+// side, BUT never forwarded `sectionTitle`/`sectionSummary` from the request
+// body into buildPrompt's `req` — so hasSectionContext was always false, the
+// Section Contract block never rendered, the LLM fell back to Project State,
+// and the actual section intent ("team smokes DMT and is visited by a
+// prophetic turtle that will save America") never reached the model.
+//
+// These tests assert the full data path: request body → buildPrompt call →
+// prompt assembly → llm_prompts.prompt shape. They would have failed before
+// the data-path fix (forwarding sectionTitle/sectionSummary in both
+// buildPrompt call sites at line ~1676 and ~1776) and pass after.
+// =============================================================================
+
+const TURTLE_SMOKE_TEST_STATE_PR360Z = {
+  container: "beat",
+  pov: "thirdPersonLimited",
+  sectionTitle: "The Turtle",
+  sectionSummary:
+    "Ted, Betty, and the team smoke DMT in Ted's basement. They're visited by a prophetic turtle who tells them they're the only ones who can save America from itself. They have to decide whether to listen.",
+  // projectStateContext intentionally omitted in the canonical case — the
+  // point of the smoke test is that Section Contract renders WITHOUT
+  // relying on Project State being populated. If Project State alone were
+  // enough, the model would just follow Ted/Betty's prior scenes (the
+  // exact failure mode Kevin hit).
+  projectStateContext: "",
+};
+
+// Turtle regression test 1: the stored llm_prompts.prompt (JSON shape with
+// system + user) contains the exact Turtle section title + summary + POV in
+// the Section Contract block. Asserts the data path end-to-end.
+Deno.test({
+  name: "Turtle smoke-test: stored prompt contains section title + summary + POV in Section Contract block (data-path)",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: TURTLE_SMOKE_TEST_STATE_PR360Z.container,
+      pov: TURTLE_SMOKE_TEST_STATE_PR360Z.pov,
+      sectionTitle: TURTLE_SMOKE_TEST_STATE_PR360Z.sectionTitle,
+      sectionSummary: TURTLE_SMOKE_TEST_STATE_PR360Z.sectionSummary,
+      projectStateContext: TURTLE_SMOKE_TEST_STATE_PR360Z.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+
+    // The actual stored prompt shape (matches llm_prompts.prompt JSON column).
+    const storedPrompt = {
+      system: c!.messages[0].content,
+      user: c!.messages[1].content,
+    };
+
+    // Section Contract in USER content (the explicit generation request).
+    assertStringIncludes(
+      storedPrompt.user,
+      "## Section Contract (AUTHORITATIVE)",
+      "USER must contain ## Section Contract (AUTHORITATIVE) — data-path regression target",
+    );
+    // Title (sanitized).
+    assertStringIncludes(
+      storedPrompt.user,
+      "The Turtle",
+      "USER Section Contract must contain the section title",
+    );
+    // Summary (verbatim — the actual current section intent).
+    assertStringIncludes(
+      storedPrompt.user,
+      "prophetic turtle",
+      "USER Section Contract must contain the section summary (prophetic turtle)",
+    );
+    assertStringIncludes(
+      storedPrompt.user,
+      "save America",
+      "USER Section Contract must contain the section summary (save America)",
+    );
+    // POV instruction (thirdPersonLimited expands to "third person limited").
+    assertStringIncludes(
+      storedPrompt.user,
+      "third person limited",
+      "USER Section Contract must contain the POV instruction",
+    );
+
+    // Section Contract must appear BEFORE Project State (per Kevin's spec).
+    const contractIdx = storedPrompt.user.indexOf("## Section Contract (AUTHORITATIVE)");
+    const projectStateIdx = storedPrompt.user.indexOf("## Project State");
+    assertNotEquals(contractIdx, -1, "USER Section Contract must render");
+    // Project State may legitimately be absent (projectStateContext: "") so
+    // only assert ordering when both are present.
+    if (projectStateIdx !== -1) {
+      assertEquals(
+        contractIdx < projectStateIdx,
+        true,
+        "## Section Contract must appear BEFORE ## Project State (Kevin's spec)",
+      );
+    }
+  },
+});
+
+// Turtle regression test 2: the canonical "described by the Section Contract"
+// Writing Task is present when section context is provided.
+Deno.test({
+  name: "Turtle smoke-test: canonical Writing Task (described by Section Contract) when section context provided",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: TURTLE_SMOKE_TEST_STATE_PR360Z.container,
+      pov: TURTLE_SMOKE_TEST_STATE_PR360Z.pov,
+      sectionTitle: TURTLE_SMOKE_TEST_STATE_PR360Z.sectionTitle,
+      sectionSummary: TURTLE_SMOKE_TEST_STATE_PR360Z.sectionSummary,
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    assertStringIncludes(
+      userMsg,
+      "Write the next complete beat described by the Section Contract",
+      "Writing Task must use canonical Section-Contract-anchored text when section context is provided",
+    );
+  },
+});
+
+// Turtle regression test 3 (guardrail): when NO section context is provided,
+// the Writing Task must NOT reference Section Contract. Without this
+// guardrail, the prompt would say "described by the Section Contract" while
+// the Section Contract block is absent — a contradiction the model cannot
+// recover from (Kevin's 2026-08-21 Turtle smoke test failure mode).
+Deno.test({
+  name: "Guardrail: Writing Task must NOT reference Section Contract when block is absent",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: TURTLE_SMOKE_TEST_STATE_PR360Z.container,
+      pov: TURTLE_SMOKE_TEST_STATE_PR360Z.pov,
+      // Intentionally omit sectionTitle/sectionSummary to exercise the
+      // hasSectionContext=false path.
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+
+    // Section Contract block must NOT render.
+    assertEquals(
+      userMsg.includes("## Section Contract (AUTHORITATIVE)"),
+      false,
+      "When no section context, Section Contract block must be absent",
+    );
+
+    // Writing Task must NOT reference "Section Contract" anywhere after the heading.
+    const writingTaskIdx = userMsg.indexOf("## Writing Task");
+    assertNotEquals(writingTaskIdx, -1, "USER must contain ## Writing Task");
+    const writingTaskBlock = userMsg.slice(writingTaskIdx);
+    assertEquals(
+      writingTaskBlock.toLowerCase().includes("section contract"),
+      false,
+      "Writing Task must NOT reference Section Contract when block is absent (Kevin 2026-08-21 guardrail)",
+    );
+
+    // Fallback Writing Task text must be present instead.
+    assertStringIncludes(
+      userMsg,
+      "Write the next scene based on the Premise",
+      "Fallback Writing Task must render when no section context is provided",
     );
   },
 });

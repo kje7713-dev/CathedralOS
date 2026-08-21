@@ -1224,9 +1224,19 @@ Structural limits:
   // Section Contract. Continue naturally from Project State. Do not restart
   // or summarize prior events." Anchors the model to the Section Contract
   // + Project State continuity without forcing an opening-scene shape.
+  // PR-360-Z guardrail (2026-08-21): Writing Task text is conditional on whether
+  // a Section Contract block actually renders. When hasSectionContext is false
+  // (caller omitted sectionTitle/sectionSummary, or they're empty after
+  // sanitization), the canonical "described by the Section Contract" line would
+  // reference a block that isn't in the prompt — a contradiction the model
+  // cannot recover from. The fallback is the original "described by the premise
+  // and selected elements" phrasing, which doesn't reference the Section
+  // Contract and works fine without one (this matches the legacy behavior).
   contextLines.push(
     "## Writing Task",
-    "Write the next complete beat described by the Section Contract. Continue naturally from Project State. Do not restart or summarize prior events.",
+    hasSectionContext
+      ? "Write the next complete beat described by the Section Contract. Continue naturally from Project State. Do not restart or summarize prior events."
+      : "Write the next scene based on the Premise, Project State, and selected elements. Continue naturally from prior accepted scenes and do not restart or summarize prior events.",
     "",
   );
 
@@ -1687,6 +1697,11 @@ async function handler(
       terminalBeat: body.terminalBeat,
       projectName,
       promptPackName,
+      // PR-360-Z: forward section context so the Section Contract block renders
+      // in the estimate's counted-tokens. Without these the section intent
+      // isn't part of the token estimate.
+      sectionTitle: body.sectionTitle,
+      sectionSummary: body.sectionSummary,
     });
     const estimatedInputTokens = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
     // Phase 3: pre-flight max = (estimated input + container hard cap) × rates, with 0.25 floor
@@ -1788,6 +1803,16 @@ async function handler(
     projectName,
     promptPackName,
     projectStateContext,
+    // PR-360-Z data-path fix (2026-08-21): forward section context to buildPrompt.
+    // Both iOS direct generation AND run-outline generation populate these top-level
+    // fields on the body (replacing the old "smuggle section into promptPack.notes"
+    // pattern). Without this forwarding, hasSectionContext inside buildPrompt stays
+    // false regardless of caller, the Section Contract block never renders, and the
+    // model falls back to Project State (Kevin's 2026-08-21 Turtle smoke test:
+    // section "team smokes DMT and is visited by a prophetic turtle" never reached
+    // the LLM; model continued Ted/Betty from prior accepted scenes).
+    sectionTitle: body.sectionTitle,
+    sectionSummary: body.sectionSummary,
   });
   // Phase 3: max possible credit cost for the pre-flight check
   const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
