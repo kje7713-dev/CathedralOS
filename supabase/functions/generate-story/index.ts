@@ -910,17 +910,6 @@ function buildPrompt(req: {
   const contentRating = req.contentRating || payload?.project?.contentRating || "";
   const audienceNotes = req.audienceNotes || payload?.project?.audienceNotes || "";
 
-  const actionTask: Record<GenerationAction, string> = {
-    generate:
-      "Write an opening story scene that brings the premise and selected elements to life.",
-    regenerate:
-      "Write a fresh story scene based on the same premise and selected elements — a new take, not a copy.",
-    continue:
-      "Continue the story directly from where the previous passage ended. Do not repeat or summarize what has already been written.",
-    remix:
-      "Reinterpret the premise and selected elements in a creative new direction while keeping the core characters and world intact.",
-  };
-
   // Style-driven scene guidance. Replaces the old length-based targets that
   // the model often ignored. “auto” gives no length target at all — the
   // model writes whatever fits the budget. “compact/standard/expansive” give
@@ -948,84 +937,84 @@ function buildPrompt(req: {
       name: "Beat",
       whatItContains: "One action, reaction, discovery, or exchange",
       naturalStoppingPoint: "The immediate action completes",
-      expectedRange: "75–250 tokens",
+      expectedRange: "75–250",
       hardCap: 350,
     },
     moment: {
       name: "Moment",
       whatItContains: "One focused emotional or sensory event",
       naturalStoppingPoint: "A realization, image, gesture, or decision",
-      expectedRange: "200–500 tokens",
+      expectedRange: "200–500",
       hardCap: 700,
     },
     vignette: {
       name: "Vignette",
       whatItContains: "A compact portrait of a person, place, relationship, or situation",
       naturalStoppingPoint: "A resonant image or emotional turn",
-      expectedRange: "300–900 tokens",
+      expectedRange: "300–900",
       hardCap: 1200,
     },
     microScene: {
       name: "Micro-scene",
       whatItContains: "One goal, one obstacle, one change",
       naturalStoppingPoint: "The immediate interaction changes state",
-      expectedRange: "400–900 tokens",
+      expectedRange: "400–900",
       hardCap: 1200,
     },
     scene: {
       name: "Scene",
       whatItContains: "One continuous dramatic event",
       naturalStoppingPoint: "Goal succeeds, fails, changes, or becomes impossible",
-      expectedRange: "800–1,800 tokens",
+      expectedRange: "800–1,800",
       hardCap: 2300,
     },
     developedScene: {
       name: "Developed scene",
       whatItContains: "A fuller scene with escalation and multiple tactics",
       naturalStoppingPoint: "The central conflict reaches a definite outcome",
-      expectedRange: "1,500–3,000 tokens",
+      expectedRange: "1,500–3,000",
       hardCap: 4000,
     },
     setPiece: {
       name: "Set piece",
       whatItContains: "A major action, confrontation, ceremony, battle, escape, or reveal",
       naturalStoppingPoint: "The major event completes",
-      expectedRange: "2,000–5,000 tokens",
+      expectedRange: "2,000–5,000",
       hardCap: 6500,
     },
     sceneSequence: {
       name: "Scene sequence",
       whatItContains: "Several connected scenes pursuing one larger objective",
       naturalStoppingPoint: "The sequence-level objective is achieved or fails",
-      expectedRange: "3,000–7,000 tokens",
+      expectedRange: "3,000–7,000",
       hardCap: 9000,
     },
     shortStory: {
       name: "Short story",
       whatItContains: "A complete independent narrative",
       naturalStoppingPoint: "The central dramatic question is answered",
-      expectedRange: "2,500–8,000 tokens",
+      expectedRange: "2,500–8,000",
       hardCap: 10000,
     },
     chapter: {
       name: "Chapter",
       whatItContains: "A publishing or pacing division containing one or more scenes",
       naturalStoppingPoint: "A turn, hook, revelation, decision, or transition",
-      expectedRange: "3,000–8,000+ tokens",
+      expectedRange: "3,000–8,000+",
       hardCap: 11000,
     },
     episode: {
       name: "Episode",
       whatItContains: "A self-contained installment within a larger serial",
       naturalStoppingPoint: "The episode’s main problem resolves, often with a larger hook",
-      expectedRange: "5,000–15,000+ tokens",
+      expectedRange: "5,000–15,000+",
       hardCap: 18000,
     },
     novella: {
       name: "Novella",
       whatItContains: "A complete extended story with multiple sequences",
       naturalStoppingPoint: "Central arc and major subplots resolve",
-      expectedRange: "20,000–50,000 tokens",
+      expectedRange: "20,000–50,000",
       hardCap: 60000,
     },
   };
@@ -1097,7 +1086,8 @@ Structural limits:
 - Do not continue into the aftermath, next destination, next scene, or consequences.
 - Produce a complete ending before stopping.`;
 
-  const povInstruction = (pov: POV): string => povConfig[pov].instruction;
+  const povInstruction = (pov: POV | undefined): string =>
+    pov && povConfig[pov] ? povConfig[pov].instruction : povConfig.thirdPersonLimited.instruction;
 
   // Craft directives — sent as the SYSTEM message. Persistent across
   // requests; the model weighs system instructions higher than user.
@@ -1224,21 +1214,19 @@ Structural limits:
       "",
     );
   }
-  // PR-360-Z: Writing Task trimmed. The `Narrative shape: <hardcoded>`
-  // hint is GONE (let premise + character state determine scene shape
-  // rather than forcing every output into one shape). POV was MOVED to
-  // SYSTEM Section Contract above (structural limits weight higher there).
-  // What remains here is just the per-request action — the rest of the
-  // PR-360-Z roll-in: Writing Task text per Kevin's 2026-08-20 20:56 EDT
-  // feedback. The previous text ("Write an opening story scene...") is
-  // actionTask[generate] which assumes the section is the first one in
-  // the project. Wrong for sections that come after accepted prior scenes
-  // + cumulative state (the smoke test had 5+ accepted scenes). New line
-  // anchors the model to the Section Contract + Project State continuity.
+  // PR-360-Z roll-in (smoke-test fix): Writing Task is now a single line.
+  // The previous text was two instructions at once:
+  //   - actionTask[generate] = "Write an opening story scene..." (legacy, only correct for the very first section)
+  //   - plus a new continuation line that assumes Section Contract + Project State exist.
+  // That dual render was the bug Kevin's 2026-08-21 smoke test caught
+  // ("There must be exactly ONE Writing Task"). Per his spec, the canonical
+  // Writing Task text is: "Write the next complete beat described by the
+  // Section Contract. Continue naturally from Project State. Do not restart
+  // or summarize prior events." Anchors the model to the Section Contract
+  // + Project State continuity without forcing an opening-scene shape.
   contextLines.push(
     "## Writing Task",
-    actionTask[req.generationAction],
-    "Write the next complete beat described by the Section Contract. Continue naturally from Project State. Do not restart, summarize prior events, or advance beyond this beat's natural stopping point.",
+    "Write the next complete beat described by the Section Contract. Continue naturally from Project State. Do not restart or summarize prior events.",
     "",
   );
 
@@ -1273,6 +1261,7 @@ Structural limits:
     "## Writing Instructions",
     "- The Section Contract governs what happens now. Project context and prior state provide continuity but must not replace or redirect the section premise.",
     "- The Premise, Characters, Relationships, Themes, Motifs, Spark, Setting, Ending, Notes, and Instruction Bias sections below are INPUT CONTEXT, not output. Do not restate, paraphrase, summarize, list, or echo them in any form. The output must BE the scene, not a description of the scene.",
+    "- Do not quote motif or theme labels or their explanatory text directly. Let motifs and themes influence imagery, subtext, and resonance — the prose should carry them, not name them.",
     "- Write a scene, not a synopsis — actual prose with movement, not a description of what happens",
     "- Use only the characters and contextual elements relevant to this beat. Do not force unused canon elements into the prose.",
     "- Include sensory specificity: concrete detail, not vague abstraction",

@@ -300,6 +300,14 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
         selectedModelId: String? = nil,
+        // PR-360-Z smoke-test fix: explicit canonical section POV. When
+        // present, takes priority over selectedPOV (the kickoff sheet
+        // selection) so the Section Contract block renders the section's
+        // authoritative POV. nil falls back to selectedPOV. Without this,
+        // Kevin's 2026-08-21 smoke test saw "POV is not actually populated"
+        // because the regenerate/continue/remix path looked up the section
+        // for title + summary but never fetched POV.
+        pov: String? = nil,
         // PR-360-Z: canonical section context fields. Callers that have
         // access to the current outline section (e.g., project view that
         // generates from a specific section) populate these. Callers
@@ -332,7 +340,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
             container: selectedContainer?.rawValue,
-            pov: selectedPOV?.rawValue,
+            pov: pov ?? selectedPOV?.rawValue,
             terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId,
@@ -376,7 +384,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             requestedOutputType: GenerationOutputType.story.rawValue,
             generationLengthMode: lengthMode.rawValue,
             container: selectedContainer?.rawValue,
-            pov: selectedPOV?.rawValue,
+            pov: pov ?? selectedPOV?.rawValue,
             terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId,
@@ -445,6 +453,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
         selectedModelId: String? = nil,
+        // PR-360-Z smoke-test fix: explicit canonical section POV. Same
+        // priority rule as generate() above — pov ?? selectedPOV?.rawValue.
+        pov: String? = nil,
         // PR-360-Z: canonical section context fields. For regenerate /
         // continue / remix actions, callers typically extract section
         // info from the parent output's outline_section_id (via project
@@ -486,7 +497,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             requestedOutputType: requestedOutputType.rawValue,
             generationLengthMode: lengthMode.rawValue,
             container: selectedContainer?.rawValue,
-            pov: selectedPOV?.rawValue,
+            pov: pov ?? selectedPOV?.rawValue,
             terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId,
@@ -757,6 +768,9 @@ final class StubGenerationBackendService: GenerationBackendServiceProtocol, Gene
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
         selectedModelId: String? = nil,
+        // PR-360-Z smoke-test fix: explicit canonical section POV. Signature
+        // must match GenerationBackendServiceProtocol; body ignores it.
+        pov: String? = nil,
         // PR-360-Z: canonical section context fields. Always nil here
         // because the stub never reaches the network — but the signature
         // must match GenerationBackendServiceProtocol.

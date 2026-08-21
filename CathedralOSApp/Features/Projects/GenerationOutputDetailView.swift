@@ -1543,13 +1543,18 @@ struct GenerationOutputDetailView: View {
             // Outline.swift line 19), the path is project.outlines
             // (array) -> outline.sections (array). Each project has a
             // single Outline (per Outline.swift comment), so .first is safe.
-            let sectionContext: (title: String?, summary: String?) = {
+            // PR-360-Z smoke-test fix: fetch section POV alongside title +
+            // summary so the Section Contract block in the prompt renders
+            // "POV: <instruction>" instead of being silently empty. Per the
+            // model graph: project.outlines[0].sections (Outline.swift comment
+            // notes each project has a single outline, so .first is safe).
+            let sectionContext: (title: String?, summary: String?, pov: String?) = {
                 guard let sectionID = output.outlineSectionID,
                       let project = output.project,
                       let outline = project.outlines.first,
                       let section = outline.sections.first(where: { $0.id == sectionID })
-                else { return (nil, nil) }
-                return (section.title, section.summary)
+                else { return (nil, nil, nil) }
+                return (section.title, section.summary, section.pov)
             }()
 
             let response = try await generationService.generateAction(
@@ -1559,6 +1564,7 @@ struct GenerationOutputDetailView: View {
                 parentGenerationID: output.id,
                 requestedOutputType: outputType,
                 lengthMode: mode,
+                pov: sectionContext.pov,
                 sectionTitle: sectionContext.title,
                 sectionSummary: sectionContext.summary
             )
