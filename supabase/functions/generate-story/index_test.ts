@@ -34,6 +34,7 @@
 import {
   assertEquals,
   assertExists,
+  assertNotEquals,
   assertRejects,
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
@@ -2174,7 +2175,7 @@ Deno.test({
 // which was just actionTask[generate] = "Write an opening story scene..." —
 // wrong once cumulative state exists).
 Deno.test({
-  name: "PR-360-Z roll-in 3: Writing Task includes 'Write the next complete beat described by the Section Contract'",
+  name: "PR-360-Z roll-in 3 (smoke-test fix): Writing Task is the canonical single line per Kevin's 2026-08-21 spec",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2183,10 +2184,17 @@ Deno.test({
     });
     assertEquals(c !== null, true);
     const userMsg = c!.messages[1].content;
-    // New Writing Task line is present.
+    // Canonical Writing Task text (Kevin #9423 #3) is present.
     assertStringIncludes(userMsg, "Write the next complete beat described by the Section Contract");
     assertStringIncludes(userMsg, "Continue naturally from Project State");
-    assertStringIncludes(userMsg, "Do not restart, summarize prior events, or advance beyond this beat's natural stopping point");
+    assertStringIncludes(userMsg, "Do not restart or summarize prior events");
+    // The ", or advance beyond this beat's natural stopping point" tail
+    // is GONE per Kevin's exact spec.
+    assertEquals(
+      userMsg.includes("or advance beyond this beat's natural stopping point"),
+      false,
+      "Writing Task must match Kevin #9423 #3 exactly — no trailing clause",
+    );
   },
 });
 
@@ -2242,5 +2250,155 @@ Deno.test({
     assertStringIncludes(userMsg, "third person limited");
     // The "Section Contract governs what happens now" framing appears in user.
     assertStringIncludes(userMsg, "The Section Contract governs what happens now");
+  },
+});
+
+
+// =============================================================================
+// PR-360-Z smoke-test regression block — Kevin's 2026-08-21 21:29 EDT feedback
+// (memory chunks #277/#279 close-out, then a fresh smoke test that found
+// Section Contract missing from USER + dual Writing Tasks + empty POV).
+//
+// Fixture mirrors the exact smoke-test state: project with multiple accepted
+// scenes (projectStateContext populated), a Beat-type section with title +
+// summary + POV populated. The three named tests below fail if any of the
+// regression conditions recur.
+// =============================================================================
+
+const SMOKE_TEST_STATE_PR360Z = {
+  // Beat container — the bar scene that cut off in the original smoke test.
+  container: "beat",
+  // POV — the section's authoritative POV (per corrections rulebook #273 rule #2).
+  pov: "firstPerson",
+  // Section context (per corrections rulebook #273 rule #3).
+  sectionTitle: "Maya at the bar",
+  sectionSummary:
+    "Maya walks into the corner bar she's avoided for three years and orders her usual. The bartender watches her but doesn't say anything. She's here to make a decision she's been postponing since the funeral.",
+  // Project state context — simulates 5+ accepted prior scenes providing continuity.
+  projectStateContext: `## Project State (prior accepted scenes)
+
+5 scenes accepted. Last scene ended with: Maya parked outside the bar for twenty minutes before going in.
+
+Characters in play:
+- Maya Chen — protagonist, returning to the bar after three years
+- The bartender — same one from before, name unknown
+- (no other characters on stage in this beat)`,
+};
+
+// PR-360-Z smoke-test regression 1: USER message contains ## Section Contract
+// when sectionTitle + sectionSummary are passed (mirrors Kevin's #9423 item #1:
+// "Inject an explicit ## Section Contract immediately before Project State
+// containing: sanitized section title, current section summary/premise,
+// requested POV"). Fails if the USER Section Contract is missing.
+Deno.test({
+  name: "PR-360-Z smoke-test 1: USER message contains ## Section Contract when sectionTitle + sectionSummary + pov are passed",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: SMOKE_TEST_STATE_PR360Z.container,
+      pov: SMOKE_TEST_STATE_PR360Z.pov,
+      sectionTitle: SMOKE_TEST_STATE_PR360Z.sectionTitle,
+      sectionSummary: SMOKE_TEST_STATE_PR360Z.sectionSummary,
+      projectStateContext: SMOKE_TEST_STATE_PR360Z.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    assertStringIncludes(
+      userMsg,
+      "## Section Contract (AUTHORITATIVE)",
+      "USER message must include ## Section Contract when section context is present (Kevin #9423 #1)",
+    );
+    assertStringIncludes(userMsg, "Maya at the bar", "Section title must appear in USER Section Contract");
+    assertStringIncludes(
+      userMsg,
+      "Maya walks into the corner bar she's avoided for three years",
+      "Section summary/premise must appear in USER Section Contract",
+    );
+  },
+});
+
+// PR-360-Z smoke-test regression 2: prompt contains exactly ONE Writing Task,
+// and the legacy "opening story scene" instruction must NOT be present
+// (Kevin #9423 items #2 + #3). The canonical Writing Task text is the
+// section-contract-anchored continuation line.
+Deno.test({
+  name: "PR-360-Z smoke-test 2: prompt contains exactly ONE Writing Task (no legacy opening-scene line)",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: SMOKE_TEST_STATE_PR360Z.container,
+      pov: SMOKE_TEST_STATE_PR360Z.pov,
+      sectionTitle: SMOKE_TEST_STATE_PR360Z.sectionTitle,
+      sectionSummary: SMOKE_TEST_STATE_PR360Z.sectionSummary,
+      projectStateContext: SMOKE_TEST_STATE_PR360Z.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    const userMsg = c!.messages[1].content;
+    const fullPrompt = sysMsg + "\n" + userMsg;
+    // Legacy text MUST NOT appear (Kevin #9423 #2).
+    assertEquals(
+      fullPrompt.includes("opening story scene that brings the premise"),
+      false,
+      "Legacy 'opening story scene...' instruction must be removed from the prompt (Kevin #9423 #2)",
+    );
+    // Canonical Writing Task MUST appear (Kevin #9423 #3).
+    assertStringIncludes(
+      userMsg,
+      "Write the next complete beat described by the Section Contract",
+      "Canonical Writing Task text must appear in the prompt (Kevin #9423 #3)",
+    );
+    // Exactly one ## Writing Task block in the user message.
+    const writingTaskCount = (userMsg.match(/## Writing Task/g) || []).length;
+    assertEquals(
+      writingTaskCount,
+      1,
+      `Expected exactly 1 '## Writing Task' block in USER, got ${writingTaskCount}`,
+    );
+  },
+});
+
+// PR-360-Z smoke-test regression 3: Section Contract contains an explicit
+// POV: line (Kevin #9423 #4: "Ensure POV is actually populated, not merely
+// referenced by SYSTEM"). The Section Contract POV instruction is what
+// drives the model's POV — if the line is missing or the instruction is
+// empty, the model writes without a POV anchor.
+Deno.test({
+  name: "PR-360-Z smoke-test 3: Section Contract block contains explicit POV: line with POV instruction",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: SMOKE_TEST_STATE_PR360Z.container,
+      pov: SMOKE_TEST_STATE_PR360Z.pov,
+      sectionTitle: SMOKE_TEST_STATE_PR360Z.sectionTitle,
+      sectionSummary: SMOKE_TEST_STATE_PR360Z.sectionSummary,
+      projectStateContext: SMOKE_TEST_STATE_PR360Z.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    const userMsg = c!.messages[1].content;
+
+    // USER Section Contract block exists (sanity check from test 1).
+    const contractIdx = userMsg.indexOf("## Section Contract (AUTHORITATIVE)");
+    assertNotEquals(
+      contractIdx,
+      -1,
+      "USER message must contain ## Section Contract (AUTHORITATIVE) — see PR-360-Z smoke-test 1",
+    );
+    // Slice the block until the next ## heading or end-of-message.
+    const afterContract = userMsg.slice(contractIdx);
+    const nextHeading = afterContract.slice(1).search(/\n## /);
+    const blockEnd = nextHeading === -1 ? afterContract.length : nextHeading + 1;
+    const sectionBlock = afterContract.slice(0, blockEnd);
+    assertStringIncludes(
+      sectionBlock,
+      "POV:",
+      "USER Section Contract block must contain an explicit 'POV:' line (Kevin #9423 #4)",
+    );
+    assertStringIncludes(
+      sectionBlock,
+      "first person",
+      "POV instruction for 'firstPerson' should expand to 'first person ...' — empty instruction means the model lost its POV anchor",
+    );
   },
 });

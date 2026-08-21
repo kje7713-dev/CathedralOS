@@ -1230,6 +1230,11 @@ struct ProjectDetailView: View {
                 selectedPOV: selectedPOV,
                 terminalBeat: terminalBeat.isEmpty ? nil : terminalBeat,
                 selectedModelId: selectedModelId,
+                // PR-360-Z smoke-test fix: explicit canonical section POV. Project-level
+                // generation has no specific section in scope here — caller passes nil
+                // and the backend falls back to selectedPOV (the kickoff-sheet choice)
+                // for both the Section Contract block and the actual POV.
+                pov: nil,
                 // PR-360-Z: canonical section context fields. Project-level
                 // generation has no specific section in scope here — caller
                 // passes nil and the backend degrades gracefully (no

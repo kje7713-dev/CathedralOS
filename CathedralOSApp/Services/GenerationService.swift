@@ -43,6 +43,9 @@ protocol GenerationService {
         selectedPOV: POV?,
         terminalBeat: String?,
         selectedModelId: String?,
+        // PR-360-Z smoke-test fix: explicit canonical section POV. See
+        // GenerationBackendService.swift for the wired-up implementation.
+        pov: String?,
         // PR-360-Z: canonical section context fields. See GenerationBackendService.swift
         // SupabaseGenerationService for the wired-up implementation; default impl in the
         // extension below forwards them when present.
@@ -64,6 +67,9 @@ protocol GenerationService {
         selectedPOV: POV?,
         terminalBeat: String?,
         selectedModelId: String?,
+        // PR-360-Z smoke-test fix: explicit canonical section POV. See
+        // GenerationBackendService.swift for the wired-up implementation.
+        pov: String?,
         // PR-360-Z: canonical section context fields. See GenerationBackendService.swift
         // SupabaseGenerationService for the wired-up implementation.
         sectionTitle: String?,
@@ -82,6 +88,8 @@ extension GenerationService {
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
+        // PR-360-Z smoke-test fix: explicit canonical section POV (defaults to nil).
+        pov: String? = nil,
         // PR-360-Z: canonical section context fields (defaults to nil).
         sectionTitle: String? = nil,
         sectionSummary: String? = nil
@@ -95,6 +103,7 @@ extension GenerationService {
             selectedPOV: selectedPOV,
             terminalBeat: terminalBeat,
             selectedModelId: nil,
+            pov: pov,
             sectionTitle: sectionTitle,
             sectionSummary: sectionSummary
         )
@@ -112,6 +121,8 @@ extension GenerationService {
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
         selectedModelId: String? = nil,
+        // PR-360-Z smoke-test fix: explicit canonical section POV (defaults to nil).
+        pov: String? = nil,
         // PR-360-Z: canonical section context fields (defaults to nil).
         sectionTitle: String? = nil,
         sectionSummary: String? = nil
@@ -146,6 +157,11 @@ final class StoryGenerationService: GenerationService {
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
         selectedModelId: String? = nil,
+        // PR-360-Z smoke-test fix: explicit canonical section POV. See
+        // GenerationBackendService.swift for the rationale. StoryGenerationService
+        // is the legacy non-Supabase backend path; threading pov through keeps
+        // the Section Contract block consistent across backends.
+        pov: String? = nil,
         // PR-360-Z: canonical section context fields. Defaults nil so existing
         // call sites compile unchanged.
         sectionTitle: String? = nil,
@@ -190,7 +206,10 @@ final class StoryGenerationService: GenerationService {
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedModelId: String? = nil,
+        // PR-360-Z smoke-test fix: explicit canonical section POV. See
+        // generate() above for rationale.
+        pov: String? = nil
     ) async throws -> GenerationResponse {
 
         // Decode the frozen payload to reconstruct the full request.
