@@ -1240,7 +1240,12 @@ struct ProjectDetailView: View {
                 // passes nil and the backend degrades gracefully (no
                 // Section Contract block in the prompt).
                 sectionTitle: nil,
-                sectionSummary: nil
+                sectionSummary: nil,
+                // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline
+                // section identity. Project-level direct-gen has no specific
+                // OutlineSection in scope — pass nil per spec ("Keep nil for
+                // genuinely non-section generation"). Backend degrades gracefully.
+                outlineSectionID: nil
             )
             mergeGenerationDiagnostics(await GenerationRequestDiagnosticsStore.shared.latestVisibleText())
 
