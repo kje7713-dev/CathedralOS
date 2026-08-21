@@ -1842,3 +1842,276 @@ Deno.test("terminal beat: absent terminalBeat produces private-inference instruc
   assertEquals(body.wasTruncated, false);
   assertExists(body.generatedText);
 });
+
+
+// =============================================================================
+// PR-360-Z regression tests (corrections rule #8 — eight named tests).
+// Run these in addition to the existing suite; they prove that the Prompt
+// Schema v1 contract is enforced end-to-end (buildPrompt + handler + provider
+// call). New tests added per PR-360-Z; do not merge without all eight green.
+// =============================================================================
+
+// PR-360-Z: capturing provider helper — stores the messages +
+// maxCompletionTokens passed to LLM.complete() for inspection.
+function makeCapturingPR360ZProvider(): {
+  provider: LLMProvider;
+  capture: () => { messages: LLMMessage[]; maxCompletionTokens: number } | null;
+} {
+  let captured: { messages: LLMMessage[]; maxCompletionTokens: number } | null = null;
+  const provider: LLMProvider = {
+    complete(messages: LLMMessage[], maxCompletionTokens: number) {
+      captured = { messages, maxCompletionTokens };
+      return Promise.resolve({
+        content: "Test output",
+        modelName: "mock-model",
+        inputTokens: 10,
+        outputTokens: 25,
+      });
+    },
+  };
+  return { provider, capture: () => captured };
+}
+
+// PR-360-Z: a payload with structured story context populated
+// (selectedCharacters, etc.) for tests 1 + 8.
+const POPULATED_PAYLOAD_PR360Z = {
+  schema: "cathedralos.prompt_pack_export",
+  version: 1,
+  project: { id: FAKE_USER_ID, name: "Test", summary: "A test summary" },
+  promptPack: { id: FAKE_USER_ID, name: "Pack", prompts: [] },
+  selectedCharacters: [
+    { name: "TestAlice", roles: ["protagonist"], goals: ["solve mystery"] },
+  ],
+  selectedRelationships: [],
+  selectedThemeQuestions: [],
+  selectedMotifs: [],
+};
+
+// PR-360-Z helper: run handler with the capturing provider + standard mocks.
+// Returns the captured messages + maxCompletionTokens.
+async function runPR360ZCapture(
+  overrides: Record<string, unknown>,
+): Promise<{ messages: LLMMessage[]; maxCompletionTokens: number } | null> {
+  const { provider, capture } = makeCapturingPR360ZProvider();
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore } = makeMockPersistenceStore();
+  const resp = await handler(makeAuthRequest(makeBaseRequest(overrides)), {
+    provider,
+    creditStore,
+    rateLimitStore,
+    generationModelStore,
+    authenticatedUserId: FAKE_USER_ID,
+    persistenceStore,
+  });
+  if (resp.status !== 200) {
+    throw new Error(`Handler returned ${resp.status}: ${await resp.text()}`);
+  }
+  return capture();
+}
+
+// PR-360-Z regression 1: buildStructuredPromptBody populated → block appears in
+// final prompt (user message). The "missing story arc" bug Kevin flagged at
+// 15:52 EDT (kevbot-brain #270) is the regression target: before this fix
+// buildStructuredPromptBody's output never reached LLMPromptDebugView.
+Deno.test({
+  name: "PR-360-Z regression 1: buildStructuredPromptBody populated → characters in user message",
+  fn: async () => {
+    const c = await runPR360ZCapture({ sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    assertStringIncludes(userMsg, "TestAlice");
+    assertStringIncludes(userMsg, "protagonist");
+    assertStringIncludes(userMsg, "solve mystery");
+  },
+});
+
+// PR-360-Z regression 2: projectStateContext absent → not in prompt (degrades
+// gracefully). Tests the conditional push at generate-story line 1075:
+// when body.project_id is missing, fetchProjectStateContext is skipped and
+// no "Project state (cumulative across all accepted scenes)" block appears.
+// The "populated" half requires mocking adminClient + section_embeddings;
+// tracked as follow-up (the conditional logic is the same code path).
+Deno.test({
+  name: "PR-360-Z regression 2: projectStateContext absent → no project-state block in prompt",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      // No project_id — fetchProjectStateContext skipped.
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    assertEquals(
+      userMsg.includes("Project state (cumulative across all accepted scenes)"),
+      false,
+    );
+  },
+});
+
+// PR-360-Z regression 3: explicit sectionTitle + sectionSummary reach the
+// Section Contract block in SYSTEM. The Section Contract is the authoritative
+// anchor for the per-generation contract (per corrections rule #2).
+Deno.test({
+  name: "PR-360-Z regression 3: sectionTitle + sectionSummary → Section Contract in SYSTEM",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Test Section",
+      sectionSummary: "A test section summary",
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    assertStringIncludes(sysMsg, "## Section Contract (AUTHORITATIVE");
+    assertStringIncludes(sysMsg, "Test Section");
+    assertStringIncludes(sysMsg, "A test section summary");
+    // The 6 authority rules must be stated explicitly in SYSTEM.
+    assertStringIncludes(sysMsg, "do not contradict the section premise");
+    assertStringIncludes(sysMsg, "dead characters remain dead");
+    assertStringIncludes(sysMsg, "do not invent named characters outside canon");
+    assertStringIncludes(sysMsg, "obey requested POV");
+    assertStringIncludes(sysMsg, "do not reproduce the section title as prose");
+    assertStringIncludes(sysMsg, "stay within container shape and stop naturally");
+  },
+});
+
+// PR-360-Z regression 4: sanitized title used in Section Contract.
+// (copy) / (test) / (draft) variants are stripped by sanitizeTitleForLLM
+// before the title reaches the LLM prompt. Verified inside the Section
+// Contract block specifically (other parts of the prompt might legitimately
+// reference "test" or "draft" — the assertion scopes to the contract).
+Deno.test({
+  name: "PR-360-Z regression 4: sanitizeTitleForLLM strips (copy)/(test)/(draft) in Section Contract",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Real Section Title (copy)",
+      sectionSummary: "Test summary",
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    // Sanitized title is present.
+    assertStringIncludes(sysMsg, "Real Section Title");
+    // "(copy)" should NOT appear inside the Section Contract block.
+    const contractIdx = sysMsg.indexOf("## Section Contract");
+    assertEquals(contractIdx >= 0, true);
+    const contractBlock = sysMsg.slice(contractIdx, contractIdx + 800);
+    assertEquals(contractBlock.includes("(copy)"), false);
+    // Also test the (test) + (draft) variants — combined assertions.
+    const c2 = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Other Title (test) and (draft)",
+      sectionSummary: "S",
+    });
+    const sys2 = c2!.messages[0].content;
+    const contractIdx2 = sys2.indexOf("## Section Contract");
+    const block2 = sys2.slice(contractIdx2, contractIdx2 + 800);
+    assertEquals(block2.includes("(test)"), false);
+    assertEquals(block2.includes("(draft)"), false);
+  },
+});
+
+// PR-360-Z regression 5: POV is system-level (in Section Contract), NOT in
+// the user message. Per corrections rule #2: "POV → SYSTEM message (alongside
+// container instructions), not user message. Structural limits weight higher
+// in system."
+Deno.test({
+  name: "PR-360-Z regression 5: POV is system-level, not user-level",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Test",
+      sectionSummary: "Summary",
+      pov: "firstPerson",
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    const userMsg = c!.messages[1].content;
+    // POV instruction appears in SYSTEM (the Section Contract renders the
+    // povConfig[pov].instruction string for firstPerson = "Write in first
+    // person (I, me, my)...").
+    assertStringIncludes(sysMsg, "first person");
+    // But NOT in USER (no "POV:" line in Writing Task anymore).
+    assertEquals(userMsg.includes("POV: "), false);
+  },
+});
+
+// PR-360-Z regression 6: "Confrontation" is gone from inferredShape. The
+// hardcoded `inferredShape = "Confrontation"` literal was the root cause
+// of "every output reads like a fight scene" (corrections rule #4 — drop
+// without replacement).
+Deno.test({
+  name: "PR-360-Z regression 6: 'Confrontation' is gone from prompt",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Test",
+      sectionSummary: "Summary",
+    });
+    assertEquals(c !== null, true);
+    const allText = c!.messages.map((m) => m.content).join("\n");
+    assertEquals(allText.includes("Confrontation"), false);
+    // Also check the trimmed "Narrative shape:" hint is gone from Writing Task.
+    const userMsg = c!.messages[1].content;
+    assertEquals(userMsg.includes("Narrative shape:"), false);
+  },
+});
+
+// PR-360-Z regression 7: provider output cap uses containerHardCap. The
+// container, not the legacy length-mode budget, owns the output limit
+// (corrections rule #6). For container="scene" (hardCap = 2300) and the
+// mock model (max_output_tokens = null per makeMockGenerationModelStore),
+// maxCompletionTokens passed to provider.complete() must equal 2300.
+Deno.test({
+  name: "PR-360-Z regression 7: provider output cap uses containerHardCap",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: "scene",
+    });
+    assertEquals(c !== null, true);
+    // scene container hardCap = 2300.
+    assertEquals(c!.maxCompletionTokens, 2300);
+
+    // Also verify another container: "moment" has hardCap = 700.
+    const c2 = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: "moment",
+    });
+    assertEquals(c2!.maxCompletionTokens, 700);
+  },
+});
+
+// PR-360-Z regression 8: no duplicate context blocks. A unique character
+// name should appear exactly once in the prompt — never duplicated across
+// craft (system) and context (user), never duplicated within either. Catches
+// the bug class where a section is smuggled into BOTH the Section Contract
+// AND the structured story context (or where the same characters appear
+// in both craft and user message).
+Deno.test({
+  name: "PR-360-Z regression 8: no duplicate context blocks",
+  fn: async () => {
+    const uniqueName = "ZZZUniquePR360ZCharacter987";
+    const payload = {
+      ...POPULATED_PAYLOAD_PR360Z,
+      selectedCharacters: [
+        { name: uniqueName, roles: ["test-role"] },
+      ],
+    };
+    const c = await runPR360ZCapture({ sourcePayloadJSON: payload });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    const userMsg = c!.messages[1].content;
+    const userOcc = (userMsg.match(new RegExp(uniqueName, "g")) || []).length;
+    const sysOcc = (sysMsg.match(new RegExp(uniqueName, "g")) || []).length;
+    // Unique character appears exactly once (in the user message — structured
+    // story context). Never in SYSTEM. Never duplicated.
+    assertEquals(userOcc, 1);
+    assertEquals(sysOcc, 0);
+    // Also verify Section Contract header appears at most once (no duplicate
+    // block if sectionTitle is provided but no duplicate "Section Contract"
+    // header either).
+    const sysContractCount = (sysMsg.match(/## Section Contract/g) || []).length;
+    assertEquals(sysContractCount <= 1, true);
+  },
+});
