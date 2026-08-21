@@ -245,7 +245,14 @@ protocol GenerationBackendServiceProtocol {
         // call sites compile unchanged. Wired through to the generate-story
         // body as top-level fields on the request payload.
         sectionTitle: String?,
-        sectionSummary: String?
+        sectionSummary: String?,
+        // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
+        // identity. UUID string of the OutlineSection that originated this
+        // generation. Required for backend-owned post-generation extraction
+        // (single owner = generate-story fires embed-section internally with
+        // raw_text = llmResult.content). Without it, section_embeddings
+        // never gets populated.
+        outlineSectionID: String?
     ) async throws -> GenerationResponse
 }
 
@@ -799,7 +806,11 @@ final class StubGenerationBackendService: GenerationBackendServiceProtocol, Gene
         // because the stub never reaches the network — but the signature
         // must match GenerationBackendServiceProtocol.
         sectionTitle: String? = nil,
-        sectionSummary: String? = nil
+        sectionSummary: String? = nil,
+        // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
+        // identity. Stub never reaches the network but signature must match
+        // GenerationBackendServiceProtocol for protocol conformance.
+        outlineSectionID: String? = nil
     ) async throws -> GenerationResponse {
         throw GenerationBackendServiceError.notImplemented
     }
