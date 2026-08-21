@@ -2115,3 +2115,132 @@ Deno.test({
     assertEquals(sysContractCount <= 1, true);
   },
 });
+
+
+// =============================================================================
+// PR-360-Z roll-in tests (Kevin 2026-08-20 20:56 EDT feedback).
+// Five tests covering the softened Writing Instructions, the new Writing
+// Task text, the softened Intimacy rule, and the Section Contract now
+// rendered in USER content for iOS direct generation.
+// =============================================================================
+
+// PR-360-Z roll-in 1: Writing Instructions softened to "Match the emotional
+// and dramatic intensity of the section premise" (replaces "Write with
+// tension, movement, and consequence" which biased everything toward high
+// drama).
+Deno.test({
+  name: "PR-360-Z roll-in 1: Writing Instructions uses softer 'Match the emotional and dramatic intensity' wording",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Test",
+      sectionSummary: "Summary",
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    // New softer wording is present.
+    assertStringIncludes(sysMsg, "Match the emotional and dramatic intensity of the section premise");
+    // Old high-drama-biasing line is gone.
+    assertEquals(sysMsg.includes("Write with tension, movement, and consequence"), false);
+  },
+});
+
+// PR-360-Z roll-in 2: Writing Instructions softened to "Use only the
+// characters and contextual elements relevant to this beat" (replaces
+// "Use the selected characters, relationships, spark, and motifs directly"
+// which forced unused canon into the prose).
+Deno.test({
+  name: "PR-360-Z roll-in 2: Writing Instructions uses softer 'Use only relevant characters' wording",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Test",
+      sectionSummary: "Summary",
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    // New softer wording is present.
+    assertStringIncludes(sysMsg, "Use only the characters and contextual elements relevant to this beat");
+    assertStringIncludes(sysMsg, "Do not force unused canon elements into the prose");
+    // Old "must drive action, dialogue, or consequence" force line is gone.
+    assertEquals(sysMsg.includes("Use the selected characters, relationships, spark, and motifs directly"), false);
+  },
+});
+
+// PR-360-Z roll-in 3: Writing Task updated to "Write the next complete
+// beat described by the Section Contract. Continue naturally from Project
+// State. Do not restart, summarize prior events, or advance beyond this
+// beat's natural stopping point." (replaces the previous Writing Task
+// which was just actionTask[generate] = "Write an opening story scene..." —
+// wrong once cumulative state exists).
+Deno.test({
+  name: "PR-360-Z roll-in 3: Writing Task includes 'Write the next complete beat described by the Section Contract'",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Test Section",
+      sectionSummary: "Test summary",
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    // New Writing Task line is present.
+    assertStringIncludes(userMsg, "Write the next complete beat described by the Section Contract");
+    assertStringIncludes(userMsg, "Continue naturally from Project State");
+    assertStringIncludes(userMsg, "Do not restart, summarize prior events, or advance beyond this beat's natural stopping point");
+  },
+});
+
+// PR-360-Z roll-in 4: Intimacy rule softened (dropped "Every intimate
+// encounter should permanently change the relationship or reveal something
+// previously hidden" — was overbearing for tiny beats).
+Deno.test({
+  name: "PR-360-Z roll-in 4: Intimacy rule does NOT contain 'permanently change the relationship'",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Test",
+      sectionSummary: "Summary",
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    // The overbearing line is gone.
+    assertEquals(
+      sysMsg.includes("Every intimate encounter should permanently change the relationship"),
+      false,
+    );
+    // The kept "explicitly authorized as character craft" framing is still there.
+    assertStringIncludes(sysMsg, "Intimacy is explicitly authorized as character craft");
+  },
+});
+
+// PR-360-Z roll-in 5: Section Contract now appears in USER content
+// (messages[1]) for iOS direct generation when sectionTitle + sectionSummary
+// are passed. Per Kevin's 2026-08-20 20:56 EDT feedback ("No POV instruction
+// in the user content"), the Section Contract belongs in the user message as
+// the explicit generation request. (The SYSTEM-level Section Contract
+// remains as the authoritative anchor; this is the user-content version.)
+Deno.test({
+  name: "PR-360-Z roll-in 5: Section Contract appears in USER content when sectionTitle + sectionSummary passed",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Test Section",
+      sectionSummary: "Test summary for the section",
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    const userMsg = c!.messages[1].content;
+    // Section Contract in SYSTEM (anchor) — still present.
+    assertStringIncludes(sysMsg, "## Section Contract (AUTHORITATIVE");
+    // Section Contract in USER (explicit generation request) — newly added.
+    assertStringIncludes(userMsg, "## Section Contract (AUTHORITATIVE)");
+    // Sanitized title appears in user content.
+    assertStringIncludes(userMsg, "Test Section");
+    // Premise appears in user content.
+    assertStringIncludes(userMsg, "Test summary for the section");
+    // POV appears in user content.
+    assertStringIncludes(userMsg, "third person limited");
+    // The "Section Contract governs what happens now" framing appears in user.
+    assertStringIncludes(userMsg, "The Section Contract governs what happens now");
+  },
+});
