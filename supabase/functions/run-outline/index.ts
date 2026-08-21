@@ -386,6 +386,10 @@ async function runOutline(
         terminal_beat: section.terminal_beat,
         story_arc_beat_id: section.story_arc_beat_id,
         raw_text: rawText,
+        // Kevin 2026-08-21 12:00 EDT fix: pass the output_id so embed-section
+        // can persist lineage. The DELETE trigger on generation_outputs uses
+        // this to clean up orphaned section memory.
+        output_id: result.output_id,
         prior_context: priorContext,
       }, adminClient, authHeader);
 
@@ -801,6 +805,12 @@ async function callEmbedSection(
     terminal_beat: string | null;
     story_arc_beat_id: string | null;
     raw_text: string;
+    // Kevin 2026-08-21 12:00 EDT fix: lineage from section memory to the
+    // generation output that produced it. embed-section persists this
+    // on the section_embeddings row; the DELETE trigger on
+    // generation_outputs uses it to clean up orphaned memory when the
+    // output is deleted.
+    output_id: string;
     // The same prior context that run-outline fetches. Passed to
     // embed-section so the LLM extraction pass knows what is already
     // stored and can decide what to add/update/supersede.

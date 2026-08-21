@@ -531,6 +531,10 @@ ${body.raw_text}`
   const { error: upsertErr } = await adminClient.from("section_embeddings").upsert({
     project_id: body.project_id,
     outline_section_id: body.outline_section_id,
+    // Kevin 2026-08-21 12:00 EDT fix: lineage from section memory to the
+    // generation output that produced it. The DELETE trigger on
+    // generation_outputs uses this to clean up orphaned memory.
+    generation_output_id: body.output_id ?? null,
     embedding,
     extracted_summary: sceneMemory.extracted_summary,
     raw_text: body.raw_text,
