@@ -1534,6 +1534,24 @@ struct GenerationOutputDetailView: View {
         newOutput = newGen
 
         do {
+            // PR-360-Z roll-in: look up the section from the parent output
+            // so the Section Contract block renders in the prompt (both
+            // SYSTEM anchor + USER content). For regenerate / continue /
+            // remix, the parent output's outlineSectionID links to the
+            // outline_sections row via the project. Per the model graph
+            // (CathedralOSApp/Models/StoryProject.swift line 40-41 +
+            // Outline.swift line 19), the path is project.outlines
+            // (array) -> outline.sections (array). Each project has a
+            // single Outline (per Outline.swift comment), so .first is safe.
+            let sectionContext: (title: String?, summary: String?) = {
+                guard let sectionID = output.outlineSectionID,
+                      let project = output.project,
+                      let outline = project.outlines.first,
+                      let section = outline.sections.first(where: { $0.id == sectionID })
+                else { return (nil, nil) }
+                return (section.title, section.summary)
+            }()
+
             let response = try await generationService.generateAction(
                 action: action,
                 sourcePayloadJSON: output.sourcePayloadJSON,
@@ -1541,13 +1559,8 @@ struct GenerationOutputDetailView: View {
                 parentGenerationID: output.id,
                 requestedOutputType: outputType,
                 lengthMode: mode,
-                // PR-360-Z: canonical section context fields. Regenerate /
-                // continue / remix from a past output doesn't have the
-                // section in scope at this call site — the parent output's
-                // outline_section_id would let us look it up via the
-                // project, but that's a follow-up wiring. For now nil.
-                sectionTitle: nil,
-                sectionSummary: nil
+                sectionTitle: sectionContext.title,
+                sectionSummary: sectionContext.summary
             )
 
             newGen.outputText = response.generatedText

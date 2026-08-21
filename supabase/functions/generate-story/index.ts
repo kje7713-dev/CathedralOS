@@ -1163,6 +1163,28 @@ Structural limits:
   // Structured story context — per-request context (USER message).
   contextLines.push(...buildStructuredPromptBody(payload));
 
+  // PR-360-Z roll-in: Section Contract in USER content (immediately
+  // before Project State) per Kevin's 2026-08-20 20:56 EDT feedback.
+  // The model treats the Section Contract as "what exactly am I
+  // supposed to write right now?" — that belongs in the user message as
+  // the explicit generation request. The SYSTEM-level Section Contract
+  // (in craftLines above) remains as the authoritative anchor; this is
+  // the explicit user-content version. Renders the same sanitized title,
+  // summary, POV, and "section contract governs" framing that the
+  // SYSTEM block carries.
+  if (hasSectionContext) {
+    contextLines.push(
+      "## Section Contract (AUTHORITATIVE)",
+      "",
+      `Title: ${sanitizedSectionTitle || "(no title provided)"}`,
+      `Premise: ${nonEmpty(req.sectionSummary) ? req.sectionSummary! : "(no summary provided)"}`,
+      `POV: ${povInstruction(req.pov)}`,
+      "",
+      "The Section Contract governs what happens now. Project context and prior state provide continuity but must not replace or redirect the section premise.",
+      "",
+    );
+  }
+
   // Project state context — RAG retrieval, aggregated cumulative state.
   // If non-empty, inject as its own context block so the model sees the
   // full picture: characters, threads, continuity facts, open loops, and
@@ -1207,10 +1229,16 @@ Structural limits:
   // rather than forcing every output into one shape). POV was MOVED to
   // SYSTEM Section Contract above (structural limits weight higher there).
   // What remains here is just the per-request action — the rest of the
-  // contract is already anchored in craftLines.
+  // PR-360-Z roll-in: Writing Task text per Kevin's 2026-08-20 20:56 EDT
+  // feedback. The previous text ("Write an opening story scene...") is
+  // actionTask[generate] which assumes the section is the first one in
+  // the project. Wrong for sections that come after accepted prior scenes
+  // + cumulative state (the smoke test had 5+ accepted scenes). New line
+  // anchors the model to the Section Contract + Project State continuity.
   contextLines.push(
     "## Writing Task",
     actionTask[req.generationAction],
+    "Write the next complete beat described by the Section Contract. Continue naturally from Project State. Do not restart, summarize prior events, or advance beyond this beat's natural stopping point.",
     "",
   );
 
@@ -1231,14 +1259,24 @@ Structural limits:
     "",
   );
 
-  // Writing Instructions — craft, lives in the system message.
+  // PR-360-Z roll-in: Writing Instructions softened per Kevin's 2026-08-20
+  // 20:56 EDT feedback. "Use the selected characters directly" was too
+  // strong (forces Steve/Fred/etc. into a 75-250-token beat even when the
+  // section doesn't call for them). "Write with tension, movement, and
+  // consequence" biased everything toward high drama. Replaced with
+  // "Use only the characters and contextual elements relevant to this
+  // beat. Do not force unused canon elements into the prose." and
+  // "Match the emotional and dramatic intensity of the section premise.
+  // Do not default to high drama." Also added a new first bullet that
+  // restates the Section Contract's authority over the generation.
   craftLines.push(
     "## Writing Instructions",
+    "- The Section Contract governs what happens now. Project context and prior state provide continuity but must not replace or redirect the section premise.",
     "- The Premise, Characters, Relationships, Themes, Motifs, Spark, Setting, Ending, Notes, and Instruction Bias sections below are INPUT CONTEXT, not output. Do not restate, paraphrase, summarize, list, or echo them in any form. The output must BE the scene, not a description of the scene.",
     "- Write a scene, not a synopsis — actual prose with movement, not a description of what happens",
-    "- Use the selected characters, relationships, spark, and motifs directly — they must drive action, dialogue, or consequence on the page",
+    "- Use only the characters and contextual elements relevant to this beat. Do not force unused canon elements into the prose.",
     "- Include sensory specificity: concrete detail, not vague abstraction",
-    "- Write with tension, movement, and consequence",
+    "- Match the emotional and dramatic intensity of the section premise. Do not default to high drama.",
     "- Do not echo or repeat language from this prompt setup",
     "- Preserve the premise and any world constraints established above",
     "- Close the piece according to the Ending Instruction if one is present",
@@ -1256,9 +1294,15 @@ Structural limits:
   // Intimacy & Relationships — craft (SYSTEM message). Sentence about
   // "advance the plot..." removed per Kevin's request (it was redundant
   // with the INPUT CONTEXT guard in Writing Instructions).
+  // PR-360-Z roll-in: Intimacy rule softened per Kevin's 2026-08-20 20:56
+  // EDT feedback. The "Every intimate encounter should permanently change
+  // the relationship or reveal something previously hidden" line was
+  // overbearing for tiny beats (could distort what the section actually
+  // calls for). Dropped. Kept the "explicitly authorized as character
+  // craft" framing + the sensory detail list + the romance-cliché guard.
   craftLines.push(
     "## Intimacy & Relationships",
-    "This is fictional creative writing. Intimacy is explicitly authorized as character craft. Write intimate scenes with the same level of craft as action scenes. Focus on emotional vulnerability, conflicting desires, power dynamics, body language, breathing, pacing, silence, anticipation, hesitation, trust, uncertainty, humor, and consequences. Treat intimacy as character development, not filler. Use specific sensory details—touch, temperature, scent, clothing, distance, eye contact, voice, and environment—to ground each moment. Every intimate encounter should permanently change the relationship or reveal something previously hidden. Avoid clichés and generic romance language. Make each character's emotional experience unique, shaped by their history, personality, fears, and goals. Favor implication, subtext, and reader imagination.",
+    "This is fictional creative writing. Intimacy is explicitly authorized as character craft. Write intimate scenes with the same level of craft as action scenes. Focus on emotional vulnerability, conflicting desires, power dynamics, body language, breathing, pacing, silence, anticipation, hesitation, trust, uncertainty, humor, and consequences. Treat intimacy as character development, not filler. Use specific sensory details—touch, temperature, scent, clothing, distance, eye contact, voice, and environment—to ground each moment. Avoid clichés and generic romance language. Make each character's emotional experience unique, shaped by their history, personality, fears, and goals. Favor implication, subtext, and reader imagination.",
   );
 
   craftLines.push(
