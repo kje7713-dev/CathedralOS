@@ -3049,6 +3049,56 @@ const POPULATED_FULL_PAYLOAD_PR360Z = {
 };
 
 
+
+
+// =============================================================================
+// Defense-in-depth regression (added 2026-08-21 after Kevin's T2 smoke test
+// showed orphaned section_embeddings rows were still reaching Project State
+// even after the lineage fix from commit 7031845). The write-time trigger
+// handles the common case but missed edge cases:
+//   - iOS crash aborts the cloud DELETE before completion → trigger doesn't
+//     fire (the row stays in section_embeddings with valid generation_output_id
+//     pointing at a still-existing generation_outputs row that gets deleted
+//     later by a different sync path).
+//   - Pre-migration rows with NULL generation_output_id that survived cleanup.
+// The fix: fetchProjectStateContext now uses an INNER JOIN
+// (`generation_outputs!inner(id)`) so orphaned memory is filtered at READ time,
+// regardless of whether write-time cleanup fired.
+// =============================================================================
+
+Deno.test({
+  name: "Defense-in-depth: fetchProjectStateContext query INNER JOINs generation_outputs to exclude orphaned memory",
+  fn: async () => {
+    // Read the source of fetchProjectStateContext (the function that loads
+    // Project State into the prompt). Assert the INNER JOIN is present in
+    // its Supabase query.
+    const indexPath = "supabase/functions/generate-story/index.ts";
+    const text = (await import("node:fs")).readFileSync(indexPath, "utf8");
+
+    // Find the fetchProjectStateContext function body.
+    const fnStart = text.indexOf("async function fetchProjectStateContext");
+    assertNotEquals(fnStart, -1, "fetchProjectStateContext must exist");
+    // Find the next function or end of file to bound the slice.
+    const fnBodyEnd = text.indexOf("\nfunction ", fnStart + 1);
+    const fnBody = text.slice(fnStart, fnBodyEnd > 0 ? fnBodyEnd : fnStart + 3000);
+
+    // The function must use generation_outputs!inner(id) to filter orphaned memory.
+    assertStringIncludes(
+      fnBody,
+      "generation_outputs!inner(id)",
+      "fetchProjectStateContext must use generation_outputs!inner(id) to filter orphaned memory at read time",
+    );
+    // And must NOT have the orphaned single-table select.
+    assertEquals(
+      fnBody.includes(
+        '.select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")',
+      ),
+      false,
+      "fetchProjectStateContext must NOT have the orphaned single-table select (no INNER JOIN) — deleted memories would leak into Project State",
+    );
+  },
+});
+
 // =============================================================================
 // PR-360-Z prompt-ordering regression (added 2026-08-21 after Kevin's 3rd
 // smoke test on the prompt authority fix still failed). The Turtle smoke

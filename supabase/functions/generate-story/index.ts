@@ -770,9 +770,21 @@ async function fetchProjectStateContext(
   projectId: string
 ): Promise<string> {
   try {
+    // Kevin 2026-08-21 12:55 EDT smoke test fix: defense-in-depth — only include
+    // section_embeddings rows whose source generation_output still exists.
+    // The `!inner` embed forces an INNER JOIN against generation_outputs,
+    // excluding rows where:
+    //   (a) generation_output_id IS NULL (pre-migration rows that survived
+    //       the one-time cleanup)
+    //   (b) the source generation_output was deleted (regardless of whether
+    //       the AFTER DELETE trigger fired — covers iOS-crash-aborts-DELETE
+    //       edge case Kevin's T1 exposed)
+    // This is belt-and-suspenders with the write-time trigger (commit 7031845):
+    // write-time cleanup removes the row, read-time filter excludes it even
+    // if the cleanup missed. Together they enforce the invariant.
     const { data, error } = await adminClient
       .from("section_embeddings")
-      .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
+      .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at, generation_outputs!inner(id)")
       .eq("project_id", projectId)
       .order("created_at", { ascending: true });
     if (error || !data || data.length === 0) return "";
