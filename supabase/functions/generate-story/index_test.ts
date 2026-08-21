@@ -1966,10 +1966,21 @@ Deno.test({
     });
     assertEquals(c !== null, true);
     const sysMsg = c!.messages[0].content;
-    // New SYSTEM block (UNTRUSTED, CACHEABLE).
+    // New SYSTEM block. Kevin 11:02 EDT removed UNTRUSTED, CACHEABLE from
+    // the header (UNTRUSTED counterproductive beside authoritative language;
+    // CACHEABLE is implementation metadata, not LLM-visible prose).
     assertStringIncludes(sysMsg, "## Section Contract Authority");
-    assertStringIncludes(sysMsg, "UNTRUSTED, CACHEABLE");
     assertStringIncludes(sysMsg, "outranks ALL other creative guidance");
+    assertEquals(
+      sysMsg.includes("UNTRUSTED"),
+      false,
+      "Old UNTRUSTED qualifier must be removed (Kevin 11:02 EDT)",
+    );
+    assertEquals(
+      sysMsg.includes("CACHEABLE"),
+      false,
+      "Old CACHEABLE qualifier must be removed (Kevin 11:02 EDT)",
+    );
     // Death rule kept separately (Kevin 09:37 EDT spec).
     assertStringIncludes(sysMsg, "character as already dead");
     // Container invariants still in SYSTEM (stable across sections, cacheable).
@@ -2212,25 +2223,58 @@ Deno.test({
 // which was just actionTask[generate] = "Write an opening story scene..." —
 // wrong once cumulative state exists).
 Deno.test({
-  name: "PR-360-Z roll-in 3 (smoke-test fix): Writing Task is the canonical single line per Kevin's 2026-08-21 spec",
+  name: "PR-360-Z roll-in 3 (smoke-test fix): Writing Task uses dynamic container noun + new wording per Kevin's 11:02 EDT spec",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      container: "beat",  // make the dynamic container noun assertion deterministic
       sectionTitle: "Test Section",
       sectionSummary: "Test summary",
     });
     assertEquals(c !== null, true);
     const userMsg = c!.messages[1].content;
     // Canonical Writing Task text (Kevin #9423 #3) is present.
-    assertStringIncludes(userMsg, "Write the next complete beat described by the Section Contract");
-    assertStringIncludes(userMsg, "Continue naturally from Project State");
-    assertStringIncludes(userMsg, "Do not restart or summarize prior events");
-    // The ", or advance beyond this beat's natural stopping point" tail
-    // is GONE per Kevin's exact spec.
+    // Kevin 11:02 EDT ordering fix: Writing Task uses dynamic container noun
+    // ("Beat" for the Beat container in this test) + new wording per his spec.
+    // Dynamic container noun (Beat container in this test).
+    assertStringIncludes(
+      userMsg,
+      "Write the current Beat described by the Section Contract",
+      "Writing Task must use dynamic container noun + canonical Section-Contract-anchored text",
+    );
+    // NEW wording per Kevin 11:02 EDT spec — replaces the OLD "Continue
+    // naturally from Project State" line that kept steering the model toward
+    // Ted/Betty continuation.
+    assertStringIncludes(
+      userMsg,
+      "Use Project State only to preserve continuity",
+      "Writing Task must say 'Use Project State only to preserve continuity' (Kevin 11:02 EDT)",
+    );
+    assertStringIncludes(
+      userMsg,
+      "Begin materially advancing the Section Contract immediately",
+      "Writing Task must say 'Begin materially advancing the Section Contract immediately' (Kevin 11:02 EDT)",
+    );
+    assertStringIncludes(
+      userMsg,
+      "Do not continue the prior interaction unless doing so directly advances the Section Contract",
+      "Writing Task must prohibit continuing the prior interaction unless it advances the Section Contract (Kevin 11:02 EDT)",
+    );
+    // OLD wording MUST be absent.
+    assertEquals(
+      userMsg.includes("Continue naturally from Project State"),
+      false,
+      "OLD 'Continue naturally from Project State' wording must be removed (Kevin 11:02 EDT — kept steering model toward Ted/Betty)",
+    );
+    assertEquals(
+      userMsg.includes("Do not restart or summarize prior events"),
+      false,
+      "OLD 'Do not restart or summarize prior events' wording must be removed (Kevin 11:02 EDT)",
+    );
     assertEquals(
       userMsg.includes("or advance beyond this beat's natural stopping point"),
       false,
-      "Writing Task must match Kevin #9423 #3 exactly — no trailing clause",
+      "OLD ', or advance beyond this beat's natural stopping point' tail must be removed",
     );
   },
 });
@@ -2395,11 +2439,23 @@ Deno.test({
       false,
       "Legacy 'opening story scene...' instruction must be removed from the prompt (Kevin #9423 #2)",
     );
-    // Canonical Writing Task MUST appear (Kevin #9423 #3).
+    // Canonical Writing Task MUST appear with NEW wording (Kevin 11:02 EDT):
+    // dynamic container noun (Beat for default container) + ordering + new prose.
     assertStringIncludes(
       userMsg,
-      "Write the next complete beat described by the Section Contract",
-      "Canonical Writing Task text must appear in the prompt (Kevin #9423 #3)",
+      "Write the current Beat described by the Section Contract",
+      "Canonical Writing Task must use dynamic container noun (Kevin 11:02 EDT)",
+    );
+    assertStringIncludes(
+      userMsg,
+      "Begin materially advancing the Section Contract immediately",
+      "Canonical Writing Task must say 'Begin materially advancing' (Kevin 11:02 EDT)",
+    );
+    // OLD wording MUST be absent.
+    assertEquals(
+      userMsg.includes("Write the next complete beat described by the Section Contract"),
+      false,
+      "OLD 'Write the next complete beat' wording must be replaced by dynamic container noun version (Kevin 11:02 EDT)",
     );
     // Exactly one ## Writing Task block in the user message.
     const writingTaskCount = (userMsg.match(/## Writing Task/g) || []).length;
@@ -2574,10 +2630,11 @@ Deno.test({
     });
     assertEquals(c !== null, true);
     const userMsg = c!.messages[1].content;
+    // Kevin 11:02 EDT: Writing Task uses dynamic container noun.
     assertStringIncludes(
       userMsg,
-      "Write the next complete beat described by the Section Contract",
-      "Writing Task must use canonical Section-Contract-anchored text when section context is provided",
+      "Write the current Beat described by the Section Contract",
+      "Writing Task must use dynamic container noun + canonical Section-Contract-anchored text when section context is provided",
     );
   },
 });
@@ -2991,3 +3048,225 @@ const POPULATED_FULL_PAYLOAD_PR360Z = {
   },
 };
 
+
+// =============================================================================
+// PR-360-Z prompt-ordering regression (added 2026-08-21 after Kevin's 3rd
+// smoke test on the prompt authority fix still failed). The Turtle smoke
+// test output NEVER mentioned DMT/turtle — it continued Ted/Betty and
+// invented named character "Sally". Root cause was PROMPT ORDERING: the
+// USER message put Section Contract BEFORE Project State, so the
+// Section Contract got buried under the prior-scene state and the Writing
+// Task said "Continue naturally from Project State" reinforcing the wrong
+// material.
+//
+// Kevin's exact spec (2026-08-21 11:02 EDT):
+//   USER volatile suffix = Project State → Section Contract → Writing Task.
+//   Section Contract is the LAST substantive context before the task.
+//   Container noun in Writing Task is dynamic (beat / vignette / scene / etc.).
+//   Remove "UNTRUSTED, CACHEABLE" from SYSTEM Section Contract header
+//   (UNTRUSTED especially counterproductive beside authoritative language;
+//   CACHEABLE is implementation metadata, not LLM-visible prose).
+// =============================================================================
+
+const VIGNETTE_AUTHORITY_FIXTURE = {
+  container: "vignette",  // Kevin's smoke test uses Vignette, not Beat.
+  pov: "thirdPersonLimited",
+  sectionTitle: "The Turtle",
+  sectionSummary:
+    "Ted, Betty, and the team smoke DMT in Ted's basement. They're visited by a prophetic turtle who tells them they're the only ones who can save America from itself. They have to decide whether to listen.",
+  // Prior state ends with Ted/Betty/bar — exact failure mode Kevin's
+  // smoke test exposed. The model must NOT continue this prior interaction;
+  // it must materially advance the DMT/turtle section.
+  projectStateContext: `## Project State (prior accepted scenes)
+
+5 scenes accepted. Last scene ended with: Ted and Betty at the bar, laughing about nothing, watching the rain trace lines down the window. Maya watched them from across the room, uncertain.
+
+Characters in play:
+- Maya Chen — protagonist
+- Ted — Maya's brother
+- Betty — Maya's best friend
+- (no other named characters in the cast)`,
+};
+
+// Regression 1: USER prompt ordering — Project State must come BEFORE
+//   Section Contract, which must come BEFORE Writing Task. Section Contract
+//   is the LAST substantive context before the task.
+Deno.test({
+  name: "Ordering fix: USER volatile suffix order = Project State → Section Contract → Writing Task",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_FULL_PAYLOAD_PR360Z,
+      container: VIGNETTE_AUTHORITY_FIXTURE.container,
+      pov: VIGNETTE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: VIGNETTE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: VIGNETTE_AUTHORITY_FIXTURE.sectionSummary,
+      projectStateContext: VIGNETTE_AUTHORITY_FIXTURE.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    // Find the three volatile-suffix blocks.
+    const projectStateIdx = userMsg.indexOf("## Project State");
+    const sectionContractIdx = userMsg.indexOf("## Section Contract");
+    const writingTaskIdx = userMsg.indexOf("## Writing Task");
+    // Sanity check: all three present.
+    assertNotEquals(projectStateIdx, -1, "Project State must render");
+    assertNotEquals(sectionContractIdx, -1, "Section Contract must render");
+    assertNotEquals(writingTaskIdx, -1, "Writing Task must render");
+    // Ordering assertion: Project State < Section Contract < Writing Task.
+    assertEquals(
+      projectStateIdx < sectionContractIdx && sectionContractIdx < writingTaskIdx,
+      true,
+      `Volatile suffix order must be: Project State (${projectStateIdx}) < Section Contract (${sectionContractIdx}) < Writing Task (${writingTaskIdx})`,
+    );
+  },
+});
+
+// Regression 2: Writing Task wording — uses dynamic container noun
+//   ("vignette" for the Vignette container) and the new wording
+//   ("Begin materially advancing" + "Do not continue the prior interaction unless").
+Deno.test({
+  name: "Ordering fix: Writing Task uses dynamic container noun + new wording",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_FULL_PAYLOAD_PR360Z,
+      container: VIGNETTE_AUTHORITY_FIXTURE.container,
+      pov: VIGNETTE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: VIGNETTE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: VIGNETTE_AUTHORITY_FIXTURE.sectionSummary,
+      projectStateContext: VIGNETTE_AUTHORITY_FIXTURE.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    // Find Writing Task block.
+    const writingTaskIdx = userMsg.indexOf("## Writing Task");
+    assertNotEquals(writingTaskIdx, -1);
+    const writingTaskBlock = userMsg.slice(writingTaskIdx);
+    // Dynamic container noun (vignette for Vignette container).
+    assertStringIncludes(
+      writingTaskBlock,
+      "Write the current Vignette",
+      "Writing Task must use dynamic container noun — got Vignette for vignette container",
+    );
+    // Old wording gone — the bug was "Continue naturally from Project State"
+    // which kept steering the model toward Ted/Betty continuation.
+    assertEquals(
+      writingTaskBlock.includes("Continue naturally from Project State"),
+      false,
+      "Old 'Continue naturally from Project State' wording must be removed (kept steering model toward prior interaction)",
+    );
+    // New wording present.
+    assertStringIncludes(
+      writingTaskBlock,
+      "Begin materially advancing the Section Contract immediately",
+      "Writing Task must say 'Begin materially advancing the Section Contract immediately'",
+    );
+    assertStringIncludes(
+      writingTaskBlock,
+      "Do not continue the prior interaction unless doing so directly advances the Section Contract",
+      "Writing Task must prohibit continuing the prior interaction unless it advances the Section Contract",
+    );
+    assertStringIncludes(
+      writingTaskBlock,
+      "Use Project State only to preserve continuity",
+      "Writing Task must say 'Use Project State only to preserve continuity'",
+    );
+  },
+});
+
+// Regression 3: SYSTEM Section Contract header — UNTRUSTED/CACHEABLE gone.
+//   Per Kevin 11:02 EDT: "UNTRUSTED is especially counterproductive beside
+//   an instruction you're simultaneously calling authoritative. CACHEABLE
+//   is implementation metadata and does not belong in LLM-visible prose."
+Deno.test({
+  name: "Ordering fix: SYSTEM Section Contract Authority header dropped UNTRUSTED, CACHEABLE",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_FULL_PAYLOAD_PR360Z,
+      container: VIGNETTE_AUTHORITY_FIXTURE.container,
+      pov: VIGNETTE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: VIGNETTE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: VIGNETTE_AUTHORITY_FIXTURE.sectionSummary,
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    // New clean header.
+    assertStringIncludes(
+      sysMsg,
+      "## Section Contract Authority",
+      "SYSTEM must have the clean '## Section Contract Authority' header",
+    );
+    // Old parenthetical gone.
+    assertEquals(
+      sysMsg.includes("UNTRUSTED, CACHEABLE"),
+      false,
+      "Old 'UNTRUSTED, CACHEABLE' parenthetical must be removed (Kevin 11:02 EDT spec)",
+    );
+    assertEquals(
+      sysMsg.includes("UNTRUSTED"),
+      false,
+      "Old 'UNTRUSTED' qualifier must be removed (counterproductive beside authoritative language)",
+    );
+    assertEquals(
+      sysMsg.includes("CACHEABLE"),
+      false,
+      "Old 'CACHEABLE' qualifier must be removed (implementation metadata, not LLM-visible prose)",
+    );
+  },
+});
+
+// Regression 4: full prompt integrity for the Turtle smoke-test scenario.
+//   Verifies all the pieces are in place — the actual model-following
+//   check is the smoke test on TestFlight, but the unit test catches
+//   regressions where a piece of the prompt reverts to the old
+//   ordering or wording.
+Deno.test({
+  name: "Ordering fix: full Turtle prompt integrity (Ted/Betty prior + DMT/turtle section + Vignette container)",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_FULL_PAYLOAD_PR360Z,
+      container: VIGNETTE_AUTHORITY_FIXTURE.container,
+      pov: VIGNETTE_AUTHORITY_FIXTURE.pov,
+      sectionTitle: VIGNETTE_AUTHORITY_FIXTURE.sectionTitle,
+      sectionSummary: VIGNETTE_AUTHORITY_FIXTURE.sectionSummary,
+      projectStateContext: VIGNETTE_AUTHORITY_FIXTURE.projectStateContext,
+    });
+    assertEquals(c !== null, true);
+    const sysMsg = c!.messages[0].content;
+    const userMsg = c!.messages[1].content;
+    const allText = sysMsg + "\n" + userMsg;
+    // Turtle section data must be in the prompt verbatim (the smoke test
+    // expects the model to know about DMT + prophetic turtle).
+    assertStringIncludes(userMsg, "The Turtle", "Section title (Turtle) must appear in USER");
+    assertStringIncludes(userMsg, "prophetic turtle", "Section summary must appear verbatim in USER Section Contract");
+    assertStringIncludes(userMsg, "save America", "Section summary must appear verbatim in USER Section Contract");
+    assertStringIncludes(userMsg, "smoke DMT", "Section summary must appear verbatim in USER Section Contract");
+    // No legacy strings anywhere.
+    assertEquals(
+      allText.includes("primary dramatic engine of the scene"),
+      false,
+      "Old 'primary dramatic engine of the scene' string must be absent",
+    );
+    assertEquals(
+      allText.includes("END STATE of this scene"),
+      false,
+      "Old 'END STATE of this scene' string must be absent",
+    );
+    assertEquals(
+      allText.includes("UNTRUSTED"),
+      false,
+      "Old 'UNTRUSTED' qualifier must be absent (Kevin 11:02 EDT spec)",
+    );
+    assertEquals(
+      allText.includes("CACHEABLE"),
+      false,
+      "Old 'CACHEABLE' qualifier must be absent (Kevin 11:02 EDT spec)",
+    );
+    // Vignette-specific rule: prior state's "Ted and Betty at the bar" must
+    // be present in Project State.
+    assertStringIncludes(
+      VIGNETTE_AUTHORITY_FIXTURE.projectStateContext,
+      "Ted and Betty at the bar",
+      "Fixture setup check: prior state ends with Ted/Betty/bar (the exact failure mode Kevin reported)",
+    );
+  },
+});

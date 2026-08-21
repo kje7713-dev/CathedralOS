@@ -1128,7 +1128,7 @@ Structural limits:
     // rule (untrusted, cacheable across sections). USER carries the volatile
     // per-section values: title + summary + POV + container.
     craftLines.push(
-      "## Section Contract Authority (UNTRUSTED, CACHEABLE)",
+      "## Section Contract Authority",
       "",
       "The current Section Contract is the authoritative writing directive for this scene. It outranks ALL other creative guidance in this prompt — Dramatic Seed, Themes, Motifs, Relationships, Ending Instruction, Intimacy guidance, and Project State (prior scenes).",
       "",
@@ -1160,31 +1160,16 @@ Structural limits:
   // Structured story context — per-request context (USER message).
   contextLines.push(...buildStructuredPromptBody(payload));
 
-  // PR-360-Z roll-in: Section Contract in USER content (immediately
-  // before Project State) per Kevin's 2026-08-20 20:56 EDT feedback.
-  // The model treats the Section Contract as "what exactly am I
-  // supposed to write right now?" — that belongs in the user message as
-  // the explicit generation request. The SYSTEM-level Section Contract
-  // (in craftLines above) remains as the authoritative anchor; this is
-  // the explicit user-content version. Renders the same sanitized title,
-  // summary, POV, and "section contract governs" framing that the
-  // SYSTEM block carries.
-  if (hasSectionContext) {
-    // Kevin 2026-08-21 09:37 EDT: USER carries the volatile per-section
-    // values. Premise describes what MUST happen now, NOT an end state
-    // to postpone toward.
-    contextLines.push(
-      "## Section Contract",
-      "",
-      `Title: ${sanitizedSectionTitle || "(no title provided)"}`,
-      `Premise: ${nonEmpty(req.sectionSummary) ? req.sectionSummary! : "(no summary provided)"}`,
-      "",
-      "The premise describes what must happen in the current section. Begin advancing it immediately. Do not postpone it in order to continue prior plot threads.",
-      "",
-      `POV: ${povInstruction(req.pov)}`,
-      "",
-    );
-  }
+  // PR-360-Z ordering fix (Kevin 2026-08-21 11:02 EDT): Section Contract
+  // must be the LAST substantive context before the Writing Task. Prior
+  // position was Section Contract → Project State → Writing Task, which
+  // buried the Section Contract under the prior-scene state and let the
+  // "Continue naturally from Project State" task wording keep steering
+  // the model toward Ted/Betty continuation. Reordered to:
+  //   structured body → Project State → Section Contract → Writing Task.
+  // This is also the correct shape for PR-372 caching (volatile suffix
+  // is the cache-invariant tail of the user message).
+
 
   // Project state context — RAG retrieval, aggregated cumulative state.
   // Kevin 2026-08-21 09:37 EDT: add transition rule. Project State is
@@ -1197,6 +1182,25 @@ Structural limits:
       "Project State establishes continuity, not the required subject of the next prose. Transition from prior state into the Section Contract as directly as necessary. Do not continue the previous interaction merely because it was the latest event."
     );
     contextLines.push("");
+  }
+
+  // PR-360-Z ordering fix: Section Contract goes AFTER Project State so
+  // it's the last substantive context before the task. The volatile suffix
+  // shape is Project State → Section Contract → Writing Task — this is
+  // the cache-friendly structure for PR-372 (volatile values don't change
+  // the cache-key for the upstream stable blocks).
+  if (hasSectionContext) {
+    contextLines.push(
+      "## Section Contract",
+      "",
+      `Title: ${sanitizedSectionTitle || "(no title provided)"}`,
+      `Premise: ${nonEmpty(req.sectionSummary) ? req.sectionSummary! : "(no summary provided)"}`,
+      "",
+      "The premise describes what must happen in the current section. Begin advancing it immediately. Do not postpone it in order to continue prior plot threads.",
+      "",
+      `POV: ${povInstruction(req.pov)}`,
+      "",
+    );
   }
 
 
@@ -1262,10 +1266,21 @@ Structural limits:
     );
   }
 
+  // PR-360-Z ordering fix (Kevin 2026-08-21 11:02 EDT): Writing Task wording.
+  // Container noun is generated dynamically (beat / vignette / scene / etc.)
+  // so the model knows the exact output shape. The previous wording "Continue
+  // naturally from Project State" kept steering the model toward the prior
+  // interaction (Kevin's Turtle smoke test failure mode: model continued
+  // Ted/Betty instead of advancing DMT/turtle). New wording:
+  //   - "Use Project State only to preserve continuity" — continuity, not subject
+  //   - "Begin materially advancing the Section Contract immediately" — force the advance
+  //   - "Do not continue the prior interaction unless doing so directly advances
+  //     the Section Contract" — explicit prohibition on continuation
+  // Container noun: cfg.name (e.g., "Beat", "Vignette", "Scene").
   contextLines.push(
     "## Writing Task",
     hasSectionContext
-      ? "Write the next complete beat described by the Section Contract. Continue naturally from Project State. Do not restart or summarize prior events."
+      ? `Write the current ${cfg.name} described by the Section Contract. Use Project State only to preserve continuity. Begin materially advancing the Section Contract immediately. Do not continue the prior interaction unless doing so directly advances the Section Contract.`
       : "Write the next scene based on the Premise, Project State, and selected elements. Continue naturally from prior accepted scenes and do not restart or summarize prior events.",
     "",
   );
