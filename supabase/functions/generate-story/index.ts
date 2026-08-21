@@ -220,16 +220,13 @@ interface GenerateStoryRequest {
   // Contract block in the prompt.
   sectionTitle?: string;
   sectionSummary?: string;
-  // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
-  // All optional; the "## Story Arc Context" block is omitted when none
-  // are set. iOS direct generation doesn't populate these today
-  // (back-compat — block simply omitted). run-outline fetches and passes them.
-  storyArcName?: string;
-  storyArcBeatLabel?: string;
-  storyArcBeatPurpose?: string;
-  // 0-indexed position in the arc. Renderer adds +1 for the "N of M" display.
-  storyArcPosition?: number;
-  storyArcTotalBeats?: number;
+  // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): the 5 Story Arc
+  // Context fields were REMOVED from the request body. iOS and run-outline
+  // no longer pass them — generate-story now resolves story arc context
+  // server-side from body.outline_section_id via fetchOutlineSectionContext.
+  // The block is omitted cleanly when outline_section_id is missing or
+  // doesn't resolve to a story_arc_beat_id. (Build-prompt params retain
+  // the 5 fields internally — they're just no longer caller-settable.)
 }
 
 interface GenerationOutputInsert {
@@ -924,6 +921,229 @@ async function fetchProjectStateContext(
   }
 }
 
+
+
+// ---- fetchOutlineSectionContext (Kevin 2026-08-21 17:47 EDT architecture spec) ----
+//
+// Resolves outline_section + story_arc context server-side from outline_section_id.
+// Used by:
+//   1. The handler to render the Story Arc Context block (resolved values, not body fields)
+//   2. The post-generation embed-section call (needs section metadata for embed-section body)
+//
+// Returns:
+//   - section: null if outline_section_id is missing or doesn't resolve; otherwise the
+//     full row needed by the embed-section call (id, title, summary, container, pov,
+//     terminal_beat, position, outline_id, story_arc_beat_id)
+//   - storyArc: {} if no story_arc_beat_id; otherwise the resolved beat info + arc template name
+//     + position + total beat count
+//
+// Failures are defensive: returns { section: null, storyArc: {} } on any DB error so the
+// generation continues without story arc context (matches the existing pattern for
+// fetchProjectStateContext failures).
+async function fetchOutlineSectionContext(
+  adminClient: any,
+  outlineSectionId: string | null | undefined,
+): Promise<{
+  section: {
+    id: string;
+    title: string;
+    summary: string;
+    container: string | null;
+    pov: string | null;
+    terminal_beat: string | null;
+    position: number;
+    outline_id: string;
+    story_arc_beat_id: string | null;
+  } | null;
+  storyArc: {
+    name?: string;
+    beatLabel?: string;
+    beatPurpose?: string;
+    position?: number;
+    totalBeats?: number;
+  };
+}> {
+  if (!outlineSectionId) return { section: null, storyArc: {} };
+  try {
+    // One PostgREST query: section + beat (if linked) + arc + template name.
+    // LEFT JOIN on story_arc_beats — sections without a beat still resolve.
+    const { data, error } = await adminClient
+      .from("outline_sections")
+      .select("id, title, summary, container, pov, terminal_beat, position, outline_id, story_arc_beat_id, story_arc_beats(position, label, details, story_arc_id, story_arcs(template_id, story_arc_templates(name)))")
+      .eq("id", outlineSectionId)
+      .maybeSingle();
+    if (error || !data) {
+      console.error(`[generate-story] fetchOutlineSectionContext failed: ${error?.message ?? "no data"}`);
+      return { section: null, storyArc: {} };
+    }
+    const section = {
+      id: String(data.id),
+      title: String(data.title ?? ""),
+      summary: String(data.summary ?? ""),
+      container: (data.container ?? null) as string | null,
+      pov: (data.pov ?? null) as string | null,
+      terminal_beat: (data.terminal_beat ?? null) as string | null,
+      position: Number(data.position ?? 0),
+      outline_id: String(data.outline_id),
+      story_arc_beat_id: (data.story_arc_beat_id ?? null) as string | null,
+    };
+    let storyArc: {
+      name?: string;
+      beatLabel?: string;
+      beatPurpose?: string;
+      position?: number;
+      totalBeats?: number;
+    } = {};
+    const beat = (data as any).story_arc_beats;
+    if (beat) {
+      const arc = beat.story_arcs;
+      const template = arc?.story_arc_templates;
+      let totalBeats: number | undefined;
+      if (beat.story_arc_id) {
+        const { count, countErr } = await adminClient
+          .from("story_arc_beats")
+          .select("id", { count: "exact", head: true })
+          .eq("story_arc_id", beat.story_arc_id);
+        if (!countErr && typeof count === "number") {
+          totalBeats = count;
+        }
+      }
+      storyArc = {
+        name: template?.name ?? undefined,
+        beatLabel: beat.label ?? undefined,
+        beatPurpose: (typeof beat.details === "string" && beat.details.length > 0) ? beat.details : undefined,
+        position: typeof beat.position === "number" ? beat.position : undefined,
+        totalBeats,
+      };
+    }
+    return { section, storyArc };
+  } catch (e) {
+    console.error(`[generate-story] fetchOutlineSectionContext threw: ${(e as Error).message ?? String(e)}`);
+    return { section: null, storyArc: {} };
+  }
+}
+
+
+// // ---- fetchPriorContextForEmbedSection (Kevin 2026-08-21 17:47 EDT architecture spec) ----
+//
+// Builds the "prior context" string that embed-section's LLM extraction uses to
+// decide what to add/update/supersede in section_embeddings. Mirrors run-outline's
+// fetchPriorContext logic (rule 5: ALWAYS inject immediately previous section's
+// summary + ending_state; rule 6: retrieve by outline position, not created_at)
+// but inlined here so the call site can pass resolved section metadata.
+//
+// Returns "" if no prior sections exist (empty project state) or if any query
+// fails — embed-section handles empty prior_context gracefully.
+async function fetchPriorContextForEmbedSection(
+  adminClient: any,
+  projectId: string | null,
+  currentSectionId: string,
+  currentOutlineId: string,
+  currentPosition: number,
+): Promise<string> {
+  if (!projectId) return "";
+  try {
+    // 1. Fetch all section_embeddings for this project.
+    const { data: allScenes } = await adminClient
+      .from("section_embeddings")
+      .select("outline_section_id, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state")
+      .eq("project_id", projectId);
+    if (!allScenes || allScenes.length === 0) return "";
+
+    // 2. Fetch outline positions for those scenes (Rule 6: outline order).
+    const outlineSectionIds = allScenes
+      .map((s: any) => s.outline_section_id)
+      .filter((id: any): id is string => typeof id === "string");
+    const { data: outlineSections } = await adminClient
+      .from("outline_sections")
+      .select("id, position")
+      .in("id", outlineSectionIds);
+    const positionById = new Map<string, number>();
+    for (const os of outlineSections ?? []) {
+      positionById.set(os.id, os.position);
+    }
+
+    // 3. Sort by outline position and filter to scenes BEFORE the current section.
+    const priorScenes = allScenes
+      .filter((s: any) => positionById.has(s.outline_section_id))
+      .filter((s: any) => (positionById.get(s.outline_section_id) ?? 0) < currentPosition)
+      .sort((a: any, b: any) =>
+        (positionById.get(a.outline_section_id) ?? 0) - (positionById.get(b.outline_section_id) ?? 0)
+      );
+    if (priorScenes.length === 0) return "";
+
+    // 4. Build the prior context string (same shape as fetchProjectStateContext
+    //    but ordered by outline position instead of created_at, and explicitly
+    //    labeled for the embed-section LLM extraction prompt).
+    const lines: string[] = ["## Prior section memory (extracted from earlier sections)"];
+    for (const scene of priorScenes) {
+      const summary = scene.extracted_summary;
+      if (typeof summary === "string" && summary.length > 0) {
+        lines.push("", `**Summary:** ${summary}`);
+      }
+    }
+    return lines.join("\n");
+  } catch (e) {
+    console.error(`[generate-story] fetchPriorContextForEmbedSection failed: ${(e as Error).message ?? String(e)}`);
+    return "";
+  }
+}
+
+
+// ---- callEmbedSectionForGeneratedOutput (Kevin 2026-08-21 17:47 EDT architecture spec) ----
+//
+// Fire-and-forget HTTP call to the embed-section edge function. generate-story
+// OWNS post-generation extraction — this is the single source of truth for both
+// iOS direct-gen and run-outline paths. The call uses raw_text = llmResult.content
+// (the ACTUAL generated prose), NOT section contract title/summary/terminalBeat
+// (that would be SectionEmbedService.buildRawText(for:) which Kevin explicitly
+// rejected because it stores the intended contract instead of what happened).
+//
+// Failure here MUST NOT fail the main generation call. Errors are logged and
+// the function returns normally.
+async function callEmbedSectionForGeneratedOutput(
+  adminClient: any,
+  _adminClient: any,
+  authHeader: string,
+  payload: {
+    outline_section_id: string;
+    outline_id: string;
+    project_id: string;
+    position: number;
+    title: string;
+    summary: string;
+    container: string | null;
+    pov: string | null;
+    terminal_beat: string | null;
+    story_arc_beat_id: string | null;
+    raw_text: string;
+    output_id: string;
+    prior_context: string;
+  },
+): Promise<void> {
+  const url = `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/embed-section`;
+  if (!url || url === "/functions/v1/embed-section") {
+    console.error("[generate-story] callEmbedSectionForGeneratedOutput: SUPABASE_URL not set, skipping embed-section call");
+    return;
+  }
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      // Pass the user's JWT through — embed-section validates the JWT the same
+      // way generate-story does, and rejects the service role key with 401
+      // (Codex cascade fix from commit c436959). Same auth pattern run-outline uses.
+      "Authorization": authHeader,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => "<unreadable>");
+    console.error(
+      `[generate-story] embed-section HTTP ${response.status}: ${errBody.slice(0, 500)}`,
+    );
+  }
+}
 
 
 function buildPrompt(req: {
@@ -1947,6 +2167,15 @@ async function handler(
   }
 
   // -------------------------------------------------------------------------
+  // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): resolve outline
+  // section + story arc context server-side from body.outline_section_id.
+  // Single source of truth — the 5 Story Arc Context fields are no longer
+  // expected from the caller. Both run-outline and iOS direct-gen paths
+  // benefit equally from this resolution.
+  // -------------------------------------------------------------------------
+  const outlineSectionCtx = await fetchOutlineSectionContext(adminClient, body.outline_section_id);
+
+  // -------------------------------------------------------------------------
   // Credit enforcement -- must happen BEFORE the LLM provider call
   //
   // Credit check is computed server-side from length mode and selected model
@@ -1989,12 +2218,15 @@ async function handler(
     // the LLM; model continued Ted/Betty from prior accepted scenes).
     sectionTitle: body.sectionTitle,
     sectionSummary: body.sectionSummary,
-    // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
-    storyArcName: body.storyArcName,
-    storyArcBeatLabel: body.storyArcBeatLabel,
-    storyArcBeatPurpose: body.storyArcBeatPurpose,
-    storyArcPosition: body.storyArcPosition,
-    storyArcTotalBeats: body.storyArcTotalBeats,
+    // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): Story Arc Context
+    // resolved SERVER-SIDE from outlineSectionCtx (fetched via
+    // fetchOutlineSectionContext at the top of the handler). Caller no longer
+    // passes the 5 fields — single source of truth.
+    storyArcName: outlineSectionCtx.storyArc.name,
+    storyArcBeatLabel: outlineSectionCtx.storyArc.beatLabel,
+    storyArcBeatPurpose: outlineSectionCtx.storyArc.beatPurpose,
+    storyArcPosition: outlineSectionCtx.storyArc.position,
+    storyArcTotalBeats: outlineSectionCtx.storyArc.totalBeats,
   });
   // Phase 3: max possible credit cost for the pre-flight check
   const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
@@ -2258,6 +2490,62 @@ async function handler(
       });
     } catch (logErr) {
       console.error(`[generate-story] llm_prompts insert failed: ${(logErr as Error).message}`);
+    }
+
+    // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): generate-story
+    // OWNS post-generation section memory extraction for EVERY successful
+    // section generation, regardless of whether it came from iOS direct
+    // generation or run-outline. We fire-and-forget call embed-section
+    // with raw_text = llmResult.content (the ACTUAL generated prose — NOT
+    // the section contract title/summary/terminalBeat that
+    // SectionEmbedService.buildRawText(for:) builds on iOS).
+    //
+    // run-outline's callEmbedSection after generation is now redundant
+    // and has been removed in this same PR (single owner = generate-story).
+    // Both paths are now identical: generate → persist → extract → next.
+    //
+    // Skip when:
+    //   - body.outline_section_id is missing (genuinely non-section gen)
+    //   - llmResult.content is empty (extraction would have nothing to extract)
+    //   - persistence.insertOutput failed (no row to point at)
+    if (outlineSectionCtx.section && llmResult?.content) {
+      // Fetch prior context for embed-section's LLM extraction.
+      // Mirrors run-outline's fetchPriorContext logic but inlined here to
+      // avoid the cross-function plumbing; the helper would be shared if a
+      // third caller appears.
+      const priorContext = await fetchPriorContextForEmbedSection(
+        adminClient,
+        projectID,
+        outlineSectionCtx.section.id,
+        outlineSectionCtx.section.outline_id,
+        outlineSectionCtx.section.position,
+      );
+
+      // Fire-and-forget — extraction failure must NOT fail the main call.
+      void callEmbedSectionForGeneratedOutput(
+        adminClient,
+        adminClient,
+        authHeader,
+        {
+          outline_section_id: outlineSectionCtx.section.id,
+          outline_id: outlineSectionCtx.section.outline_id,
+          project_id: projectID,
+          position: outlineSectionCtx.section.position,
+          title: outlineSectionCtx.section.title,
+          summary: outlineSectionCtx.section.summary,
+          container: outlineSectionCtx.section.container,
+          pov: outlineSectionCtx.section.pov,
+          terminal_beat: outlineSectionCtx.section.terminal_beat,
+          story_arc_beat_id: outlineSectionCtx.section.story_arc_beat_id,
+          raw_text: llmResult.content,
+          output_id: outputId,
+          prior_context: priorContext,
+        },
+      ).catch((e) => {
+        console.error(
+          `[generate-story] post-generation embed-section failed: ${(e as Error)?.message ?? String(e)}`,
+        );
+      });
     }
   }
 

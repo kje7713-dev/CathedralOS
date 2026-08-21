@@ -351,60 +351,32 @@ async function runOutline(
       status: "running", started_at: new Date().toISOString(),
     });
     try {
-      // 1. Build the prior context (narrow queries, outline order, ALWAYS-inject previous).
-      //    No K, no recency limit. The current section knows what it needs.
-      const priorContext = await fetchPriorContext(adminClient, outlineId, section.id);
+      // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): the fetchPriorContext
+      // call was REMOVED. generate-story fetches its own prior_context for
+      // embed-section internally. run-outline's loop is now just:
+      //   generate (via generate-story) → next section.
+      // Both iOS direct-gen and run-outline paths have identical extraction
+      // behavior because both delegate to generate-story's fire-and-forget
+      // embed-section call.
 
-      // 2. Generate the prose (Rule 8: generate first).
-      //    Kevin 2026-08-21 17:02 EDT cleanup pass: also fetch story arc
-      //    context (beat + arc + template) so the prompt can render the
-      //    "## Story Arc Context" block between Project State and Section
-      //    Contract. Empty object on miss → block omitted, generation
-      //    continues normally.
-      const storyArc = await fetchStoryArcContext(adminClient, section.story_arc_beat_id);
+      // 1. Generate the prose (Rule 8: generate first).
+      //    Kevin 2026-08-21 17:47 EDT architecture spec: generate-story now
+      //    OWNS post-generation extraction (calls embed-section internally
+      //    with raw_text = llmResult.content). run-outline no longer calls
+      //    embed-section — single owner = generate-story. Story arc context
+      //    is also resolved server-side in generate-story (was previously
+      //    fetched here and passed as 5 fields; those fields have been
+      //    removed from buildGenerateStoryRequest).
       const generationRequest = buildGenerateStoryRequest({
         snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
         section,
         projectId,
         selectedModelId: model,
         lengthMode: estimateLengthModeFromContainer(section.container),
-        storyArcName: storyArc.name,
-        storyArcBeatLabel: storyArc.beatLabel,
-        storyArcBeatPurpose: storyArc.beatPurpose,
-        storyArcPosition: storyArc.position,
-        storyArcTotalBeats: storyArc.totalBeats,
       });
       const result = await callGenerateStory(generationRequest, authHeader);
 
-      // 3. Persist the output (Rule 8: generate-story has persisted to generation_outputs;
-      //    fetch raw_text by output_id to pass to embed-section for structured memory
-      //    extraction). The output is persisted BEFORE the next section reads.
-      const rawText = await fetchRawTextFromOutput(adminClient, result.output_id);
-
-      // 4. Extract structured memory (Rule 8: extract AFTER output is persisted).
-      //    This populates section_embeddings with the new shape (stable UUIDs,
-      //    source_section_id, lifecycle) so the next section's prior-context
-      //    query sees this section's structured state.
-      await callEmbedSection({
-        outline_section_id: section.id,
-        outline_id: outlineId,
-        project_id: projectId,
-        position: section.position,
-        title: section.title,
-        summary: section.summary,
-        container: section.container,
-        pov: section.pov,
-        terminal_beat: section.terminal_beat,
-        story_arc_beat_id: section.story_arc_beat_id,
-        raw_text: rawText,
-        // Kevin 2026-08-21 12:00 EDT fix: pass the output_id so embed-section
-        // can persist lineage. The DELETE trigger on generation_outputs uses
-        // this to clean up orphaned section memory.
-        output_id: result.output_id,
-        prior_context: priorContext,
-      }, adminClient, authHeader);
-
-      // 5. Per-section cost tracking.
+      // 3. Per-section cost tracking.
       const sectionCost = estimateSectionCost(section.container);
       actualCost += sectionCost;
       await updateSectionStatus(adminClient, runId, {
@@ -798,70 +770,6 @@ async function fetchRawTextFromOutput(
   if (!outputText) throw new Error(`persisted generation output ${outputId} has no prose`);
   return outputText;
 }
-
-// Fetch story arc context for a beat (Kevin 2026-08-21 17:02 EDT cleanup pass).
-// Returns the arc name (from story_arc_templates.name), the beat's label,
-// the beat's details ("purpose"), and the beat's 0-indexed position + the
-// total beat count for the arc. The prompt renderer adds +1 to convert to
-// the 1-indexed "N of M" display format Kevin specified.
-//
-// Failure modes:
-//   - No beat id on the section → empty object (block omitted in prompt).
-//   - Beat doesn't exist → empty object (block omitted).
-//   - Arc has no template_id (custom arc) → name is undefined; the prompt
-//     renderer still shows the beat label + position without the arc name.
-//   - Any DB error → logged + empty object (defensive — the run continues
-//     without arc context rather than failing the whole generation).
-async function fetchStoryArcContext(
-  adminClient: any,
-  storyArcBeatId: string | null,
-): Promise<{
-  name?: string;
-  beatLabel?: string;
-  beatPurpose?: string;
-  position?: number;
-  totalBeats?: number;
-}> {
-  if (!storyArcBeatId) return {};
-  try {
-    // One PostgREST query: beat + arc + template name (LEFT JOIN — missing
-    // template_id returns null template but the beat row is still included).
-    const { data, error } = await adminClient
-      .from("story_arc_beats")
-      .select("position, label, details, story_arc_id, story_arcs(template_id, story_arc_templates(name))")
-      .eq("id", storyArcBeatId)
-      .maybeSingle();
-    if (error || !data) {
-      console.error(`[run-outline] fetchStoryArcContext failed: ${error?.message ?? "no data"}`);
-      return {};
-    }
-    const arc = (data as any).story_arcs;
-    const template = arc?.story_arc_templates;
-    let totalBeats: number | undefined;
-    if (data.story_arc_id) {
-      const { count, countErr } = await adminClient
-        .from("story_arc_beats")
-        .select("id", { count: "exact", head: true })
-        .eq("story_arc_id", data.story_arc_id);
-      if (countErr) {
-        console.error(`[run-outline] fetchStoryArcContext count failed: ${countErr.message}`);
-      } else if (typeof count === "number") {
-        totalBeats = count;
-      }
-    }
-    return {
-      name: template?.name ?? undefined,
-      beatLabel: data.label ?? undefined,
-      beatPurpose: (typeof data.details === "string" && data.details.length > 0) ? data.details : undefined,
-      position: typeof data.position === "number" ? data.position : undefined,
-      totalBeats,
-    };
-  } catch (e) {
-    console.error(`[run-outline] fetchStoryArcContext threw: ${(e as Error).message ?? String(e)}`);
-    return {};
-  }
-}
-
 
 // Call embed-section to extract structured memory from the persisted output.
 // Per Rule 8: this happens AFTER the output is persisted to generation_outputs,

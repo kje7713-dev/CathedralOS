@@ -144,7 +144,13 @@ struct GenerationRequest: Codable {
         // them nil — generate-story's prompt assembly degrades gracefully
         // (no Section Contract block, all other blocks render normally).
         sectionTitle: String? = nil,
-        sectionSummary: String? = nil
+        sectionSummary: String? = nil,
+        // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
+        // identity. UUID string of the OutlineSection that originated this
+        // generation. Default nil (no section context) — degraded gracefully
+        // on the backend side. Callers that have access to the current
+        // OutlineSection pass the section's UUID here.
+        outlineSectionID: String? = nil
     ) {
         self.schema = schema
         self.version = version
@@ -170,6 +176,7 @@ struct GenerationRequest: Codable {
         self.localGenerationID = localGenerationID
         self.sectionTitle = sectionTitle
         self.sectionSummary = sectionSummary
+        self.outlineSectionID = outlineSectionID
     }
 }
 

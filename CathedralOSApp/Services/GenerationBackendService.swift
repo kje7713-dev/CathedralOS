@@ -322,7 +322,18 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         // without section context leave them nil — generate-story
         // degrades gracefully (no Section Contract block in the prompt).
         sectionTitle: String? = nil,
-        sectionSummary: String? = nil
+        sectionSummary: String? = nil,
+        // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
+        // identity. UUID string of the OutlineSection that originated this
+        // generation. Required for backend-owned post-generation extraction
+        // (single owner = generate-story fires embed-section internally with
+        // raw_text = llmResult.content). Without it, section_embeddings
+        // never gets populated for this generation.
+        //
+        // Default nil (no section context). Callers that have an OutlineSection
+        // in scope pass the section's UUID here. Direct-gen from a section
+        // passes this; project-level generation passes nil.
+        outlineSectionID: String? = nil
     ) async throws -> GenerationResponse {
         do {
             try await validateConfigAndAuth()
@@ -353,7 +364,12 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId,
             sectionTitle: sectionTitle,
-            sectionSummary: sectionSummary
+            sectionSummary: sectionSummary,
+            // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): forward
+            // outline section identity so backend can resolve section +
+            // story arc metadata server-side and own post-generation
+            // section memory extraction (single owner = generate-story).
+            outlineSectionID: outlineSectionID
         )
 
         return try await post(requestBody)

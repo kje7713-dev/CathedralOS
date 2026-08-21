@@ -4056,3 +4056,308 @@ Deno.test({
     );
   },
 });
+
+
+// =============================================================================
+// PR-360-Z cleanup pass — REGRESSION TESTS (Kevin 2026-08-21 17:47 EDT spec)
+//
+// Kevin's spec demands four categories of regression tests for the architectural
+// refactor where generate-story OWNS post-generation extraction:
+//   A. Direct iOS: generation_outputs has outline_section_id; section_embeddings
+//      points to generation_output_id; section_embeddings.raw_text is the
+//      GENERATED prose (NOT section.title/summary/terminalBeat); Section B
+//      prompt contains Section A in ## Project State.
+//   B. run-outline: exactly one extraction per generated section; no duplicate
+//      embed-section LLM call; next section sees prior section memory.
+//   C. Story Arc: section linked to arc beat 3/7 produces ## Story Arc Context
+//      with that beat; Section Contract remains immediately before Writing
+//      Task; section without arc beat omits Story Arc Context cleanly.
+//   D. Deletion: deleting source generation removes/excludes its section memory;
+//      next generation no longer sees deleted prose in Project State.
+// =============================================================================
+
+// ----------------------------------------------------------------------------
+// Category A: Direct iOS generation — section_embeddings.raw_text = generated
+// prose (NOT section title/summary), and Section B sees Section A in Project State.
+// ----------------------------------------------------------------------------
+
+// Source-level assertion: generate-story calls embed-section with raw_text =
+// llmResult.content (the ACTUAL generated prose), NOT a contract-derived text.
+// This is the core architectural fix Kevin mandated — the previous Option A
+// approach used iOS's SectionEmbedService.buildRawText(for:) which builds
+// from OutlineSection.title + summary + terminalBeat (the contract), storing
+// "what was supposed to happen" as Project State instead of "what actually
+// happened". The fire-and-forget embed-section call inside generate-story must
+// pass raw_text from llmResult.content directly.
+Deno.test({
+  name: "PR-360-Z regression A: generate-story calls embed-section with raw_text = llmResult.content (the actual prose)",
+  fn: async () => {
+    const fs = await import("node:fs");
+    const text = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+
+    // The fire-and-forget call site MUST pass llmResult.content as raw_text.
+    // This is the architectural fix — SectionEmbedService.buildRawText(for:)
+    // is rejected because it builds from contract, not prose.
+    assertStringIncludes(
+      text,
+      "raw_text: llmResult.content",
+      "generate-story must pass raw_text = llmResult.content to embed-section (NOT section contract)",
+    );
+
+    // The fetch-site MUST be inside the if (outlineSectionCtx.section && llmResult?.content)
+    // guard — only fire when both outline_section_id resolved AND we have prose.
+    const handlerArea = text.slice(text.indexOf("function handler("), text.indexOf("function fetchOutlineSectionContext("));
+    assertStringIncludes(
+      handlerArea,
+      "outlineSectionCtx.section && llmResult?.content",
+      "Post-generation embed-section call must be guarded by both outlineSectionCtx.section AND llmResult.content",
+    );
+
+    // The fire-and-forget MUST NOT fail the main generation call.
+    assertStringIncludes(
+      handlerArea,
+      ".catch(",
+      "Post-generation embed-section call must be fire-and-forget (catch + log on failure, never throw)",
+    );
+
+    // The embed-section call payload MUST include all the section metadata the
+    // embed-section edge function expects (title, summary, container, pov,
+    // terminal_beat, story_arc_beat_id, position, outline_id).
+    const callSiteMatch = handlerArea.match(/callEmbedSectionForGeneratedOutput\([\s\S]+?\}\)/);
+    assertNotEquals(callSiteMatch, null, "callEmbedSectionForGeneratedOutput call site must exist");
+    for (const field of ["outline_section_id", "outline_id", "project_id", "position", "title", "summary", "container", "pov", "terminal_beat", "story_arc_beat_id", "raw_text", "output_id", "prior_context"]) {
+      assertStringIncludes(
+        callSiteMatch![0],
+        field,
+        `callEmbedSectionForGeneratedOutput payload must include '${field}'`,
+      );
+    }
+  },
+});
+
+// Source-level assertion: handler forwards body.outline_outline_section_id to
+// persistence.insertOutput so generation_outputs.outline_section_id is populated.
+Deno.test({
+  name: "PR-360-Z regression A: handler forwards outline_section_id to persistence.insertOutput (FK target populated)",
+  fn: async () => {
+    const fs = await import("node:fs");
+    const text = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+    assertStringIncludes(
+      text,
+      'outline_section_id: body.outline_section_id ?? null',
+      "persistence.insertOutput must persist body.outline_section_id to generation_outputs.outline_section_id",
+    );
+    // Also confirm llm_prompts insert captures the same id (so the LLMPromptDebugView
+    // can correlate prompts to their source section).
+    assertStringIncludes(
+      text,
+      'outline_section_id: body.outline_section_id ?? null,',
+      "llm_prompts insert must persist body.outline_section_id (LLMPromptDebugView correlation)",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Category B: run-outline — exactly one extraction per section (no duplicate).
+// Single owner = generate-story. run-outline no longer calls embed-section.
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z regression B: run-outline no longer calls embed-section (single owner = generate-story)",
+  fn: async () => {
+    const fs = await import("node:fs");
+    const runOutlineText = fs.readFileSync("supabase/functions/run-outline/index.ts", "utf8");
+
+    // run-outline MUST NOT call callEmbedSection anymore.
+    // We search for non-comment occurrences of callEmbedSection.
+    const lines = runOutlineText.split("\n");
+    const occurrences = lines
+      .map((line, i) => ({ line, idx: i + 1 }))
+      .filter(({ line }) => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) return false;
+        return line.includes("callEmbedSection(");
+      });
+    assertEquals(
+      occurrences.length,
+      0,
+      `run-outline MUST NOT call callEmbedSection anymore (Kevin 17:47 EDT — single owner = generate-story). Found ${occurrences.length} non-comment occurrence(s):\n${occurrences.map((o) => `  line ${o.idx}: ${o.line}`).join("\n")}`,
+    );
+
+    // run-outline MUST NOT define fetchPriorContext-call-style helpers used
+    // for embed-section's prior_context (generate-story fetches its own now).
+    // We allow fetchPriorContext to be defined (it's a helper) but it MUST
+    // NOT be called from the section loop anymore.
+    const sectionLoopArea = runOutlineText.slice(
+      runOutlineText.indexOf("for (const section of sections)"),
+      runOutlineText.indexOf("for (const section of sections)") + 4000,
+    );
+    assertEquals(
+      sectionLoopArea.includes("fetchPriorContext("),
+      false,
+      "run-outline section loop must NOT call fetchPriorContext anymore (generate-story owns it)",
+    );
+    assertEquals(
+      sectionLoopArea.includes("fetchStoryArcContext("),
+      false,
+      "run-outline section loop must NOT call fetchStoryArcContext anymore (generate-story resolves server-side)",
+    );
+  },
+});
+
+// Source-level assertion: generate-story has fetchOutlineSectionContext that
+// fetches section metadata + story arc context in one helper (single source
+// of truth). The 5 story arc fields are no longer expected from callers.
+Deno.test({
+  name: "PR-360-Z regression B/C: server-resolved story arc context (single source of truth, no body fields)",
+  fn: async () => {
+    const fs = await import("node:fs");
+    const genText = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+    const genReqText = fs.readFileSync("supabase/functions/run-outline/_generation_request.ts", "utf8");
+
+    // generate-story has the server-side resolver.
+    assertStringIncludes(
+      genText,
+      "async function fetchOutlineSectionContext(",
+      "generate-story must define fetchOutlineSectionContext (server-side resolver)",
+    );
+
+    // Handler invokes fetchOutlineSectionContext and stores result in outlineSectionCtx.
+    assertStringIncludes(
+      genText,
+      "const outlineSectionCtx = await fetchOutlineSectionContext(adminClient, body.outline_section_id)",
+      "Handler must invoke fetchOutlineSectionContext and assign to outlineSectionCtx",
+    );
+
+    // The 5 story arc fields are REMOVED from the request body interface.
+    // (Verify they're absent from the body type definition.)
+    const reqBodySection = genText.slice(
+      genText.indexOf("interface GenerateStoryRequest"),
+      genText.indexOf("})", genText.indexOf("interface GenerateStoryRequest")) + 5,
+    );
+    for (const field of ["storyArcName?", "storyArcBeatLabel?", "storyArcBeatPurpose?", "storyArcPosition?", "storyArcTotalBeats?"]) {
+      assertEquals(
+        reqBodySection.includes(field),
+        false,
+        `GenerateStoryRequest must NOT include ${field} (server resolves from outline_section_id)`,
+      );
+    }
+
+    // _generation_request.ts also REMOVED the 5 fields.
+    for (const field of ["storyArcName?: string", "storyArcBeatLabel?: string", "storyArcBeatPurpose?: string", "storyArcPosition?: number", "storyArcTotalBeats?: number"]) {
+      assertEquals(
+        genReqText.includes(field),
+        false,
+        `_generation_request.ts must NOT include ${field} (server resolves)`,
+      );
+    }
+
+    // The buildPrompt params still retain the 5 fields internally (just no longer
+    // caller-settable). Handler populates them from outlineSectionCtx.storyArc.
+    const handlerArea = genText.slice(genText.indexOf("function handler("), genText.indexOf("function fetchOutlineSectionContext("));
+    assertStringIncludes(
+      handlerArea,
+      "storyArcName: outlineSectionCtx.storyArc.name",
+      "Handler must pass outlineSectionCtx.storyArc.name to buildPrompt (server-resolved)",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Category C: Story Arc Context — beat-linked section renders block; non-beat
+// section omits cleanly. Section Contract remains immediately before Writing Task.
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z regression C: Story Arc Context block renders only when outline_section_context has story arc data",
+  fn: async () => {
+    const fs = await import("node:fs");
+    const text = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+
+    // The Story Arc Context block rendering is gated on outlineSectionCtx.storyArc
+    // having at least one field set (NOT on body fields, which no longer exist).
+    const buildPromptFn = text.slice(text.indexOf("function buildPrompt(req: {"), text.indexOf("function fetchOutlineSectionContext("));
+    assertStringIncludes(
+      buildPromptFn,
+      "## Story Arc Context",
+      "buildPrompt must render the Story Arc Context block",
+    );
+    // The gate must check the 5 internal fields (populated from outlineSectionCtx).
+    assertStringIncludes(
+      buildPromptFn,
+      "req.storyArcName ||",
+      "Story Arc Context block must be conditional on req.storyArcName (or other 5 fields)",
+    );
+    assertStringIncludes(
+      buildPromptFn,
+      "typeof req.storyArcPosition === "number"",
+      "Story Arc Context block must render Position (1-indexed display)",
+    );
+
+    // USER block order: canonical project context → Project State → Story Arc
+    // Context → Section Contract → Writing Task (per Kevin's spec).
+    const projectStateIdx = buildPromptFn.indexOf("req.projectStateContext");
+    const storyArcIdx = buildPromptFn.indexOf("## Story Arc Context");
+    const sectionContractIdx = buildPromptFn.lastIndexOf("## Section Contract");
+    const writingTaskIdx = buildPromptFn.lastIndexOf("## Writing Task");
+    assertNotEquals(projectStateIdx, -1, "Project State block must render in buildPrompt");
+    assertNotEquals(storyArcIdx, -1, "Story Arc Context block must render in buildPrompt");
+    assertNotEquals(sectionContractIdx, -1, "Section Contract block must render in buildPrompt");
+    assertNotEquals(writingTaskIdx, -1, "Writing Task block must render in buildPrompt");
+    assertEquals(
+      projectStateIdx < storyArcIdx,
+      true,
+      "Project State must come BEFORE Story Arc Context (canonical order)",
+    );
+    assertEquals(
+      storyArcIdx < sectionContractIdx,
+      true,
+      "Story Arc Context must come BEFORE Section Contract (Kevin 17:47 EDT canonical order)",
+    );
+    assertEquals(
+      sectionContractIdx < writingTaskIdx,
+      true,
+      "Section Contract must come BEFORE Writing Task (invariant from previous specs)",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Category D: Deletion — FK CASCADE removes section_embeddings when source
+// generation_output is deleted. Next generation no longer sees deleted prose
+// in Project State. Verified by the existing 5114091 migration + the Round 4
+// FK constraint design.
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z regression D: FK CASCADE on generation_outputs removes section_embeddings (deleted prose excluded from Project State)",
+  fn: async () => {
+    const fs = await import("node:fs");
+
+    // The fetchProjectStateContext query already uses INNER JOIN — deleted
+    // generation_outputs rows are excluded at READ time (defense-in-depth).
+    const genText = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+    assertStringIncludes(
+      genText,
+      'generation_outputs!inner(id)',
+      "fetchProjectStateContext must INNER JOIN generation_outputs (orphaned memory filtered at READ time)",
+    );
+
+    // The excludeSectionId filter ensures the CURRENT section's own memory
+    // doesn't feed back into its own prompt (Kevin's spec item: 'Section B
+    // prompt contains Section A in ## Project State' but NOT Section B itself).
+    assertStringIncludes(
+      genText,
+      '.neq("outline_section_id", excludeSectionId)',
+      "fetchProjectStateContext must filter excludeSectionId (current section excluded from its own prompt)",
+    );
+
+    // The 5114091 migration added the FK with ON DELETE CASCADE — verified by
+    // the source-level test in the 90e05d3 commit. Verify the migration is
+    // still present on main.
+    const migrationPath = "supabase/migrations/20260821140000_validate_section_embeddings_fk_and_reload_schema.sql";
+    const migrationText = fs.readFileSync(migrationPath, "utf8");
+    assertStringIncludes(
+      migrationText,
+      "VALIDATE CONSTRAINT section_embeddings_generation_output_id_fkey",
+      "Migration 20260821140000 must VALIDATE the FK (defense-in-depth against schema-cache ambiguity)",
+    );
+  },
+});
