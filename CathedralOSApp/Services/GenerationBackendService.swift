@@ -232,7 +232,12 @@ protocol GenerationBackendServiceProtocol {
         selectedContainer: Container?,
         selectedPOV: POV?,
         terminalBeat: String?,
-        selectedModelId: String?
+        selectedModelId: String?,
+        // PR-360-Z: canonical section context fields. Defaults nil so existing
+        // call sites compile unchanged. Wired through to the generate-story
+        // body as top-level fields on the request payload.
+        sectionTitle: String?,
+        sectionSummary: String?
     ) async throws -> GenerationResponse
 }
 
@@ -294,7 +299,14 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedModelId: String? = nil,
+        // PR-360-Z: canonical section context fields. Callers that have
+        // access to the current outline section (e.g., project view that
+        // generates from a specific section) populate these. Callers
+        // without section context leave them nil — generate-story
+        // degrades gracefully (no Section Contract block in the prompt).
+        sectionTitle: String? = nil,
+        sectionSummary: String? = nil
     ) async throws -> GenerationResponse {
         do {
             try await validateConfigAndAuth()
@@ -323,7 +335,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             pov: selectedPOV?.rawValue,
             terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
-            selectedModelId: selectedModelId
+            selectedModelId: selectedModelId,
+            sectionTitle: sectionTitle,
+            sectionSummary: sectionSummary
         )
 
         return try await post(requestBody)
@@ -430,7 +444,13 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedModelId: String? = nil,
+        // PR-360-Z: canonical section context fields. For regenerate /
+        // continue / remix actions, callers typically extract section
+        // info from the parent output's outline_section_id (via project
+        // lookup). nil values degrade gracefully.
+        sectionTitle: String? = nil,
+        sectionSummary: String? = nil
     ) async throws -> GenerationResponse {
         do {
             try await validateConfigAndAuth()
@@ -472,7 +492,9 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             selectedModelId: selectedModelId,
             action: action,
             parentGenerationID: parentGenerationID?.uuidString,
-            previousOutputText: previousOutputText
+            previousOutputText: previousOutputText,
+            sectionTitle: sectionTitle,
+            sectionSummary: sectionSummary
         )
 
         return try await post(requestBody)
@@ -734,7 +756,12 @@ final class StubGenerationBackendService: GenerationBackendServiceProtocol, Gene
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedModelId: String? = nil,
+        // PR-360-Z: canonical section context fields. Always nil here
+        // because the stub never reaches the network — but the signature
+        // must match GenerationBackendServiceProtocol.
+        sectionTitle: String? = nil,
+        sectionSummary: String? = nil
     ) async throws -> GenerationResponse {
         throw GenerationBackendServiceError.notImplemented
     }

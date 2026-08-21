@@ -42,7 +42,12 @@ protocol GenerationService {
         selectedContainer: Container?,
         selectedPOV: POV?,
         terminalBeat: String?,
-        selectedModelId: String?
+        selectedModelId: String?,
+        // PR-360-Z: canonical section context fields. See GenerationBackendService.swift
+        // SupabaseGenerationService for the wired-up implementation; default impl in the
+        // extension below forwards them when present.
+        sectionTitle: String?,
+        sectionSummary: String?
     ) async throws -> GenerationResponse
 
     /// Submits a derived generation action (regenerate / continue / remix) using
@@ -58,7 +63,11 @@ protocol GenerationService {
         selectedContainer: Container?,
         selectedPOV: POV?,
         terminalBeat: String?,
-        selectedModelId: String?
+        selectedModelId: String?,
+        // PR-360-Z: canonical section context fields. See GenerationBackendService.swift
+        // SupabaseGenerationService for the wired-up implementation.
+        sectionTitle: String?,
+        sectionSummary: String?
     ) async throws -> GenerationResponse
 }
 
@@ -72,7 +81,10 @@ extension GenerationService {
         lengthMode: GenerationLengthMode,
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
-        terminalBeat: String? = nil
+        terminalBeat: String? = nil,
+        // PR-360-Z: canonical section context fields (defaults to nil).
+        sectionTitle: String? = nil,
+        sectionSummary: String? = nil
     ) async throws -> GenerationResponse {
         try await generate(
             project: project,
@@ -82,7 +94,9 @@ extension GenerationService {
             selectedContainer: selectedContainer,
             selectedPOV: selectedPOV,
             terminalBeat: terminalBeat,
-            selectedModelId: nil
+            selectedModelId: nil,
+            sectionTitle: sectionTitle,
+            sectionSummary: sectionSummary
         )
     }
 
@@ -97,7 +111,10 @@ extension GenerationService {
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedModelId: String? = nil,
+        // PR-360-Z: canonical section context fields (defaults to nil).
+        sectionTitle: String? = nil,
+        sectionSummary: String? = nil
     ) async throws -> GenerationResponse {
         throw GenerationServiceError.endpointNotConfigured
     }
@@ -128,7 +145,11 @@ final class StoryGenerationService: GenerationService {
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedModelId: String? = nil,
+        // PR-360-Z: canonical section context fields. Defaults nil so existing
+        // call sites compile unchanged.
+        sectionTitle: String? = nil,
+        sectionSummary: String? = nil
     ) async throws -> GenerationResponse {
 
         // Build canonical frozen payload.
@@ -151,7 +172,9 @@ final class StoryGenerationService: GenerationService {
             pov: selectedPOV?.rawValue,
             terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
-            selectedModelId: selectedModelId
+            selectedModelId: selectedModelId,
+            sectionTitle: sectionTitle,
+            sectionSummary: sectionSummary
         )
 
         return try await post(requestBody)

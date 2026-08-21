@@ -1540,7 +1540,14 @@ struct GenerationOutputDetailView: View {
                 previousOutputText: previousText,
                 parentGenerationID: output.id,
                 requestedOutputType: outputType,
-                lengthMode: mode
+                lengthMode: mode,
+                // PR-360-Z: canonical section context fields. Regenerate /
+                // continue / remix from a past output doesn't have the
+                // section in scope at this call site — the parent output's
+                // outline_section_id would let us look it up via the
+                // project, but that's a follow-up wiring. For now nil.
+                sectionTitle: nil,
+                sectionSummary: nil
             )
 
             newGen.outputText = response.generatedText

@@ -207,6 +207,19 @@ interface GenerateStoryRequest {
   // sync roundtrips it into GenerationOutput.outlineSectionID (PR #325 wire).
   // Optional for backwards compat — omitted => null.
   outline_section_id?: string;
+  // PR-360-Z: camelCase alias for `project_id`. iOS sends `projectID` (explicit
+  // CodingKeys; no convertToSnakeCase). Run-outline sends both. Normalized
+  // once after body parse into a single canonical `projectID` variable.
+  // Optional for backwards compat — omitted => null.
+  projectID?: string;
+  // PR-360-Z: canonical explicit section context fields. Replaces the old
+  // pattern of smuggling the outline section into `promptPack.notes`.
+  // Both iOS direct generation AND run-outline generation must populate
+  // the same canonical fields (see `run-outline/_generation_request.ts`).
+  // Optional for backwards compat — missing values degrade to no Section
+  // Contract block in the prompt.
+  sectionTitle?: string;
+  sectionSummary?: string;
 }
 
 interface GenerationOutputInsert {
@@ -841,6 +854,15 @@ function buildPrompt(req: {
   // state. Pre-fetched by caller (adminClient not in scope inside
   // buildPrompt). Empty/undefined skips injection.
   projectStateContext?: string;
+  // PR-360-Z: Section Contract inputs (canonical explicit fields). Both iOS
+  // direct generation AND run-outline generation must populate these
+  // (replacing the old "smuggle section title + summary into promptPack.notes"
+  // pattern in run-outline/_generation_request.ts). Sanitized via
+  // sanitizeTitleForLLM before rendering as the authoritative Section
+  // Contract block in SYSTEM. Missing / empty values degrade to no Section
+  // Contract block — callers that lack section context simply omit it.
+  sectionTitle?: string;
+  sectionSummary?: string;
 }): { craft: string; context: string } {
   // Parse the payload — degrade gracefully if malformed.
   let payload: PromptPackPayloadShape = {};
@@ -1004,10 +1026,20 @@ function buildPrompt(req: {
     },
   };
 
-  // Narrative shape: server infers from recipe for v1. Hardcoded to
-  // Confrontation because the recipe's dramatic seed is the strongest
-  // signal. Future: model-picked in a quick first call.
-  const inferredShape = "Confrontation";
+  // PR-360-Z: drop `inferredShape = "Confrontation"`. That hardcode was the
+  // root cause of "every output reads like a fight scene". No replacement:
+  // the Section Contract (SYSTEM, authoritative) carries the section premise
+  // + character state; the model now infers the right shape from those
+  // inputs rather than receiving a hardcoded "Confrontation" hint that
+  // overrode everything.
+
+  // PR-360-Z: sanitize the section title before rendering as the Section
+  // Contract block. Strips leaked editor annotations like (copy) / (test) /
+  // (draft) per sanitizeTitleForLLM(). Empty / non-string inputs degrade to
+  // empty string so the Section Contract block is omitted when the caller
+  // has no section info (legacy clients, smoke tests, etc.).
+  const sanitizedSectionTitle = sanitizeTitleForLLM(req.sectionTitle);
+  const hasSectionContext = sanitizedSectionTitle !== "" || nonEmpty(req.sectionSummary);
 
   // Container-aware scene instructions. The model gets:
   //  - the container's "what it contains" so it knows the shape
@@ -1053,6 +1085,41 @@ Structural limits:
     containerInstructions(cfg.name, cfg.whatItContains, cfg.naturalStoppingPoint, cfg.expectedRange),
     "",
   ];
+
+  // PR-360-Z: Section Contract (AUTHORITATIVE) — system-level anchor for
+  // premise + POV + container invariants + authority rules. The model
+  // weights SYSTEM instructions higher than user; placing this here makes
+  // the contract inalterable rather than a soft "INPUT CONTEXT" hint that
+  // the model may soften or summarize. Skipped entirely when the caller
+  // supplies no section context (legacy iOS builds, direct smoke tests).
+  if (hasSectionContext) {
+    craftLines.push(
+      "## Section Contract (AUTHORITATIVE — DO NOT INVERT)",
+      "",
+      `Title: ${sanitizedSectionTitle || "(no title provided)"}`,
+      `Summary: ${nonEmpty(req.sectionSummary) ? req.sectionSummary! : "(no summary provided)"}`,
+      "",
+      "The summary above describes the END STATE of this scene. If it says a character is dead, the scene is set AFTER their death (memorial, investigation, afterlife). DO NOT write the character as alive in this scene.",
+      "",
+      `POV: ${povInstruction(req.pov)}`,
+      "",
+      "Container invariants:",
+      `- Container: ${cfg.name}`,
+      `- What it contains: ${cfg.whatItContains}`,
+      `- Natural stopping point: ${cfg.naturalStoppingPoint}`,
+      `- Expected range: ${cfg.expectedRange}`,
+      `- Hard cap: ${cfg.hardCap} tokens`,
+      "",
+      "Authority rules (state explicitly):",
+      "- do not contradict the section premise",
+      "- dead characters remain dead unless the section explicitly establishes otherwise",
+      "- do not invent named characters outside canon unless explicitly authorized",
+      "- obey requested POV",
+      "- do not reproduce the section title as prose / dialogue",
+      "- stay within container shape and stop naturally",
+      "",
+    );
+  }
 
   // Per-request context — sent as the USER message.
   const contextLines: string[] = [];
@@ -1107,11 +1174,32 @@ Structural limits:
       "",
     );
   }
+  // PR-360-Z: Writing Task trimmed. The `Narrative shape: <hardcoded>`
+  // hint is GONE (let premise + character state determine scene shape
+  // rather than forcing every output into one shape). POV was MOVED to
+  // SYSTEM Section Contract above (structural limits weight higher there).
+  // What remains here is just the per-request action — the rest of the
+  // contract is already anchored in craftLines.
   contextLines.push(
     "## Writing Task",
     actionTask[req.generationAction],
-    `Narrative shape: ${inferredShape}.`,
-    `POV: ${povInstruction(req.pov)}`,
+    "",
+  );
+
+  // PR-360-Z: silent pre-return self-check. A short checklist the LLM
+  // performs internally right before returning. The checklist itself is
+  // NEVER returned to the caller (kept silent per corrections rule #6) —
+  // the LLM is told to do the verification, not to surface it. Inserted
+  // before Writing Instructions so the model sees it as the final gate
+  // before producing prose.
+  craftLines.push(
+    "## Pre-Return Self-Check (CRITICAL)",
+    "Before you return your response, verify (silently — do not include this checklist in your output):",
+    "- POV: the entire output is in the requested POV (no drift first-person to third-person).",
+    "- Premise: the scene is consistent with the section premise above. If the premise says a character is dead, that character does NOT appear alive in the scene.",
+    "- Characters: every named character comes from the proposal or an accepted prior section. Names not in canon are PROHIBITED unless the user explicitly introduces them via the proposal.",
+    "- Title leakage: the section title does not appear as prose or dialogue in the output.",
+    "- Container shape: end within the container's expected range and at the natural stopping point. Do not pad or sprawl past it.",
     "",
   );
 
@@ -1164,6 +1252,25 @@ function extractTitle(text: string, fallback: string): string {
   const headingMatch = text.match(/^#{1,3}\s+(.+)/m);
   if (headingMatch) return headingMatch[1].trim();
   return fallback || "";
+}
+
+// PR-360-Z: Section title sanitizer. Strips (copy) / (test) / (draft)
+// variants case-insensitive anywhere in the title, trims whitespace, and
+// returns the empty string when nothing useful is left. No arbitrary
+// truncation — that is a separate UX concern, deferred. The sanitizer is
+// used to render the Section Contract block in the prompt so leaked
+// editor-side annotations never make the the model as dialogue or
+// scene title (a real bug class observed on the 2026-08-15 smoke test).
+function sanitizeTitleForLLM(title: string | undefined | null): string {
+  if (typeof title !== "string") return "";
+  // Strip the three known-leak suffixes anywhere in the title, case-insensitive.
+  // Anchored on word boundaries so "(copy)" inside a legitimate title like
+  // "The (copy) shop" still gets cleaned, but "copycat" stays intact.
+  const stripped = title
+    .replace(/\s*\((copy|test|draft)\)\s*/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped;
 }
 
 function describeError(error: unknown, fallback: string): string {
@@ -1338,6 +1445,17 @@ async function handler(
     );
   }
 
+  // PR-360-Z Bug A fix: normalize the project identifier across both calling
+  // paths. iOS direct generation sends `projectID` (camelCase, explicit
+  // CodingKeys; no convertToSnakeCase). Run-outline sends both `projectID`
+  // and `project_id`. The legacy code only read `body.project_id`, so iOS
+  // direct calls silently lost the project-state context block. We now
+  // accept both names and canonicalize to a single `projectID` variable
+  // used everywhere downstream. Cost: one extra `?? null` chain at parse
+  // time. Benefit: iOS direct generation now reaches the same project-state
+  // RAG retrieval as run-outline (no behavior change for run-outline).
+  const projectID: string | null = body.project_id ?? body.projectID ?? null;
+
   // -------------------------------------------------------------------------
   // Server-side validation
   // -------------------------------------------------------------------------
@@ -1459,9 +1577,17 @@ async function handler(
       { status: 400 },
     );
   }
+  // PR-360-Z: container owns the output limit. Per corrections rule #6,
+  // max_tokens = min(containerHardCap, modelMaxOutputTokens). Drops the
+  // legacy reliance on outputBudget here so the cap is determined by the
+  // container (single source of truth), not the legacy length-mode budget.
+  // OUTPUT_BUDGETS in run-outline/_generation_request.ts is also deleted
+  // (Commit 3). CONTAINER_HARD_CAPS already mirrors containerConfig.hardCap
+  // in buildPrompt — if those values diverge, this formula reads stale.
+  const containerHardCap = CONTAINER_HARD_CAPS[container];
   const maxCompletionTokens = Math.min(
-    outputBudget,
-    selectedModel.max_output_tokens ?? outputBudget,
+    containerHardCap,
+    selectedModel.max_output_tokens ?? containerHardCap ?? 4096,
   );
 
   // previousOutputText is required for "continue" to avoid a no-op generation.
@@ -1582,8 +1708,8 @@ async function handler(
   // accepted scenes. Empty string if project has no accepted scenes yet,
   // or if adminClient isn't available.
   let projectStateContext = "";
-  if (adminClient && body.project_id) {
-    projectStateContext = await fetchProjectStateContext(adminClient, body.project_id);
+  if (adminClient && projectID) {
+    projectStateContext = await fetchProjectStateContext(adminClient, projectID);
   }
 
   const { craft: craftPrompt, context: contextPrompt } = buildPrompt({
@@ -1849,7 +1975,7 @@ async function handler(
       await adminClient.from("llm_prompts").insert({
         call_type: "generate-story",
         output_id: outputId,
-        project_id: body.project_id ?? null,
+        project_id: projectID,
         outline_section_id: body.outline_section_id ?? null,
         model: selectedModel.provider_model,
         prompt: JSON.stringify({

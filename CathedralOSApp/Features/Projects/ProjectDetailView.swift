@@ -1229,7 +1229,13 @@ struct ProjectDetailView: View {
                 selectedContainer: selectedContainer,
                 selectedPOV: selectedPOV,
                 terminalBeat: terminalBeat.isEmpty ? nil : terminalBeat,
-                selectedModelId: selectedModelId
+                selectedModelId: selectedModelId,
+                // PR-360-Z: canonical section context fields. Project-level
+                // generation has no specific section in scope here — caller
+                // passes nil and the backend degrades gracefully (no
+                // Section Contract block in the prompt).
+                sectionTitle: nil,
+                sectionSummary: nil
             )
             mergeGenerationDiagnostics(await GenerationRequestDiagnosticsStore.shared.latestVisibleText())
 
