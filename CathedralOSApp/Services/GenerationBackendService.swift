@@ -392,7 +392,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             requestedOutputType: GenerationOutputType.story.rawValue,
             generationLengthMode: lengthMode.rawValue,
             container: selectedContainer?.rawValue,
-            pov: pov ?? selectedPOV?.rawValue,
+            pov: selectedPOV?.rawValue,
             terminalBeat: terminalBeat,
             approximateMaxOutputTokens: lengthMode.outputBudget,
             selectedModelId: selectedModelId,
