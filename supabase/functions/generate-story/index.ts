@@ -666,7 +666,21 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   const at = p.selectedAftertaste;
   if (at) {
     const atLines: string[] = [];
-    atLines.push(`Leave the reader with ${at.label ?? ""} — shape the final image, tone, and consequence to produce this emotional residue. The current Section Contract always takes precedence.`);
+    // Kevin 2026-08-21 14:44 EDT cleanup pass fix #2: Ending Instruction
+    // was leaking literally into prose ("Leave the reader with Vomit" →
+    // "a haze that felt distinctly like vomit"). The instruction describes
+    // the emotional, sensory, or thematic residue the ending should leave,
+    // NOT a literal word/object that must appear. Interpret the label as the
+    // underlying residue (e.g., "Vomit" → nausea, disgust, stomach turning,
+    // sour/bitter sensory residue, physical revulsion if organically
+    // appropriate) and never quote/name it directly unless the current scene
+    // independently requires that literal thing. Section Contract still
+    // outranks Ending Instruction.
+    atLines.push(
+      `Target ending residue: ${at.label ?? ""}.`,
+      "The Ending Instruction describes the emotional, sensory, or thematic residue the ending should leave with the reader. Do not quote, name, or directly restate it unless the current scene independently requires that literal thing. Interpret the label as the underlying residue and shape the final image, tone, and consequence to produce it.",
+      "The current Section Contract always takes precedence over the Ending Instruction.",
+    );
     if (nonEmpty(at.note))                  atLines.push(at.note!);
     if (nonEmpty(at.emotionalResidue))      atLines.push(`Emotional residue: ${at.emotionalResidue}`);
     if (nonEmpty(at.endingTexture))         atLines.push(`Ending texture: ${at.endingTexture}`);
@@ -767,7 +781,12 @@ const CONTAINER_HARD_CAPS: Record<Container, number> = {
 // - scene_ending_state: just the latest scene's state (only the latest matters)
 async function fetchProjectStateContext(
   adminClient: any,
-  projectId: string
+  projectId: string,
+  // The current section being generated. When set, its section_embeddings
+  // row is excluded from the result — the current section's own prior
+  // memory (latest UPSERT) must not feed back into its own prompt.
+  // Per Kevin 2026-08-21 14:44 EDT smoke-test feedback (cleanup pass fix #1).
+  excludeSectionId?: string,
 ): Promise<string> {
   try {
     // Kevin 2026-08-21 12:55 EDT smoke test fix: defense-in-depth — only include
@@ -782,12 +801,29 @@ async function fetchProjectStateContext(
     // This is belt-and-suspenders with the write-time trigger (commit 7031845):
     // write-time cleanup removes the row, read-time filter excludes it even
     // if the cleanup missed. Together they enforce the invariant.
-    const { data, error } = await adminClient
+    //
+    // Kevin 2026-08-21 14:44 EDT cleanup pass: also exclude the current
+    // section's section_embeddings row (when excludeSectionId is provided)
+    // so the current section's prior/throwaway memory does not contaminate
+    // its own prompt. UPSERT replaces the row on each regeneration, so the
+    // row's memory is whatever the latest throwaway produced — it is not
+    // "prior state", it is "the current section so far".
+    let query = adminClient
       .from("section_embeddings")
       .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at, generation_outputs!inner(id)")
-      .eq("project_id", projectId)
-      .order("created_at", { ascending: true });
-    if (error || !data || data.length === 0) return "";
+      .eq("project_id", projectId);
+    if (excludeSectionId) {
+      query = query.neq("outline_section_id", excludeSectionId);
+    }
+    const { data, error } = await query.order("created_at", { ascending: true });
+    if (error) {
+      // Surface the actual PostgREST error (defense-in-depth: previously this
+      // was collapsed into a silent "" return, which made the Kevin 14:44 EDT
+      // smoke-test "no Project State block" symptom hard to attribute).
+      console.error(`[generate-story] fetchProjectStateContext query error: ${error.message ?? JSON.stringify(error)}`);
+      return "";
+    }
+    if (!data || data.length === 0) return "";
 
     // Iterate in ascending order so later scenes overwrite earlier ones
     // (Map.set on the same key replaces — gives us "latest entry per X").
@@ -944,6 +980,10 @@ function buildPrompt(req: {
     naturalStoppingPoint: string;
     expectedRange: string;
     hardCap: number;
+    // Kevin 2026-08-21 14:44 EDT cleanup pass fix #4: optional container-
+    // specific stopping rule (e.g., tighter rule for vignettes to prevent
+    // aftermath sprawl). When omitted, the general structural limits apply.
+    stoppingRule?: string;
   }
   const containerConfig: Record<Container, ContainerConfig> = {
     modelDecides: {
@@ -977,6 +1017,14 @@ function buildPrompt(req: {
       naturalStoppingPoint: "A resonant image or emotional turn",
       expectedRange: "300–900",
       hardCap: 1200,
+      // Kevin 2026-08-21 14:44 EDT cleanup pass fix #4: vignette was
+      // sprawling past its natural stopping point (alien scene + Ted
+      // realization → continued with Ted returning to the street,
+      // future-action contemplation, additional destruction imagery,
+      // another closing image). Container budgets unchanged. The tighter
+      // stopping rule below applies only to vignettes — beats, scenes,
+      // etc. continue to use the existing general structural limits.
+      stoppingRule: "Once the vignette reaches its resonant image or emotional turn, stop. Do not add aftermath, future-action setup, a second ending, or additional thematic explanation after the natural stopping point.",
     },
     microScene: {
       name: "Micro-scene",
@@ -1093,6 +1141,7 @@ function buildPrompt(req: {
     whatItContains: string,
     naturalStoppingPoint: string,
     expectedRange: string,
+    stoppingRule?: string,
   ): string =>
     `Write one complete ${containerName.toLowerCase()} (${expectedRange} tokens expected).
 
@@ -1108,7 +1157,11 @@ Structural limits:
 - Do not introduce a new unresolved conflict near the ending.
 - End immediately after the natural stopping point.
 - Do not continue into the aftermath, next destination, next scene, or consequences.
-- Produce a complete ending before stopping.`;
+- Produce a complete ending before stopping.${
+      stoppingRule
+        ? `\n\nContainer-specific stopping rule (${containerName.toLowerCase()}):\n${stoppingRule}`
+        : ""
+    }`;
 
   const povInstruction = (pov: POV | undefined): string =>
     pov && povConfig[pov] ? povConfig[pov].instruction : povConfig.thirdPersonLimited.instruction;
@@ -1124,7 +1177,7 @@ Structural limits:
     "You are a creative writing assistant helping authors craft compelling story content.",
     "",
     "## Container (CRITICAL SHAPE GUIDANCE)",
-    containerInstructions(cfg.name, cfg.whatItContains, cfg.naturalStoppingPoint, cfg.expectedRange),
+    containerInstructions(cfg.name, cfg.whatItContains, cfg.naturalStoppingPoint, cfg.expectedRange, cfg.stoppingRule),
     "",
   ];
 
@@ -1845,7 +1898,7 @@ async function handler(
   if (body.projectStateContext !== undefined && body.projectStateContext !== null) {
     projectStateContext = body.projectStateContext;
   } else if (adminClient && projectID) {
-    projectStateContext = await fetchProjectStateContext(adminClient, projectID);
+    projectStateContext = await fetchProjectStateContext(adminClient, projectID, body.outline_section_id ?? undefined);
   }
 
   const { craft: craftPrompt, context: contextPrompt } = buildPrompt({

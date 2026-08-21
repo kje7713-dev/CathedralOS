@@ -3410,3 +3410,338 @@ Deno.test({
     );
   },
 });
+
+
+// =============================================================================
+// PR-360-Z CLEANUP PASS (Kevin 2026-08-21 14:44 EDT smoke-test feedback)
+//
+// Four targeted fixes per Kevin's spec:
+//   1. Project State disappeared from Section 2 prompt → restore prior-section
+//      memory in fetchProjectStateContext. Plus exclude the current section's
+//      row (so prior/throwaway memory of the section being generated does not
+//      feed back into its own prompt).
+//   2. Ending Instruction leaking literally into prose → soften the guidance
+//      (residue, not literal word/object).
+//   3. Supporting context (Dramatic Seed / Relationships / Themes / Motifs /
+//      Ending Instruction) must not commandeer the section → preserve the
+//      "supporting context only" qualifier across all of them.
+//   4. Vignette aftermath sprawl → container-specific tighter stopping rule.
+//
+// Success criteria (per Kevin): two-section smoke test where
+//   (a) Section 1's memory appears in Section 2's Project State;
+//   (b) Deleted/throwaway Section 2 attempts do NOT appear in Project State;
+//   (c) Section Contract remains the last substantive context before Writing Task;
+//   (d) Current section premise is followed immediately;
+//   (e) Ending Instruction influences tone/residue without being literally named;
+//   (f) Vignette stops at the first legitimate resonant endpoint.
+//
+// (d) is an LLM-behavior assertion that's not testable in deno; covered by
+// smoke test on TestFlight. (a)-(c) and (e)-(f) are structural assertions on
+// the prompt text + query, which the deno suite covers here.
+// =============================================================================
+
+// ----------------------------------------------------------------------------
+// Cleanup pass #1: Project State query + rendering.
+//
+// (a) Section 1 memory appears in Section 2 Project State.
+//     Verified by injecting projectStateContext in the request body (the
+//     caller-supplied path). The actual fetchProjectStateContext DB query
+//     is verified by source-level assertions below (PostgREST INNER JOIN
+//     + excludeSectionId filter).
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z cleanup #1: projectStateContext appears in Section 2 user message (Section 1 memory → Project State)",
+  fn: async () => {
+    const sectionOneMemory =
+      "## Project state (cumulative across all accepted scenes)\n\n" +
+      "**Latest summary:** Ted confronts the alien in the alley. The alien vanishes.\n\n" +
+      "### Characters (latest known state)\n" +
+      "- **Ted**: bloody, disoriented, standing in the alley.\n\n" +
+      "### Open loops (unresolved)\n" +
+      "- [unresolved] Where did the alien go?\n";
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      projectStateContext: sectionOneMemory,
+      sectionTitle: "Aftermath",
+      sectionSummary: "Ted walks home and processes what just happened.",
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    // Section 1's summary reaches Section 2's Project State block.
+    assertStringIncludes(
+      userMsg,
+      "Ted confronts the alien in the alley",
+      "Section 1 memory must survive into Section 2 ## Project State (success criterion #1a)",
+    );
+    assertStringIncludes(
+      userMsg,
+      "Where did the alien go?",
+      "Section 1 open loops must survive into Section 2 ## Project State",
+    );
+    // Section Contract remains the LAST substantive context before Writing Task
+    // (success criterion #1c). Order check: Section Contract index < Writing Task index.
+    const sectionContractIdx = userMsg.lastIndexOf("## Section Contract");
+    const writingTaskIdx = userMsg.lastIndexOf("## Writing Task");
+    assertNotEquals(sectionContractIdx, -1, "Section Contract block must render");
+    assertNotEquals(writingTaskIdx, -1, "Writing Task block must render");
+    assertEquals(
+      sectionContractIdx < writingTaskIdx,
+      true,
+      "Section Contract must appear BEFORE Writing Task (Kevin 14:44 EDT success criterion #1c)",
+    );
+    // Project State block appears BEFORE Section Contract (canonical order
+    // per Kevin's spec: project context → Project State → Section Contract → Writing Task).
+    const projectStateIdx = userMsg.indexOf("## Project state");
+    assertNotEquals(projectStateIdx, -1, "Project State block must render when populated");
+    assertEquals(
+      projectStateIdx < sectionContractIdx,
+      true,
+      "Project State must appear BEFORE Section Contract (canonical order)",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Cleanup pass #1 (DB query): fetchProjectStateContext excludes the current
+// section's row so prior/throwaway memory does not feed back.
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z cleanup #1: fetchProjectStateContext accepts excludeSectionId + filters it in the query",
+  fn: async () => {
+    const indexPath = "supabase/functions/generate-story/index.ts";
+    const text = (await import("node:fs")).readFileSync(indexPath, "utf8");
+
+    // 1. Signature accepts excludeSectionId.
+    const fnStart = text.indexOf("async function fetchProjectStateContext");
+    assertNotEquals(fnStart, -1, "fetchProjectStateContext must exist");
+    const fnBodyEnd = text.indexOf("\nfunction ", fnStart + 1);
+    const fnBody = text.slice(fnStart, fnBodyEnd > 0 ? fnBodyEnd : fnStart + 3000);
+    assertStringIncludes(
+      fnBody,
+      "excludeSectionId?: string",
+      "fetchProjectStateContext must accept excludeSectionId?: string parameter (Kevin 14:44 EDT fix #1)",
+    );
+
+    // 2. Query applies .neq(\"outline_section_id\", excludeSectionId) when set.
+    assertStringIncludes(
+      fnBody,
+      '.neq("outline_section_id", excludeSectionId)',
+      "fetchProjectStateContext must filter excludeSectionId from the section_embeddings query (Kevin 14:44 EDT fix #1)",
+    );
+
+    // 3. INNER JOIN still present (defense-in-depth for orphaned memory).
+    assertStringIncludes(
+      fnBody,
+      "generation_outputs!inner(id)",
+      "fetchProjectStateContext must retain generation_outputs!inner(id) for orphaned-memory defense-in-depth",
+    );
+
+    // 4. Query error is logged (not silently swallowed) so future regressions
+    //    surface in Supabase logs.
+    assertStringIncludes(
+      fnBody,
+      "fetchProjectStateContext query error",
+      "fetchProjectStateContext must log the PostgREST error on query failure (was silently returning \"\" before)",
+    );
+
+    // 5. Call site passes body.outline_section_id as excludeSectionId.
+    assertStringIncludes(
+      text,
+      "fetchProjectStateContext(adminClient, projectID, body.outline_section_id",
+      "fetchProjectStateContext must be called with body.outline_section_id as excludeSectionId",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Cleanup pass #2: Ending Instruction softens literal guidance.
+//
+// Smoke result: "Leave the reader with Vomit" produced "a haze that felt
+// distinctly like vomit" — too literal. New guidance describes residue,
+// not the literal word/object.
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z cleanup #2: Ending Instruction describes residue, not literal word/object",
+  fn: async () => {
+    const indexPath = "supabase/functions/generate-story/index.ts";
+    const text = (await import("node:fs")).readFileSync(indexPath, "utf8");
+
+    // Old wording must be removed.
+    assertEquals(
+      text.includes("Leave the reader with"),
+      false,
+      "Old 'Leave the reader with' literal-direction wording must be removed (Kevin 14:44 EDT fix #2)",
+    );
+
+    // New wording must be present.
+    assertStringIncludes(
+      text,
+      "Target ending residue:",
+      "Ending Instruction must state 'Target ending residue:' (replaces literal 'Leave the reader with X')",
+    );
+    assertStringIncludes(
+      text,
+      "Do not quote, name, or directly restate",
+      "Ending Instruction must explicitly forbid quoting/naming the label",
+    );
+    assertStringIncludes(
+      text,
+      "unless the current scene independently requires that literal thing",
+      "Ending Instruction must carve out the 'scene independently requires the literal thing' exception",
+    );
+    // Section Contract still outranks Ending Instruction.
+    assertStringIncludes(
+      text,
+      "The current Section Contract always takes precedence over the Ending Instruction",
+      "Section Contract must remain authoritative over Ending Instruction (Kevin 14:44 EDT spec)",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Cleanup pass #3: Supporting context qualifiers preserved.
+//
+// Smoke result: Dramatic Seed / Ted violence guidance pushed the alien into
+// saying "Your blood thirst is a tool. Embrace it." — supporting context
+// commandeering the section. The existing "supporting context only" labels
+// must remain on every supporting-context section (Dramatic Seed /
+// Relationships / Themes / Motifs / Ending Instruction).
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z cleanup #3: supporting-context qualifiers present on Relationships, Themes, Motifs, Dramatic Seed, Ending Instruction",
+  fn: async () => {
+    const indexPath = "supabase/functions/generate-story/index.ts";
+    const text = (await import("node:fs")).readFileSync(indexPath, "utf8");
+
+    // Relationships: supporting context only — do not let it redirect.
+    assertStringIncludes(
+      text,
+      "(Supporting context only — the current Section Contract always takes precedence. Do not let relationships redirect the section.)",
+      "Relationships must carry the 'supporting context only' qualifier",
+    );
+
+    // Themes: same.
+    assertStringIncludes(
+      text,
+      "(Supporting context only — the current Section Contract always takes precedence. Do not let these questions redirect the section.)",
+      "Themes must carry the 'supporting context only' qualifier",
+    );
+
+    // Motifs: same.
+    assertStringIncludes(
+      text,
+      "(Supporting context only — the current Section Contract always takes precedence. Do not let motifs redirect the section.)",
+      "Motifs must carry the 'supporting context only' qualifier",
+    );
+
+    // Dramatic Seed: explicitly states the Section Contract always wins.
+    assertStringIncludes(
+      text,
+      "The Section Contract always takes precedence. Do not let the spark redirect, replace, or override the section premise",
+      "Dramatic Seed must explicitly defer to Section Contract (Kevin 09:37 EDT rule)",
+    );
+
+    // Ending Instruction: now explicitly states Section Contract outranks it.
+    assertStringIncludes(
+      text,
+      "The current Section Contract always takes precedence over the Ending Instruction",
+      "Ending Instruction must explicitly state Section Contract outranks it (Kevin 14:44 EDT fix #2)",
+    );
+
+    // SYSTEM authority block unchanged: Section Contract outranks ALL.
+    assertStringIncludes(
+      text,
+      "It outranks ALL other creative guidance in this prompt — Dramatic Seed, Themes, Motifs, Relationships, Ending Instruction, Intimacy guidance, and Project State (prior scenes).",
+      "SYSTEM Section Contract Authority block must outrank ALL other creative guidance (invariant)",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Cleanup pass #4: Vignette stopping rule tightened.
+//
+// Smoke result: vignette reached its natural stopping point around the alien
+// disappearing / Ted's realization, then continued with Ted returning to the
+// street, future-action contemplation, additional destruction imagery, and
+// another closing image. Container budgets UNCHANGED — only the stopping
+// rule is tightened for vignettes specifically.
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z cleanup #4: vignette container has container-specific stopping rule (no aftermath sprawl)",
+  fn: async () => {
+    const indexPath = "supabase/functions/generate-story/index.ts";
+    const text = (await import("node:fs")).readFileSync(indexPath, "utf8");
+
+    // Vignette config has the new stoppingRule field.
+    const vignetteBlock = text.match(
+      /vignette:\s*\{[\s\S]*?\},/,
+    );
+    assertNotEquals(vignetteBlock, null, "vignette container config block must exist");
+    assertStringIncludes(
+      vignetteBlock![0],
+      'stoppingRule: "Once the vignette reaches its resonant image or emotional turn, stop. Do not add aftermath, future-action setup, a second ending, or additional thematic explanation after the natural stopping point."',
+      "vignette container must carry the Kevin 14:44 EDT stoppingRule (no aftermath/future-action/second ending)",
+    );
+
+    // containerInstructions accepts and renders the stoppingRule when present.
+    const containerInstructionsFn = text.match(
+      /const containerInstructions = \([\s\S]*?\);/,
+    );
+    assertNotEquals(containerInstructionsFn, null, "containerInstructions function must exist");
+    assertStringIncludes(
+      containerInstructionsFn![0],
+      "stoppingRule?: string",
+      "containerInstructions must accept stoppingRule?: string parameter",
+    );
+    assertStringIncludes(
+      containerInstructionsFn![0],
+      "Container-specific stopping rule",
+      "containerInstructions must render the Container-specific stopping rule block when provided",
+    );
+
+    // Call site passes cfg.stoppingRule.
+    assertStringIncludes(
+      text,
+      "containerInstructions(cfg.name, cfg.whatItContains, cfg.naturalStoppingPoint, cfg.expectedRange, cfg.stoppingRule)",
+      "containerInstructions call site must forward cfg.stoppingRule",
+    );
+
+    // General structural-limit instruction still present (other containers).
+    assertStringIncludes(
+      text,
+      "Do not continue into the aftermath, next destination, next scene, or consequences.",
+      "General structural-limit instruction must remain for non-vignette containers",
+    );
+
+    // hardCap is unchanged (Kevin 14:44 EDT: 'Do not change container budgets').
+    const vignetteHardCap = text.match(/vignette:\s*\{[\s\S]*?hardCap:\s*\d+,/);
+    assertNotEquals(vignetteHardCap, null, "vignette hardCap must still be defined");
+    assertStringIncludes(
+      vignetteHardCap![0],
+      "hardCap: 1200",
+      "vignette hardCap must remain 1200 (Kevin 14:44 EDT: 'Do not change container budgets')",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Cleanup pass #1 migration: validate FK + reload PostgREST schema.
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z cleanup #1 migration: validates section_embeddings FK + reloads PostgREST schema",
+  fn: async () => {
+    const fs = await import("node:fs");
+    const path = "supabase/migrations/20260821140000_validate_section_embeddings_fk_and_reload_schema.sql";
+    const text = fs.readFileSync(path, "utf8");
+    assertStringIncludes(
+      text,
+      "VALIDATE CONSTRAINT section_embeddings_generation_output_id_fkey",
+      "Migration must VALIDATE the section_embeddings FK constraint",
+    );
+    assertStringIncludes(
+      text,
+      "NOTIFY pgrst, 'reload schema'",
+      "Migration must reload PostgREST schema cache",
+    );
+  },
+});
