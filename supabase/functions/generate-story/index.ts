@@ -220,6 +220,16 @@ interface GenerateStoryRequest {
   // Contract block in the prompt.
   sectionTitle?: string;
   sectionSummary?: string;
+  // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
+  // All optional; the "## Story Arc Context" block is omitted when none
+  // are set. iOS direct generation doesn't populate these today
+  // (back-compat — block simply omitted). run-outline fetches and passes them.
+  storyArcName?: string;
+  storyArcBeatLabel?: string;
+  storyArcBeatPurpose?: string;
+  // 0-indexed position in the arc. Renderer adds +1 for the "N of M" display.
+  storyArcPosition?: number;
+  storyArcTotalBeats?: number;
 }
 
 interface GenerationOutputInsert {
@@ -947,6 +957,14 @@ function buildPrompt(req: {
   // Contract block — callers that lack section context simply omit it.
   sectionTitle?: string;
   sectionSummary?: string;
+  // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
+  // Optional — when any field is set, the buildPrompt renders a
+  // "## Story Arc Context" block between Project State and Section Contract.
+  storyArcName?: string;
+  storyArcBeatLabel?: string;
+  storyArcBeatPurpose?: string;
+  storyArcPosition?: number;
+  storyArcTotalBeats?: number;
 }): { craft: string; context: string } {
   // Parse the payload — degrade gracefully if malformed.
   let payload: PromptPackPayloadShape = {};
@@ -1246,6 +1264,51 @@ Structural limits:
     contextLines.push(
       "Project State establishes continuity, not the required subject of the next prose. Transition from prior state into the Section Contract as directly as necessary. Do not continue the previous interaction merely because it was the latest event."
     );
+    contextLines.push("");
+  }
+
+  // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
+  // Supporting structural context only. The Section Contract remains
+  // authoritative (same deferral rule as Dramatic Seed / Relationships /
+  // Themes / Motifs / Ending Instruction). Rendered between Project State
+  // and Section Contract so the model sees arc position immediately before
+  // the per-section contract — gives the model structural awareness
+  // ("this is beat 3 of 7") without overriding the Section Contract.
+  //
+  // Block is omitted entirely when none of the five fields are set
+  // (back-compat — iOS direct generation doesn't populate them today;
+  // run-outline fetches and passes them).
+  if (
+    req.storyArcName ||
+    req.storyArcBeatLabel ||
+    req.storyArcBeatPurpose ||
+    typeof req.storyArcPosition === "number" ||
+    typeof req.storyArcTotalBeats === "number"
+  ) {
+    contextLines.push(
+      "## Story Arc Context",
+      "",
+      "Supporting structural context only. The Section Contract remains authoritative.",
+      "",
+    );
+    if (req.storyArcName) {
+      contextLines.push(`Arc: ${req.storyArcName}`);
+    }
+    if (req.storyArcBeatLabel) {
+      contextLines.push(`Current beat: ${req.storyArcBeatLabel}`);
+    }
+    if (req.storyArcBeatPurpose) {
+      contextLines.push(`Beat purpose: ${req.storyArcBeatPurpose}`);
+    }
+    if (typeof req.storyArcPosition === "number" && typeof req.storyArcTotalBeats === "number") {
+      // 0-indexed position → 1-indexed display ("Position: 3 of 7").
+      const displayPosition = req.storyArcPosition + 1;
+      contextLines.push(`Position: ${displayPosition} of ${req.storyArcTotalBeats}`);
+    } else if (typeof req.storyArcPosition === "number") {
+      contextLines.push(`Position: ${req.storyArcPosition + 1}`);
+    } else if (typeof req.storyArcTotalBeats === "number") {
+      contextLines.push(`Total beats: ${req.storyArcTotalBeats}`);
+    }
     contextLines.push("");
   }
 
@@ -1926,6 +1989,12 @@ async function handler(
     // the LLM; model continued Ted/Betty from prior accepted scenes).
     sectionTitle: body.sectionTitle,
     sectionSummary: body.sectionSummary,
+    // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
+    storyArcName: body.storyArcName,
+    storyArcBeatLabel: body.storyArcBeatLabel,
+    storyArcBeatPurpose: body.storyArcBeatPurpose,
+    storyArcPosition: body.storyArcPosition,
+    storyArcTotalBeats: body.storyArcTotalBeats,
   });
   // Phase 3: max possible credit cost for the pre-flight check
   const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);

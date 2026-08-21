@@ -75,10 +75,21 @@ export function buildGenerateStoryRequest(args: {
   // the run loop passes in). Added in the PR-#327 backend fix-forward so generate-story
   // can persist `outline_section_id` on the generation_outputs row it inserts, which is
   // what the iOS-side `GenerationOutput.outlineSectionID` field expects on sync.
-  section: { id: string; title: string; summary: string; container: string | null; pov: string | null; terminal_beat: string | null };
+  section: { id: string; title: string; summary: string; container: string | null; pov: string | null; terminal_beat: string | null; story_arc_beat_id: string | null };
   projectId: string;
   selectedModelId?: string;
   lengthMode: LengthMode;
+  // PR-360-Z cleanup pass: Story Arc Context (Kevin 17:02 EDT) — the
+  // generation prompt gains a "## Story Arc Context" block so the model
+  // knows which beat it's writing within the larger arc structure.
+  // All five fields are optional: omitting any of them skips that line
+  // in the rendered block. iOS direct generation doesn't populate them
+  // today (back-compat); run-outline fetches and passes them.
+  storyArcName?: string;
+  storyArcBeatLabel?: string;
+  storyArcBeatPurpose?: string;
+  storyArcPosition?: number;
+  storyArcTotalBeats?: number;
 }): JSONObject {
   const project = args.snapshot.project as JSONObject | undefined;
   // PR-360-Z: buildSourcePayloadJSON no longer takes the section (section
@@ -116,6 +127,15 @@ export function buildGenerateStoryRequest(args: {
     // up in Commit 4.
     sectionTitle: args.section.title,
     sectionSummary: args.section.summary,
+    // PR-360-Z cleanup pass: Story Arc Context (Kevin 17:02 EDT). These
+    // top-level fields feed the "## Story Arc Context" block in the
+    // user message (between Project State and Section Contract). All
+    // optional; the block is omitted if all five are unset.
+    storyArcName: args.storyArcName,
+    storyArcBeatLabel: args.storyArcBeatLabel,
+    storyArcBeatPurpose: args.storyArcBeatPurpose,
+    storyArcPosition: args.storyArcPosition,
+    storyArcTotalBeats: args.storyArcTotalBeats,
   };
 }
 

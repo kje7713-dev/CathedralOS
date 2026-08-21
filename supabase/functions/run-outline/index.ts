@@ -356,12 +356,23 @@ async function runOutline(
       const priorContext = await fetchPriorContext(adminClient, outlineId, section.id);
 
       // 2. Generate the prose (Rule 8: generate first).
+      //    Kevin 2026-08-21 17:02 EDT cleanup pass: also fetch story arc
+      //    context (beat + arc + template) so the prompt can render the
+      //    "## Story Arc Context" block between Project State and Section
+      //    Contract. Empty object on miss → block omitted, generation
+      //    continues normally.
+      const storyArc = await fetchStoryArcContext(adminClient, section.story_arc_beat_id);
       const generationRequest = buildGenerateStoryRequest({
         snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
         section,
         projectId,
         selectedModelId: model,
         lengthMode: estimateLengthModeFromContainer(section.container),
+        storyArcName: storyArc.name,
+        storyArcBeatLabel: storyArc.beatLabel,
+        storyArcBeatPurpose: storyArc.beatPurpose,
+        storyArcPosition: storyArc.position,
+        storyArcTotalBeats: storyArc.totalBeats,
       });
       const result = await callGenerateStory(generationRequest, authHeader);
 
@@ -787,6 +798,70 @@ async function fetchRawTextFromOutput(
   if (!outputText) throw new Error(`persisted generation output ${outputId} has no prose`);
   return outputText;
 }
+
+// Fetch story arc context for a beat (Kevin 2026-08-21 17:02 EDT cleanup pass).
+// Returns the arc name (from story_arc_templates.name), the beat's label,
+// the beat's details ("purpose"), and the beat's 0-indexed position + the
+// total beat count for the arc. The prompt renderer adds +1 to convert to
+// the 1-indexed "N of M" display format Kevin specified.
+//
+// Failure modes:
+//   - No beat id on the section → empty object (block omitted in prompt).
+//   - Beat doesn't exist → empty object (block omitted).
+//   - Arc has no template_id (custom arc) → name is undefined; the prompt
+//     renderer still shows the beat label + position without the arc name.
+//   - Any DB error → logged + empty object (defensive — the run continues
+//     without arc context rather than failing the whole generation).
+async function fetchStoryArcContext(
+  adminClient: any,
+  storyArcBeatId: string | null,
+): Promise<{
+  name?: string;
+  beatLabel?: string;
+  beatPurpose?: string;
+  position?: number;
+  totalBeats?: number;
+}> {
+  if (!storyArcBeatId) return {};
+  try {
+    // One PostgREST query: beat + arc + template name (LEFT JOIN — missing
+    // template_id returns null template but the beat row is still included).
+    const { data, error } = await adminClient
+      .from("story_arc_beats")
+      .select("position, label, details, story_arc_id, story_arcs(template_id, story_arc_templates(name))")
+      .eq("id", storyArcBeatId)
+      .maybeSingle();
+    if (error || !data) {
+      console.error(`[run-outline] fetchStoryArcContext failed: ${error?.message ?? "no data"}`);
+      return {};
+    }
+    const arc = (data as any).story_arcs;
+    const template = arc?.story_arc_templates;
+    let totalBeats: number | undefined;
+    if (data.story_arc_id) {
+      const { count, countErr } = await adminClient
+        .from("story_arc_beats")
+        .select("id", { count: "exact", head: true })
+        .eq("story_arc_id", data.story_arc_id);
+      if (countErr) {
+        console.error(`[run-outline] fetchStoryArcContext count failed: ${countErr.message}`);
+      } else if (typeof count === "number") {
+        totalBeats = count;
+      }
+    }
+    return {
+      name: template?.name ?? undefined,
+      beatLabel: data.label ?? undefined,
+      beatPurpose: (typeof data.details === "string" && data.details.length > 0) ? data.details : undefined,
+      position: typeof data.position === "number" ? data.position : undefined,
+      totalBeats,
+    };
+  } catch (e) {
+    console.error(`[run-outline] fetchStoryArcContext threw: ${(e as Error).message ?? String(e)}`);
+    return {};
+  }
+}
+
 
 // Call embed-section to extract structured memory from the persisted output.
 // Per Rule 8: this happens AFTER the output is persisted to generation_outputs,

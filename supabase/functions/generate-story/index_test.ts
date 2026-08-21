@@ -3745,3 +3745,314 @@ Deno.test({
     );
   },
 });
+
+
+// =============================================================================
+// PR-360-Z CLEANUP PASS — Story Arc Context (Kevin 2026-08-21 17:02 EDT)
+//
+// Kevin explicitly chose option (a) — add it NOW in this cleanup pass, not
+// in Phase 2. The prompt gains a "## Story Arc Context" block between
+// Project State and Section Contract so the model knows which beat it's
+// writing within the larger arc structure. All five fields are optional;
+// the block is omitted when none are set (back-compat for iOS direct
+// generation, which doesn't populate these today).
+//
+// Rendered format (per Kevin's spec):
+//   ## Story Arc Context
+//   Supporting structural context only. The Section Contract remains authoritative.
+//
+//   Arc: [arc name/type]
+//   Current beat: [beat label]
+//   Beat purpose: [beat description]
+//   Position: N of M    (1-indexed; DB position is 0-indexed)
+// =============================================================================
+
+// ----------------------------------------------------------------------------
+// Handler-level: block renders correctly when all fields are populated.
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z Story Arc Context: block renders when all fields populated (Kevin 17:02 EDT spec)",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "The Darkest Hour",
+      sectionSummary: "The hero confronts the villain at the midpoint of the arc.",
+      storyArcName: "Three-Act Structure",
+      storyArcBeatLabel: "Midpoint Reversal",
+      storyArcBeatPurpose: "Stakes raised; hero's worst fear realized; major revelation shifts the trajectory of the story.",
+      storyArcPosition: 3,        // 0-indexed in DB
+      storyArcTotalBeats: 7,
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+
+    // Header line.
+    assertStringIncludes(
+      userMsg,
+      "## Story Arc Context",
+      "Story Arc Context header must render when fields are populated",
+    );
+    // Kevin's framing — supporting context only + Section Contract authority.
+    assertStringIncludes(
+      userMsg,
+      "Supporting structural context only. The Section Contract remains authoritative.",
+      "Story Arc Context must carry the supporting-context-only framing (Kevin 17:02 EDT spec)",
+    );
+
+    // Each of the four content lines.
+    assertStringIncludes(userMsg, "Arc: Three-Act Structure", "Arc name line must render");
+    assertStringIncludes(userMsg, "Current beat: Midpoint Reversal", "Beat label line must render");
+    assertStringIncludes(
+      userMsg,
+      "Beat purpose: Stakes raised; hero\u2019s worst fear realized; major revelation shifts the trajectory of the story.",
+      "Beat purpose line must render (apostrophe + escaping)",
+    );
+    // 1-indexed conversion: position 3 (0-indexed) → "Position: 4 of 7".
+    assertStringIncludes(
+      userMsg,
+      "Position: 4 of 7",
+      "Position line must render as 1-indexed (DB position 3 → display '4 of 7')",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Handler-level: block is omitted when NO fields are set (back-compat).
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z Story Arc Context: block omitted when no fields set (back-compat for iOS direct-gen)",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Some Section",
+      sectionSummary: "A summary that does not mention story arc.",
+      // No storyArc* fields.
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    assertEquals(
+      userMsg.includes("## Story Arc Context"),
+      false,
+      "Story Arc Context block must be omitted when none of the five fields are set",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Handler-level: position partial fields work (e.g., position without total).
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z Story Arc Context: partial fields render the available lines (e.g., beat only)",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Beat Only",
+      sectionSummary: "Section with only beat label set.",
+      storyArcBeatLabel: "Inciting Incident",
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+    assertStringIncludes(userMsg, "## Story Arc Context", "Header must render when at least one field is set");
+    assertStringIncludes(userMsg, "Current beat: Inciting Incident", "Beat label line must render");
+    // Other lines must NOT render when their fields are absent.
+    assertEquals(
+      userMsg.includes("Arc:"),
+      false,
+      "Arc line must not render when storyArcName is absent",
+    );
+    assertEquals(
+      userMsg.includes("Beat purpose:"),
+      false,
+      "Beat purpose line must not render when storyArcBeatPurpose is absent",
+    );
+    assertEquals(
+      userMsg.includes("Position:"),
+      false,
+      "Position line must not render when storyArcPosition is absent",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Placement: Story Arc Context must be between Project State and Section Contract.
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z Story Arc Context: placed between Project State and Section Contract (Kevin 17:02 EDT order)",
+  fn: async () => {
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+      sectionTitle: "Order Check",
+      sectionSummary: "Verifying prompt order.",
+      projectStateContext: "## Project state (cumulative across all accepted scenes)\n\nPrior scene memory.",
+      storyArcName: "Hero\u2019s Journey",
+      storyArcBeatLabel: "Crossing the Threshold",
+      storyArcBeatPurpose: "Hero commits to the adventure.",
+      storyArcPosition: 1,
+      storyArcTotalBeats: 5,
+    });
+    assertEquals(c !== null, true);
+    const userMsg = c!.messages[1].content;
+
+    const projectStateIdx = userMsg.indexOf("## Project state");
+    const storyArcIdx = userMsg.indexOf("## Story Arc Context");
+    const sectionContractIdx = userMsg.lastIndexOf("## Section Contract");
+    const writingTaskIdx = userMsg.lastIndexOf("## Writing Task");
+
+    assertNotEquals(projectStateIdx, -1, "Project State must render");
+    assertNotEquals(storyArcIdx, -1, "Story Arc Context must render");
+    assertNotEquals(sectionContractIdx, -1, "Section Contract must render");
+    assertNotEquals(writingTaskIdx, -1, "Writing Task must render");
+
+    assertEquals(
+      projectStateIdx < storyArcIdx,
+      true,
+      "Project State must appear BEFORE Story Arc Context (canonical order)",
+    );
+    assertEquals(
+      storyArcIdx < sectionContractIdx,
+      true,
+      "Story Arc Context must appear BEFORE Section Contract (Kevin 17:02 EDT spec — structural context immediately before per-section contract)",
+    );
+    assertEquals(
+      sectionContractIdx < writingTaskIdx,
+      true,
+      "Section Contract must still appear BEFORE Writing Task (invariant from PR-360-Z cleanup pass #1)",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Source-level: generate-story request body type + buildPrompt params + forwarding.
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z Story Arc Context: request body + buildPrompt + handler forwarding are wired",
+  fn: async () => {
+    const fs = await import("node:fs");
+    const text = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+
+    // 1. Request body interface accepts the 5 new fields.
+    assertStringIncludes(
+      text,
+      "storyArcName?: string;",
+      "GenerateStoryRequest interface must include storyArcName?: string",
+    );
+    assertStringIncludes(
+      text,
+      "storyArcBeatLabel?: string;",
+      "GenerateStoryRequest interface must include storyArcBeatLabel?: string",
+    );
+    assertStringIncludes(
+      text,
+      "storyArcBeatPurpose?: string;",
+      "GenerateStoryRequest interface must include storyArcBeatPurpose?: string",
+    );
+    assertStringIncludes(
+      text,
+      "storyArcPosition?: number;",
+      "GenerateStoryRequest interface must include storyArcPosition?: number",
+    );
+    assertStringIncludes(
+      text,
+      "storyArcTotalBeats?: number;",
+      "GenerateStoryRequest interface must include storyArcTotalBeats?: number",
+    );
+
+    // 2. buildPrompt params accept the same 5 fields.
+    // Use the source-level pattern check (similar to existing "Defense-in-depth" test).
+    const fnPromptStart = text.indexOf("function buildPrompt(req: {");
+    assertNotEquals(fnPromptStart, -1, "buildPrompt must exist");
+    const fnPromptEnd = text.indexOf("\nfunction ", fnPromptStart + 1);
+    const fnPromptBody = text.slice(fnPromptStart, fnPromptEnd > 0 ? fnPromptEnd : fnPromptStart + 3000);
+    assertStringIncludes(
+      fnPromptBody,
+      "storyArcName?: string;",
+      "buildPrompt params must accept storyArcName?: string",
+    );
+    assertStringIncludes(
+      fnPromptBody,
+      "storyArcTotalBeats?: number;",
+      "buildPrompt params must accept storyArcTotalBeats?: number",
+    );
+
+    // 3. The "## Story Arc Context" block is rendered with Kevin's exact framing.
+    assertStringIncludes(
+      text,
+      "\"## Story Arc Context\"",
+      "buildPrompt must render the \"## Story Arc Context\" header",
+    );
+    assertStringIncludes(
+      text,
+      "Supporting structural context only. The Section Contract remains authoritative.",
+      "Story Arc Context block must carry Kevin's framing verbatim (17:02 EDT spec)",
+    );
+
+    // 4. Position is rendered as 1-indexed (DB position + 1).
+    assertStringIncludes(
+      text,
+      "const displayPosition = req.storyArcPosition + 1",
+      "Position must convert from 0-indexed DB to 1-indexed display",
+    );
+
+    // 5. Handler forwards the 5 fields from body to buildPrompt.
+    assertStringIncludes(
+      text,
+      "storyArcName: body.storyArcName",
+      "Handler must forward body.storyArcName to buildPrompt",
+    );
+    assertStringIncludes(
+      text,
+      "storyArcTotalBeats: body.storyArcTotalBeats",
+      "Handler must forward body.storyArcTotalBeats to buildPrompt",
+    );
+  },
+});
+
+// ----------------------------------------------------------------------------
+// Source-level: _generation_request.ts exposes the 5 fields + run-outline
+// fetchStoryArcContext helper exists and is called.
+// ----------------------------------------------------------------------------
+Deno.test({
+  name: "PR-360-Z Story Arc Context: _generation_request.ts + run-outline fetchStoryArcContext wired",
+  fn: async () => {
+    const fs = await import("node:fs");
+    const genReqText = fs.readFileSync(
+      "supabase/functions/run-outline/_generation_request.ts",
+      "utf8",
+    );
+    assertStringIncludes(
+      genReqText,
+      "storyArcName?: string;",
+      "_generation_request.ts must expose storyArcName?: string in buildGenerateStoryRequest",
+    );
+    assertStringIncludes(
+      genReqText,
+      "storyArcTotalBeats?: number;",
+      "_generation_request.ts must expose storyArcTotalBeats?: number in buildGenerateStoryRequest",
+    );
+    assertStringIncludes(
+      genReqText,
+      "storyArcName: args.storyArcName",
+      "_generation_request.ts must forward args.storyArcName into the returned payload",
+    );
+
+    const runOutlineText = fs.readFileSync(
+      "supabase/functions/run-outline/index.ts",
+      "utf8",
+    );
+    assertStringIncludes(
+      runOutlineText,
+      "async function fetchStoryArcContext(",
+      "run-outline must define fetchStoryArcContext helper (Kevin 17:02 EDT)",
+    );
+    assertStringIncludes(
+      runOutlineText,
+      "await fetchStoryArcContext(adminClient, section.story_arc_beat_id)",
+      "run-outline must call fetchStoryArcContext before buildGenerateStoryRequest",
+    );
+    assertStringIncludes(
+      runOutlineText,
+      "storyArcName: storyArc.name",
+      "run-outline must spread fetched story arc fields into buildGenerateStoryRequest",
+    );
+  },
+});
