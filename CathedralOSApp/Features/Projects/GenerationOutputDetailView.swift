@@ -1538,11 +1538,16 @@ struct GenerationOutputDetailView: View {
             // so the Section Contract block renders in the prompt (both
             // SYSTEM anchor + USER content). For regenerate / continue /
             // remix, the parent output's outlineSectionID links to the
-            // outline_sections row via the project.
+            // outline_sections row via the project. Per the model graph
+            // (CathedralOSApp/Models/StoryProject.swift line 40-41 +
+            // Outline.swift line 19), the path is project.outlines
+            // (array) -> outline.sections (array). Each project has a
+            // single Outline (per Outline.swift comment), so .first is safe.
             let sectionContext: (title: String?, summary: String?) = {
                 guard let sectionID = output.outlineSectionID,
                       let project = output.project,
-                      let section = project.outlineSections.first(where: { $0.id == sectionID })
+                      let outline = project.outlines.first,
+                      let section = outline.sections.first(where: { $0.id == sectionID })
                 else { return (nil, nil) }
                 return (section.title, section.summary)
             }()
