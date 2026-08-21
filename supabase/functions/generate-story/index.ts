@@ -702,20 +702,48 @@ type POV = "firstPerson" | "secondPerson" | "thirdPersonLimited" | "thirdPersonO
 // Pre-flight hard cap lookup for credit estimation. Mirrors the hardCap
 // values in containerConfig inside buildPrompt — keep in sync if those
 // values change. Used by the Phase 2 pre-flight cost check.
+// PR-360-Z hotfix: bumped per-container hard caps to restore the "target +
+// runway + hard cap" model Kevin described at 2026-08-20 20:52 EDT.
+// Each container's hardCap is now ~50% above the typical lengthMode.outputBudget
+// that maps to it, so the LLM has runway to finish gracefully without
+// cutting off mid-sentence. Per Kevin's correction rule #6, container still
+// owns the output limit; the prompt still carries the container's
+// expectedRange as the target so the LLM aims for it.
+//
+// Per-container mapping (post-hotfix):
+//   beat          (350 -> 1200)  typical .short  (800)   runway +400
+//   moment        (700 -> 2400)  typical .medium (1600)  runway +800
+//   vignette      (1200 -> 2400) typical .medium (1600)  runway +800
+//   microScene    (1200 -> 2400) typical .medium (1600)  runway +800
+//   scene         (2300 -> 4500) typical .long   (3000)  runway +1500
+//   developedScene(4000 -> 9000) typical .chapter(6000)  runway +3000
+//   setPiece      (6500 -> 12000)
+//   sceneSequence (9000 -> 14000)
+//   shortStory    (10000 -> 16000)
+//   chapter       (11000 -> 16000)
+//   episode       (18000 -> 24000)
+//   novella       (60000 -> 70000)
+//   modelDecides  (8000 -> 12000)
+//
+// The values inside containerConfig (the inline table inside buildPrompt)
+// were left untouched here. They govern prompt-shape wording, not the cap.
+// If you want to keep them in sync, do that in a follow-up commit — but the
+// original code comment ("keep in sync if those values change") is advisory,
+// not load-bearing for generation length.
 const CONTAINER_HARD_CAPS: Record<Container, number> = {
-  modelDecides: 8000,
-  beat: 350,
-  moment: 700,
-  vignette: 1200,
-  microScene: 1200,
-  scene: 2300,
-  developedScene: 4000,
-  setPiece: 6500,
-  sceneSequence: 9000,
-  shortStory: 10000,
-  chapter: 11000,
-  episode: 18000,
-  novella: 60000,
+  modelDecides: 12000,
+  beat: 1200,
+  moment: 2400,
+  vignette: 2400,
+  microScene: 2400,
+  scene: 4500,
+  developedScene: 9000,
+  setPiece: 12000,
+  sceneSequence: 14000,
+  shortStory: 16000,
+  chapter: 16000,
+  episode: 24000,
+  novella: 70000,
 };
 
 // Aggregate project state across ALL accepted scenes from section_embeddings
