@@ -1471,7 +1471,8 @@ Structural limits:
       "",
       "The current Section Contract is the authoritative writing directive for this scene. It outranks ALL other creative guidance in this prompt — Dramatic Seed, Themes, Motifs, Relationships, Ending Instruction, Intimacy guidance, and Project State (prior scenes).",
       "",
-      "Container scope and the Section Contract are jointly authoritative. The Container controls how much happens; the Section Contract controls what happens. If the Section Contract describes more events than fit the current Container, select one concrete action, reaction, discovery, or exchange that materially advances it. Do not summarize or cram the entire section into a smaller container.",
+      "Container scope and the Section Contract are jointly authoritative. The Container controls the scale and shape of the output; the Section Contract controls its subject and required outcome. If the Section Contract is broader than the Container, select one container-sized portion using the Container’s “What it contains” definition. Fully develop and complete that unit rather than summarizing or cramming the larger section.",
+      "The expected range is a genuine target. Do not finish below its minimum by reducing a major event to a gesture, threat, near miss, or summary. Develop the selected event through concrete actions, obstacles, reactions, reversals, and consequences appropriate to the Container, without unrelated padding.",
       "",
       "These are supporting context only and must NEVER redirect the current section. If they conflict with the Section Contract, follow the Section Contract.",
       "",
@@ -1517,6 +1518,14 @@ Structural limits:
   // CONTINUITY, not the required subject of the next prose. The Section
   // Contract outranks it.
   if (req.projectStateContext) {
+    // Kevin 2026-08-22 10:12 EDT narrow correction: Project State is factual
+    // continuity data, not a prose sample. Prevents the model from imitating
+    // the block's analytical language, thread labels, or arc terminology
+    // in the fiction. The block itself remains unchanged.
+    contextLines.push(
+      "Project State is factual continuity data, not a prose sample. Use only concrete facts needed for continuity. Do not imitate, paraphrase, summarize, or import its analytical language, thread labels, arc terminology, summaries, or explanatory tone into the fiction.",
+      "",
+    );
     contextLines.push(req.projectStateContext);
     contextLines.push("");
     contextLines.push(
@@ -1612,18 +1621,27 @@ Structural limits:
   // Terminal beat — optional concrete endpoint, rendered as the LAST input
   // section in the user message so the model sees it right before the
   // Writing Task. Strongest anchor position.
-  // PR-360-Z follow-up (Kevin 2026-08-22 09:50 EDT prompt cleanup):
-  // Prefer storyArcBeatPurpose (human-readable purpose text from story_arc_beats)
-  // over terminalBeat (raw enum from caller) for prose-facing instructions.
-  // Never place the raw enum or beat name in prose-facing instructions.
+  // Kevin 2026-08-22 10:12 EDT narrow correction: rename Terminal Beat →
+  // Terminal Function. Prefer storyArcBeatPurpose (human-readable purpose from
+  // story_arc_beats) over terminalBeat (raw enum from caller). Never expose
+  // raw enum IDs (ordinary_world, call_to_adventure, etc.) in prose-facing
+  // instructions. Block includes the meta-rule, the rendered instruction
+  // for the current beat, the Ordinary World canonical example, and the
+  // generic "use the corresponding human-readable purpose" guidance.
   const terminalBeatText = nonEmpty(req.storyArcBeatPurpose)
     ? req.storyArcBeatPurpose
     : req.terminalBeat;
   if (nonEmpty(terminalBeatText)) {
     contextLines.push(
-      "## Terminal Beat",
-      `End after: ${terminalBeatText}`,
-      "Do not name or quote the structural beat in the prose.",
+      "## Terminal Function",
+      "End when the current structural beat’s human-readable purpose has been fulfilled through a concrete event within the Section Contract. Do not name, quote, paraphrase, or allude to the structural beat label in the prose.",
+      "",
+      `End after ${terminalBeatText}`,
+      "",
+      "For Ordinary World, the rendered instruction is functionally equivalent to:",
+      "End after a concrete moment establishes the viewpoint character’s normal pattern or baseline under the pressure described by the Section Contract. Do not refer to “ordinary life,” “the ordinary world,” or structural terminology.",
+      "",
+      "Use the corresponding human-readable purpose for other arc beats. Do not expose their enum IDs.",
       "",
     );
   }
@@ -1660,6 +1678,20 @@ Structural limits:
     );
   }
 
+  // Kevin 2026-08-22 10:12 EDT narrow correction: Set Piece must sustain one
+  // major event through causally connected phases until it reaches a concrete
+  // outcome. Preparation, threats, a single gesture, or a near miss do not by
+  // themselves complete a Set Piece. Conditional on container === "Set Piece"
+  // only (does not require hasSectionContext — applies to any Set Piece
+  // request regardless of Section Contract presence).
+  if (cfg.name === "Set Piece") {
+    contextLines.push(
+      "## Set Piece Completion (CRITICAL)",
+      "For a Set Piece, sustain one major event through causally connected phases until it reaches a concrete outcome. Preparation, threats, a single gesture, or a near miss do not by themselves complete a Set Piece.",
+      "",
+    );
+  }
+
   // PR-360-Z ordering fix (Kevin 2026-08-21 11:02 EDT): Writing Task wording.
   // Container noun is generated dynamically (beat / vignette / scene / etc.)
   // so the model knows the exact output shape. The previous wording "Continue
@@ -1679,6 +1711,16 @@ Structural limits:
     "",
   );
 
+  // Kevin 2026-08-22 10:12 EDT narrow correction: stopping discipline rule.
+  // Reinforces the existing container-shape stopping guidance with explicit
+  // language forbidding extended aftermath / reflection / thematic explanation
+  // / generalized consequences / repeated concluding paragraphs after the
+  // minimum required confirming reaction.
+  craftLines.push(
+    "## Stopping Discipline",
+    "After the selected major event completes, include only the minimum immediate reaction necessary to establish the Section Contract’s required outcome, then stop. Do not continue into extended aftermath, reflection, thematic explanation, generalized consequences, or repeated concluding paragraphs.",
+  );
+
   // PR-360-Z: silent pre-return self-check. A short checklist the LLM
   // performs internally right before returning. The checklist itself is
   // NEVER returned to the caller (kept silent per corrections rule #6) —
@@ -1693,6 +1735,11 @@ Structural limits:
     "- Characters: every named character comes from the proposal or an accepted prior section. Names not in canon are PROHIBITED unless the user explicitly introduces them via the proposal.",
     "- Title leakage: the section title does not appear as prose or dialogue in the output.",
     "- Container shape: end within the container's expected range and at the natural stopping point. Do not pad or sprawl past it.",
+    "- Central event: the central event actually occurs and reaches a concrete outcome.",
+    "- Expected range: the output meets the Container’s minimum expected range without unrelated padding.",
+    "- Stopping: the output stops after the minimum required confirming reaction.",
+    "- Forbidden surfaces: no raw structural identifier, structural beat name, Project State analytical language, or repeated concluding passage appears.",
+    "- Anti-stock: stock metaphors and abstract emotional explanations have not replaced concrete action.",
     "",
   );
 

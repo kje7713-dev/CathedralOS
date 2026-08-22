@@ -4406,7 +4406,7 @@ Deno.test("buildPrompt: contains ## Literary Execution block with the 14 craft b
   assertStringIncludes(craft, "Build one decisive ending. Do not append repeated revelations");
 });
 
-Deno.test("buildPrompt: Section Contract Authority contains Container co-authority rule", () => {
+Deno.test("buildPrompt: Section Contract Authority contains Container co-authority rule (Kevin 10:12 EDT wording)", () => {
   const { craft } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     sectionTitle: "Test Section",
@@ -4414,9 +4414,25 @@ Deno.test("buildPrompt: Section Contract Authority contains Container co-authori
   });
   assertStringIncludes(craft, "## Section Contract Authority");
   assertStringIncludes(craft, "Container scope and the Section Contract are jointly authoritative");
-  assertStringIncludes(craft, "The Container controls how much happens");
-  assertStringIncludes(craft, "the Section Contract controls what happens");
-  assertStringIncludes(craft, "Do not summarize or cram the entire section into a smaller container");
+  assertStringIncludes(craft, "The Container controls the scale and shape of the output");
+  assertStringIncludes(craft, "the Section Contract controls its subject and required outcome");
+  assertStringIncludes(craft, "select one container-sized portion using the Container");
+  assertStringIncludes(craft, "Fully develop and complete that unit rather than summarizing or cramming the larger section");
+  // The OLD wording from commit 1740cd7 should be gone.
+  assertEquals(craft.includes("The Container controls how much happens"), false);
+  assertEquals(craft.includes("select one concrete action, reaction, discovery, or exchange"), false);
+});
+
+Deno.test("buildPrompt: Section Contract Authority contains expected-range rule", () => {
+  const { craft } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "Test Section",
+    sectionSummary: "The protagonist faces a storm.",
+  });
+  assertStringIncludes(craft, "The expected range is a genuine target");
+  assertStringIncludes(craft, "Do not finish below its minimum by reducing a major event to a gesture, threat, near miss, or summary");
+  assertStringIncludes(craft, "Develop the selected event through concrete actions, obstacles, reactions, reversals, and consequences");
+  assertStringIncludes(craft, "without unrelated padding");
 });
 
 Deno.test("buildPrompt: Beat container + section context instructs dramatize one incident", () => {
@@ -4431,31 +4447,54 @@ Deno.test("buildPrompt: Beat container + section context instructs dramatize one
   assertStringIncludes(context, "Do not summarize every event implied by the section premise");
 });
 
-Deno.test("buildPrompt: Terminal Beat uses storyArcBeatPurpose (human-readable) over raw terminalBeat", () => {
+Deno.test("buildPrompt: Terminal Function uses storyArcBeatPurpose (human-readable) over raw terminalBeat", () => {
   const { context } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     terminalBeat: "ordinary_world", // raw enum from caller
     storyArcBeatPurpose: "End after a concrete moment establishes the viewpoint character's normal pattern under pressure.",
   });
   assertEquals(context.includes("ordinary_world"), false);
-  assertStringIncludes(context, "End after: End after a concrete moment establishes the viewpoint character");
-  assertStringIncludes(context, "Do not name or quote the structural beat in the prose");
+  assertEquals(context.includes("call_to_adventure"), false);
+  assertStringIncludes(context, "## Terminal Function");
+  assertStringIncludes(context, "End after End after a concrete moment establishes the viewpoint character");
+  assertStringIncludes(context, "Do not name, quote, paraphrase, or allude to the structural beat label in the prose");
 });
 
-Deno.test("buildPrompt: Terminal Beat falls back to terminalBeat when storyArcBeatPurpose absent", () => {
+Deno.test("buildPrompt: Terminal Function falls back to terminalBeat when storyArcBeatPurpose absent", () => {
   const { context } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     terminalBeat: "End after the conversation settles into silence.",
     storyArcBeatPurpose: undefined,
   });
-  assertStringIncludes(context, "## Terminal Beat");
-  assertStringIncludes(context, "End after: End after the conversation settles into silence");
-  assertStringIncludes(context, "Do not name or quote the structural beat in the prose");
+  assertStringIncludes(context, "## Terminal Function");
+  assertStringIncludes(context, "End after End after the conversation settles into silence");
+  assertStringIncludes(context, "Do not name, quote, paraphrase, or allude to the structural beat label in the prose");
+  // Raw enum should NOT appear even when fallback is used.
+  assertEquals(context.includes("ordinary_world"), false);
 });
 
-Deno.test("buildPrompt: Terminal Beat omitted when neither terminalBeat nor storyArcBeatPurpose set", () => {
+Deno.test("buildPrompt: Terminal Function omitted when neither terminalBeat nor storyArcBeatPurpose set", () => {
   const { context } = buildPrompt(MINIMAL_PROMPT_ARGS);
+  assertEquals(context.includes("## Terminal Function"), false);
   assertEquals(context.includes("## Terminal Beat"), false);
+});
+
+Deno.test("buildPrompt: Terminal Function includes Ordinary World canonical example for reference", () => {
+  // The Ordinary World example must always be in the Terminal Function block,
+  // regardless of the caller-provided purpose. This is the reference template
+  // for what a rendered instruction looks like.
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    terminalBeat: "ordinary_world",
+    storyArcBeatPurpose: "End after a concrete moment establishes the viewpoint character's normal pattern under pressure.",
+  });
+  assertStringIncludes(context, "For Ordinary World, the rendered instruction is functionally equivalent to:");
+  assertStringIncludes(context, "End after a concrete moment establishes the viewpoint character");
+  assertStringIncludes(context, "Do not refer to");
+  assertStringIncludes(context, "ordinary life");
+  assertStringIncludes(context, "the ordinary world");
+  assertStringIncludes(context, "Use the corresponding human-readable purpose for other arc beats");
+  assertStringIncludes(context, "Do not expose their enum IDs");
 });
 
 Deno.test("buildPrompt: projectStateContext rendered unchanged into user message", () => {
@@ -4483,4 +4522,81 @@ Deno.test("buildPrompt: Writing Instructions has Ending Instruction residue rule
   assertEquals(craft.includes("Close the piece according to the Ending Instruction"), false);
   assertStringIncludes(craft, "Shape the final action and image to leave the requested Ending Instruction residue");
   assertStringIncludes(craft, "Do not quote the residue label, force it literally, or add a second ending after the Terminal Beat");
+});
+
+
+// =============================================================================
+// Kevin 2026-08-22 10:12 EDT narrow correction — additional buildPrompt tests
+// =============================================================================
+
+Deno.test("buildPrompt: Set Piece Completion guidance present when container is setPiece", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    container: "setPiece",
+    sectionTitle: "Escape",
+    sectionSummary: "The hero escapes the burning building through a collapsing corridor.",
+  });
+  assertStringIncludes(context, "## Set Piece Completion (CRITICAL)");
+  assertStringIncludes(context, "For a Set Piece, sustain one major event through causally connected phases");
+  assertStringIncludes(context, "Preparation, threats, a single gesture, or a near miss do not by themselves complete a Set Piece");
+});
+
+Deno.test("buildPrompt: Set Piece Completion omitted when container is not setPiece", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    container: "scene",
+    sectionTitle: "Quiet",
+    sectionSummary: "A quiet conversation.",
+  });
+  assertEquals(context.includes("## Set Piece Completion"), false);
+  assertEquals(context.includes("themselves complete a Set Piece"), false);
+});
+
+Deno.test("buildPrompt: Project State factual-data warning present immediately before projectStateContext", () => {
+  const projectState = "## Project state (cumulative across all accepted scenes)\n\n**Latest summary:** test";
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    projectStateContext: projectState,
+  });
+  assertStringIncludes(context, "Project State is factual continuity data, not a prose sample");
+  assertStringIncludes(context, "Use only concrete facts needed for continuity");
+  assertStringIncludes(context, "Do not imitate, paraphrase, summarize, or import its analytical language, thread labels, arc terminology");
+  // Warning must appear BEFORE the project state content.
+  const warningPos = context.indexOf("Project State is factual continuity data");
+  const statePos = context.indexOf(projectState);
+  assertEquals(warningPos >= 0 && statePos >= 0 && warningPos < statePos, true);
+});
+
+Deno.test("buildPrompt: Project State factual-data warning absent when no projectStateContext provided", () => {
+  const { context } = buildPrompt(MINIMAL_PROMPT_ARGS);
+  assertEquals(context.includes("Project State is factual continuity data"), false);
+});
+
+Deno.test("buildPrompt: Stopping Discipline rule present in SYSTEM craft", () => {
+  const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
+  assertStringIncludes(craft, "## Stopping Discipline");
+  assertStringIncludes(craft, "include only the minimum immediate reaction necessary to establish the Section Contract");
+  assertStringIncludes(craft, "Do not continue into extended aftermath, reflection, thematic explanation, generalized consequences, or repeated concluding paragraphs");
+});
+
+Deno.test("buildPrompt: Pre-Return Self-Check expanded with central-event, expected-range, stopping, forbidden-surfaces, anti-stock checks", () => {
+  const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
+  assertStringIncludes(craft, "## Pre-Return Self-Check (CRITICAL)");
+  assertStringIncludes(craft, "Central event: the central event actually occurs and reaches a concrete outcome");
+  assertStringIncludes(craft, "Expected range: the output meets the Container");
+  assertStringIncludes(craft, "Stopping: the output stops after the minimum required confirming reaction");
+  assertStringIncludes(craft, "Forbidden surfaces: no raw structural identifier, structural beat name, Project State analytical language");
+  assertStringIncludes(craft, "Anti-stock: stock metaphors and abstract emotional explanations have not replaced concrete action");
+});
+
+Deno.test("buildPrompt: Project State block itself remains unchanged (full content preserved when provided)", () => {
+  const projectState = "## Project state (cumulative across all accepted scenes)\n\n**Latest summary:** Custom summary.\n\n### Characters\n- Alice: brave";
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    projectStateContext: projectState,
+  });
+  // The full block must be present byte-for-byte (the factual-data warning is
+  // the only thing added before it; the block itself is not modified).
+  assertStringIncludes(context, projectState);
+  assertStringIncludes(context, "Project State establishes continuity, not the required subject");
 });
