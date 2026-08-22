@@ -4456,21 +4456,25 @@ Deno.test("buildPrompt: Terminal Function uses storyArcBeatPurpose (human-readab
   assertEquals(context.includes("ordinary_world"), false);
   assertEquals(context.includes("call_to_adventure"), false);
   assertStringIncludes(context, "## Terminal Function");
-  assertStringIncludes(context, "End after End after a concrete moment establishes the viewpoint character");
-  assertStringIncludes(context, "Do not name, quote, paraphrase, or allude to the structural beat label in the prose");
+  assertStringIncludes(context, "Use the following structural purpose only to determine where the current Section Contract ends");
+  assertStringIncludes(context, "End after a concrete moment establishes the viewpoint character's normal pattern under pressure");
+  assertStringIncludes(context, "It controls the stopping point, not the subject of the prose");
+  assertStringIncludes(context, "Do not introduce a separate mission, threat, reveal, setting, confrontation, or subplot");
+  assertStringIncludes(context, "If the structural purpose conflicts with the Section Contract, follow the Section Contract");
 });
 
-Deno.test("buildPrompt: Terminal Function falls back to terminalBeat when storyArcBeatPurpose absent", () => {
+Deno.test("buildPrompt: Terminal Function falls back to terminalBeat when storyArcBeatPurpose absent AND terminalBeat is human-readable", () => {
+  // Per Kevin 2026-08-22 10:35 EDT correction: terminalBeat is used only if
+  // it does NOT match the canonical arc-beat snake_case enum pattern
+  // (ordinary_world, call_to_adventure, refusal_of_the_call, etc.).
   const { context } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     terminalBeat: "End after the conversation settles into silence.",
     storyArcBeatPurpose: undefined,
   });
   assertStringIncludes(context, "## Terminal Function");
-  assertStringIncludes(context, "End after End after the conversation settles into silence");
-  assertStringIncludes(context, "Do not name, quote, paraphrase, or allude to the structural beat label in the prose");
-  // Raw enum should NOT appear even when fallback is used.
-  assertEquals(context.includes("ordinary_world"), false);
+  assertStringIncludes(context, "End after the conversation settles into silence");
+  assertStringIncludes(context, "It controls the stopping point, not the subject of the prose");
 });
 
 Deno.test("buildPrompt: Terminal Function omitted when neither terminalBeat nor storyArcBeatPurpose set", () => {
@@ -4479,23 +4483,6 @@ Deno.test("buildPrompt: Terminal Function omitted when neither terminalBeat nor 
   assertEquals(context.includes("## Terminal Beat"), false);
 });
 
-Deno.test("buildPrompt: Terminal Function includes Ordinary World canonical example for reference", () => {
-  // The Ordinary World example must always be in the Terminal Function block,
-  // regardless of the caller-provided purpose. This is the reference template
-  // for what a rendered instruction looks like.
-  const { context } = buildPrompt({
-    ...MINIMAL_PROMPT_ARGS,
-    terminalBeat: "ordinary_world",
-    storyArcBeatPurpose: "End after a concrete moment establishes the viewpoint character's normal pattern under pressure.",
-  });
-  assertStringIncludes(context, "For Ordinary World, the rendered instruction is functionally equivalent to:");
-  assertStringIncludes(context, "End after a concrete moment establishes the viewpoint character");
-  assertStringIncludes(context, "Do not refer to");
-  assertStringIncludes(context, "ordinary life");
-  assertStringIncludes(context, "the ordinary world");
-  assertStringIncludes(context, "Use the corresponding human-readable purpose for other arc beats");
-  assertStringIncludes(context, "Do not expose their enum IDs");
-});
 
 Deno.test("buildPrompt: projectStateContext rendered unchanged into user message", () => {
   const projectState = "## Project state (cumulative across all accepted scenes)\n\n**Latest summary:** The rainstorm ended.\n\n### Characters (latest known state)\n- Bill Noah: grieving";
@@ -4599,4 +4586,93 @@ Deno.test("buildPrompt: Project State block itself remains unchanged (full conte
   // the only thing added before it; the block itself is not modified).
   assertStringIncludes(context, projectState);
   assertStringIncludes(context, "Project State establishes continuity, not the required subject");
+});
+
+// =============================================================================
+// Kevin 2026-08-22 10:35 EDT narrow correction acceptance tests for Terminal
+// Function rendering. Verifies raw enum IDs never reach the assembled prompt
+// (even when the caller passes them as terminalBeat), no implementation
+// examples or multi-beat guidance leak into production, and the literal spec
+// block format is emitted with the resolved canonical purpose.
+// =============================================================================
+
+Deno.test("buildPrompt: Terminal Function -- call_to_adventure fixture contains resolved purpose but not the raw enum", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    terminalBeat: "call_to_adventure", // raw enum from caller
+    storyArcBeatPurpose: "The protagonist meets a mentor figure who presents the central quest or challenge.",
+  });
+  assertEquals(context.includes("call_to_adventure"), false);
+  assertStringIncludes(context, "## Terminal Function");
+  assertStringIncludes(context, "The protagonist meets a mentor figure who presents the central quest or challenge");
+});
+
+Deno.test("buildPrompt: Terminal Function -- ordinary_world fixture contains resolved purpose but not the raw enum", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    terminalBeat: "ordinary_world", // raw enum from caller
+    storyArcBeatPurpose: "End after a concrete moment establishes the viewpoint character's normal pattern under pressure.",
+  });
+  assertEquals(context.includes("ordinary_world"), false);
+  assertStringIncludes(context, "## Terminal Function");
+  assertStringIncludes(context, "End after a concrete moment establishes the viewpoint character");
+});
+
+Deno.test("buildPrompt: Terminal Function -- refusal_of_the_call raw enum also fails closed", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    terminalBeat: "refusal_of_the_call",
+  });
+  // No resolved purpose, raw enum rejected -- Terminal Function block omitted.
+  assertEquals(context.includes("## Terminal Function"), false);
+  assertEquals(context.includes("refusal_of_the_call"), false);
+});
+
+Deno.test("buildPrompt: Terminal Function -- fail closed: raw enum terminalBeat without resolved purpose omits the block", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    terminalBeat: "call_to_adventure", // raw enum, no storyArcBeatPurpose
+  });
+  // Terminal Function block must be omitted entirely (fail closed).
+  assertEquals(context.includes("## Terminal Function"), false);
+  // The raw enum must NOT leak anywhere in the assembled context.
+  assertEquals(context.includes("call_to_adventure"), false);
+});
+
+Deno.test("buildPrompt: Terminal Function block never contains Ordinary World example phrases", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    terminalBeat: "call_to_adventure",
+    storyArcBeatPurpose: "The protagonist meets a mentor figure who presents the central quest.",
+  });
+  // None of these implementation/developer-instruction phrases may appear
+  // in the assembled production prompt.
+  assertEquals(context.includes("For Ordinary World"), false);
+  assertEquals(context.includes("the rendered instruction is functionally equivalent"), false);
+  assertEquals(context.includes("Use the corresponding human-readable purpose"), false);
+});
+
+Deno.test("buildPrompt: Terminal Function block says stopping not subject matter", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    storyArcBeatPurpose: "Test canonical purpose.",
+  });
+  assertStringIncludes(context, "It controls the stopping point, not the subject of the prose");
+});
+
+Deno.test("buildPrompt: Terminal Function block prohibits inventing separate mission/threat/reveal/subplot", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    storyArcBeatPurpose: "Test canonical purpose.",
+  });
+  assertStringIncludes(context, "Do not introduce a separate mission, threat, reveal, setting, confrontation, or subplot");
+});
+
+Deno.test("buildPrompt: Terminal Function block says Structural purpose follows Section Contract when in conflict", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    storyArcBeatPurpose: "Test canonical purpose.",
+  });
+  assertStringIncludes(context, "If the structural purpose conflicts with the Section Contract, follow the Section Contract");
+  assertStringIncludes(context, "Stop once the Section Contract's current event has concretely fulfilled the structural purpose");
 });

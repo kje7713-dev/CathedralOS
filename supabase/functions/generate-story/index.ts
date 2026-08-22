@@ -1621,27 +1621,45 @@ Structural limits:
   // Terminal beat — optional concrete endpoint, rendered as the LAST input
   // section in the user message so the model sees it right before the
   // Writing Task. Strongest anchor position.
-  // Kevin 2026-08-22 10:12 EDT narrow correction: rename Terminal Beat →
-  // Terminal Function. Prefer storyArcBeatPurpose (human-readable purpose from
-  // story_arc_beats) over terminalBeat (raw enum from caller). Never expose
-  // raw enum IDs (ordinary_world, call_to_adventure, etc.) in prose-facing
-  // instructions. Block includes the meta-rule, the rendered instruction
-  // for the current beat, the Ordinary World canonical example, and the
-  // generic "use the corresponding human-readable purpose" guidance.
-  const terminalBeatText = nonEmpty(req.storyArcBeatPurpose)
+  // Kevin 2026-08-22 10:35 EDT narrow correction to Terminal Function rendering.
+  // HARD SCOPE: only this block + its tests; everything else (Literary
+  // Execution, container guidance, Section Contract Authority, Beat Rule,
+  // Set Piece Completion, Project State factual-data warning, Stopping
+  // Discipline, Pre-Return Self-Check) is preserved byte-exact.
+  //
+  // ONLY the canonical human-readable purpose (resolved by the caller from
+  // story_arc_beats.purpose) may appear in the assembled prompt. NEVER emit
+  // raw terminal identifiers (ordinary_world, call_to_adventure,
+  // refusal_of_the_call, etc.). NEVER paste implementation examples,
+  // mapping instructions, or guidance for beats other than the current
+  // beat. FAIL CLOSED if the canonical purpose cannot be resolved: omit
+  // the Terminal Function block entirely and let the Container’s natural
+  // stopping point + Section Contract’s required outcome govern ending.
+  //
+  // Canonical arc-beat enum IDs are snake_case (e.g. ordinary_world,
+  // call_to_adventure). When terminalBeat reaches this function without a
+  // resolved storyArcBeatPurpose and matches that snake_case pattern, we
+  // treat it as an unresolved raw identifier and omit the block.
+  function looksLikeRawTerminalBeatEnum(s: string | undefined | null): boolean {
+    if (!s) return false;
+    return /^[a-z][a-z0-9]*(_[a-z0-9]+)+$/.test(s);
+  }
+  const resolvedTerminalPurpose = nonEmpty(req.storyArcBeatPurpose)
     ? req.storyArcBeatPurpose
-    : req.terminalBeat;
-  if (nonEmpty(terminalBeatText)) {
+    : (nonEmpty(req.terminalBeat) && !looksLikeRawTerminalBeatEnum(req.terminalBeat)
+        ? req.terminalBeat
+        : null);
+  if (resolvedTerminalPurpose !== null) {
     contextLines.push(
       "## Terminal Function",
-      "End when the current structural beat’s human-readable purpose has been fulfilled through a concrete event within the Section Contract. Do not name, quote, paraphrase, or allude to the structural beat label in the prose.",
       "",
-      `End after ${terminalBeatText}`,
+      "Use the following structural purpose only to determine where the current Section Contract ends:",
       "",
-      "For Ordinary World, the rendered instruction is functionally equivalent to:",
-      "End after a concrete moment establishes the viewpoint character’s normal pattern or baseline under the pressure described by the Section Contract. Do not refer to “ordinary life,” “the ordinary world,” or structural terminology.",
+      resolvedTerminalPurpose,
       "",
-      "Use the corresponding human-readable purpose for other arc beats. Do not expose their enum IDs.",
+      "Fulfill this purpose through the event already required by the current Section Contract. It controls the stopping point, not the subject of the prose. Do not introduce a separate mission, threat, reveal, setting, confrontation, or subplot merely to satisfy it. Do not name, quote, paraphrase, or allude to the structural beat or its metadata in the prose.",
+      "",
+      "If the structural purpose conflicts with the Section Contract, follow the Section Contract. Stop once the Section Contract’s current event has concretely fulfilled the structural purpose.",
       "",
     );
   }
