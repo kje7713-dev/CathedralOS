@@ -817,12 +817,15 @@ async function fetchProjectStateContext(
     // "prior state", it is "the current section so far".
     let query = adminClient
       .from("section_embeddings")
-      .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at, generation_outputs!inner(id)")
+      .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
       .eq("project_id", projectId);
     if (excludeSectionId) {
       query = query.neq("outline_section_id", excludeSectionId);
     }
     const { data, error } = await query.order("created_at", { ascending: true });
+    console.log(
+      `[generate-story] fetchProjectStateContext: rows=${data?.length ?? 0} for projectId=${projectId} excludeSectionId=${excludeSectionId ?? "none"} error=${error?.message ?? "none"}`,
+    );
     if (error) {
       // Surface the actual PostgREST error (defense-in-depth: previously this
       // was collapsed into a silent "" return, which made the Kevin 14:44 EDT
