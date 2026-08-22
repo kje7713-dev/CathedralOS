@@ -4361,3 +4361,126 @@ Deno.test({
     );
   },
 });
+
+
+// =============================================================================
+// PR-360-Z follow-up (Kevin 2026-08-22 09:50 EDT prompt cleanup) — buildPrompt
+// regression tests. These verify the 8 required changes from the prompt
+// cleanup spec landed correctly without touching Project State / RAG /
+// validation / models / flow / DB / UI.
+// =============================================================================
+
+import { buildPrompt } from "./index.ts";
+
+const MINIMAL_PROMPT_ARGS = {
+  sourcePayloadJSON: MINIMAL_PAYLOAD,
+  generationAction: "generate" as const,
+  generationLengthMode: "short" as const,
+  container: "scene" as const,
+  pov: "thirdPersonLimited" as const,
+  outputBudget: 800,
+  projectName: "Test Project",
+  promptPackName: "Test Pack",
+};
+
+Deno.test("buildPrompt: does not contain the fixed prose example (She set down the glass)", () => {
+  const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
+  assertEquals(craft.includes("She set down the glass"), false);
+  assertEquals(craft.includes("## Examples"), false);
+});
+
+Deno.test("buildPrompt: contains ## Literary Execution block with the 14 craft bullets", () => {
+  const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
+  assertStringIncludes(craft, "## Literary Execution");
+  assertStringIncludes(craft, "Write finished prose in active scene, not synopsis");
+  assertStringIncludes(craft, "Build direct cause and effect");
+  assertStringIncludes(craft, "Render the selected required event on-page");
+  assertStringIncludes(craft, "Filter description and interpretation through the viewpoint character");
+  assertStringIncludes(craft, "Do not explain a dynamic or emotion immediately after the prose has already demonstrated it");
+  assertStringIncludes(craft, "Give dialogue an immediate character objective");
+  assertStringIncludes(craft, "Prefer precise nouns, active verbs, and selective concrete details");
+  assertStringIncludes(craft, "Vary sentence length and paragraph size");
+  assertStringIncludes(craft, "Do not repeat an image unless its meaning, context, or consequence changes");
+  assertStringIncludes(craft, "Do not directly reproduce or closely paraphrase section titles, motif labels");
+  assertStringIncludes(craft, "Preserve character agency");
+  assertStringIncludes(craft, "Build one decisive ending. Do not append repeated revelations");
+});
+
+Deno.test("buildPrompt: Section Contract Authority contains Container co-authority rule", () => {
+  const { craft } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "Test Section",
+    sectionSummary: "The protagonist faces a storm.",
+  });
+  assertStringIncludes(craft, "## Section Contract Authority");
+  assertStringIncludes(craft, "Container scope and the Section Contract are jointly authoritative");
+  assertStringIncludes(craft, "The Container controls how much happens");
+  assertStringIncludes(craft, "the Section Contract controls what happens");
+  assertStringIncludes(craft, "Do not summarize or cram the entire section into a smaller container");
+});
+
+Deno.test("buildPrompt: Beat container + section context instructs dramatize one incident", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    container: "beat",
+    sectionTitle: "Beat",
+    sectionSummary: "Several events happen in the protagonist's day.",
+  });
+  assertStringIncludes(context, "## Beat Rule (CRITICAL)");
+  assertStringIncludes(context, "select and dramatize one concrete incident");
+  assertStringIncludes(context, "Do not summarize every event implied by the section premise");
+});
+
+Deno.test("buildPrompt: Terminal Beat uses storyArcBeatPurpose (human-readable) over raw terminalBeat", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    terminalBeat: "ordinary_world", // raw enum from caller
+    storyArcBeatPurpose: "End after a concrete moment establishes the viewpoint character's normal pattern under pressure.",
+  });
+  assertEquals(context.includes("ordinary_world"), false);
+  assertStringIncludes(context, "End after: End after a concrete moment establishes the viewpoint character");
+  assertStringIncludes(context, "Do not name or quote the structural beat in the prose");
+});
+
+Deno.test("buildPrompt: Terminal Beat falls back to terminalBeat when storyArcBeatPurpose absent", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    terminalBeat: "End after the conversation settles into silence.",
+    storyArcBeatPurpose: undefined,
+  });
+  assertStringIncludes(context, "## Terminal Beat");
+  assertStringIncludes(context, "End after: End after the conversation settles into silence");
+  assertStringIncludes(context, "Do not name or quote the structural beat in the prose");
+});
+
+Deno.test("buildPrompt: Terminal Beat omitted when neither terminalBeat nor storyArcBeatPurpose set", () => {
+  const { context } = buildPrompt(MINIMAL_PROMPT_ARGS);
+  assertEquals(context.includes("## Terminal Beat"), false);
+});
+
+Deno.test("buildPrompt: projectStateContext rendered unchanged into user message", () => {
+  const projectState = "## Project state (cumulative across all accepted scenes)\n\n**Latest summary:** The rainstorm ended.\n\n### Characters (latest known state)\n- Bill Noah: grieving";
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    projectStateContext: projectState,
+  });
+  assertStringIncludes(context, projectState);
+  // The transition rule (continuity, not subject) should still appear.
+  assertStringIncludes(context, "Project State establishes continuity, not the required subject");
+});
+
+Deno.test("buildPrompt: Writing Instructions has new Container-rule text", () => {
+  const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
+  assertEquals(craft.includes("If you cannot cover everything"), false);
+  assertStringIncludes(craft, "If the Section Contract is broader than the Container");
+  assertStringIncludes(craft, "dramatize one material part of it");
+  assertStringIncludes(craft, "Compress description and transitions before compressing the selected action");
+  assertStringIncludes(craft, "Never exceed the Container hard cap");
+});
+
+Deno.test("buildPrompt: Writing Instructions has Ending Instruction residue rule", () => {
+  const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
+  assertEquals(craft.includes("Close the piece according to the Ending Instruction"), false);
+  assertStringIncludes(craft, "Shape the final action and image to leave the requested Ending Instruction residue");
+  assertStringIncludes(craft, "Do not quote the residue label, force it literally, or add a second ending after the Terminal Beat");
+});

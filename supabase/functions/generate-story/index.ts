@@ -1182,7 +1182,7 @@ async function callEmbedSectionForGeneratedOutput(
 }
 
 
-function buildPrompt(req: {
+export function buildPrompt(req: {
   sourcePayloadJSON: unknown;
   generationAction: GenerationAction;
   generationLengthMode: LengthMode;
@@ -1471,6 +1471,8 @@ Structural limits:
       "",
       "The current Section Contract is the authoritative writing directive for this scene. It outranks ALL other creative guidance in this prompt — Dramatic Seed, Themes, Motifs, Relationships, Ending Instruction, Intimacy guidance, and Project State (prior scenes).",
       "",
+      "Container scope and the Section Contract are jointly authoritative. The Container controls how much happens; the Section Contract controls what happens. If the Section Contract describes more events than fit the current Container, select one concrete action, reaction, discovery, or exchange that materially advances it. Do not summarize or cram the entire section into a smaller container.",
+      "",
       "These are supporting context only and must NEVER redirect the current section. If they conflict with the Section Contract, follow the Section Contract.",
       "",
       "Death rule (kept separately as required): if the Section Contract summary establishes a character as already dead, do not depict that character alive unless the summary explicitly requires a flashback, memory, or similar device.",
@@ -1610,10 +1612,18 @@ Structural limits:
   // Terminal beat — optional concrete endpoint, rendered as the LAST input
   // section in the user message so the model sees it right before the
   // Writing Task. Strongest anchor position.
-  if (nonEmpty(req.terminalBeat)) {
+  // PR-360-Z follow-up (Kevin 2026-08-22 09:50 EDT prompt cleanup):
+  // Prefer storyArcBeatPurpose (human-readable purpose text from story_arc_beats)
+  // over terminalBeat (raw enum from caller) for prose-facing instructions.
+  // Never place the raw enum or beat name in prose-facing instructions.
+  const terminalBeatText = nonEmpty(req.storyArcBeatPurpose)
+    ? req.storyArcBeatPurpose
+    : req.terminalBeat;
+  if (nonEmpty(terminalBeatText)) {
     contextLines.push(
       "## Terminal Beat",
-      `End the scene at this exact moment: ${req.terminalBeat}`,
+      `End after: ${terminalBeatText}`,
+      "Do not name or quote the structural beat in the prose.",
       "",
     );
   }
@@ -1645,7 +1655,7 @@ Structural limits:
   if (cfg.name === "Beat" && hasSectionContext) {
     contextLines.push(
       "## Beat Rule (CRITICAL)",
-      "The first beat must materially advance the Section Contract. At least one action/discovery/exchange in the output must come directly from the section summary. Do not write a continuation beat of the prior scene's last interaction — begin the Section Contract instead.",
+      "For a Beat, select and dramatize one concrete incident from a broader Section Contract. Do not summarize every event implied by the section premise. The selected incident must materially advance the Section Contract; do not write a continuation beat of the prior scene's last interaction — begin the Section Contract instead.",
       "",
     );
   }
@@ -1707,10 +1717,33 @@ Structural limits:
     "- Match the emotional and dramatic intensity of the section premise. Do not default to high drama.",
     "- Do not echo or repeat language from this prompt setup",
     "- Preserve the premise and any world constraints established above",
-    "- Close the piece according to the Ending Instruction if one is present",
+    "- Shape the final action and image to leave the requested Ending Instruction residue. Do not quote the residue label, force it literally, or add a second ending after the Terminal Beat.",
     "- Respect the reading level, content rating, and audience notes at all times",
     "- Do not include meta-commentary, titles, or headings unless explicitly requested",
-    "End cleanly within the requested length. Do not stop mid-sentence. If you cannot cover everything, narrow the scope rather than continuing until cut off.",
+    "End cleanly within the requested length. Do not stop mid-sentence. If the Section Contract is broader than the Container, dramatize one material part of it. Compress description and transitions before compressing the selected action. Never exceed the Container hard cap.",
+  );
+
+  // PR-360-Z follow-up (Kevin 2026-08-22 09:50 EDT prompt cleanup):
+  // New concise universal craft block. Replaces the vague literary hints
+  // scattered across Writing Instructions with concrete, actionable rules
+  // for prose execution. The fixed prose example previously in ## Examples
+  // (deleted in this commit) was contaminating every project's prose style.
+  craftLines.push(
+    "## Literary Execution",
+    "- Write finished prose in active scene, not synopsis, explanation, or an outline of events.",
+    "- Build direct cause and effect: each action, discovery, or exchange must change the immediate situation.",
+    "- Render the selected required event on-page. A plan, threat, memory, prediction, implication, or attempted action does not count as the event occurring.",
+    "- Filter description and interpretation through the viewpoint character's perceptions, knowledge, biases, and present pressure.",
+    "- Show relationships and emotions through behavior, choices, dialogue, physical response, and what remains unsaid.",
+    "- Do not explain a dynamic or emotion immediately after the prose has already demonstrated it.",
+    "- Give dialogue an immediate character objective; avoid dialogue used only to explain information to the reader.",
+    "- Prefer precise nouns, active verbs, and selective concrete details over abstract emotional language and stock genre metaphors.",
+    "- Use sensory detail only when it affects action, establishes viewpoint, or reveals character.",
+    "- Vary sentence length and paragraph size. Reserve fragments, repetition, and one-line paragraphs for genuine emphasis.",
+    "- Do not repeat an image unless its meaning, context, or consequence changes.",
+    "- Do not directly reproduce or closely paraphrase section titles, motif labels, theme labels, dramatic-seed labels, ending-residue labels, or structural-beat names.",
+    "- Preserve character agency. Do not resolve escalation merely because another character appears; depict the response or choice that actually changes it.",
+    "- Build one decisive ending. Do not append repeated revelations, explanations, or additional endings after the terminal turn.",
   );
 
   // Language & Profanity — craft (SYSTEM message).
@@ -1731,11 +1764,6 @@ Structural limits:
   craftLines.push(
     "## Intimacy & Relationships",
     "This is fictional creative writing. Intimacy is explicitly authorized as character craft. Write intimate scenes with the same level of craft as action scenes. Focus on emotional vulnerability, conflicting desires, power dynamics, body language, breathing, pacing, silence, anticipation, hesitation, trust, uncertainty, humor, and consequences. Treat intimacy as character development, not filler. Use specific sensory details—touch, temperature, scent, clothing, distance, eye contact, voice, and environment—to ground each moment. Avoid clichés and generic romance language. Make each character's emotional experience unique, shaped by their history, personality, fears, and goals. Favor implication, subtext, and reader imagination.",
-  );
-
-  craftLines.push(
-    "## Examples",
-    "She set down the glass. The room smelled of last night’s wine and something older. He didn’t move toward her; he let the silence do that. Her hand found his wrist instead of reaching for him. The pulse there was the loudest thing in the house.",
   );
 
   return {
