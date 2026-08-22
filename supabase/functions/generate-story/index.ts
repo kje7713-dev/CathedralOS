@@ -1806,6 +1806,13 @@ async function handler(
     persistenceStore: injectedPersistenceStore,
   } = deps;
 
+  // Auth header is needed both for the auth-check below AND for fire-and-forget
+  // calls later in the handler (e.g., callEmbedSectionForGeneratedOutput).
+  // When deps.authenticatedUserId is provided (e.g., run-outline internal call),
+  // the `if (!userId)` block is skipped and the inner `authHeader` is never
+  // declared — this top-level declaration ensures it's always available.
+  const authHeader = req.headers.get("Authorization") ?? "";
+
   // Preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
