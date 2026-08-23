@@ -811,22 +811,39 @@ extension GenerationOutputDeletionError {
 // is invalidated so the UI never has to dereference the deleted model
 // object again.
 struct GenerationOutputDeletionInput {
+    // 19:18 EDT Kevin: scalar-only payload that crosses await/background
+    // boundaries. No ModelContext, no SwiftData models, no relationships.
     let localOutputID: UUID
     let cloudGenerationOutputID: String
     let cloudOwnerUserID: String
     let sharedOutputID: String
-    let projectID: UUID?
 }
 
 protocol GenerationOutputDeletionServiceProtocol {
-    func deleteLocal(input: GenerationOutputDeletionInput, context: ModelContext) async throws
+    /// 19:16 EDT Kevin: synchronous, MainActor-only. Performs fetch-by-ID →
+    /// delete → save as one non-suspending MainActor block. The caller is
+    /// responsible for writing the tombstone and performing the remote
+    /// cloud DELETE beforehand; this method touches ModelContext in a
+    /// serialized MainActor section.
+    @MainActor
+    func deleteLocal(input: GenerationOutputDeletionInput, context: ModelContext) throws
+
+    /// Remote REST DELETE on generation_outputs. Non-MainActor so the
+    /// internal mutationGate actor hop can serialize concurrent cloud
+    /// mutations. No ModelContext access; scalars only.
     func deleteCloud(input: GenerationOutputDeletionInput) async throws
+
+    /// Orchestrates delete-everywhere as three discrete, scalar-only
+    /// stages plus a synchronous MainActor fetch-by-ID → delete → save.
+    @MainActor
     func deleteEverywhere(input: GenerationOutputDeletionInput, context: ModelContext) async throws
-    /// Writes a tombstone for the given output with the specified scope.
-    /// Best-effort: a tombstone-service failure does NOT throw. Auth state
-    /// is resolved via checkSession() if currently `.unknown`, and the
-    /// userID comes from the live auth state (not from any captured input)
-    /// so the tombstone userID always matches the real session.
+
+    /// 19:16 EDT Kevin: MainActor so authService.authState (which is
+    /// MainActor-isolated) is accessible. Awaits tombstoneService.record
+    /// on background queue; the function returns the assignment to
+    /// MainActor context after the network hop. Best-effort: a
+    /// tombstone-service failure does NOT throw.
+    @MainActor
     func writeTombstone(input: GenerationOutputDeletionInput, scope: SyncTombstone.DeletionScope) async
 }
 
@@ -869,6 +886,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     /// Best-effort: a tombstone-service failure does NOT throw.
     /// The userID comes from the live auth state (not from any captured
     /// input) so the tombstone userID always matches the real session.
+    @MainActor
     func writeTombstone(
         input: GenerationOutputDeletionInput,
         scope: SyncTombstone.DeletionScope
@@ -891,12 +909,29 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         ))
     }
 
-    func deleteLocal(input: GenerationOutputDeletionInput, context: ModelContext) async throws {
-        // 13:33 EDT Kevin: operate from stable captured IDs. Re-fetch the
-        // model fresh from context using the stable ID, then drop the
-        // reference — do not retain any captured model pointer.
+    /// 19:16 EDT Kevin: synchronous MainActor-only delete. Performs the
+    /// full fetch → delete → save transaction as one non-suspending block
+    /// so ModelContext is not touched across any await or detached task
+    /// boundary. The caller writes the tombstone and performs the remote
+    /// cloud DELETE separately (each taking only scalar value data).
+    ///
+    /// Root cause of the original PR #401/#402 crash this fixes: the
+    /// previous async shape had `await tombstoneService.record(...)` AT
+    /// THE BOTTOM of this method, AFTER `context.save()` had been called.
+    /// The `isDeletingOutput = true` state change at the call site
+    /// triggered a SwiftUI render whose `HomeView.projects` @Query ran a
+    /// `ModelContext.fetch` on the same context, racing with the
+    /// `invalidateFutures` work happening inside save. Result was
+    /// `EXC_BAD_ACCESS` at `DefaultStore.FutureCache.pruneValues` from
+    /// a corrupted internal Dictionary (see .ips for build 20260823214522).
+    @MainActor
+    func deleteLocal(input: GenerationOutputDeletionInput, context: ModelContext) throws {
+        // 19:18 EDT Kevin: preconditionIsolated + @MainActor combo — the
+        // annotation enforces it at compile time, this asserts at
+        // runtime that no caller slipped through (e.g. via Task.detached).
+        MainActor.preconditionIsolated()
+
         let outputID = input.localOutputID
-        let cloudID = input.cloudGenerationOutputID
 
         let descriptor = FetchDescriptor<GenerationOutput>(
             predicate: #Predicate { $0.id == outputID }
@@ -912,24 +947,6 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             throw GenerationOutputDeletionError.persistenceError(stage: "local delete", error: error)
         }
         _ = backupService.deleteBackups(outputID: outputID)
-
-        // Resolve auth state before reading userID so that an early-launch delete
-        // (when authState is still .unknown) still produces a tombstone.
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        // Write tombstone so cloud pull does not resurrect this row.
-        if let userID = authService.authState.currentUser?.id {
-            await tombstoneService.record(SyncTombstone(
-                userID: userID,
-                entityType: .generationOutput,
-                localEntityID: outputID.uuidString,
-                cloudEntityID: UUID(uuidString: cloudID)?.uuidString,
-                deletionScope: .localOnly,
-                reason: nil,
-                projectName: nil
-            ))
-        }
     }
 
     func deleteCloud(input: GenerationOutputDeletionInput) async throws {
@@ -1117,60 +1134,29 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         // back into a SwiftData context. The caller will use the returned ownerID directly.
     }
 
+    /// 19:16 EDT Kevin: orchestrates delete-everywhere as three discrete
+    /// stages, each a scalar-only network/await, plus a synchronous
+    /// MainActor fetch-by-ID → delete → save. The ModelContext is never
+    /// touched across an await boundary. Tombstone is written FIRST so
+    /// that even if a later stage fails the sync-pull filter prevents
+    /// resurrection; `deleteCloud` validates ownership and throws on
+    /// auth/network failure; `deleteLocal` is the only call that
+    /// mutates the model context and is in one synchronous MainActor block.
+    @MainActor
     func deleteEverywhere(input: GenerationOutputDeletionInput, context: ModelContext) async throws {
-        let outputID = input.localOutputID
-        let cloudID = input.cloudGenerationOutputID
+        // Stage 1 — tombstone first (scalar-only network write).
+        await writeTombstone(input: input, scope: .everywhere)
 
-        // Persist deletion intent before any cloud mutation. The pending tombstone is
-        // durable across offline failure/relaunch and every upload path checks it.
-        if case .unknown = authService.authState {
-            await authService.checkSession()
-        }
-        let userID = authService.authState.currentUser?.id
-
-        if !cloudID.isEmpty {
-            if input.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                try await mutationGate.run {
-                    try await resolveLegacyOwnership(input: input, cloudID: cloudID)
-                }
-            }
-            let ownerID = input.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let userID, !ownerID.isEmpty,
-                  ownerID.caseInsensitiveCompare(userID) == .orderedSame else {
-                throw GenerationOutputDeletionError.cloudOwnershipNotVerified
-            }
-        }
-
-        if let userID {
-            await tombstoneService.record(SyncTombstone(
-                userID: userID,
-                entityType: .generationOutput,
-                localEntityID: outputID.uuidString,
-                cloudEntityID: UUID(uuidString: cloudID)?.uuidString,
-                deletionScope: .everywhere,
-                reason: nil,
-                projectName: nil
-            ))
-        }
-
+        // Stage 2 — remote DELETE on `generation_outputs` (scalar-only
+        // network call; internally hops to mutationGate actor for
+        // serialization; throws cloudOwnershipNotVerified / networkError /
+        // notSignedIn / sessionExpired as appropriate).
         try await deleteCloud(input: input)
 
-        // 13:33 EDT Kevin: re-fetch from context using the stable ID.
-        let everywhereDescriptor = FetchDescriptor<GenerationOutput>(
-            predicate: #Predicate { $0.id == outputID }
-        )
-        guard let everywhereModel = try? context.fetch(everywhereDescriptor).first else {
-            return  // Row already gone — idempotent success.
-        }
-        context.delete(everywhereModel)
-        do {
-            try context.save()
-        } catch {
-            context.rollback()
-            throw GenerationOutputDeletionError.persistenceError(stage: "local delete after cloud delete", error: error)
-        }
-        _ = backupService.deleteBackups(outputID: outputID)
-
+        // Stage 3 — synchronous fetch-by-ID → delete → save. One
+        // non-suspending MainActor block; preconditionIsolated inside
+        // deleteLocal enforces it.
+        try deleteLocal(input: input, context: context)
     }
 
     private func resolveLegacyOwnership(input: GenerationOutputDeletionInput, cloudID: String) async throws {
