@@ -677,6 +677,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         output.generationAction    = record.generationAction
         output.generationLengthMode = record.generationLengthMode
         if let budget = record.outputBudget { output.outputBudget = budget }
+        output.renderedContainer   = record.renderedContainer
         output.status              = record.status
         output.visibility          = record.visibility
         output.outlineSectionID     = record.outlineSectionID.flatMap(UUID.init(uuidString:))
@@ -704,7 +705,8 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             sourcePromptPackName: record.promptPackName,
             generationAction: record.generationAction,
             generationLengthMode: record.generationLengthMode,
-            outputBudget: record.outputBudget ?? GenerationLengthMode.defaultMode.outputBudget
+            outputBudget: record.outputBudget ?? GenerationLengthMode.defaultMode.outputBudget,
+            renderedContainer: record.renderedContainer
         )
         output.cloudGenerationOutputID = record.id
         output.cloudOwnerUserID = record.userID

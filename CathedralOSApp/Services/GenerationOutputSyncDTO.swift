@@ -34,6 +34,10 @@ struct GenerationOutputUploadRequest: Codable {
     /// Raw value of `GenerationLengthMode`: "short" | "medium" | "long" | "chapter".
     let generationLengthMode: String
     let outputBudget: Int
+    /// Container that `buildPrompt()` actually used. Nil for legacy rows; backend
+    /// stores as `rendered_container` (cloud column added by migration
+    /// 20260823000000_add_rendered_container_to_generation_outputs.sql).
+    let renderedContainer: String?
 
     // MARK: Status / visibility
     let status: String
@@ -59,6 +63,7 @@ struct GenerationOutputUploadRequest: Codable {
         self.generationAction     = output.generationAction
         self.generationLengthMode = output.generationLengthMode
         self.outputBudget         = output.outputBudget
+        self.renderedContainer    = output.renderedContainer
         self.status               = output.status
         self.visibility           = output.visibility
         self.allowRemix           = output.allowRemix
@@ -80,6 +85,7 @@ struct GenerationOutputUploadRequest: Codable {
         case generationAction     = "generation_action"
         case generationLengthMode = "generation_length_mode"
         case outputBudget         = "output_budget"
+        case renderedContainer    = "rendered_container"
         case status
         case visibility
         case allowRemix           = "allow_remix"
@@ -107,6 +113,10 @@ struct GenerationOutputCloudRecord: Codable {
     let generationAction: String
     let generationLengthMode: String
     let outputBudget: Int?
+    /// Container that `buildPrompt()` actually used when this row was generated.
+    /// Cloud column `rendered_container` (migration
+    /// 20260823000000_add_rendered_container_to_generation_outputs.sql).
+    let renderedContainer: String?
     let status: String
     let visibility: String
     let allowRemix: Bool
@@ -128,6 +138,7 @@ struct GenerationOutputCloudRecord: Codable {
         generationAction    = try c.decodeIfPresent(String.self, forKey: .generationAction) ?? "generate"
         generationLengthMode = try c.decodeIfPresent(String.self, forKey: .generationLengthMode) ?? "medium"
         outputBudget        = try c.decodeIfPresent(Int.self, forKey: .outputBudget)
+        renderedContainer   = try c.decodeIfPresent(String.self, forKey: .renderedContainer)
         status              = try c.decodeIfPresent(String.self, forKey: .status) ?? "complete"
         visibility          = try c.decodeIfPresent(String.self, forKey: .visibility) ?? "private"
         allowRemix          = try c.decodeIfPresent(Bool.self, forKey: .allowRemix) ?? false
@@ -150,6 +161,7 @@ struct GenerationOutputCloudRecord: Codable {
         case generationAction    = "generation_action"
         case generationLengthMode = "generation_length_mode"
         case outputBudget        = "output_budget"
+        case renderedContainer   = "rendered_container"
         case status
         case visibility
         case allowRemix          = "allow_remix"
