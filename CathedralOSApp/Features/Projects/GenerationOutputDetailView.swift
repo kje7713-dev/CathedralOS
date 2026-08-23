@@ -1185,11 +1185,22 @@ struct GenerationOutputDetailView: View {
         deleteError = nil
         defer { isDeletingOutput = false }
 
+        // 17:03 EDT Kevin: refuse to delete without a confirmed signed-in user.
+        // Without this, the tombstone userID could be unresolvable and the
+        // sync-pull filter wouldn't match, allowing resurrection.
+        guard authService.authState.isSignedIn else {
+            deleteError = "Sign in to delete this output."
+            return
+        }
+
         // 13:33 EDT Kevin: capture stable IDs BEFORE the deletion service
         // starts invalidating the live model. After this point, we must
         // not dereference `output` again.
         let input = captureDeletionInput()
         do {
+            // Write .localOnly tombstone BEFORE local delete so a background
+            // sync-pull can't resurrect the row.
+            await outputDeletionService.writeTombstone(input: input, scope: .localOnly)
             try await outputDeletionService.deleteLocal(input: input, context: modelContext)
             // Dismiss immediately. Do not touch `output` again — it may
             // already be invalidated in SwiftData.
@@ -1206,13 +1217,37 @@ struct GenerationOutputDetailView: View {
         deleteError = nil
         defer { isDeletingOutput = false }
 
+        // 17:03 EDT Kevin: refuse to delete without a confirmed signed-in user.
+        guard authService.authState.isSignedIn else {
+            deleteError = "Sign in to delete this output."
+            return
+        }
+
         // 13:33 EDT Kevin: capture stable IDs BEFORE the deletion service
         // starts invalidating the live model.
         let input = captureDeletionInput()
         do {
-            try await outputDeletionService.deleteEverywhere(input: input, context: modelContext)
-            // Dismiss immediately. Do not touch `output` again.
+            // Write .everywhere tombstone BEFORE local delete + cloud DELETE.
+            // This guarantees resurrection is prevented even if the background
+            // cloud DELETE fails or is cancelled — sync-pull will filter on it.
+            await outputDeletionService.writeTombstone(input: input, scope: .everywhere)
+            try await outputDeletionService.deleteLocal(input: input, context: modelContext)
+            // Dismiss immediately so the user sees the delete take effect.
+            // Do not touch `output` again — it may already be invalidated
+            // in SwiftData by the time the background cloud DELETE runs.
             dismiss()
+
+            // Background cloud DELETE — best-effort. The .everywhere
+            // tombstone is already in place, so even if this fails or the
+            // Task is cancelled, sync-pull cannot resurrect the row.
+            Task.detached(priority: .utility) { [outputDeletionService] in
+                do {
+                    try await outputDeletionService.deleteCloud(input: input)
+                } catch {
+                    // Tombstone prevents resurrection; log only.
+                    NSLog("[GenerationOutputDetailView] background cloud DELETE failed: \(error)")
+                }
+            }
         } catch {
             deleteError = Self.deletionErrorMessage(error)
         }
@@ -1232,34 +1267,8 @@ struct GenerationOutputDetailView: View {
             cloudGenerationOutputID: cloudID,
             cloudOwnerUserID: cloudOwner,
             sharedOutputID: sharedOutputID,
-            projectID: output.project?.id,
-            userID: currentUserID()
+            projectID: output.project?.id
         )
-    }
-
-    /// Resolves the local authenticated user's stable UUID from the
-    /// view's `authService`. Used to populate
-    /// `GenerationOutputDeletionInput.userID` at capture time so the
-    /// deletion service can write a tombstone.
-    /// 13:33 EDT Kevin: pull userID from the active auth session if
-    /// available; never dereference the bound model after deletion
-    /// starts, so resolve it here at capture time.
-    @MainActor
-    private func currentUserID() -> UUID {
-        // The view's authService is the canonical source. If auth is
-        // still `.unknown`, kick a session check and fall back to a
-        // fresh UUID; surfacing an empty UUID would violate the
-        // tombstone contract, and a tombstone is only useful if its
-        // userID matches the real local user.
-        //
-        // AuthUser.id is a String (Supabase user id format), so we
-        // convert to UUID here. GenerationOutputDeletionInput.userID
-        // is typed as UUID to match the rest of the deletion flow.
-        if let current = authService.authState.currentUser,
-           let parsed = UUID(uuidString: current.id) {
-            return parsed
-        }
-        return UUID()
     }
 
     private var pendingOutputCoverImage: PendingOutputCoverImage? {
