@@ -121,6 +121,15 @@ class GenerationOutput {
     var finishReason: String?
     /// True when the provider stopped due to token-length limit and output may be incomplete.
     var wasTruncated: Bool
+    /// Container that `buildPrompt()` actually used when generating this output
+    /// (e.g. "beat", "scene", "setPiece"). Captured at kickoff time from the
+    /// kickoff scope picker's resolved container — distinct from
+    /// `generationLengthMode` which is the user's Length Mode picker intent.
+    /// Source of truth for the iOS detail view "Length" row so the UI shows
+    /// what the model actually saw, not what the user picked (which may have
+    /// been overridden by OutlineSection.container). Nil for older outputs
+    /// pre-PR-#rendered-container; detail view falls back to length_mode.
+    var renderedContainer: String?
 
     // MARK: Publishing metadata
     /// Raw value of `OutputVisibility`: "private" | "shared" | "unlisted".
@@ -193,7 +202,8 @@ class GenerationOutput {
         generationLengthMode: String = GenerationLengthMode.defaultMode.rawValue,
         outputBudget: Int = GenerationLengthMode.defaultMode.outputBudget,
         finishReason: String? = nil,
-        wasTruncated: Bool = false
+        wasTruncated: Bool = false,
+        renderedContainer: String? = nil
     ) {
         self.id = UUID()
         self.title = title
@@ -215,6 +225,7 @@ class GenerationOutput {
         self.outputBudget = outputBudget
         self.finishReason = finishReason
         self.wasTruncated = wasTruncated
+        self.renderedContainer = renderedContainer
         self.visibility = OutputVisibility.private.rawValue
         self.shareTitle = ""
         self.shareExcerpt = ""

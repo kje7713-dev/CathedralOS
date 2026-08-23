@@ -1192,6 +1192,11 @@ struct ProjectDetailView: View {
             sourcePromptPackID: pack.id
         )
 
+        // PR-fix/ios-rendered-container-provenance: capture the Container
+        // buildPrompt() will use (the kickoff scope picker resolution) onto
+        // the GenerationOutput row at creation. Source of truth per Kevin
+        // 2026-08-23 08:21 EDT — the prompt's Container, not the user's
+        // Length Mode pick, is what the model is told.
         let gen = GenerationOutput(
             title: "\(pack.name) — \(project.name)",
             outputText: "",
@@ -1202,7 +1207,8 @@ struct ProjectDetailView: View {
             sourcePayloadJSON: frozenJSON,
             outputType: GenerationOutputType.story.rawValue,
             generationLengthMode: mode.rawValue,
-            outputBudget: mode.outputBudget
+            outputBudget: mode.outputBudget,
+            renderedContainer: selectedContainer.rawValue
         )
         gen.project = project
         modelContext.insert(gen)
