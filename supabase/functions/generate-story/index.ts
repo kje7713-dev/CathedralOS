@@ -247,6 +247,14 @@ interface GenerationOutputInsert {
   // leave it null). Cloud schema column added by migration
   // 20260812170000_add_outline_section_id_to_generation_outputs.sql.
   outline_section_id: string | null;
+  // PR-fix/ios-rendered-container-provenance (Kevin 2026-08-23 08:21 EDT):
+  // Container that buildPrompt() actually used at generation time (e.g.
+  // "beat", "scene", "setPiece"). Source of truth for the iOS detail view
+  // "Length" row — the prompt is authoritative, not the user's Length Mode
+  // pick. Cloud schema column added by migration
+  // 20260823000000_add_rendered_container_to_generation_outputs.sql.
+  // Nullable: older rows + non-section generation paths leave it null.
+  rendered_container: string | null;
   // PR-XXX-F: explicit row id. Reserved locally so llm_prompts.output_id and
   // generation_outputs.id share the same UUID (the iOS debug box queries
   // llm_prompts by output_id).
@@ -2604,6 +2612,11 @@ async function handler(
     status: outputStatus,
     visibility: "private",
     outline_section_id: body.outline_section_id ?? null,
+    // PR-fix/ios-rendered-container-provenance: persist the Container that
+    // buildPrompt() actually used (from request body.container, defaulted
+    // to "scene" by buildPrompt's own fallback if absent). See interface
+    // field comment above for provenance rationale.
+    rendered_container: body.container ?? null,
   });
 
   // PR-XXX-A: log the prompt + response to llm_prompts (best-effort, do not fail the main call).

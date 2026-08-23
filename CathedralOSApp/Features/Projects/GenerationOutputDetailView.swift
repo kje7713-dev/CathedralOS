@@ -596,7 +596,15 @@ struct GenerationOutputDetailView: View {
                     Divider()
                     metadataRow(label: "Action", value: output.generationAction.capitalized)
                 }
-                if !output.generationLengthMode.isEmpty {
+                // PR-fix/ios-rendered-container-provenance: show the Container
+                // buildPrompt() actually used, not the user's Length Mode pick.
+                // Source of truth per Kevin 2026-08-23 08:21 EDT.
+                if let containerRaw = output.renderedContainer, !containerRaw.isEmpty,
+                   let container = Container(rawValue: containerRaw) {
+                    Divider()
+                    metadataRow(label: "Length", value: "\(container.displayName) (\(container.expectedRange))")
+                } else if !output.generationLengthMode.isEmpty {
+                    // Fallback: older rows predate the renderedContainer column.
                     Divider()
                     let modeName = GenerationLengthMode(rawValue: output.generationLengthMode)?.displayName
                         ?? output.generationLengthMode.capitalized
@@ -647,7 +655,12 @@ struct GenerationOutputDetailView: View {
                         Divider()
                         provenanceRow(label: "Model", value: output.modelName)
                     }
-                    if !output.generationLengthMode.isEmpty {
+                    // PR-fix/ios-rendered-container-provenance: same swap as above.
+                    if let containerRaw = output.renderedContainer, !containerRaw.isEmpty,
+                       let container = Container(rawValue: containerRaw) {
+                        Divider()
+                        provenanceRow(label: "Container", value: "\(container.displayName) (\(container.expectedRange))")
+                    } else if !output.generationLengthMode.isEmpty {
                         Divider()
                         let modeName = GenerationLengthMode(rawValue: output.generationLengthMode)?.displayName
                             ?? output.generationLengthMode.capitalized
