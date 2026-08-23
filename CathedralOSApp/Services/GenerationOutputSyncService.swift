@@ -816,13 +816,18 @@ struct GenerationOutputDeletionInput {
     let cloudOwnerUserID: String
     let sharedOutputID: String
     let projectID: UUID?
-    let userID: UUID
 }
 
 protocol GenerationOutputDeletionServiceProtocol {
     func deleteLocal(input: GenerationOutputDeletionInput, context: ModelContext) async throws
     func deleteCloud(input: GenerationOutputDeletionInput) async throws
     func deleteEverywhere(input: GenerationOutputDeletionInput, context: ModelContext) async throws
+    /// Writes a tombstone for the given output with the specified scope.
+    /// Best-effort: a tombstone-service failure does NOT throw. Auth state
+    /// is resolved via checkSession() if currently `.unknown`, and the
+    /// userID comes from the live auth state (not from any captured input)
+    /// so the tombstone userID always matches the real session.
+    func writeTombstone(input: GenerationOutputDeletionInput, scope: SyncTombstone.DeletionScope) async
 }
 
 final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProtocol {
@@ -857,6 +862,33 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         self.session = session
         self.clientFactory = clientFactory
         self.mutationGate = mutationGate
+    }
+
+    /// Writes a tombstone for the given output with the specified scope.
+    /// Resolves auth state via checkSession() if currently `.unknown`.
+    /// Best-effort: a tombstone-service failure does NOT throw.
+    /// The userID comes from the live auth state (not from any captured
+    /// input) so the tombstone userID always matches the real session.
+    func writeTombstone(
+        input: GenerationOutputDeletionInput,
+        scope: SyncTombstone.DeletionScope
+    ) async {
+        if case .unknown = authService.authState {
+            await authService.checkSession()
+        }
+        guard let userID = authService.authState.currentUser?.id else {
+            return  // not signed in; tombstone is a no-op
+        }
+        let cloudEntityID = UUID(uuidString: input.cloudGenerationOutputID)?.uuidString
+        await tombstoneService.record(SyncTombstone(
+            userID: userID,
+            entityType: .generationOutput,
+            localEntityID: input.localOutputID.uuidString,
+            cloudEntityID: cloudEntityID,
+            deletionScope: scope,
+            reason: nil,
+            projectName: nil
+        ))
     }
 
     func deleteLocal(input: GenerationOutputDeletionInput, context: ModelContext) async throws {
