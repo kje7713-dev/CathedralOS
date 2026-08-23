@@ -32,6 +32,13 @@ struct OutputPublishingDTO: Codable {
     let generationAction: String
     /// Raw value of `GenerationLengthMode`: "short" | "medium" | "long" | "chapter".
     let generationLengthMode: String
+    /// Container that `buildPrompt()` actually used when this output was generated
+    /// (e.g. "beat", "scene", "setPiece"). Captured at kickoff time, round-tripped
+    /// through the cloud sync so the detail view can show what the model saw
+    /// even when the local SwiftData row was reconstructed from a cloud pull.
+    /// Nil for older rows predating the field; the detail view falls back to
+    /// generationLengthMode display in that case.
+    let renderedContainer: String?
 
     // MARK: Optional cover image metadata
     let sharedOutputID: String?
@@ -58,6 +65,7 @@ struct OutputPublishingDTO: Codable {
         self.modelName = output.modelName
         self.generationAction = output.generationAction
         self.generationLengthMode = output.generationLengthMode
+        self.renderedContainer = output.renderedContainer
         self.sharedOutputID = sharedOutputID
         self.coverImagePath = output.coverImagePath.nilIfEmpty
         self.coverImageURL = output.coverImageURL.nilIfEmpty
