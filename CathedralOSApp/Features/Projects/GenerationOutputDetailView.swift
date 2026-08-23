@@ -1240,7 +1240,18 @@ struct GenerationOutputDetailView: View {
             // Background cloud DELETE — best-effort. The .everywhere
             // tombstone is already in place, so even if this fails or the
             // Task is cancelled, sync-pull cannot resurrect the row.
-            Task.detached(priority: .utility) { [outputDeletionService] in
+            //
+            // 17:41 EDT Kevin: PR #401 used `Task.detached(priority: .utility)`
+            // which runs the closure on a non-MainActor executor. The closure
+            // body calls `outputDeletionService.deleteCloud(input:)` which
+            // internally hops back to @MainActor (AuthService.authState is
+            // @MainActor at AuthService.swift:153). The actor hop from a
+            // detached Task context crashed at runtime even though iOS Build
+            // passed. Inheriting @MainActor via plain `Task { }` keeps the
+            // network call on the cooperative pool while the await yields
+            // MainActor, so the UI stays responsive without the cross-actor
+            // hop.
+            Task { [outputDeletionService] in
                 do {
                     try await outputDeletionService.deleteCloud(input: input)
                 } catch {
