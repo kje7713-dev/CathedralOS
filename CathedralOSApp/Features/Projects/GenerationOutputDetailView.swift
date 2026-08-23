@@ -1178,90 +1178,107 @@ struct GenerationOutputDetailView: View {
 
     @MainActor
     private func performDeleteLocalOnly() async {
-        // Single-flight guard: a second tap while the first deletion is
-        // in-flight is a no-op because the button is disabled and we set
-        // isDeletingOutput immediately.
+        // 19:18 EDT Kevin: isDeletingOutput set at the very start so the
+        // button is disabled BEFORE any await can yield the main actor.
+        // Mutated to false at the end (no defer; the implicit unlock at
+        // function exit was the previous timing-hack single-flight guard).
         isDeletingOutput = true
         deleteError = nil
-        defer { isDeletingOutput = false }
 
-        // 17:03 EDT Kevin: refuse to delete without a confirmed signed-in user.
-        // Without this, the tombstone userID could be unresolvable and the
-        // sync-pull filter wouldn't match, allowing resurrection.
+        // Refuse to delete without a confirmed signed-in user.
         guard authService.authState.isSignedIn else {
             deleteError = "Sign in to delete this output."
+            isDeletingOutput = false
             return
         }
 
-        // 13:33 EDT Kevin: capture stable IDs BEFORE the deletion service
-        // starts invalidating the live model. After this point, we must
-        // not dereference `output` again.
+        // Capture stable scalars BEFORE any await. From here on, no
+        // property access on `output` — only scalar IDs flow across
+        // awaits.
         let input = captureDeletionInput()
+
         do {
-            // Write .localOnly tombstone BEFORE local delete so a background
-            // sync-pull can't resurrect the row.
+            // Tombstone first (scalar-only network write). Best-effort;
+            // network failure here still leaves the local row deletable.
             await outputDeletionService.writeTombstone(input: input, scope: .localOnly)
-            try await outputDeletionService.deleteLocal(input: input, context: modelContext)
-            // Dismiss immediately. Do not touch `output` again — it may
-            // already be invalidated in SwiftData.
+
+            // Synchronous MainActor fetch → delete → save. One
+            // non-suspending block; the model context is touched only
+            // inside this block on @MainActor.
+            try outputDeletionService.deleteLocal(input: input, context: modelContext)
+
+            // Save succeeded — dismiss the view.
             dismiss()
         } catch {
+            // Save or tombstone threw — surface error to the Delete
+            // Failed alert, no dismiss, user can dismiss via OK then
+            // tap DELETE OUTPUT again.
             deleteError = Self.deletionErrorMessage(error)
         }
+
+        // Always unlock at the very end so the user isn't stuck
+        // mid-disabled after an error.
+        isDeletingOutput = false
     }
 
     @MainActor
     private func performDeleteEverywhere() async {
-        // Single-flight guard.
+        // 19:18 EDT Kevin: isDeletingOutput set at the very start so the
+        // button is disabled BEFORE any await can yield the main actor.
+        // The double-tap guard is the lock this provides; correct
+        // serialization of context access (below) makes the resulting
+        // SwiftUI render harmless.
         isDeletingOutput = true
         deleteError = nil
-        defer { isDeletingOutput = false }
 
-        // 17:03 EDT Kevin: refuse to delete without a confirmed signed-in user.
+        // Refuse to delete without a confirmed signed-in user.
         guard authService.authState.isSignedIn else {
             deleteError = "Sign in to delete this output."
+            isDeletingOutput = false
             return
         }
 
-        // 13:33 EDT Kevin: capture stable IDs BEFORE the deletion service
-        // starts invalidating the live model.
+        // Capture stable scalars BEFORE any await. No model or
+        // relationship property access after this point.
         let input = captureDeletionInput()
-        do {
-            // Write .everywhere tombstone BEFORE local delete + cloud DELETE.
-            // This guarantees resurrection is prevented even if the background
-            // cloud DELETE fails or is cancelled — sync-pull will filter on it.
-            await outputDeletionService.writeTombstone(input: input, scope: .everywhere)
-            try await outputDeletionService.deleteLocal(input: input, context: modelContext)
-            // Dismiss immediately so the user sees the delete take effect.
-            // Do not touch `output` again — it may already be invalidated
-            // in SwiftData by the time the background cloud DELETE runs.
-            dismiss()
 
-            // Background cloud DELETE — best-effort. The .everywhere
-            // tombstone is already in place, so even if this fails or the
-            // Task is cancelled, sync-pull cannot resurrect the row.
-            //
-            // 17:41 EDT Kevin: PR #401 used `Task.detached(priority: .utility)`
-            // which runs the closure on a non-MainActor executor. The closure
-            // body calls `outputDeletionService.deleteCloud(input:)` which
-            // internally hops back to @MainActor (AuthService.authState is
-            // @MainActor at AuthService.swift:153). The actor hop from a
-            // detached Task context crashed at runtime even though iOS Build
-            // passed. Inheriting @MainActor via plain `Task { }` keeps the
-            // network call on the cooperative pool while the await yields
-            // MainActor, so the UI stays responsive without the cross-actor
-            // hop.
-            Task { [outputDeletionService] in
-                do {
-                    try await outputDeletionService.deleteCloud(input: input)
-                } catch {
-                    // Tombstone prevents resurrection; log only.
-                    NSLog("[GenerationOutputDetailView] background cloud DELETE failed: \(error)")
-                }
-            }
+        do {
+            // Stage 1 — tombstone first. Scalar-only network write; if it
+            // succeeds the .everywhere scope guarantees any later failure
+            // (or app crash, or reinstall) cannot resurrect the row via
+            // sync-pull. The tombstone itself is best-effort — a failure
+            // here doesn't abort the deletion; we just lose the safety net.
+            await outputDeletionService.writeTombstone(input: input, scope: .everywhere)
+
+            // Stage 2 — remote DELETE on `generation_outputs`. Network call
+            // passing only scalar IDs. Internally hops to the
+            // `mutationGate` actor for serialization; throws
+            // `cloudOwnershipNotVerified` / `networkError` /
+            // `notSignedIn` / `sessionExpired` as appropriate. ModelContext
+            // is NOT touched during this await.
+            try await outputDeletionService.deleteCloud(input: input)
+
+            // Stage 3 — synchronous MainActor fetch-by-ID → delete → save.
+            // THIS is the only block that touches `modelContext`. It holds
+            // @MainActor continuously: no awaits, no Task, no detached,
+            // no ModelContext access across any boundary. The SwiftUI
+            // render queued by `isDeletingOutput = true` above does a
+            // @Query read on the same context; @MainActor isolation +
+            // SwiftData's `performAndWait` serialization queue it behind
+            // any in-flight save here.
+            try outputDeletionService.deleteLocal(input: input, context: modelContext)
+
+            // Stage 4 — save() succeeded. Per Kevin: mutate completion
+            // state and dismiss only after save() succeeds.
+            dismiss()
         } catch {
+            // Any stage failed. Per Kevin: do NOT dismiss; user can
+            // retry via the Delete Failed alert (OK then tap again).
             deleteError = Self.deletionErrorMessage(error)
         }
+
+        // Always unlock at the very end regardless of outcome.
+        isDeletingOutput = false
     }
 
     /// 13:33 EDT Kevin: capture stable, primitive-only data from the bound
@@ -1270,6 +1287,12 @@ struct GenerationOutputDetailView: View {
     /// the deleted model object again.
     @MainActor
     private func captureDeletionInput() -> GenerationOutputDeletionInput {
+        // 19:18 EDT Kevin: only scalar SwiftData properties here.
+        // `output.project` is a `@Relationship` traversal that can fault
+        // under concurrent ModelContext access (the very thing PR
+        // #401/#402's crash exposed). `projectID` was also unused by
+        // every consumer of `GenerationOutputDeletionInput` so dropping
+        // it removes the only relationship access on this hot path.
         let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
         let cloudOwner = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
         let sharedOutputID = output.sharedOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1277,8 +1300,7 @@ struct GenerationOutputDetailView: View {
             localOutputID: output.id,
             cloudGenerationOutputID: cloudID,
             cloudOwnerUserID: cloudOwner,
-            sharedOutputID: sharedOutputID,
-            projectID: output.project?.id
+            sharedOutputID: sharedOutputID
         )
     }
 
