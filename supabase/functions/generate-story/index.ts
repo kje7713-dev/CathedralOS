@@ -66,8 +66,6 @@ import {
   SupabaseRateLimitStore,
 } from "./_rate_limiter.ts";
 import {
-  computeActualChargeCredits,
-  computeGenerationCreditCharge,
   computeMaxChargeCredits,
   estimateTokensFromText,
   type GenerationModelStore,
@@ -75,6 +73,11 @@ import {
   snapshotPricing,
   SupabaseGenerationModelStore,
 } from "./_generation_models.ts";
+import {
+  BillableLLMError,
+  type BillableProviderResult,
+  runBillableLLM,
+} from "../_shared/billable-llm.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -2121,20 +2124,6 @@ function sanitizeTitleForLLM(title: string | undefined | null): string {
   return stripped;
 }
 
-function describeError(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === "string" && error.length > 0) return error;
-
-  try {
-    const serialized = JSON.stringify(error);
-    if (serialized && serialized !== "{}") return serialized;
-  } catch {
-    // Ignore serialization failures and fall back to the supplied message.
-  }
-
-  return fallback;
-}
-
 // ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
@@ -2609,10 +2598,8 @@ async function handler(
   );
 
   // -------------------------------------------------------------------------
-  // Credit enforcement -- must happen BEFORE the LLM provider call
-  //
-  // Credit check is computed server-side from length mode and selected model
-  // multiplier. The client cannot override model rates.
+  // Shared billable-runner preflight input. The runner performs the authoritative
+  // entitlement check immediately before the provider call.
   // -------------------------------------------------------------------------
 
   // RAG retrieval — fetch project state context aggregated across ALL
@@ -2670,43 +2657,12 @@ async function handler(
   // Phase 3: max possible credit cost for the pre-flight check
   const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) +
     estimateTokensFromText(contextPrompt);
-  const checkPricing = snapshotPricing(selectedModel);
-  const checkUsage = {
+  const preflightUsage = {
     uncachedInputTokens: estimatedInputTokensForCheck,
     cachedInputTokens: 0,
     outputTokens: CONTAINER_HARD_CAPS[container],
     toolCostUsd: 0,
   };
-  const requiredCredits = computeMaxChargeCredits(checkUsage, checkPricing);
-  const entitlement = await store.loadOrDefault(userId);
-  const creditCheck = checkCredits(entitlement, requiredCredits);
-
-  if (!creditCheck.allowed) {
-    await limiter.recordRequest(userId, {
-      requestId,
-      action: generationAction,
-      generationLengthMode,
-      outputBudget: maxCompletionTokens,
-      selectedModelId,
-      providerModel: selectedModel.provider_model,
-      maxCompletionTokens,
-      status: "insufficient_credits",
-      errorCode: "insufficient_credits",
-      errorMessage: "Insufficient credits for this generation.",
-      durationMs: Date.now() - requestStartMs,
-    });
-
-    return corsResponse(
-      JSON.stringify({
-        status: "failed",
-        errorCode: "insufficient_credits",
-        errorMessage: "Insufficient credits for this generation.",
-        requiredCredits: creditCheck.requiredCredits,
-        availableCredits: creditCheck.availableCredits,
-      }),
-      { status: 402 },
-    );
-  }
 
   // -------------------------------------------------------------------------
   // Resolve provider (injected or from env)
@@ -2743,332 +2699,264 @@ async function handler(
   }
 
   // -------------------------------------------------------------------------
-  // Build prompt and call LLM
-  // One LLM call per generation request. No auto-continuation: if the model
-  // truncates, the response carries wasTruncated=true and the iOS app
-  // surfaces it. The user can hit an explicit Continue action if they
-  // want more.
+  // Shared billable runner: provider call → output persistence → usage event
+  // → credit charge. The callback persists the output before the runner
+  // finalizes billing, preserving generate-story's no-charge-on-persistence-
+  // failure contract.
   // -------------------------------------------------------------------------
 
-  type LlmResult = {
-    content: string;
-    modelName: string;
-    finishReason?: string;
-    inputTokens?: number;
-    cachedInputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-    toolCostUsd?: number;
-  };
-  let llmResult: LlmResult | null = null;
-  // PR-XXX-A: track LLM call duration for llm_prompts log
-  const llmStartMs = Date.now();
-  // PR-XXX-F: reserve output id locally so llm_prompts.output_id and
-  // generation_outputs.id share the same UUID (iOS debug box queries by it).
   const outputId = crypto.randomUUID();
+  const providerStartMs = Date.now();
+  type GenerateFeatureResult = {
+    outputRow: { id: string };
+    generatedText: string;
+    title: string;
+    wasTruncated: boolean;
+  };
 
+  let billableResult;
   try {
-    llmResult = await llm.complete(
-      [
-        { role: "system", content: craftPrompt },
-        { role: "user", content: contextPrompt },
-      ],
-      maxCompletionTokens,
-      selectedModel.provider_model,
-    );
-  } catch (err) {
-    // Classify provider errors into stable error codes.
-    // Credits are NOT charged on provider failure.
-    let providerErrorCode = "unknown";
-    const isTimeout = err instanceof ProviderError &&
-      err.errorCode === "provider_timeout";
-    const isInsufficientQuota = err instanceof ProviderError &&
-      err.errorCode === "provider_insufficient_quota";
-
-    if (err instanceof ProviderError) {
-      providerErrorCode = err.errorCode;
-    }
-
-    const providerErrorMessage = err instanceof Error
-      ? err.message
-      : "LLM provider error";
-    const failureResponse = providerErrorResponse(
-      providerErrorCode,
-      providerErrorMessage,
-    );
-
-    if (isTimeout) {
-      // Structured log so operators can confirm timeoutMs in logs.
-      console.error("[generate-story] provider_timeout", {
-        action: generationAction,
-        lengthMode: generationLengthMode,
-        timeoutMs: PROVIDER_TIMEOUT_MS,
-        model: selectedModel.provider_model,
-      });
-    }
-
-    // Best-effort: record a failed usage event for audit purposes.
-    // Skipped on provider_timeout / provider_insufficient_quota — no output was
-    // produced and credits are not charged.
-    if (!isTimeout && !isInsufficientQuota) {
-      const { error: usageInsertError } = await persistence.insertUsageEvent({
-        user_id: userId,
-        generation_output_id: null,
-        action: generationAction,
-        model_name: selectedModel.provider_model,
-        input_tokens: null,
-        output_tokens: null,
-        generation_length_mode: generationLengthMode,
-        output_budget: maxCompletionTokens,
-        status: "failed",
-      });
-
-      if (usageInsertError) {
-        console.error(
-          "[generate-story] generation_usage_events insert failed",
-          usageInsertError,
-        );
-      }
-    }
-
-    // Log the failed request.
-    await limiter.recordRequest(userId, {
-      requestId,
-      action: generationAction,
-      generationLengthMode,
-      outputBudget: maxCompletionTokens,
-      selectedModelId,
-      providerModel: selectedModel.provider_model,
-      maxCompletionTokens,
-      status: "failed",
-      errorCode: providerErrorCode,
-      errorMessage: providerErrorMessage,
-      modelName: selectedModel.provider_model,
-      actualCharge: 0,
-      durationMs: Date.now() - requestStartMs,
-    });
-
-    return corsResponse(
-      JSON.stringify(failureResponse.body),
+    billableResult = await runBillableLLM<GenerateFeatureResult>(
       {
-        status: failureResponse.httpStatus,
-        ...(failureResponse.headers
-          ? { headers: failureResponse.headers }
-          : {}),
+        userID: userId,
+        purpose: "generate",
+        action: generationAction,
+        model: selectedModel,
+        messages: [
+          { role: "system", content: craftPrompt },
+          { role: "user", content: contextPrompt },
+        ],
+        maxOutputTokens: maxCompletionTokens,
+        usageContext: {
+          projectID,
+          generationOutputID: outputId,
+          generationLengthMode,
+          outputBudget: maxCompletionTokens,
+        },
+        preflightUsageOverride: preflightUsage,
+        recordProviderFailureUsage: false,
+        onProviderSuccess: async (providerResult: BillableProviderResult) => {
+          const llmDurationMs = Date.now() - providerStartMs;
+          const generatedText = providerResult.content.trim();
+          const wasTruncated = providerResult.finishReason === "length";
+          const outputStatus: GenerationOutputInsert["status"] = wasTruncated
+            ? "draft"
+            : "complete";
+          const title = extractTitle(
+            generatedText,
+            promptPackName || projectName,
+          );
+
+          const sourcePayloadForDB = typeof body.sourcePayloadJSON === "string"
+            ? JSON.parse(body.sourcePayloadJSON)
+            : body.sourcePayloadJSON;
+
+          console.log(
+            "[generate-story] inserting output with outline_section_id:",
+            body.outline_section_id,
+            "| body keys:",
+            Object.keys(body).sort().join(","),
+          );
+
+          const { data: outputRow, error: outputInsertError } =
+            await persistence
+              .insertOutput({
+                id: outputId,
+                user_id: userId,
+                local_generation_id: body.localGenerationID ?? null,
+                project_name: projectName,
+                prompt_pack_name: promptPackName,
+                title,
+                output_text: generatedText,
+                source_payload_json: sourcePayloadForDB,
+                model_name: providerResult.modelName,
+                generation_action: generationAction,
+                generation_length_mode: generationLengthMode,
+                output_budget: maxCompletionTokens,
+                status: outputStatus,
+                visibility: "private",
+                outline_section_id: body.outline_section_id ?? null,
+                rendered_container: body.container ?? null,
+              });
+
+          if (outputInsertError || !outputRow?.id) {
+            throw outputInsertError ??
+              new Error("generation_outputs insert returned no row");
+          }
+
+          if (adminClient) {
+            try {
+              await adminClient.from("llm_prompts").insert({
+                call_type: "generate-story",
+                output_id: outputId,
+                project_id: projectID,
+                outline_section_id: body.outline_section_id ?? null,
+                model: selectedModel.provider_model,
+                prompt: JSON.stringify({
+                  system: craftPrompt,
+                  user: contextPrompt,
+                }),
+                response: providerResult.content,
+                prompt_tokens: providerResult.inputTokens,
+                completion_tokens: providerResult.outputTokens,
+                total_tokens: (providerResult.inputTokens ?? 0) +
+                  (providerResult.outputTokens ?? 0),
+                duration_ms: llmDurationMs,
+              });
+            } catch (logErr) {
+              console.error(
+                `[generate-story] llm_prompts insert failed: ${
+                  (logErr as Error).message
+                }`,
+              );
+            }
+          }
+
+          if (
+            adminClient && body.outline_section_id && providerResult.content
+          ) {
+            const { data: sectionForEmbed, error: sectionEmbedErr } =
+              await adminClient
+                .from("outline_sections")
+                .select(
+                  "id, title, summary, container, pov, terminal_beat, position, outline_id, story_arc_beat_id",
+                )
+                .eq("id", body.outline_section_id)
+                .maybeSingle();
+            if (sectionEmbedErr) {
+              console.error(
+                `[generate-story] post-generation embed-section section fetch failed: ${
+                  sectionEmbedErr.message ?? JSON.stringify(sectionEmbedErr)
+                }`,
+              );
+            } else if (sectionForEmbed) {
+              const priorContext = await fetchPriorContextForEmbedSection(
+                adminClient,
+                projectID,
+                String(sectionForEmbed.id),
+                String(sectionForEmbed.outline_id),
+                Number(sectionForEmbed.position ?? 0),
+              );
+              void callEmbedSectionForGeneratedOutput(
+                adminClient,
+                adminClient,
+                authHeader,
+                {
+                  outline_section_id: String(sectionForEmbed.id),
+                  outline_id: String(sectionForEmbed.outline_id),
+                  project_id: projectID ?? "",
+                  position: Number(sectionForEmbed.position ?? 0),
+                  title: String(sectionForEmbed.title ?? ""),
+                  summary: String(sectionForEmbed.summary ?? ""),
+                  container: (sectionForEmbed.container ?? null) as
+                    | string
+                    | null,
+                  pov: (sectionForEmbed.pov ?? null) as string | null,
+                  terminal_beat: (sectionForEmbed.terminal_beat ?? null) as
+                    | string
+                    | null,
+                  story_arc_beat_id:
+                    (sectionForEmbed.story_arc_beat_id ?? null) as
+                      | string
+                      | null,
+                  raw_text: providerResult.content,
+                  output_id: outputId,
+                  prior_context: priorContext,
+                },
+              ).catch((e) => {
+                console.error(
+                  `[generate-story] post-generation embed-section failed: ${
+                    (e as Error)?.message ?? String(e)
+                  }`,
+                );
+              });
+            }
+          }
+
+          return { outputRow, generatedText, title, wasTruncated };
+        },
+      },
+      {
+        adminClient,
+        provider: llm,
+        creditStore: store,
+        usageEventWriter: async (row) => {
+          const result = await persistence.insertUsageEvent(
+            row as unknown as GenerationUsageEventInsert,
+          );
+          return {
+            data: result.error ? null : { id: outputId },
+            error: result.error as { message?: string } | null,
+          };
+        },
       },
     );
-  }
-
-  const llmDurationMs = Date.now() - llmStartMs;
-
-  // Phase 3 removed: llmResult is the single response, not stitched from segments.
-  // The downstream code reads llmResult!.content etc. directly.
-  // (TypeScript can't narrow let from a try/catch that returns, so we use a
-  // non-null assertion at use sites — the catch block always returns.)
-
-  // -------------------------------------------------------------------------
-  // Persist generation_outputs row
-  // -------------------------------------------------------------------------
-
-  const generatedText = llmResult.content.trim();
-  const wasTruncated = llmResult.finishReason === "length";
-  const outputStatus: GenerationOutputInsert["status"] = wasTruncated
-    ? "draft"
-    : "complete";
-  const title = extractTitle(generatedText, promptPackName || projectName);
-
-  // Normalize sourcePayloadJSON for storage -- always persist as an object.
-  const sourcePayloadForDB = typeof body.sourcePayloadJSON === "string"
-    ? JSON.parse(body.sourcePayloadJSON)
-    : body.sourcePayloadJSON;
-
-  // === Diagnose PR #327 write path ===
-  // One-line probe: log the value `body.outline_section_id` actually carries at insert time
-  // plus the request body's keys. Three branches surface from the probe:
-  //   1. value is a UUID, body keys include `outline_section_id` -> value reaches generate-story
-  //      but DB write silently fails -> RLS / column-grant / schema-cache issue
-  //   2. value is undefined, body keys OMIT `outline_section_id` -> run-outline emission bug
-  //   3. value is null, body keys include `outline_section_id` -> run-outline is emitting null
-  //      explicitly -> `section.id` missing in the loop / collection step
-  // Re-deploy this file with `gh workflow run "Supabase Deploy" --ref main` (already shipped
-  // by PR #327), kick off any fresh generation, then read the function log
-  // (`gh run view <deploy-run-id> --log`) to see what printed here.
-  console.log(
-    "[generate-story] inserting output with outline_section_id:",
-    body.outline_section_id,
-    "| body keys:",
-    Object.keys(body).sort().join(","),
-  );
-
-  const { data: outputRow, error: outputInsertError } = await persistence
-    .insertOutput({
-      id: outputId,
-      user_id: userId,
-      local_generation_id: body.localGenerationID ?? null,
-      project_name: projectName,
-      prompt_pack_name: promptPackName,
-      title,
-      output_text: generatedText,
-      source_payload_json: sourcePayloadForDB,
-      model_name: llmResult.modelName,
-      generation_action: generationAction,
-      generation_length_mode: generationLengthMode,
-      output_budget: maxCompletionTokens,
-      status: outputStatus,
-      visibility: "private",
-      outline_section_id: body.outline_section_id ?? null,
-      // PR-fix/ios-rendered-container-provenance: persist the Container that
-      // buildPrompt() actually used (from request body.container, defaulted
-      // to "scene" by buildPrompt's own fallback if absent). See interface
-      // field comment above for provenance rationale.
-      rendered_container: body.container ?? null,
-    });
-
-  // PR-XXX-A: log the prompt + response to llm_prompts (best-effort, do not fail the main call).
-  // PR-XXX-H: moved AFTER persistence.insertOutput so the FK on output_id
-  // references generation_outputs.id satisfies (the row exists before we
-  // reference it). Previously this insert ran before generation_outputs
-  // and the FK was dangling → insert threw → try/catch swallowed it → no row.
-  if (outputRow?.id && !outputInsertError) {
-    try {
-      await adminClient.from("llm_prompts").insert({
-        call_type: "generate-story",
-        output_id: outputId,
-        project_id: projectID,
-        outline_section_id: body.outline_section_id ?? null,
-        model: selectedModel.provider_model,
-        prompt: JSON.stringify({
-          system: craftPrompt,
-          user: contextPrompt,
-        }),
-        response: llmResult?.content ?? null,
-        prompt_tokens: llmResult?.inputTokens ?? null,
-        completion_tokens: llmResult?.outputTokens ?? null,
-        total_tokens: llmResult?.totalTokens ?? null,
-        duration_ms: llmDurationMs,
+  } catch (err) {
+    const isBillableError = err instanceof BillableLLMError;
+    if (isBillableError && err.code === "insufficient_credits") {
+      const details = err.details && typeof err.details === "object"
+        ? err.details as Record<string, unknown>
+        : {};
+      await limiter.recordRequest(userId, {
+        requestId,
+        action: generationAction,
+        generationLengthMode,
+        outputBudget: maxCompletionTokens,
+        selectedModelId,
+        providerModel: selectedModel.provider_model,
+        maxCompletionTokens,
+        status: "insufficient_credits",
+        errorCode: "insufficient_credits",
+        errorMessage: err.message,
+        durationMs: Date.now() - requestStartMs,
       });
-    } catch (logErr) {
-      console.error(
-        `[generate-story] llm_prompts insert failed: ${
-          (logErr as Error).message
-        }`,
+      return corsResponse(
+        JSON.stringify({
+          status: "failed",
+          errorCode: "insufficient_credits",
+          errorMessage: "Insufficient credits for this generation.",
+          requiredCredits: details.requiredCredits ?? null,
+          availableCredits: details.availableCredits ?? null,
+        }),
+        { status: 402 },
+      );
+    }
+    if (err instanceof ProviderError) {
+      await limiter.recordRequest(userId, {
+        requestId,
+        action: generationAction,
+        generationLengthMode,
+        outputBudget: maxCompletionTokens,
+        selectedModelId,
+        providerModel: selectedModel.provider_model,
+        maxCompletionTokens,
+        status: "failed",
+        errorCode: err.errorCode,
+        errorMessage: err.message,
+        actualCharge: 0,
+        durationMs: Date.now() - requestStartMs,
+      });
+      const failureResponse = providerErrorResponse(
+        err.errorCode,
+        err.message,
+      );
+      return corsResponse(
+        JSON.stringify(failureResponse.body),
+        {
+          status: failureResponse.httpStatus,
+          ...(failureResponse.headers
+            ? { headers: failureResponse.headers }
+            : {}),
+        },
       );
     }
 
-    // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): generate-story
-    // OWNS post-generation section memory extraction for EVERY successful
-    // section generation, regardless of whether it came from iOS direct
-    // generation or run-outline. We fire-and-forget call embed-section
-    // with raw_text = llmResult.content (the ACTUAL generated prose — NOT
-    // the section contract title/summary/terminalBeat that
-    // SectionEmbedService.buildRawText(for:) builds on iOS).
-    //
-    // run-outline's callEmbedSection after generation is now redundant
-    // and has been removed in this same PR (single owner = generate-story).
-    // Both paths are now identical: generate → persist → extract → next.
-    //
-    // Skip when:
-    //   - body.outline_section_id is missing (genuinely non-section gen)
-    //   - llmResult.content is empty (extraction would have nothing to extract)
-    //   - persistence.insertOutput failed (no row to point at)
-    // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT, hardened 19:43 EDT):
-    // The fire-and-forget embed-section call is the architectural fix for the
-    // RAG fields bug. It used to be conditional on `outlineSectionCtx.section`
-    // being set, which made it fragile — if the Story Arc Context fetch
-    // returned null (PostgREST depth limit, RLS, etc.), the fire-and-forget
-    // never entered and Section 2's Project State stayed empty.
-    //
-    // Now we ALWAYS fire if body.outline_section_id is set. We do a fresh,
-    // lightweight section fetch inline (just the fields embed-section needs).
-    // If that fetch also fails, log and skip — but try first.
-    if (body.outline_section_id && llmResult?.content) {
-      console.log(
-        `[generate-story] post-generation extraction: body.outline_section_id=${body.outline_section_id}, llmResult.content.length=${
-          llmResult?.content?.length ?? 0
-        }, outlineSectionCtx.section=${
-          outlineSectionCtx.section ? "found" : "null"
-        }`,
-      );
-
-      // Fresh section fetch for the embed-section payload.
-      const { data: sectionForEmbed, error: sectionEmbedErr } =
-        await adminClient
-          .from("outline_sections")
-          .select(
-            "id, title, summary, container, pov, terminal_beat, position, outline_id, story_arc_beat_id",
-          )
-          .eq("id", body.outline_section_id)
-          .maybeSingle();
-      if (sectionEmbedErr) {
-        console.error(
-          `[generate-story] post-generation embed-section section fetch failed: ${
-            sectionEmbedErr.message ?? JSON.stringify(sectionEmbedErr)
-          }`,
-        );
-      } else if (!sectionForEmbed) {
-        console.error(
-          `[generate-story] post-generation embed-section: section not found for id=${body.outline_section_id}`,
-        );
-      } else {
-        // Fetch prior context for embed-section's LLM extraction.
-        const priorContext = await fetchPriorContextForEmbedSection(
-          adminClient,
-          projectID,
-          String(sectionForEmbed.id),
-          String(sectionForEmbed.outline_id),
-          Number(sectionForEmbed.position ?? 0),
-        );
-
-        // Fire-and-forget — extraction failure must NOT fail the main call.
-        void callEmbedSectionForGeneratedOutput(
-          adminClient,
-          adminClient,
-          authHeader,
-          {
-            outline_section_id: String(sectionForEmbed.id),
-            outline_id: String(sectionForEmbed.outline_id),
-            project_id: projectID ?? "",
-            position: Number(sectionForEmbed.position ?? 0),
-            title: String(sectionForEmbed.title ?? ""),
-            summary: String(sectionForEmbed.summary ?? ""),
-            container: (sectionForEmbed.container ?? null) as string | null,
-            pov: (sectionForEmbed.pov ?? null) as string | null,
-            terminal_beat: (sectionForEmbed.terminal_beat ?? null) as
-              | string
-              | null,
-            story_arc_beat_id: (sectionForEmbed.story_arc_beat_id ?? null) as
-              | string
-              | null,
-            raw_text: llmResult.content,
-            output_id: outputId,
-            prior_context: priorContext,
-          },
-        ).catch((e) => {
-          console.error(
-            `[generate-story] post-generation embed-section failed: ${
-              (e as Error)?.message ?? String(e)
-            }`,
-          );
-        });
-      }
-    }
-  }
-
-  // Coherence v2 (2026-08-20): fire-and-forget post-gen coherence REMOVED.
-  // The check is now user-initiated via the "Check for inconsistencies"
-  // button on the section output detail view. iOS calls the edge function
-  // directly with output_text + full RAG retrieval as input.
-
-  if (outputInsertError || !outputRow?.id) {
-    const persistenceFailure = outputInsertError ??
-      new Error("generation_outputs insert returned no row");
-    console.error("[generate-story] generation_outputs insert failed", {
-      requestId,
-      userId,
-      error: outputInsertError ?? null,
-      outputRow: outputRow ?? null,
-    });
-
+    const errorCode = isBillableError && err.code === "credit_charge_failed"
+      ? "billing_charge_failed"
+      : isBillableError && err.code === "usage_event_insert_failed"
+      ? "billing_persistence_failed"
+      : "persistence_failed";
+    const errorMessage = err instanceof Error ? err.message : String(err);
     await limiter.recordRequest(userId, {
       requestId,
       action: generationAction,
@@ -3078,97 +2966,28 @@ async function handler(
       providerModel: selectedModel.provider_model,
       maxCompletionTokens,
       status: "failed",
-      errorCode: "persistence_failed",
-      errorMessage: describeError(
-        persistenceFailure,
-        "Failed to persist generation output.",
-      ),
-      modelName: llmResult.modelName,
-      inputTokens: llmResult.inputTokens,
-      outputTokens: llmResult.outputTokens,
-      totalTokens: llmResult.totalTokens,
+      errorCode,
+      errorMessage,
       actualCharge: 0,
       durationMs: Date.now() - requestStartMs,
     });
-
     return corsResponse(
       JSON.stringify({
         status: "failed",
-        errorCode: "persistence_failed",
-        errorMessage: "Failed to save generated output.",
+        errorCode,
+        errorMessage: errorCode === "billing_charge_failed"
+          ? "Generation completed but billing could not be finalized."
+          : "Failed to save generated output.",
       }),
       { status: 500 },
     );
   }
 
-  const generationOutputId = outputRow.id;
-
-  // -------------------------------------------------------------------------
-  // Compute credit charge BEFORE persisting usage event so we can record
-  // credit_revenue_usd on the row (Phase 1 telemetry).
-  // -------------------------------------------------------------------------
-
-  // Phase 3: actual cost based on real input + output + cached + tool tokens. No floor.
-  // Pricing was snapshotted at request start — admin updates don't change charges.
-  const postFlightUsage = {
-    uncachedInputTokens: llmResult.inputTokens ?? 0,
-    cachedInputTokens: llmResult.cachedInputTokens ?? 0,
-    outputTokens: llmResult.outputTokens ?? 0,
-    toolCostUsd: llmResult.toolCostUsd ?? 0,
-  };
-  const postFlightPricing = snapshotPricing(selectedModel);
-  const actualCharge = computeActualChargeCredits(
-    postFlightUsage,
-    postFlightPricing,
-  );
-  const creditRevenueUsd = actualCharge * 0.05;
-
-  // -------------------------------------------------------------------------
-  // Persist generation_usage_events row
-  // -------------------------------------------------------------------------
-
-  const { error: usageInsertError } = await persistence.insertUsageEvent({
-    user_id: userId,
-    generation_output_id: generationOutputId,
-    action: generationAction,
-    model_name: llmResult.modelName,
-    input_tokens: llmResult.inputTokens ?? null,
-    output_tokens: llmResult.outputTokens ?? null,
-    generation_length_mode: generationLengthMode,
-    output_budget: maxCompletionTokens,
-    status: "complete",
-    credit_revenue_usd: creditRevenueUsd,
-  });
-
-  if (usageInsertError) {
-    console.error(
-      "[generate-story] generation_usage_events insert failed",
-      usageInsertError,
-    );
-  }
-
-  // -------------------------------------------------------------------------
-  // Charge credits -- only after successful generation.
-  // Credits are charged AFTER the LLM provider returns successfully and the
-  // output row is persisted.
-  // A failed LLM call or output persistence failure does NOT charge.
-  // Monthly allowance is drained first; purchased balance is used second.
-  // actualCharge was computed above for telemetry; reuse it here.
-  // -------------------------------------------------------------------------
-
-  const updatedEntitlement = await store.charge(
-    userId,
-    actualCharge,
-    entitlement,
-    generationOutputId,
-  );
-
-  const remainingCredits = updatedEntitlement.monthly_credit_allowance +
-    updatedEntitlement.purchased_credit_balance;
-
-  // -------------------------------------------------------------------------
-  // Log successful request
-  // -------------------------------------------------------------------------
+  const llmResult = billableResult.providerResult;
+  const { outputRow, generatedText, title, wasTruncated } =
+    billableResult.featureResult;
+  const actualCharge = billableResult.actualCharge;
+  const remainingCredits = billableResult.remainingCredits;
 
   await limiter.recordRequest(userId, {
     requestId,
@@ -3184,16 +3003,12 @@ async function handler(
       ? "The generation hit the model length limit and may be incomplete."
       : undefined,
     modelName: llmResult.modelName,
-    inputTokens: llmResult.inputTokens,
-    outputTokens: llmResult.outputTokens,
-    totalTokens: llmResult.totalTokens,
+    inputTokens: llmResult.inputTokens ?? undefined,
+    outputTokens: llmResult.outputTokens ?? undefined,
+    totalTokens: (llmResult.inputTokens ?? 0) + (llmResult.outputTokens ?? 0),
     actualCharge,
     durationMs: Date.now() - requestStartMs,
   });
-
-  // -------------------------------------------------------------------------
-  // Return response
-  // -------------------------------------------------------------------------
 
   return corsResponse(
     JSON.stringify({
@@ -3211,7 +3026,7 @@ async function handler(
       wasTruncated,
       inputTokens: llmResult.inputTokens,
       outputTokens: llmResult.outputTokens,
-      totalTokens: llmResult.totalTokens,
+      totalTokens: (llmResult.inputTokens ?? 0) + (llmResult.outputTokens ?? 0),
       creditCostCharged: actualCharge,
       remainingCredits,
       status: wasTruncated ? "incomplete" : "complete",
@@ -3235,7 +3050,3 @@ export {
   PROVIDER_TIMEOUT_MS,
   ProviderError,
 } from "./_provider.ts";
-export {
-  computeGenerationCreditCharge,
-  DEFAULT_GENERATION_MODEL_ID,
-} from "./_generation_models.ts";
