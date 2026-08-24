@@ -1,6 +1,9 @@
 # sync-story-arc — Manual Test Cases
 
-Run against the deployed function or a local `supabase functions serve sync-story-arc --env-file .env.local`. The function accepts POST with a user JWT in `Authorization` and is service-role-authenticating the DB writes.
+Run against the deployed function or a local
+`supabase functions serve sync-story-arc --env-file .env.local`. The function
+accepts POST with a user JWT in `Authorization` and is
+service-role-authenticating the DB writes.
 
 ## Prerequisites
 
@@ -76,7 +79,8 @@ curl -s -X POST "$BASE_URL" \
 
 ## Case 4 — Beat replace: drop one beat
 
-Re-run Case 3 with only BEAT1 (omit BEAT2). BEAT2 should be deleted server-side; BEAT1 retained with the same row data.
+Re-run Case 3 with only BEAT1 (omit BEAT2). BEAT2 should be deleted server-side;
+BEAT1 retained with the same row data.
 
 ```sh
 curl -s -X POST "$BASE_URL" \
@@ -168,11 +172,14 @@ curl -s -w "\n%{http_code}" -X POST "$BASE_URL" \
 
 ## Case 9 — Integration smoke: PR #284 burn fixed
 
-This is the cross-function verification that the original 0/8 accept failure is fixed.
+This is the cross-function verification that the original 0/8 accept failure is
+fixed.
 
 1. Run Case 3 to put arc + beats on the server.
-2. From the iOS app (with the v2 self-sync edit flows wired in a future PR), accept an AI-suggested section that has `story_arc_beat_id = BEAT1_ID`.
-3. Verify in Supabase → `outline_sections` table → the new row has `story_arc_beat_id = BEAT1_ID` (no FK violation).
+2. From the iOS app (with the v2 self-sync edit flows wired in a future PR),
+   accept an AI-suggested section that has `story_arc_beat_id = BEAT1_ID`.
+3. Verify in Supabase → `outline_sections` table → the new row has
+   `story_arc_beat_id = BEAT1_ID` (no FK violation).
 
 Or, without iOS, simulate via direct REST:
 

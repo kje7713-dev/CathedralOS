@@ -2,8 +2,8 @@
 
 These cases document the expected behaviour of the `generate-story` Edge
 Function. Run them with `curl` against a locally-served function
-(`supabase functions serve generate-story --env-file .env.local`) or against
-the hosted project.
+(`supabase functions serve generate-story --env-file .env.local`) or against the
+hosted project.
 
 ---
 
@@ -101,9 +101,9 @@ curl -s -X POST "$BASE_URL" \
 
 ## Case 5 — Excessive outputBudget is capped to server max
 
-The server silently clamps `outputBudget` to the per-mode maximum.
-A valid short request with `outputBudget: 99999` should succeed and the
-response should show `outputBudget: 800` (the short-mode cap).
+The server silently clamps `outputBudget` to the per-mode maximum. A valid short
+request with `outputBudget: 99999` should succeed and the response should show
+`outputBudget: 800` (the short-mode cap).
 
 ```sh
 curl -s -X POST "$BASE_URL" \
@@ -193,7 +193,8 @@ curl -s -X POST "$BASE_URL" \
 
 ## Case 9 — Provider failure returns failed status
 
-Temporarily set `OPENAI_API_KEY=invalid` in `.env.local` and re-serve the function.
+Temporarily set `OPENAI_API_KEY=invalid` in `.env.local` and re-serve the
+function.
 
 ```sh
 curl -s -X POST "$BASE_URL" \
@@ -217,8 +218,9 @@ curl -s -X POST "$BASE_URL" \
 ## Case 10 — Insufficient credits returns 402
 
 First, ensure the user has 0 available credits:
-- In Supabase Studio, set `user_entitlements.monthly_credit_allowance = 0`
-  and `purchased_credit_balance = 0` for the test user.
+
+- In Supabase Studio, set `user_entitlements.monthly_credit_allowance = 0` and
+  `purchased_credit_balance = 0` for the test user.
 
 ```sh
 curl -s -X POST "$BASE_URL" \
@@ -306,7 +308,7 @@ exported `handler` function in `index.ts`. See `index_test.ts` for examples.
 
 ```ts
 import { handler } from "./index.ts";
-import type { LLMProvider, LLMMessage } from "./_provider.ts";
+import type { LLMMessage, LLMProvider } from "./_provider.ts";
 import type { CreditStore, UserEntitlement } from "./_credits.ts";
 
 const mockProvider: LLMProvider = {
@@ -335,7 +337,10 @@ const mockCreditStore: CreditStore = {
     };
   },
   async charge(_userId, _cost, ent, _outputId) {
-    return { ...ent, monthly_credit_allowance: ent.monthly_credit_allowance - _cost };
+    return {
+      ...ent,
+      monthly_credit_allowance: ent.monthly_credit_allowance - _cost,
+    };
   },
 };
 
@@ -343,12 +348,12 @@ const mockCreditStore: CreditStore = {
 // await handler(req, mockProvider, mockCreditStore);
 ```
 
-
 ---
 
 ## Case 13 — Rate limit exceeded (per minute)
 
-Trigger the rate limit by sending more than 5 requests within a 60-second window.
+Trigger the rate limit by sending more than 5 requests within a 60-second
+window.
 
 ```sh
 for i in {1..6}; do
@@ -359,6 +364,7 @@ done
 ```
 
 Expected rate-limited response body:
+
 ```json
 {
   "status": "failed",
@@ -369,8 +375,10 @@ Expected rate-limited response body:
 ```
 
 Verify in Supabase Studio:
+
 - `generation_request_logs` contains a row with `status = 'rate_limited'`
-- No `generation_outputs` or `user_credit_ledger` row for the rate-limited request
+- No `generation_outputs` or `user_credit_ledger` row for the rate-limited
+  request
 
 ---
 
@@ -415,8 +423,8 @@ curl -s -X POST "$BASE_URL" \
 
 ## Case 16 — Provider timeout maps to provider_timeout
 
-Set `OPENAI_API_KEY=sk-fake-key-that-causes-immediate-401` and serve the function.
-Alternatively configure a local proxy that holds connections open.
+Set `OPENAI_API_KEY=sk-fake-key-that-causes-immediate-401` and serve the
+function. Alternatively configure a local proxy that holds connections open.
 
 ```sh
 curl -s -X POST "$BASE_URL" \
@@ -499,7 +507,7 @@ The rate limiter can be tested by injecting a `MockRateLimitStore` via the
 
 ```ts
 import { handler } from "./index.ts";
-import type { RateLimitStore, RateLimitResult } from "./_rate_limiter.ts";
+import type { RateLimitResult, RateLimitStore } from "./_rate_limiter.ts";
 
 const rateLimitedStore: RateLimitStore = {
   async checkLimits(_userId) {

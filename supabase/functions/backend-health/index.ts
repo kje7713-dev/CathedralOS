@@ -72,10 +72,13 @@ export async function handler(
 
   const openaiKeyPresent = Boolean(Deno.env.get("OPENAI_API_KEY"));
   const supabaseURLPresent = Boolean(Deno.env.get("SUPABASE_URL"));
-  const serviceRoleKeyPresent = Boolean(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
+  const serviceRoleKeyPresent = Boolean(
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"),
+  );
 
   // Report the configured model name (this is not a secret).
-  const openaiModel = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini (default)";
+  const openaiModel = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
+    "gpt-4o-mini (default)";
 
   // -------------------------------------------------------------------------
   // Database connectivity check via health_check_ping() RPC
@@ -133,7 +136,9 @@ export async function handler(
       };
     }
   } else {
-    dbError = { message: "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not configured" };
+    dbError = {
+      message: "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not configured",
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -143,8 +148,8 @@ export async function handler(
   // generate-story Edge Function is confirmed present and reachable.
   // -------------------------------------------------------------------------
 
-  const generationFunctionConfigured =
-    openaiKeyPresent && supabaseURLPresent && serviceRoleKeyPresent && dbReachable;
+  const generationFunctionConfigured = openaiKeyPresent && supabaseURLPresent &&
+    serviceRoleKeyPresent && dbReachable;
 
   const healthPayload = {
     status: generationFunctionConfigured ? "ok" : "degraded",

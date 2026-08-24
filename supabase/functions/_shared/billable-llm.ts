@@ -19,7 +19,9 @@
 
 import {
   computeActualChargeCredits,
+  computeMarginCents,
   computeMaxChargeCredits,
+  computeProviderCogsCents,
   type GenerationModel,
   type GenerationUsage,
   snapshotPricing,
@@ -44,6 +46,8 @@ export interface BillableProviderResult {
   inputTokens: number | null;
   outputTokens: number | null;
   cachedInputTokens: number | null;
+  /** PR-372: cache-write input tokens (separately priced on GPT-5.6+). */
+  cacheWriteInputTokens: number | null;
   finishReason: string | undefined;
   toolCostUsd: number;
 }
@@ -59,10 +63,21 @@ export interface BillableUsageContext {
 /** Provider-specific knobs. Coherence-check sets `responseFormat` to enable
  * Structured Outputs via the chat/completions endpoint. Generate-story
  * leaves it unset and uses the Responses API path. `temperature` is
- * forwarded to chat/completions when set; ignored by the Responses API. */
+ * forwarded to chat/completions when set; ignored by the Responses API.
+ *
+ * PR-372 additions: `cacheMode` + `promptCacheKey` enable OpenAI prompt
+ * caching on the Responses API path. `cacheMode === "explicit"` adds
+ * `prompt_cache_options: { mode: "explicit" }` and the `prompt_cache_key`
+ * to the request. Caller (index.ts) is responsible for adding
+ * `prompt_cache_breakpoint: { mode: "explicit" }` to the LAST stable
+ * content block; this interface just threads the metadata through. */
 export interface BillableProviderOptions {
   responseFormat?: unknown;
   temperature?: number;
+  /** PR-372: cache capability for this request. */
+  cacheMode?: "none" | "implicit" | "explicit";
+  /** PR-372: stable cache key for grouping related requests. */
+  promptCacheKey?: string;
 }
 
 export interface BillableLLMRequest<T> {
@@ -74,6 +89,11 @@ export interface BillableLLMRequest<T> {
   maxOutputTokens: number;
   providerOptions?: BillableProviderOptions;
   usageContext: BillableUsageContext;
+  /** PR-372: SHA-256 hex of the serialized stable prefix sent to the
+   *  provider. For diagnostics only — never reverse to prompt content.
+   *  Persisted to generation_usage_events.stable_prefix_hash. Coherence-check
+   *  doesn't have a stable prefix and leaves this undefined. */
+  stablePrefixHash?: string;
   /** Feature-specific persistence callback. May throw on validation /
    * persistence failure; the runner rethrows without recording a
    * "complete" usage event (and without charging). The callback may itself
@@ -101,6 +121,17 @@ export interface BillableLLMResult<T> {
   usageEventInserted: boolean;
   /** Remaining monthly + purchased credits after a successful charge. */
   remainingCredits: number;
+  /** PR-372: provider cost-of-goods (cents). Uses the corrected split
+   *  formula (ordinary * normalRate + cached * cachedRate + cacheWrite *
+   *  cacheWriteRate + output * outputRate + toolCost) with defensive
+   *  anomaly handling. Always present after a successful run. */
+  providerCogsCents: number;
+  /** PR-372: customer revenue in cents (charge × creditValueUsd × 100).
+   *  Invariant on cache outcome — same total input at normal rate. */
+  customerRevenueCents: number;
+  /** PR-372: margin in cents (customerRevenueCents - providerCogsCents).
+   *  Improves on cache hits; may be negative on cache writes without reuse. */
+  marginCents: number;
 }
 
 export interface BillableUsageEventWriteResult {
@@ -159,6 +190,9 @@ function defaultPreflightUsage(maxOutputTokens: number): GenerationUsage {
   return {
     uncachedInputTokens: 5000,
     cachedInputTokens: 0,
+    // PR-372: preflight assumes zero cache savings (cache hit is not
+    // guaranteed — only count after the provider responds).
+    cacheWriteInputTokens: 0,
     outputTokens: maxOutputTokens,
     toolCostUsd: 0,
   };
@@ -239,29 +273,60 @@ export async function runBillableLLM<T>(
     inputTokens: llmResponse.inputTokens ?? null,
     outputTokens: llmResponse.outputTokens ?? null,
     cachedInputTokens: llmResponse.cachedInputTokens ?? null,
+    // PR-372: extract cache-write tokens from the OpenAI response.
+    cacheWriteInputTokens: llmResponse.cacheWriteInputTokens ?? null,
     finishReason: llmResponse.finishReason,
     toolCostUsd: llmResponse.toolCostUsd ?? 0,
   };
   const featureResult = await req.onProviderSuccess(providerResult);
 
-  // 4. Compute actual charge from real tokens. Cached tokens must NOT be
-  //    double-counted: the provider returns `inputTokens` as the TOTAL
-  //    input count and `cachedInputTokens` as the subset of that total that
-  //    hit the cache. We charge uncached at the full rate and cached at the
-  //    cached rate. uncached = total - cached.
+  // 4. PR-372 corrected token accounting + provider COGS math.
+  //
+  // The provider returns:
+  //   - inputTokens             = TOTAL input (includes cached + cacheWrite)
+  //   - cachedInputTokens       = subset of total that hit the cache read
+  //   - cacheWriteInputTokens   = subset of total written to cache this call
+  //
+  // We compute:
+  //   ordinaryUncached = max(0, totalInput - cached - cacheWrite)
+  //
+  // and pass that into computeActualChargeCredits (which charges ALL input
+  // at normal rate — no customer discount on cache hits) and into
+  // computeProviderCogsCents (which uses the corrected split formula for
+  // the provider COGS side).
+  //
+  // Customer charge and provider COGS are computed independently so cache
+  // savings stay Cathedral's margin, never a customer-side concession.
   const totalInputTokens = Math.max(0, providerResult.inputTokens ?? 0);
   const cachedInputTokens = Math.max(
     0,
     Math.min(totalInputTokens, providerResult.cachedInputTokens ?? 0),
   );
+  const cacheWriteInputTokens = Math.max(
+    0,
+    Math.min(totalInputTokens, providerResult.cacheWriteInputTokens ?? 0),
+  );
+  const ordinaryUncachedInputTokens = Math.max(
+    0,
+    totalInputTokens - cachedInputTokens - cacheWriteInputTokens,
+  );
   const actualUsage: GenerationUsage = {
-    uncachedInputTokens: totalInputTokens - cachedInputTokens,
+    uncachedInputTokens: ordinaryUncachedInputTokens,
     cachedInputTokens,
+    cacheWriteInputTokens,
     outputTokens: Math.max(0, providerResult.outputTokens ?? 0),
     toolCostUsd: providerResult.toolCostUsd,
   };
   const actualCharge = computeActualChargeCredits(actualUsage, pricing);
-  const creditRevenueUsd = actualCharge * 0.05;
+  // Keep credit_revenue_usd (legacy column) in sync with customer charge.
+  const creditRevenueUsd = actualCharge * pricing.creditValueUsd;
+  // PR-372: provider COGS (cents) + margin (cents) for telemetry.
+  const providerCogs = computeProviderCogsCents(actualUsage, pricing);
+  const marginInfo = computeMarginCents(
+    actualCharge,
+    pricing,
+    providerCogs.providerCogsCents,
+  );
 
   // 5. INSERT generation_usage_events. Partial unique index on
   //    (user_id, idempotency_key) WHERE purpose='coherence-check'
@@ -279,6 +344,14 @@ export async function runBillableLLM<T>(
     status: "complete",
     credit_revenue_usd: creditRevenueUsd,
     idempotency_key: req.usageContext.idempotencyKey ?? null,
+    // PR-372 cache economics telemetry (migration 20260824220000).
+    uncached_input_tokens: ordinaryUncachedInputTokens,
+    cached_input_tokens: cachedInputTokens,
+    cache_write_input_tokens: cacheWriteInputTokens,
+    provider_cogs_cents: providerCogs.providerCogsCents,
+    customer_revenue_cents: marginInfo.customerRevenueCents,
+    margin_cents: marginInfo.marginCents,
+    stable_prefix_hash: req.stablePrefixHash ?? null,
   };
 
   const insertResult = deps.usageEventWriter
@@ -307,6 +380,11 @@ export async function runBillableLLM<T>(
       usageEventInserted: false,
       remainingCredits: entitlement.monthly_credit_allowance +
         entitlement.purchased_credit_balance,
+      // PR-372: COGS/margin still reported even when charge skipped
+      // (idempotency replay is a successful LLM call, not a free one).
+      providerCogsCents: providerCogs.providerCogsCents,
+      customerRevenueCents: marginInfo.customerRevenueCents,
+      marginCents: marginInfo.marginCents,
     };
   }
 
@@ -383,6 +461,10 @@ export async function runBillableLLM<T>(
     charged: true,
     usageEventInserted: true,
     remainingCredits,
+    // PR-372 cache economics telemetry.
+    providerCogsCents: providerCogs.providerCogsCents,
+    customerRevenueCents: marginInfo.customerRevenueCents,
+    marginCents: marginInfo.marginCents,
   };
 }
 

@@ -35,7 +35,8 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini";
+const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
+  "gpt-4o-mini";
 const OPENAI_EMBED_MODEL = "text-embedding-3-small";
 
 // Keep extraction constrained to the shape consumed below. JSON mode can still
@@ -49,7 +50,14 @@ const SCENE_MEMORY_RESPONSE_FORMAT = {
     schema: {
       type: "object",
       additionalProperties: false,
-      required: ["extracted_summary", "character_deltas", "plot_thread_deltas", "continuity_facts", "open_loops", "scene_ending_state"],
+      required: [
+        "extracted_summary",
+        "character_deltas",
+        "plot_thread_deltas",
+        "continuity_facts",
+        "open_loops",
+        "scene_ending_state",
+      ],
       properties: {
         extracted_summary: { type: "string" },
         character_deltas: {
@@ -57,7 +65,16 @@ const SCENE_MEMORY_RESPONSE_FORMAT = {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["character_name", "location", "knowledge_delta", "relationship_delta", "injuries", "goals", "possessions", "emotional_stance"],
+            required: [
+              "character_name",
+              "location",
+              "knowledge_delta",
+              "relationship_delta",
+              "injuries",
+              "goals",
+              "possessions",
+              "emotional_stance",
+            ],
             properties: {
               character_name: { type: "string" },
               location: { type: ["string", "null"] },
@@ -78,7 +95,10 @@ const SCENE_MEMORY_RESPONSE_FORMAT = {
             required: ["thread_name", "status", "description"],
             properties: {
               thread_name: { type: "string" },
-              status: { type: "string", enum: ["introduced", "advanced", "resolved"] },
+              status: {
+                type: "string",
+                enum: ["introduced", "advanced", "resolved"],
+              },
               description: { type: "string" },
             },
           },
@@ -91,7 +111,16 @@ const SCENE_MEMORY_RESPONSE_FORMAT = {
             additionalProperties: false,
             required: ["type", "description"],
             properties: {
-              type: { type: "string", enum: ["promise", "mystery", "question", "threat", "pending_action"] },
+              type: {
+                type: "string",
+                enum: [
+                  "promise",
+                  "mystery",
+                  "question",
+                  "threat",
+                  "pending_action",
+                ],
+              },
               description: { type: "string" },
             },
           },
@@ -124,15 +153,23 @@ const SCENE_MEMORY_RESPONSE_FORMAT = {
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Content-Type": "application/json",
 };
 
 const corsResponse = (body: string, init: ResponseInit = {}): Response =>
-  new Response(body, { ...init, headers: { ...CORS_HEADERS, ...(init.headers ?? {}) } });
+  new Response(body, {
+    ...init,
+    headers: { ...CORS_HEADERS, ...(init.headers ?? {}) },
+  });
 
-const errorResponse = (code: string, message: string, status: number): Response =>
+const errorResponse = (
+  code: string,
+  message: string,
+  status: number,
+): Response =>
   corsResponse(JSON.stringify({ errorCode: code, message }), { status });
 
 interface EmbedSectionRequest {
@@ -163,11 +200,29 @@ interface EmbedSectionRequest {
 // status, timestamps, and provenance metadata server-side per the locked rules.
 interface SceneMemory {
   extracted_summary: string;
-  character_deltas: Array<{ character_name?: string; location?: string; knowledge_delta?: string; relationship_delta?: string; injuries?: string; goals?: string; possessions?: string; emotional_stance?: string }>;
-  plot_thread_deltas: Array<{ thread_name?: string; status?: string; description?: string }>;
+  character_deltas: Array<
+    {
+      character_name?: string;
+      location?: string;
+      knowledge_delta?: string;
+      relationship_delta?: string;
+      injuries?: string;
+      goals?: string;
+      possessions?: string;
+      emotional_stance?: string;
+    }
+  >;
+  plot_thread_deltas: Array<
+    { thread_name?: string; status?: string; description?: string }
+  >;
   continuity_facts: string[];
   open_loops: Array<{ type?: string; description?: string }>;
-  scene_ending_state: { character_positions?: Array<{ character?: string; location?: string; immediate_state?: string }>; immediate_pressure?: string };
+  scene_ending_state: {
+    character_positions?: Array<
+      { character?: string; location?: string; immediate_state?: string }
+    >;
+    immediate_pressure?: string;
+  };
 }
 
 // Stable UUIDs for plot_thread_deltas, open_loops, continuity_facts.
@@ -175,10 +230,18 @@ const newUuid = (): string => crypto.randomUUID();
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsResponse("", { status: 204 });
-  if (req.method !== "POST") return errorResponse("method_not_allowed", "POST only", 405);
+  if (req.method !== "POST") {
+    return errorResponse("method_not_allowed", "POST only", 405);
+  }
 
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader) return errorResponse("not_authenticated", "Missing Authorization header", 401);
+  if (!authHeader) {
+    return errorResponse(
+      "not_authenticated",
+      "Missing Authorization header",
+      401,
+    );
+  }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
@@ -186,10 +249,18 @@ Deno.serve(async (req: Request) => {
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    return errorResponse("not_configured", "Supabase URL or anon key missing", 500);
+    return errorResponse(
+      "not_configured",
+      "Supabase URL or anon key missing",
+      500,
+    );
   }
   if (!supabaseServiceKey) {
-    return errorResponse("not_configured", "SUPABASE_SERVICE_ROLE_KEY missing", 500);
+    return errorResponse(
+      "not_configured",
+      "SUPABASE_SERVICE_ROLE_KEY missing",
+      500,
+    );
   }
   if (!openaiKey) {
     return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
@@ -211,15 +282,20 @@ Deno.serve(async (req: Request) => {
     return errorResponse("invalid_request", "Body must be JSON", 400);
   }
 
-  if (!body.outline_section_id || !body.outline_id || !body.project_id || !body.title || !body.raw_text) {
+  if (
+    !body.outline_section_id || !body.outline_id || !body.project_id ||
+    !body.title || !body.raw_text
+  ) {
     return errorResponse(
       "invalid_request",
       "outline_section_id, outline_id, project_id, title, and raw_text are required",
-      400
+      400,
     );
   }
 
-  console.log(`[embed-section] start user=${user.id} section=${body.outline_section_id} outline=${body.outline_id} project=${body.project_id}`);
+  console.log(
+    `[embed-section] start user=${user.id} section=${body.outline_section_id} outline=${body.outline_id} project=${body.project_id}`,
+  );
 
   const adminClient = createClient(supabaseUrl, supabaseServiceKey);
 
@@ -232,8 +308,14 @@ Deno.serve(async (req: Request) => {
     name: "Outline",
   }, { onConflict: "id" });
   if (outlineErr) {
-    console.error(`[embed-section] outline upsert failed: ${outlineErr.message}`);
-    return errorResponse("database_error", `outline upsert failed: ${outlineErr.message}`, 500);
+    console.error(
+      `[embed-section] outline upsert failed: ${outlineErr.message}`,
+    );
+    return errorResponse(
+      "database_error",
+      `outline upsert failed: ${outlineErr.message}`,
+      500,
+    );
   }
   console.log(`[embed-section] outline upserted id=${body.outline_id}`);
 
@@ -247,10 +329,14 @@ Deno.serve(async (req: Request) => {
       .eq("id", validatedBeatID)
       .maybeSingle();
     if (beatCheckErr) {
-      console.warn(`[embed-section] beat check error (nulling FK): ${beatCheckErr.message}`);
+      console.warn(
+        `[embed-section] beat check error (nulling FK): ${beatCheckErr.message}`,
+      );
       validatedBeatID = null;
     } else if (!beatExists) {
-      console.warn(`[embed-section] dropping bogus story_arc_beat_id: ${validatedBeatID}`);
+      console.warn(
+        `[embed-section] dropping bogus story_arc_beat_id: ${validatedBeatID}`,
+      );
       validatedBeatID = null;
     }
   }
@@ -258,21 +344,28 @@ Deno.serve(async (req: Request) => {
   // Step 2: UPSERT outline_section (id = client-provided, all fields).
   // status stays "draft" here — the iOS app flips it to "accepted" locally
   // on 200 response.
-  const { error: sectionErr } = await adminClient.from("outline_sections").upsert({
-    id: body.outline_section_id,
-    outline_id: body.outline_id,
-    position: body.position ?? 0,
-    title: body.title,
-    summary: body.summary ?? "",
-    container: body.container ?? null,
-    pov: body.pov ?? null,
-    terminal_beat: body.terminal_beat ?? null,
-    story_arc_beat_id: validatedBeatID,
-    status: "draft",
-  }, { onConflict: "id" });
+  const { error: sectionErr } = await adminClient.from("outline_sections")
+    .upsert({
+      id: body.outline_section_id,
+      outline_id: body.outline_id,
+      position: body.position ?? 0,
+      title: body.title,
+      summary: body.summary ?? "",
+      container: body.container ?? null,
+      pov: body.pov ?? null,
+      terminal_beat: body.terminal_beat ?? null,
+      story_arc_beat_id: validatedBeatID,
+      status: "draft",
+    }, { onConflict: "id" });
   if (sectionErr) {
-    console.error(`[embed-section] section upsert failed: ${sectionErr.message}`);
-    return errorResponse("database_error", `outline_section upsert failed: ${sectionErr.message}`, 500);
+    console.error(
+      `[embed-section] section upsert failed: ${sectionErr.message}`,
+    );
+    return errorResponse(
+      "database_error",
+      `outline_section upsert failed: ${sectionErr.message}`,
+      500,
+    );
   }
   console.log(`[embed-section] section upserted id=${body.outline_section_id}`);
 
@@ -318,13 +411,16 @@ Deno.serve(async (req: Request) => {
               "`scene_ending_state` ({character_positions: [{character, location, immediate_state}], immediate_pressure: string}). " +
               "Output ONLY valid JSON. Empty arrays/objects are fine when a layer has nothing.",
           },
-          { role: "user", content: body.prior_context
-            ? `Prior context (what the model already knows about prior sections — use this to inform what to add/update/supersede in the structured state):
+          {
+            role: "user",
+            content: body.prior_context
+              ? `Prior context (what the model already knows about prior sections — use this to inform what to add/update/supersede in the structured state):
 ${body.prior_context}
 
 Now, from the current section's raw_text below, extract structured state:
 ${body.raw_text}`
-            : body.raw_text },
+              : body.raw_text,
+          },
         ],
         // Reasoning models consume part of this budget before emitting JSON.
         // 1500 could truncate the object and surface as "invalid JSON".
@@ -337,23 +433,35 @@ ${body.raw_text}`
     clearTimeout(t);
     if (!r.ok) {
       const errText = await r.text();
-      console.error(`[embed-section] OpenAI extract ${r.status}: ${errText.slice(0, 500)}`);
+      console.error(
+        `[embed-section] OpenAI extract ${r.status}: ${errText.slice(0, 500)}`,
+      );
       return errorResponse(
         "provider_error",
         `OpenAI extract ${r.status}: ${errText.slice(0, 500)}`,
-        502
+        502,
       );
     }
     const data = await r.json();
     const finishReason = data.choices?.[0]?.finish_reason;
     if (finishReason === "length") {
-      console.error(`[embed-section] LLM extraction exhausted completion budget`);
-      return errorResponse("provider_error", "LLM extraction exceeded its completion budget", 502);
+      console.error(
+        `[embed-section] LLM extraction exhausted completion budget`,
+      );
+      return errorResponse(
+        "provider_error",
+        "LLM extraction exceeded its completion budget",
+        502,
+      );
     }
     const raw = (data.choices?.[0]?.message?.content ?? "").trim();
     if (!raw) {
       console.error(`[embed-section] LLM extraction returned empty content`);
-      return errorResponse("provider_error", "LLM extraction returned empty content", 502);
+      return errorResponse(
+        "provider_error",
+        "LLM extraction returned empty content",
+        502,
+      );
     }
 
     // PR-XXX-A: log the extraction prompt + response to llm_prompts (best-effort)
@@ -376,37 +484,63 @@ ${body.raw_text}`
         duration_ms: extractDurationMs,
       });
     } catch (logErr) {
-      console.error(`[embed-section] llm_prompts insert failed: ${(logErr as Error).message}`);
+      console.error(
+        `[embed-section] llm_prompts insert failed: ${
+          (logErr as Error).message
+        }`,
+      );
     }
 
     let parsed: Partial<SceneMemory>;
     try {
       parsed = JSON.parse(raw) as Partial<SceneMemory>;
     } catch (parseErr) {
-      console.error(`[embed-section] LLM extraction returned invalid JSON: ${String(parseErr)} raw=${raw.slice(0, 300)}`);
-      return errorResponse("provider_error", "LLM extraction returned invalid JSON", 502);
+      console.error(
+        `[embed-section] LLM extraction returned invalid JSON: ${
+          String(parseErr)
+        } raw=${raw.slice(0, 300)}`,
+      );
+      return errorResponse(
+        "provider_error",
+        "LLM extraction returned invalid JSON",
+        502,
+      );
     }
     // Defaults: empty arrays/objects so the schema is forgiving if a layer is missing.
     sceneMemory = {
-      extracted_summary: typeof parsed.extracted_summary === "string" ? parsed.extracted_summary : "",
-      character_deltas: Array.isArray(parsed.character_deltas) ? parsed.character_deltas : [],
-      plot_thread_deltas: Array.isArray(parsed.plot_thread_deltas) ? parsed.plot_thread_deltas : [],
-      continuity_facts: Array.isArray(parsed.continuity_facts) ? parsed.continuity_facts : [],
+      extracted_summary: typeof parsed.extracted_summary === "string"
+        ? parsed.extracted_summary
+        : "",
+      character_deltas: Array.isArray(parsed.character_deltas)
+        ? parsed.character_deltas
+        : [],
+      plot_thread_deltas: Array.isArray(parsed.plot_thread_deltas)
+        ? parsed.plot_thread_deltas
+        : [],
+      continuity_facts: Array.isArray(parsed.continuity_facts)
+        ? parsed.continuity_facts
+        : [],
       open_loops: Array.isArray(parsed.open_loops) ? parsed.open_loops : [],
-      scene_ending_state:
-        parsed.scene_ending_state && typeof parsed.scene_ending_state === "object"
-          ? parsed.scene_ending_state
-          : {},
+      scene_ending_state: parsed.scene_ending_state &&
+          typeof parsed.scene_ending_state === "object"
+        ? parsed.scene_ending_state
+        : {},
     };
     if (!sceneMemory.extracted_summary) {
       console.error(`[embed-section] LLM extraction returned empty summary`);
-      return errorResponse("provider_error", "LLM extraction returned empty summary", 502);
+      return errorResponse(
+        "provider_error",
+        "LLM extraction returned empty summary",
+        502,
+      );
     }
   } catch (err) {
     console.error(`[embed-section] LLM extract threw: ${String(err)}`);
     return errorResponse("provider_error", String(err), 502);
   }
-  console.log(`[embed-section] extract OK summary_len=${sceneMemory.extracted_summary.length} layers=6`);
+  console.log(
+    `[embed-section] extract OK summary_len=${sceneMemory.extracted_summary.length} layers=6`,
+  );
 
   // Step 3.5: wrap the LLM output with server-side metadata per the locked rules.
   // - Rule 3: stable UUIDs for plot_thread_deltas, open_loops
@@ -479,18 +613,24 @@ ${body.raw_text}`
     clearTimeout(t);
     if (!r.ok) {
       const errText = await r.text();
-      console.error(`[embed-section] OpenAI embed ${r.status}: ${errText.slice(0, 500)}`);
+      console.error(
+        `[embed-section] OpenAI embed ${r.status}: ${errText.slice(0, 500)}`,
+      );
       return errorResponse(
         "provider_error",
         `OpenAI embed ${r.status}: ${errText.slice(0, 500)}`,
-        502
+        502,
       );
     }
     const data = await r.json();
     const vec = data.data?.[0]?.embedding;
     if (!Array.isArray(vec)) {
       console.error(`[embed-section] Embedding API returned invalid data`);
-      return errorResponse("provider_error", "Embedding API returned invalid data", 502);
+      return errorResponse(
+        "provider_error",
+        "Embedding API returned invalid data",
+        502,
+      );
     }
     embedding = vec;
 
@@ -513,7 +653,11 @@ ${body.raw_text}`
         duration_ms: embedDurationMs,
       });
     } catch (logErr) {
-      console.error(`[embed-section] embeddings llm_prompts insert failed: ${(logErr as Error).message}`);
+      console.error(
+        `[embed-section] embeddings llm_prompts insert failed: ${
+          (logErr as Error).message
+        }`,
+      );
     }
   } catch (err) {
     console.error(`[embed-section] embed threw: ${String(err)}`);
@@ -528,29 +672,34 @@ ${body.raw_text}`
   //   - raw_text: stored (Rule 9 — for re-extraction/debugging, NOT injected by default)
   //   - character_deltas: per-scene array (Rule 2 — aggregate merges across scenes)
   //   - scene_ending_state: same object shape
-  const { error: upsertErr } = await adminClient.from("section_embeddings").upsert({
-    project_id: body.project_id,
-    outline_section_id: body.outline_section_id,
-    // Kevin 2026-08-21 12:00 EDT fix: lineage from section memory to the
-    // generation output that produced it. The DELETE trigger on
-    // generation_outputs uses this to clean up orphaned memory.
-    generation_output_id: body.output_id ?? null,
-    embedding,
-    extracted_summary: sceneMemory.extracted_summary,
-    raw_text: body.raw_text,
-    container: body.container ?? null,
-    pov: body.pov ?? null,
-    character_deltas: sceneMemory.character_deltas,
-    plot_thread_deltas: enrichedPlotThreads,
-    continuity_facts: enrichedContinuityFacts,
-    open_loops: enrichedOpenLoops,
-    scene_ending_state: sceneMemory.scene_ending_state,
-  }, { onConflict: "outline_section_id" });
+  const { error: upsertErr } = await adminClient.from("section_embeddings")
+    .upsert({
+      project_id: body.project_id,
+      outline_section_id: body.outline_section_id,
+      // Kevin 2026-08-21 12:00 EDT fix: lineage from section memory to the
+      // generation output that produced it. The DELETE trigger on
+      // generation_outputs uses this to clean up orphaned memory.
+      generation_output_id: body.output_id ?? null,
+      embedding,
+      extracted_summary: sceneMemory.extracted_summary,
+      raw_text: body.raw_text,
+      container: body.container ?? null,
+      pov: body.pov ?? null,
+      character_deltas: sceneMemory.character_deltas,
+      plot_thread_deltas: enrichedPlotThreads,
+      continuity_facts: enrichedContinuityFacts,
+      open_loops: enrichedOpenLoops,
+      scene_ending_state: sceneMemory.scene_ending_state,
+    }, { onConflict: "outline_section_id" });
   if (upsertErr) {
-    console.error(`[embed-section] section_embeddings upsert failed: ${upsertErr.message}`);
+    console.error(
+      `[embed-section] section_embeddings upsert failed: ${upsertErr.message}`,
+    );
     return errorResponse("database_error", upsertErr.message, 500);
   }
-  console.log(`[embed-section] section_embeddings upserted section=${body.outline_section_id} threads=${enrichedPlotThreads.length} loops=${enrichedOpenLoops.length} facts=${enrichedContinuityFacts.length}`);
+  console.log(
+    `[embed-section] section_embeddings upserted section=${body.outline_section_id} threads=${enrichedPlotThreads.length} loops=${enrichedOpenLoops.length} facts=${enrichedContinuityFacts.length}`,
+  );
 
   return corsResponse(
     JSON.stringify({
@@ -558,6 +707,6 @@ ${body.raw_text}`
       extracted_summary: sceneMemory.extracted_summary,
       embedding_dim: embedding.length,
     }),
-    { status: 200 }
+    { status: 200 },
   );
 });

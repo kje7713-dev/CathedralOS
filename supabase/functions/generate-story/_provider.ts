@@ -179,9 +179,39 @@ export function extractResponsesFinishReason(
 // LLM interface types
 // ---------------------------------------------------------------------------
 
+/**
+ * PR-372: a single content block inside an LLMMessage — used for OpenAI
+ * explicit cache breakpoint markers (GPT-5.6+ Responses API only). Adding
+ * `prompt_cache_breakpoint: { mode: "explicit" }` to a block marks the END
+ * of a stable prefix that OpenAI should cache. Content after the last
+ * selected breakpoint is processed at uncached rates without a cache-write
+ * charge.
+ *
+ * Do NOT add Anthropic-style `cache_control: { type: "ephemeral" }`
+ * markers — OpenAI uses different field names. See PR-372 plan doc.
+ */
+export interface LLMContentBlock {
+  /** OpenAI content block type. "input_text" for Responses API,
+   *  "text" for Chat Completions API. The Responses API rejects "text"
+   *  and the Chat Completions API rejects "input_text". */
+  type: "input_text" | "text";
+  text: string;
+  /** PR-372: explicit cache breakpoint marker. Only valid in
+   *  `options.cacheMode === "explicit"`. */
+  prompt_cache_breakpoint?: { mode: "explicit" };
+}
+
+/** String for legacy callers; array of content blocks for explicit cache
+ *  breakpoint support. */
+export type LLMContent = string | LLMContentBlock[];
+
 export interface LLMMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
+  /** PR-372: added "developer" role (OpenAI Responses API stable content
+   *  per the GPT-5.6+ prompt caching docs). */
+  role: "system" | "developer" | "user" | "assistant";
+  /** String for legacy callers; array of content blocks for explicit
+   *  cache breakpoint support. */
+  content: LLMContent;
 }
 
 export interface LLMResponse {
@@ -191,6 +221,12 @@ export interface LLMResponse {
   inputTokens?: number;
   /** Cached input tokens (from OpenAI response.usage.prompt_tokens_details.cached_tokens). */
   cachedInputTokens?: number;
+  /** PR-372: cache-write input tokens (from
+   *  OpenAI response.usage.input_tokens_details.cache_write_tokens).
+   *  Some providers / older model versions don't report this; undefined
+   *  when absent. Used by the corrected provider COGS formula:
+   *  `ordinaryUncached = max(0, totalInput - cached - cacheWrite)`. */
+  cacheWriteInputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
   /** Additional tool / function-call cost in USD. 0 for most chat models. */
@@ -203,12 +239,34 @@ export interface LLMResponse {
  * it unset and uses the Responses API path. `temperature` is forwarded to
  * chat/completions when set; ignored by the Responses API (it controls its
  * own sampling).
+ *
+ * PR-372 additions: `cacheMode` + `promptCacheKey` enable OpenAI prompt
+ * caching per the GPT-5.6+ cache boundary spec.
+ *  - `cacheMode === "none"`     → no cache fields sent
+ *  - `cacheMode === "implicit"` → sends `prompt_cache_key` only (automatic
+ *                                 prefix matching). Default for most OpenAI
+ *                                 models; safe fallback when the model
+ *                                 doesn't support explicit mode.
+ *  - `cacheMode === "explicit"` → adds top-level
+ *                                 `prompt_cache_options: { mode: "explicit" }`
+ *                                 plus `prompt_cache_breakpoint: { mode: "explicit" }`
+ *                                 on the last stable content block.
+ *                                 Responses API only; chat/completions
+ *                                 downgrades to implicit (prompt_cache_key).
+ *                                 Do NOT enable on models that don't
+ *                                 support it (per PR-372 Kevin correction #2).
  */
 export interface LLMProviderOptions {
   /** OpenAI Structured Outputs json_schema payload. */
   responseFormat?: unknown;
   /** Sampling temperature (0-2). Only forwarded by the chat/completions path. */
   temperature?: number;
+  /** PR-372: cache capability for this request. */
+  cacheMode?: "none" | "implicit" | "explicit";
+  /** PR-372: stable cache key for grouping related requests. Generate-story
+   *  sets this to `cath:proj:${projectId}:v1` so cache entries are reachable
+   *  across Nth-of-project generations within the cache TTL window. */
+  promptCacheKey?: string;
 }
 
 export interface LLMProvider {
@@ -257,13 +315,53 @@ export class OpenAIProvider implements LLMProvider {
         options,
       );
     }
-    return await this.callResponses(messages, maxTokens, resolvedModel);
+    return await this.callResponses(
+      messages,
+      maxTokens,
+      resolvedModel,
+      options,
+    );
+  }
+
+  /**
+   * PR-372: build the Responses API request body. Adds `prompt_cache_key`
+   * and (in explicit mode) `prompt_cache_options: { mode: "explicit" }`
+   * per the OpenAI GPT-5.6+ cache boundary spec. Content-block-level
+   * `prompt_cache_breakpoint: { mode: "explicit" }` markers are added by
+   * the caller (buildPrompt / index.ts) on the LAST stable content block
+   * and pass through unchanged.
+   */
+  private buildResponsesBody(
+    resolvedModel: string,
+    messages: LLMMessage[],
+    maxTokens: number,
+    options?: LLMProviderOptions,
+  ): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      model: resolvedModel,
+      input: messages,
+      max_output_tokens: maxTokens,
+      store: false,
+    };
+    if (options?.promptCacheKey) {
+      body.prompt_cache_key = options.promptCacheKey;
+    }
+    if (options?.cacheMode === "explicit") {
+      // Top-level explicit-mode flag (OpenAI GPT-5.6+ Responses API).
+      body.prompt_cache_options = { mode: "explicit" };
+    }
+    // "implicit" cacheMode sends prompt_cache_key only (no top-level
+    // prompt_cache_options), which is OpenAI's automatic prefix matching
+    // behavior. We deliberately do NOT send any cache field when
+    // cacheMode === "none".
+    return body;
   }
 
   private async callResponses(
     messages: LLMMessage[],
     maxTokens: number,
     resolvedModel: string,
+    options?: LLMProviderOptions,
   ): Promise<LLMResponse> {
     const controller = new AbortController();
     const timer = setTimeout(
@@ -279,12 +377,17 @@ export class OpenAIProvider implements LLMProvider {
           "Content-Type": "application/json",
           Authorization: `Bearer ${this.apiKey}`,
         },
-        body: JSON.stringify({
-          model: resolvedModel,
-          input: messages,
-          max_output_tokens: maxTokens,
-          store: false,
-        }),
+        // PR-372: cache fields are additive — when the caller does NOT
+        // provide cacheMode / promptCacheKey, the request shape is
+        // byte-identical to the pre-PR-372 generate-story path (no cache
+        // fields sent). Preserves "no generation semantic changes" when
+        // callers don't opt in.
+        body: JSON.stringify(this.buildResponsesBody(
+          resolvedModel,
+          messages,
+          maxTokens,
+          options,
+        )),
         signal: controller.signal,
       });
     } catch (err) {
@@ -331,6 +434,12 @@ export class OpenAIProvider implements LLMProvider {
       finishReason: extractResponsesFinishReason(json),
       inputTokens: usage?.input_tokens as number | undefined,
       cachedInputTokens: inputTokenDetails?.cached_tokens as number | undefined,
+      // PR-372: extract cache_write_tokens. Some providers / older model
+      // versions don't report this; treat undefined as 0 in the runner via
+      // Math.max(0, ...) when reading.
+      cacheWriteInputTokens: inputTokenDetails?.cache_write_tokens as
+        | number
+        | undefined,
       outputTokens: usage?.output_tokens as number | undefined,
       totalTokens: usage?.total_tokens as number | undefined,
       toolCostUsd: 0,
@@ -361,6 +470,15 @@ export class OpenAIProvider implements LLMProvider {
     }
     if (typeof options.temperature === "number") {
       body.temperature = options.temperature;
+    }
+    // PR-372: chat/completions supports prompt_cache_key but NOT
+    // prompt_cache_options / prompt_cache_breakpoint (those are Responses
+    // API only). When the caller passes cacheMode === "explicit" through
+    // chat/completions, we downgrade to implicit by sending prompt_cache_key
+    // only. chat/completions callers should use cacheMode "implicit" or
+    // "none" to match their actual capability.
+    if (options.promptCacheKey) {
+      body.prompt_cache_key = options.promptCacheKey;
     }
 
     let resp: Response;
@@ -424,6 +542,11 @@ export class OpenAIProvider implements LLMProvider {
       cachedInputTokens: ((json.usage as Record<string, unknown> | undefined)
         ?.prompt_tokens_details as Record<string, unknown> | undefined)
         ?.cached_tokens as number | undefined,
+      // PR-372: cache_write_tokens from chat/completions usage.
+      cacheWriteInputTokens:
+        ((json.usage as Record<string, unknown> | undefined)
+          ?.prompt_tokens_details as Record<string, unknown> | undefined)
+          ?.cache_write_tokens as number | undefined,
       outputTokens: (json.usage as Record<string, unknown> | undefined)
         ?.completion_tokens as number | undefined,
       totalTokens: (json.usage as Record<string, unknown> | undefined)

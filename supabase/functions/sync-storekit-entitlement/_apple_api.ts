@@ -114,7 +114,9 @@ function base64url(input: string | Uint8Array): string {
  *
  * Ref: https://developer.apple.com/documentation/appstoreserverapi/generating_tokens_for_api_requests
  */
-export async function createAppleApiJWT(config: AppleApiConfig): Promise<string> {
+export async function createAppleApiJWT(
+  config: AppleApiConfig,
+): Promise<string> {
   const header = {
     alg: "ES256",
     kid: config.keyId,
@@ -148,7 +150,7 @@ export async function createAppleApiJWT(config: AppleApiConfig): Promise<string>
   } catch {
     throw new Error(
       "Failed to import APP_STORE_PRIVATE_KEY. " +
-      "Ensure it is a valid PKCS#8 PEM-encoded ES256 private key (the .p8 file from App Store Connect).",
+        "Ensure it is a valid PKCS#8 PEM-encoded ES256 private key (the .p8 file from App Store Connect).",
     );
   }
 
@@ -182,7 +184,9 @@ export async function verifyTransactionWithApple(
     ? "https://api.storekit-sandbox.itunes.apple.com"
     : "https://api.storekit.itunes.apple.com";
 
-  const url = `${baseUrl}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`;
+  const url = `${baseUrl}/inApps/v1/transactions/${
+    encodeURIComponent(transactionId)
+  }`;
 
   const response = await fetch(url, {
     headers: {

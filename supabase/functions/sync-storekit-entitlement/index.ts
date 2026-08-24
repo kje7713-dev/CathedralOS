@@ -41,17 +41,20 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
-  getProductGrant,
   type ConsumableGrant,
+  getProductGrant,
   type SubscriptionGrant,
 } from "./_product_map.ts";
 import {
-  decodeJWSPayload,
-  verifyTransactionWithApple,
-  loadAppleApiConfig,
   type AppleTransactionPayload,
+  decodeJWSPayload,
+  loadAppleApiConfig,
+  verifyTransactionWithApple,
 } from "./_apple_api.ts";
-import { FREE_TIER_MONTHLY_ALLOWANCE, type UserEntitlement } from "../generate-story/_credits.ts";
+import {
+  FREE_TIER_MONTHLY_ALLOWANCE,
+  type UserEntitlement,
+} from "../generate-story/_credits.ts";
 
 // ---------------------------------------------------------------------------
 // CORS
@@ -113,7 +116,9 @@ Deno.serve(async (req: Request) => {
   }
 
   if (req.method !== "POST") {
-    return corsResponse(JSON.stringify({ error: "Method not allowed" }), { status: 405 });
+    return corsResponse(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
+    });
   }
 
   const supabaseURL = Deno.env.get("SUPABASE_URL");
@@ -122,7 +127,10 @@ Deno.serve(async (req: Request) => {
   const adminSecret = Deno.env.get("ADMIN_SECRET");
 
   if (!supabaseURL || !supabaseAnonKey || !serviceRoleKey) {
-    return corsResponse(JSON.stringify({ error: "Server configuration error" }), { status: 500 });
+    return corsResponse(
+      JSON.stringify({ error: "Server configuration error" }),
+      { status: 500 },
+    );
   }
 
   // Parse body first so we know the mode before auth checks.
@@ -130,7 +138,9 @@ Deno.serve(async (req: Request) => {
   try {
     body = await req.json();
   } catch {
-    return corsResponse(JSON.stringify({ error: "Invalid JSON body" }), { status: 400 });
+    return corsResponse(JSON.stringify({ error: "Invalid JSON body" }), {
+      status: 400,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -142,7 +152,8 @@ Deno.serve(async (req: Request) => {
     const authHeader = req.headers.get("Authorization");
     const bearerToken = authHeader?.replace(/^Bearer\s+/i, "");
 
-    const isAdminSecretAuth = adminSecret && providedAdminSecret === adminSecret;
+    const isAdminSecretAuth = adminSecret &&
+      providedAdminSecret === adminSecret;
     const isServiceRoleAuth = bearerToken === serviceRoleKey;
 
     if (!isAdminSecretAuth && !isServiceRoleAuth) {
@@ -165,14 +176,18 @@ Deno.serve(async (req: Request) => {
 
   if (body.mode !== "validate_transaction") {
     return corsResponse(
-      JSON.stringify({ error: "Invalid mode. Use 'validate_transaction' or 'manual_grant'." }),
+      JSON.stringify({
+        error: "Invalid mode. Use 'validate_transaction' or 'manual_grant'.",
+      }),
       { status: 422 },
     );
   }
 
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) {
-    return corsResponse(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
+    return corsResponse(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+    });
   }
 
   // Verify the user's Supabase JWT.
@@ -182,7 +197,9 @@ Deno.serve(async (req: Request) => {
 
   const { data: { user }, error: authError } = await userClient.auth.getUser();
   if (authError || !user) {
-    return corsResponse(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
+    return corsResponse(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+    });
   }
 
   const adminClient = createClient(supabaseURL, serviceRoleKey);
@@ -212,7 +229,9 @@ async function handleValidateTransaction(
     } catch (e) {
       console.error("Failed to decode signedTransactionInfo:", e);
       return corsResponse(
-        JSON.stringify({ error: "Invalid signedTransactionInfo: could not decode JWS payload" }),
+        JSON.stringify({
+          error: "Invalid signedTransactionInfo: could not decode JWS payload",
+        }),
         { status: 422 },
       );
     }
@@ -225,7 +244,8 @@ async function handleValidateTransaction(
   if (!transactionId) {
     return corsResponse(
       JSON.stringify({
-        error: "Missing transaction identifier. Provide signedTransactionInfo or transactionId.",
+        error:
+          "Missing transaction identifier. Provide signedTransactionInfo or transactionId.",
       }),
       { status: 422 },
     );
@@ -259,13 +279,17 @@ async function handleValidateTransaction(
 
   if (appleConfig) {
     try {
-      applePayload = await verifyTransactionWithApple(transactionId, appleConfig);
+      applePayload = await verifyTransactionWithApple(
+        transactionId,
+        appleConfig,
+      );
     } catch (e) {
       console.error("Apple API verification failed:", e);
       return corsResponse(
         JSON.stringify({
           error: "Transaction verification failed",
-          detail: "Could not verify transaction with Apple's servers. Please try again.",
+          detail:
+            "Could not verify transaction with Apple's servers. Please try again.",
         }),
         { status: 402 },
       );
@@ -276,7 +300,7 @@ async function handleValidateTransaction(
     // APP_STORE_* secrets before production launch.
     console.warn(
       "APP_STORE_* secrets not configured. Falling back to unverified JWS decode. " +
-      "Configure secrets before production launch.",
+        "Configure secrets before production launch.",
     );
     if (!jwsPayload) {
       return corsResponse(
@@ -294,11 +318,19 @@ async function handleValidateTransaction(
   }
 
   // 4. Security: ensure the transaction belongs to the authenticated user's bundle.
-  const expectedBundleId = appleConfig?.bundleId ?? Deno.env.get("APP_STORE_BUNDLE_ID");
-  if (expectedBundleId && applePayload.bundleId && applePayload.bundleId !== expectedBundleId) {
-    console.error(`Bundle ID mismatch: expected ${expectedBundleId}, got ${applePayload.bundleId}`);
+  const expectedBundleId = appleConfig?.bundleId ??
+    Deno.env.get("APP_STORE_BUNDLE_ID");
+  if (
+    expectedBundleId && applePayload.bundleId &&
+    applePayload.bundleId !== expectedBundleId
+  ) {
+    console.error(
+      `Bundle ID mismatch: expected ${expectedBundleId}, got ${applePayload.bundleId}`,
+    );
     return corsResponse(
-      JSON.stringify({ error: "Transaction bundle ID does not match this app." }),
+      JSON.stringify({
+        error: "Transaction bundle ID does not match this app.",
+      }),
       { status: 403 },
     );
   }
@@ -329,8 +361,11 @@ async function handleValidateTransaction(
     );
   }
 
-  const environment = appleConfig ? appleConfig.environment : (applePayload.environment ?? "unknown");
-  const originalTransactionId = applePayload.originalTransactionId ?? body.originalTransactionId ?? transactionId;
+  const environment = appleConfig
+    ? appleConfig.environment
+    : (applePayload.environment ?? "unknown");
+  const originalTransactionId = applePayload.originalTransactionId ??
+    body.originalTransactionId ?? transactionId;
 
   // 7. Apply the grant.
   const updatedEntitlement = await applyGrant({
@@ -438,7 +473,8 @@ async function applyGrant(params: ApplyGrantParams): Promise<UserEntitlement> {
   } else {
     const pack = grant as ConsumableGrant;
     creditedAmount = pack.creditAmount;
-    const newPurchasedBalance = current.purchased_credit_balance + creditedAmount;
+    const newPurchasedBalance = current.purchased_credit_balance +
+      creditedAmount;
 
     upsertPayload = {
       user_id: userId,
@@ -502,7 +538,10 @@ async function applyGrant(params: ApplyGrantParams): Promise<UserEntitlement> {
       original_transaction_id: originalTransactionId,
       product_id: productId,
       environment,
-      type: applePayload.type ?? (grant!.type === "subscription" ? "Auto-Renewable Subscription" : "Consumable"),
+      type: applePayload.type ??
+        (grant!.type === "subscription"
+          ? "Auto-Renewable Subscription"
+          : "Consumable"),
       credited_amount: creditedAmount,
       raw_payload: signedTransactionInfo
         ? { signedTransactionInfo, decodedPayload: applePayload }
@@ -521,9 +560,14 @@ async function applyGrant(params: ApplyGrantParams): Promise<UserEntitlement> {
 // ---------------------------------------------------------------------------
 
 // deno-lint-ignore no-explicit-any
-async function handleManualGrant(body: ManualGrantRequest, adminClient: any): Promise<Response> {
+async function handleManualGrant(
+  body: ManualGrantRequest,
+  adminClient: any,
+): Promise<Response> {
   if (!body.userId) {
-    return corsResponse(JSON.stringify({ error: "userId is required" }), { status: 422 });
+    return corsResponse(JSON.stringify({ error: "userId is required" }), {
+      status: 422,
+    });
   }
 
   const { data: existing } = await adminClient
@@ -540,8 +584,8 @@ async function handleManualGrant(body: ManualGrantRequest, adminClient: any): Pr
     user_id: body.userId,
     plan_name: body.planName ?? existing?.plan_name ?? "free",
     is_pro: body.isPro ?? existing?.is_pro ?? false,
-    monthly_credit_allowance:
-      body.monthlyCreditAllowance ?? existing?.monthly_credit_allowance ?? FREE_TIER_MONTHLY_ALLOWANCE,
+    monthly_credit_allowance: body.monthlyCreditAllowance ??
+      existing?.monthly_credit_allowance ?? FREE_TIER_MONTHLY_ALLOWANCE,
     purchased_credit_balance: newPurchasedBalance,
     entitlement_source: "admin_adjustment",
     current_period_start: existing?.current_period_start ?? null,
@@ -556,7 +600,10 @@ async function handleManualGrant(body: ManualGrantRequest, adminClient: any): Pr
 
   if (upsertError) {
     console.error("user_entitlements upsert error:", upsertError);
-    return corsResponse(JSON.stringify({ error: "Failed to update entitlement" }), { status: 500 });
+    return corsResponse(
+      JSON.stringify({ error: "Failed to update entitlement" }),
+      { status: 500 },
+    );
   }
 
   if (creditDelta !== 0) {
@@ -585,7 +632,10 @@ async function handleManualGrant(body: ManualGrantRequest, adminClient: any): Pr
 // ---------------------------------------------------------------------------
 
 // deno-lint-ignore no-explicit-any
-async function loadCurrentEntitlement(userId: string, adminClient: any): Promise<UserEntitlement> {
+async function loadCurrentEntitlement(
+  userId: string,
+  adminClient: any,
+): Promise<UserEntitlement> {
   const { data, error } = await adminClient
     .from("user_entitlements")
     .select("*")
@@ -609,7 +659,9 @@ async function loadCurrentEntitlement(userId: string, adminClient: any): Promise
   return data as UserEntitlement;
 }
 
-function formatEntitlementResponse(e: UserEntitlement): Record<string, unknown> {
+function formatEntitlementResponse(
+  e: UserEntitlement,
+): Record<string, unknown> {
   return {
     planName: e.plan_name,
     isPro: e.is_pro,

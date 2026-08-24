@@ -95,7 +95,10 @@ Deno.serve(async (req: Request) => {
   const signedPayload = body?.signedPayload;
   if (typeof signedPayload !== "string" || !signedPayload) {
     return jsonResponse(
-      { error: "Missing signedPayload. This endpoint expects Apple App Store Server Notifications v2." },
+      {
+        error:
+          "Missing signedPayload. This endpoint expects Apple App Store Server Notifications v2.",
+      },
       400,
     );
   }
@@ -110,12 +113,19 @@ Deno.serve(async (req: Request) => {
   const subtype = envelope["subtype"] ?? null;
 
   // Log for observability (no secrets are logged).
-  console.log(`App Store Server Notification received: ${notificationType}${subtype ? "/" + subtype : ""}`);
+  console.log(
+    `App Store Server Notification received: ${notificationType}${
+      subtype ? "/" + subtype : ""
+    }`,
+  );
 
   // Extract transaction info if present for logging.
   let transactionId: string | null = null;
   const data = envelope["data"] as Record<string, unknown> | undefined;
-  if (data?.signedTransactionInfo && typeof data.signedTransactionInfo === "string") {
+  if (
+    data?.signedTransactionInfo &&
+    typeof data.signedTransactionInfo === "string"
+  ) {
     const txPayload = tryDecodeJWSPayload(data.signedTransactionInfo as string);
     transactionId = (txPayload?.["transactionId"] as string) ?? null;
     if (transactionId) {

@@ -10,7 +10,12 @@ const CORS_HEADERS: Record<string, string> = {
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const ALLOWED_ACTIONS = new Set(["generate", "regenerate", "continue", "remix"]);
+const ALLOWED_ACTIONS = new Set([
+  "generate",
+  "regenerate",
+  "continue",
+  "remix",
+]);
 const ALLOWED_LENGTH_MODES = new Set(["short", "medium", "long", "chapter"]);
 const ALLOWED_REPORT_REASONS = new Set([
   "inappropriate_content",
@@ -48,7 +53,11 @@ interface RemixRequestBody {
   createdAt?: string;
 }
 
-function jsonResponse(payload: unknown, status = 200, headers: Record<string, string> = {}): Response {
+function jsonResponse(
+  payload: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+): Response {
   return new Response(JSON.stringify(payload), {
     status,
     headers: {
@@ -95,9 +104,15 @@ function deriveAudienceFields(sourcePayloadJSON: unknown): {
 } {
   const payload = sourcePayloadJSON as Record<string, unknown> | null;
   const project = payload?.project as Record<string, unknown> | undefined;
-  const readingLevel = typeof project?.readingLevel === "string" ? project.readingLevel : null;
-  const contentRating = typeof project?.contentRating === "string" ? project.contentRating : null;
-  const audienceNotes = typeof project?.audienceNotes === "string" ? project.audienceNotes : null;
+  const readingLevel = typeof project?.readingLevel === "string"
+    ? project.readingLevel
+    : null;
+  const contentRating = typeof project?.contentRating === "string"
+    ? project.contentRating
+    : null;
+  const audienceNotes = typeof project?.audienceNotes === "string"
+    ? project.audienceNotes
+    : null;
   return { readingLevel, contentRating, audienceNotes };
 }
 
@@ -128,7 +143,10 @@ async function getAuthenticatedUserId(
   }
 }
 
-function buildShareURL(baseURL: string | null, sharedOutputID: string): string | null {
+function buildShareURL(
+  baseURL: string | null,
+  sharedOutputID: string,
+): string | null {
   if (!baseURL) return null;
   const trimmed = baseURL.trim().replace(/\/+$/, "");
   if (!trimmed) return null;
@@ -159,13 +177,21 @@ export async function handler(req: Request): Promise<Response> {
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!supabaseURL || !supabaseAnonKey || !serviceRoleKey) {
     return jsonResponse(
-      { status: "failed", errorCode: "backend_config_missing", error: "Server configuration error" },
+      {
+        status: "failed",
+        errorCode: "backend_config_missing",
+        error: "Server configuration error",
+      },
       500,
     );
   }
 
   const adminClient = createClient(supabaseURL, serviceRoleKey);
-  const authenticatedUserId = await getAuthenticatedUserId(req, supabaseURL, supabaseAnonKey);
+  const authenticatedUserId = await getAuthenticatedUserId(
+    req,
+    supabaseURL,
+    supabaseAnonKey,
+  );
   const routePath = routePathFromURL(req.url);
   const segments = routePath.split("/").filter(Boolean);
   const publicShareBaseURL = Deno.env.get("PUBLIC_SHARE_WEB_BASE_URL") ?? null;
@@ -187,11 +213,20 @@ export async function handler(req: Request): Promise<Response> {
 
     if (error) {
       console.error("[public-sharing] list shared outputs error:", error);
-      return jsonResponse({ status: "failed", error: "Could not load shared outputs" }, 500);
+      return jsonResponse({
+        status: "failed",
+        error: "Could not load shared outputs",
+      }, 500);
     }
 
     const rows = (data ?? []) as Array<Record<string, unknown>>;
-    const ownerIds = [...new Set(rows.map((row) => row.owner_user_id).filter((id): id is string => typeof id === "string"))];
+    const ownerIds = [
+      ...new Set(
+        rows.map((row) => row.owner_user_id).filter((id): id is string =>
+          typeof id === "string"
+        ),
+      ),
+    ];
     let displayNameByUserId = new Map<string, string>();
 
     if (ownerIds.length > 0) {
@@ -201,7 +236,9 @@ export async function handler(req: Request): Promise<Response> {
         .in("id", ownerIds);
       displayNameByUserId = new Map(
         ((profileRows ?? []) as Array<Record<string, unknown>>)
-          .filter((row) => typeof row.id === "string" && typeof row.display_name === "string")
+          .filter((row) =>
+            typeof row.id === "string" && typeof row.display_name === "string"
+          )
           .map((row) => [row.id as string, row.display_name as string]),
       );
     }
@@ -209,32 +246,56 @@ export async function handler(req: Request): Promise<Response> {
     const items = rows.map((row) => {
       const sourcePayload = row.source_payload_json as unknown;
       const audience = deriveAudienceFields(sourcePayload);
-      const ownerUserID = typeof row.owner_user_id === "string" ? row.owner_user_id : "";
+      const ownerUserID = typeof row.owner_user_id === "string"
+        ? row.owner_user_id
+        : "";
       return {
         sharedOutputID: String(row.id ?? ""),
         shareTitle: typeof row.share_title === "string" ? row.share_title : "",
-        shareExcerpt: typeof row.share_excerpt === "string" ? row.share_excerpt : "",
+        shareExcerpt: typeof row.share_excerpt === "string"
+          ? row.share_excerpt
+          : "",
         authorDisplayName: displayNameByUserId.get(ownerUserID) ?? null,
-        createdAt: typeof row.published_at === "string" ? row.published_at : asISOString(row.created_at),
+        createdAt: typeof row.published_at === "string"
+          ? row.published_at
+          : asISOString(row.created_at),
         allowRemix: Boolean(row.allow_remix),
-        generationLengthMode: typeof row.generation_length_mode === "string" ? row.generation_length_mode : null,
+        generationLengthMode: typeof row.generation_length_mode === "string"
+          ? row.generation_length_mode
+          : null,
         contentRating: audience.contentRating,
         readingLevel: audience.readingLevel,
-        coverImagePath: typeof row.cover_image_path === "string" ? row.cover_image_path : null,
-        coverImageURL: typeof row.cover_image_url === "string" ? row.cover_image_url : null,
-        coverImageWidth: typeof row.cover_image_width === "number" ? row.cover_image_width : null,
-        coverImageHeight: typeof row.cover_image_height === "number" ? row.cover_image_height : null,
-        coverImageContentType: typeof row.cover_image_content_type === "string" ? row.cover_image_content_type : null,
+        coverImagePath: typeof row.cover_image_path === "string"
+          ? row.cover_image_path
+          : null,
+        coverImageURL: typeof row.cover_image_url === "string"
+          ? row.cover_image_url
+          : null,
+        coverImageWidth: typeof row.cover_image_width === "number"
+          ? row.cover_image_width
+          : null,
+        coverImageHeight: typeof row.cover_image_height === "number"
+          ? row.cover_image_height
+          : null,
+        coverImageContentType: typeof row.cover_image_content_type === "string"
+          ? row.cover_image_content_type
+          : null,
       };
     });
 
     return jsonResponse({ items }, 200);
   }
 
-  if (req.method === "GET" && segments[0] === "shared-outputs" && segments.length === 2) {
+  if (
+    req.method === "GET" && segments[0] === "shared-outputs" &&
+    segments.length === 2
+  ) {
     const sharedOutputID = segments[1];
     if (!isUUID(sharedOutputID)) {
-      return jsonResponse({ status: "failed", error: "Invalid shared output ID" }, 400);
+      return jsonResponse({
+        status: "failed",
+        error: "Invalid shared output ID",
+      }, 400);
     }
 
     const { data, error } = await adminClient
@@ -245,23 +306,40 @@ export async function handler(req: Request): Promise<Response> {
 
     if (error) {
       console.error("[public-sharing] detail error:", error);
-      return jsonResponse({ status: "failed", error: "Could not load shared output" }, 500);
+      return jsonResponse({
+        status: "failed",
+        error: "Could not load shared output",
+      }, 500);
     }
     if (!data) {
-      return jsonResponse({ status: "failed", error: "Shared output not found" }, 404);
+      return jsonResponse({
+        status: "failed",
+        error: "Shared output not found",
+      }, 404);
     }
 
-    const ownerUserID = String((data as Record<string, unknown>).owner_user_id ?? "");
-    const visibility = String((data as Record<string, unknown>).visibility ?? "private");
+    const ownerUserID = String(
+      (data as Record<string, unknown>).owner_user_id ?? "",
+    );
+    const visibility = String(
+      (data as Record<string, unknown>).visibility ?? "private",
+    );
     const unpublishedAt = (data as Record<string, unknown>).unpublished_at;
-    const isPublicVisible = (visibility === "shared" || visibility === "unlisted") && !unpublishedAt;
+    const isPublicVisible =
+      (visibility === "shared" || visibility === "unlisted") && !unpublishedAt;
     const isOwner = authenticatedUserId === ownerUserID;
     if (!isPublicVisible && !isOwner) {
-      return jsonResponse({ status: "failed", error: "Shared output not found" }, 404);
+      return jsonResponse({
+        status: "failed",
+        error: "Shared output not found",
+      }, 404);
     }
 
     const { data: profileData } = ownerUserID
-      ? await adminClient.from("profiles").select("display_name").eq("id", ownerUserID).maybeSingle()
+      ? await adminClient.from("profiles").select("display_name").eq(
+        "id",
+        ownerUserID,
+      ).maybeSingle()
       : { data: null };
 
     const sourcePayload = (data as Record<string, unknown>).source_payload_json;
@@ -281,22 +359,27 @@ export async function handler(req: Request): Promise<Response> {
         outputText: typeof sharedOutputRecord.output_text === "string"
           ? sharedOutputRecord.output_text
           : "",
-        authorDisplayName: typeof (profileData as Record<string, unknown> | null)?.display_name === "string"
-          ? (profileData as Record<string, unknown>).display_name
-          : null,
+        authorDisplayName:
+          typeof (profileData as Record<string, unknown> | null)
+              ?.display_name === "string"
+            ? (profileData as Record<string, unknown>).display_name
+            : null,
         ownerUserID,
-        sourcePromptPackName: typeof sharedOutputRecord.source_prompt_pack_name === "string"
-          ? sharedOutputRecord.source_prompt_pack_name
-          : null,
+        sourcePromptPackName:
+          typeof sharedOutputRecord.source_prompt_pack_name === "string"
+            ? sharedOutputRecord.source_prompt_pack_name
+            : null,
         modelName: typeof sharedOutputRecord.model_name === "string"
           ? sharedOutputRecord.model_name
           : null,
-        generationAction: typeof sharedOutputRecord.generation_action === "string"
-          ? sharedOutputRecord.generation_action
-          : null,
-        generationLengthMode: typeof sharedOutputRecord.generation_length_mode === "string"
-          ? sharedOutputRecord.generation_length_mode
-          : null,
+        generationAction:
+          typeof sharedOutputRecord.generation_action === "string"
+            ? sharedOutputRecord.generation_action
+            : null,
+        generationLengthMode:
+          typeof sharedOutputRecord.generation_length_mode === "string"
+            ? sharedOutputRecord.generation_length_mode
+            : null,
         allowRemix,
         createdAt: asISOString(
           sharedOutputRecord.published_at ?? sharedOutputRecord.created_at,
@@ -305,22 +388,27 @@ export async function handler(req: Request): Promise<Response> {
         readingLevel: audience.readingLevel,
         contentRating: audience.contentRating,
         audienceNotes: audience.audienceNotes,
-        sourcePayloadJSON: allowRemix ? JSON.stringify(sourcePayload ?? {}) : null,
+        sourcePayloadJSON: allowRemix
+          ? JSON.stringify(sourcePayload ?? {})
+          : null,
         coverImagePath: typeof sharedOutputRecord.cover_image_path === "string"
           ? sharedOutputRecord.cover_image_path
           : null,
         coverImageURL: typeof sharedOutputRecord.cover_image_url === "string"
           ? sharedOutputRecord.cover_image_url
           : null,
-        coverImageWidth: typeof sharedOutputRecord.cover_image_width === "number"
-          ? sharedOutputRecord.cover_image_width
-          : null,
-        coverImageHeight: typeof sharedOutputRecord.cover_image_height === "number"
-          ? sharedOutputRecord.cover_image_height
-          : null,
-        coverImageContentType: typeof sharedOutputRecord.cover_image_content_type === "string"
-          ? sharedOutputRecord.cover_image_content_type
-          : null,
+        coverImageWidth:
+          typeof sharedOutputRecord.cover_image_width === "number"
+            ? sharedOutputRecord.cover_image_width
+            : null,
+        coverImageHeight:
+          typeof sharedOutputRecord.cover_image_height === "number"
+            ? sharedOutputRecord.cover_image_height
+            : null,
+        coverImageContentType:
+          typeof sharedOutputRecord.cover_image_content_type === "string"
+            ? sharedOutputRecord.cover_image_content_type
+            : null,
       },
       200,
     );
@@ -335,45 +423,85 @@ export async function handler(req: Request): Promise<Response> {
     try {
       body = await req.json() as PublishRequestBody;
     } catch {
-      return jsonResponse({ status: "failed", error: "Invalid JSON body" }, 400);
+      return jsonResponse(
+        { status: "failed", error: "Invalid JSON body" },
+        400,
+      );
     }
 
-    const outputText = typeof body.outputText === "string" ? body.outputText.trim() : "";
+    const outputText = typeof body.outputText === "string"
+      ? body.outputText.trim()
+      : "";
     if (!outputText) {
-      return jsonResponse({ status: "failed", error: "outputText must not be empty" }, 422);
+      return jsonResponse({
+        status: "failed",
+        error: "outputText must not be empty",
+      }, 422);
     }
 
-    const requestedSharedOutputID = normalizeOptionalString(body.sharedOutputID);
+    const requestedSharedOutputID = normalizeOptionalString(
+      body.sharedOutputID,
+    );
     if (body.sharedOutputID !== undefined && !requestedSharedOutputID) {
-      return jsonResponse({ status: "failed", error: "sharedOutputID must be a non-empty UUID" }, 422);
+      return jsonResponse({
+        status: "failed",
+        error: "sharedOutputID must be a non-empty UUID",
+      }, 422);
     }
     if (requestedSharedOutputID && !isUUID(requestedSharedOutputID)) {
-      return jsonResponse({ status: "failed", error: "sharedOutputID must be a UUID" }, 422);
+      return jsonResponse({
+        status: "failed",
+        error: "sharedOutputID must be a UUID",
+      }, 422);
     }
 
-    const cloudGenerationOutputID = normalizeOptionalString(body.cloudGenerationOutputID);
+    const cloudGenerationOutputID = normalizeOptionalString(
+      body.cloudGenerationOutputID,
+    );
     if (!cloudGenerationOutputID || !isUUID(cloudGenerationOutputID)) {
-      return jsonResponse({ status: "failed", error: "cloudGenerationOutputID must be a UUID" }, 422);
+      return jsonResponse({
+        status: "failed",
+        error: "cloudGenerationOutputID must be a UUID",
+      }, 422);
     }
     const generationOutputID = cloudGenerationOutputID;
 
-    const { data: generationOutput, error: generationLookupError } = await adminClient
-      .from("generation_outputs")
-      .select("id, user_id")
-      .eq("id", generationOutputID)
-      .maybeSingle();
+    const { data: generationOutput, error: generationLookupError } =
+      await adminClient
+        .from("generation_outputs")
+        .select("id, user_id")
+        .eq("id", generationOutputID)
+        .maybeSingle();
     if (generationLookupError) {
-      console.error("[public-sharing] generation ownership lookup error:", generationLookupError);
-      return jsonResponse({ status: "failed", error: "Could not validate generation output ownership" }, 500);
+      console.error(
+        "[public-sharing] generation ownership lookup error:",
+        generationLookupError,
+      );
+      return jsonResponse({
+        status: "failed",
+        error: "Could not validate generation output ownership",
+      }, 500);
     }
     if (!generationOutput) {
-      return jsonResponse({ status: "failed", error: "Generation output not found" }, 404);
+      return jsonResponse({
+        status: "failed",
+        error: "Generation output not found",
+      }, 404);
     }
-    if (String((generationOutput as Record<string, unknown>).user_id ?? "") !== userID) {
-      return jsonResponse({ status: "failed", error: "You do not own this generation output" }, 403);
+    if (
+      String((generationOutput as Record<string, unknown>).user_id ?? "") !==
+        userID
+    ) {
+      return jsonResponse({
+        status: "failed",
+        error: "You do not own this generation output",
+      }, 403);
     }
 
-    const { data: existingSharedOutput, error: existingSharedOutputLookupError } = requestedSharedOutputID
+    const {
+      data: existingSharedOutput,
+      error: existingSharedOutputLookupError,
+    } = requestedSharedOutputID
       ? await adminClient
         .from("shared_outputs")
         .select("id, owner_user_id")
@@ -381,69 +509,114 @@ export async function handler(req: Request): Promise<Response> {
         .maybeSingle()
       : { data: null, error: null };
     if (existingSharedOutputLookupError) {
-      console.error("[public-sharing] shared output lookup error:", existingSharedOutputLookupError);
-      return jsonResponse({ status: "failed", error: "Could not validate shared output ownership" }, 500);
+      console.error(
+        "[public-sharing] shared output lookup error:",
+        existingSharedOutputLookupError,
+      );
+      return jsonResponse({
+        status: "failed",
+        error: "Could not validate shared output ownership",
+      }, 500);
     }
     if (
       existingSharedOutput &&
-      String((existingSharedOutput as Record<string, unknown>).owner_user_id ?? "") !== userID
+      String(
+          (existingSharedOutput as Record<string, unknown>).owner_user_id ?? "",
+        ) !== userID
     ) {
-      return jsonResponse({ status: "failed", error: "You do not own this shared output" }, 403);
+      return jsonResponse({
+        status: "failed",
+        error: "You do not own this shared output",
+      }, 403);
     }
 
     const coverImagePath = normalizeOptionalString(body.coverImagePath);
     const coverImageURL = normalizeOptionalString(body.coverImageURL);
     const rawCoverImageWidth = body.coverImageWidth;
     const rawCoverImageHeight = body.coverImageHeight;
-    const coverImageWidth = typeof rawCoverImageWidth === "number" && Number.isInteger(rawCoverImageWidth) &&
+    const coverImageWidth = typeof rawCoverImageWidth === "number" &&
+        Number.isInteger(rawCoverImageWidth) &&
         rawCoverImageWidth > 0
       ? rawCoverImageWidth
       : null;
-    const coverImageHeight = typeof rawCoverImageHeight === "number" && Number.isInteger(rawCoverImageHeight) &&
+    const coverImageHeight = typeof rawCoverImageHeight === "number" &&
+        Number.isInteger(rawCoverImageHeight) &&
         rawCoverImageHeight > 0
       ? rawCoverImageHeight
       : null;
-    const coverImageContentType = normalizeOptionalString(body.coverImageContentType);
-    const hasAnyCoverField = body.coverImagePath !== undefined || body.coverImageURL !== undefined ||
-      body.coverImageWidth !== undefined || body.coverImageHeight !== undefined ||
+    const coverImageContentType = normalizeOptionalString(
+      body.coverImageContentType,
+    );
+    const hasAnyCoverField = body.coverImagePath !== undefined ||
+      body.coverImageURL !== undefined ||
+      body.coverImageWidth !== undefined ||
+      body.coverImageHeight !== undefined ||
       body.coverImageContentType !== undefined;
     if (rawCoverImageWidth !== undefined && coverImageWidth === null) {
-      return jsonResponse({ status: "failed", error: "coverImageWidth must be a positive integer" }, 422);
+      return jsonResponse({
+        status: "failed",
+        error: "coverImageWidth must be a positive integer",
+      }, 422);
     }
     if (rawCoverImageHeight !== undefined && coverImageHeight === null) {
-      return jsonResponse({ status: "failed", error: "coverImageHeight must be a positive integer" }, 422);
+      return jsonResponse({
+        status: "failed",
+        error: "coverImageHeight must be a positive integer",
+      }, 422);
     }
     if (
       hasAnyCoverField &&
-      (!coverImagePath || !coverImageURL || !coverImageWidth || !coverImageHeight || !coverImageContentType)
+      (!coverImagePath || !coverImageURL || !coverImageWidth ||
+        !coverImageHeight || !coverImageContentType)
     ) {
       return jsonResponse(
-        { status: "failed", error: "cover image metadata must include path, URL, width, height, and content type" },
+        {
+          status: "failed",
+          error:
+            "cover image metadata must include path, URL, width, height, and content type",
+        },
         422,
       );
     }
     if (coverImageContentType && !coverImageContentType.startsWith("image/")) {
-      return jsonResponse({ status: "failed", error: "coverImageContentType must be an image MIME type" }, 422);
+      return jsonResponse({
+        status: "failed",
+        error: "coverImageContentType must be an image MIME type",
+      }, 422);
     }
     if (hasAnyCoverField) {
       if (!requestedSharedOutputID) {
-        return jsonResponse({ status: "failed", error: "sharedOutputID is required when cover image metadata is provided" }, 422);
+        return jsonResponse({
+          status: "failed",
+          error:
+            "sharedOutputID is required when cover image metadata is provided",
+        }, 422);
       }
       const expectedCoverPrefix = `${userID}/${requestedSharedOutputID}/`;
       if (!coverImagePath?.startsWith(expectedCoverPrefix)) {
         return jsonResponse(
-          { status: "failed", error: "coverImagePath must match user and shared output ownership path" },
+          {
+            status: "failed",
+            error:
+              "coverImagePath must match user and shared output ownership path",
+          },
           422,
         );
       }
       if (coverImagePath.includes("..")) {
-        return jsonResponse({ status: "failed", error: "coverImagePath contains invalid path traversal segments" }, 422);
+        return jsonResponse({
+          status: "failed",
+          error: "coverImagePath contains invalid path traversal segments",
+        }, 422);
       }
       const normalizedSupabaseURL = supabaseURL.trim().replace(/\/+$/, "");
       const expectedCoverImageURL =
         `${normalizedSupabaseURL}/storage/v1/object/public/shared-output-images/${coverImagePath}`;
       if (coverImageURL !== expectedCoverImageURL) {
-        return jsonResponse({ status: "failed", error: "coverImageURL does not match expected public storage URL" }, 422);
+        return jsonResponse({
+          status: "failed",
+          error: "coverImageURL does not match expected public storage URL",
+        }, 422);
       }
     }
 
@@ -452,19 +625,26 @@ export async function handler(req: Request): Promise<Response> {
     const generationAction = ALLOWED_ACTIONS.has(String(body.generationAction))
       ? String(body.generationAction)
       : "generate";
-    const generationLengthMode = ALLOWED_LENGTH_MODES.has(String(body.generationLengthMode))
-      ? String(body.generationLengthMode)
-      : "medium";
+    const generationLengthMode =
+      ALLOWED_LENGTH_MODES.has(String(body.generationLengthMode))
+        ? String(body.generationLengthMode)
+        : "medium";
 
     const sharedOutputWritePayload = {
       owner_user_id: userID,
       generation_output_id: generationOutputID,
-      share_title: typeof body.shareTitle === "string" ? body.shareTitle.trim() : "",
-      share_excerpt: typeof body.shareExcerpt === "string" ? body.shareExcerpt.trim() : "",
+      share_title: typeof body.shareTitle === "string"
+        ? body.shareTitle.trim()
+        : "",
+      share_excerpt: typeof body.shareExcerpt === "string"
+        ? body.shareExcerpt.trim()
+        : "",
       allow_remix: Boolean(body.allowRemix),
       output_text: outputText,
       source_payload_json: sourcePayloadJSON,
-      source_prompt_pack_name: typeof body.sourcePromptPackName === "string" ? body.sourcePromptPackName : "",
+      source_prompt_pack_name: typeof body.sourcePromptPackName === "string"
+        ? body.sourcePromptPackName
+        : "",
       model_name: typeof body.modelName === "string" ? body.modelName : "",
       generation_action: generationAction,
       generation_length_mode: generationLengthMode,
@@ -497,7 +677,10 @@ export async function handler(req: Request): Promise<Response> {
 
     if (error || !data) {
       console.error("[public-sharing] publish error:", error);
-      return jsonResponse({ status: "failed", error: "Could not publish shared output" }, 500);
+      return jsonResponse({
+        status: "failed",
+        error: "Could not publish shared output",
+      }, 500);
     }
 
     const sharedOutputID = String((data as Record<string, unknown>).id);
@@ -505,20 +688,29 @@ export async function handler(req: Request): Promise<Response> {
       {
         sharedOutputID,
         shareURL: buildShareURL(publicShareBaseURL, sharedOutputID),
-        visibility: String((data as Record<string, unknown>).visibility ?? "shared"),
-        publishedAt: (data as Record<string, unknown>).published_at ?? new Date().toISOString(),
+        visibility: String(
+          (data as Record<string, unknown>).visibility ?? "shared",
+        ),
+        publishedAt: (data as Record<string, unknown>).published_at ??
+          new Date().toISOString(),
       },
       200,
     );
   }
 
-  if (req.method === "DELETE" && segments[0] === "shared-outputs" && segments.length === 2) {
+  if (
+    req.method === "DELETE" && segments[0] === "shared-outputs" &&
+    segments.length === 2
+  ) {
     const userIDOrError = requireUser();
     if (userIDOrError instanceof Response) return userIDOrError;
     const userID = userIDOrError;
     const sharedOutputID = segments[1];
     if (!isUUID(sharedOutputID)) {
-      return jsonResponse({ status: "failed", error: "Invalid shared output ID" }, 400);
+      return jsonResponse({
+        status: "failed",
+        error: "Invalid shared output ID",
+      }, 400);
     }
 
     const { data, error } = await adminClient
@@ -535,17 +727,24 @@ export async function handler(req: Request): Promise<Response> {
 
     if (error) {
       console.error("[public-sharing] unpublish error:", error);
-      return jsonResponse({ status: "failed", error: "Could not unpublish shared output" }, 500);
+      return jsonResponse({
+        status: "failed",
+        error: "Could not unpublish shared output",
+      }, 500);
     }
     if (!data) {
-      return jsonResponse({ status: "failed", error: "Shared output not found" }, 404);
+      return jsonResponse({
+        status: "failed",
+        error: "Shared output not found",
+      }, 404);
     }
 
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
   if (
-    req.method === "POST" && segments[0] === "shared-outputs" && segments.length === 3 &&
+    req.method === "POST" && segments[0] === "shared-outputs" &&
+    segments.length === 3 &&
     segments[2] === "reports"
   ) {
     const userIDOrError = requireUser();
@@ -553,19 +752,28 @@ export async function handler(req: Request): Promise<Response> {
     const userID = userIDOrError;
     const sharedOutputID = segments[1];
     if (!isUUID(sharedOutputID)) {
-      return jsonResponse({ status: "failed", error: "Invalid shared output ID" }, 400);
+      return jsonResponse({
+        status: "failed",
+        error: "Invalid shared output ID",
+      }, 400);
     }
 
     let body: Record<string, unknown>;
     try {
       body = await req.json() as Record<string, unknown>;
     } catch {
-      return jsonResponse({ status: "failed", error: "Invalid JSON body" }, 400);
+      return jsonResponse(
+        { status: "failed", error: "Invalid JSON body" },
+        400,
+      );
     }
 
     const reason = typeof body.reason === "string" ? body.reason : "";
     if (!ALLOWED_REPORT_REASONS.has(reason)) {
-      return jsonResponse({ status: "failed", error: "Invalid report reason" }, 422);
+      return jsonResponse(
+        { status: "failed", error: "Invalid report reason" },
+        422,
+      );
     }
 
     const { data: target, error: lookupError } = await adminClient
@@ -576,10 +784,16 @@ export async function handler(req: Request): Promise<Response> {
       .is("unpublished_at", null)
       .maybeSingle();
     if (lookupError) {
-      return jsonResponse({ status: "failed", error: "Could not validate shared output" }, 500);
+      return jsonResponse({
+        status: "failed",
+        error: "Could not validate shared output",
+      }, 500);
     }
     if (!target) {
-      return jsonResponse({ status: "failed", error: "Shared output not found" }, 404);
+      return jsonResponse({
+        status: "failed",
+        error: "Shared output not found",
+      }, 404);
     }
 
     const { error } = await adminClient.from("shared_output_reports").insert({
@@ -591,7 +805,10 @@ export async function handler(req: Request): Promise<Response> {
 
     if (error) {
       console.error("[public-sharing] report insert error:", error);
-      return jsonResponse({ status: "failed", error: "Could not submit report" }, 500);
+      return jsonResponse({
+        status: "failed",
+        error: "Could not submit report",
+      }, 500);
     }
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
@@ -605,11 +822,17 @@ export async function handler(req: Request): Promise<Response> {
     try {
       body = await req.json() as RemixRequestBody;
     } catch {
-      return jsonResponse({ status: "failed", error: "Invalid JSON body" }, 400);
+      return jsonResponse(
+        { status: "failed", error: "Invalid JSON body" },
+        400,
+      );
     }
 
     if (!isUUID(body.sharedOutputID)) {
-      return jsonResponse({ status: "failed", error: "Invalid sharedOutputID" }, 422);
+      return jsonResponse(
+        { status: "failed", error: "Invalid sharedOutputID" },
+        422,
+      );
     }
 
     const createdProjectLocalID = typeof body.createdProjectLocalID === "string"
@@ -618,7 +841,10 @@ export async function handler(req: Request): Promise<Response> {
 
     const createdAt = body.createdAt ? new Date(body.createdAt) : new Date();
     if (Number.isNaN(createdAt.getTime())) {
-      return jsonResponse({ status: "failed", error: "Invalid createdAt timestamp" }, 422);
+      return jsonResponse({
+        status: "failed",
+        error: "Invalid createdAt timestamp",
+      }, 422);
     }
 
     const { error } = await adminClient.from("remix_events").insert({
@@ -631,7 +857,10 @@ export async function handler(req: Request): Promise<Response> {
 
     if (error) {
       console.error("[public-sharing] remix event insert error:", error);
-      return jsonResponse({ status: "failed", error: "Could not record remix event" }, 500);
+      return jsonResponse({
+        status: "failed",
+        error: "Could not record remix event",
+      }, 500);
     }
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }

@@ -88,6 +88,14 @@ const FALLBACK_MODEL: GenerationModel = {
   minimum_charge_credits: 1,
   max_output_tokens: null,
   enabled: true,
+  // PR-372: cache-write rate (1.25× input standard; coherence-check
+  // doesn't actually hit cache in production, but the snapshot is
+  // populated for billing-correctness when cacheWrite tokens appear).
+  provider_cache_write_usd_per_1m: 0,
+  // PR-372: coherence-check uses chat/completions which doesn't support
+  // explicit cache mode. Default to "implicit" so prompt_cache_key is
+  // sent (cache writes / reads never materialize here, so this is safe).
+  cacheMode: "implicit",
   sort_order: 0,
   billing_multiplier: 2.0,
   provider_input_usd_per_1m: 0.40,

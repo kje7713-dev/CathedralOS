@@ -1,4 +1,7 @@
-import { assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertExists,
+} from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   buildGenerateStoryRequest,
   generationOutputId,
@@ -11,19 +14,35 @@ const snapshot = {
   setting: { summary: "Old house" },
   characters: [{ id: "character-1", name: "Ada" }],
   storySparks: [{ id: "spark-1", title: "A letter" }],
-  aftertastes: [], relationships: [], themeQuestions: [], motifs: [],
+  aftertastes: [],
+  relationships: [],
+  themeQuestions: [],
+  motifs: [],
   promptPacks: [{
-    id: "pack-1", name: "Recipe", includeProjectSetting: true,
-    selectedCharacterIDs: ["character-1"], selectedStorySparkID: "spark-1",
-    selectedRelationshipIDs: [], selectedThemeQuestionIDs: [], selectedMotifIDs: [],
+    id: "pack-1",
+    name: "Recipe",
+    includeProjectSetting: true,
+    selectedCharacterIDs: ["character-1"],
+    selectedStorySparkID: "spark-1",
+    selectedRelationshipIDs: [],
+    selectedThemeQuestionIDs: [],
+    selectedMotifIDs: [],
   }],
 };
 
 Deno.test("maps a snapshot and section to generate-story's canonical request", () => {
   const request = buildGenerateStoryRequest({
     snapshot,
-    section: { title: "Arrival", summary: "Ada enters.", container: "scene", pov: "firstPerson", terminal_beat: "The door locks." },
-    projectId: "project-1", selectedModelId: "model-1", lengthMode: "long",
+    section: {
+      title: "Arrival",
+      summary: "Ada enters.",
+      container: "scene",
+      pov: "firstPerson",
+      terminal_beat: "The door locks.",
+    },
+    projectId: "project-1",
+    selectedModelId: "model-1",
+    lengthMode: "long",
   });
   assertEquals(request.generationAction, "generate");
   assertEquals(request.generationLengthMode, "long");
@@ -40,7 +59,10 @@ Deno.test("maps a snapshot and section to generate-story's canonical request", (
 });
 
 Deno.test("uses cloudGenerationOutputID as the output handoff", () => {
-  assertEquals(generationOutputId({ cloudGenerationOutputID: "output-1" }), "output-1");
+  assertEquals(
+    generationOutputId({ cloudGenerationOutputID: "output-1" }),
+    "output-1",
+  );
   assertEquals(generationOutputId({ output_id: "legacy" }), "");
 });
 

@@ -1,6 +1,8 @@
 # outline-from-recipe — Test Cases
 
-Phase 2 of novel-building per `docs/novel-building.md`. Takes a recipe (PromptPack-shaped) + arc template (StoryArcTemplate-shaped) and returns 5-15 suggested `OutlineSection` payloads.
+Phase 2 of novel-building per `docs/novel-building.md`. Takes a recipe
+(PromptPack-shaped) + arc template (StoryArcTemplate-shaped) and returns 5-15
+suggested `OutlineSection` payloads.
 
 ## Sample Request
 
@@ -25,7 +27,11 @@ Phase 2 of novel-building per `docs/novel-building.md`. Takes a recipe (PromptPa
       "note": "The cost of suspicion"
     },
     "themes": [
-      { "id": "t_1", "question": "Are bad people capable of good things?", "coreTension": "Trust vs suspicion" }
+      {
+        "id": "t_1",
+        "question": "Are bad people capable of good things?",
+        "coreTension": "Trust vs suspicion"
+      }
     ],
     "motifs": [
       { "id": "m_1", "label": "Skull in the smoke" }
@@ -37,12 +43,42 @@ Phase 2 of novel-building per `docs/novel-building.md`. Takes a recipe (PromptPa
     "name": "Three-Act",
     "description": "Classic three-act structure",
     "beats": [
-      { "id": "beat_1", "role": "setup", "label": "Setup", "description": "Establish the world and characters" },
-      { "id": "beat_2", "role": "inciting_incident", "label": "Inciting Incident", "description": "The signal reactivates" },
-      { "id": "beat_3", "role": "first_plot_point", "label": "First Plot Point", "description": "Fred discovers the truth" },
-      { "id": "beat_4", "role": "midpoint", "label": "Midpoint", "description": "The signal responds to Fred" },
-      { "id": "beat_5", "role": "climax", "label": "Climax", "description": "Fred confronts Ted" },
-      { "id": "beat_6", "role": "resolution", "label": "Resolution", "description": "The truth is buried" }
+      {
+        "id": "beat_1",
+        "role": "setup",
+        "label": "Setup",
+        "description": "Establish the world and characters"
+      },
+      {
+        "id": "beat_2",
+        "role": "inciting_incident",
+        "label": "Inciting Incident",
+        "description": "The signal reactivates"
+      },
+      {
+        "id": "beat_3",
+        "role": "first_plot_point",
+        "label": "First Plot Point",
+        "description": "Fred discovers the truth"
+      },
+      {
+        "id": "beat_4",
+        "role": "midpoint",
+        "label": "Midpoint",
+        "description": "The signal responds to Fred"
+      },
+      {
+        "id": "beat_5",
+        "role": "climax",
+        "label": "Climax",
+        "description": "Fred confronts Ted"
+      },
+      {
+        "id": "beat_6",
+        "role": "resolution",
+        "label": "Resolution",
+        "description": "The truth is buried"
+      }
     ]
   },
   "hint": "Lean into cold-war paranoia"
@@ -109,36 +145,48 @@ Phase 2 of novel-building per `docs/novel-building.md`. Takes a recipe (PromptPa
 ## Test Scenarios
 
 ### Success: 5-15 suggestions returned
+
 - Input: valid recipe + arc template with 6+ beats
 - Expected: `200`, returns 5-15 valid suggestions
 
 ### Failure: empty arc beats
+
 - Input: `arcTemplate.beats = []`
-- Expected: `400 invalid_request` "arcTemplate.id and non-empty arcTemplate.beats required"
+- Expected: `400 invalid_request` "arcTemplate.id and non-empty
+  arcTemplate.beats required"
 
 ### Failure: missing recipe
+
 - Input: `{ "arcTemplate": { ... } }` (no `recipe`)
 - Expected: `400 invalid_request` "recipe.id and recipe.name required"
 
 ### Failure: unauthorized
+
 - Input: missing `Authorization` header
 - Expected: `401 not_authenticated`
 
 ### Failure: rate limited
+
 - Input: 6+ requests in 60 seconds
 - Expected: `429 rate_limited` with `Retry-After` header
 
 ### Failure: invalid LLM response (drift)
+
 - Input: forced mock to return malformed JSON
-- Expected: `502 invalid_response`; invalid suggestions dropped, `warnings` returned
+- Expected: `502 invalid_response`; invalid suggestions dropped, `warnings`
+  returned
 
 ### Failure: server key missing
+
 - Server-side: `OPENAI_API_KEY` not set
 - Expected: `500 not_configured`
 
 ### Partial: beat not referenced
-- Input: arc template with 6 beats, model returns 5 suggestions referencing only 4 beats
-- Expected: `200` with suggestions + `warnings: ["no suggestion references beat beat_5"]`
+
+- Input: arc template with 6 beats, model returns 5 suggestions referencing only
+  4 beats
+- Expected: `200` with suggestions +
+  `warnings: ["no suggestion references beat beat_5"]`
 
 ## Curl Example
 

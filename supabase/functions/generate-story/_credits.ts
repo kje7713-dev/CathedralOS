@@ -25,7 +25,12 @@
 //      received no output.
 // =============================================================================
 
-export const ALLOWED_LENGTH_MODES = ["short", "medium", "long", "chapter"] as const;
+export const ALLOWED_LENGTH_MODES = [
+  "short",
+  "medium",
+  "long",
+  "chapter",
+] as const;
 export type LengthMode = typeof ALLOWED_LENGTH_MODES[number];
 
 // ---------------------------------------------------------------------------
@@ -34,9 +39,9 @@ export type LengthMode = typeof ALLOWED_LENGTH_MODES[number];
 // ---------------------------------------------------------------------------
 
 export const CREDIT_COST: Record<LengthMode, number> = {
-  short:   1,
-  medium:  2,
-  long:    4,
+  short: 1,
+  medium: 2,
+  long: 4,
   chapter: 8,
 };
 
@@ -87,7 +92,7 @@ export function checkCredits(
 ): CreditCheckResult {
   const avail = availableCredits(entitlement);
   return avail >= cost
-    ? { allowed: true,  requiredCredits: cost, availableCredits: avail }
+    ? { allowed: true, requiredCredits: cost, availableCredits: avail }
     : { allowed: false, requiredCredits: cost, availableCredits: avail };
 }
 
@@ -217,7 +222,10 @@ export class SupabaseCreditStore implements CreditStore {
     entitlement: UserEntitlement,
     relatedOutputId: string | null,
   ): Promise<UserEntitlement> {
-    const { newMonthlyAllowance, newPurchasedBalance } = computeCharge(entitlement, cost);
+    const { newMonthlyAllowance, newPurchasedBalance } = computeCharge(
+      entitlement,
+      cost,
+    );
 
     // Update entitlement balance.
     const { error: updateError } = await this.db

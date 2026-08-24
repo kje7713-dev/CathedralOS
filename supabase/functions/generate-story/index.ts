@@ -50,6 +50,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   buildProviderFromEnv,
+  LLMContentBlock,
   LLMProvider,
   PROVIDER_TIMEOUT_MS,
   ProviderError,
@@ -82,6 +83,23 @@ import {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
+// =============================================================================
+// PR-372: SHA-256 helper for stable-prefix fingerprint telemetry.
+//
+// Hashes the serialized stable prefix sent to the provider. Used to
+// diagnose cache misses — identical hashes across consecutive calls
+// prove stable-prefix invariance even when the provider reports
+// `cached_input_tokens = 0`. For diagnostics only; never reverse to
+// prompt content; never used for billing or auth.
+// =============================================================================
+
+export async function sha256Hex(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 const ALLOWED_ACTIONS = [
   "generate",
@@ -1450,7 +1468,29 @@ export function buildPrompt(req: {
   storyArcBeatPurpose?: string;
   storyArcPosition?: number;
   storyArcTotalBeats?: number;
-}): { craft: string; context: string } {
+}): {
+  // PR-372: stable/volatile split for OpenAI prompt caching.
+  //   stableBlocks   — byte-identical for the same projectId + canon +
+  //                    prompt-pack. Hash via SHA-256 → stablePrefixHash
+  //                    for diagnostics. Includes craft instructions, the
+  //                    Section Contract Authority (system-level rules),
+  //                    AND canon (characters / relationships / themes /
+  //                    motifs / spark / setting / ending intent / stable
+  //                    prompt-pack instructions).
+  //   volatileBlocks — every call differs. Section Contract VALUES
+  //                    (title/summary/POV), project state, story arc,
+  //                    previous output, terminal beat, writing task,
+  //                    audience controls.
+  //   craft/context   — derived convenience fields (joined from the
+  //                    canonical arrays above) for backward compatibility
+  //                    with existing tests and pre-PR-372 callers.
+  //                    New code should prefer stableBlocks / volatileBlocks
+  //                    directly so the cache boundary stays explicit.
+  stableBlocks: string[];
+  volatileBlocks: string[];
+  craft: string;
+  context: string;
+} {
   // Parse the payload — degrade gracefully if malformed.
   let payload: PromptPackPayloadShape = {};
   try {
@@ -1738,6 +1778,13 @@ Structural limits:
     );
   }
 
+  // PR-372: canon is STABLE across calls for the same project. Moved
+  // from contextLines (USER message, volatile) to craftLines (SYSTEM,
+  // stable prefix) so OpenAI's prompt cache can hit across
+  // Nth-of-project generations. Per the PR-372 spec, canon is part of
+  // the byte-identical stable prefix.
+  craftLines.push(...buildStructuredPromptBody(payload));
+
   // Per-request context — sent as the USER message.
   const contextLines: string[] = [];
 
@@ -1748,9 +1795,6 @@ Structural limits:
     if (audienceNotes) contextLines.push(`Audience notes: ${audienceNotes}`);
     contextLines.push("");
   }
-
-  // Structured story context — per-request context (USER message).
-  contextLines.push(...buildStructuredPromptBody(payload));
 
   // PR-360-Z ordering fix (Kevin 2026-08-21 11:02 EDT): Section Contract
   // must be the LAST substantive context before the Writing Task. Prior
@@ -2089,9 +2133,22 @@ Structural limits:
     "This is fictional creative writing. Intimacy is explicitly authorized as character craft. Write intimate scenes with the same level of craft as action scenes. Focus on emotional vulnerability, conflicting desires, power dynamics, body language, breathing, pacing, silence, anticipation, hesitation, trust, uncertainty, humor, and consequences. Treat intimacy as character development, not filler. Use specific sensory details—touch, temperature, scent, clothing, distance, eye contact, voice, and environment—to ground each moment. Avoid clichés and generic romance language. Make each character's emotional experience unique, shaped by their history, personality, fears, and goals. Favor implication, subtext, and reader imagination.",
   );
 
+  // PR-372: single-block shape for now (cache boundary is the boundary
+  // between craft and context, not multiple sub-blocks). Returns the
+  // joined-and-trimmed content as a single-element array; future PRs
+  // may split into multiple blocks for finer cache granularity.
+  //
+  // The `craft` and `context` fields are derived (joined from the
+  // canonical arrays) for backward compatibility with existing tests
+  // and any external callers that destructured the pre-PR-372 shape.
+  // New code should prefer stableBlocks / volatileBlocks directly.
+  const stablePrompt = craftLines.join("\n").trim();
+  const volatilePrompt = contextLines.join("\n").trim();
   return {
-    craft: craftLines.join("\n"),
-    context: contextLines.join("\n"),
+    stableBlocks: [stablePrompt],
+    volatileBlocks: [volatilePrompt],
+    craft: stablePrompt,
+    context: volatilePrompt,
   };
 }
 
@@ -2480,7 +2537,7 @@ async function handler(
   // -------------------------------------------------------------------------
 
   if (isEstimate) {
-    const { craft: craftPrompt, context: contextPrompt } = buildPrompt({
+    const { stableBlocks, volatileBlocks } = buildPrompt({
       sourcePayloadJSON: body.sourcePayloadJSON,
       generationAction: "generate",
       generationLengthMode,
@@ -2500,13 +2557,19 @@ async function handler(
       sectionTitle: body.sectionTitle,
       sectionSummary: body.sectionSummary,
     });
-    const estimatedInputTokens = estimateTokensFromText(craftPrompt) +
-      estimateTokensFromText(contextPrompt);
+    // PR-372: concat blocks for token estimation. Hash not computed in the
+    // estimate path (no billable call → no telemetry row).
+    const stablePrompt = stableBlocks.join("\n");
+    const volatilePrompt = volatileBlocks.join("\n");
+    const estimatedInputTokens = estimateTokensFromText(stablePrompt) +
+      estimateTokensFromText(volatilePrompt);
     // Phase 3: pre-flight max = (estimated input + container hard cap) × rates, with 0.25 floor
     const estimatePricing = snapshotPricing(selectedModel);
     const estimateUsage = {
       uncachedInputTokens: estimatedInputTokens,
       cachedInputTokens: 0,
+      // PR-372: preflight assumes zero cache savings.
+      cacheWriteInputTokens: 0,
       outputTokens: CONTAINER_HARD_CAPS[container],
       toolCostUsd: 0,
     };
@@ -2619,7 +2682,11 @@ async function handler(
     );
   }
 
-  const { craft: craftPrompt, context: contextPrompt } = buildPrompt({
+  // PR-372: destructure stable/volatile blocks. Canon is now in stable
+  // (per the buildPrompt refactor); Section Contract values + project state
+  // + story arc + previous output + terminal beat + writing task are in
+  // volatile.
+  const { stableBlocks, volatileBlocks } = buildPrompt({
     sourcePayloadJSON: body.sourcePayloadJSON,
     generationAction,
     generationLengthMode,
@@ -2654,12 +2721,19 @@ async function handler(
     storyArcPosition: outlineSectionCtx.storyArc.position,
     storyArcTotalBeats: outlineSectionCtx.storyArc.totalBeats,
   });
+  const stablePrompt = stableBlocks.join("\n").trim();
+  const volatilePrompt = volatileBlocks.join("\n").trim();
+  // PR-372: SHA-256 of the serialized stable prefix. Diagnostics only —
+  // persisted to generation_usage_events.stable_prefix_hash.
+  const stablePrefixHash = await sha256Hex(stablePrompt);
   // Phase 3: max possible credit cost for the pre-flight check
-  const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) +
-    estimateTokensFromText(contextPrompt);
+  const estimatedInputTokensForCheck = estimateTokensFromText(stablePrompt) +
+    estimateTokensFromText(volatilePrompt);
   const preflightUsage = {
     uncachedInputTokens: estimatedInputTokensForCheck,
     cachedInputTokens: 0,
+    // PR-372: preflight assumes zero cache savings.
+    cacheWriteInputTokens: 0,
     outputTokens: CONTAINER_HARD_CAPS[container],
     toolCostUsd: 0,
   };
@@ -2716,6 +2790,34 @@ async function handler(
 
   let billableResult;
   try {
+    // PR-372: hoist cache-wiring consts before the options object so we
+    // can reference them inside the object literal (object literals can
+    // only contain expressions, not statements).
+    // - stableContentBlocks / volatileContentBlocks: arrays of content
+    //   blocks. The LAST stable block carries a prompt_cache_breakpoint
+    //   marker in explicit mode (GPT-5.6+ only — older models ignore
+    //   the field and fall back to implicit prefix matching).
+    // - promptCacheKey: stable per-project so OpenAI cache entries are
+    //   reachable across Nth-of-project generations within the cache
+    //   TTL window.
+    const stableContentBlocks: LLMContentBlock[] = stableBlocks.map(
+      (text, i) => ({
+        type: "input_text" as const,
+        text,
+        ...(selectedModel.cacheMode === "explicit" &&
+            i === stableBlocks.length - 1
+          ? { prompt_cache_breakpoint: { mode: "explicit" as const } }
+          : {}),
+      }),
+    );
+    const volatileContentBlocks: LLMContentBlock[] = volatileBlocks.map(
+      (text) => ({
+        type: "input_text" as const,
+        text,
+      }),
+    );
+    const promptCacheKey = projectID ? `cath:proj:${projectID}:v1` : undefined;
+
     billableResult = await runBillableLLM<GenerateFeatureResult>(
       {
         userID: userId,
@@ -2723,9 +2825,19 @@ async function handler(
         action: generationAction,
         model: selectedModel,
         messages: [
-          { role: "system", content: craftPrompt },
-          { role: "user", content: contextPrompt },
+          { role: "developer", content: stableContentBlocks },
+          { role: "user", content: volatileContentBlocks },
         ],
+        // PR-372: thread cacheMode + promptCacheKey through providerOptions
+        // so the OpenAI Responses API applies the explicit cache boundary
+        // (when cacheMode === "explicit") and the stable prompt_cache_key.
+        providerOptions: {
+          cacheMode: selectedModel.cacheMode,
+          promptCacheKey,
+        },
+        // PR-372: SHA-256 of the serialized stable prefix. Diagnostics
+        // only — persisted to generation_usage_events.stable_prefix_hash.
+        stablePrefixHash,
         maxOutputTokens: maxCompletionTokens,
         usageContext: {
           projectID,
@@ -2793,8 +2905,8 @@ async function handler(
                 outline_section_id: body.outline_section_id ?? null,
                 model: selectedModel.provider_model,
                 prompt: JSON.stringify({
-                  system: craftPrompt,
-                  user: contextPrompt,
+                  system: stablePrompt,
+                  user: volatilePrompt,
                 }),
                 response: providerResult.content,
                 prompt_tokens: providerResult.inputTokens,
