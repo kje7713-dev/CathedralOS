@@ -308,6 +308,8 @@ export async function handleCoherenceCheck(
       {
         uncachedInputTokens: estimatedInputTokens,
         cachedInputTokens: 0,
+        // PR-372: preflight assumes zero cache savings.
+        cacheWriteInputTokens: 0,
         outputTokens: config.maxCompletionTokens,
         toolCostUsd: 0,
       },

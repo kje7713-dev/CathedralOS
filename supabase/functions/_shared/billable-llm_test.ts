@@ -64,8 +64,13 @@ const TEST_MODEL: GenerationModel = {
   billing_multiplier: 2.0,
   provider_input_usd_per_1m: 0.15,
   provider_cached_input_usd_per_1m: 0.075,
+  // PR-372: cache-write rate default = standard input × 1.25 (GPT-5.6+ contract).
+  provider_cache_write_usd_per_1m: 0.1875,
   provider_output_usd_per_1m: 0.60,
   pricing_effective_at: "2026-01-01T00:00:00Z",
+  // PR-372: default cache capability (automatic prefix matching with
+  // prompt_cache_key). Override to "explicit" for supported models.
+  cacheMode: "implicit",
 };
 
 /** Model with distinct cached vs uncached rates for exact-charge billing
@@ -509,17 +514,22 @@ Deno.test("runBillableLLM: credit charge exception throws credit_charge_failed (
   assertEquals(creditStore.chargeCalls.length, 0);
 });
 
-Deno.test("runBillableLLM: cached tokens NOT double-counted — total=1500, cached=500", async () => {
-  // EXACT_BILLING_MODEL yields:
-  //   inputCreditRatePer1k = 10  → uncached tokens charged at 10/1k
-  //   cachedInputCreditRatePer1k = 2  → cached tokens charged at 2/1k
+Deno.test("runBillableLLM: cached tokens NOT double-counted — total=1500, cached=500 (PR-372: no customer cache discount)", async () => {
+  // EXACT_BILLING_MODEL yields (after PR-372):
+  //   inputCreditRatePer1k = 10  → ALL input tokens (uncached + cached +
+  //                                 cacheWrite) charged at this normal
+  //                                 rate. NO customer discount on cache
+  //                                 hits — cache savings stay Cathedral's
+  //                                 margin.
   //   outputCreditRatePer1k = 20
   //   minimumChargeCredits = 0
-  // With total=1500, cached=500, output=0:
-  //   uncached = 1500 - 500 = 1000  → 1000 * 10 / 1000 = 10 credits
-  //   cached  = 500                → 500 * 2 / 1000 = 1 credit
-  //   output  = 0                  → 0 credits
-  //   total = 11 credits
+  // With total=1500, cached=500, cacheWrite=0, output=0:
+  //   uncached = max(0, 1500 - 500 - 0) = 1000
+  //   cached   = 500
+  //   total input at normal rate = (1000 + 500 + 0) × 10 / 1000 = 15 credits
+  //   output                   = 0
+  //   total                    = 15 credits (was 11 with the pre-PR-372
+  //                              cached-discount behavior)
   const admin = makeMockAdmin();
   const provider = makeProvider(
     makeLLMResponse({
@@ -538,7 +548,7 @@ Deno.test("runBillableLLM: cached tokens NOT double-counted — total=1500, cach
     makeRequest({ model: EXACT_BILLING_MODEL }),
     deps,
   );
-  assertEquals(result.actualCharge, 11);
+  assertEquals(result.actualCharge, 15);
   assertEquals(result.charged, true);
 });
 
@@ -603,9 +613,11 @@ Deno.test("runBillableLLM: cached > total is clamped safely (no negative uncache
     makeRequest({ model: EXACT_BILLING_MODEL }),
     deps,
   );
-  // clamped: uncached = max(0, 1000 - 5000) = 0; cached = min(1000, 5000) = 1000
-  // charge = 0 * 10 / 1000 + 1000 * 2 / 1000 = 2 credits
-  assertEquals(result.actualCharge, 2);
+  // clamped: uncached = max(0, 1000 - 5000 - 0) = 0; cached = min(1000, 5000) = 1000.
+  // PR-372: NO customer cache discount. All input (uncached + cached) at
+  // normal rate. charge = (0 + 1000) * 10 / 1000 = 10 credits
+  // (was 2 with the pre-PR-372 cached-discount behavior).
+  assertEquals(result.actualCharge, 10);
 });
 
 Deno.test("runBillableLLM: negative provider token values cannot produce negative billable usage", async () => {

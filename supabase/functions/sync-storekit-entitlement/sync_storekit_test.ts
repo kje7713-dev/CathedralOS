@@ -14,20 +14,22 @@
 // Run via: deno test --allow-env supabase/functions/sync-storekit-entitlement/sync_storekit_test.ts
 // =============================================================================
 
-import { assertEquals, assertExists, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
-  getProductGrant,
-  isSubscriptionProduct,
-  isConsumableProduct,
+  assertEquals,
+  assertExists,
+  assertThrows,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
   ALL_PRODUCT_IDS,
-  SUBSCRIPTION_PRODUCT_IDS,
   CONSUMABLE_PRODUCT_IDS,
-  type SubscriptionGrant,
   type ConsumableGrant,
+  getProductGrant,
+  isConsumableProduct,
+  isSubscriptionProduct,
+  SUBSCRIPTION_PRODUCT_IDS,
+  type SubscriptionGrant,
 } from "./_product_map.ts";
-import {
-  decodeJWSPayload,
-} from "./_apple_api.ts";
+import { decodeJWSPayload } from "./_apple_api.ts";
 
 // =============================================================================
 // Product map tests
@@ -55,7 +57,9 @@ Deno.test("PRODUCT_MAP: credits.small is a consumable with 20 credits", () => {
 });
 
 Deno.test("PRODUCT_MAP: credits.medium is a consumable with 60 credits", () => {
-  const grant = getProductGrant("cathedralos.credits.medium") as ConsumableGrant;
+  const grant = getProductGrant(
+    "cathedralos.credits.medium",
+  ) as ConsumableGrant;
   assertExists(grant);
   assertEquals(grant.type, "consumable");
   assertEquals(grant.creditAmount, 60);
@@ -104,9 +108,18 @@ Deno.test("PRODUCT_MAP: SUBSCRIPTION_PRODUCT_IDS contains only pro.monthly", () 
 
 Deno.test("PRODUCT_MAP: CONSUMABLE_PRODUCT_IDS contains three credit packs", () => {
   assertEquals(CONSUMABLE_PRODUCT_IDS.length, 3);
-  assertEquals(CONSUMABLE_PRODUCT_IDS.includes("cathedralos.credits.small"), true);
-  assertEquals(CONSUMABLE_PRODUCT_IDS.includes("cathedralos.credits.medium"), true);
-  assertEquals(CONSUMABLE_PRODUCT_IDS.includes("cathedralos.credits.large"), true);
+  assertEquals(
+    CONSUMABLE_PRODUCT_IDS.includes("cathedralos.credits.small"),
+    true,
+  );
+  assertEquals(
+    CONSUMABLE_PRODUCT_IDS.includes("cathedralos.credits.medium"),
+    true,
+  );
+  assertEquals(
+    CONSUMABLE_PRODUCT_IDS.includes("cathedralos.credits.large"),
+    true,
+  );
 });
 
 // =============================================================================
@@ -148,8 +161,14 @@ Deno.test("decodeJWSPayload: throws on JWS with fewer than 3 segments", () => {
 });
 
 Deno.test("decodeJWSPayload: throws on JWS with non-JSON payload", () => {
-  const header = btoa("{}").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const badBody = btoa("not json at all").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const header = btoa("{}").replace(/\+/g, "-").replace(/\//g, "_").replace(
+    /=+$/,
+    "",
+  );
+  const badBody = btoa("not json at all").replace(/\+/g, "-").replace(
+    /\//g,
+    "_",
+  ).replace(/=+$/, "");
   assertThrows(
     () => decodeJWSPayload(`${header}.${badBody}.sig`),
     Error,

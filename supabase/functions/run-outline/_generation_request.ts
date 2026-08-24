@@ -11,7 +11,10 @@ import type { LengthMode } from "../generate-story/_credits.ts";
 type JSONObject = Record<string, unknown>;
 
 /** Match both local and canonical identities for restored/imported projects. */
-export function projectSnapshotLookupFilter(projectId: string, lineageId: unknown): string {
+export function projectSnapshotLookupFilter(
+  projectId: string,
+  lineageId: unknown,
+): string {
   const lineage = String(lineageId ?? "").trim();
   return lineage
     ? `local_project_id.eq.${projectId},lineage_id.eq.${lineage}`
@@ -20,7 +23,9 @@ export function projectSnapshotLookupFilter(projectId: string, lineageId: unknow
 
 function objects(value: unknown): JSONObject[] {
   return Array.isArray(value)
-    ? value.filter((item): item is JSONObject => !!item && typeof item === "object")
+    ? value.filter((item): item is JSONObject =>
+      !!item && typeof item === "object"
+    )
     : [];
 }
 
@@ -34,7 +39,9 @@ export function buildSourcePayloadJSON(
   snapshot: JSONObject,
 ): JSONObject {
   const packs = objects(snapshot.promptPacks);
-  if (packs.length === 0) throw new Error("project snapshot has no prompt pack");
+  if (packs.length === 0) {
+    throw new Error("project snapshot has no prompt pack");
+  }
   const pack = packs[0];
   const setting = snapshot.setting && typeof snapshot.setting === "object"
     ? snapshot.setting as JSONObject
@@ -53,11 +60,24 @@ export function buildSourcePayloadJSON(
     version: 1,
     project: snapshot.project,
     setting: { ...setting, included: pack.includeProjectSetting === true },
-    selectedCharacters: selectedByIds(snapshot.characters, pack.selectedCharacterIDs),
-    selectedStorySpark: selectedByIds(snapshot.storySparks, [pack.selectedStorySparkID])[0] ?? null,
-    selectedAftertaste: selectedByIds(snapshot.aftertastes, [pack.selectedAftertasteID])[0] ?? null,
-    selectedRelationships: selectedByIds(snapshot.relationships, pack.selectedRelationshipIDs),
-    selectedThemeQuestions: selectedByIds(snapshot.themeQuestions, pack.selectedThemeQuestionIDs),
+    selectedCharacters: selectedByIds(
+      snapshot.characters,
+      pack.selectedCharacterIDs,
+    ),
+    selectedStorySpark:
+      selectedByIds(snapshot.storySparks, [pack.selectedStorySparkID])[0] ??
+        null,
+    selectedAftertaste:
+      selectedByIds(snapshot.aftertastes, [pack.selectedAftertasteID])[0] ??
+        null,
+    selectedRelationships: selectedByIds(
+      snapshot.relationships,
+      pack.selectedRelationshipIDs,
+    ),
+    selectedThemeQuestions: selectedByIds(
+      snapshot.themeQuestions,
+      pack.selectedThemeQuestionIDs,
+    ),
     selectedMotifs: selectedByIds(snapshot.motifs, pack.selectedMotifIDs),
     promptPack: {
       id: pack.id,
@@ -75,7 +95,14 @@ export function buildGenerateStoryRequest(args: {
   // the run loop passes in). Added in the PR-#327 backend fix-forward so generate-story
   // can persist `outline_section_id` on the generation_outputs row it inserts, which is
   // what the iOS-side `GenerationOutput.outlineSectionID` field expects on sync.
-  section: { id: string; title: string; summary: string; container: string | null; pov: string | null; terminal_beat: string | null };
+  section: {
+    id: string;
+    title: string;
+    summary: string;
+    container: string | null;
+    pov: string | null;
+    terminal_beat: string | null;
+  };
   projectId: string;
   selectedModelId?: string;
   lengthMode: LengthMode;

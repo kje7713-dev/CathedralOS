@@ -1,4 +1,4 @@
-import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { createClient } from "jsr:@supabase/supabase-js@2";
 
 // =============================================================================
 // index.ts — outline-from-recipe Edge Function
@@ -58,22 +58,43 @@ const RESPONSE_SCHEMA = {
           "container": {
             "type": "string",
             "enum": [
-              "beat", "moment", "vignette", "microScene", "scene",
-              "developedScene", "setPiece", "sceneSequence",
-              "shortStory", "chapter", "episode",
+              "beat",
+              "moment",
+              "vignette",
+              "microScene",
+              "scene",
+              "developedScene",
+              "setPiece",
+              "sceneSequence",
+              "shortStory",
+              "chapter",
+              "episode",
             ],
           },
           "pov": {
             "type": "string",
             "enum": [
-              "firstPerson", "secondPerson",
-              "thirdPersonLimited", "thirdPersonOmniscient",
+              "firstPerson",
+              "secondPerson",
+              "thirdPersonLimited",
+              "thirdPersonOmniscient",
             ],
           },
-          "terminalBeat": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "terminalBeat": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+          },
           "storyArcBeatID": { "type": "string" },
         },
-        "required": ["title", "summary", "container", "pov", "terminalBeat", "storyArcBeatID"],
+        "required": [
+          "title",
+          "summary",
+          "container",
+          "pov",
+          "terminalBeat",
+          "storyArcBeatID",
+        ],
         "additionalProperties": false,
       },
     },
@@ -83,14 +104,24 @@ const RESPONSE_SCHEMA = {
 } as const;
 
 const ALLOWED_CONTAINERS = new Set([
-  "beat", "moment", "vignette", "microScene", "scene",
-  "developedScene", "setPiece", "sceneSequence",
-  "shortStory", "chapter", "episode",
+  "beat",
+  "moment",
+  "vignette",
+  "microScene",
+  "scene",
+  "developedScene",
+  "setPiece",
+  "sceneSequence",
+  "shortStory",
+  "chapter",
+  "episode",
 ]);
 
 const ALLOWED_POVS = new Set([
-  "firstPerson", "secondPerson",
-  "thirdPersonLimited", "thirdPersonOmniscient",
+  "firstPerson",
+  "secondPerson",
+  "thirdPersonLimited",
+  "thirdPersonOmniscient",
 ]);
 
 const RATE_LIMIT_PER_MINUTE = 5;
@@ -98,7 +129,8 @@ const RATE_LIMIT_PER_HOUR = 30;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Content-Type": "application/json",
 };
@@ -111,7 +143,12 @@ interface RecipeBlob {
   id: string;
   name: string;
   characters?: Array<{ id: string; name: string; summary?: string }>;
-  storySpark?: { id: string; title: string; situation?: string; stakes?: string } | null;
+  storySpark?: {
+    id: string;
+    title: string;
+    situation?: string;
+    stakes?: string;
+  } | null;
   aftertaste?: { id: string; label: string; note?: string } | null;
   themes?: Array<{ id: string; question: string; coreTension?: string }>;
   motifs?: Array<{ id: string; label: string; meaning?: string }>;
@@ -122,14 +159,16 @@ interface ArcTemplateBlob {
   id: string;
   name: string;
   description?: string;
-  beats: Array<{ id: string; role: string; label: string; description?: string }>;
+  beats: Array<
+    { id: string; role: string; label: string; description?: string }
+  >;
 }
 
 interface OutlineFromRecipeRequest {
   recipe: RecipeBlob;
   arcTemplate: ArcTemplateBlob;
   hint?: string;
-  existingSections?: ExistingSectionBlob[];  // iOS-side outline state at request time
+  existingSections?: ExistingSectionBlob[]; // iOS-side outline state at request time
 }
 
 interface ExistingSectionBlob {
@@ -138,7 +177,7 @@ interface ExistingSectionBlob {
   container?: string;
   pov?: string;
   terminalBeat?: string;
-  storyArcBeatID?: string;  // null for manual/free-form sections
+  storyArcBeatID?: string; // null for manual/free-form sections
 }
 
 interface Suggestion {
@@ -161,15 +200,24 @@ function corsResponse(body: string, init: ResponseInit = {}): Response {
   });
 }
 
-function errorResponse(code: string, message: string, status: number): Response {
+function errorResponse(
+  code: string,
+  message: string,
+  status: number,
+): Response {
   return corsResponse(JSON.stringify({ errorCode: code, message }), { status });
 }
 
 function validateRequest(req: unknown): string | null {
   if (!req || typeof req !== "object") return "request must be an object";
   const r = req as Partial<OutlineFromRecipeRequest>;
-  if (!r.recipe?.id || !r.recipe?.name) return "recipe.id and recipe.name required";
-  if (!r.arcTemplate?.id || !Array.isArray(r.arcTemplate.beats) || r.arcTemplate.beats.length === 0) {
+  if (!r.recipe?.id || !r.recipe?.name) {
+    return "recipe.id and recipe.name required";
+  }
+  if (
+    !r.arcTemplate?.id || !Array.isArray(r.arcTemplate.beats) ||
+    r.arcTemplate.beats.length === 0
+  ) {
     return "arcTemplate.id and non-empty arcTemplate.beats required";
   }
   return null;
@@ -182,12 +230,14 @@ function buildPrompt(
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
       const beat = req.arcTemplate.beats.find((b) => b.id === beatId);
-      return `- ${beat?.label ?? beatId}: ${info.count} sections (${info.rationale})`;
+      return `- ${
+        beat?.label ?? beatId
+      }: ${info.count} sections (${info.rationale})`;
     })
     .join("\n");
 
-
-  const system = `You are an expert novel outliner. Given a recipe (curated characters, sparks, themes, motifs), a story arc template (ordered beats), and a per-beat section allocation plan, produce a novel outline — the section-by-section blueprint a writer would actually draft over many chapters.
+  const system =
+    `You are an expert novel outliner. Given a recipe (curated characters, sparks, themes, motifs), a story arc template (ordered beats), and a per-beat section allocation plan, produce a novel outline — the section-by-section blueprint a writer would actually draft over many chapters.
 
 ## Use the allocation plan exactly
 
@@ -197,20 +247,32 @@ ${allocationLines}
 
 Each section should be a distinct scene/chapter within its beat, exploring different moments, characters, or sub-events.
 
-${req.existingSections && req.existingSections.length > 0
-    ? `Existing sections already in this outline (DO NOT duplicate — build on them where natural; prefer beats without existing sections):
-${req.existingSections.map(s => `- "${s.title ?? "(untitled)"}" (${s.container ?? "scene"}, ${s.pov ?? "thirdPersonLimited"}): ${s.summary ?? ""}`).join("\n")}
+${
+      req.existingSections && req.existingSections.length > 0
+        ? `Existing sections already in this outline (DO NOT duplicate — build on them where natural; prefer beats without existing sections):
+${
+          req.existingSections.map((s) =>
+            `- "${s.title ?? "(untitled)"}" (${s.container ?? "scene"}, ${
+              s.pov ?? "thirdPersonLimited"
+            }): ${s.summary ?? ""}`
+          ).join("\n")
+        }
 
 `
-    : ""}Distribute the arc beats across the suggestions — every beat should appear in at least one suggestion's storyArcBeatID. Skip beats already covered by an existing section if possible. You may reuse beats across suggestions if multiple sections handle the same beat from different angles.
+        : ""
+    }Distribute the arc beats across the suggestions — every beat should appear in at least one suggestion's storyArcBeatID. Skip beats already covered by an existing section if possible. You may reuse beats across suggestions if multiple sections handle the same beat from different angles.
 
 Respond with structured JSON matching the schema.`;
 
-  const user = JSON.stringify({
-    recipe: req.recipe,
-    arcTemplate: req.arcTemplate,
-    hint: req.hint ?? null,
-  }, null, 2);
+  const user = JSON.stringify(
+    {
+      recipe: req.recipe,
+      arcTemplate: req.arcTemplate,
+      hint: req.hint ?? null,
+    },
+    null,
+    2,
+  );
 
   return { system, user };
 }
@@ -223,7 +285,8 @@ async function planSectionAllocation(
   req: OutlineFromRecipeRequest,
   apiKey: string,
 ): Promise<Map<string, { count: number; rationale: string }>> {
-  const system = `You are an expert novel outliner. Given a recipe (curated characters, sparks, themes, motifs) and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular novel.
+  const system =
+    `You are an expert novel outliner. Given a recipe (curated characters, sparks, themes, motifs) and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular novel.
 
 A novel outline is built from many sections per beat. Some beats are quick transitions (1-2 sections). Some are major movements unfolding across many scenes (5-10+ sections). The same arc template produces very different outlines for different recipes — a fast-paced thriller might give 1-2 sections per beat; an intimate literary novel might give 8-10 to major beats.
 
@@ -236,19 +299,23 @@ Total sections across all beats should be 30-60+ for a novel-length outline.
 
 Output JSON only. No commentary, no prose.`;
 
-  const user = JSON.stringify({
-    recipe: req.recipe,
-    arcTemplate: {
-      id: req.arcTemplate.id,
-      name: req.arcTemplate.name,
-      beats: req.arcTemplate.beats.map((b) => ({
-        id: b.id,
-        label: b.label,
-        description: b.description,
-      })),
+  const user = JSON.stringify(
+    {
+      recipe: req.recipe,
+      arcTemplate: {
+        id: req.arcTemplate.id,
+        name: req.arcTemplate.name,
+        beats: req.arcTemplate.beats.map((b) => ({
+          id: b.id,
+          label: b.label,
+          description: b.description,
+        })),
+      },
+      existingSections: req.existingSections ?? [],
     },
-    existingSections: req.existingSections ?? [],
-  }, null, 2);
+    null,
+    2,
+  );
 
   const raw = await callOpenAI(system, user, apiKey, {
     maxTokens: 2048,
@@ -265,8 +332,8 @@ Output JSON only. No commentary, no prose.`;
   const allocations: any[] = Array.isArray(parsed)
     ? parsed
     : Array.isArray(parsed.allocations)
-      ? parsed.allocations
-      : [];
+    ? parsed.allocations
+    : [];
 
   const out = new Map<string, { count: number; rationale: string }>();
   for (const beat of req.arcTemplate.beats) {
@@ -361,20 +428,22 @@ async function callOpenAI(
         response_format: options?.useJsonSchema === false
           ? { type: "json_object" }
           : {
-              type: "json_schema",
-              json_schema: {
-                name: options?.jsonSchemaName ?? "outline_suggestions",
-                strict: true,
-                schema: options?.jsonSchema ?? RESPONSE_SCHEMA,
-              },
+            type: "json_schema",
+            json_schema: {
+              name: options?.jsonSchemaName ?? "outline_suggestions",
+              strict: true,
+              schema: options?.jsonSchema ?? RESPONSE_SCHEMA,
             },
+          },
         temperature: 0.7,
       }),
       signal: ac.signal,
     });
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`OpenAI API error ${response.status}: ${errText.slice(0, 500)}`);
+      throw new Error(
+        `OpenAI API error ${response.status}: ${errText.slice(0, 500)}`,
+      );
     }
     const data = await response.json();
     return data.choices?.[0]?.message?.content ?? "";
@@ -399,7 +468,9 @@ function validateSuggestions(
       continue;
     }
     if (!ALLOWED_CONTAINERS.has(s.container)) {
-      warnings.push(`dropped suggestion with invalid container: ${s.container}`);
+      warnings.push(
+        `dropped suggestion with invalid container: ${s.container}`,
+      );
       continue;
     }
     if (!ALLOWED_POVS.has(s.pov)) {
@@ -411,7 +482,9 @@ function validateSuggestions(
       continue;
     }
     if (!beatIds.has(s.storyArcBeatID)) {
-      warnings.push(`dropped suggestion with unknown beat id: ${s.storyArcBeatID}`);
+      warnings.push(
+        `dropped suggestion with unknown beat id: ${s.storyArcBeatID}`,
+      );
       continue;
     }
     valid.push({
@@ -450,15 +523,27 @@ Deno.serve(async (req: Request) => {
   }
 
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader) return errorResponse("not_authenticated", "Missing Authorization header", 401);
+  if (!authHeader) {
+    return errorResponse(
+      "not_authenticated",
+      "Missing Authorization header",
+      401,
+    );
+  }
 
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
-  if (!openaiKey) return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
+  if (!openaiKey) {
+    return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
+  }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   if (!supabaseUrl || !supabaseAnonKey) {
-    return errorResponse("not_configured", "Supabase URL or anon key missing", 500);
+    return errorResponse(
+      "not_configured",
+      "Supabase URL or anon key missing",
+      500,
+    );
   }
 
   let body: OutlineFromRecipeRequest;
@@ -468,7 +553,9 @@ Deno.serve(async (req: Request) => {
     return errorResponse("invalid_request", "Body must be JSON", 400);
   }
   const validationError = validateRequest(body);
-  if (validationError) return errorResponse("invalid_request", validationError, 400);
+  if (validationError) {
+    return errorResponse("invalid_request", validationError, 400);
+  }
 
   const supabase = makeSupabase(supabaseUrl, supabaseAnonKey, authHeader);
 
@@ -508,7 +595,9 @@ Deno.serve(async (req: Request) => {
 
   let rawResponse: string;
   try {
-    rawResponse = await callOpenAI(system, userPrompt, openaiKey, { maxTokens: 16000 });
+    rawResponse = await callOpenAI(system, userPrompt, openaiKey, {
+      maxTokens: 16000,
+    });
   } catch (err) {
     await logRequest(supabase, user.id, "failed", "provider_error");
     return errorResponse("provider_error", String(err), 502);
@@ -519,7 +608,11 @@ Deno.serve(async (req: Request) => {
     parsed = JSON.parse(rawResponse);
   } catch {
     await logRequest(supabase, user.id, "failed", "invalid_response");
-    return errorResponse("invalid_response", "Could not parse LLM response", 502);
+    return errorResponse(
+      "invalid_response",
+      "Could not parse LLM response",
+      502,
+    );
   }
 
   let result: { suggestions: Suggestion[]; warnings: string[] };

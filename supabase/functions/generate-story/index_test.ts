@@ -51,8 +51,8 @@ import {
 import type { GenerationModelStore } from "./_generation_models.ts";
 import {
   classifyOpenAIStatus,
-  extractResponseText,
   extractResponsesFinishReason,
+  extractResponseText,
   OpenAIProvider,
   PROVIDER_TIMEOUT_MS,
   ProviderError,
@@ -151,7 +151,7 @@ function makeEntitlement(
     user_id: FAKE_USER_ID,
     plan_name: "free",
     is_pro: false,
-      monthly_credit_allowance: 100_000,
+    monthly_credit_allowance: 100_000,
     purchased_credit_balance: 0,
     current_period_start: null,
     current_period_end: null,
@@ -258,6 +258,9 @@ function makeMockGenerationModelStore(
         minimum_charge_credits: row.minimum_charge_credits ?? 1,
         max_output_tokens: row.max_output_tokens ?? null,
         enabled: true,
+        // PR-372: cache fields (mock returns sane defaults).
+        provider_cache_write_usd_per_1m: 0,
+        cacheMode: "implicit",
         sort_order: 0,
         // Phase 3 pricing fields. Defaults derived from legacy rates using the
         // migration's backfill formula (provider_usd_per_1m = legacy_rate × 5)
@@ -319,8 +322,12 @@ function makeMockPersistenceStore(
   overrides: Partial<MockPersistenceStoreState["outputInsertResult"]> = {},
 ): {
   store: {
-    insertOutput(row: Record<string, unknown>): Promise<{ data: { id: string } | null; error: unknown | null }>;
-    insertUsageEvent(row: Record<string, unknown>): Promise<{ error: unknown | null }>;
+    insertOutput(
+      row: Record<string, unknown>,
+    ): Promise<{ data: { id: string } | null; error: unknown | null }>;
+    insertUsageEvent(
+      row: Record<string, unknown>,
+    ): Promise<{ error: unknown | null }>;
   };
   state: MockPersistenceStoreState;
 } {
@@ -342,7 +349,9 @@ function makeMockPersistenceStore(
       state.outputInsertCalls.push(row);
       return Promise.resolve(state.outputInsertResult);
     },
-    insertUsageEvent(row: Record<string, unknown>): Promise<{ error: unknown | null }> {
+    insertUsageEvent(
+      row: Record<string, unknown>,
+    ): Promise<{ error: unknown | null }> {
       state.usageInsertCalls.push(row);
       return Promise.resolve({ error: state.usageInsertError });
     },
@@ -688,7 +697,8 @@ Deno.test("OpenAIProvider: 429 insufficient_quota maps to provider_insufficient_
       new Response(
         JSON.stringify({
           error: {
-            message: "You exceeded your current quota, please check your plan and billing details.",
+            message:
+              "You exceeded your current quota, please check your plan and billing details.",
             code: "insufficient_quota",
           },
         }),
@@ -746,11 +756,17 @@ Deno.test("OpenAIProvider: uses Responses API payload and parses output_text", a
 
   try {
     const provider = new OpenAIProvider("test-key", "gpt-4o-mini");
-    const result = await provider.complete([{ role: "user", content: "Tell a story" }], 800);
+    const result = await provider.complete([{
+      role: "user",
+      content: "Tell a story",
+    }], 800);
 
     assertExists(requestBody);
     assertEquals(requestedUrl, "https://api.openai.com/v1/responses");
-    assertEquals(requestBody?.input, [{ role: "user", content: "Tell a story" }]);
+    assertEquals(requestBody?.input, [{
+      role: "user",
+      content: "Tell a story",
+    }]);
     assertEquals(requestBody?.max_output_tokens, 800);
     assertEquals(requestBody?.store, false);
     assertEquals("max_tokens" in requestBody!, false);
@@ -812,7 +828,10 @@ Deno.test("OpenAIProvider: parses output array when output_text missing", async 
 
   try {
     const provider = new OpenAIProvider("test-key", "gpt-4o-mini");
-    const result = await provider.complete([{ role: "user", content: "Tell a story" }], 800);
+    const result = await provider.complete([{
+      role: "user",
+      content: "Tell a story",
+    }], 800);
     assertEquals(result.content, "Partial story from parts.");
     assertEquals(result.finishReason, "completed");
   } finally {
@@ -1047,16 +1066,18 @@ Deno.test("handler: generation_outputs insert failure returns failed response an
   const { store: creditStore, state: creditState } = makeMockCreditStore(
     makeEntitlement({ monthly_credit_allowance: 10 }),
   );
-  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: rateLimitStore, state: rateLimitState } =
+    makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore();
-  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore({
-    data: null,
-    error: {
-      code: "23505",
-      message: "duplicate key value violates unique constraint",
-      details: "Key (local_generation_id) already exists.",
-    },
-  });
+  const { store: persistenceStore, state: persistenceState } =
+    makeMockPersistenceStore({
+      data: null,
+      error: {
+        code: "23505",
+        message: "duplicate key value violates unique constraint",
+        details: "Key (local_generation_id) already exists.",
+      },
+    });
 
   const resp = await handler(makeAuthRequest(makeBaseRequest()), {
     provider: _mockSuccessProvider,
@@ -1076,19 +1097,24 @@ Deno.test("handler: generation_outputs insert failure returns failed response an
   assertEquals(persistenceState.usageInsertCalls.length, 0);
   assertEquals(rateLimitState.recordRequestCalls.length, 1);
   assertEquals(rateLimitState.recordRequestCalls[0].status, "failed");
-  assertEquals(rateLimitState.recordRequestCalls[0].errorCode, "persistence_failed");
+  assertEquals(
+    rateLimitState.recordRequestCalls[0].errorCode,
+    "persistence_failed",
+  );
 });
 
 Deno.test("handler: missing generation_outputs row is treated as persistence failure", async () => {
   const { store: creditStore, state: creditState } = makeMockCreditStore(
     makeEntitlement({ monthly_credit_allowance: 10 }),
   );
-  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: rateLimitStore, state: rateLimitState } =
+    makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore();
-  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore({
-    data: null,
-    error: null,
-  });
+  const { store: persistenceStore, state: persistenceState } =
+    makeMockPersistenceStore({
+      data: null,
+      error: null,
+    });
 
   const resp = await handler(makeAuthRequest(makeBaseRequest()), {
     provider: _mockSuccessProvider,
@@ -1229,9 +1255,11 @@ Deno.test("handler: provider_timeout returns 504 and does not insert usage event
   const { store: creditStore, state: creditState } = makeMockCreditStore(
     makeEntitlement({ monthly_credit_allowance: 10 }),
   );
-  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: rateLimitStore, state: rateLimitState } =
+    makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore();
-  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+  const { store: persistenceStore, state: persistenceState } =
+    makeMockPersistenceStore();
 
   const resp = await handler(makeAuthRequest(makeBaseRequest()), {
     provider: _mockTimeoutProvider,
@@ -1255,23 +1283,30 @@ Deno.test("handler: provider_timeout returns 504 and does not insert usage event
   // The failed request must still be logged.
   assertEquals(rateLimitState.recordRequestCalls.length, 1);
   assertEquals(rateLimitState.recordRequestCalls[0].status, "failed");
-  assertEquals(rateLimitState.recordRequestCalls[0].errorCode, "provider_timeout");
+  assertEquals(
+    rateLimitState.recordRequestCalls[0].errorCode,
+    "provider_timeout",
+  );
 });
 
 Deno.test("handler: missing selectedModelId defaults to gpt-4o-mini", async () => {
   const { store: creditStore } = makeMockCreditStore(makeEntitlement());
   const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
-  const { store: generationModelStore, state: modelState } = makeMockGenerationModelStore();
+  const { store: generationModelStore, state: modelState } =
+    makeMockGenerationModelStore();
   const { store: persistenceStore } = makeMockPersistenceStore();
 
-  const resp = await handler(makeAuthRequest(makeBaseRequest({ selectedModelId: undefined })), {
-    provider: _mockSuccessProvider,
-    creditStore,
-    rateLimitStore,
-    generationModelStore,
-    authenticatedUserId: FAKE_USER_ID,
-    persistenceStore,
-  });
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({ selectedModelId: undefined })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
   const body = await resp.json();
   assertEquals(resp.status, 200);
   assertEquals(body.selectedModelId, "gpt-4o-mini");
@@ -1304,14 +1339,17 @@ Deno.test("handler: valid selectedModelId routes to provider_model", async () =>
     },
   };
 
-  const resp = await handler(makeAuthRequest(makeBaseRequest({ selectedModelId: "gpt-4.1-mini" })), {
-    provider,
-    creditStore,
-    rateLimitStore,
-    generationModelStore,
-    authenticatedUserId: FAKE_USER_ID,
-    persistenceStore,
-  });
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({ selectedModelId: "gpt-4.1-mini" })),
+    {
+      provider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
   assertEquals(resp.status, 200);
   assertEquals(providerModelSeen, "gpt-4.1-mini");
 });
@@ -1326,14 +1364,17 @@ Deno.test("handler: disabled selectedModelId returns invalid_model", async () =>
   }]);
   const { store: persistenceStore } = makeMockPersistenceStore();
 
-  const resp = await handler(makeAuthRequest(makeBaseRequest({ selectedModelId: "gpt-4.1-mini" })), {
-    provider: _mockSuccessProvider,
-    creditStore,
-    rateLimitStore,
-    generationModelStore,
-    authenticatedUserId: FAKE_USER_ID,
-    persistenceStore,
-  });
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({ selectedModelId: "gpt-4.1-mini" })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
   const body = await resp.json();
   assertEquals(resp.status, 400);
   assertEquals(body.errorCode, "invalid_model");
@@ -1345,14 +1386,17 @@ Deno.test("handler: unknown selectedModelId returns invalid_model", async () => 
   const { store: generationModelStore } = makeMockGenerationModelStore();
   const { store: persistenceStore } = makeMockPersistenceStore();
 
-  const resp = await handler(makeAuthRequest(makeBaseRequest({ selectedModelId: "unknown-model-id" })), {
-    provider: _mockSuccessProvider,
-    creditStore,
-    rateLimitStore,
-    generationModelStore,
-    authenticatedUserId: FAKE_USER_ID,
-    persistenceStore,
-  });
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({ selectedModelId: "unknown-model-id" })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
   const body = await resp.json();
   assertEquals(resp.status, 400);
   assertEquals(body.errorCode, "invalid_model");
@@ -1380,31 +1424,38 @@ Deno.test("handler: raw model override fields are ignored", async () => {
     },
   };
 
-  const resp = await handler(makeAuthRequest(makeBaseRequest({
-    selectedModelId: "gpt-4.1-mini",
-    model: "hacked-model",
-    modelName: "hacked-model",
-    providerModel: "hacked-model",
-  })), {
-    provider,
-    creditStore,
-    rateLimitStore,
-    generationModelStore,
-    authenticatedUserId: FAKE_USER_ID,
-    persistenceStore,
-  });
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({
+      selectedModelId: "gpt-4.1-mini",
+      model: "hacked-model",
+      modelName: "hacked-model",
+      providerModel: "hacked-model",
+    })),
+    {
+      provider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
   assertEquals(resp.status, 200);
   assertEquals(providerModelSeen, "gpt-4.1-mini");
 });
 Deno.test("handler: provider 429 maps to provider_rate_limited and charges 0", async () => {
-  const { store: creditStore, state: creditState } = makeMockCreditStore(makeEntitlement());
+  const { store: creditStore, state: creditState } = makeMockCreditStore(
+    makeEntitlement(),
+  );
   const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore();
   const { store: persistenceStore } = makeMockPersistenceStore();
 
   const provider: LLMProvider = {
     complete() {
-      return Promise.reject(new ProviderError("rate limited", "provider_rate_limited", true));
+      return Promise.reject(
+        new ProviderError("rate limited", "provider_rate_limited", true),
+      );
     },
   };
 
@@ -1428,10 +1479,14 @@ Deno.test("handler: provider 429 maps to provider_rate_limited and charges 0", a
 });
 
 Deno.test("handler: provider insufficient quota returns billing message and charges 0", async () => {
-  const { store: creditStore, state: creditState } = makeMockCreditStore(makeEntitlement());
-  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: creditStore, state: creditState } = makeMockCreditStore(
+    makeEntitlement(),
+  );
+  const { store: rateLimitStore, state: rateLimitState } =
+    makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore();
-  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+  const { store: persistenceStore, state: persistenceState } =
+    makeMockPersistenceStore();
 
   const provider: LLMProvider = {
     complete() {
@@ -1466,12 +1521,18 @@ Deno.test("handler: provider insufficient quota returns billing message and char
   assertEquals(persistenceState.outputInsertCalls.length, 0);
   assertEquals(persistenceState.usageInsertCalls.length, 0);
   assertEquals(rateLimitState.recordRequestCalls.length, 1);
-  assertEquals(rateLimitState.recordRequestCalls[0].errorCode, "provider_insufficient_quota");
+  assertEquals(
+    rateLimitState.recordRequestCalls[0].errorCode,
+    "provider_insufficient_quota",
+  );
 });
 
 Deno.test("handler: insufficient credits blocks before provider call", async () => {
   const { store: creditStore } = makeMockCreditStore(
-    makeEntitlement({ monthly_credit_allowance: 0, purchased_credit_balance: 0 }),
+    makeEntitlement({
+      monthly_credit_allowance: 0,
+      purchased_credit_balance: 0,
+    }),
   );
   const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore([{
@@ -1506,10 +1567,14 @@ Deno.test("handler: insufficient credits blocks before provider call", async () 
 });
 
 Deno.test("handler: finish_reason length marks output incomplete and truncated", async () => {
-  const { store: creditStore, state: creditState } = makeMockCreditStore(makeEntitlement());
-  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: creditStore, state: creditState } = makeMockCreditStore(
+    makeEntitlement(),
+  );
+  const { store: rateLimitStore, state: rateLimitState } =
+    makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore();
-  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+  const { store: persistenceStore, state: persistenceState } =
+    makeMockPersistenceStore();
 
   const provider: LLMProvider = {
     complete() {
@@ -1554,7 +1619,8 @@ Deno.test("handler: finish_reason stop remains complete", async () => {
   const { store: creditStore } = makeMockCreditStore(makeEntitlement());
   const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore();
-  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+  const { store: persistenceStore, state: persistenceState } =
+    makeMockPersistenceStore();
 
   const provider: LLMProvider = {
     complete() {
@@ -1592,7 +1658,8 @@ Deno.test("handler: null outputTokens on length breaks loop (no infinite spin)",
   const { store: creditStore } = makeMockCreditStore(makeEntitlement());
   const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore();
-  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+  const { store: persistenceStore, state: persistenceState } =
+    makeMockPersistenceStore();
 
   let callCount = 0;
   const provider: LLMProvider = {
@@ -1637,13 +1704,18 @@ Deno.test("handler: null outputTokens on length breaks loop (no infinite spin)",
 
 Deno.test("handler: estimate action returns ok with required estimate fields", async () => {
   const { store: creditStore } = makeMockCreditStore(makeEntitlement());
-  const { store: rateLimitStore, state: rateLimitState } = makeMockRateLimitStore({ allowed: true });
+  const { store: rateLimitStore, state: rateLimitState } =
+    makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore();
-  const { store: persistenceStore, state: persistenceState } = makeMockPersistenceStore();
+  const { store: persistenceStore, state: persistenceState } =
+    makeMockPersistenceStore();
 
   let providerCalled = false;
   const provider: LLMProvider = {
-    complete(_messages: LLMMessage[], _maxTokens: number): Promise<LLMResponse> {
+    complete(
+      _messages: LLMMessage[],
+      _maxTokens: number,
+    ): Promise<LLMResponse> {
       providerCalled = true;
       return Promise.resolve({
         content: "ok",
@@ -1689,7 +1761,10 @@ Deno.test("handler: estimate action returns ok with required estimate fields", a
 
 Deno.test("handler: estimate action returns allowed=false when credits are insufficient", async () => {
   const { store: creditStore } = makeMockCreditStore(
-    makeEntitlement({ monthly_credit_allowance: 0, purchased_credit_balance: 0 }),
+    makeEntitlement({
+      monthly_credit_allowance: 0,
+      purchased_credit_balance: 0,
+    }),
   );
   const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore([{
@@ -1721,7 +1796,9 @@ Deno.test("handler: estimate action returns allowed=false when credits are insuf
 });
 
 Deno.test("handler: estimate action does not charge credits", async () => {
-  const { store: creditStore, state: creditState } = makeMockCreditStore(makeEntitlement());
+  const { store: creditStore, state: creditState } = makeMockCreditStore(
+    makeEntitlement(),
+  );
   const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore } = makeMockGenerationModelStore();
   const { store: persistenceStore } = makeMockPersistenceStore();
@@ -1748,7 +1825,12 @@ Deno.test("handler: estimate action with invalid length mode returns 422", async
   const { store: persistenceStore } = makeMockPersistenceStore();
 
   const resp = await handler(
-    makeAuthRequest(makeBaseRequest({ generationAction: "estimate", generationLengthMode: "invalid" })),
+    makeAuthRequest(
+      makeBaseRequest({
+        generationAction: "estimate",
+        generationLengthMode: "invalid",
+      }),
+    ),
     {
       provider: _mockSuccessProvider,
       creditStore,
@@ -1773,7 +1855,8 @@ Deno.test("terminal beat: explicit beat appears in Writing Task with Closure Tar
   const provider: LLMProvider = {
     complete() {
       return Promise.resolve({
-        content: "Jonah admits he lied. His father takes the letter, turns away, and refuses to answer him.",
+        content:
+          "Jonah admits he lied. His father takes the letter, turns away, and refuses to answer him.",
         modelName: "gpt-4o-mini",
         finishReason: "stop",
         inputTokens: 200,
@@ -1783,17 +1866,21 @@ Deno.test("terminal beat: explicit beat appears in Writing Task with Closure Tar
     },
   };
 
-  const resp = await handler(makeAuthRequest(makeBaseRequest({
-    container: "scene",
-    terminalBeat: "Jonah admits the lie. His father takes the letter and turns away.",
-  })), {
-    provider,
-    creditStore,
-    rateLimitStore,
-    generationModelStore,
-    authenticatedUserId: FAKE_USER_ID,
-    persistenceStore,
-  });
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({
+      container: "scene",
+      terminalBeat:
+        "Jonah admits the lie. His father takes the letter and turns away.",
+    })),
+    {
+      provider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
   const body = await resp.json();
 
   assertEquals(resp.status, 200);
@@ -1826,24 +1913,26 @@ Deno.test("terminal beat: absent terminalBeat produces private-inference instruc
 
   // No terminalBeat in the request — model should still get a
   // valid response (the prompt tells the model to infer one privately).
-  const resp = await handler(makeAuthRequest(makeBaseRequest({
-    container: "scene",
-    // terminalBeat intentionally omitted
-  })), {
-    provider,
-    creditStore,
-    rateLimitStore,
-    generationModelStore,
-    authenticatedUserId: FAKE_USER_ID,
-    persistenceStore,
-  });
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({
+      container: "scene",
+      // terminalBeat intentionally omitted
+    })),
+    {
+      provider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
   const body = await resp.json();
 
   assertEquals(resp.status, 200);
   assertEquals(body.wasTruncated, false);
   assertExists(body.generatedText);
 });
-
 
 // =============================================================================
 // PR-360-Z regression tests (corrections rule #8 — eight named tests).
@@ -1858,7 +1947,8 @@ function makeCapturingPR360ZProvider(): {
   provider: LLMProvider;
   capture: () => { messages: LLMMessage[]; maxCompletionTokens: number } | null;
 } {
-  let captured: { messages: LLMMessage[]; maxCompletionTokens: number } | null = null;
+  let captured: { messages: LLMMessage[]; maxCompletionTokens: number } | null =
+    null;
   const provider: LLMProvider = {
     complete(messages: LLMMessage[], maxCompletionTokens: number) {
       captured = { messages, maxCompletionTokens };
@@ -1917,9 +2007,12 @@ async function runPR360ZCapture(
 // 15:52 EDT (kevbot-brain #270) is the regression target: before this fix
 // buildStructuredPromptBody's output never reached LLMPromptDebugView.
 Deno.test({
-  name: "PR-360-Z regression 1: buildStructuredPromptBody populated → characters in user message",
+  name:
+    "PR-360-Z regression 1: buildStructuredPromptBody populated → characters in user message",
   fn: async () => {
-    const c = await runPR360ZCapture({ sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z });
+    const c = await runPR360ZCapture({
+      sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
+    });
     assertEquals(c !== null, true);
     const userMsg = c!.messages[1].content;
     assertStringIncludes(userMsg, "TestAlice");
@@ -1935,7 +2028,8 @@ Deno.test({
 // The "populated" half requires mocking adminClient + section_embeddings;
 // tracked as follow-up (the conditional logic is the same code path).
 Deno.test({
-  name: "PR-360-Z regression 2: projectStateContext absent → no project-state block in prompt",
+  name:
+    "PR-360-Z regression 2: projectStateContext absent → no project-state block in prompt",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -1957,7 +2051,8 @@ Deno.test({
 // stated inside the Authority block alongside the new Section Contract
 // outranks-all-creative-guidance principle.
 Deno.test({
-  name: "PR-360-Z regression 3 (smoke-test fix): SYSTEM has Section Contract Authority block; volatile values moved to USER",
+  name:
+    "PR-360-Z regression 3 (smoke-test fix): SYSTEM has Section Contract Authority block; volatile values moved to USER",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2012,7 +2107,8 @@ Deno.test({
 // Contract block specifically (other parts of the prompt might legitimately
 // reference "test" or "draft" — the assertion scopes to the contract).
 Deno.test({
-  name: "PR-360-Z regression 4 (smoke-test fix): sanitizeTitleForLLM strips (copy)/(test)/(draft) in USER Section Contract Title",
+  name:
+    "PR-360-Z regression 4 (smoke-test fix): sanitizeTitleForLLM strips (copy)/(test)/(draft) in USER Section Contract Title",
   fn: async () => {
     // Kevin 09:37 EDT prompt restructure: the volatile Title is now in
     // USER Section Contract (not SYSTEM). Switch the assertion to userMsg.
@@ -2054,7 +2150,8 @@ Deno.test({
 // The Writing Task line itself should not duplicate "POV:" inline; it just
 // references the Section Contract.
 Deno.test({
-  name: "PR-360-Z regression 5 (smoke-test fix): POV is in USER Section Contract block (volatile), not inline in Writing Task",
+  name:
+    "PR-360-Z regression 5 (smoke-test fix): POV is in USER Section Contract block (volatile), not inline in Writing Task",
   fn: async () => {
     // Kevin 09:37 EDT: POV instruction moved to USER Section Contract
     // (volatile, per-section). SYSTEM no longer duplicates it (caching
@@ -2160,11 +2257,11 @@ Deno.test({
     // Also verify Section Contract header appears at most once (no duplicate
     // block if sectionTitle is provided but no duplicate "Section Contract"
     // header either).
-    const sysContractCount = (sysMsg.match(/## Section Contract/g) || []).length;
+    const sysContractCount =
+      (sysMsg.match(/## Section Contract/g) || []).length;
     assertEquals(sysContractCount <= 1, true);
   },
 });
-
 
 // =============================================================================
 // PR-360-Z roll-in tests (Kevin 2026-08-20 20:56 EDT feedback).
@@ -2178,7 +2275,8 @@ Deno.test({
 // tension, movement, and consequence" which biased everything toward high
 // drama).
 Deno.test({
-  name: "PR-360-Z roll-in 1: Writing Instructions uses softer 'Match the emotional and dramatic intensity' wording",
+  name:
+    "PR-360-Z roll-in 1: Writing Instructions uses softer 'Match the emotional and dramatic intensity' wording",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2188,9 +2286,15 @@ Deno.test({
     assertEquals(c !== null, true);
     const sysMsg = c!.messages[0].content;
     // New softer wording is present.
-    assertStringIncludes(sysMsg, "Match the emotional and dramatic intensity of the section premise");
+    assertStringIncludes(
+      sysMsg,
+      "Match the emotional and dramatic intensity of the section premise",
+    );
     // Old high-drama-biasing line is gone.
-    assertEquals(sysMsg.includes("Write with tension, movement, and consequence"), false);
+    assertEquals(
+      sysMsg.includes("Write with tension, movement, and consequence"),
+      false,
+    );
   },
 });
 
@@ -2199,7 +2303,8 @@ Deno.test({
 // "Use the selected characters, relationships, spark, and motifs directly"
 // which forced unused canon into the prose).
 Deno.test({
-  name: "PR-360-Z roll-in 2: Writing Instructions uses softer 'Use only relevant characters' wording",
+  name:
+    "PR-360-Z roll-in 2: Writing Instructions uses softer 'Use only relevant characters' wording",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2209,10 +2314,21 @@ Deno.test({
     assertEquals(c !== null, true);
     const sysMsg = c!.messages[0].content;
     // New softer wording is present.
-    assertStringIncludes(sysMsg, "Use only the characters and contextual elements relevant to this beat");
-    assertStringIncludes(sysMsg, "Do not force unused canon elements into the prose");
+    assertStringIncludes(
+      sysMsg,
+      "Use only the characters and contextual elements relevant to this beat",
+    );
+    assertStringIncludes(
+      sysMsg,
+      "Do not force unused canon elements into the prose",
+    );
     // Old "must drive action, dialogue, or consequence" force line is gone.
-    assertEquals(sysMsg.includes("Use the selected characters, relationships, spark, and motifs directly"), false);
+    assertEquals(
+      sysMsg.includes(
+        "Use the selected characters, relationships, spark, and motifs directly",
+      ),
+      false,
+    );
   },
 });
 
@@ -2223,11 +2339,12 @@ Deno.test({
 // which was just actionTask[generate] = "Write an opening story scene..." —
 // wrong once cumulative state exists).
 Deno.test({
-  name: "PR-360-Z roll-in 3 (smoke-test fix): Writing Task uses dynamic container noun + new wording per Kevin's 11:02 EDT spec",
+  name:
+    "PR-360-Z roll-in 3 (smoke-test fix): Writing Task uses dynamic container noun + new wording per Kevin's 11:02 EDT spec",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
-      container: "beat",  // make the dynamic container noun assertion deterministic
+      container: "beat", // make the dynamic container noun assertion deterministic
       sectionTitle: "Test Section",
       sectionSummary: "Test summary",
     });
@@ -2283,7 +2400,8 @@ Deno.test({
 // encounter should permanently change the relationship or reveal something
 // previously hidden" — was overbearing for tiny beats).
 Deno.test({
-  name: "PR-360-Z roll-in 4: Intimacy rule does NOT contain 'permanently change the relationship'",
+  name:
+    "PR-360-Z roll-in 4: Intimacy rule does NOT contain 'permanently change the relationship'",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2294,11 +2412,16 @@ Deno.test({
     const sysMsg = c!.messages[0].content;
     // The overbearing line is gone.
     assertEquals(
-      sysMsg.includes("Every intimate encounter should permanently change the relationship"),
+      sysMsg.includes(
+        "Every intimate encounter should permanently change the relationship",
+      ),
       false,
     );
     // The kept "explicitly authorized as character craft" framing is still there.
-    assertStringIncludes(sysMsg, "Intimacy is explicitly authorized as character craft");
+    assertStringIncludes(
+      sysMsg,
+      "Intimacy is explicitly authorized as character craft",
+    );
   },
 });
 
@@ -2309,7 +2432,8 @@ Deno.test({
 // the explicit generation request. (The SYSTEM-level Section Contract
 // remains as the authoritative anchor; this is the user-content version.)
 Deno.test({
-  name: "PR-360-Z roll-in 5 (smoke-test fix): Section Contract volatile values in USER; SYSTEM carries authority only",
+  name:
+    "PR-360-Z roll-in 5 (smoke-test fix): Section Contract volatile values in USER; SYSTEM carries authority only",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2341,7 +2465,6 @@ Deno.test({
     );
   },
 });
-
 
 // =============================================================================
 // PR-360-Z smoke-test regression block — Kevin's 2026-08-21 21:29 EDT feedback
@@ -2380,7 +2503,8 @@ Characters in play:
 // containing: sanitized section title, current section summary/premise,
 // requested POV"). Fails if the USER Section Contract is missing.
 Deno.test({
-  name: "PR-360-Z smoke-test 1 (smoke-test fix): USER message contains ## Section Contract (volatile values) when section context passed",
+  name:
+    "PR-360-Z smoke-test 1 (smoke-test fix): USER message contains ## Section Contract (volatile values) when section context passed",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2405,7 +2529,11 @@ Deno.test({
       false,
       "Old USER ## Section Contract (AUTHORITATIVE) header removed (replaced by plain ## Section Contract)",
     );
-    assertStringIncludes(userMsg, "Maya at the bar", "Section title must appear in USER Section Contract");
+    assertStringIncludes(
+      userMsg,
+      "Maya at the bar",
+      "Section title must appear in USER Section Contract",
+    );
     assertStringIncludes(
       userMsg,
       "Maya walks into the corner bar she's avoided for three years",
@@ -2419,7 +2547,8 @@ Deno.test({
 // (Kevin #9423 items #2 + #3). The canonical Writing Task text is the
 // section-contract-anchored continuation line.
 Deno.test({
-  name: "PR-360-Z smoke-test 2: prompt contains exactly ONE Writing Task (no legacy opening-scene line)",
+  name:
+    "PR-360-Z smoke-test 2: prompt contains exactly ONE Writing Task (no legacy opening-scene line)",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2453,7 +2582,9 @@ Deno.test({
     );
     // OLD wording MUST be absent.
     assertEquals(
-      userMsg.includes("Write the next complete beat described by the Section Contract"),
+      userMsg.includes(
+        "Write the next complete beat described by the Section Contract",
+      ),
       false,
       "OLD 'Write the next complete beat' wording must be replaced by dynamic container noun version (Kevin 11:02 EDT)",
     );
@@ -2473,7 +2604,8 @@ Deno.test({
 // drives the model's POV — if the line is missing or the instruction is
 // empty, the model writes without a POV anchor.
 Deno.test({
-  name: "PR-360-Z smoke-test 3: Section Contract block contains explicit POV: line with POV instruction",
+  name:
+    "PR-360-Z smoke-test 3: Section Contract block contains explicit POV: line with POV instruction",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2499,7 +2631,9 @@ Deno.test({
     // Slice the block until the next ## heading or end-of-message.
     const afterContract = userMsg.slice(contractIdx);
     const nextHeading = afterContract.slice(1).search(/\n## /);
-    const blockEnd = nextHeading === -1 ? afterContract.length : nextHeading + 1;
+    const blockEnd = nextHeading === -1
+      ? afterContract.length
+      : nextHeading + 1;
     const sectionBlock = afterContract.slice(0, blockEnd);
     assertStringIncludes(
       sectionBlock,
@@ -2513,7 +2647,6 @@ Deno.test({
     );
   },
 });
-
 
 // =============================================================================
 // Turtle smoke-test regression (added 2026-08-21 after Kevin's actual TestFlight
@@ -2549,7 +2682,8 @@ const TURTLE_SMOKE_TEST_STATE_PR360Z = {
 // system + user) contains the exact Turtle section title + summary + POV in
 // the Section Contract block. Asserts the data path end-to-end.
 Deno.test({
-  name: "Turtle smoke-test (smoke-test fix): stored prompt contains Section Contract with title + summary + POV; new framing applied",
+  name:
+    "Turtle smoke-test (smoke-test fix): stored prompt contains Section Contract with title + summary + POV; new framing applied",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2619,7 +2753,8 @@ Deno.test({
 // Turtle regression test 2: the canonical "described by the Section Contract"
 // Writing Task is present when section context is provided.
 Deno.test({
-  name: "Turtle smoke-test: canonical Writing Task (described by Section Contract) when section context provided",
+  name:
+    "Turtle smoke-test: canonical Writing Task (described by Section Contract) when section context provided",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2645,7 +2780,8 @@ Deno.test({
 // the Section Contract block is absent — a contradiction the model cannot
 // recover from (Kevin's 2026-08-21 Turtle smoke test failure mode).
 Deno.test({
-  name: "Guardrail: Writing Task must NOT reference Section Contract when block is absent",
+  name:
+    "Guardrail: Writing Task must NOT reference Section Contract when block is absent",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2682,7 +2818,6 @@ Deno.test({
     );
   },
 });
-
 
 // =============================================================================
 // PR-360-Z prompt-authority regression (added 2026-08-21 after Kevin's Turtle
@@ -2726,7 +2861,8 @@ Characters in play:
 //   Before the fix: "summary above describes the END STATE of this scene".
 //   After the fix:  "premise describes what must happen in the current section".
 Deno.test({
-  name: "Authority fix: USER Section Contract uses 'must happen now' framing (not END STATE)",
+  name:
+    "Authority fix: USER Section Contract uses 'must happen now' framing (not END STATE)",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2761,7 +2897,8 @@ Deno.test({
 // Regression 2: SYSTEM has the Section Contract Authority block that
 //   says Section Contract outranks ALL other creative guidance.
 Deno.test({
-  name: "Authority fix: SYSTEM has Section Contract Authority block (outranks ALL other creative guidance)",
+  name:
+    "Authority fix: SYSTEM has Section Contract Authority block (outranks ALL other creative guidance)",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2808,7 +2945,8 @@ Deno.test({
 //   Per Kevin 09:37 EDT spec: replaced with "Use this spark only when
 //   relevant to the current Section Contract".
 Deno.test({
-  name: "Authority fix: Dramatic Seed no longer claims to be the primary engine",
+  name:
+    "Authority fix: Dramatic Seed no longer claims to be the primary engine",
   fn: async () => {
     // POPULATED_FULL_PAYLOAD_PR360Z has a selectedStorySpark so the Spark
     // section renders. POPULATED_PAYLOAD_PR360Z leaves spark empty.
@@ -2846,7 +2984,8 @@ Deno.test({
 // Regression 4: Themes + Motifs + Relationships carry the "Supporting context
 //   only — Section Contract always takes precedence" precedence note.
 Deno.test({
-  name: "Authority fix: Themes / Motifs / Relationships carry Section Contract precedence note",
+  name:
+    "Authority fix: Themes / Motifs / Relationships carry Section Contract precedence note",
   fn: async () => {
     // POPULATED_FULL_PAYLOAD_PR360Z has selectedThemeQuestions,
     // selectedMotifs, and selectedRelationships so those sections render.
@@ -2903,7 +3042,8 @@ Deno.test({
 //   interaction merely because it was the latest event" — the exact
 //   failure mode Kevin's smoke test exposed (Ted/Betty kissing).
 Deno.test({
-  name: "Authority fix: Project State transition rule prevents continuing prior interaction",
+  name:
+    "Authority fix: Project State transition rule prevents continuing prior interaction",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -2933,7 +3073,8 @@ Deno.test({
 //   guardrail that catches the exact Kevin-smoke-test failure mode in
 //   future regressions.
 Deno.test({
-  name: "Authority fix: Beat Rule emitted for Beat container only — first beat must materially advance Section Contract",
+  name:
+    "Authority fix: Beat Rule emitted for Beat container only — first beat must materially advance Section Contract",
   fn: async () => {
     // Beat container — rule must be present.
     const cBeat = await runPR360ZCapture({
@@ -2979,7 +3120,8 @@ Deno.test({
 // old primary-engine / END STATE / AUTHORITATIVE — DO NOT INVERT strings
 // creep back in via a future change).
 Deno.test({
-  name: "Authority fix: legacy 'primary dramatic engine' / 'END STATE' / 'AUTHORITATIVE — DO NOT INVERT' strings absent",
+  name:
+    "Authority fix: legacy 'primary dramatic engine' / 'END STATE' / 'AUTHORITATIVE — DO NOT INVERT' strings absent",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -3013,7 +3155,6 @@ Deno.test({
   },
 });
 
-
 // PR-360-Z authority-fix fixture: structured story context populated
 // (selectedStorySpark, selectedThemeQuestions, selectedMotifs,
 // selectedRelationships) so the Section Contract precedence notes actually
@@ -3031,7 +3172,10 @@ const POPULATED_FULL_PAYLOAD_PR360Z = {
     { nameA: "TestAlice", nameB: "TestBob", loyalty: "deep trust" },
   ],
   selectedThemeQuestions: [
-    { question: "Can trust survive betrayal?", coreTension: "loyalty vs evidence" },
+    {
+      question: "Can trust survive betrayal?",
+      coreTension: "loyalty vs evidence",
+    },
   ],
   selectedMotifs: [
     { label: "flickering candle", meaning: "hope in darkness" },
@@ -3047,9 +3191,6 @@ const POPULATED_FULL_PAYLOAD_PR360Z = {
     emotionalResidue: "something shifts inside the reader",
   },
 };
-
-
-
 
 // =============================================================================
 // Defense-in-depth regression (added 2026-08-21 after Kevin's T2 smoke test
@@ -3067,7 +3208,8 @@ const POPULATED_FULL_PAYLOAD_PR360Z = {
 // =============================================================================
 
 Deno.test({
-  name: "Defense-in-depth: fetchProjectStateContext query INNER JOINs generation_outputs to exclude orphaned memory",
+  name:
+    "Defense-in-depth: fetchProjectStateContext query INNER JOINs generation_outputs to exclude orphaned memory",
   fn: async () => {
     // Read the source of fetchProjectStateContext (the function that loads
     // Project State into the prompt). Assert the INNER JOIN is present in
@@ -3080,7 +3222,10 @@ Deno.test({
     assertNotEquals(fnStart, -1, "fetchProjectStateContext must exist");
     // Find the next function or end of file to bound the slice.
     const fnBodyEnd = text.indexOf("\nfunction ", fnStart + 1);
-    const fnBody = text.slice(fnStart, fnBodyEnd > 0 ? fnBodyEnd : fnStart + 3000);
+    const fnBody = text.slice(
+      fnStart,
+      fnBodyEnd > 0 ? fnBodyEnd : fnStart + 3000,
+    );
 
     // The function must use generation_outputs!inner(id) to filter orphaned memory.
     assertStringIncludes(
@@ -3119,7 +3264,7 @@ Deno.test({
 // =============================================================================
 
 const VIGNETTE_AUTHORITY_FIXTURE = {
-  container: "vignette",  // Kevin's smoke test uses Vignette, not Beat.
+  container: "vignette", // Kevin's smoke test uses Vignette, not Beat.
   pov: "thirdPersonLimited",
   sectionTitle: "The Turtle",
   sectionSummary:
@@ -3142,7 +3287,8 @@ Characters in play:
 //   Section Contract, which must come BEFORE Writing Task. Section Contract
 //   is the LAST substantive context before the task.
 Deno.test({
-  name: "Ordering fix: USER volatile suffix order = Project State → Section Contract → Writing Task",
+  name:
+    "Ordering fix: USER volatile suffix order = Project State → Section Contract → Writing Task",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_FULL_PAYLOAD_PR360Z,
@@ -3164,7 +3310,8 @@ Deno.test({
     assertNotEquals(writingTaskIdx, -1, "Writing Task must render");
     // Ordering assertion: Project State < Section Contract < Writing Task.
     assertEquals(
-      projectStateIdx < sectionContractIdx && sectionContractIdx < writingTaskIdx,
+      projectStateIdx < sectionContractIdx &&
+        sectionContractIdx < writingTaskIdx,
       true,
       `Volatile suffix order must be: Project State (${projectStateIdx}) < Section Contract (${sectionContractIdx}) < Writing Task (${writingTaskIdx})`,
     );
@@ -3228,7 +3375,8 @@ Deno.test({
 //   an instruction you're simultaneously calling authoritative. CACHEABLE
 //   is implementation metadata and does not belong in LLM-visible prose."
 Deno.test({
-  name: "Ordering fix: SYSTEM Section Contract Authority header dropped UNTRUSTED, CACHEABLE",
+  name:
+    "Ordering fix: SYSTEM Section Contract Authority header dropped UNTRUSTED, CACHEABLE",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_FULL_PAYLOAD_PR360Z,
@@ -3270,7 +3418,8 @@ Deno.test({
 //   regressions where a piece of the prompt reverts to the old
 //   ordering or wording.
 Deno.test({
-  name: "Ordering fix: full Turtle prompt integrity (Ted/Betty prior + DMT/turtle section + Vignette container)",
+  name:
+    "Ordering fix: full Turtle prompt integrity (Ted/Betty prior + DMT/turtle section + Vignette container)",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_FULL_PAYLOAD_PR360Z,
@@ -3286,10 +3435,26 @@ Deno.test({
     const allText = sysMsg + "\n" + userMsg;
     // Turtle section data must be in the prompt verbatim (the smoke test
     // expects the model to know about DMT + prophetic turtle).
-    assertStringIncludes(userMsg, "The Turtle", "Section title (Turtle) must appear in USER");
-    assertStringIncludes(userMsg, "prophetic turtle", "Section summary must appear verbatim in USER Section Contract");
-    assertStringIncludes(userMsg, "save America", "Section summary must appear verbatim in USER Section Contract");
-    assertStringIncludes(userMsg, "smoke DMT", "Section summary must appear verbatim in USER Section Contract");
+    assertStringIncludes(
+      userMsg,
+      "The Turtle",
+      "Section title (Turtle) must appear in USER",
+    );
+    assertStringIncludes(
+      userMsg,
+      "prophetic turtle",
+      "Section summary must appear verbatim in USER Section Contract",
+    );
+    assertStringIncludes(
+      userMsg,
+      "save America",
+      "Section summary must appear verbatim in USER Section Contract",
+    );
+    assertStringIncludes(
+      userMsg,
+      "smoke DMT",
+      "Section summary must appear verbatim in USER Section Contract",
+    );
     // No legacy strings anywhere.
     assertEquals(
       allText.includes("primary dramatic engine of the scene"),
@@ -3321,7 +3486,6 @@ Deno.test({
   },
 });
 
-
 // =============================================================================
 // PR-360-Z section-memory lineage regression (added 2026-08-21 after Kevin
 // found the data integrity bug: deleting a GenerationOutput does not remove
@@ -3340,7 +3504,8 @@ Deno.test({
 // =============================================================================
 
 Deno.test({
-  name: "Section-memory lineage fix (REVISED): FK on generation_output_id replaces trigger + backfill handles legacy rows",
+  name:
+    "Section-memory lineage fix (REVISED): FK on generation_output_id replaces trigger + backfill handles legacy rows",
   fn: async () => {
     // Per Kevin 2026-08-21 13:05 EDT feedback, the Round 4 migration was revised:
     // - Drop the custom output-delete trigger (replaced by FK + ON DELETE CASCADE)
@@ -3350,16 +3515,22 @@ Deno.test({
     //
     // Assert the migration contains the canonical FK + backfill pattern, and
     // does NOT contain the dropped trigger.
-    const migrationPath = "supabase/migrations/20260821120000_add_generation_output_id_to_section_embeddings.sql";
+    const migrationPath =
+      "supabase/migrations/20260821120000_add_generation_output_id_to_section_embeddings.sql";
     const testPath = "supabase/migrations/test_section_memory_lineage.sql";
     const exists = (await import("node:fs")).existsSync;
     if (!exists(migrationPath)) {
       throw new Error(`Migration file missing: ${migrationPath}`);
     }
     if (!exists(testPath)) {
-      throw new Error(`Behavioral DB regression test file missing: ${testPath}`);
+      throw new Error(
+        `Behavioral DB regression test file missing: ${testPath}`,
+      );
     }
-    const migrationText = (await import("node:fs")).readFileSync(migrationPath, "utf8");
+    const migrationText = (await import("node:fs")).readFileSync(
+      migrationPath,
+      "utf8",
+    );
     // FK + ON DELETE CASCADE present.
     assertStringIncludes(
       migrationText,
@@ -3382,12 +3553,16 @@ Deno.test({
     // trigger name in the DROP statement, but it must NOT CREATE the trigger
     // (only DROP it). The FK is the canonical approach per Kevin's spec.
     assertEquals(
-      migrationText.includes("create trigger generation_outputs_delete_source_memory"),
+      migrationText.includes(
+        "create trigger generation_outputs_delete_source_memory",
+      ),
       false,
       "Migration must NOT CREATE the custom trigger (replaced by FK CASCADE per Kevin 13:05 EDT)",
     );
     assertEquals(
-      migrationText.includes("create or replace function public.delete_source_section_embedding"),
+      migrationText.includes(
+        "create or replace function public.delete_source_section_embedding",
+      ),
       false,
       "Migration must NOT CREATE the custom trigger function (replaced by FK CASCADE per Kevin 13:05 EDT)",
     );
@@ -3410,7 +3585,6 @@ Deno.test({
     );
   },
 });
-
 
 // =============================================================================
 // PR-360-Z CLEANUP PASS (Kevin 2026-08-21 14:44 EDT smoke-test feedback)
@@ -3450,7 +3624,8 @@ Deno.test({
 //     + excludeSectionId filter).
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z cleanup #1: projectStateContext appears in Section 2 user message (Section 1 memory → Project State)",
+  name:
+    "PR-360-Z cleanup #1: projectStateContext appears in Section 2 user message (Section 1 memory → Project State)",
   fn: async () => {
     const sectionOneMemory =
       "## Project state (cumulative across all accepted scenes)\n\n" +
@@ -3482,7 +3657,11 @@ Deno.test({
     // (success criterion #1c). Order check: Section Contract index < Writing Task index.
     const sectionContractIdx = userMsg.lastIndexOf("## Section Contract");
     const writingTaskIdx = userMsg.lastIndexOf("## Writing Task");
-    assertNotEquals(sectionContractIdx, -1, "Section Contract block must render");
+    assertNotEquals(
+      sectionContractIdx,
+      -1,
+      "Section Contract block must render",
+    );
     assertNotEquals(writingTaskIdx, -1, "Writing Task block must render");
     assertEquals(
       sectionContractIdx < writingTaskIdx,
@@ -3492,7 +3671,11 @@ Deno.test({
     // Project State block appears BEFORE Section Contract (canonical order
     // per Kevin's spec: project context → Project State → Section Contract → Writing Task).
     const projectStateIdx = userMsg.indexOf("## Project state");
-    assertNotEquals(projectStateIdx, -1, "Project State block must render when populated");
+    assertNotEquals(
+      projectStateIdx,
+      -1,
+      "Project State block must render when populated",
+    );
     assertEquals(
       projectStateIdx < sectionContractIdx,
       true,
@@ -3506,7 +3689,8 @@ Deno.test({
 // section's row so prior/throwaway memory does not feed back.
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z cleanup #1: fetchProjectStateContext accepts excludeSectionId + filters it in the query",
+  name:
+    "PR-360-Z cleanup #1: fetchProjectStateContext accepts excludeSectionId + filters it in the query",
   fn: async () => {
     const indexPath = "supabase/functions/generate-story/index.ts";
     const text = (await import("node:fs")).readFileSync(indexPath, "utf8");
@@ -3515,7 +3699,10 @@ Deno.test({
     const fnStart = text.indexOf("async function fetchProjectStateContext");
     assertNotEquals(fnStart, -1, "fetchProjectStateContext must exist");
     const fnBodyEnd = text.indexOf("\nfunction ", fnStart + 1);
-    const fnBody = text.slice(fnStart, fnBodyEnd > 0 ? fnBodyEnd : fnStart + 3000);
+    const fnBody = text.slice(
+      fnStart,
+      fnBodyEnd > 0 ? fnBodyEnd : fnStart + 3000,
+    );
     assertStringIncludes(
       fnBody,
       "excludeSectionId?: string",
@@ -3541,7 +3728,7 @@ Deno.test({
     assertStringIncludes(
       fnBody,
       "fetchProjectStateContext query error",
-      "fetchProjectStateContext must log the PostgREST error on query failure (was silently returning \"\" before)",
+      'fetchProjectStateContext must log the PostgREST error on query failure (was silently returning "" before)',
     );
 
     // 5. Call site passes body.outline_section_id as excludeSectionId.
@@ -3561,7 +3748,8 @@ Deno.test({
 // not the literal word/object.
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z cleanup #2: Ending Instruction describes residue, not literal word/object",
+  name:
+    "PR-360-Z cleanup #2: Ending Instruction describes residue, not literal word/object",
   fn: async () => {
     const indexPath = "supabase/functions/generate-story/index.ts";
     const text = (await import("node:fs")).readFileSync(indexPath, "utf8");
@@ -3608,7 +3796,8 @@ Deno.test({
 // Relationships / Themes / Motifs / Ending Instruction).
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z cleanup #3: supporting-context qualifiers present on Relationships, Themes, Motifs, Dramatic Seed, Ending Instruction",
+  name:
+    "PR-360-Z cleanup #3: supporting-context qualifiers present on Relationships, Themes, Motifs, Dramatic Seed, Ending Instruction",
   fn: async () => {
     const indexPath = "supabase/functions/generate-story/index.ts";
     const text = (await import("node:fs")).readFileSync(indexPath, "utf8");
@@ -3667,7 +3856,8 @@ Deno.test({
 // rule is tightened for vignettes specifically.
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z cleanup #4: vignette container has container-specific stopping rule (no aftermath sprawl)",
+  name:
+    "PR-360-Z cleanup #4: vignette container has container-specific stopping rule (no aftermath sprawl)",
   fn: async () => {
     const indexPath = "supabase/functions/generate-story/index.ts";
     const text = (await import("node:fs")).readFileSync(indexPath, "utf8");
@@ -3676,7 +3866,11 @@ Deno.test({
     const vignetteBlock = text.match(
       /vignette:\s*\{[\s\S]*?\},/,
     );
-    assertNotEquals(vignetteBlock, null, "vignette container config block must exist");
+    assertNotEquals(
+      vignetteBlock,
+      null,
+      "vignette container config block must exist",
+    );
     assertStringIncludes(
       vignetteBlock![0],
       'stoppingRule: "Once the vignette reaches its resonant image or emotional turn, stop. Do not add aftermath, future-action setup, a second ending, or additional thematic explanation after the natural stopping point."',
@@ -3687,7 +3881,11 @@ Deno.test({
     const containerInstructionsFn = text.match(
       /const containerInstructions = \([\s\S]*?\);/,
     );
-    assertNotEquals(containerInstructionsFn, null, "containerInstructions function must exist");
+    assertNotEquals(
+      containerInstructionsFn,
+      null,
+      "containerInstructions function must exist",
+    );
     assertStringIncludes(
       containerInstructionsFn![0],
       "stoppingRule?: string",
@@ -3715,7 +3913,11 @@ Deno.test({
 
     // hardCap is unchanged (Kevin 14:44 EDT: 'Do not change container budgets').
     const vignetteHardCap = text.match(/vignette:\s*\{[\s\S]*?hardCap:\s*\d+,/);
-    assertNotEquals(vignetteHardCap, null, "vignette hardCap must still be defined");
+    assertNotEquals(
+      vignetteHardCap,
+      null,
+      "vignette hardCap must still be defined",
+    );
     assertStringIncludes(
       vignetteHardCap![0],
       "hardCap: 1200",
@@ -3728,10 +3930,12 @@ Deno.test({
 // Cleanup pass #1 migration: validate FK + reload PostgREST schema.
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z cleanup #1 migration: validates section_embeddings FK + reloads PostgREST schema",
+  name:
+    "PR-360-Z cleanup #1 migration: validates section_embeddings FK + reloads PostgREST schema",
   fn: async () => {
     const fs = await import("node:fs");
-    const path = "supabase/migrations/20260821140000_validate_section_embeddings_fk_and_reload_schema.sql";
+    const path =
+      "supabase/migrations/20260821140000_validate_section_embeddings_fk_and_reload_schema.sql";
     const text = fs.readFileSync(path, "utf8");
     assertStringIncludes(
       text,
@@ -3745,7 +3949,6 @@ Deno.test({
     );
   },
 });
-
 
 // =============================================================================
 // PR-360-Z CLEANUP PASS — Story Arc Context (Kevin 2026-08-21 17:02 EDT)
@@ -3771,16 +3974,19 @@ Deno.test({
 // Handler-level: block renders correctly when all fields are populated.
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z Story Arc Context: block renders when all fields populated (Kevin 17:02 EDT spec)",
+  name:
+    "PR-360-Z Story Arc Context: block renders when all fields populated (Kevin 17:02 EDT spec)",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
       sectionTitle: "The Darkest Hour",
-      sectionSummary: "The hero confronts the villain at the midpoint of the arc.",
+      sectionSummary:
+        "The hero confronts the villain at the midpoint of the arc.",
       storyArcName: "Three-Act Structure",
       storyArcBeatLabel: "Midpoint Reversal",
-      storyArcBeatPurpose: "Stakes raised; hero's worst fear realized; major revelation shifts the trajectory of the story.",
-      storyArcPosition: 3,        // 0-indexed in DB
+      storyArcBeatPurpose:
+        "Stakes raised; hero's worst fear realized; major revelation shifts the trajectory of the story.",
+      storyArcPosition: 3, // 0-indexed in DB
       storyArcTotalBeats: 7,
     });
     assertEquals(c !== null, true);
@@ -3800,8 +4006,16 @@ Deno.test({
     );
 
     // Each of the four content lines.
-    assertStringIncludes(userMsg, "Arc: Three-Act Structure", "Arc name line must render");
-    assertStringIncludes(userMsg, "Current beat: Midpoint Reversal", "Beat label line must render");
+    assertStringIncludes(
+      userMsg,
+      "Arc: Three-Act Structure",
+      "Arc name line must render",
+    );
+    assertStringIncludes(
+      userMsg,
+      "Current beat: Midpoint Reversal",
+      "Beat label line must render",
+    );
     assertStringIncludes(
       userMsg,
       "Beat purpose: Stakes raised; hero\u2019s worst fear realized; major revelation shifts the trajectory of the story.",
@@ -3820,7 +4034,8 @@ Deno.test({
 // Handler-level: block is omitted when NO fields are set (back-compat).
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z Story Arc Context: block omitted when no fields set (back-compat for iOS direct-gen)",
+  name:
+    "PR-360-Z Story Arc Context: block omitted when no fields set (back-compat for iOS direct-gen)",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -3842,7 +4057,8 @@ Deno.test({
 // Handler-level: position partial fields work (e.g., position without total).
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z Story Arc Context: partial fields render the available lines (e.g., beat only)",
+  name:
+    "PR-360-Z Story Arc Context: partial fields render the available lines (e.g., beat only)",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -3852,8 +4068,16 @@ Deno.test({
     });
     assertEquals(c !== null, true);
     const userMsg = c!.messages[1].content;
-    assertStringIncludes(userMsg, "## Story Arc Context", "Header must render when at least one field is set");
-    assertStringIncludes(userMsg, "Current beat: Inciting Incident", "Beat label line must render");
+    assertStringIncludes(
+      userMsg,
+      "## Story Arc Context",
+      "Header must render when at least one field is set",
+    );
+    assertStringIncludes(
+      userMsg,
+      "Current beat: Inciting Incident",
+      "Beat label line must render",
+    );
     // Other lines must NOT render when their fields are absent.
     assertEquals(
       userMsg.includes("Arc:"),
@@ -3877,13 +4101,15 @@ Deno.test({
 // Placement: Story Arc Context must be between Project State and Section Contract.
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z Story Arc Context: placed between Project State and Section Contract (Kevin 17:02 EDT order)",
+  name:
+    "PR-360-Z Story Arc Context: placed between Project State and Section Contract (Kevin 17:02 EDT order)",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
       sectionTitle: "Order Check",
       sectionSummary: "Verifying prompt order.",
-      projectStateContext: "## Project state (cumulative across all accepted scenes)\n\nPrior scene memory.",
+      projectStateContext:
+        "## Project state (cumulative across all accepted scenes)\n\nPrior scene memory.",
       storyArcName: "Hero\u2019s Journey",
       storyArcBeatLabel: "Crossing the Threshold",
       storyArcBeatPurpose: "Hero commits to the adventure.",
@@ -3925,10 +4151,14 @@ Deno.test({
 // Source-level: generate-story request body type + buildPrompt params + forwarding.
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z Story Arc Context: request body + buildPrompt + handler forwarding are wired",
+  name:
+    "PR-360-Z Story Arc Context: request body + buildPrompt + handler forwarding are wired",
   fn: async () => {
     const fs = await import("node:fs");
-    const text = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+    const text = fs.readFileSync(
+      "supabase/functions/generate-story/index.ts",
+      "utf8",
+    );
 
     // 1. Request body interface accepts the 5 new fields.
     assertStringIncludes(
@@ -3962,7 +4192,10 @@ Deno.test({
     const fnPromptStart = text.indexOf("function buildPrompt(req: {");
     assertNotEquals(fnPromptStart, -1, "buildPrompt must exist");
     const fnPromptEnd = text.indexOf("\nfunction ", fnPromptStart + 1);
-    const fnPromptBody = text.slice(fnPromptStart, fnPromptEnd > 0 ? fnPromptEnd : fnPromptStart + 3000);
+    const fnPromptBody = text.slice(
+      fnPromptStart,
+      fnPromptEnd > 0 ? fnPromptEnd : fnPromptStart + 3000,
+    );
     assertStringIncludes(
       fnPromptBody,
       "storyArcName?: string;",
@@ -3977,8 +4210,8 @@ Deno.test({
     // 3. The "## Story Arc Context" block is rendered with Kevin's exact framing.
     assertStringIncludes(
       text,
-      "\"## Story Arc Context\"",
-      "buildPrompt must render the \"## Story Arc Context\" header",
+      '"## Story Arc Context"',
+      'buildPrompt must render the "## Story Arc Context" header',
     );
     assertStringIncludes(
       text,
@@ -4012,7 +4245,8 @@ Deno.test({
 // fetchStoryArcContext helper exists and is called.
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z Story Arc Context: _generation_request.ts + run-outline fetchStoryArcContext wired",
+  name:
+    "PR-360-Z Story Arc Context: _generation_request.ts + run-outline fetchStoryArcContext wired",
   fn: async () => {
     const fs = await import("node:fs");
     const genReqText = fs.readFileSync(
@@ -4057,7 +4291,6 @@ Deno.test({
   },
 });
 
-
 // =============================================================================
 // PR-360-Z cleanup pass — REGRESSION TESTS (Kevin 2026-08-21 17:47 EDT spec)
 //
@@ -4090,10 +4323,14 @@ Deno.test({
 // happened". The fire-and-forget embed-section call inside generate-story must
 // pass raw_text from llmResult.content directly.
 Deno.test({
-  name: "PR-360-Z regression A: generate-story calls embed-section with raw_text = llmResult.content (the actual prose)",
+  name:
+    "PR-360-Z regression A: generate-story calls embed-section with raw_text = llmResult.content (the actual prose)",
   fn: async () => {
     const fs = await import("node:fs");
-    const text = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+    const text = fs.readFileSync(
+      "supabase/functions/generate-story/index.ts",
+      "utf8",
+    );
 
     // The fire-and-forget call site MUST pass llmResult.content as raw_text.
     // This is the architectural fix — SectionEmbedService.buildRawText(for:)
@@ -4106,7 +4343,10 @@ Deno.test({
 
     // The fetch-site MUST be inside the if (outlineSectionCtx.section && llmResult?.content)
     // guard — only fire when both outline_section_id resolved AND we have prose.
-    const handlerArea = text.slice(text.indexOf("function handler("), text.indexOf("function fetchOutlineSectionContext("));
+    const handlerArea = text.slice(
+      text.indexOf("function handler("),
+      text.indexOf("function fetchOutlineSectionContext("),
+    );
     assertStringIncludes(
       handlerArea,
       "outlineSectionCtx.section && llmResult?.content",
@@ -4123,9 +4363,31 @@ Deno.test({
     // The embed-section call payload MUST include all the section metadata the
     // embed-section edge function expects (title, summary, container, pov,
     // terminal_beat, story_arc_beat_id, position, outline_id).
-    const callSiteMatch = handlerArea.match(/callEmbedSectionForGeneratedOutput\([\s\S]+?\}\)/);
-    assertNotEquals(callSiteMatch, null, "callEmbedSectionForGeneratedOutput call site must exist");
-    for (const field of ["outline_section_id", "outline_id", "project_id", "position", "title", "summary", "container", "pov", "terminal_beat", "story_arc_beat_id", "raw_text", "output_id", "prior_context"]) {
+    const callSiteMatch = handlerArea.match(
+      /callEmbedSectionForGeneratedOutput\([\s\S]+?\}\)/,
+    );
+    assertNotEquals(
+      callSiteMatch,
+      null,
+      "callEmbedSectionForGeneratedOutput call site must exist",
+    );
+    for (
+      const field of [
+        "outline_section_id",
+        "outline_id",
+        "project_id",
+        "position",
+        "title",
+        "summary",
+        "container",
+        "pov",
+        "terminal_beat",
+        "story_arc_beat_id",
+        "raw_text",
+        "output_id",
+        "prior_context",
+      ]
+    ) {
       assertStringIncludes(
         callSiteMatch![0],
         field,
@@ -4138,20 +4400,24 @@ Deno.test({
 // Source-level assertion: handler forwards body.outline_outline_section_id to
 // persistence.insertOutput so generation_outputs.outline_section_id is populated.
 Deno.test({
-  name: "PR-360-Z regression A: handler forwards outline_section_id to persistence.insertOutput (FK target populated)",
+  name:
+    "PR-360-Z regression A: handler forwards outline_section_id to persistence.insertOutput (FK target populated)",
   fn: async () => {
     const fs = await import("node:fs");
-    const text = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+    const text = fs.readFileSync(
+      "supabase/functions/generate-story/index.ts",
+      "utf8",
+    );
     assertStringIncludes(
       text,
-      'outline_section_id: body.outline_section_id ?? null',
+      "outline_section_id: body.outline_section_id ?? null",
       "persistence.insertOutput must persist body.outline_section_id to generation_outputs.outline_section_id",
     );
     // Also confirm llm_prompts insert captures the same id (so the LLMPromptDebugView
     // can correlate prompts to their source section).
     assertStringIncludes(
       text,
-      'outline_section_id: body.outline_section_id ?? null,',
+      "outline_section_id: body.outline_section_id ?? null,",
       "llm_prompts insert must persist body.outline_section_id (LLMPromptDebugView correlation)",
     );
   },
@@ -4162,10 +4428,14 @@ Deno.test({
 // Single owner = generate-story. run-outline no longer calls embed-section.
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z regression B: run-outline no longer calls embed-section (single owner = generate-story)",
+  name:
+    "PR-360-Z regression B: run-outline no longer calls embed-section (single owner = generate-story)",
   fn: async () => {
     const fs = await import("node:fs");
-    const runOutlineText = fs.readFileSync("supabase/functions/run-outline/index.ts", "utf8");
+    const runOutlineText = fs.readFileSync(
+      "supabase/functions/run-outline/index.ts",
+      "utf8",
+    );
 
     // run-outline MUST NOT call callEmbedSection anymore.
     // We search for non-comment occurrences of callEmbedSection.
@@ -4174,13 +4444,18 @@ Deno.test({
       .map((line, i) => ({ line, idx: i + 1 }))
       .filter(({ line }) => {
         const trimmed = line.trim();
-        if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) return false;
+        if (
+          trimmed.startsWith("//") || trimmed.startsWith("*") ||
+          trimmed.startsWith("/*")
+        ) return false;
         return line.includes("callEmbedSection(");
       });
     assertEquals(
       occurrences.length,
       0,
-      `run-outline MUST NOT call callEmbedSection anymore (Kevin 17:47 EDT — single owner = generate-story). Found ${occurrences.length} non-comment occurrence(s):\n${occurrences.map((o) => `  line ${o.idx}: ${o.line}`).join("\n")}`,
+      `run-outline MUST NOT call callEmbedSection anymore (Kevin 17:47 EDT — single owner = generate-story). Found ${occurrences.length} non-comment occurrence(s):\n${
+        occurrences.map((o) => `  line ${o.idx}: ${o.line}`).join("\n")
+      }`,
     );
 
     // run-outline MUST NOT define fetchPriorContext-call-style helpers used
@@ -4208,11 +4483,18 @@ Deno.test({
 // fetches section metadata + story arc context in one helper (single source
 // of truth). The 5 story arc fields are no longer expected from callers.
 Deno.test({
-  name: "PR-360-Z regression B/C: server-resolved story arc context (single source of truth, no body fields)",
+  name:
+    "PR-360-Z regression B/C: server-resolved story arc context (single source of truth, no body fields)",
   fn: async () => {
     const fs = await import("node:fs");
-    const genText = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
-    const genReqText = fs.readFileSync("supabase/functions/run-outline/_generation_request.ts", "utf8");
+    const genText = fs.readFileSync(
+      "supabase/functions/generate-story/index.ts",
+      "utf8",
+    );
+    const genReqText = fs.readFileSync(
+      "supabase/functions/run-outline/_generation_request.ts",
+      "utf8",
+    );
 
     // generate-story has the server-side resolver.
     assertStringIncludes(
@@ -4232,9 +4514,18 @@ Deno.test({
     // (Verify they're absent from the body type definition.)
     const reqBodySection = genText.slice(
       genText.indexOf("interface GenerateStoryRequest"),
-      genText.indexOf("})", genText.indexOf("interface GenerateStoryRequest")) + 5,
+      genText.indexOf("})", genText.indexOf("interface GenerateStoryRequest")) +
+        5,
     );
-    for (const field of ["storyArcName?", "storyArcBeatLabel?", "storyArcBeatPurpose?", "storyArcPosition?", "storyArcTotalBeats?"]) {
+    for (
+      const field of [
+        "storyArcName?",
+        "storyArcBeatLabel?",
+        "storyArcBeatPurpose?",
+        "storyArcPosition?",
+        "storyArcTotalBeats?",
+      ]
+    ) {
       assertEquals(
         reqBodySection.includes(field),
         false,
@@ -4243,7 +4534,15 @@ Deno.test({
     }
 
     // _generation_request.ts also REMOVED the 5 fields.
-    for (const field of ["storyArcName?: string", "storyArcBeatLabel?: string", "storyArcBeatPurpose?: string", "storyArcPosition?: number", "storyArcTotalBeats?: number"]) {
+    for (
+      const field of [
+        "storyArcName?: string",
+        "storyArcBeatLabel?: string",
+        "storyArcBeatPurpose?: string",
+        "storyArcPosition?: number",
+        "storyArcTotalBeats?: number",
+      ]
+    ) {
       assertEquals(
         genReqText.includes(field),
         false,
@@ -4253,7 +4552,10 @@ Deno.test({
 
     // The buildPrompt params still retain the 5 fields internally (just no longer
     // caller-settable). Handler populates them from outlineSectionCtx.storyArc.
-    const handlerArea = genText.slice(genText.indexOf("function handler("), genText.indexOf("function fetchOutlineSectionContext("));
+    const handlerArea = genText.slice(
+      genText.indexOf("function handler("),
+      genText.indexOf("function fetchOutlineSectionContext("),
+    );
     assertStringIncludes(
       handlerArea,
       "storyArcName: outlineSectionCtx.storyArc.name",
@@ -4267,14 +4569,21 @@ Deno.test({
 // section omits cleanly. Section Contract remains immediately before Writing Task.
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z regression C: Story Arc Context block renders only when outline_section_context has story arc data",
+  name:
+    "PR-360-Z regression C: Story Arc Context block renders only when outline_section_context has story arc data",
   fn: async () => {
     const fs = await import("node:fs");
-    const text = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+    const text = fs.readFileSync(
+      "supabase/functions/generate-story/index.ts",
+      "utf8",
+    );
 
     // The Story Arc Context block rendering is gated on outlineSectionCtx.storyArc
     // having at least one field set (NOT on body fields, which no longer exist).
-    const buildPromptFn = text.slice(text.indexOf("function buildPrompt(req: {"), text.indexOf("function fetchOutlineSectionContext("));
+    const buildPromptFn = text.slice(
+      text.indexOf("function buildPrompt(req: {"),
+      text.indexOf("function fetchOutlineSectionContext("),
+    );
     assertStringIncludes(
       buildPromptFn,
       "## Story Arc Context",
@@ -4288,7 +4597,7 @@ Deno.test({
     );
     assertStringIncludes(
       buildPromptFn,
-      "typeof req.storyArcPosition === \"number\"",
+      'typeof req.storyArcPosition === "number"',
       "Story Arc Context block must render Position (1-indexed display)",
     );
 
@@ -4298,10 +4607,26 @@ Deno.test({
     const storyArcIdx = buildPromptFn.indexOf("## Story Arc Context");
     const sectionContractIdx = buildPromptFn.lastIndexOf("## Section Contract");
     const writingTaskIdx = buildPromptFn.lastIndexOf("## Writing Task");
-    assertNotEquals(projectStateIdx, -1, "Project State block must render in buildPrompt");
-    assertNotEquals(storyArcIdx, -1, "Story Arc Context block must render in buildPrompt");
-    assertNotEquals(sectionContractIdx, -1, "Section Contract block must render in buildPrompt");
-    assertNotEquals(writingTaskIdx, -1, "Writing Task block must render in buildPrompt");
+    assertNotEquals(
+      projectStateIdx,
+      -1,
+      "Project State block must render in buildPrompt",
+    );
+    assertNotEquals(
+      storyArcIdx,
+      -1,
+      "Story Arc Context block must render in buildPrompt",
+    );
+    assertNotEquals(
+      sectionContractIdx,
+      -1,
+      "Section Contract block must render in buildPrompt",
+    );
+    assertNotEquals(
+      writingTaskIdx,
+      -1,
+      "Writing Task block must render in buildPrompt",
+    );
     assertEquals(
       projectStateIdx < storyArcIdx,
       true,
@@ -4327,16 +4652,20 @@ Deno.test({
 // FK constraint design.
 // ----------------------------------------------------------------------------
 Deno.test({
-  name: "PR-360-Z regression D: FK CASCADE on generation_outputs removes section_embeddings (deleted prose excluded from Project State)",
+  name:
+    "PR-360-Z regression D: FK CASCADE on generation_outputs removes section_embeddings (deleted prose excluded from Project State)",
   fn: async () => {
     const fs = await import("node:fs");
 
     // The fetchProjectStateContext query already uses INNER JOIN — deleted
     // generation_outputs rows are excluded at READ time (defense-in-depth).
-    const genText = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+    const genText = fs.readFileSync(
+      "supabase/functions/generate-story/index.ts",
+      "utf8",
+    );
     assertStringIncludes(
       genText,
-      'generation_outputs!inner(id)',
+      "generation_outputs!inner(id)",
       "fetchProjectStateContext must INNER JOIN generation_outputs (orphaned memory filtered at READ time)",
     );
 
@@ -4352,7 +4681,8 @@ Deno.test({
     // The 5114091 migration added the FK with ON DELETE CASCADE — verified by
     // the source-level test in the 90e05d3 commit. Verify the migration is
     // still present on main.
-    const migrationPath = "supabase/migrations/20260821140000_validate_section_embeddings_fk_and_reload_schema.sql";
+    const migrationPath =
+      "supabase/migrations/20260821140000_validate_section_embeddings_fk_and_reload_schema.sql";
     const migrationText = fs.readFileSync(migrationPath, "utf8");
     assertStringIncludes(
       migrationText,
@@ -4361,7 +4691,6 @@ Deno.test({
     );
   },
 });
-
 
 // =============================================================================
 // PR-360-Z follow-up (Kevin 2026-08-22 09:50 EDT prompt cleanup) — buildPrompt
@@ -4392,18 +4721,39 @@ Deno.test("buildPrompt: does not contain the fixed prose example (She set down t
 Deno.test("buildPrompt: contains ## Literary Execution block with the 14 craft bullets", () => {
   const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
   assertStringIncludes(craft, "## Literary Execution");
-  assertStringIncludes(craft, "Write finished prose in active scene, not synopsis");
+  assertStringIncludes(
+    craft,
+    "Write finished prose in active scene, not synopsis",
+  );
   assertStringIncludes(craft, "Build direct cause and effect");
   assertStringIncludes(craft, "Render the selected required event on-page");
-  assertStringIncludes(craft, "Filter description and interpretation through the viewpoint character");
-  assertStringIncludes(craft, "Do not explain a dynamic or emotion immediately after the prose has already demonstrated it");
+  assertStringIncludes(
+    craft,
+    "Filter description and interpretation through the viewpoint character",
+  );
+  assertStringIncludes(
+    craft,
+    "Do not explain a dynamic or emotion immediately after the prose has already demonstrated it",
+  );
   assertStringIncludes(craft, "Give dialogue an immediate character objective");
-  assertStringIncludes(craft, "Prefer precise nouns, active verbs, and selective concrete details");
+  assertStringIncludes(
+    craft,
+    "Prefer precise nouns, active verbs, and selective concrete details",
+  );
   assertStringIncludes(craft, "Vary sentence length and paragraph size");
-  assertStringIncludes(craft, "Do not repeat an image unless its meaning, context, or consequence changes");
-  assertStringIncludes(craft, "Do not directly reproduce or closely paraphrase section titles, motif labels");
+  assertStringIncludes(
+    craft,
+    "Do not repeat an image unless its meaning, context, or consequence changes",
+  );
+  assertStringIncludes(
+    craft,
+    "Do not directly reproduce or closely paraphrase section titles, motif labels",
+  );
   assertStringIncludes(craft, "Preserve character agency");
-  assertStringIncludes(craft, "Build one decisive ending. Do not append repeated revelations");
+  assertStringIncludes(
+    craft,
+    "Build one decisive ending. Do not append repeated revelations",
+  );
 });
 
 Deno.test("buildPrompt: Section Contract Authority contains Container co-authority rule (Kevin 10:12 EDT wording)", () => {
@@ -4413,14 +4763,37 @@ Deno.test("buildPrompt: Section Contract Authority contains Container co-authori
     sectionSummary: "The protagonist faces a storm.",
   });
   assertStringIncludes(craft, "## Section Contract Authority");
-  assertStringIncludes(craft, "Container scope and the Section Contract are jointly authoritative");
-  assertStringIncludes(craft, "The Container controls the scale and shape of the output");
-  assertStringIncludes(craft, "the Section Contract controls its subject and required outcome");
-  assertStringIncludes(craft, "select one container-sized portion using the Container");
-  assertStringIncludes(craft, "Fully develop and complete that unit rather than summarizing or cramming the larger section");
+  assertStringIncludes(
+    craft,
+    "Container scope and the Section Contract are jointly authoritative",
+  );
+  assertStringIncludes(
+    craft,
+    "The Container controls the scale and shape of the output",
+  );
+  assertStringIncludes(
+    craft,
+    "the Section Contract controls its subject and required outcome",
+  );
+  assertStringIncludes(
+    craft,
+    "select one container-sized portion using the Container",
+  );
+  assertStringIncludes(
+    craft,
+    "Fully develop and complete that unit rather than summarizing or cramming the larger section",
+  );
   // The OLD wording from commit 1740cd7 should be gone.
-  assertEquals(craft.includes("The Container controls how much happens"), false);
-  assertEquals(craft.includes("select one concrete action, reaction, discovery, or exchange"), false);
+  assertEquals(
+    craft.includes("The Container controls how much happens"),
+    false,
+  );
+  assertEquals(
+    craft.includes(
+      "select one concrete action, reaction, discovery, or exchange",
+    ),
+    false,
+  );
 });
 
 Deno.test("buildPrompt: Section Contract Authority contains expected-range rule", () => {
@@ -4430,8 +4803,14 @@ Deno.test("buildPrompt: Section Contract Authority contains expected-range rule"
     sectionSummary: "The protagonist faces a storm.",
   });
   assertStringIncludes(craft, "The expected range is a genuine target");
-  assertStringIncludes(craft, "Do not finish below its minimum by reducing a major event to a gesture, threat, near miss, or summary");
-  assertStringIncludes(craft, "Develop the selected event through concrete actions, obstacles, reactions, reversals, and consequences");
+  assertStringIncludes(
+    craft,
+    "Do not finish below its minimum by reducing a major event to a gesture, threat, near miss, or summary",
+  );
+  assertStringIncludes(
+    craft,
+    "Develop the selected event through concrete actions, obstacles, reactions, reversals, and consequences",
+  );
   assertStringIncludes(craft, "without unrelated padding");
 });
 
@@ -4444,23 +4823,42 @@ Deno.test("buildPrompt: Beat container + section context instructs dramatize one
   });
   assertStringIncludes(context, "## Beat Rule (CRITICAL)");
   assertStringIncludes(context, "select and dramatize one concrete incident");
-  assertStringIncludes(context, "Do not summarize every event implied by the section premise");
+  assertStringIncludes(
+    context,
+    "Do not summarize every event implied by the section premise",
+  );
 });
 
 Deno.test("buildPrompt: Terminal Function uses storyArcBeatPurpose (human-readable) over raw terminalBeat", () => {
   const { context } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     terminalBeat: "ordinary_world", // raw enum from caller
-    storyArcBeatPurpose: "End after a concrete moment establishes the viewpoint character's normal pattern under pressure.",
+    storyArcBeatPurpose:
+      "End after a concrete moment establishes the viewpoint character's normal pattern under pressure.",
   });
   assertEquals(context.includes("ordinary_world"), false);
   assertEquals(context.includes("call_to_adventure"), false);
   assertStringIncludes(context, "## Terminal Function");
-  assertStringIncludes(context, "Use the following structural purpose only to determine where the current Section Contract ends");
-  assertStringIncludes(context, "End after a concrete moment establishes the viewpoint character's normal pattern under pressure");
-  assertStringIncludes(context, "It controls the stopping point, not the subject of the prose");
-  assertStringIncludes(context, "Do not introduce a separate mission, threat, reveal, setting, confrontation, or subplot");
-  assertStringIncludes(context, "If the structural purpose conflicts with the Section Contract, follow the Section Contract");
+  assertStringIncludes(
+    context,
+    "Use the following structural purpose only to determine where the current Section Contract ends",
+  );
+  assertStringIncludes(
+    context,
+    "End after a concrete moment establishes the viewpoint character's normal pattern under pressure",
+  );
+  assertStringIncludes(
+    context,
+    "It controls the stopping point, not the subject of the prose",
+  );
+  assertStringIncludes(
+    context,
+    "Do not introduce a separate mission, threat, reveal, setting, confrontation, or subplot",
+  );
+  assertStringIncludes(
+    context,
+    "If the structural purpose conflicts with the Section Contract, follow the Section Contract",
+  );
 });
 
 Deno.test("buildPrompt: Terminal Function falls back to terminalBeat when storyArcBeatPurpose absent AND terminalBeat is human-readable", () => {
@@ -4473,8 +4871,14 @@ Deno.test("buildPrompt: Terminal Function falls back to terminalBeat when storyA
     storyArcBeatPurpose: undefined,
   });
   assertStringIncludes(context, "## Terminal Function");
-  assertStringIncludes(context, "End after the conversation settles into silence");
-  assertStringIncludes(context, "It controls the stopping point, not the subject of the prose");
+  assertStringIncludes(
+    context,
+    "End after the conversation settles into silence",
+  );
+  assertStringIncludes(
+    context,
+    "It controls the stopping point, not the subject of the prose",
+  );
 });
 
 Deno.test("buildPrompt: Terminal Function omitted when neither terminalBeat nor storyArcBeatPurpose set", () => {
@@ -4483,34 +4887,51 @@ Deno.test("buildPrompt: Terminal Function omitted when neither terminalBeat nor 
   assertEquals(context.includes("## Terminal Beat"), false);
 });
 
-
 Deno.test("buildPrompt: projectStateContext rendered unchanged into user message", () => {
-  const projectState = "## Project state (cumulative across all accepted scenes)\n\n**Latest summary:** The rainstorm ended.\n\n### Characters (latest known state)\n- Bill Noah: grieving";
+  const projectState =
+    "## Project state (cumulative across all accepted scenes)\n\n**Latest summary:** The rainstorm ended.\n\n### Characters (latest known state)\n- Bill Noah: grieving";
   const { context } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     projectStateContext: projectState,
   });
   assertStringIncludes(context, projectState);
   // The transition rule (continuity, not subject) should still appear.
-  assertStringIncludes(context, "Project State establishes continuity, not the required subject");
+  assertStringIncludes(
+    context,
+    "Project State establishes continuity, not the required subject",
+  );
 });
 
 Deno.test("buildPrompt: Writing Instructions has new Container-rule text", () => {
   const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
   assertEquals(craft.includes("If you cannot cover everything"), false);
-  assertStringIncludes(craft, "If the Section Contract is broader than the Container");
+  assertStringIncludes(
+    craft,
+    "If the Section Contract is broader than the Container",
+  );
   assertStringIncludes(craft, "dramatize one material part of it");
-  assertStringIncludes(craft, "Compress description and transitions before compressing the selected action");
+  assertStringIncludes(
+    craft,
+    "Compress description and transitions before compressing the selected action",
+  );
   assertStringIncludes(craft, "Never exceed the Container hard cap");
 });
 
 Deno.test("buildPrompt: Writing Instructions has Ending Instruction residue rule", () => {
   const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
-  assertEquals(craft.includes("Close the piece according to the Ending Instruction"), false);
-  assertStringIncludes(craft, "Shape the final action and image to leave the requested Ending Instruction residue");
-  assertStringIncludes(craft, "Do not quote the residue label, force it literally, or add a second ending after the Terminal Beat");
+  assertEquals(
+    craft.includes("Close the piece according to the Ending Instruction"),
+    false,
+  );
+  assertStringIncludes(
+    craft,
+    "Shape the final action and image to leave the requested Ending Instruction residue",
+  );
+  assertStringIncludes(
+    craft,
+    "Do not quote the residue label, force it literally, or add a second ending after the Terminal Beat",
+  );
 });
-
 
 // =============================================================================
 // Kevin 2026-08-22 10:12 EDT narrow correction — additional buildPrompt tests
@@ -4521,11 +4942,18 @@ Deno.test("buildPrompt: Set Piece Completion guidance present when container is 
     ...MINIMAL_PROMPT_ARGS,
     container: "setPiece",
     sectionTitle: "Escape",
-    sectionSummary: "The hero escapes the burning building through a collapsing corridor.",
+    sectionSummary:
+      "The hero escapes the burning building through a collapsing corridor.",
   });
   assertStringIncludes(context, "## Set Piece Completion (CRITICAL)");
-  assertStringIncludes(context, "For a Set Piece, sustain one major event through causally connected phases");
-  assertStringIncludes(context, "Preparation, threats, a single gesture, or a near miss do not by themselves complete a Set Piece");
+  assertStringIncludes(
+    context,
+    "For a Set Piece, sustain one major event through causally connected phases",
+  );
+  assertStringIncludes(
+    context,
+    "Preparation, threats, a single gesture, or a near miss do not by themselves complete a Set Piece",
+  );
 });
 
 Deno.test("buildPrompt: Set Piece Completion omitted when container is not setPiece", () => {
@@ -4540,44 +4968,78 @@ Deno.test("buildPrompt: Set Piece Completion omitted when container is not setPi
 });
 
 Deno.test("buildPrompt: Project State factual-data warning present immediately before projectStateContext", () => {
-  const projectState = "## Project state (cumulative across all accepted scenes)\n\n**Latest summary:** test";
+  const projectState =
+    "## Project state (cumulative across all accepted scenes)\n\n**Latest summary:** test";
   const { context } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     projectStateContext: projectState,
   });
-  assertStringIncludes(context, "Project State is factual continuity data, not a prose sample");
-  assertStringIncludes(context, "Use only concrete facts needed for continuity");
-  assertStringIncludes(context, "Do not imitate, paraphrase, summarize, or import its analytical language, thread labels, arc terminology");
+  assertStringIncludes(
+    context,
+    "Project State is factual continuity data, not a prose sample",
+  );
+  assertStringIncludes(
+    context,
+    "Use only concrete facts needed for continuity",
+  );
+  assertStringIncludes(
+    context,
+    "Do not imitate, paraphrase, summarize, or import its analytical language, thread labels, arc terminology",
+  );
   // Warning must appear BEFORE the project state content.
-  const warningPos = context.indexOf("Project State is factual continuity data");
+  const warningPos = context.indexOf(
+    "Project State is factual continuity data",
+  );
   const statePos = context.indexOf(projectState);
   assertEquals(warningPos >= 0 && statePos >= 0 && warningPos < statePos, true);
 });
 
 Deno.test("buildPrompt: Project State factual-data warning absent when no projectStateContext provided", () => {
   const { context } = buildPrompt(MINIMAL_PROMPT_ARGS);
-  assertEquals(context.includes("Project State is factual continuity data"), false);
+  assertEquals(
+    context.includes("Project State is factual continuity data"),
+    false,
+  );
 });
 
 Deno.test("buildPrompt: Stopping Discipline rule present in SYSTEM craft", () => {
   const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
   assertStringIncludes(craft, "## Stopping Discipline");
-  assertStringIncludes(craft, "include only the minimum immediate reaction necessary to establish the Section Contract");
-  assertStringIncludes(craft, "Do not continue into extended aftermath, reflection, thematic explanation, generalized consequences, or repeated concluding paragraphs");
+  assertStringIncludes(
+    craft,
+    "include only the minimum immediate reaction necessary to establish the Section Contract",
+  );
+  assertStringIncludes(
+    craft,
+    "Do not continue into extended aftermath, reflection, thematic explanation, generalized consequences, or repeated concluding paragraphs",
+  );
 });
 
 Deno.test("buildPrompt: Pre-Return Self-Check expanded with central-event, expected-range, stopping, forbidden-surfaces, anti-stock checks", () => {
   const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
   assertStringIncludes(craft, "## Pre-Return Self-Check (CRITICAL)");
-  assertStringIncludes(craft, "Central event: the central event actually occurs and reaches a concrete outcome");
+  assertStringIncludes(
+    craft,
+    "Central event: the central event actually occurs and reaches a concrete outcome",
+  );
   assertStringIncludes(craft, "Expected range: the output meets the Container");
-  assertStringIncludes(craft, "Stopping: the output stops after the minimum required confirming reaction");
-  assertStringIncludes(craft, "Forbidden surfaces: no raw structural identifier, structural beat name, Project State analytical language");
-  assertStringIncludes(craft, "Anti-stock: stock metaphors and abstract emotional explanations have not replaced concrete action");
+  assertStringIncludes(
+    craft,
+    "Stopping: the output stops after the minimum required confirming reaction",
+  );
+  assertStringIncludes(
+    craft,
+    "Forbidden surfaces: no raw structural identifier, structural beat name, Project State analytical language",
+  );
+  assertStringIncludes(
+    craft,
+    "Anti-stock: stock metaphors and abstract emotional explanations have not replaced concrete action",
+  );
 });
 
 Deno.test("buildPrompt: Project State block itself remains unchanged (full content preserved when provided)", () => {
-  const projectState = "## Project state (cumulative across all accepted scenes)\n\n**Latest summary:** Custom summary.\n\n### Characters\n- Alice: brave";
+  const projectState =
+    "## Project state (cumulative across all accepted scenes)\n\n**Latest summary:** Custom summary.\n\n### Characters\n- Alice: brave";
   const { context } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     projectStateContext: projectState,
@@ -4585,7 +5047,10 @@ Deno.test("buildPrompt: Project State block itself remains unchanged (full conte
   // The full block must be present byte-for-byte (the factual-data warning is
   // the only thing added before it; the block itself is not modified).
   assertStringIncludes(context, projectState);
-  assertStringIncludes(context, "Project State establishes continuity, not the required subject");
+  assertStringIncludes(
+    context,
+    "Project State establishes continuity, not the required subject",
+  );
 });
 
 // =============================================================================
@@ -4600,22 +5065,30 @@ Deno.test("buildPrompt: Terminal Function -- call_to_adventure fixture contains 
   const { context } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     terminalBeat: "call_to_adventure", // raw enum from caller
-    storyArcBeatPurpose: "The protagonist meets a mentor figure who presents the central quest or challenge.",
+    storyArcBeatPurpose:
+      "The protagonist meets a mentor figure who presents the central quest or challenge.",
   });
   assertEquals(context.includes("call_to_adventure"), false);
   assertStringIncludes(context, "## Terminal Function");
-  assertStringIncludes(context, "The protagonist meets a mentor figure who presents the central quest or challenge");
+  assertStringIncludes(
+    context,
+    "The protagonist meets a mentor figure who presents the central quest or challenge",
+  );
 });
 
 Deno.test("buildPrompt: Terminal Function -- ordinary_world fixture contains resolved purpose but not the raw enum", () => {
   const { context } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     terminalBeat: "ordinary_world", // raw enum from caller
-    storyArcBeatPurpose: "End after a concrete moment establishes the viewpoint character's normal pattern under pressure.",
+    storyArcBeatPurpose:
+      "End after a concrete moment establishes the viewpoint character's normal pattern under pressure.",
   });
   assertEquals(context.includes("ordinary_world"), false);
   assertStringIncludes(context, "## Terminal Function");
-  assertStringIncludes(context, "End after a concrete moment establishes the viewpoint character");
+  assertStringIncludes(
+    context,
+    "End after a concrete moment establishes the viewpoint character",
+  );
 });
 
 Deno.test("buildPrompt: Terminal Function -- refusal_of_the_call raw enum also fails closed", () => {
@@ -4643,13 +5116,20 @@ Deno.test("buildPrompt: Terminal Function block never contains Ordinary World ex
   const { context } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     terminalBeat: "call_to_adventure",
-    storyArcBeatPurpose: "The protagonist meets a mentor figure who presents the central quest.",
+    storyArcBeatPurpose:
+      "The protagonist meets a mentor figure who presents the central quest.",
   });
   // None of these implementation/developer-instruction phrases may appear
   // in the assembled production prompt.
   assertEquals(context.includes("For Ordinary World"), false);
-  assertEquals(context.includes("the rendered instruction is functionally equivalent"), false);
-  assertEquals(context.includes("Use the corresponding human-readable purpose"), false);
+  assertEquals(
+    context.includes("the rendered instruction is functionally equivalent"),
+    false,
+  );
+  assertEquals(
+    context.includes("Use the corresponding human-readable purpose"),
+    false,
+  );
 });
 
 Deno.test("buildPrompt: Terminal Function block says stopping not subject matter", () => {
@@ -4657,7 +5137,10 @@ Deno.test("buildPrompt: Terminal Function block says stopping not subject matter
     ...MINIMAL_PROMPT_ARGS,
     storyArcBeatPurpose: "Test canonical purpose.",
   });
-  assertStringIncludes(context, "It controls the stopping point, not the subject of the prose");
+  assertStringIncludes(
+    context,
+    "It controls the stopping point, not the subject of the prose",
+  );
 });
 
 Deno.test("buildPrompt: Terminal Function block prohibits inventing separate mission/threat/reveal/subplot", () => {
@@ -4665,7 +5148,10 @@ Deno.test("buildPrompt: Terminal Function block prohibits inventing separate mis
     ...MINIMAL_PROMPT_ARGS,
     storyArcBeatPurpose: "Test canonical purpose.",
   });
-  assertStringIncludes(context, "Do not introduce a separate mission, threat, reveal, setting, confrontation, or subplot");
+  assertStringIncludes(
+    context,
+    "Do not introduce a separate mission, threat, reveal, setting, confrontation, or subplot",
+  );
 });
 
 Deno.test("buildPrompt: Terminal Function block says Structural purpose follows Section Contract when in conflict", () => {
@@ -4673,6 +5159,12 @@ Deno.test("buildPrompt: Terminal Function block says Structural purpose follows 
     ...MINIMAL_PROMPT_ARGS,
     storyArcBeatPurpose: "Test canonical purpose.",
   });
-  assertStringIncludes(context, "If the structural purpose conflicts with the Section Contract, follow the Section Contract");
-  assertStringIncludes(context, "Stop once the Section Contract's current event has concretely fulfilled the structural purpose");
+  assertStringIncludes(
+    context,
+    "If the structural purpose conflicts with the Section Contract, follow the Section Contract",
+  );
+  assertStringIncludes(
+    context,
+    "Stop once the Section Contract's current event has concretely fulfilled the structural purpose",
+  );
 });

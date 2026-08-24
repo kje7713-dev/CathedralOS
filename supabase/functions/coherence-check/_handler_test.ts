@@ -85,8 +85,12 @@ const MODEL_ROW: GenerationModel = {
   billing_multiplier: 2.0,
   provider_input_usd_per_1m: 0.15,
   provider_cached_input_usd_per_1m: 0.075,
+  // PR-372: cache-write rate default 1.25× standard input.
+  provider_cache_write_usd_per_1m: 0.1875,
   provider_output_usd_per_1m: 0.60,
   pricing_effective_at: "2026-01-01T00:00:00Z",
+  // PR-372: chat/completions path uses implicit cache only.
+  cacheMode: "implicit",
 };
 
 const FALLBACK_MODEL: GenerationModel = {
@@ -98,6 +102,9 @@ const FALLBACK_MODEL: GenerationModel = {
   input_credit_rate: 0,
   output_credit_rate: 0,
   minimum_charge_credits: 1,
+  // PR-372: cache fields.
+  provider_cache_write_usd_per_1m: 0,
+  cacheMode: "implicit",
   max_output_tokens: null,
   enabled: true,
   sort_order: 0,

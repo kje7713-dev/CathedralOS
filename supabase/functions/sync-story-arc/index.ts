@@ -34,19 +34,29 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Content-Type": "application/json",
 };
 
 const corsResponse = (body: string, init: ResponseInit = {}): Response =>
-  new Response(body, { ...init, headers: { ...CORS_HEADERS, ...(init.headers || {}) } });
+  new Response(body, {
+    ...init,
+    headers: { ...CORS_HEADERS, ...(init.headers || {}) },
+  });
 
-const errorResponse = (code: string, message: string, status: number): Response =>
+const errorResponse = (
+  code: string,
+  message: string,
+  status: number,
+): Response =>
   corsResponse(JSON.stringify({ errorCode: code, message }), { status });
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const isUuid = (s: unknown): s is string => typeof s === "string" && UUID_RE.test(s);
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (s: unknown): s is string =>
+  typeof s === "string" && UUID_RE.test(s);
 
 interface BeatPayload {
   id?: string;
@@ -67,19 +77,35 @@ interface SyncArcRequest {
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsResponse("", { status: 204 });
-  if (req.method !== "POST") return errorResponse("method_not_allowed", "POST only", 405);
+  if (req.method !== "POST") {
+    return errorResponse("method_not_allowed", "POST only", 405);
+  }
 
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader) return errorResponse("not_authenticated", "Missing Authorization header", 401);
+  if (!authHeader) {
+    return errorResponse(
+      "not_authenticated",
+      "Missing Authorization header",
+      401,
+    );
+  }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   if (!supabaseUrl || !supabaseAnonKey) {
-    return errorResponse("not_configured", "Supabase URL or anon key missing", 500);
+    return errorResponse(
+      "not_configured",
+      "Supabase URL or anon key missing",
+      500,
+    );
   }
   if (!supabaseServiceKey) {
-    return errorResponse("not_configured", "SUPABASE_SERVICE_ROLE_KEY missing", 500);
+    return errorResponse(
+      "not_configured",
+      "SUPABASE_SERVICE_ROLE_KEY missing",
+      500,
+    );
   }
 
   const userClient = createClient(supabaseUrl, supabaseAnonKey, {
@@ -99,16 +125,35 @@ Deno.serve(async (req: Request) => {
 
   // --- Validation ---
   if (!body.story_arc_id || !isUuid(body.story_arc_id)) {
-    return errorResponse("invalid_request", "story_arc_id is required (UUID)", 400);
+    return errorResponse(
+      "invalid_request",
+      "story_arc_id is required (UUID)",
+      400,
+    );
   }
-  if (!body.local_project_id || typeof body.local_project_id !== "string" || body.local_project_id.length === 0) {
-    return errorResponse("invalid_request", "local_project_id is required (text)", 400);
+  if (
+    !body.local_project_id || typeof body.local_project_id !== "string" ||
+    body.local_project_id.length === 0
+  ) {
+    return errorResponse(
+      "invalid_request",
+      "local_project_id is required (text)",
+      400,
+    );
   }
   if (!body.lineage_id || !isUuid(body.lineage_id)) {
-    return errorResponse("invalid_request", "lineage_id is required (UUID)", 400);
+    return errorResponse(
+      "invalid_request",
+      "lineage_id is required (UUID)",
+      400,
+    );
   }
   if (body.template_id != null && !isUuid(body.template_id)) {
-    return errorResponse("invalid_request", "template_id must be UUID or null", 400);
+    return errorResponse(
+      "invalid_request",
+      "template_id must be UUID or null",
+      400,
+    );
   }
   const beats = body.beats ?? [];
   for (const b of beats) {
@@ -116,14 +161,27 @@ Deno.serve(async (req: Request) => {
       return errorResponse("invalid_request", "beat.id must be UUID", 400);
     }
     if (typeof b.label !== "string" || b.label.length === 0) {
-      return errorResponse("invalid_request", "beat.label must be non-empty string", 400);
+      return errorResponse(
+        "invalid_request",
+        "beat.label must be non-empty string",
+        400,
+      );
     }
-    if (typeof b.position !== "number" || !Number.isInteger(b.position) || b.position < 0) {
-      return errorResponse("invalid_request", "beat.position must be non-negative integer", 400);
+    if (
+      typeof b.position !== "number" || !Number.isInteger(b.position) ||
+      b.position < 0
+    ) {
+      return errorResponse(
+        "invalid_request",
+        "beat.position must be non-negative integer",
+        400,
+      );
     }
   }
 
-  console.log(`[sync-story-arc] start user=${user.id} arc=${body.story_arc_id} beats=${beats.length}`);
+  console.log(
+    `[sync-story-arc] start user=${user.id} arc=${body.story_arc_id} beats=${beats.length}`,
+  );
 
   const adminClient = createClient(supabaseUrl, supabaseServiceKey);
 
@@ -137,8 +195,14 @@ Deno.serve(async (req: Request) => {
     customizations: body.customizations ?? {},
   }, { onConflict: "id" });
   if (arcErr) {
-    console.error(`[sync-story-arc] story_arcs upsert failed: ${arcErr.message}`);
-    return errorResponse("database_error", `story_arcs upsert failed: ${arcErr.message}`, 500);
+    console.error(
+      `[sync-story-arc] story_arcs upsert failed: ${arcErr.message}`,
+    );
+    return errorResponse(
+      "database_error",
+      `story_arcs upsert failed: ${arcErr.message}`,
+      500,
+    );
   }
   console.log(`[sync-story-arc] story_arc upserted id=${body.story_arc_id}`);
 
@@ -148,18 +212,26 @@ Deno.serve(async (req: Request) => {
     .select("id")
     .eq("story_arc_id", body.story_arc_id);
   if (listErr) {
-    console.error(`[sync-story-arc] list existing beats failed: ${listErr.message}`);
-    return errorResponse("database_error", `list existing beats failed: ${listErr.message}`, 500);
+    console.error(
+      `[sync-story-arc] list existing beats failed: ${listErr.message}`,
+    );
+    return errorResponse(
+      "database_error",
+      `list existing beats failed: ${listErr.message}`,
+      500,
+    );
   }
-  const existingIds = new Set((existingBeats ?? []).map(b => b.id));
-  const incomingIds = new Set(beats.map(b => b.id));
-  const toDelete = [...existingIds].filter(id => !incomingIds.has(id));
-  console.log(`[sync-story-arc] beats incoming=${beats.length} existing=${existingIds.size} toDelete=${toDelete.length}`);
+  const existingIds = new Set((existingBeats ?? []).map((b) => b.id));
+  const incomingIds = new Set(beats.map((b) => b.id));
+  const toDelete = [...existingIds].filter((id) => !incomingIds.has(id));
+  console.log(
+    `[sync-story-arc] beats incoming=${beats.length} existing=${existingIds.size} toDelete=${toDelete.length}`,
+  );
 
   // --- Step 3: UPSERT beats. ---
   let beatsUpserted = 0;
   if (beats.length > 0) {
-    const rows = beats.map(b => ({
+    const rows = beats.map((b) => ({
       id: b.id,
       story_arc_id: body.story_arc_id,
       position: b.position,
@@ -167,10 +239,17 @@ Deno.serve(async (req: Request) => {
       label: b.label ?? "",
       details: b.details ?? "",
     }));
-    const { error: beatsErr } = await adminClient.from("story_arc_beats").upsert(rows, { onConflict: "id" });
+    const { error: beatsErr } = await adminClient.from("story_arc_beats")
+      .upsert(rows, { onConflict: "id" });
     if (beatsErr) {
-      console.error(`[sync-story-arc] beats upsert failed: ${beatsErr.message}`);
-      return errorResponse("database_error", `beats upsert failed: ${beatsErr.message}`, 500);
+      console.error(
+        `[sync-story-arc] beats upsert failed: ${beatsErr.message}`,
+      );
+      return errorResponse(
+        "database_error",
+        `beats upsert failed: ${beatsErr.message}`,
+        500,
+      );
     }
     beatsUpserted = rows.length;
   }
@@ -187,7 +266,11 @@ Deno.serve(async (req: Request) => {
       .in("id", toDelete);
     if (delErr) {
       console.error(`[sync-story-arc] beats delete failed: ${delErr.message}`);
-      return errorResponse("database_error", `beats delete failed: ${delErr.message}`, 500);
+      return errorResponse(
+        "database_error",
+        `beats delete failed: ${delErr.message}`,
+        500,
+      );
     }
     beatsDeleted = toDelete.length;
   }
@@ -199,6 +282,6 @@ Deno.serve(async (req: Request) => {
       beats_upserted: beatsUpserted,
       beats_deleted: beatsDeleted,
     }),
-    { status: 200 }
+    { status: 200 },
   );
 });

@@ -112,10 +112,22 @@ Deno.test("handler: all checks pass returns ok status", async () => {
 
   const body = await res.json() as Record<string, unknown>;
   assertEquals(body.status, "ok");
-  assertEquals((body.checks as Record<string, unknown>).openaiKeyConfigured, true);
-  assertEquals((body.checks as Record<string, unknown>).supabaseURLConfigured, true);
-  assertEquals((body.checks as Record<string, unknown>).serviceRoleKeyConfigured, true);
-  assertEquals((body.checks as Record<string, unknown>).databaseReachable, true);
+  assertEquals(
+    (body.checks as Record<string, unknown>).openaiKeyConfigured,
+    true,
+  );
+  assertEquals(
+    (body.checks as Record<string, unknown>).supabaseURLConfigured,
+    true,
+  );
+  assertEquals(
+    (body.checks as Record<string, unknown>).serviceRoleKeyConfigured,
+    true,
+  );
+  assertEquals(
+    (body.checks as Record<string, unknown>).databaseReachable,
+    true,
+  );
   assertEquals(body.generationFunctionConfigured, true);
   assertEquals(body.dbError, undefined);
   clearEnvVars();
@@ -134,7 +146,10 @@ Deno.test("handler: missing OPENAI_API_KEY returns degraded", async () => {
 
   const body = await res.json() as Record<string, unknown>;
   assertEquals(body.status, "degraded");
-  assertEquals((body.checks as Record<string, unknown>).openaiKeyConfigured, false);
+  assertEquals(
+    (body.checks as Record<string, unknown>).openaiKeyConfigured,
+    false,
+  );
   assertEquals(body.generationFunctionConfigured, false);
   clearEnvVars();
 });
@@ -150,7 +165,10 @@ Deno.test("handler: missing SUPABASE_SERVICE_ROLE_KEY skips db probe", async () 
   const res = await handler(makeGetRequest(), makePingFetch({ ok: true }));
   const body = await res.json() as Record<string, unknown>;
   assertEquals(body.status, "degraded");
-  assertEquals((body.checks as Record<string, unknown>).databaseReachable, false);
+  assertEquals(
+    (body.checks as Record<string, unknown>).databaseReachable,
+    false,
+  );
   assertEquals(body.generationFunctionConfigured, false);
 
   // dbError should be set because the probe was skipped due to missing config.
@@ -169,8 +187,14 @@ Deno.test("handler: missing SUPABASE_URL skips db probe and marks degraded", asy
   const res = await handler(makeGetRequest(), makePingFetch({ ok: true }));
   const body = await res.json() as Record<string, unknown>;
   assertEquals(body.status, "degraded");
-  assertEquals((body.checks as Record<string, unknown>).supabaseURLConfigured, false);
-  assertEquals((body.checks as Record<string, unknown>).databaseReachable, false);
+  assertEquals(
+    (body.checks as Record<string, unknown>).supabaseURLConfigured,
+    false,
+  );
+  assertEquals(
+    (body.checks as Record<string, unknown>).databaseReachable,
+    false,
+  );
   assertEquals(body.generationFunctionConfigured, false);
   assertExists(body.dbError);
   clearEnvVars();
@@ -194,7 +218,10 @@ Deno.test("handler: db probe HTTP error returns degraded with dbError", async ()
   );
   const body = await res.json() as Record<string, unknown>;
   assertEquals(body.status, "degraded");
-  assertEquals((body.checks as Record<string, unknown>).databaseReachable, false);
+  assertEquals(
+    (body.checks as Record<string, unknown>).databaseReachable,
+    false,
+  );
   assertExists(body.dbError);
 
   const dbErr = body.dbError as Record<string, unknown>;
@@ -239,7 +266,10 @@ Deno.test("handler: db probe fetch throws returns degraded with error message", 
   );
   const body = await res.json() as Record<string, unknown>;
   assertEquals(body.status, "degraded");
-  assertEquals((body.checks as Record<string, unknown>).databaseReachable, false);
+  assertEquals(
+    (body.checks as Record<string, unknown>).databaseReachable,
+    false,
+  );
 
   const dbErr = body.dbError as Record<string, unknown>;
   assertEquals(dbErr.message, "Connection refused");
@@ -254,7 +284,11 @@ Deno.test("handler: generationFunctionConfigured false when db unreachable even 
   setAllEnvVars();
   const res = await handler(
     makeGetRequest(),
-    makePingFetch({ ok: false, status: 503, body: '{"message":"unavailable","code":"503"}' }),
+    makePingFetch({
+      ok: false,
+      status: 503,
+      body: '{"message":"unavailable","code":"503"}',
+    }),
   );
   const body = await res.json() as Record<string, unknown>;
   assertEquals(body.generationFunctionConfigured, false);
@@ -284,7 +318,10 @@ Deno.test("handler: status is ok iff generationFunctionConfigured is true", asyn
 
   // Degrade by removing OPENAI_API_KEY
   Deno.env.delete("OPENAI_API_KEY");
-  const degradedRes = await handler(makeGetRequest(), makePingFetch({ ok: true }));
+  const degradedRes = await handler(
+    makeGetRequest(),
+    makePingFetch({ ok: true }),
+  );
   const degradedBody = await degradedRes.json() as Record<string, unknown>;
   assertEquals(degradedBody.status, "degraded");
   assertEquals(degradedBody.generationFunctionConfigured, false);

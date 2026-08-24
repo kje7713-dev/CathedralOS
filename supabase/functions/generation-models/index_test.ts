@@ -26,7 +26,9 @@ Deno.test("generation-models: returns only enabled model list payload", async ()
   Deno.env.set("SUPABASE_URL", "https://fake.supabase.co");
   Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "fake-service-role-key");
 
-  const req = new Request("https://test.example.com/generation-models", { method: "GET" });
+  const req = new Request("https://test.example.com/generation-models", {
+    method: "GET",
+  });
   const res = await handler(req, {
     modelStore: mockModelStore,
     authenticatedUserId: "00000000-0000-0000-0000-000000000001",
