@@ -88,6 +88,12 @@ export interface CoherenceConfig {
   temperature: number;
 }
 
+/** GPT-5-family OpenAI models only support their default temperature (1). */
+export function supportsCustomTemperature(model: GenerationModel): boolean {
+  return !(model.provider === "openai" &&
+    /^gpt-5(?:[.-]|$)/i.test(model.provider_model));
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -340,6 +346,12 @@ export async function handleCoherenceCheck(
       { role: "system", content: messages.system },
       { role: "user", content: messages.user },
     ];
+    const providerOptions = {
+      responseFormat: COHERENCE_RESPONSE_FORMAT,
+      ...(supportsCustomTemperature(model)
+        ? { temperature: config.temperature }
+        : {}),
+    };
     const runnerResult = await runBillableLLM<CoherenceFeatureResult>({
       userID: userId,
       purpose: "coherence-check",
@@ -347,10 +359,7 @@ export async function handleCoherenceCheck(
       model,
       messages: llmMessages,
       maxOutputTokens: config.maxCompletionTokens,
-      providerOptions: {
-        responseFormat: COHERENCE_RESPONSE_FORMAT,
-        temperature: config.temperature,
-      },
+      providerOptions,
       usageContext: {
         projectID: request.project_id ?? null,
         generationOutputID: null,

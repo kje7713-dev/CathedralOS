@@ -18,6 +18,7 @@ import {
   type CoherenceConfig,
   type CoherenceRuntimeDeps,
   handleCoherenceCheck,
+  supportsCustomTemperature,
 } from "./_handler.ts";
 import type {
   LLMMessage,
@@ -113,6 +114,29 @@ const CONFIG: CoherenceConfig = {
   maxCompletionTokens: 1500,
   temperature: 0.2,
 };
+
+Deno.test("supportsCustomTemperature: omits override for GPT-5-family models", () => {
+  assertEquals(
+    supportsCustomTemperature({ ...MODEL_ROW, provider_model: "gpt-5.6-luna" }),
+    false,
+  );
+  assertEquals(
+    supportsCustomTemperature({ ...MODEL_ROW, provider_model: "gpt-5-mini" }),
+    false,
+  );
+  assertEquals(
+    supportsCustomTemperature({ ...MODEL_ROW, provider_model: "gpt-4o-mini" }),
+    true,
+  );
+  assertEquals(
+    supportsCustomTemperature({
+      ...MODEL_ROW,
+      provider: "anthropic",
+      provider_model: "claude-sonnet-4",
+    }),
+    true,
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Mock admin client — records inserts, returns scripted model row.
