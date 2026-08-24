@@ -37,9 +37,7 @@ function makeModel(overrides: Partial<GenerationModel> = {}): GenerationModel {
     description: null,
     input_credit_rate: 0, // legacy, unused in Phase 3
     output_credit_rate: 0, // legacy, unused in Phase 3
-    // minimum_charge_credits intentionally omitted so the test
-    // "snapshotPricing uses DEFAULT_PRICING defaults" actually exercises
-    // the defaults. Phase 3 pricing uses provider_*_usd_per_1m directly.
+    minimum_charge_credits: 0.25,
     max_output_tokens: 8000,
     enabled: true,
     sort_order: 10,
@@ -53,7 +51,9 @@ function makeModel(overrides: Partial<GenerationModel> = {}): GenerationModel {
   };
 }
 
-function makeSnapshot(overrides: Partial<PricingSnapshot> = {}): PricingSnapshot {
+function makeSnapshot(
+  overrides: Partial<PricingSnapshot> = {},
+): PricingSnapshot {
   return {
     inputCreditRatePer1k: 1.0, // (5.0 × 2.0 / 10)
     cachedInputCreditRatePer1k: 0.1, // (0.5 × 2.0 / 10)

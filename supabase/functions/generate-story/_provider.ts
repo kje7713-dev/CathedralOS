@@ -125,13 +125,14 @@ export function formatOpenAIError(details: OpenAIErrorDetails): string {
   return `OpenAI error (${parts.join(", ")})`;
 }
 
-// deno-lint-ignore no-explicit-any
-export function extractResponseText(json: any): string {
+export function extractResponseText(json: Record<string, unknown>): string {
   if (typeof json?.output_text === "string") return json.output_text;
 
   const parts: string[] = [];
-  for (const item of json?.output ?? []) {
-    for (const content of item?.content ?? []) {
+  const output = json.output as Array<Record<string, unknown>> | undefined;
+  for (const item of output ?? []) {
+    const contents = item.content as Array<Record<string, unknown>> | undefined;
+    for (const content of contents ?? []) {
       if (
         content?.type === "output_text" &&
         typeof content?.text === "string"
@@ -153,10 +154,14 @@ function isTokenLimitIncompleteReason(reason: string): boolean {
       (normalized.includes("max") || normalized.includes("limit")));
 }
 
-// deno-lint-ignore no-explicit-any
-export function extractResponsesFinishReason(json: any): string | undefined {
+export function extractResponsesFinishReason(
+  json: Record<string, unknown>,
+): string | undefined {
   if (json?.status === "incomplete") {
-    const reason = json?.incomplete_details?.reason;
+    const incomplete = json.incomplete_details as
+      | Record<string, unknown>
+      | undefined;
+    const reason = incomplete?.reason;
     if (
       typeof reason === "string" &&
       isTokenLimitIncompleteReason(reason)
@@ -315,16 +320,19 @@ export class OpenAIProvider implements LLMProvider {
       );
     }
 
-    // deno-lint-ignore no-explicit-any
-    const json: any = await resp.json();
+    const json: Record<string, unknown> = await resp.json();
+    const usage = json.usage as Record<string, unknown> | undefined;
+    const inputTokenDetails = usage?.input_tokens_details as
+      | Record<string, unknown>
+      | undefined;
     return {
       content: extractResponseText(json),
-      modelName: json.model ?? resolvedModel,
+      modelName: typeof json.model === "string" ? json.model : resolvedModel,
       finishReason: extractResponsesFinishReason(json),
-      inputTokens: json.usage?.input_tokens,
-      cachedInputTokens: json.usage?.input_tokens_details?.cached_tokens,
-      outputTokens: json.usage?.output_tokens,
-      totalTokens: json.usage?.total_tokens,
+      inputTokens: usage?.input_tokens as number | undefined,
+      cachedInputTokens: inputTokenDetails?.cached_tokens as number | undefined,
+      outputTokens: usage?.output_tokens as number | undefined,
+      totalTokens: usage?.total_tokens as number | undefined,
       toolCostUsd: 0,
     };
   }
@@ -343,8 +351,7 @@ export class OpenAIProvider implements LLMProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
-    // deno-lint-ignore no-explicit-any
-    const body: any = {
+    const body: Record<string, unknown> = {
       model: resolvedModel,
       messages,
       max_completion_tokens: maxTokens,
@@ -356,7 +363,6 @@ export class OpenAIProvider implements LLMProvider {
       body.temperature = options.temperature;
     }
 
-    // deno-lint-ignore no-explicit-any
     let resp: Response;
     try {
       resp = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -399,20 +405,29 @@ export class OpenAIProvider implements LLMProvider {
       );
     }
 
-    // deno-lint-ignore no-explicit-any
-    const json: any = await resp.json();
-    const choice = json.choices?.[0];
-    const content = typeof choice?.message?.content === "string"
-      ? choice.message.content
-      : "";
+    const json: Record<string, unknown> = await resp.json();
+    const choices = json.choices;
+    const choice = Array.isArray(choices)
+      ? choices[0] as Record<string, unknown> | undefined
+      : undefined;
+    const message = choice?.message as Record<string, unknown> | undefined;
+    const rawContent = message?.content;
+    const content = typeof rawContent === "string" ? rawContent : "";
     return {
       content,
-      modelName: json.model ?? resolvedModel,
-      finishReason: choice?.finish_reason,
-      inputTokens: json.usage?.prompt_tokens,
-      cachedInputTokens: json.usage?.prompt_tokens_details?.cached_tokens,
-      outputTokens: json.usage?.completion_tokens,
-      totalTokens: json.usage?.total_tokens,
+      modelName: typeof json.model === "string" ? json.model : resolvedModel,
+      finishReason: typeof choice?.finish_reason === "string"
+        ? choice.finish_reason
+        : undefined,
+      inputTokens: (json.usage as Record<string, unknown> | undefined)
+        ?.prompt_tokens as number | undefined,
+      cachedInputTokens: ((json.usage as Record<string, unknown> | undefined)
+        ?.prompt_tokens_details as Record<string, unknown> | undefined)
+        ?.cached_tokens as number | undefined,
+      outputTokens: (json.usage as Record<string, unknown> | undefined)
+        ?.completion_tokens as number | undefined,
+      totalTokens: (json.usage as Record<string, unknown> | undefined)
+        ?.total_tokens as number | undefined,
       toolCostUsd: 0,
     };
   }

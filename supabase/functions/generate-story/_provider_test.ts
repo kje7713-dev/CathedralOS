@@ -26,26 +26,29 @@ interface CapturedRequest {
 }
 
 let lastRequest: CapturedRequest | null = null;
-// deno-lint-ignore no-explicit-any
 const originalFetch = globalThis.fetch;
 
 function installFetchStub(responseJson: Record<string, unknown>): void {
-  // deno-lint-ignore no-explicit-any
-  globalThis.fetch = (async (input: any, init?: any) => {
-    const url = typeof input === "string" ? input : input.url;
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.toString()
+      : input.url;
     const bodyText = init?.body ? String(init.body) : "{}";
     lastRequest = {
       url,
       init: init ?? {},
       body: JSON.parse(bodyText) as Record<string, unknown>,
     };
-    return new Response(JSON.stringify(responseJson), { status: 200 });
+    return Promise.resolve(
+      new Response(JSON.stringify(responseJson), { status: 200 }),
+    );
   }) as typeof fetch;
 }
 
 function uninstallFetchStub(): void {
-  // deno-lint-ignore no-explicit-any
-  globalThis.fetch = originalFetch as any;
+  globalThis.fetch = originalFetch as typeof fetch;
 }
 
 function chatCompletionsResponse(content: string): Record<string, unknown> {

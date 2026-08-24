@@ -39,20 +39,22 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
-  handleCoherenceCheck,
-  type CoherenceRuntimeDeps,
   type CoherenceConfig,
+  type CoherenceRuntimeDeps,
+  handleCoherenceCheck,
 } from "./_handler.ts";
 import { validateRequest } from "./_validation.ts";
 import { GenerationModel } from "../generate-story/_generation_models.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
-import { OpenAIProvider, LLMProvider } from "../generate-story/_provider.ts";
+import { LLMProvider, OpenAIProvider } from "../generate-story/_provider.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ??
+  "";
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY")!;
-const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-5-mini";
+const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
+  "gpt-5-mini";
 const COHERENCE_TEMPERATURE = 0.2;
 const COHERENCE_MAX_COMPLETION_TOKENS = 1500;
 
@@ -66,7 +68,10 @@ const creditStore = new SupabaseCreditStore(adminClient);
 
 // LLM provider for the coherence feature. Uses chat/completions + Structured
 // Outputs via the 4th options argument (LLMProviderOptions.responseFormat).
-const provider: LLMProvider = new OpenAIProvider(OPENAI_API_KEY, OPENAI_MODEL_DEFAULT);
+const provider: LLMProvider = new OpenAIProvider(
+  OPENAI_API_KEY,
+  OPENAI_MODEL_DEFAULT,
+);
 
 // Fallback model row when the env-var-provided model isn\'t in
 // generation_models. Used for snapshotPricing() only — the actual LLM call
@@ -76,7 +81,8 @@ const FALLBACK_MODEL: GenerationModel = {
   provider: "openai",
   provider_model: OPENAI_MODEL_DEFAULT,
   display_name: OPENAI_MODEL_DEFAULT,
-  description: "Fallback pricing for coherence-check when model not in generation_models",
+  description:
+    "Fallback pricing for coherence-check when model not in generation_models",
   input_credit_rate: 0,
   output_credit_rate: 0,
   minimum_charge_credits: 1,
@@ -92,7 +98,8 @@ const FALLBACK_MODEL: GenerationModel = {
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Content-Type": "application/json",
 };
@@ -103,7 +110,11 @@ const corsResponse = (body: string, init: ResponseInit = {}): Response =>
     headers: { ...CORS_HEADERS, ...(init.headers ?? {}) },
   });
 
-const errorResponse = (code: string, message: string, status: number): Response =>
+const errorResponse = (
+  code: string,
+  message: string,
+  status: number,
+): Response =>
   corsResponse(JSON.stringify({ errorCode: code, message }), { status });
 
 const RUNTIME_DEPS: CoherenceRuntimeDeps = {

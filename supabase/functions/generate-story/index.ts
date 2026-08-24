@@ -48,34 +48,44 @@
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { buildProviderFromEnv, LLMProvider, ProviderError, PROVIDER_TIMEOUT_MS } from "./_provider.ts";
+import {
+  buildProviderFromEnv,
+  LLMProvider,
+  PROVIDER_TIMEOUT_MS,
+  ProviderError,
+} from "./_provider.ts";
 import {
   ALLOWED_LENGTH_MODES,
-  type LengthMode,
   checkCredits,
-  SupabaseCreditStore,
   type CreditStore,
+  type LengthMode,
+  SupabaseCreditStore,
 } from "./_credits.ts";
 import {
-  SupabaseRateLimitStore,
   type RateLimitStore,
+  SupabaseRateLimitStore,
 } from "./_rate_limiter.ts";
 import {
   computeActualChargeCredits,
   computeGenerationCreditCharge,
   computeMaxChargeCredits,
   estimateTokensFromText,
+  type GenerationModelStore,
   normalizedModelId,
   snapshotPricing,
   SupabaseGenerationModelStore,
-  type GenerationModelStore,
 } from "./_generation_models.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const ALLOWED_ACTIONS = ["generate", "regenerate", "continue", "remix"] as const;
+const ALLOWED_ACTIONS = [
+  "generate",
+  "regenerate",
+  "continue",
+  "remix",
+] as const;
 type GenerationAction = typeof ALLOWED_ACTIONS[number];
 
 /** Estimate-only action — returns a cost estimate without calling the LLM. */
@@ -116,7 +126,10 @@ function corsResponse(body: string, init: ResponseInit = {}): Response {
   });
 }
 
-function providerErrorResponse(providerErrorCode: string, fallbackMessage: string): {
+function providerErrorResponse(
+  providerErrorCode: string,
+  fallbackMessage: string,
+): {
   httpStatus: number;
   body: Record<string, string | number | null>;
   headers?: Record<string, string>;
@@ -329,7 +342,9 @@ class SupabaseGenerationPersistenceStore implements GenerationPersistenceStore {
     if (row.credit_revenue_usd == null) {
       delete (insertRow as Record<string, unknown>).credit_revenue_usd;
     }
-    const { error } = await this.db.from("generation_usage_events").insert(insertRow);
+    const { error } = await this.db.from("generation_usage_events").insert(
+      insertRow,
+    );
     return { error };
   }
 
@@ -366,7 +381,9 @@ class SupabaseGenerationPersistenceStore implements GenerationPersistenceStore {
     };
   }
 
-  private async lookupModelRate(modelName: string): Promise<ModelRateRow | null> {
+  private async lookupModelRate(
+    modelName: string,
+  ): Promise<ModelRateRow | null> {
     const { data, error } = await this.db
       .from("model_rates")
       .select("input_per_1k_usd, output_per_1k_usd, premium_markup_pct, tier")
@@ -564,38 +581,56 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
     out.push("## Characters");
     for (const c of chars) {
       if (nonEmpty(c.name)) out.push(`### ${c.name}`);
-      if (c.roles?.length)           out.push(`Roles: ${join(c.roles, ", ")}`);
-      if (c.goals?.length)           out.push(`Goals: ${join(c.goals)}`);
-      if (c.fears?.length)           out.push(`Fears: ${join(c.fears)}`);
-      if (c.flaws?.length)           out.push(`Flaws: ${join(c.flaws)}`);
-      if (c.secrets?.length)         out.push(`Secrets: ${join(c.secrets)}`);
-      if (c.wounds?.length)          out.push(`Wounds: ${join(c.wounds)}`);
-      if (nonEmpty(c.coreLie))       out.push(`Core lie: ${c.coreLie}`);
-      if (nonEmpty(c.coreTruth))     out.push(`Core truth: ${c.coreTruth}`);
-      if (nonEmpty(c.arcStart))      out.push(`Arc (start): ${c.arcStart}`);
-      if (nonEmpty(c.arcEnd))        out.push(`Arc (end): ${c.arcEnd}`);
-      if (c.breakingPoints?.length)  out.push(`Breaking points: ${join(c.breakingPoints)}`);
-      if (c.moralLines?.length)      out.push(`Moral lines: ${join(c.moralLines)}`);
-      if (c.selfDeceptions?.length)  out.push(`Self-deceptions: ${join(c.selfDeceptions)}`);
-      if (c.identityConflicts?.length) out.push(`Identity conflicts: ${join(c.identityConflicts)}`);
-      if (nonEmpty(c.instructionBias)) out.push(`Character instruction: ${c.instructionBias}`);
-    // Fields captured by PromptPackExportBuilder.build() but previously dropped
-    // by buildStructuredPromptBody. Each line uses nonEmpty() / array-length
-    // checks so empty values cost nothing in tokens.
-    if (c.preferences?.length)       out.push(`Preferences: ${join(c.preferences)}`);
-    if (c.resources?.length)         out.push(`Resources: ${join(c.resources)}`);
-    if (c.failurePatterns?.length)   out.push(`Failure patterns: ${join(c.failurePatterns)}`);
-    if (c.needs?.length)             out.push(`Needs: ${join(c.needs)}`);
-    if (c.contradictions?.length)   out.push(`Contradictions: ${join(c.contradictions)}`);
-    if (c.obsessions?.length)       out.push(`Obsessions: ${join(c.obsessions)}`);
-    if (c.attachments?.length)      out.push(`Attachments: ${join(c.attachments)}`);
-    if (nonEmpty(c.notes))           out.push(`Notes: ${c.notes}`);
-    if (c.virtues?.length)           out.push(`Virtues: ${join(c.virtues)}`);
-    if (nonEmpty(c.publicMask))      out.push(`Public mask: ${c.publicMask}`);
-    if (nonEmpty(c.privateLogic))    out.push(`Private logic: ${c.privateLogic}`);
-    if (nonEmpty(c.speechStyle))     out.push(`Speech style: ${c.speechStyle}`);
-    if (nonEmpty(c.reputation))      out.push(`Reputation: ${c.reputation}`);
-    if (nonEmpty(c.status))          out.push(`Status: ${c.status}`);
+      if (c.roles?.length) out.push(`Roles: ${join(c.roles, ", ")}`);
+      if (c.goals?.length) out.push(`Goals: ${join(c.goals)}`);
+      if (c.fears?.length) out.push(`Fears: ${join(c.fears)}`);
+      if (c.flaws?.length) out.push(`Flaws: ${join(c.flaws)}`);
+      if (c.secrets?.length) out.push(`Secrets: ${join(c.secrets)}`);
+      if (c.wounds?.length) out.push(`Wounds: ${join(c.wounds)}`);
+      if (nonEmpty(c.coreLie)) out.push(`Core lie: ${c.coreLie}`);
+      if (nonEmpty(c.coreTruth)) out.push(`Core truth: ${c.coreTruth}`);
+      if (nonEmpty(c.arcStart)) out.push(`Arc (start): ${c.arcStart}`);
+      if (nonEmpty(c.arcEnd)) out.push(`Arc (end): ${c.arcEnd}`);
+      if (c.breakingPoints?.length) {
+        out.push(`Breaking points: ${join(c.breakingPoints)}`);
+      }
+      if (c.moralLines?.length) out.push(`Moral lines: ${join(c.moralLines)}`);
+      if (c.selfDeceptions?.length) {
+        out.push(`Self-deceptions: ${join(c.selfDeceptions)}`);
+      }
+      if (c.identityConflicts?.length) {
+        out.push(`Identity conflicts: ${join(c.identityConflicts)}`);
+      }
+      if (nonEmpty(c.instructionBias)) {
+        out.push(`Character instruction: ${c.instructionBias}`);
+      }
+      // Fields captured by PromptPackExportBuilder.build() but previously dropped
+      // by buildStructuredPromptBody. Each line uses nonEmpty() / array-length
+      // checks so empty values cost nothing in tokens.
+      if (c.preferences?.length) {
+        out.push(`Preferences: ${join(c.preferences)}`);
+      }
+      if (c.resources?.length) out.push(`Resources: ${join(c.resources)}`);
+      if (c.failurePatterns?.length) {
+        out.push(`Failure patterns: ${join(c.failurePatterns)}`);
+      }
+      if (c.needs?.length) out.push(`Needs: ${join(c.needs)}`);
+      if (c.contradictions?.length) {
+        out.push(`Contradictions: ${join(c.contradictions)}`);
+      }
+      if (c.obsessions?.length) out.push(`Obsessions: ${join(c.obsessions)}`);
+      if (c.attachments?.length) {
+        out.push(`Attachments: ${join(c.attachments)}`);
+      }
+      if (nonEmpty(c.notes)) out.push(`Notes: ${c.notes}`);
+      if (c.virtues?.length) out.push(`Virtues: ${join(c.virtues)}`);
+      if (nonEmpty(c.publicMask)) out.push(`Public mask: ${c.publicMask}`);
+      if (nonEmpty(c.privateLogic)) {
+        out.push(`Private logic: ${c.privateLogic}`);
+      }
+      if (nonEmpty(c.speechStyle)) out.push(`Speech style: ${c.speechStyle}`);
+      if (nonEmpty(c.reputation)) out.push(`Reputation: ${c.reputation}`);
+      if (nonEmpty(c.status)) out.push(`Status: ${c.status}`);
     }
     out.push("");
   }
@@ -604,26 +639,40 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   const rels = p.selectedRelationships;
   if (rels?.length) {
     out.push("## Relationships");
-    out.push("(Supporting context only — the current Section Contract always takes precedence. Do not let relationships redirect the section.)");
+    out.push(
+      "(Supporting context only — the current Section Contract always takes precedence. Do not let relationships redirect the section.)",
+    );
     for (const r of rels) {
       if (nonEmpty(r.name)) out.push(`### ${r.name}`);
       if (nonEmpty(r.relationshipType)) out.push(`Type: ${r.relationshipType}`);
-      if (nonEmpty(r.tension))          out.push(`Tension: ${r.tension}`);
-      if (nonEmpty(r.unspokenTruth))    out.push(`Unspoken truth: ${r.unspokenTruth}`);
-      if (nonEmpty(r.whatEachWantsFromTheOther)) out.push(`What each wants: ${r.whatEachWantsFromTheOther}`);
-      if (nonEmpty(r.whatWouldBreakIt)) out.push(`What would break it: ${r.whatWouldBreakIt}`);
-      if (nonEmpty(r.whatWouldTransformIt)) out.push(`What would transform it: ${r.whatWouldTransformIt}`);
-    // Fields captured by PromptPackExportBuilder.build() but previously dropped
-    // by buildStructuredPromptBody.
-    if (nonEmpty(r.loyalty))         out.push(`Loyalty: ${r.loyalty}`);
-    if (nonEmpty(r.fear))            out.push(`Fear: ${r.fear}`);
-    if (nonEmpty(r.desire))          out.push(`Desire: ${r.desire}`);
-    if (nonEmpty(r.dependency))      out.push(`Dependency: ${r.dependency}`);
-    if (nonEmpty(r.history))         out.push(`History: ${r.history}`);
-    if (nonEmpty(r.powerBalance))    out.push(`Power balance: ${r.powerBalance}`);
-    if (nonEmpty(r.resentment))      out.push(`Resentment: ${r.resentment}`);
-    if (nonEmpty(r.misunderstanding)) out.push(`Misunderstanding: ${r.misunderstanding}`);
-    if (nonEmpty(r.notes))           out.push(`Notes: ${r.notes}`);
+      if (nonEmpty(r.tension)) out.push(`Tension: ${r.tension}`);
+      if (nonEmpty(r.unspokenTruth)) {
+        out.push(`Unspoken truth: ${r.unspokenTruth}`);
+      }
+      if (nonEmpty(r.whatEachWantsFromTheOther)) {
+        out.push(`What each wants: ${r.whatEachWantsFromTheOther}`);
+      }
+      if (nonEmpty(r.whatWouldBreakIt)) {
+        out.push(`What would break it: ${r.whatWouldBreakIt}`);
+      }
+      if (nonEmpty(r.whatWouldTransformIt)) {
+        out.push(`What would transform it: ${r.whatWouldTransformIt}`);
+      }
+      // Fields captured by PromptPackExportBuilder.build() but previously dropped
+      // by buildStructuredPromptBody.
+      if (nonEmpty(r.loyalty)) out.push(`Loyalty: ${r.loyalty}`);
+      if (nonEmpty(r.fear)) out.push(`Fear: ${r.fear}`);
+      if (nonEmpty(r.desire)) out.push(`Desire: ${r.desire}`);
+      if (nonEmpty(r.dependency)) out.push(`Dependency: ${r.dependency}`);
+      if (nonEmpty(r.history)) out.push(`History: ${r.history}`);
+      if (nonEmpty(r.powerBalance)) {
+        out.push(`Power balance: ${r.powerBalance}`);
+      }
+      if (nonEmpty(r.resentment)) out.push(`Resentment: ${r.resentment}`);
+      if (nonEmpty(r.misunderstanding)) {
+        out.push(`Misunderstanding: ${r.misunderstanding}`);
+      }
+      if (nonEmpty(r.notes)) out.push(`Notes: ${r.notes}`);
     }
     out.push("");
   }
@@ -632,15 +681,21 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   const themes = p.selectedThemeQuestions;
   if (themes?.length) {
     out.push("## Themes");
-    out.push("(Supporting context only — the current Section Contract always takes precedence. Do not let these questions redirect the section.)");
+    out.push(
+      "(Supporting context only — the current Section Contract always takes precedence. Do not let these questions redirect the section.)",
+    );
     for (const t of themes) {
-      if (nonEmpty(t.question))      out.push(`- ${t.question}`);
-      if (nonEmpty(t.coreTension))   out.push(`  Core tension: ${t.coreTension}`);
-      if (nonEmpty(t.moralFaultLine)) out.push(`  Moral fault line: ${t.moralFaultLine}`);
-      if (nonEmpty(t.endingTruth))   out.push(`  Ending truth: ${t.endingTruth}`);
-    // Fields captured by PromptPackExportBuilder.build() but previously dropped.
-    if (nonEmpty(t.valueConflict))   out.push(`  Value conflict: ${t.valueConflict}`);
-    if (nonEmpty(t.notes))           out.push(`  Notes: ${t.notes}`);
+      if (nonEmpty(t.question)) out.push(`- ${t.question}`);
+      if (nonEmpty(t.coreTension)) out.push(`  Core tension: ${t.coreTension}`);
+      if (nonEmpty(t.moralFaultLine)) {
+        out.push(`  Moral fault line: ${t.moralFaultLine}`);
+      }
+      if (nonEmpty(t.endingTruth)) out.push(`  Ending truth: ${t.endingTruth}`);
+      // Fields captured by PromptPackExportBuilder.build() but previously dropped.
+      if (nonEmpty(t.valueConflict)) {
+        out.push(`  Value conflict: ${t.valueConflict}`);
+      }
+      if (nonEmpty(t.notes)) out.push(`  Notes: ${t.notes}`);
     }
     out.push("");
   }
@@ -649,13 +704,17 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   const motifs = p.selectedMotifs;
   if (motifs?.length) {
     out.push("## Motifs");
-    out.push("(Supporting context only — the current Section Contract always takes precedence. Do not let motifs redirect the section.)");
+    out.push(
+      "(Supporting context only — the current Section Contract always takes precedence. Do not let motifs redirect the section.)",
+    );
     for (const m of motifs) {
-      out.push(`- ${m.label ?? ""}${nonEmpty(m.meaning) ? ": " + m.meaning : ""}`);
+      out.push(
+        `- ${m.label ?? ""}${nonEmpty(m.meaning) ? ": " + m.meaning : ""}`,
+      );
       // Fields captured by PromptPackExportBuilder.build() but previously dropped.
       if (nonEmpty(m.category)) out.push(`  Category: ${m.category}`);
-      if (m.examples?.length)   out.push(`  Examples: ${join(m.examples)}`);
-      if (nonEmpty(m.notes))    out.push(`  Notes: ${m.notes}`);
+      if (m.examples?.length) out.push(`  Examples: ${join(m.examples)}`);
+      if (nonEmpty(m.notes)) out.push(`  Notes: ${m.notes}`);
     }
     out.push("");
   }
@@ -669,23 +728,39 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   if (spark) {
     const sparkLines: string[] = [];
     sparkLines.push(
-      `Use this spark only when relevant to the current Section Contract: "${spark.title ?? ""}"`,
+      `Use this spark only when relevant to the current Section Contract: "${
+        spark.title ?? ""
+      }"`,
     );
     sparkLines.push(
       "The Section Contract always takes precedence. Do not let the spark redirect, replace, or override the section premise — if the section calls for something other than this spark, follow the Section Contract.",
     );
-    if (nonEmpty(spark.situation))        sparkLines.push(`Situation: ${spark.situation}`);
-    if (nonEmpty(spark.stakes))           sparkLines.push(`Stakes: ${spark.stakes}`);
-    if (nonEmpty(spark.urgency))          sparkLines.push(`Urgency: ${spark.urgency}`);
-    if (nonEmpty(spark.threat))           sparkLines.push(`Threat: ${spark.threat}`);
-    if (nonEmpty(spark.twist))            sparkLines.push(`Twist: ${spark.twist}`);
-    if (nonEmpty(spark.opportunity))      sparkLines.push(`Opportunity: ${spark.opportunity}`);
-    if (nonEmpty(spark.complication))     sparkLines.push(`Complication: ${spark.complication}`);
-    if (nonEmpty(spark.clock))            sparkLines.push(`Clock: ${spark.clock}`);
-    if (nonEmpty(spark.triggerEvent))     sparkLines.push(`Trigger event: ${spark.triggerEvent}`);
-    if (nonEmpty(spark.initialImbalance)) sparkLines.push(`Initial imbalance: ${spark.initialImbalance}`);
-    if (nonEmpty(spark.reversalPotential)) sparkLines.push(`Reversal potential: ${spark.reversalPotential}`);
-    if (nonEmpty(spark.falseResolution))  sparkLines.push(`False resolution: ${spark.falseResolution}`);
+    if (nonEmpty(spark.situation)) {
+      sparkLines.push(`Situation: ${spark.situation}`);
+    }
+    if (nonEmpty(spark.stakes)) sparkLines.push(`Stakes: ${spark.stakes}`);
+    if (nonEmpty(spark.urgency)) sparkLines.push(`Urgency: ${spark.urgency}`);
+    if (nonEmpty(spark.threat)) sparkLines.push(`Threat: ${spark.threat}`);
+    if (nonEmpty(spark.twist)) sparkLines.push(`Twist: ${spark.twist}`);
+    if (nonEmpty(spark.opportunity)) {
+      sparkLines.push(`Opportunity: ${spark.opportunity}`);
+    }
+    if (nonEmpty(spark.complication)) {
+      sparkLines.push(`Complication: ${spark.complication}`);
+    }
+    if (nonEmpty(spark.clock)) sparkLines.push(`Clock: ${spark.clock}`);
+    if (nonEmpty(spark.triggerEvent)) {
+      sparkLines.push(`Trigger event: ${spark.triggerEvent}`);
+    }
+    if (nonEmpty(spark.initialImbalance)) {
+      sparkLines.push(`Initial imbalance: ${spark.initialImbalance}`);
+    }
+    if (nonEmpty(spark.reversalPotential)) {
+      sparkLines.push(`Reversal potential: ${spark.reversalPotential}`);
+    }
+    if (nonEmpty(spark.falseResolution)) {
+      sparkLines.push(`False resolution: ${spark.falseResolution}`);
+    }
     out.push(...section("## Dramatic Seed", sparkLines));
   }
 
@@ -695,24 +770,54 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   if (s?.included) {
     const settingLines: string[] = [];
     if (nonEmpty(s.summary)) settingLines.push(s.summary!);
-    if (s.worldRules?.length)    settingLines.push(`World rules: ${join(s.worldRules)}`);
-    if (s.constraints?.length)   settingLines.push(`Constraints: ${join(s.constraints)}`);
-    if (s.domains?.length)       settingLines.push(`Domains: ${join(s.domains, ", ")}`);
-    if (s.themes?.length)        settingLines.push(`Themes: ${join(s.themes, ", ")}`);
-    if (nonEmpty(s.season))              settingLines.push(`Season / Time: ${s.season}`);
-    if (nonEmpty(s.historicalPressure))  settingLines.push(`Historical pressure: ${s.historicalPressure}`);
-    if (nonEmpty(s.politicalForces))     settingLines.push(`Political forces: ${s.politicalForces}`);
-    if (nonEmpty(s.socialOrder))         settingLines.push(`Social order: ${s.socialOrder}`);
-    if (nonEmpty(s.environmentalPressure)) settingLines.push(`Environmental pressure: ${s.environmentalPressure}`);
-    if (nonEmpty(s.technologyLevel))     settingLines.push(`Technology level: ${s.technologyLevel}`);
-    if (nonEmpty(s.mythicFrame))         settingLines.push(`Mythic frame: ${s.mythicFrame}`);
-    if (nonEmpty(s.religiousPressure))   settingLines.push(`Religious pressure: ${s.religiousPressure}`);
-    if (nonEmpty(s.economicPressure))    settingLines.push(`Economic pressure: ${s.economicPressure}`);
-    if (s.taboos?.length)        settingLines.push(`Taboos: ${join(s.taboos)}`);
-    if (s.institutions?.length)  settingLines.push(`Institutions: ${join(s.institutions, ", ")}`);
-    if (s.dominantValues?.length) settingLines.push(`Dominant values: ${join(s.dominantValues, ", ")}`);
-    if (s.hiddenTruths?.length)  settingLines.push(`Hidden truths: ${join(s.hiddenTruths)}`);
-    if (nonEmpty(s.instructionBias)) settingLines.push(`Setting instruction: ${s.instructionBias}`);
+    if (s.worldRules?.length) {
+      settingLines.push(`World rules: ${join(s.worldRules)}`);
+    }
+    if (s.constraints?.length) {
+      settingLines.push(`Constraints: ${join(s.constraints)}`);
+    }
+    if (s.domains?.length) {
+      settingLines.push(`Domains: ${join(s.domains, ", ")}`);
+    }
+    if (s.themes?.length) settingLines.push(`Themes: ${join(s.themes, ", ")}`);
+    if (nonEmpty(s.season)) settingLines.push(`Season / Time: ${s.season}`);
+    if (nonEmpty(s.historicalPressure)) {
+      settingLines.push(`Historical pressure: ${s.historicalPressure}`);
+    }
+    if (nonEmpty(s.politicalForces)) {
+      settingLines.push(`Political forces: ${s.politicalForces}`);
+    }
+    if (nonEmpty(s.socialOrder)) {
+      settingLines.push(`Social order: ${s.socialOrder}`);
+    }
+    if (nonEmpty(s.environmentalPressure)) {
+      settingLines.push(`Environmental pressure: ${s.environmentalPressure}`);
+    }
+    if (nonEmpty(s.technologyLevel)) {
+      settingLines.push(`Technology level: ${s.technologyLevel}`);
+    }
+    if (nonEmpty(s.mythicFrame)) {
+      settingLines.push(`Mythic frame: ${s.mythicFrame}`);
+    }
+    if (nonEmpty(s.religiousPressure)) {
+      settingLines.push(`Religious pressure: ${s.religiousPressure}`);
+    }
+    if (nonEmpty(s.economicPressure)) {
+      settingLines.push(`Economic pressure: ${s.economicPressure}`);
+    }
+    if (s.taboos?.length) settingLines.push(`Taboos: ${join(s.taboos)}`);
+    if (s.institutions?.length) {
+      settingLines.push(`Institutions: ${join(s.institutions, ", ")}`);
+    }
+    if (s.dominantValues?.length) {
+      settingLines.push(`Dominant values: ${join(s.dominantValues, ", ")}`);
+    }
+    if (s.hiddenTruths?.length) {
+      settingLines.push(`Hidden truths: ${join(s.hiddenTruths)}`);
+    }
+    if (nonEmpty(s.instructionBias)) {
+      settingLines.push(`Setting instruction: ${s.instructionBias}`);
+    }
     out.push(...section("## World & Constraints", settingLines));
   }
 
@@ -737,12 +842,22 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
       "The Ending Instruction describes the emotional, sensory, or thematic residue the ending should leave with the reader. Do not quote, name, or directly restate it unless the current scene independently requires that literal thing. Interpret the label as the underlying residue and shape the final image, tone, and consequence to produce it.",
       "The current Section Contract always takes precedence over the Ending Instruction.",
     );
-    if (nonEmpty(at.note))                  atLines.push(at.note!);
-    if (nonEmpty(at.emotionalResidue))      atLines.push(`Emotional residue: ${at.emotionalResidue}`);
-    if (nonEmpty(at.endingTexture))         atLines.push(`Ending texture: ${at.endingTexture}`);
-    if (nonEmpty(at.desiredAmbiguityLevel)) atLines.push(`Ambiguity: ${at.desiredAmbiguityLevel}`);
-    if (nonEmpty(at.readerQuestionLeftOpen)) atLines.push(`Leave open: ${at.readerQuestionLeftOpen}`);
-    if (nonEmpty(at.lastImageFeeling))      atLines.push(`Last image: ${at.lastImageFeeling}`);
+    if (nonEmpty(at.note)) atLines.push(at.note!);
+    if (nonEmpty(at.emotionalResidue)) {
+      atLines.push(`Emotional residue: ${at.emotionalResidue}`);
+    }
+    if (nonEmpty(at.endingTexture)) {
+      atLines.push(`Ending texture: ${at.endingTexture}`);
+    }
+    if (nonEmpty(at.desiredAmbiguityLevel)) {
+      atLines.push(`Ambiguity: ${at.desiredAmbiguityLevel}`);
+    }
+    if (nonEmpty(at.readerQuestionLeftOpen)) {
+      atLines.push(`Leave open: ${at.readerQuestionLeftOpen}`);
+    }
+    if (nonEmpty(at.lastImageFeeling)) {
+      atLines.push(`Last image: ${at.lastImageFeeling}`);
+    }
     out.push(...section("## Ending Instruction", atLines));
   }
 
@@ -751,7 +866,9 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
     out.push(...section("## Notes", [p.promptPack!.notes!]));
   }
   if (nonEmpty(p.promptPack?.instructionBias)) {
-    out.push(...section("## Instruction Bias", [p.promptPack!.instructionBias!]));
+    out.push(
+      ...section("## Instruction Bias", [p.promptPack!.instructionBias!]),
+    );
   }
 
   return out;
@@ -775,7 +892,11 @@ type Container =
   | "novella";
 
 // Point of view: who narrates the scene.
-type POV = "firstPerson" | "secondPerson" | "thirdPersonLimited" | "thirdPersonOmniscient";
+type POV =
+  | "firstPerson"
+  | "secondPerson"
+  | "thirdPersonLimited"
+  | "thirdPersonOmniscient";
 
 // Pre-flight hard cap lookup for credit estimation. Mirrors the hardCap
 // values in containerConfig inside buildPrompt — keep in sync if those
@@ -866,20 +987,32 @@ async function fetchProjectStateContext(
     // "prior state", it is "the current section so far".
     let query = adminClient
       .from("section_embeddings")
-      .select("extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at")
+      .select(
+        "extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at",
+      )
       .eq("project_id", projectId);
     if (excludeSectionId) {
       query = query.neq("outline_section_id", excludeSectionId);
     }
-    const { data, error } = await query.order("created_at", { ascending: true });
+    const { data, error } = await query.order("created_at", {
+      ascending: true,
+    });
     console.log(
-      `[generate-story] fetchProjectStateContext: rows=${data?.length ?? 0} for projectId=${projectId} excludeSectionId=${excludeSectionId ?? "none"} error=${error?.message ?? "none"}`,
+      `[generate-story] fetchProjectStateContext: rows=${
+        data?.length ?? 0
+      } for projectId=${projectId} excludeSectionId=${
+        excludeSectionId ?? "none"
+      } error=${error?.message ?? "none"}`,
     );
     if (error) {
       // Surface the actual PostgREST error (defense-in-depth: previously this
       // was collapsed into a silent "" return, which made the Kevin 14:44 EDT
       // smoke-test "no Project State block" symptom hard to attribute).
-      console.error(`[generate-story] fetchProjectStateContext query error: ${error.message ?? JSON.stringify(error)}`);
+      console.error(
+        `[generate-story] fetchProjectStateContext query error: ${
+          error.message ?? JSON.stringify(error)
+        }`,
+      );
       return "";
     }
     if (!data || data.length === 0) return "";
@@ -928,7 +1061,9 @@ async function fetchProjectStateContext(
       }
     }
 
-    const lines: string[] = ["## Project state (cumulative across all accepted scenes)"];
+    const lines: string[] = [
+      "## Project state (cumulative across all accepted scenes)",
+    ];
     lines.push("");
     if (latestSummary) {
       lines.push(`**Latest summary:** ${latestSummary}`);
@@ -944,7 +1079,9 @@ async function fetchProjectStateContext(
     if (threadsByName.size > 0) {
       lines.push("### Plot threads (latest status)");
       for (const thread of threadsByName.values()) {
-        lines.push(`- **${thread.thread_name}** [${thread.status}]: ${thread.description}`);
+        lines.push(
+          `- **${thread.thread_name}** [${thread.status}]: ${thread.description}`,
+        );
       }
       lines.push("");
     }
@@ -960,7 +1097,10 @@ async function fetchProjectStateContext(
       }
       lines.push("");
     }
-    if (latestEndingState && typeof latestEndingState === "object" && Object.keys(latestEndingState).length > 0) {
+    if (
+      latestEndingState && typeof latestEndingState === "object" &&
+      Object.keys(latestEndingState).length > 0
+    ) {
       lines.push("### Ending state (latest scene)");
       lines.push("```json");
       lines.push(JSON.stringify(latestEndingState, null, 2));
@@ -972,8 +1112,6 @@ async function fetchProjectStateContext(
     return "";
   }
 }
-
-
 
 // ---- fetchOutlineSectionContext (Kevin 2026-08-21 17:47 EDT architecture spec) ----
 //
@@ -1042,17 +1180,25 @@ async function fetchOutlineSectionContext(
     // forget embed-section. Splitting into two queries fixes this.
     const { data: sectionRow, error: sectionErr } = await adminClient
       .from("outline_sections")
-      .select("id, title, summary, container, pov, terminal_beat, position, outline_id, story_arc_beat_id")
+      .select(
+        "id, title, summary, container, pov, terminal_beat, position, outline_id, story_arc_beat_id",
+      )
       .eq("id", outlineSectionId)
       .maybeSingle();
     if (sectionErr) {
-      console.error(`[generate-story] fetchOutlineSectionContext (section fetch) failed: ${sectionErr.message ?? JSON.stringify(sectionErr)}`);
+      console.error(
+        `[generate-story] fetchOutlineSectionContext (section fetch) failed: ${
+          sectionErr.message ?? JSON.stringify(sectionErr)
+        }`,
+      );
       return { section: null, storyArc: {} };
     }
     if (!sectionRow) {
       // Section doesn't exist (or was deleted between kickoff and this call).
       // Treat as non-section; skip the fire-and-forget + Story Arc Context.
-      console.error(`[generate-story] fetchOutlineSectionContext: section not found for id=${outlineSectionId}`);
+      console.error(
+        `[generate-story] fetchOutlineSectionContext: section not found for id=${outlineSectionId}`,
+      );
       return { section: null, storyArc: {} };
     }
     section = {
@@ -1064,7 +1210,9 @@ async function fetchOutlineSectionContext(
       terminal_beat: (sectionRow.terminal_beat ?? null) as string | null,
       position: Number(sectionRow.position ?? 0),
       outline_id: String(sectionRow.outline_id),
-      story_arc_beat_id: (sectionRow.story_arc_beat_id ?? null) as string | null,
+      story_arc_beat_id: (sectionRow.story_arc_beat_id ?? null) as
+        | string
+        | null,
     };
 
     // Query 2: story arc context — only if the section is linked to a beat.
@@ -1073,11 +1221,17 @@ async function fetchOutlineSectionContext(
     if (section.story_arc_beat_id) {
       const { data: beat, error: beatErr } = await adminClient
         .from("story_arc_beats")
-        .select("position, label, details, story_arc_id, story_arcs(template_id, story_arc_templates(name))")
+        .select(
+          "position, label, details, story_arc_id, story_arcs(template_id, story_arc_templates(name))",
+        )
         .eq("id", section.story_arc_beat_id)
         .maybeSingle();
       if (beatErr) {
-        console.error(`[generate-story] fetchOutlineSectionContext (beat fetch) failed: ${beatErr.message ?? JSON.stringify(beatErr)}`);
+        console.error(
+          `[generate-story] fetchOutlineSectionContext (beat fetch) failed: ${
+            beatErr.message ?? JSON.stringify(beatErr)
+          }`,
+        );
         // Section metadata is intact; Story Arc Context will be omitted.
       } else if (beat) {
         const arc = (beat as any).story_arcs;
@@ -1095,19 +1249,27 @@ async function fetchOutlineSectionContext(
         storyArc = {
           name: template?.name ?? undefined,
           beatLabel: beat.label ?? undefined,
-          beatPurpose: (typeof beat.details === "string" && beat.details.length > 0) ? beat.details : undefined,
-          position: typeof beat.position === "number" ? beat.position : undefined,
+          beatPurpose:
+            (typeof beat.details === "string" && beat.details.length > 0)
+              ? beat.details
+              : undefined,
+          position: typeof beat.position === "number"
+            ? beat.position
+            : undefined,
           totalBeats,
         };
       }
     }
     return { section, storyArc };
   } catch (e) {
-    console.error(`[generate-story] fetchOutlineSectionContext threw: ${(e as Error).message ?? String(e)}`);
+    console.error(
+      `[generate-story] fetchOutlineSectionContext threw: ${
+        (e as Error).message ?? String(e)
+      }`,
+    );
     return { section: null, storyArc: {} };
   }
 }
-
 
 // // ---- fetchPriorContextForEmbedSection (Kevin 2026-08-21 17:47 EDT architecture spec) ----
 //
@@ -1131,7 +1293,9 @@ async function fetchPriorContextForEmbedSection(
     // 1. Fetch all section_embeddings for this project.
     const { data: allScenes } = await adminClient
       .from("section_embeddings")
-      .select("outline_section_id, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state")
+      .select(
+        "outline_section_id, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state",
+      )
       .eq("project_id", projectId);
     if (!allScenes || allScenes.length === 0) return "";
 
@@ -1151,16 +1315,21 @@ async function fetchPriorContextForEmbedSection(
     // 3. Sort by outline position and filter to scenes BEFORE the current section.
     const priorScenes = allScenes
       .filter((s: any) => positionById.has(s.outline_section_id))
-      .filter((s: any) => (positionById.get(s.outline_section_id) ?? 0) < currentPosition)
+      .filter((s: any) =>
+        (positionById.get(s.outline_section_id) ?? 0) < currentPosition
+      )
       .sort((a: any, b: any) =>
-        (positionById.get(a.outline_section_id) ?? 0) - (positionById.get(b.outline_section_id) ?? 0)
+        (positionById.get(a.outline_section_id) ?? 0) -
+        (positionById.get(b.outline_section_id) ?? 0)
       );
     if (priorScenes.length === 0) return "";
 
     // 4. Build the prior context string (same shape as fetchProjectStateContext
     //    but ordered by outline position instead of created_at, and explicitly
     //    labeled for the embed-section LLM extraction prompt).
-    const lines: string[] = ["## Prior section memory (extracted from earlier sections)"];
+    const lines: string[] = [
+      "## Prior section memory (extracted from earlier sections)",
+    ];
     for (const scene of priorScenes) {
       const summary = scene.extracted_summary;
       if (typeof summary === "string" && summary.length > 0) {
@@ -1169,11 +1338,14 @@ async function fetchPriorContextForEmbedSection(
     }
     return lines.join("\n");
   } catch (e) {
-    console.error(`[generate-story] fetchPriorContextForEmbedSection failed: ${(e as Error).message ?? String(e)}`);
+    console.error(
+      `[generate-story] fetchPriorContextForEmbedSection failed: ${
+        (e as Error).message ?? String(e)
+      }`,
+    );
     return "";
   }
 }
-
 
 // ---- callEmbedSectionForGeneratedOutput (Kevin 2026-08-21 17:47 EDT architecture spec) ----
 //
@@ -1206,9 +1378,13 @@ async function callEmbedSectionForGeneratedOutput(
     prior_context: string;
   },
 ): Promise<void> {
-  const url = `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/embed-section`;
+  const url = `${
+    Deno.env.get("SUPABASE_URL") ?? ""
+  }/functions/v1/embed-section`;
   if (!url || url === "/functions/v1/embed-section") {
-    console.error("[generate-story] callEmbedSectionForGeneratedOutput: SUPABASE_URL not set, skipping embed-section call");
+    console.error(
+      "[generate-story] callEmbedSectionForGeneratedOutput: SUPABASE_URL not set, skipping embed-section call",
+    );
     return;
   }
   const response = await fetch(url, {
@@ -1225,11 +1401,12 @@ async function callEmbedSectionForGeneratedOutput(
   if (!response.ok) {
     const errBody = await response.text().catch(() => "<unreadable>");
     console.error(
-      `[generate-story] embed-section HTTP ${response.status}: ${errBody.slice(0, 500)}`,
+      `[generate-story] embed-section HTTP ${response.status}: ${
+        errBody.slice(0, 500)
+      }`,
     );
   }
 }
-
 
 export function buildPrompt(req: {
   sourcePayloadJSON: unknown;
@@ -1285,9 +1462,11 @@ export function buildPrompt(req: {
   }
 
   // Resolve audience fields — prefer top-level req fields, fall back to payload.
-  const readingLevel  = req.readingLevel  || payload?.project?.readingLevel  || "";
-  const contentRating = req.contentRating || payload?.project?.contentRating || "";
-  const audienceNotes = req.audienceNotes || payload?.project?.audienceNotes || "";
+  const readingLevel = req.readingLevel || payload?.project?.readingLevel || "";
+  const contentRating = req.contentRating || payload?.project?.contentRating ||
+    "";
+  const audienceNotes = req.audienceNotes || payload?.project?.audienceNotes ||
+    "";
 
   // Style-driven scene guidance. Replaces the old length-based targets that
   // the model often ignored. “auto” gives no length target at all — the
@@ -1336,7 +1515,8 @@ export function buildPrompt(req: {
     },
     vignette: {
       name: "Vignette",
-      whatItContains: "A compact portrait of a person, place, relationship, or situation",
+      whatItContains:
+        "A compact portrait of a person, place, relationship, or situation",
       naturalStoppingPoint: "A resonant image or emotional turn",
       expectedRange: "300–900",
       hardCap: 1200,
@@ -1347,7 +1527,8 @@ export function buildPrompt(req: {
       // another closing image). Container budgets unchanged. The tighter
       // stopping rule below applies only to vignettes — beats, scenes,
       // etc. continue to use the existing general structural limits.
-      stoppingRule: "Once the vignette reaches its resonant image or emotional turn, stop. Do not add aftermath, future-action setup, a second ending, or additional thematic explanation after the natural stopping point.",
+      stoppingRule:
+        "Once the vignette reaches its resonant image or emotional turn, stop. Do not add aftermath, future-action setup, a second ending, or additional thematic explanation after the natural stopping point.",
     },
     microScene: {
       name: "Micro-scene",
@@ -1359,7 +1540,8 @@ export function buildPrompt(req: {
     scene: {
       name: "Scene",
       whatItContains: "One continuous dramatic event",
-      naturalStoppingPoint: "Goal succeeds, fails, changes, or becomes impossible",
+      naturalStoppingPoint:
+        "Goal succeeds, fails, changes, or becomes impossible",
       expectedRange: "800–1,800",
       hardCap: 2300,
     },
@@ -1372,7 +1554,8 @@ export function buildPrompt(req: {
     },
     setPiece: {
       name: "Set piece",
-      whatItContains: "A major action, confrontation, ceremony, battle, escape, or reveal",
+      whatItContains:
+        "A major action, confrontation, ceremony, battle, escape, or reveal",
       naturalStoppingPoint: "The major event completes",
       expectedRange: "2,000–5,000",
       hardCap: 6500,
@@ -1393,7 +1576,8 @@ export function buildPrompt(req: {
     },
     chapter: {
       name: "Chapter",
-      whatItContains: "A publishing or pacing division containing one or more scenes",
+      whatItContains:
+        "A publishing or pacing division containing one or more scenes",
       naturalStoppingPoint: "A turn, hook, revelation, decision, or transition",
       expectedRange: "3,000–8,000+",
       hardCap: 11000,
@@ -1401,7 +1585,8 @@ export function buildPrompt(req: {
     episode: {
       name: "Episode",
       whatItContains: "A self-contained installment within a larger serial",
-      naturalStoppingPoint: "The episode’s main problem resolves, often with a larger hook",
+      naturalStoppingPoint:
+        "The episode’s main problem resolves, often with a larger hook",
       expectedRange: "5,000–15,000+",
       hardCap: 18000,
     },
@@ -1422,19 +1607,23 @@ export function buildPrompt(req: {
   const povConfig: Record<POV, POVConfig> = {
     firstPerson: {
       name: "First person",
-      instruction: "Write in first person (I, me, my). The viewpoint character narrates in their own voice.",
+      instruction:
+        "Write in first person (I, me, my). The viewpoint character narrates in their own voice.",
     },
     secondPerson: {
       name: "Second person",
-      instruction: "Write in second person (you, your). Address the reader or the viewpoint character directly.",
+      instruction:
+        "Write in second person (you, your). Address the reader or the viewpoint character directly.",
     },
     thirdPersonLimited: {
       name: "Third person limited",
-      instruction: "Write in third person limited (he/she/they). Stay close to one character’s perspective; show only what that character can perceive and feel.",
+      instruction:
+        "Write in third person limited (he/she/they). Stay close to one character’s perspective; show only what that character can perceive and feel.",
     },
     thirdPersonOmniscient: {
       name: "Third person omniscient",
-      instruction: "Write in third person omniscient (he/she/they). The narrator is all-knowing and can enter any character’s mind.",
+      instruction:
+        "Write in third person omniscient (he/she/they). The narrator is all-knowing and can enter any character’s mind.",
     },
   };
 
@@ -1451,7 +1640,8 @@ export function buildPrompt(req: {
   // empty string so the Section Contract block is omitted when the caller
   // has no section info (legacy clients, smoke tests, etc.).
   const sanitizedSectionTitle = sanitizeTitleForLLM(req.sectionTitle);
-  const hasSectionContext = sanitizedSectionTitle !== "" || nonEmpty(req.sectionSummary);
+  const hasSectionContext = sanitizedSectionTitle !== "" ||
+    nonEmpty(req.sectionSummary);
 
   // Container-aware scene instructions. The model gets:
   //  - the container's "what it contains" so it knows the shape
@@ -1487,7 +1677,9 @@ Structural limits:
     }`;
 
   const povInstruction = (pov: POV | undefined): string =>
-    pov && povConfig[pov] ? povConfig[pov].instruction : povConfig.thirdPersonLimited.instruction;
+    pov && povConfig[pov]
+      ? povConfig[pov].instruction
+      : povConfig.thirdPersonLimited.instruction;
 
   // Craft directives — sent as the SYSTEM message. Persistent across
   // requests; the model weighs system instructions higher than user.
@@ -1500,7 +1692,13 @@ Structural limits:
     "You are a creative writing assistant helping authors craft compelling story content.",
     "",
     "## Container (CRITICAL SHAPE GUIDANCE)",
-    containerInstructions(cfg.name, cfg.whatItContains, cfg.naturalStoppingPoint, cfg.expectedRange, cfg.stoppingRule),
+    containerInstructions(
+      cfg.name,
+      cfg.whatItContains,
+      cfg.naturalStoppingPoint,
+      cfg.expectedRange,
+      cfg.stoppingRule,
+    ),
     "",
   ];
 
@@ -1542,7 +1740,7 @@ Structural limits:
 
   // Audience controls — per-request context (USER message).
   if (readingLevel || contentRating || audienceNotes) {
-    if (readingLevel)  contextLines.push(`Reading level: ${readingLevel}`);
+    if (readingLevel) contextLines.push(`Reading level: ${readingLevel}`);
     if (contentRating) contextLines.push(`Content rating: ${contentRating}`);
     if (audienceNotes) contextLines.push(`Audience notes: ${audienceNotes}`);
     contextLines.push("");
@@ -1561,7 +1759,6 @@ Structural limits:
   // This is also the correct shape for PR-372 caching (volatile suffix
   // is the cache-invariant tail of the user message).
 
-
   // Project state context — RAG retrieval, aggregated cumulative state.
   // Kevin 2026-08-21 09:37 EDT: add transition rule. Project State is
   // CONTINUITY, not the required subject of the next prose. The Section
@@ -1578,7 +1775,7 @@ Structural limits:
     contextLines.push(req.projectStateContext);
     contextLines.push("");
     contextLines.push(
-      "Project State establishes continuity, not the required subject of the next prose. Transition from prior state into the Section Contract as directly as necessary. Do not continue the previous interaction merely because it was the latest event."
+      "Project State establishes continuity, not the required subject of the next prose. Transition from prior state into the Section Contract as directly as necessary. Do not continue the previous interaction merely because it was the latest event.",
     );
     contextLines.push("");
   }
@@ -1616,10 +1813,15 @@ Structural limits:
     if (req.storyArcBeatPurpose) {
       contextLines.push(`Beat purpose: ${req.storyArcBeatPurpose}`);
     }
-    if (typeof req.storyArcPosition === "number" && typeof req.storyArcTotalBeats === "number") {
+    if (
+      typeof req.storyArcPosition === "number" &&
+      typeof req.storyArcTotalBeats === "number"
+    ) {
       // 0-indexed position → 1-indexed display ("Position: 3 of 7").
       const displayPosition = req.storyArcPosition + 1;
-      contextLines.push(`Position: ${displayPosition} of ${req.storyArcTotalBeats}`);
+      contextLines.push(
+        `Position: ${displayPosition} of ${req.storyArcTotalBeats}`,
+      );
     } else if (typeof req.storyArcPosition === "number") {
       contextLines.push(`Position: ${req.storyArcPosition + 1}`);
     } else if (typeof req.storyArcTotalBeats === "number") {
@@ -1638,7 +1840,11 @@ Structural limits:
       "## Section Contract",
       "",
       `Title: ${sanitizedSectionTitle || "(no title provided)"}`,
-      `Premise: ${nonEmpty(req.sectionSummary) ? req.sectionSummary! : "(no summary provided)"}`,
+      `Premise: ${
+        nonEmpty(req.sectionSummary)
+          ? req.sectionSummary!
+          : "(no summary provided)"
+      }`,
       "",
       "The premise describes what must happen in the current section. Begin advancing it immediately. Do not postpone it in order to continue prior plot threads.",
       "",
@@ -1646,7 +1852,6 @@ Structural limits:
       "",
     );
   }
-
 
   // Previous output for continue / remix — per-request context (USER message).
   if (
@@ -1695,9 +1900,10 @@ Structural limits:
   }
   const resolvedTerminalPurpose = nonEmpty(req.storyArcBeatPurpose)
     ? req.storyArcBeatPurpose
-    : (nonEmpty(req.terminalBeat) && !looksLikeRawTerminalBeatEnum(req.terminalBeat)
-        ? req.terminalBeat
-        : null);
+    : (nonEmpty(req.terminalBeat) &&
+        !looksLikeRawTerminalBeatEnum(req.terminalBeat)
+      ? req.terminalBeat
+      : null);
   if (resolvedTerminalPurpose !== null) {
     contextLines.push(
       "## Terminal Function",
@@ -2031,8 +2237,7 @@ async function handler(
 
   let store: CreditStore;
   let limiter: RateLimitStore;
-  const requiresAdminClient =
-    creditStore === undefined ||
+  const requiresAdminClient = creditStore === undefined ||
     rateLimitStore === undefined ||
     injectedPersistenceStore === undefined ||
     generationModelStore === undefined;
@@ -2111,12 +2316,17 @@ async function handler(
 
   const isEstimate = body.generationAction === ESTIMATE_ACTION;
 
-  if (!isEstimate && !ALLOWED_ACTIONS.includes(body.generationAction as GenerationAction)) {
+  if (
+    !isEstimate &&
+    !ALLOWED_ACTIONS.includes(body.generationAction as GenerationAction)
+  ) {
     return corsResponse(
       JSON.stringify({
         status: "failed",
         errorCode: "invalid_request",
-        errorMessage: `Invalid generationAction. Allowed values: ${ALLOWED_ACTIONS.join(", ")}, ${ESTIMATE_ACTION}`,
+        errorMessage: `Invalid generationAction. Allowed values: ${
+          ALLOWED_ACTIONS.join(", ")
+        }, ${ESTIMATE_ACTION}`,
       }),
       { status: 422 },
     );
@@ -2131,7 +2341,9 @@ async function handler(
       JSON.stringify({
         status: "failed",
         errorCode: "invalid_request",
-        errorMessage: `Invalid generationLengthMode. Allowed values: ${ALLOWED_LENGTH_MODES.join(", ")}`,
+        errorMessage: `Invalid generationLengthMode. Allowed values: ${
+          ALLOWED_LENGTH_MODES.join(", ")
+        }`,
       }),
       { status: 422 },
     );
@@ -2141,18 +2353,32 @@ async function handler(
   // Container picker: defaults to "scene" (common, well-known) if not
   // provided. Coerces unknown values to a safe default.
   const validContainers: Container[] = [
-    "modelDecides", "beat", "moment", "vignette", "microScene", "scene",
-    "developedScene", "setPiece", "sceneSequence", "shortStory",
-    "chapter", "episode", "novella",
+    "modelDecides",
+    "beat",
+    "moment",
+    "vignette",
+    "microScene",
+    "scene",
+    "developedScene",
+    "setPiece",
+    "sceneSequence",
+    "shortStory",
+    "chapter",
+    "episode",
+    "novella",
   ];
-  const container: Container = validContainers.includes(body.container as Container)
-    ? body.container as Container
-    : "scene";
+  const container: Container =
+    validContainers.includes(body.container as Container)
+      ? body.container as Container
+      : "scene";
 
   // POV picker: defaults to "thirdPersonLimited" (most common in modern
   // fiction). Coerces unknown values to the default.
   const validPOVs: POV[] = [
-    "firstPerson", "secondPerson", "thirdPersonLimited", "thirdPersonOmniscient",
+    "firstPerson",
+    "secondPerson",
+    "thirdPersonLimited",
+    "thirdPersonOmniscient",
   ];
   const pov: POV = validPOVs.includes(body.pov as POV)
     ? body.pov as POV
@@ -2170,28 +2396,32 @@ async function handler(
   }
 
   // Enforce sourcePayloadJSON size limit.
-  const sourcePayloadStr =
-    typeof body.sourcePayloadJSON === "string"
-      ? body.sourcePayloadJSON
-      : JSON.stringify(body.sourcePayloadJSON);
+  const sourcePayloadStr = typeof body.sourcePayloadJSON === "string"
+    ? body.sourcePayloadJSON
+    : JSON.stringify(body.sourcePayloadJSON);
   if (sourcePayloadStr.length > MAX_SOURCE_PAYLOAD_CHARS) {
     return corsResponse(
       JSON.stringify({
         status: "failed",
         errorCode: "invalid_request",
-        errorMessage: `sourcePayloadJSON exceeds maximum size of ${MAX_SOURCE_PAYLOAD_CHARS} characters`,
+        errorMessage:
+          `sourcePayloadJSON exceeds maximum size of ${MAX_SOURCE_PAYLOAD_CHARS} characters`,
       }),
       { status: 422 },
     );
   }
 
   // Enforce previousOutputText size limit.
-  if (body.previousOutputText != null && body.previousOutputText.length > MAX_PREVIOUS_OUTPUT_CHARS) {
+  if (
+    body.previousOutputText != null &&
+    body.previousOutputText.length > MAX_PREVIOUS_OUTPUT_CHARS
+  ) {
     return corsResponse(
       JSON.stringify({
         status: "failed",
         errorCode: "invalid_request",
-        errorMessage: `previousOutputText exceeds maximum size of ${MAX_PREVIOUS_OUTPUT_CHARS} characters`,
+        errorMessage:
+          `previousOutputText exceeds maximum size of ${MAX_PREVIOUS_OUTPUT_CHARS} characters`,
       }),
       { status: 422 },
     );
@@ -2281,7 +2511,8 @@ async function handler(
       sectionTitle: body.sectionTitle,
       sectionSummary: body.sectionSummary,
     });
-    const estimatedInputTokens = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
+    const estimatedInputTokens = estimateTokensFromText(craftPrompt) +
+      estimateTokensFromText(contextPrompt);
     // Phase 3: pre-flight max = (estimated input + container hard cap) × rates, with 0.25 floor
     const estimatePricing = snapshotPricing(selectedModel);
     const estimateUsage = {
@@ -2290,7 +2521,10 @@ async function handler(
       outputTokens: CONTAINER_HARD_CAPS[container],
       toolCostUsd: 0,
     };
-    const estimatedCredits = computeMaxChargeCredits(estimateUsage, estimatePricing);
+    const estimatedCredits = computeMaxChargeCredits(
+      estimateUsage,
+      estimatePricing,
+    );
     const entitlement = await store.loadOrDefault(userId);
     const creditCheck = checkCredits(entitlement, estimatedCredits);
 
@@ -2358,12 +2592,21 @@ async function handler(
   // expected from the caller. Both run-outline and iOS direct-gen paths
   // benefit equally from this resolution.
   // -------------------------------------------------------------------------
-  const outlineSectionCtx = await fetchOutlineSectionContext(adminClient, body.outline_section_id);
+  const outlineSectionCtx = await fetchOutlineSectionContext(
+    adminClient,
+    body.outline_section_id,
+  );
   // Explicit diagnostic log so we can see whether the fetch succeeded
   // (Kevin 19:24 EDT smoke test showed RAG fields missing on Section 2,
   // suggesting the fire-and-forget never entered — either outline_section_id
   // is null or the fetch returned section: null).
-  console.log(`[generate-story] resolved outline section context: body.outline_section_id=${body.outline_section_id ?? "null"}, section=${outlineSectionCtx.section ? "found" : "null"}, storyArc=${Object.keys(outlineSectionCtx.storyArc).length > 0 ? "found" : "empty"}`);
+  console.log(
+    `[generate-story] resolved outline section context: body.outline_section_id=${
+      body.outline_section_id ?? "null"
+    }, section=${outlineSectionCtx.section ? "found" : "null"}, storyArc=${
+      Object.keys(outlineSectionCtx.storyArc).length > 0 ? "found" : "empty"
+    }`,
+  );
 
   // -------------------------------------------------------------------------
   // Credit enforcement -- must happen BEFORE the LLM provider call
@@ -2377,10 +2620,16 @@ async function handler(
   // (so unit tests don't need to mock adminClient). Production always
   // fetches from the DB unless the caller explicitly passes one.
   let projectStateContext = "";
-  if (body.projectStateContext !== undefined && body.projectStateContext !== null) {
+  if (
+    body.projectStateContext !== undefined && body.projectStateContext !== null
+  ) {
     projectStateContext = body.projectStateContext;
   } else if (adminClient && projectID) {
-    projectStateContext = await fetchProjectStateContext(adminClient, projectID, body.outline_section_id ?? undefined);
+    projectStateContext = await fetchProjectStateContext(
+      adminClient,
+      projectID,
+      body.outline_section_id ?? undefined,
+    );
   }
 
   const { craft: craftPrompt, context: contextPrompt } = buildPrompt({
@@ -2419,7 +2668,8 @@ async function handler(
     storyArcTotalBeats: outlineSectionCtx.storyArc.totalBeats,
   });
   // Phase 3: max possible credit cost for the pre-flight check
-  const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) + estimateTokensFromText(contextPrompt);
+  const estimatedInputTokensForCheck = estimateTokensFromText(craftPrompt) +
+    estimateTokensFromText(contextPrompt);
   const checkPricing = snapshotPricing(selectedModel);
   const checkUsage = {
     uncachedInputTokens: estimatedInputTokensForCheck,
@@ -2466,7 +2716,9 @@ async function handler(
   try {
     llm = provider ?? buildProviderFromEnv();
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Provider configuration error";
+    const msg = err instanceof Error
+      ? err.message
+      : "Provider configuration error";
     await limiter.recordRequest(userId, {
       requestId,
       action: generationAction,
@@ -2528,7 +2780,8 @@ async function handler(
     // Classify provider errors into stable error codes.
     // Credits are NOT charged on provider failure.
     let providerErrorCode = "unknown";
-    const isTimeout = err instanceof ProviderError && err.errorCode === "provider_timeout";
+    const isTimeout = err instanceof ProviderError &&
+      err.errorCode === "provider_timeout";
     const isInsufficientQuota = err instanceof ProviderError &&
       err.errorCode === "provider_insufficient_quota";
 
@@ -2536,8 +2789,13 @@ async function handler(
       providerErrorCode = err.errorCode;
     }
 
-    const providerErrorMessage = err instanceof Error ? err.message : "LLM provider error";
-    const failureResponse = providerErrorResponse(providerErrorCode, providerErrorMessage);
+    const providerErrorMessage = err instanceof Error
+      ? err.message
+      : "LLM provider error";
+    const failureResponse = providerErrorResponse(
+      providerErrorCode,
+      providerErrorMessage,
+    );
 
     if (isTimeout) {
       // Structured log so operators can confirm timeoutMs in logs.
@@ -2566,7 +2824,10 @@ async function handler(
       });
 
       if (usageInsertError) {
-        console.error("[generate-story] generation_usage_events insert failed", usageInsertError);
+        console.error(
+          "[generate-story] generation_usage_events insert failed",
+          usageInsertError,
+        );
       }
     }
 
@@ -2591,7 +2852,9 @@ async function handler(
       JSON.stringify(failureResponse.body),
       {
         status: failureResponse.httpStatus,
-        ...(failureResponse.headers ? { headers: failureResponse.headers } : {}),
+        ...(failureResponse.headers
+          ? { headers: failureResponse.headers }
+          : {}),
       },
     );
   }
@@ -2603,21 +2866,21 @@ async function handler(
   // (TypeScript can't narrow let from a try/catch that returns, so we use a
   // non-null assertion at use sites — the catch block always returns.)
 
-
   // -------------------------------------------------------------------------
   // Persist generation_outputs row
   // -------------------------------------------------------------------------
 
   const generatedText = llmResult.content.trim();
   const wasTruncated = llmResult.finishReason === "length";
-  const outputStatus: GenerationOutputInsert["status"] = wasTruncated ? "draft" : "complete";
+  const outputStatus: GenerationOutputInsert["status"] = wasTruncated
+    ? "draft"
+    : "complete";
   const title = extractTitle(generatedText, promptPackName || projectName);
 
   // Normalize sourcePayloadJSON for storage -- always persist as an object.
-  const sourcePayloadForDB =
-    typeof body.sourcePayloadJSON === "string"
-      ? JSON.parse(body.sourcePayloadJSON)
-      : body.sourcePayloadJSON;
+  const sourcePayloadForDB = typeof body.sourcePayloadJSON === "string"
+    ? JSON.parse(body.sourcePayloadJSON)
+    : body.sourcePayloadJSON;
 
   // === Diagnose PR #327 write path ===
   // One-line probe: log the value `body.outline_section_id` actually carries at insert time
@@ -2637,28 +2900,29 @@ async function handler(
     Object.keys(body).sort().join(","),
   );
 
-  const { data: outputRow, error: outputInsertError } = await persistence.insertOutput({
-    id: outputId,
-    user_id: userId,
-    local_generation_id: body.localGenerationID ?? null,
-    project_name: projectName,
-    prompt_pack_name: promptPackName,
-    title,
-    output_text: generatedText,
-    source_payload_json: sourcePayloadForDB,
-    model_name: llmResult.modelName,
-    generation_action: generationAction,
-    generation_length_mode: generationLengthMode,
-    output_budget: maxCompletionTokens,
-    status: outputStatus,
-    visibility: "private",
-    outline_section_id: body.outline_section_id ?? null,
-    // PR-fix/ios-rendered-container-provenance: persist the Container that
-    // buildPrompt() actually used (from request body.container, defaulted
-    // to "scene" by buildPrompt's own fallback if absent). See interface
-    // field comment above for provenance rationale.
-    rendered_container: body.container ?? null,
-  });
+  const { data: outputRow, error: outputInsertError } = await persistence
+    .insertOutput({
+      id: outputId,
+      user_id: userId,
+      local_generation_id: body.localGenerationID ?? null,
+      project_name: projectName,
+      prompt_pack_name: promptPackName,
+      title,
+      output_text: generatedText,
+      source_payload_json: sourcePayloadForDB,
+      model_name: llmResult.modelName,
+      generation_action: generationAction,
+      generation_length_mode: generationLengthMode,
+      output_budget: maxCompletionTokens,
+      status: outputStatus,
+      visibility: "private",
+      outline_section_id: body.outline_section_id ?? null,
+      // PR-fix/ios-rendered-container-provenance: persist the Container that
+      // buildPrompt() actually used (from request body.container, defaulted
+      // to "scene" by buildPrompt's own fallback if absent). See interface
+      // field comment above for provenance rationale.
+      rendered_container: body.container ?? null,
+    });
 
   // PR-XXX-A: log the prompt + response to llm_prompts (best-effort, do not fail the main call).
   // PR-XXX-H: moved AFTER persistence.insertOutput so the FK on output_id
@@ -2684,7 +2948,11 @@ async function handler(
         duration_ms: llmDurationMs,
       });
     } catch (logErr) {
-      console.error(`[generate-story] llm_prompts insert failed: ${(logErr as Error).message}`);
+      console.error(
+        `[generate-story] llm_prompts insert failed: ${
+          (logErr as Error).message
+        }`,
+      );
     }
 
     // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): generate-story
@@ -2714,18 +2982,33 @@ async function handler(
     // lightweight section fetch inline (just the fields embed-section needs).
     // If that fetch also fails, log and skip — but try first.
     if (body.outline_section_id && llmResult?.content) {
-      console.log(`[generate-story] post-generation extraction: body.outline_section_id=${body.outline_section_id}, llmResult.content.length=${llmResult?.content?.length ?? 0}, outlineSectionCtx.section=${outlineSectionCtx.section ? "found" : "null"}`);
+      console.log(
+        `[generate-story] post-generation extraction: body.outline_section_id=${body.outline_section_id}, llmResult.content.length=${
+          llmResult?.content?.length ?? 0
+        }, outlineSectionCtx.section=${
+          outlineSectionCtx.section ? "found" : "null"
+        }`,
+      );
 
       // Fresh section fetch for the embed-section payload.
-      const { data: sectionForEmbed, error: sectionEmbedErr } = await adminClient
-        .from("outline_sections")
-        .select("id, title, summary, container, pov, terminal_beat, position, outline_id, story_arc_beat_id")
-        .eq("id", body.outline_section_id)
-        .maybeSingle();
+      const { data: sectionForEmbed, error: sectionEmbedErr } =
+        await adminClient
+          .from("outline_sections")
+          .select(
+            "id, title, summary, container, pov, terminal_beat, position, outline_id, story_arc_beat_id",
+          )
+          .eq("id", body.outline_section_id)
+          .maybeSingle();
       if (sectionEmbedErr) {
-        console.error(`[generate-story] post-generation embed-section section fetch failed: ${sectionEmbedErr.message ?? JSON.stringify(sectionEmbedErr)}`);
+        console.error(
+          `[generate-story] post-generation embed-section section fetch failed: ${
+            sectionEmbedErr.message ?? JSON.stringify(sectionEmbedErr)
+          }`,
+        );
       } else if (!sectionForEmbed) {
-        console.error(`[generate-story] post-generation embed-section: section not found for id=${body.outline_section_id}`);
+        console.error(
+          `[generate-story] post-generation embed-section: section not found for id=${body.outline_section_id}`,
+        );
       } else {
         // Fetch prior context for embed-section's LLM extraction.
         const priorContext = await fetchPriorContextForEmbedSection(
@@ -2750,15 +3033,21 @@ async function handler(
             summary: String(sectionForEmbed.summary ?? ""),
             container: (sectionForEmbed.container ?? null) as string | null,
             pov: (sectionForEmbed.pov ?? null) as string | null,
-            terminal_beat: (sectionForEmbed.terminal_beat ?? null) as string | null,
-            story_arc_beat_id: (sectionForEmbed.story_arc_beat_id ?? null) as string | null,
+            terminal_beat: (sectionForEmbed.terminal_beat ?? null) as
+              | string
+              | null,
+            story_arc_beat_id: (sectionForEmbed.story_arc_beat_id ?? null) as
+              | string
+              | null,
             raw_text: llmResult.content,
             output_id: outputId,
             prior_context: priorContext,
           },
         ).catch((e) => {
           console.error(
-            `[generate-story] post-generation embed-section failed: ${(e as Error)?.message ?? String(e)}`,
+            `[generate-story] post-generation embed-section failed: ${
+              (e as Error)?.message ?? String(e)
+            }`,
           );
         });
       }
@@ -2771,8 +3060,8 @@ async function handler(
   // directly with output_text + full RAG retrieval as input.
 
   if (outputInsertError || !outputRow?.id) {
-    const persistenceFailure =
-      outputInsertError ?? new Error("generation_outputs insert returned no row");
+    const persistenceFailure = outputInsertError ??
+      new Error("generation_outputs insert returned no row");
     console.error("[generate-story] generation_outputs insert failed", {
       requestId,
       userId,
@@ -2828,7 +3117,10 @@ async function handler(
     toolCostUsd: llmResult.toolCostUsd ?? 0,
   };
   const postFlightPricing = snapshotPricing(selectedModel);
-  const actualCharge = computeActualChargeCredits(postFlightUsage, postFlightPricing);
+  const actualCharge = computeActualChargeCredits(
+    postFlightUsage,
+    postFlightPricing,
+  );
   const creditRevenueUsd = actualCharge * 0.05;
 
   // -------------------------------------------------------------------------
@@ -2849,7 +3141,10 @@ async function handler(
   });
 
   if (usageInsertError) {
-    console.error("[generate-story] generation_usage_events insert failed", usageInsertError);
+    console.error(
+      "[generate-story] generation_usage_events insert failed",
+      usageInsertError,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -2868,8 +3163,7 @@ async function handler(
     generationOutputId,
   );
 
-  const remainingCredits =
-    updatedEntitlement.monthly_credit_allowance +
+  const remainingCredits = updatedEntitlement.monthly_credit_allowance +
     updatedEntitlement.purchased_credit_balance;
 
   // -------------------------------------------------------------------------
@@ -2936,5 +3230,12 @@ Deno.serve((req) => handler(req));
 export { handler };
 export { checkCredits, computeCharge } from "./_credits.ts";
 export { RATE_LIMITS } from "./_rate_limiter.ts";
-export { classifyOpenAIStatus, ProviderError, PROVIDER_TIMEOUT_MS } from "./_provider.ts";
-export { computeGenerationCreditCharge, DEFAULT_GENERATION_MODEL_ID } from "./_generation_models.ts";
+export {
+  classifyOpenAIStatus,
+  PROVIDER_TIMEOUT_MS,
+  ProviderError,
+} from "./_provider.ts";
+export {
+  computeGenerationCreditCharge,
+  DEFAULT_GENERATION_MODEL_ID,
+} from "./_generation_models.ts";

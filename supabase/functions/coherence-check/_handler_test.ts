@@ -175,7 +175,10 @@ function makeMockAdmin(opts: {
       // generation_usage_events + llm_prompts: insert path
       return {
         insert(row: unknown): unknown {
-          state.insertedRows.push({ table, row: row as Record<string, unknown> });
+          state.insertedRows.push({
+            table,
+            row: row as Record<string, unknown>,
+          });
           const result = table === "generation_usage_events"
             ? state.usageEventResult
             : {

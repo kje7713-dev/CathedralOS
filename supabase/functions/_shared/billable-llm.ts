@@ -153,8 +153,7 @@ function defaultPreflightUsage(maxOutputTokens: number): GenerationUsage {
  * conflict; any other error code is treated as a generic failure. */
 function isUniqueViolation(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  // deno-lint-ignore no-explicit-any
-  const e = error as any;
+  const e = error as Record<string, unknown>;
   return e.code === "23505";
 }
 
@@ -249,7 +248,6 @@ export async function runBillableLLM<T>(
   // 5. INSERT generation_usage_events. Partial unique index on
   //    (user_id, idempotency_key) WHERE purpose='coherence-check'
   //    deduplicates identical repeat calls within the same minute.
-  // deno-lint-ignore no-explicit-any
   const usageEventRow: Record<string, unknown> = {
     user_id: req.userID,
     generation_output_id: req.usageContext.generationOutputID ?? null,
@@ -265,12 +263,24 @@ export async function runBillableLLM<T>(
     idempotency_key: req.usageContext.idempotencyKey ?? null,
   };
 
-  // deno-lint-ignore no-explicit-any
-  const insertResult: any = await (deps.adminClient as any)
+  const insertResult = (await (deps.adminClient as unknown as {
+    from: (t: string) => {
+      insert: (r: unknown) => {
+        select: (c?: string) => {
+          maybeSingle: () => Promise<
+            { data: { id: string } | null; error: unknown }
+          >;
+        };
+      };
+    };
+  })
     .from("generation_usage_events")
     .insert(usageEventRow)
     .select("id")
-    .maybeSingle();
+    .maybeSingle()) as {
+      data: { id: string } | null;
+      error: { message?: string; [key: string]: unknown } | null;
+    };
 
   // 6. Confirmed uniqueness conflict (idempotency hit) — no charge.
   if (insertResult?.error && isUniqueViolation(insertResult.error)) {
@@ -368,13 +378,21 @@ export async function runBillableLLM<T>(
  * are logged but never thrown — billing audit must not crash the main
  * response or mask the original provider/feature failure.
  */
+type PostgrestWriteResult = {
+  data?: unknown;
+  error?: { message?: string; [key: string]: unknown } | null;
+};
+
 export async function recordFailedUsageEvent(
   adminClient: unknown,
   input: FailedUsageEventInput,
 ): Promise<void> {
   try {
-    // deno-lint-ignore no-explicit-any
-    const result: any = await (adminClient as any)
+    const result = await (adminClient as unknown as {
+      from: (
+        t: string,
+      ) => { insert: (r: unknown) => Promise<PostgrestWriteResult> };
+    })
       .from("generation_usage_events")
       .insert({
         user_id: input.userID,

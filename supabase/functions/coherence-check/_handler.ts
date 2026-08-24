@@ -22,10 +22,10 @@
 // =============================================================================
 
 import {
-  runBillableLLM,
   BillableLLMError,
-  recordFailedUsageEvent,
   type BillableProviderResult,
+  recordFailedUsageEvent,
+  runBillableLLM,
 } from "../_shared/billable-llm.ts";
 import { buildMessages, COHERENCE_RESPONSE_FORMAT } from "./_prompts.ts";
 import { validateAndFilterWarnings } from "./_validation.ts";
@@ -174,6 +174,11 @@ async function buildCoherenceResult(
  * outline_section_id, model, prompt, response, prompt_tokens,
  * completion_tokens, total_tokens, duration_ms.
  */
+type PostgrestWriteResult = {
+  data?: unknown;
+  error?: { message?: string; [key: string]: unknown } | null;
+};
+
 async function writeCoherenceAuditLog(
   adminClient: unknown,
   request: CoherenceCheckRequest,
@@ -182,8 +187,11 @@ async function writeCoherenceAuditLog(
   llmDurationMs: number,
 ): Promise<void> {
   try {
-    // deno-lint-ignore no-explicit-any
-    const result: any = await (adminClient as any).from("llm_prompts").insert({
+    const result = await (adminClient as unknown as {
+      from: (
+        t: string,
+      ) => { insert: (r: unknown) => Promise<PostgrestWriteResult> };
+    }).from("llm_prompts").insert({
       call_type: "coherence-check",
       project_id: request.project_id ?? null,
       outline_section_id: request.current_section?.id ?? null,
@@ -260,16 +268,29 @@ export async function handleCoherenceCheck(
   config: CoherenceConfig,
 ): Promise<Response> {
   // 1. Resolve the GenerationModel.
-  // deno-lint-ignore no-explicit-any
-  const modelRow = await (deps.adminClient as any)
+  const modelRow = await (deps.adminClient as unknown as {
+    from: (t: string) => {
+      select: (c?: string) => {
+        eq: (col: string, v: unknown) => {
+          eq: (
+            col2: string,
+            v2: unknown,
+          ) => {
+            maybeSingle: () => Promise<
+              { data: GenerationModel | null; error: unknown }
+            >;
+          };
+        };
+      };
+    };
+  })
     .from("generation_models")
     .select("*")
     .eq("provider_model", config.openaiModelDefault)
     .eq("enabled", true)
     .maybeSingle();
-  const model: GenerationModel =
-    // deno-lint-ignore no-explicit-any
-    (modelRow?.data as GenerationModel | null) ?? config.fallbackModel;
+  const model: GenerationModel = (modelRow?.data as GenerationModel | null) ??
+    config.fallbackModel;
 
   // 2. Build messages + idempotency key.
   const messages = buildMessages(request);
