@@ -946,6 +946,15 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             context.rollback()
             throw GenerationOutputDeletionError.persistenceError(stage: "local delete", error: error)
         }
+        // Notify observing views (e.g. OutlineSectionsRegionView) so their
+        // @State allOutputs refreshes and the eye disappears from the
+        // outline without requiring a navigation re-create. The notification
+        // only fires after a successful save; failed saves roll back without
+        // notifying. Same notification pattern as PR #342 (sync refresh).
+        NotificationCenter.default.post(
+            name: .cathedralOSGenerationOutputsChanged,
+            object: nil
+        )
         _ = backupService.deleteBackups(outputID: outputID)
     }
 
