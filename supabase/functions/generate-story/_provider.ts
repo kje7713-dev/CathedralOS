@@ -125,13 +125,14 @@ export function formatOpenAIError(details: OpenAIErrorDetails): string {
   return `OpenAI error (${parts.join(", ")})`;
 }
 
-// deno-lint-ignore no-explicit-any
-export function extractResponseText(json: any): string {
+export function extractResponseText(json: Record<string, unknown>): string {
   if (typeof json?.output_text === "string") return json.output_text;
 
   const parts: string[] = [];
-  for (const item of json?.output ?? []) {
-    for (const content of item?.content ?? []) {
+  const output = json.output as Array<Record<string, unknown>> | undefined;
+  for (const item of output ?? []) {
+    const contents = item.content as Array<Record<string, unknown>> | undefined;
+    for (const content of contents ?? []) {
       if (
         content?.type === "output_text" &&
         typeof content?.text === "string"
@@ -153,10 +154,14 @@ function isTokenLimitIncompleteReason(reason: string): boolean {
       (normalized.includes("max") || normalized.includes("limit")));
 }
 
-// deno-lint-ignore no-explicit-any
-export function extractResponsesFinishReason(json: any): string | undefined {
+export function extractResponsesFinishReason(
+  json: Record<string, unknown>,
+): string | undefined {
   if (json?.status === "incomplete") {
-    const reason = json?.incomplete_details?.reason;
+    const incomplete = json.incomplete_details as
+      | Record<string, unknown>
+      | undefined;
+    const reason = incomplete?.reason;
     if (
       typeof reason === "string" &&
       isTokenLimitIncompleteReason(reason)
@@ -192,11 +197,26 @@ export interface LLMResponse {
   toolCostUsd?: number;
 }
 
+/**
+ * Provider-specific knobs. Coherence-check sets `responseFormat` to enable
+ * Structured Outputs via the chat/completions endpoint. Generate-story leaves
+ * it unset and uses the Responses API path. `temperature` is forwarded to
+ * chat/completions when set; ignored by the Responses API (it controls its
+ * own sampling).
+ */
+export interface LLMProviderOptions {
+  /** OpenAI Structured Outputs json_schema payload. */
+  responseFormat?: unknown;
+  /** Sampling temperature (0-2). Only forwarded by the chat/completions path. */
+  temperature?: number;
+}
+
 export interface LLMProvider {
   complete(
     messages: LLMMessage[],
     maxTokens: number,
     providerModel?: string,
+    options?: LLMProviderOptions,
   ): Promise<LLMResponse>;
 }
 
@@ -223,8 +243,28 @@ export class OpenAIProvider implements LLMProvider {
     messages: LLMMessage[],
     maxTokens: number,
     providerModel?: string,
+    options?: LLMProviderOptions,
   ): Promise<LLMResponse> {
     const resolvedModel = providerModel ?? this.model;
+    // Route on options.responseFormat: if set, use chat/completions with
+    // Structured Outputs (coherence-check path). Otherwise use the Responses
+    // API (generate-story path; preserves prior behavior).
+    if (options?.responseFormat) {
+      return await this.callChatCompletions(
+        messages,
+        maxTokens,
+        resolvedModel,
+        options,
+      );
+    }
+    return await this.callResponses(messages, maxTokens, resolvedModel);
+  }
+
+  private async callResponses(
+    messages: LLMMessage[],
+    maxTokens: number,
+    resolvedModel: string,
+  ): Promise<LLMResponse> {
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(),
@@ -280,16 +320,114 @@ export class OpenAIProvider implements LLMProvider {
       );
     }
 
-    // deno-lint-ignore no-explicit-any
-    const json: any = await resp.json();
+    const json: Record<string, unknown> = await resp.json();
+    const usage = json.usage as Record<string, unknown> | undefined;
+    const inputTokenDetails = usage?.input_tokens_details as
+      | Record<string, unknown>
+      | undefined;
     return {
       content: extractResponseText(json),
-      modelName: json.model ?? resolvedModel,
+      modelName: typeof json.model === "string" ? json.model : resolvedModel,
       finishReason: extractResponsesFinishReason(json),
-      inputTokens: json.usage?.input_tokens,
-      cachedInputTokens: json.usage?.input_tokens_details?.cached_tokens,
-      outputTokens: json.usage?.output_tokens,
-      totalTokens: json.usage?.total_tokens,
+      inputTokens: usage?.input_tokens as number | undefined,
+      cachedInputTokens: inputTokenDetails?.cached_tokens as number | undefined,
+      outputTokens: usage?.output_tokens as number | undefined,
+      totalTokens: usage?.total_tokens as number | undefined,
+      toolCostUsd: 0,
+    };
+  }
+
+  /**
+   * chat/completions path used by coherence-check. Returns content from
+   * `choices[0].message.content` and token counts from `usage`. Supports
+   * Structured Outputs via `response_format` when supplied.
+   */
+  private async callChatCompletions(
+    messages: LLMMessage[],
+    maxTokens: number,
+    resolvedModel: string,
+    options: LLMProviderOptions,
+  ): Promise<LLMResponse> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    const body: Record<string, unknown> = {
+      model: resolvedModel,
+      messages,
+      max_completion_tokens: maxTokens,
+    };
+    if (options.responseFormat) {
+      body.response_format = options.responseFormat;
+    }
+    if (typeof options.temperature === "number") {
+      body.temperature = options.temperature;
+    }
+
+    let resp: Response;
+    try {
+      resp = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new ProviderError(
+          `OpenAI chat/completions timed out after ${this.timeoutMs}ms (model=${resolvedModel})`,
+          "provider_timeout",
+          false,
+        );
+      }
+      throw new ProviderError(
+        `OpenAI chat/completions network error: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        "unknown",
+        true,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      const details = extractOpenAIErrorDetails(resp.status, text);
+      const code = classifyOpenAIStatus(resp.status, details.code);
+      throw new ProviderError(
+        formatOpenAIError(details),
+        code,
+        code === "provider_overloaded",
+      );
+    }
+
+    const json: Record<string, unknown> = await resp.json();
+    const choices = json.choices;
+    const choice = Array.isArray(choices)
+      ? choices[0] as Record<string, unknown> | undefined
+      : undefined;
+    const message = choice?.message as Record<string, unknown> | undefined;
+    const rawContent = message?.content;
+    const content = typeof rawContent === "string" ? rawContent : "";
+    return {
+      content,
+      modelName: typeof json.model === "string" ? json.model : resolvedModel,
+      finishReason: typeof choice?.finish_reason === "string"
+        ? choice.finish_reason
+        : undefined,
+      inputTokens: (json.usage as Record<string, unknown> | undefined)
+        ?.prompt_tokens as number | undefined,
+      cachedInputTokens: ((json.usage as Record<string, unknown> | undefined)
+        ?.prompt_tokens_details as Record<string, unknown> | undefined)
+        ?.cached_tokens as number | undefined,
+      outputTokens: (json.usage as Record<string, unknown> | undefined)
+        ?.completion_tokens as number | undefined,
+      totalTokens: (json.usage as Record<string, unknown> | undefined)
+        ?.total_tokens as number | undefined,
       toolCostUsd: 0,
     };
   }

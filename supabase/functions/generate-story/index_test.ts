@@ -4288,7 +4288,7 @@ Deno.test({
     );
     assertStringIncludes(
       buildPromptFn,
-      "typeof req.storyArcPosition === "number"",
+      "typeof req.storyArcPosition === \"number\"",
       "Story Arc Context block must render Position (1-indexed display)",
     );
 

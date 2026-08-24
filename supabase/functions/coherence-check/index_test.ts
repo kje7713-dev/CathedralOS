@@ -1,258 +1,71 @@
-// Coherence v2.1 — general-purpose coherence checker tests.
+// =============================================================================
+// coherence-check/index_test.ts
 //
-// Verifies the orchestration logic in index.ts (request validation, prompt
-// construction, response validation). The actual OpenAI call is an integration
-// surface — exercised in the broader test suite, not in this file.
+// Tests exercise the REAL production code extracted to:
+//   - _validation.ts   (validateRequest, validateAndFilterWarnings, types)
+//   - _prompts.ts      (SYSTEM_PROMPT, COHERENCE_RESPONSE_FORMAT, buildUserPrompt)
+//   - _idempotency.ts  (sha256Hex, computeIdempotencyKey)
 //
-// Coverage targets (regression fixtures per Kevin 2026-08-20):
+// Previously these helpers were mirrored into this file as a copy. The mirrors
+// hid drift (kevbot-brain: "mirror of production" tests are a recurring failure
+// mode). This file now imports the real implementations so the tests actually
+// cover what ships.
+//
+// Coverage:
 // - Request validation: required fields, optional current_section, empty canon
 // - Prompt construction: includes section intent, section identity preserved,
 //   recency order, no suppressions for internal inconsistencies
 // - Response validation: pre/post filter counts distinguish "LLM said nothing"
 //   from "warnings were filtered" from "LLM truncated"
+// - Idempotency key derivation: same body within same minute → same key,
+//   different body / different minute → different key
 // - Diagnostic completeness: raw_content, finish_reason, model captured
 
-import { assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertExists,
+  assertNotEquals,
+  assertStringIncludes,
+} from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { validateAndFilterWarnings, validateRequest } from "./_validation.ts";
+import {
+  buildUserPrompt,
+  COHERENCE_RESPONSE_FORMAT,
+  SYSTEM_PROMPT,
+} from "./_prompts.ts";
+import { computeIdempotencyKey, sha256Hex } from "./_idempotency.ts";
 
 // =============================================================================
-// Mirror of validateRequest from index.ts
-// =============================================================================
-
-interface CurrentSection {
-  id: string;
-  title: string;
-  summary: string;
-  pov: string | null;
-  container: string | null;
-  beat_label: string | null;
-}
-
-interface CanonSection {
-  section_id: string;
-  title: string;
-  summary: string;
-  pov: string | null;
-  container: string | null;
-  created_at: string;
-  extracted_summary: string | null;
-  character_deltas: unknown[];
-  plot_thread_deltas: unknown[];
-  continuity_facts: unknown[];
-  open_loops: unknown[];
-  scene_ending_state: unknown;
-}
-
-interface PriorCanon {
-  sections: CanonSection[];
-}
-
-interface CoherenceCheckRequest {
-  output_text: string;
-  current_section: CurrentSection | null;
-  prior_canon: PriorCanon;
-  project_id?: string;
-}
-
-const validateRequest = (body: any):
-  | { ok: true; request: CoherenceCheckRequest }
-  | { ok: false; error: string } => {
-  if (typeof body?.output_text !== "string" || body.output_text.length === 0) {
-    return { ok: false, error: "output_text required (non-empty string)" };
-  }
-  if (!body.prior_canon || typeof body.prior_canon !== "object") {
-    return { ok: false, error: "prior_canon required (object)" };
-  }
-  if (!Array.isArray(body.prior_canon.sections)) {
-    return { ok: false, error: "prior_canon.sections required (array)" };
-  }
-  if (body.current_section !== null && body.current_section !== undefined) {
-    const cs = body.current_section;
-    if (typeof cs.id !== "string" || typeof cs.title !== "string" || typeof cs.summary !== "string") {
-      return { ok: false, error: "current_section requires id, title, summary (strings)" };
-    }
-  }
-  return { ok: true, request: body as CoherenceCheckRequest };
-};
-
-// =============================================================================
-// Mirror of buildUserPrompt from index.ts
-// =============================================================================
-
-const buildUserPrompt = (input: {
-  output_text: string;
-  current_section: CurrentSection | null;
-  prior_canon: PriorCanon;
-}): string => {
-  const parts: string[] = [
-    "GENERATED OUTPUT:",
-    input.output_text,
-    "",
-    "CURRENT SECTION INTENT:",
-    input.current_section
-      ? `Title: ${input.current_section.title}\nSummary: ${input.current_section.summary}\nPOV: ${input.current_section.pov ?? "(unspecified)"}\nContainer: ${input.current_section.container ?? "(unspecified)"}\nTerminal Beat: ${input.current_section.beat_label ?? "(unspecified)"}`
-      : "(none)",
-    "",
-    "PRIOR CANON (ordered by recency, newest first):",
-  ];
-  if (input.prior_canon.sections.length === 0) {
-    parts.push("(no prior accepted sections)");
-  } else {
-    const sectionBlocks = input.prior_canon.sections.map((s, i) =>
-      `[Section ${i + 1}] id=${s.section_id}\n` +
-      `Title: ${s.title}\n` +
-      `Summary: ${s.summary}\n` +
-      `POV: ${s.pov ?? "(unspecified)"}\n` +
-      `Container: ${s.container ?? "(unspecified)"}\n` +
-      `Extracted summary: ${s.extracted_summary ?? "(none)"}\n` +
-      `Created at: ${s.created_at}\n` +
-      `Character deltas: ${JSON.stringify(s.character_deltas, null, 2)}\n` +
-      `Plot thread deltas: ${JSON.stringify(s.plot_thread_deltas, null, 2)}\n` +
-      `Continuity facts: ${JSON.stringify(s.continuity_facts, null, 2)}\n` +
-      `Open loops: ${JSON.stringify(s.open_loops, null, 2)}\n` +
-      `Scene ending state: ${JSON.stringify(s.scene_ending_state, null, 2)}`
-    );
-    parts.push(sectionBlocks.join("\n\n"));
-  }
-  return parts.join("\n");
-};
-
-// =============================================================================
-// Mirror of validateAndFilterWarnings from index.ts
-// =============================================================================
-
-const validateAndFilterWarnings = (raw: any): {
-  warnings: Array<{ reason: string; severity: "warn" | "high" }>;
-  preFilterCount: number;
-  postFilterCount: number;
-} => {
-  if (!raw || typeof raw !== "object") {
-    return { warnings: [], preFilterCount: 0, postFilterCount: 0 };
-  }
-  const list = Array.isArray(raw.warnings) ? raw.warnings : [];
-  const preFilterCount = list.length;
-  const warnings = list
-    .filter((w: any) =>
-      typeof w === "object" &&
-      w !== null &&
-      typeof w.reason === "string" &&
-      w.reason.length > 0 &&
-      (w.severity === "warn" || w.severity === "high")
-    )
-    .map((w: any) => ({
-      reason: w.reason as string,
-      severity: w.severity === "high" ? "high" as const : "warn" as const,
-    }));
-  return { warnings, preFilterCount, postFilterCount: warnings.length };
-};
-
-// =============================================================================
-// Mirror of SYSTEM_PROMPT from index.ts — assert it does not suppress findings
-// =============================================================================
-
-const SYSTEM_PROMPT_SNIPPETS = {
-  includesCurrentSection: "CURRENT SECTION INTENT",
-  includesPriorCanon: "PRIOR CANON",
-  includesGeneratedOutput: "GENERATED OUTPUT",
-  forbidsStylisticFilter: "Skip stylistic concerns",  // old v2 phrase — must NOT appear
-  requiresCanonCitation: "every inconsistency must cite a canon",  // anti-pattern
-};
-
-const SYSTEM_PROMPT = `You are a story-coherence checker. The user generated output text for a section. Your job is to identify real inconsistencies in the generated output.
-
-CONTEXT YOU WILL RECEIVE:
-- CURRENT SECTION INTENT: what this section was supposed to be (title, summary, POV, container, beat_label). If null, the section has no current intent.
-- PRIOR CANON: structured memory from previously accepted sections, ordered by recency (newest first). Each entry is a section with its identity, summary, POV, container, and structured layers.
-- GENERATED OUTPUT: the prose the user wrote for this section.
-
-FIND INCONSISTENCIES. Categories include but are not limited to:
-- Contradictions with prior canon (character states, locations, plot events, continuity facts)
-- Output contradicts the current section's intended premise/summary/POV/container
-- Internal inconsistencies within the output itself (POV shifts, character/name confusion, impossible sequencing, factual self-contradictions)
-- Unresolved plot threads being silently dropped, or open threads being prematurely closed
-- Tone/voice continuity breaks (NOT surface-level style)
-
-FOR EACH FINDING, write \`reason\` as a one-sentence plain-English explanation. Cite the contradicting canon element when the inconsistency is canon-related. When the inconsistency is entirely inside the output (no canon element to cite), state that explicitly.
-
-SEVERITY:
-- "high" — clear factual contradiction, premise mismatch, or POV drift
-- "warn" — softer concern (anachronism, lesser inconsistency)
-
-If there are no real inconsistencies, return {"warnings": []}.`;
-
-const RESPONSE_FORMAT_SCHEMA = {
-  type: "object",
-  properties: {
-    warnings: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          reason: { type: "string" },
-          severity: { type: "string", enum: ["warn", "high"] },
-        },
-        required: ["reason", "severity"],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ["warnings"],
-  additionalProperties: false,
-};
-
-// =============================================================================
-// Fixtures
-// =============================================================================
-
-const fixtureCurrentSection: CurrentSection = {
-  id: "sec-current",
-  title: "The Confrontation",
-  summary: "Alice confronts Bob in Paris about the missing ledger.",
-  pov: "thirdPersonLimited",
-  container: "scene",
-  beat_label: "confrontation",
-};
-
-const fixtureCanonSection: CanonSection = {
-  section_id: "sec-prior-1",
-  title: "The Meeting",
-  summary: "Alice and Bob agreed to meet at Notre Dame.",
-  pov: "thirdPersonLimited",
-  container: "scene",
-  created_at: "2026-08-19T10:00:00Z",
-  extracted_summary: "Alice and Bob meet at Notre Dame and plan to find the ledger.",
-  character_deltas: [{ character_name: "Alice", action: "plans to find ledger" }],
-  plot_thread_deltas: [{ thread: "ledger", state: "open" }],
-  continuity_facts: [{ fact: "Bob is alive", source: "sec-1" }],
-  open_loops: ["Where is the ledger?"],
-  scene_ending_state: { where: "Notre Dame", when: "morning" },
-};
-
-const fixturePriorCanon: PriorCanon = { sections: [fixtureCanonSection] };
-
-// =============================================================================
-// Tests: request validation
+// validateRequest (production import — no mirror)
 // =============================================================================
 
 Deno.test("validateRequest: requires output_text", () => {
-  const result = validateRequest({ output_text: "", prior_canon: { sections: [] } });
+  const result = validateRequest({ prior_canon: { sections: [] } });
   assertEquals(result.ok, false);
-  assertEquals(result.error?.includes("output_text"), true);
+  if (!result.ok) {
+    assertEquals(result.error, "output_text required (non-empty string)");
+  }
 });
 
 Deno.test("validateRequest: requires prior_canon", () => {
-  const result = validateRequest({ output_text: "Some text" });
+  const result = validateRequest({ output_text: "hi" });
   assertEquals(result.ok, false);
-  assertEquals(result.error?.includes("prior_canon"), true);
+  if (!result.ok) {
+    assertEquals(result.error, "prior_canon required (object)");
+  }
 });
 
 Deno.test("validateRequest: requires prior_canon.sections array", () => {
-  const result = validateRequest({ output_text: "Some text", prior_canon: { sections: "not-array" } });
+  const result = validateRequest({ output_text: "hi", prior_canon: {} });
   assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.error, "prior_canon.sections required (array)");
+  }
 });
 
 Deno.test("validateRequest: accepts empty prior_canon (no prior sections)", () => {
   const result = validateRequest({
-    output_text: "Some text",
+    output_text: "hello",
     prior_canon: { sections: [] },
   });
   assertEquals(result.ok, true);
@@ -260,325 +73,453 @@ Deno.test("validateRequest: accepts empty prior_canon (no prior sections)", () =
 
 Deno.test("validateRequest: accepts current_section as null", () => {
   const result = validateRequest({
-    output_text: "Some text",
-    prior_canon: { sections: [] },
+    output_text: "hello",
     current_section: null,
+    prior_canon: { sections: [] },
   });
   assertEquals(result.ok, true);
 });
 
 Deno.test("validateRequest: accepts full current_section", () => {
   const result = validateRequest({
-    output_text: "Some text",
+    output_text: "hello",
+    current_section: {
+      id: "sec-1",
+      title: "T",
+      summary: "S",
+      pov: "first",
+      container: "scene",
+      beat_label: null,
+    },
     prior_canon: { sections: [] },
-    current_section: fixtureCurrentSection,
   });
   assertEquals(result.ok, true);
 });
 
 Deno.test("validateRequest: rejects current_section missing required fields", () => {
   const result = validateRequest({
-    output_text: "Some text",
+    output_text: "hello",
+    current_section: { id: "x", title: "y" },
     prior_canon: { sections: [] },
-    current_section: { id: "x" },  // missing title + summary
   });
   assertEquals(result.ok, false);
-  assertEquals(result.error?.includes("current_section"), true);
 });
 
 // =============================================================================
-// Tests: prompt construction
+// buildUserPrompt (production import — no mirror)
 // =============================================================================
 
 Deno.test("buildUserPrompt: includes generated output", () => {
-  const prompt = buildUserPrompt({
-    output_text: "Alice walks down the boulevard.",
-    current_section: null,
-    prior_canon: { sections: [] },
+  const prompt = buildUserPrompt("the user-written prose", null, {
+    sections: [],
   });
-  assertEquals(prompt.includes("GENERATED OUTPUT"), true);
-  assertEquals(prompt.includes("Alice walks down the boulevard."), true);
+  assertStringIncludes(prompt, "GENERATED OUTPUT:");
+  assertStringIncludes(prompt, "the user-written prose");
 });
 
 Deno.test("buildUserPrompt: includes current_section intent when provided", () => {
-  const prompt = buildUserPrompt({
-    output_text: "Some output.",
-    current_section: fixtureCurrentSection,
-    prior_canon: { sections: [] },
-  });
-  assertEquals(prompt.includes("CURRENT SECTION INTENT"), true);
-  assertEquals(prompt.includes("The Confrontation"), true);
-  assertEquals(prompt.includes("Alice confronts Bob"), true);
-  assertEquals(prompt.includes("thirdPersonLimited"), true);
-  assertEquals(prompt.includes("confrontation"), true);
+  const prompt = buildUserPrompt(
+    "output",
+    {
+      id: "sec-1",
+      title: "The Crossing",
+      summary: "Hero crosses the river.",
+      pov: "thirdPersonLimited",
+      container: "scene",
+      beat_label: "decision beat",
+    },
+    { sections: [] },
+  );
+  assertStringIncludes(prompt, "CURRENT SECTION INTENT:");
+  assertStringIncludes(prompt, "Title: The Crossing");
+  assertStringIncludes(prompt, "Summary: Hero crosses the river.");
+  assertStringIncludes(prompt, "POV: thirdPersonLimited");
+  assertStringIncludes(prompt, "Container: scene");
+  assertStringIncludes(prompt, "Terminal Beat: decision beat");
 });
 
 Deno.test("buildUserPrompt: shows (none) when current_section is null", () => {
-  const prompt = buildUserPrompt({
-    output_text: "Some output.",
-    current_section: null,
-    prior_canon: { sections: [] },
-  });
-  assertEquals(prompt.includes("(none)"), true);
+  const prompt = buildUserPrompt("output", null, { sections: [] });
+  assertStringIncludes(prompt, "(none)");
 });
 
 Deno.test("buildUserPrompt: shows (no prior accepted sections) when canon is empty", () => {
-  const prompt = buildUserPrompt({
-    output_text: "Some output.",
-    current_section: null,
-    prior_canon: { sections: [] },
-  });
-  assertEquals(prompt.includes("(no prior accepted sections)"), true);
+  const prompt = buildUserPrompt("output", null, { sections: [] });
+  assertStringIncludes(prompt, "(no prior accepted sections)");
 });
 
 Deno.test("buildUserPrompt: preserves section identity (each prior section is a unit)", () => {
-  const prompt = buildUserPrompt({
-    output_text: "Some output.",
-    current_section: null,
-    prior_canon: fixturePriorCanon,
+  const prompt = buildUserPrompt("output", null, {
+    sections: [
+      {
+        section_id: "sec-a",
+        title: "Alpha",
+        summary: "First section.",
+        pov: "first",
+        container: "scene",
+        created_at: "2026-01-01T00:00:00Z",
+        extracted_summary: "summary A",
+        character_deltas: [],
+        plot_thread_deltas: [],
+        continuity_facts: [],
+        open_loops: [],
+        scene_ending_state: null,
+      },
+      {
+        section_id: "sec-b",
+        title: "Bravo",
+        summary: "Second section.",
+        pov: "third",
+        container: "scene",
+        created_at: "2026-01-02T00:00:00Z",
+        extracted_summary: "summary B",
+        character_deltas: [],
+        plot_thread_deltas: [],
+        continuity_facts: [],
+        open_loops: [],
+        scene_ending_state: null,
+      },
+    ],
   });
-  assertEquals(prompt.includes("sec-prior-1"), true);
-  assertEquals(prompt.includes("The Meeting"), true);
-  assertEquals(prompt.includes("Notre Dame"), true);
-  // Structured layers are preserved
-  assertEquals(prompt.includes("character_name"), true);
-  assertEquals(prompt.includes("Alice"), true);
-  assertEquals(prompt.includes("Where is the ledger?"), true);
+  assertStringIncludes(prompt, "[Section 1] id=sec-a");
+  assertStringIncludes(prompt, "[Section 2] id=sec-b");
+  assertStringIncludes(prompt, "Title: Alpha");
+  assertStringIncludes(prompt, "Title: Bravo");
 });
 
 Deno.test("buildUserPrompt: orders prior canon by recency (newest first)", () => {
-  const newerSection: CanonSection = {
-    ...fixtureCanonSection,
-    section_id: "sec-newer",
-    created_at: "2026-08-20T10:00:00Z",
-  };
-  const olderSection: CanonSection = {
-    ...fixtureCanonSection,
-    section_id: "sec-older",
-    created_at: "2026-08-19T10:00:00Z",
-  };
-  const prompt = buildUserPrompt({
-    output_text: "Some output.",
-    current_section: null,
-    prior_canon: { sections: [newerSection, olderSection] },
+  const prompt = buildUserPrompt("output", null, {
+    sections: [
+      {
+        section_id: "sec-new",
+        title: "Newest",
+        summary: "Most recent.",
+        pov: null,
+        container: null,
+        created_at: "2026-01-03T00:00:00Z",
+        extracted_summary: null,
+        character_deltas: [],
+        plot_thread_deltas: [],
+        continuity_facts: [],
+        open_loops: [],
+        scene_ending_state: null,
+      },
+      {
+        section_id: "sec-old",
+        title: "Oldest",
+        summary: "Earliest.",
+        pov: null,
+        container: null,
+        created_at: "2026-01-01T00:00:00Z",
+        extracted_summary: null,
+        character_deltas: [],
+        plot_thread_deltas: [],
+        continuity_facts: [],
+        open_loops: [],
+        scene_ending_state: null,
+      },
+    ],
   });
-  const newerPos = prompt.indexOf("sec-newer");
-  const olderPos = prompt.indexOf("sec-older");
-  assertEquals(newerPos < olderPos, true);
+  const newIdx = prompt.indexOf("sec-new");
+  const oldIdx = prompt.indexOf("sec-old");
+  assertEquals(newIdx < oldIdx, true);
 });
 
 Deno.test("buildUserPrompt: includes POV per prior canon section", () => {
-  const prompt = buildUserPrompt({
-    output_text: "Some output.",
-    current_section: null,
-    prior_canon: fixturePriorCanon,
+  const prompt = buildUserPrompt("output", null, {
+    sections: [
+      {
+        section_id: "sec-pov",
+        title: "Has POV",
+        summary: "S",
+        pov: "secondPerson",
+        container: "scene",
+        created_at: "2026-01-01T00:00:00Z",
+        extracted_summary: null,
+        character_deltas: [],
+        plot_thread_deltas: [],
+        continuity_facts: [],
+        open_loops: [],
+        scene_ending_state: null,
+      },
+    ],
   });
-  // The prior section's POV is included so the LLM can compare POV drift
-  assertEquals(prompt.includes("POV: thirdPersonLimited"), true);
+  assertStringIncludes(prompt, "POV: secondPerson");
 });
 
 // =============================================================================
-// Tests: response validation (regression: ensure filter doesn't collapse to [])
+// validateAndFilterWarnings (production import — no mirror)
 // =============================================================================
 
 Deno.test("validateAndFilterWarnings: empty input returns empty", () => {
-  const result = validateAndFilterWarnings({ warnings: [] });
+  const result = validateAndFilterWarnings({});
   assertEquals(result.warnings, []);
   assertEquals(result.preFilterCount, 0);
   assertEquals(result.postFilterCount, 0);
 });
 
+Deno.test("validateAndFilterWarnings: null input returns empty", () => {
+  const result = validateAndFilterWarnings(null);
+  assertEquals(result.warnings, []);
+});
+
 Deno.test("validateAndFilterWarnings: drops warnings with missing reason", () => {
   const result = validateAndFilterWarnings({
     warnings: [
-      { reason: "", severity: "warn" },
-      { severity: "warn" },
-      { reason: "Valid", severity: "warn" },
+      { severity: "high" },
+      { reason: "valid", severity: "warn" },
     ],
   });
   assertEquals(result.warnings.length, 1);
-  assertEquals(result.warnings[0].reason, "Valid");
-  assertEquals(result.preFilterCount, 3);
+  assertEquals(result.warnings[0].reason, "valid");
+  assertEquals(result.preFilterCount, 2);
   assertEquals(result.postFilterCount, 1);
 });
 
 Deno.test("validateAndFilterWarnings: drops warnings with invalid severity", () => {
   const result = validateAndFilterWarnings({
     warnings: [
-      { reason: "R", severity: "block" },
-      { reason: "R", severity: "error" },
-      { reason: "R", severity: "warn" },
+      { reason: "A", severity: "extreme" },
+      { reason: "B", severity: "warn" },
     ],
   });
   assertEquals(result.warnings.length, 1);
-  assertEquals(result.warnings[0].severity, "warn");
-  assertEquals(result.preFilterCount, 3);
-  assertEquals(result.postFilterCount, 1);
+  assertEquals(result.warnings[0].reason, "B");
 });
 
-Deno.test("validateAndFilterWarnings: preserves 'high' severity", () => {
+Deno.test("validateAndFilterWarnings: preserves high severity", () => {
   const result = validateAndFilterWarnings({
-    warnings: [{ reason: "R", severity: "high" }],
+    warnings: [{ reason: "Premise mismatch", severity: "high" }],
   });
-  assertEquals(result.warnings.length, 1);
   assertEquals(result.warnings[0].severity, "high");
 });
 
-Deno.test("validateAndFilterWarnings: pre/post filter counts distinguish 'LLM said nothing' from 'filtered'", () => {
-  // If pre == post == 0, the LLM returned no warnings.
-  // If pre > post, some were dropped.
-  // The diagnostic must distinguish these — otherwise we can't tell whether
-  // the LLM genuinely found nothing vs. the filter ate valid warnings.
-  const noWarnings = validateAndFilterWarnings({ warnings: [] });
-  assertEquals(noWarnings.preFilterCount, 0);
-  assertEquals(noWarnings.postFilterCount, 0);
+Deno.test("validateAndFilterWarnings: pre/post filter counts distinguish empty from filtered", () => {
+  const emptyResult = validateAndFilterWarnings({});
+  assertEquals(emptyResult.preFilterCount, 0);
+  assertEquals(emptyResult.postFilterCount, 0);
 
-  const someFiltered = validateAndFilterWarnings({
+  const filteredResult = validateAndFilterWarnings({
     warnings: [
-      { reason: "Valid", severity: "warn" },
-      { reason: "", severity: "warn" },
+      { severity: "extreme" },
+      { severity: "lol" },
     ],
   });
-  assertEquals(someFiltered.preFilterCount, 2);
-  assertEquals(someFiltered.postFilterCount, 1);
+  assertEquals(filteredResult.preFilterCount, 2);
+  assertEquals(filteredResult.postFilterCount, 0);
 });
 
 // =============================================================================
-// Tests: prompt contents (regression: prompt does not suppress findings)
+// SYSTEM_PROMPT invariants
 // =============================================================================
 
 Deno.test("SYSTEM_PROMPT: does not contain the v2 'Skip stylistic concerns' phrase", () => {
-  // v2 had "Skip stylistic concerns" which the LLM read as a global filter
-  // and used to drop POV drift as 'stylistic'. v2.1 must not include that.
-  assertEquals(SYSTEM_PROMPT.includes(SYSTEM_PROMPT_SNIPPETS.forbidsStylisticFilter), false);
+  assertEquals(
+    SYSTEM_PROMPT.includes("Skip stylistic concerns"),
+    false,
+    "v2-era suppression phrase must not be in the v2.1 prompt",
+  );
 });
 
 Deno.test("SYSTEM_PROMPT: does not require canon citation for all findings", () => {
-  // Internal inconsistencies (e.g., POV drift within the output) have no
-  // canon element to cite. The prompt must not require every warning to cite
-  // canon or the LLM will skip valid internal findings.
-  assertEquals(SYSTEM_PROMPT.includes(SYSTEM_PROMPT_SNIPPETS.requiresCanonCitation), false);
+  assertEquals(
+    SYSTEM_PROMPT.includes("every inconsistency must cite a canon"),
+    false,
+  );
 });
 
 Deno.test("SYSTEM_PROMPT: explicitly allows internal inconsistencies", () => {
-  // The prompt must mention internal inconsistencies so the LLM knows to flag
-  // them (especially POV drift, which is the original symptom).
-  assertEquals(SYSTEM_PROMPT.includes("Internal inconsistencies"), true);
-  assertEquals(SYSTEM_PROMPT.includes("POV shifts"), true);
+  assertStringIncludes(
+    SYSTEM_PROMPT,
+    "Internal inconsistencies within the output itself",
+  );
 });
 
 Deno.test("SYSTEM_PROMPT: explicitly mentions current_section intent", () => {
-  // Without current_section in the prompt, the LLM has no comparison frame
-  // for "what was this section supposed to be." The prompt must reference it.
-  assertEquals(SYSTEM_PROMPT.includes(SYSTEM_PROMPT_SNIPPETS.includesCurrentSection), true);
+  assertStringIncludes(SYSTEM_PROMPT, "CURRENT SECTION INTENT");
 });
 
 Deno.test("SYSTEM_PROMPT: explicitly mentions prior canon", () => {
-  assertEquals(SYSTEM_PROMPT.includes(SYSTEM_PROMPT_SNIPPETS.includesPriorCanon), true);
+  assertStringIncludes(SYSTEM_PROMPT, "PRIOR CANON");
 });
 
-Deno.test("SYSTEM_PROMPT: instructions survive the OpenAI structured-output schema", () => {
-  // The schema enforces {warnings: [{reason, severity}]}. The system prompt
-  // asks for "reason" explicitly so the LLM knows what to emit.
-  assertEquals(SYSTEM_PROMPT.includes("reason"), true);
+Deno.test("COHERENCE_RESPONSE_FORMAT: is strict json_schema with no additional properties", () => {
+  const schema = COHERENCE_RESPONSE_FORMAT as unknown as {
+    json_schema: {
+      strict: boolean;
+      schema: { additionalProperties: boolean; required: string[] };
+    };
+  };
+  assertEquals(schema.json_schema.strict, true);
+  assertEquals(schema.json_schema.schema.additionalProperties, false);
+  assertEquals(schema.json_schema.schema.required.includes("warnings"), true);
 });
 
 // =============================================================================
-// Tests: regression fixtures (per Kevin 2026-08-20 brief)
-// These verify the request shape that would surface each invalid class.
+// Idempotency key derivation
 // =============================================================================
 
-// 1. Obvious internal inconsistency (POV drift within the output)
-Deno.test("regression: POV drift has comparison frame (current_section.pov vs output)", () => {
-  const request = validateRequest({
-    output_text: "Alice walked down the street. Bob's hands trembled as he watched. FROM BOB'S PERSPECTIVE:",
+Deno.test("computeIdempotencyKey: same body + same minute → same key", async () => {
+  const userId = "user-123";
+  const body = {
+    output_text: "hello world",
     current_section: {
       id: "sec-1",
-      title: "Chapter 5",
-      summary: "Alice's POV throughout.",
-      pov: "thirdPersonLimited",
-      container: "scene",
-      beat_label: "rising",
+      title: "T",
+      summary: "S",
+      pov: null,
+      container: null,
+      beat_label: null,
     },
     prior_canon: { sections: [] },
-  });
-  assertEquals(request.ok, true);
-  if (request.ok) {
-    const prompt = buildUserPrompt(request.request);
-    // The LLM sees both intent.pov = thirdPersonLimited AND pov_label,
-    // and the output text that drifts. The framework gives the LLM enough
-    // context to flag drift — we don't test the LLM's response here, only
-    // that the request shape supports it.
-    assertEquals(prompt.includes("thirdPersonLimited"), true);
-    assertEquals(prompt.includes("Alice's POV throughout"), true);
-  }
+  };
+  const fixedNow = 1_700_000_000_000; // arbitrary fixed instant
+  const k1 = await computeIdempotencyKey(userId, body, fixedNow);
+  const k2 = await computeIdempotencyKey(userId, body, fixedNow);
+  assertEquals(k1, k2);
+  // SHA-256 hex is 64 chars
+  assertEquals(k1.length, 64);
 });
 
-// 2. Contradiction against prior canon
-Deno.test("regression: canon contradiction has prior canon in prompt", () => {
-  const request = validateRequest({
-    output_text: "Bob grinned. He was alive and well.",
+Deno.test("computeIdempotencyKey: different body → different key", async () => {
+  const userId = "user-123";
+  const baseBody = {
+    output_text: "hello",
     current_section: null,
-    prior_canon: {
-      sections: [
-        {
-          ...fixtureCanonSection,
-          continuity_facts: [{ fact: "Bob is dead", source: "sec-1" }],
-        },
-      ],
-    },
-  });
-  assertEquals(request.ok, true);
-  if (request.ok) {
-    const prompt = buildUserPrompt(request.request);
-    assertEquals(prompt.includes("Bob is dead"), true);
-    assertEquals(prompt.includes("Bob grinned"), true);
-  }
+    prior_canon: { sections: [] },
+  };
+  const fixedNow = 1_700_000_000_000;
+  const k1 = await computeIdempotencyKey(userId, baseBody, fixedNow);
+  const k2 = await computeIdempotencyKey(
+    userId,
+    { ...baseBody, output_text: "hello world" },
+    fixedNow,
+  );
+  assertNotEquals(k1, k2);
 });
 
-// 3. Generated output contradicts intended section premise
-Deno.test("regression: premise mismatch has current_section.summary in prompt", () => {
-  const request = validateRequest({
-    output_text: "Alice is in London, walking along the Thames.",
-    current_section: {
+Deno.test("computeIdempotencyKey: different minute → different key", async () => {
+  const userId = "user-123";
+  const body = {
+    output_text: "hello",
+    current_section: null,
+    prior_canon: { sections: [] },
+  };
+  const k1 = await computeIdempotencyKey(userId, body, 1_700_000_000_000);
+  const k2 = await computeIdempotencyKey(userId, body, 1_700_000_060_000); // +60s
+  assertNotEquals(k1, k2);
+});
+
+Deno.test("computeIdempotencyKey: different user → different key", async () => {
+  const body = {
+    output_text: "hello",
+    current_section: null,
+    prior_canon: { sections: [] },
+  };
+  const fixedNow = 1_700_000_000_000;
+  const k1 = await computeIdempotencyKey("user-a", body, fixedNow);
+  const k2 = await computeIdempotencyKey("user-b", body, fixedNow);
+  assertNotEquals(k1, k2);
+});
+
+Deno.test("sha256Hex: known input → known output", async () => {
+  // SHA-256 of empty string is well-known: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  assertEquals(
+    await sha256Hex(""),
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  );
+  // SHA-256 of "abc"
+  assertEquals(
+    await sha256Hex("abc"),
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+  );
+});
+
+// =============================================================================
+// Regression: prompt shape ensures failure modes can be detected downstream
+// =============================================================================
+
+Deno.test("regression: POV drift has comparison frame (current_section.pov vs output)", () => {
+  const prompt = buildUserPrompt(
+    "the prose uses first-person POV",
+    {
       id: "sec-1",
-      title: "The Confrontation",
-      summary: "Alice confronts Bob in Paris.",
+      title: "T",
+      summary: "S",
       pov: "thirdPersonLimited",
       container: "scene",
-      beat_label: "confrontation",
+      beat_label: null,
     },
-    prior_canon: { sections: [] },
-  });
-  assertEquals(request.ok, true);
-  if (request.ok) {
-    const prompt = buildUserPrompt(request.request);
-    // LLM sees both intended summary (Paris) and current output (London).
-    assertEquals(prompt.includes("Alice confronts Bob in Paris"), true);
-    assertEquals(prompt.includes("Alice is in London"), true);
-  }
+    { sections: [] },
+  );
+  assertStringIncludes(prompt, "POV: thirdPersonLimited");
+  assertStringIncludes(prompt, "the prose uses first-person POV");
 });
 
-// 4. Clean coherent output
+Deno.test("regression: canon contradiction has prior canon in prompt", () => {
+  const prompt = buildUserPrompt("output", null, {
+    sections: [
+      {
+        section_id: "sec-canon",
+        title: "Hero is alive",
+        summary: "The hero survived the battle.",
+        pov: null,
+        container: null,
+        created_at: "2026-01-01T00:00:00Z",
+        extracted_summary: null,
+        character_deltas: [],
+        plot_thread_deltas: [],
+        continuity_facts: [],
+        open_loops: [],
+        scene_ending_state: null,
+      },
+    ],
+  });
+  assertStringIncludes(prompt, "The hero survived the battle.");
+});
+
+Deno.test("regression: premise mismatch has current_section.summary in prompt", () => {
+  const prompt = buildUserPrompt(
+    "output",
+    {
+      id: "sec-1",
+      title: "T",
+      summary: "Hero crosses the river at dawn.",
+      pov: null,
+      container: null,
+      beat_label: null,
+    },
+    { sections: [] },
+  );
+  assertStringIncludes(prompt, "Hero crosses the river at dawn.");
+});
+
 Deno.test("regression: clean coherent output has all context but no contradictions", () => {
-  const request = validateRequest({
-    output_text: "Alice met Bob at Notre Dame, as planned.",
-    current_section: fixtureCurrentSection,
-    prior_canon: fixturePriorCanon,
-  });
-  assertEquals(request.ok, true);
-  if (request.ok) {
-    const prompt = buildUserPrompt(request.request);
-    // All the context is present; the LLM has what it needs to judge.
-    // We don't assert "no warnings" here because that's an LLM decision —
-    // we only assert the framework provides the necessary context.
-    assertEquals(prompt.includes("CURRENT SECTION INTENT"), true);
-    assertEquals(prompt.includes("PRIOR CANON"), true);
-    assertEquals(prompt.includes("Notre Dame"), true);
-  }
+  const prompt = buildUserPrompt(
+    "clean output",
+    {
+      id: "sec-1",
+      title: "T",
+      summary: "S",
+      pov: null,
+      container: null,
+      beat_label: null,
+    },
+    { sections: [] },
+  );
+  // Should still carry both context blocks so downstream can detect
+  // inconsistencies even when there are none.
+  assertStringIncludes(prompt, "CURRENT SECTION INTENT:");
+  assertStringIncludes(prompt, "PRIOR CANON");
 });
 
-// Touch imported helpers
 Deno.test("assert helpers are wired up", () => {
-  assertExists(assertEquals);
+  // Smoke check: the imports exist and are callable.
+  assertExists(validateRequest);
+  assertExists(validateAndFilterWarnings);
+  assertExists(buildUserPrompt);
+  assertExists(SYSTEM_PROMPT);
+  assertExists(COHERENCE_RESPONSE_FORMAT);
+  assertExists(computeIdempotencyKey);
+  assertExists(sha256Hex);
 });
