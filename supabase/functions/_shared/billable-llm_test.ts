@@ -2,11 +2,8 @@
 // _shared/billable-llm_test.ts
 //
 // Unit tests for the shared billable-LLM runner. Verifies the invariants
-// called out in the refactor spec:
+// called out in the PR #407 merge-blocking revision:
 //   - Insufficient credits fail before the provider is called.
-//   - Disabled / missing model is not the runner's concern (the feature
-//     resolves the GenerationModel and passes it in), but pricing snapshot
-//     must work even for the FALLBACK row.
 //   - Provider failure creates no 'complete' usage event and no customer
 //     charge; a 'failed' usage event IS recorded by the runner.
 //   - Successful call records the provider model and actual token counts.
@@ -14,8 +11,15 @@
 //   - Successful newly-inserted usage event charges exactly once.
 //   - Confirmed unique-violation on usage event INSERT does NOT charge again.
 //   - Non-uniqueness DB error is NOT treated as duplicate — it propagates.
-//   - providerOptions are forwarded to the provider's complete() call.
+//   - Missing inserted row data with no error is treated as a failure.
+//   - Credit charge exception throws credit_charge_failed (NOT a silent
+//     charged:false return — that was the free-output escape hatch).
+//   - onProviderSuccess callback exception propagates WITHOUT recording a
+//     'complete' event (preserves generate-story's behavior).
+//   - Cached tokens are NOT double-counted: uncached = total - cached.
+//   - providerOptions are forwarded to provider.complete().
 //   - Idempotency key is forwarded to the usage event INSERT row.
+//   - recordFailedUsageEvent logs returned PostgREST errors without throwing.
 // =============================================================================
 
 import {
@@ -25,12 +29,12 @@ import {
   assertStrictEquals,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
-  runBillableLLM,
-  BillableLLMError,
   type BillableLLMDependencies,
+  BillableLLMError,
   type BillableLLMRequest,
   type FailedUsageEventInput,
   recordFailedUsageEvent,
+  runBillableLLM,
 } from "./billable-llm.ts";
 import { ProviderError } from "../generate-story/_provider.ts";
 import type {
@@ -64,11 +68,27 @@ const TEST_MODEL: GenerationModel = {
   pricing_effective_at: "2026-01-01T00:00:00Z",
 };
 
+/** Model with distinct cached vs uncached rates for exact-charge billing
+ * tests. snapshotPricing() yields:
+ *   inputCreditRatePer1k       = 50 * 2.0 / 10 = 10
+ *   cachedInputCreditRatePer1k = 10 * 2.0 / 10 = 2
+ *   outputCreditRatePer1k      = 100 * 2.0 / 10 = 20
+ *   minimumChargeCredits        = 0
+ */
+const EXACT_BILLING_MODEL: GenerationModel = {
+  ...TEST_MODEL,
+  billing_multiplier: 2.0,
+  provider_input_usd_per_1m: 50,
+  provider_cached_input_usd_per_1m: 10,
+  provider_output_usd_per_1m: 100,
+  minimum_charge_credits: 0,
+};
+
 const USER_ID = "00000000-0000-0000-0000-000000000001";
 
 function makeLLMResponse(overrides: Partial<LLMResponse> = {}): LLMResponse {
   return {
-    content: "{\"warnings\":[]}",
+    content: '{"warnings":[]}',
     modelName: TEST_MODEL.provider_model,
     finishReason: "stop",
     inputTokens: 1500,
@@ -80,48 +100,63 @@ function makeLLMResponse(overrides: Partial<LLMResponse> = {}): LLMResponse {
   };
 }
 
+type AnyResult = unknown;
+
+interface MockAdminUsageEventRow {
+  user_id: string;
+  generation_output_id: string | null;
+  action: string;
+  purpose: string;
+  model_name: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  generation_length_mode: string;
+  output_budget: number | null;
+  status: string;
+  credit_revenue_usd: number | null;
+  idempotency_key: string | null;
+}
+
 interface MockAdminCall {
   table: string;
-  // deno-lint-ignore no-explicit-any
-  row: any;
+  row: MockAdminUsageEventRow;
 }
 
 interface MockAdminClient {
   insertCalls: MockAdminCall[];
-  // For each insert call, return this result (or push to queue per-call).
-  // deno-lint-ignore no-explicit-any
-  resultsByCall: any[];
+  resultsByCall: unknown[];
   from(table: string): {
-    // deno-lint-ignore no-explicit-any
-    insert(row: any): any;
+    insert(row: unknown): unknown;
   };
 }
 
 function makeMockAdmin(opts: {
-  // deno-lint-ignore no-explicit-any
-  insertResults?: any[];
+  insertResults?: unknown[];
 } = {}): MockAdminClient {
   const insertCalls: MockAdminCall[] = [];
-  const results = opts.insertResults ?? [{ data: { id: "row-1" }, error: null }];
+  const results = opts.insertResults ??
+    [{ data: { id: "row-1" }, error: null }];
   let idx = 0;
   return {
     insertCalls,
     resultsByCall: results,
     from(table: string) {
       return {
-        // deno-lint-ignore no-explicit-any
-        insert(row: any) {
-          insertCalls.push({ table, row });
+        insert(row: unknown) {
+          // The mock admin types insert as `unknown` to keep lint quiet;
+          // narrow to the expected row shape so test assertions are typed.
+          insertCalls.push({
+            table,
+            row: row as MockAdminUsageEventRow,
+          });
           const result = results[idx] ?? results[results.length - 1];
           idx++;
-          // Mimic Supabase query chain: .insert(row).select(...).maybeSingle()
-          // returns { data, error }. If the caller doesn't chain further,
-          // it just awaits a thenable that resolves with the same shape.
           return {
             select: () => ({
-              maybeSingle: async () => result,
+              maybeSingle: () => Promise.resolve(result),
             }),
-            then: async (resolve: (v: unknown) => void) => resolve(result),
+            then: (resolve: (v: unknown) => void) =>
+              Promise.resolve(resolve(result)),
           };
         },
       };
@@ -131,12 +166,16 @@ function makeMockAdmin(opts: {
 
 function makeProvider(response: LLMResponse | Error): LLMProvider {
   return {
-    // deno-lint-ignore no-explicit-any
-    complete: async (_messages: LLMMessage[], _maxTokens: number, _model?: string, _options?: any) => {
+    complete: (
+      _messages: LLMMessage[],
+      _maxTokens: number,
+      _model?: string,
+      _options?: unknown,
+    ) => {
       if (response instanceof Error) {
-        throw response;
+        return Promise.reject(response);
       }
-      return response;
+      return Promise.resolve(response);
     },
   };
 }
@@ -144,28 +183,34 @@ function makeProvider(response: LLMResponse | Error): LLMProvider {
 function makeCreditStore(opts: {
   availableCredits?: number;
   chargeShouldThrow?: boolean;
-} = {}): CreditStore {
+} = {}): CreditStore & { chargeCalls: number[] } {
   const availableCredits = opts.availableCredits ?? 100;
-  const charged: number[] = [];
+  const chargeCalls: number[] = [];
   return {
-    // deno-lint-ignore no-explicit-any
-    loadOrDefault: async (_userId: string) => ({
-      user_id: USER_ID,
-      plan_name: "free",
-      is_pro: false,
-      monthly_credit_allowance: availableCredits,
-      purchased_credit_balance: 0,
-      current_period_start: null,
-      current_period_end: null,
-      entitlement_source: "monthly_grant",
-      updated_at: new Date().toISOString(),
-    }),
-    // deno-lint-ignore no-explicit-any
-    charge: async (_userId: string, cost: number, _ent: any, _outputId: string | null) => {
+    chargeCalls,
+    loadOrDefault: (_userId: string) =>
+      Promise.resolve({
+        user_id: USER_ID,
+        plan_name: "free",
+        is_pro: false,
+        monthly_credit_allowance: availableCredits,
+        purchased_credit_balance: 0,
+        current_period_start: null,
+        current_period_end: null,
+        entitlement_source: "monthly_grant",
+        updated_at: new Date().toISOString(),
+      }),
+    charge: async (
+      _userId: string,
+      cost: number,
+      _ent: unknown,
+      _outputId: string | null,
+    ) => {
+      await Promise.resolve();
       if (opts.chargeShouldThrow) {
         throw new Error("simulated charge failure");
       }
-      charged.push(cost);
+      chargeCalls.push(cost);
       return {
         user_id: USER_ID,
         plan_name: "free",
@@ -178,10 +223,12 @@ function makeCreditStore(opts: {
         updated_at: new Date().toISOString(),
       };
     },
-  } as unknown as CreditStore;
+  } as unknown as CreditStore & { chargeCalls: number[] };
 }
 
-function makeRequest(overrides: Partial<BillableLLMRequest<unknown>> = {}): BillableLLMRequest<unknown> {
+function makeRequest(
+  overrides: Partial<BillableLLMRequest<unknown>> = {},
+): BillableLLMRequest<unknown> {
   return {
     userID: USER_ID,
     purpose: "coherence-check",
@@ -203,22 +250,22 @@ function makeRequest(overrides: Partial<BillableLLMRequest<unknown>> = {}): Bill
       outputBudget: 1500,
       idempotencyKey: "idem-1",
     },
-    onProviderSuccess: async (_result) => null,
+    onProviderSuccess: (_result) => Promise.resolve(null),
     ...overrides,
   };
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Billing & invariant tests
 // ---------------------------------------------------------------------------
 
-Deno.test("runBillableLLM: insufficient credits throws BEFORE provider is called", async () => {
+Deno.test("runBillableLLM: insufficient credits throws BEFORE the provider is called", async () => {
   const admin = makeMockAdmin();
   let providerCalls = 0;
   const provider: LLMProvider = {
-    complete: async () => {
+    complete: () => {
       providerCalls++;
-      return makeLLMResponse();
+      return Promise.resolve(makeLLMResponse());
     },
   };
   const deps: BillableLLMDependencies = {
@@ -230,9 +277,7 @@ Deno.test("runBillableLLM: insufficient credits throws BEFORE provider is called
     () => runBillableLLM(makeRequest(), deps),
     BillableLLMError,
   );
-  // Provider must not have been called.
   assertEquals(providerCalls, 0);
-  // No usage event must have been inserted.
   assertEquals(admin.insertCalls.length, 0);
 });
 
@@ -286,9 +331,9 @@ Deno.test("runBillableLLM: purpose + action reach the usage event unchanged", as
 Deno.test("runBillableLLM: providerOptions are forwarded to provider.complete()", async () => {
   let capturedOptions: unknown = null;
   const provider: LLMProvider = {
-    complete: async (_msgs, _tokens, _model, options) => {
+    complete: (_msgs, _tokens, _model, options) => {
       capturedOptions = options;
-      return makeLLMResponse();
+      return Promise.resolve(makeLLMResponse());
     },
   };
   const deps: BillableLLMDependencies = {
@@ -304,11 +349,26 @@ Deno.test("runBillableLLM: providerOptions are forwarded to provider.complete()"
   assertStrictEquals(capturedOptions, opts);
 });
 
-Deno.test("runBillableLLM: confirmed unique-violation on usage event does NOT charge again", async () => {
+Deno.test("runBillableLLM: providerOptions absent is preserved as undefined", async () => {
+  let capturedOptions: unknown = "sentinel";
+  const provider: LLMProvider = {
+    complete: (_msgs, _tokens, _model, options) => {
+      capturedOptions = options;
+      return Promise.resolve(makeLLMResponse());
+    },
+  };
+  const deps: BillableLLMDependencies = {
+    adminClient: makeMockAdmin(),
+    provider,
+    creditStore: makeCreditStore(),
+  };
+  await runBillableLLM(makeRequest({ providerOptions: undefined }), deps);
+  assertEquals(capturedOptions, undefined);
+});
+
+Deno.test("runBillableLLM: confirmed unique-violation does NOT charge again", async () => {
   const admin = makeMockAdmin({
     insertResults: [
-      // Postgres SQLSTATE 23505 = unique_violation. The runner must treat
-      // this as "already billed" and return charged=false.
       { data: null, error: { code: "23505", message: "duplicate key value" } },
     ],
   });
@@ -321,21 +381,14 @@ Deno.test("runBillableLLM: confirmed unique-violation on usage event does NOT ch
   const result = await runBillableLLM(makeRequest(), deps);
   assertEquals(result.charged, false);
   assertEquals(result.usageEventInserted, false);
-  // creditStore.charge must NOT have been called.
-  // deno-lint-ignore no-explicit-any
-  const chargedCalls = (creditStore as any).charge.mock?.calls?.length ?? 0;
-  // We don't have a mock with .mock.calls; use a different probe: check the
-  // admin client only saw one insert (the one that "failed" with conflict).
+  // creditStore.charge must NOT have been called — chargeCalls is empty.
+  assertEquals(creditStore.chargeCalls.length, 0);
   assertEquals(admin.insertCalls.length, 1);
-  assertEquals(chargedCalls, 0);
 });
 
-Deno.test("runBillableLLM: non-uniqueness DB error is NOT silently treated as duplicate", async () => {
+Deno.test("runBillableLLM: non-uniqueness DB error propagates as BillableLLMError (NOT silent duplicate)", async () => {
   const admin = makeMockAdmin({
     insertResults: [
-      // Some other DB error — NOT a unique violation. The runner must
-      // throw a BillableLLMError so the caller can follow the existing
-      // diagnostic conventions.
       { data: null, error: { code: "42P01", message: "undefined_table" } },
     ],
   });
@@ -348,6 +401,28 @@ Deno.test("runBillableLLM: non-uniqueness DB error is NOT silently treated as du
     () => runBillableLLM(makeRequest(), deps),
     BillableLLMError,
   );
+});
+
+Deno.test("runBillableLLM: missing inserted row data (no error) throws usage_event_insert_failed", async () => {
+  // Supabase/PostgREST returned { data: null, error: null } — a contract
+  // violation. The runner must NOT proceed to charging as if persistence
+  // succeeded.
+  const admin = makeMockAdmin({
+    insertResults: [{ data: null, error: null }],
+  });
+  const creditStore = makeCreditStore();
+  const deps: BillableLLMDependencies = {
+    adminClient: admin,
+    provider: makeProvider(makeLLMResponse()),
+    creditStore,
+  };
+  const err = await assertRejects(
+    () => runBillableLLM(makeRequest(), deps),
+    BillableLLMError,
+  );
+  assertEquals(err.code, "usage_event_insert_failed");
+  assertEquals(creditStore.chargeCalls.length, 0);
+  assertEquals(admin.insertCalls.length, 1);
 });
 
 Deno.test("runBillableLLM: provider failure records 'failed' usage event + throws", async () => {
@@ -366,14 +441,12 @@ Deno.test("runBillableLLM: provider failure records 'failed' usage event + throw
     () => runBillableLLM(makeRequest(), deps),
     ProviderError,
   );
-  // The runner must have recorded a 'failed' usage event before throwing.
   assertEquals(admin.insertCalls.length, 1);
   const row = admin.insertCalls[0].row;
   assertEquals(row.status, "failed");
   assertEquals(row.purpose, "coherence-check");
   assertEquals(row.action, "check");
   assertEquals(row.idempotency_key, null);
-  // No tokens (provider never returned them).
   assertEquals(row.input_tokens, null);
   assertEquals(row.output_tokens, null);
 });
@@ -388,14 +461,14 @@ Deno.test("runBillableLLM: onProviderSuccess callback result is returned in feat
   const expectedResult = { outputRowId: "gen-123" };
   const result = await runBillableLLM(
     makeRequest({
-      onProviderSuccess: async (_r) => expectedResult,
+      onProviderSuccess: (_r) => Promise.resolve(expectedResult),
     }),
     deps,
   );
   assertStrictEquals(result.featureResult, expectedResult);
 });
 
-Deno.test("runBillableLLM: onProviderSuccess throw propagates without recording 'complete' usage event", async () => {
+Deno.test("runBillableLLM: onProviderSuccess throw propagates WITHOUT recording 'complete' usage event", async () => {
   const admin = makeMockAdmin();
   const deps: BillableLLMDependencies = {
     adminClient: admin,
@@ -406,36 +479,160 @@ Deno.test("runBillableLLM: onProviderSuccess throw propagates without recording 
     () =>
       runBillableLLM(
         makeRequest({
-          onProviderSuccess: async () => {
-            throw new Error("persistence failed");
-          },
+          onProviderSuccess: () =>
+            Promise.reject(new Error("persistence failed")),
         }),
         deps,
       ),
     Error,
     "persistence failed",
   );
-  // The runner must NOT have inserted a usage event on feature-callback
-  // failure (caller decides via recordFailedUsageEvent if it wants one).
   assertEquals(admin.insertCalls.length, 0);
 });
 
-Deno.test("runBillableLLM: credit charge failure after usage event insert does NOT roll back the event", async () => {
+Deno.test("runBillableLLM: credit charge exception throws credit_charge_failed (NOT a silent free-output path)", async () => {
   const admin = makeMockAdmin();
+  const creditStore = makeCreditStore({ chargeShouldThrow: true });
   const deps: BillableLLMDependencies = {
     adminClient: admin,
     provider: makeProvider(makeLLMResponse()),
-    creditStore: makeCreditStore({ chargeShouldThrow: true }),
+    creditStore,
   };
-  const result = await runBillableLLM(makeRequest(), deps);
-  // The usage event WAS inserted, but the charge failed.
-  assertEquals(result.usageEventInserted, true);
-  assertEquals(result.charged, false);
+  const err = await assertRejects(
+    () => runBillableLLM(makeRequest(), deps),
+    BillableLLMError,
+  );
+  assertEquals(err.code, "credit_charge_failed");
+  // The usage event IS inserted (audit trail preserved), but the charge
+  // failed — surface as a non-2xx response, NOT as a 200 + free output.
   assertEquals(admin.insertCalls.length, 1);
+  assertEquals(creditStore.chargeCalls.length, 0);
+});
+
+Deno.test("runBillableLLM: cached tokens NOT double-counted — total=1500, cached=500", async () => {
+  // EXACT_BILLING_MODEL yields:
+  //   inputCreditRatePer1k = 10  → uncached tokens charged at 10/1k
+  //   cachedInputCreditRatePer1k = 2  → cached tokens charged at 2/1k
+  //   outputCreditRatePer1k = 20
+  //   minimumChargeCredits = 0
+  // With total=1500, cached=500, output=0:
+  //   uncached = 1500 - 500 = 1000  → 1000 * 10 / 1000 = 10 credits
+  //   cached  = 500                → 500 * 2 / 1000 = 1 credit
+  //   output  = 0                  → 0 credits
+  //   total = 11 credits
+  const admin = makeMockAdmin();
+  const provider = makeProvider(
+    makeLLMResponse({
+      inputTokens: 1500,
+      cachedInputTokens: 500,
+      outputTokens: 0,
+    }),
+  );
+  const creditStore = makeCreditStore();
+  const deps: BillableLLMDependencies = {
+    adminClient: admin,
+    provider,
+    creditStore,
+  };
+  const result = await runBillableLLM(
+    makeRequest({ model: EXACT_BILLING_MODEL }),
+    deps,
+  );
+  assertEquals(result.actualCharge, 11);
+  assertEquals(result.charged, true);
+});
+
+Deno.test("runBillableLLM: cached token count absent → uncached = total", async () => {
+  const admin = makeMockAdmin();
+  const provider = makeProvider(
+    makeLLMResponse({
+      inputTokens: 1500,
+      // cachedInputTokens undefined / omitted
+      outputTokens: 0,
+    }),
+  );
+  const deps: BillableLLMDependencies = {
+    adminClient: admin,
+    provider,
+    creditStore: makeCreditStore(),
+  };
+  const result = await runBillableLLM(
+    makeRequest({ model: EXACT_BILLING_MODEL }),
+    deps,
+  );
+  // uncached = 1500, cached = 0 → 1500 * 10 / 1000 + 0 = 15 credits
+  assertEquals(result.actualCharge, 15);
+});
+
+Deno.test("runBillableLLM: cached token count zero → uncached = total, cached = 0", async () => {
+  const admin = makeMockAdmin();
+  const provider = makeProvider(
+    makeLLMResponse({
+      inputTokens: 1500,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+    }),
+  );
+  const deps: BillableLLMDependencies = {
+    adminClient: admin,
+    provider,
+    creditStore: makeCreditStore(),
+  };
+  const result = await runBillableLLM(
+    makeRequest({ model: EXACT_BILLING_MODEL }),
+    deps,
+  );
+  assertEquals(result.actualCharge, 15);
+});
+
+Deno.test("runBillableLLM: cached > total is clamped safely (no negative uncached)", async () => {
+  const admin = makeMockAdmin();
+  const provider = makeProvider(
+    makeLLMResponse({
+      inputTokens: 1000,
+      cachedInputTokens: 5000, // pathological: provider says more cached than total
+      outputTokens: 0,
+    }),
+  );
+  const deps: BillableLLMDependencies = {
+    adminClient: admin,
+    provider,
+    creditStore: makeCreditStore(),
+  };
+  const result = await runBillableLLM(
+    makeRequest({ model: EXACT_BILLING_MODEL }),
+    deps,
+  );
+  // clamped: uncached = max(0, 1000 - 5000) = 0; cached = min(1000, 5000) = 1000
+  // charge = 0 * 10 / 1000 + 1000 * 2 / 1000 = 2 credits
+  assertEquals(result.actualCharge, 2);
+});
+
+Deno.test("runBillableLLM: negative provider token values cannot produce negative billable usage", async () => {
+  const admin = makeMockAdmin();
+  const provider = makeProvider(
+    makeLLMResponse({
+      inputTokens: -100 as unknown as number,
+      cachedInputTokens: -50 as unknown as number,
+      outputTokens: -25 as unknown as number,
+    }),
+  );
+  const deps: BillableLLMDependencies = {
+    adminClient: admin,
+    provider,
+    creditStore: makeCreditStore(),
+  };
+  const result = await runBillableLLM(
+    makeRequest({ model: EXACT_BILLING_MODEL }),
+    deps,
+  );
+  // Math.max(0, -100) = 0 total; Math.max(0, min(0, -50)) = 0 cached
+  // → uncached = 0 - 0 = 0, cached = 0, output = 0 → charge = 0
+  assertEquals(result.actualCharge, 0);
 });
 
 // ---------------------------------------------------------------------------
-// recordFailedUsageEvent helper
+// recordFailedUsageEvent
 // ---------------------------------------------------------------------------
 
 Deno.test("recordFailedUsageEvent: writes a row with status='failed' + null tokens", async () => {
@@ -460,9 +657,36 @@ Deno.test("recordFailedUsageEvent: writes a row with status='failed' + null toke
   assertEquals(row.idempotency_key, null);
 });
 
-Deno.test("recordFailedUsageEvent: swallow errors (audit must not crash caller)", async () => {
-  // deno-lint-ignore no-explicit-any
-  const broken = { from: () => { throw new Error("db unreachable"); } } as any;
+Deno.test("recordFailedUsageEvent: returned PostgREST error is logged + does NOT throw over original error", async () => {
+  const logs: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (msg: string) => logs.push(msg);
+  try {
+    const admin = makeMockAdmin({
+      insertResults: [
+        { data: null, error: { code: "42P01", message: "undefined_table" } },
+      ],
+    });
+    await recordFailedUsageEvent(admin, {
+      userID: USER_ID,
+      purpose: "generate",
+      action: "generate",
+      modelName: "gpt-4o-mini",
+    });
+  } finally {
+    console.error = originalConsoleError;
+  }
+  // The PostgREST error was logged.
+  assertEquals(logs.length >= 1, true);
+  assertStringIncludes(logs[0], "[billable-llm] failed-usage insert failed");
+});
+
+Deno.test("recordFailedUsageEvent: swallow thrown errors (audit must not crash caller)", async () => {
+  const broken: { from: () => unknown } = {
+    from: () => {
+      throw new Error("db unreachable");
+    },
+  };
   // Should NOT throw.
   await recordFailedUsageEvent(broken, {
     userID: USER_ID,
@@ -490,3 +714,17 @@ Deno.test("BillableLLMError: carries code + details + correct message", () => {
   assertEquals(err instanceof Error, true);
   assertEquals(err instanceof BillableLLMError, true);
 });
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function assertStringIncludes(actual: string, expected: string): void {
+  if (!actual.includes(expected)) {
+    throw new Error(
+      `Expected string to include ${JSON.stringify(expected)} but got ${
+        JSON.stringify(actual)
+      }`,
+    );
+  }
+}

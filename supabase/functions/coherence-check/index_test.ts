@@ -27,16 +27,13 @@ import {
   assertNotEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { validateAndFilterWarnings, validateRequest } from "./_validation.ts";
 import {
-  validateRequest,
-  validateAndFilterWarnings,
-} from "./_validation.ts";
-import {
-  SYSTEM_PROMPT,
-  COHERENCE_RESPONSE_FORMAT,
   buildUserPrompt,
+  COHERENCE_RESPONSE_FORMAT,
+  SYSTEM_PROMPT,
 } from "./_prompts.ts";
-import { sha256Hex, computeIdempotencyKey } from "./_idempotency.ts";
+import { computeIdempotencyKey, sha256Hex } from "./_idempotency.ts";
 
 // =============================================================================
 // validateRequest (production import — no mirror)
@@ -290,14 +287,14 @@ Deno.test("validateAndFilterWarnings: drops warnings with invalid severity", () 
   assertEquals(result.warnings[0].reason, "B");
 });
 
-Deno.test("validateAndFilterWarnings: preserves "high" severity", () => {
+Deno.test("validateAndFilterWarnings: preserves high severity", () => {
   const result = validateAndFilterWarnings({
     warnings: [{ reason: "Premise mismatch", severity: "high" }],
   });
   assertEquals(result.warnings[0].severity, "high");
 });
 
-Deno.test("validateAndFilterWarnings: pre/post filter counts distinguish "LLM said nothing" from "filtered"", () => {
+Deno.test("validateAndFilterWarnings: pre/post filter counts distinguish empty from filtered", () => {
   const emptyResult = validateAndFilterWarnings({});
   assertEquals(emptyResult.preFilterCount, 0);
   assertEquals(emptyResult.postFilterCount, 0);
@@ -347,7 +344,12 @@ Deno.test("SYSTEM_PROMPT: explicitly mentions prior canon", () => {
 });
 
 Deno.test("COHERENCE_RESPONSE_FORMAT: is strict json_schema with no additional properties", () => {
-  const schema = COHERENCE_RESPONSE_FORMAT as { json_schema: { strict: boolean; schema: { additionalProperties: boolean; required: string[] } } };
+  const schema = COHERENCE_RESPONSE_FORMAT as unknown as {
+    json_schema: {
+      strict: boolean;
+      schema: { additionalProperties: boolean; required: string[] };
+    };
+  };
   assertEquals(schema.json_schema.strict, true);
   assertEquals(schema.json_schema.schema.additionalProperties, false);
   assertEquals(schema.json_schema.schema.required.includes("warnings"), true);

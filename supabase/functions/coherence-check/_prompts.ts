@@ -7,9 +7,9 @@
 // =============================================================================
 
 import type {
+  CoherenceCheckRequest,
   CurrentSection,
   PriorCanon,
-  CoherenceCheckRequest,
 } from "./_validation.ts";
 
 // OpenAI Structured Outputs schema — strict, no additional properties.
@@ -45,7 +45,8 @@ export const COHERENCE_RESPONSE_FORMAT = {
   },
 } as const;
 
-export const SYSTEM_PROMPT = `You are a story-coherence checker. The user generated output text for a section. Your job is to identify real inconsistencies in the generated output.
+export const SYSTEM_PROMPT =
+  `You are a story-coherence checker. The user generated output text for a section. Your job is to identify real inconsistencies in the generated output.
 
 CONTEXT YOU WILL RECEIVE:
 - CURRENT SECTION INTENT: what this section was supposed to be (title, summary, POV, container, beat_label). If null, the section has no current intent.
@@ -78,7 +79,11 @@ export function buildUserPrompt(
     "",
     "CURRENT SECTION INTENT:",
     current_section
-      ? `Title: ${current_section.title}\nSummary: ${current_section.summary}\nPOV: ${current_section.pov ?? "(unspecified)"}\nContainer: ${current_section.container ?? "(unspecified)"}\nTerminal Beat: ${current_section.beat_label ?? "(unspecified)"}`
+      ? `Title: ${current_section.title}\nSummary: ${current_section.summary}\nPOV: ${
+        current_section.pov ?? "(unspecified)"
+      }\nContainer: ${
+        current_section.container ?? "(unspecified)"
+      }\nTerminal Beat: ${current_section.beat_label ?? "(unspecified)"}`
       : "(none)",
     "",
     "PRIOR CANON (ordered by recency, newest first):",
