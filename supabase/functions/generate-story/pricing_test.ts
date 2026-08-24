@@ -37,7 +37,9 @@ function makeModel(overrides: Partial<GenerationModel> = {}): GenerationModel {
     description: null,
     input_credit_rate: 0, // legacy, unused in Phase 3
     output_credit_rate: 0, // legacy, unused in Phase 3
-    minimum_charge_credits: 0, // legacy, unused in Phase 3
+    // minimum_charge_credits intentionally omitted so the test
+    // "snapshotPricing uses DEFAULT_PRICING defaults" actually exercises
+    // the defaults. Phase 3 pricing uses provider_*_usd_per_1m directly.
     max_output_tokens: 8000,
     enabled: true,
     sort_order: 10,

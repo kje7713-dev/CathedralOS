@@ -212,6 +212,12 @@ interface GenerateStoryRequest {
   // once after body parse into a single canonical `projectID` variable.
   // Optional for backwards compat — omitted => null.
   projectID?: string;
+  // Snake_case alias sent by run-outline. Same canonical value as
+  // projectID above; the handler prefers project_id ?? projectID.
+  project_id?: string;
+  // Project state context — populated by run-outline from project
+  // runtime state (characters, plot threads, recent outputs). Optional.
+  projectStateContext?: string | null;
   // PR-360-Z: canonical explicit section context fields. Replaces the old
   // pattern of smuggling the outline section into `promptPack.notes`.
   // Both iOS direct generation AND run-outline generation must populate
@@ -444,6 +450,23 @@ interface PromptPackPayloadShape {
     moralLines?: string[];
     selfDeceptions?: string[];
     identityConflicts?: string[];
+    // Fields captured by PromptPackExportBuilder.build() but previously
+    // dropped by the PromptPackPayloadShape interface. buildStructuredPromptBody
+    // accesses each via optional chaining, so empty values cost nothing.
+    preferences?: string[];
+    resources?: string[];
+    failurePatterns?: string[];
+    needs?: string[];
+    contradictions?: string[];
+    obsessions?: string[];
+    attachments?: string[];
+    notes?: string;
+    virtues?: string[];
+    publicMask?: string;
+    privateLogic?: string;
+    speechStyle?: string;
+    reputation?: string;
+    status?: string;
     instructionBias?: string;
   }>;
   selectedRelationships?: Array<{
@@ -454,16 +477,34 @@ interface PromptPackPayloadShape {
     whatEachWantsFromTheOther?: string;
     whatWouldBreakIt?: string;
     whatWouldTransformIt?: string;
+    loyalty?: string;
+    fear?: string;
+    desire?: string;
+    dependency?: string;
+    history?: string;
+    powerBalance?: string;
+    resentment?: string;
+    misunderstanding?: string;
+    notes?: string;
   }>;
   selectedThemeQuestions?: Array<{
     question?: string;
     coreTension?: string;
     moralFaultLine?: string;
     endingTruth?: string;
+    // Fields captured by PromptPackExportBuilder.build() but previously
+    // dropped by the PromptPackPayloadShape interface.
+    valueConflict?: string;
+    notes?: string;
   }>;
   selectedMotifs?: Array<{
     label?: string;
     meaning?: string;
+    // Fields captured by PromptPackExportBuilder.build() but previously
+    // dropped by the PromptPackPayloadShape interface.
+    category?: string;
+    examples?: string[];
+    notes?: string;
   }>;
   selectedStorySpark?: {
     title?: string;
@@ -2703,7 +2744,7 @@ async function handler(
           {
             outline_section_id: String(sectionForEmbed.id),
             outline_id: String(sectionForEmbed.outline_id),
-            project_id: projectID,
+            project_id: projectID ?? "",
             position: Number(sectionForEmbed.position ?? 0),
             title: String(sectionForEmbed.title ?? ""),
             summary: String(sectionForEmbed.summary ?? ""),
