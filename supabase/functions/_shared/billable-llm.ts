@@ -82,6 +82,10 @@ export interface BillableLLMRequest<T> {
    * failures (e.g., empty provider content, invalid JSON). */
   onProviderSuccess: (result: BillableProviderResult) => Promise<T>;
   preflightUsageOverride?: GenerationUsage;
+  /** Generate-story historically omits failed usage rows for provider timeout
+   * and provider-account quota failures. Feature callers can disable the
+   * runner's best-effort failure audit to preserve that contract. */
+  recordProviderFailureUsage?: boolean;
 }
 
 export interface BillableLLMResult<T> {
@@ -95,12 +99,24 @@ export interface BillableLLMResult<T> {
   /** True iff a usage_event row was INSERTed (false on confirmed
    * idempotency conflict or non-uniqueness DB error). */
   usageEventInserted: boolean;
+  /** Remaining monthly + purchased credits after a successful charge. */
+  remainingCredits: number;
+}
+
+export interface BillableUsageEventWriteResult {
+  data: { id: string } | null;
+  error: { message?: string; [key: string]: unknown } | null;
 }
 
 export interface BillableLLMDependencies {
   adminClient: unknown;
   provider: LLMProvider;
   creditStore: CreditStore;
+  /** Optional feature-specific writer. Generate-story supplies its existing
+   * persistence store here so margin telemetry and test seams remain intact. */
+  usageEventWriter?: (
+    row: Record<string, unknown>,
+  ) => Promise<BillableUsageEventWriteResult>;
 }
 
 export type BillableLLMErrorCode =
@@ -196,14 +212,16 @@ export async function runBillableLLM<T>(
       req.providerOptions,
     );
   } catch (err) {
-    await recordFailedUsageEvent(deps.adminClient, {
-      userID: req.userID,
-      purpose: req.purpose,
-      action: req.action,
-      modelName: req.model.provider_model,
-      generationLengthMode: req.usageContext.generationLengthMode ?? null,
-      outputBudget: req.usageContext.outputBudget ?? req.maxOutputTokens,
-    });
+    if (req.recordProviderFailureUsage !== false) {
+      await recordFailedUsageEvent(deps.adminClient, {
+        userID: req.userID,
+        purpose: req.purpose,
+        action: req.action,
+        modelName: req.model.provider_model,
+        generationLengthMode: req.usageContext.generationLengthMode ?? null,
+        outputBudget: req.usageContext.outputBudget ?? req.maxOutputTokens,
+      });
+    }
     throw err;
   }
 
@@ -263,24 +281,21 @@ export async function runBillableLLM<T>(
     idempotency_key: req.usageContext.idempotencyKey ?? null,
   };
 
-  const insertResult = (await (deps.adminClient as unknown as {
-    from: (t: string) => {
-      insert: (r: unknown) => {
-        select: (c?: string) => {
-          maybeSingle: () => Promise<
-            { data: { id: string } | null; error: unknown }
-          >;
+  const insertResult = deps.usageEventWriter
+    ? await deps.usageEventWriter(usageEventRow)
+    : (await (deps.adminClient as unknown as {
+      from: (t: string) => {
+        insert: (r: unknown) => {
+          select: (c?: string) => {
+            maybeSingle: () => Promise<BillableUsageEventWriteResult>;
+          };
         };
       };
-    };
-  })
-    .from("generation_usage_events")
-    .insert(usageEventRow)
-    .select("id")
-    .maybeSingle()) as {
-      data: { id: string } | null;
-      error: { message?: string; [key: string]: unknown } | null;
-    };
+    })
+      .from("generation_usage_events")
+      .insert(usageEventRow)
+      .select("id")
+      .maybeSingle());
 
   // 6. Confirmed uniqueness conflict (idempotency hit) — no charge.
   if (insertResult?.error && isUniqueViolation(insertResult.error)) {
@@ -290,6 +305,8 @@ export async function runBillableLLM<T>(
       actualCharge,
       charged: false,
       usageEventInserted: false,
+      remainingCredits: entitlement.monthly_credit_allowance +
+        entitlement.purchased_credit_balance,
     };
   }
 
@@ -334,13 +351,16 @@ export async function runBillableLLM<T>(
   //    "return charged:false" path created a free-output escape hatch).
   //    The usage_event row is already inserted; the spec's follow-up
   //    (atomic billing) covers reconciliation for that audit row.
+  let remainingCredits = 0;
   try {
-    await deps.creditStore.charge(
+    const updatedEntitlement = await deps.creditStore.charge(
       req.userID,
       actualCharge,
       entitlement,
       req.usageContext.generationOutputID ?? null,
     );
+    remainingCredits = updatedEntitlement.monthly_credit_allowance +
+      updatedEntitlement.purchased_credit_balance;
   } catch (err) {
     console.error(
       `[billable-llm] credit charge failed (usage event already inserted at ` +
@@ -362,6 +382,7 @@ export async function runBillableLLM<T>(
     actualCharge,
     charged: true,
     usageEventInserted: true,
+    remainingCredits,
   };
 }
 
@@ -387,6 +408,7 @@ export async function recordFailedUsageEvent(
   adminClient: unknown,
   input: FailedUsageEventInput,
 ): Promise<void> {
+  if (!adminClient) return;
   try {
     const result = await (adminClient as unknown as {
       from: (
