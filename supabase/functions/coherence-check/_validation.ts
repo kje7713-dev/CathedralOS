@@ -35,6 +35,10 @@ export interface PriorCanon {
 }
 
 export interface CoherenceCheckRequest {
+  /** estimate performs preflight only; check performs the billable call. */
+  action?: "estimate" | "check";
+  /** Backend generation_models.id; never a provider model string from the client. */
+  selected_model_id?: string;
   output_text: string;
   current_section: CurrentSection | null;
   prior_canon: PriorCanon;
@@ -53,6 +57,17 @@ export type ValidationResult =
 export function validateRequest(body: unknown): ValidationResult {
   // deno-lint-ignore no-explicit-any
   const b = body as any;
+  if (
+    b?.action !== undefined && b.action !== "estimate" && b.action !== "check"
+  ) {
+    return { ok: false, error: "action must be estimate or check" };
+  }
+  if (
+    b?.selected_model_id !== undefined &&
+    typeof b.selected_model_id !== "string"
+  ) {
+    return { ok: false, error: "selected_model_id must be a string" };
+  }
   if (typeof b?.output_text !== "string" || b.output_text.length === 0) {
     return { ok: false, error: "output_text required (non-empty string)" };
   }

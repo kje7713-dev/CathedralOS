@@ -33,7 +33,12 @@ import { computeIdempotencyKey } from "./_idempotency.ts";
 import type { CoherenceCheckRequest, CoherenceWarning } from "./_validation.ts";
 import { GenerationModel } from "../generate-story/_generation_models.ts";
 import type { LLMMessage, LLMProvider } from "../generate-story/_provider.ts";
-import type { CreditStore } from "../generate-story/_credits.ts";
+import { checkCredits, type CreditStore } from "../generate-story/_credits.ts";
+import {
+  computeMaxChargeCredits,
+  estimateTokensFromText,
+  snapshotPricing,
+} from "../generate-story/_generation_models.ts";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -268,32 +273,60 @@ export async function handleCoherenceCheck(
   config: CoherenceConfig,
 ): Promise<Response> {
   // 1. Resolve the GenerationModel.
-  const modelRow = await (deps.adminClient as unknown as {
+  const modelTable = (deps.adminClient as unknown as {
     from: (t: string) => {
       select: (c?: string) => {
         eq: (col: string, v: unknown) => {
-          eq: (
-            col2: string,
-            v2: unknown,
-          ) => {
-            maybeSingle: () => Promise<
-              { data: GenerationModel | null; error: unknown }
-            >;
-          };
+          maybeSingle: () => Promise<
+            { data: GenerationModel | null; error: unknown }
+          >;
         };
       };
     };
-  })
-    .from("generation_models")
-    .select("*")
-    .eq("provider_model", config.openaiModelDefault)
-    .eq("enabled", true)
-    .maybeSingle();
+  }).from("generation_models").select("*");
+  const modelRow = request.selected_model_id
+    ? await modelTable.eq("id", request.selected_model_id).maybeSingle()
+    : await modelTable.eq("provider_model", config.openaiModelDefault)
+      .maybeSingle();
   const model: GenerationModel = (modelRow?.data as GenerationModel | null) ??
     config.fallbackModel;
 
-  // 2. Build messages + idempotency key.
+  // 2. Build messages. Estimate uses the exact same prompt shape as the
+  // billable call, but never invokes the provider or writes usage rows.
   const messages = buildMessages(request);
+  if ((request.action ?? "check") === "estimate") {
+    const entitlement = await deps.creditStore.loadOrDefault(userId);
+    const estimatedInputTokens = estimateTokensFromText(messages.system) +
+      estimateTokensFromText(messages.user);
+    const estimatedCredits = computeMaxChargeCredits(
+      {
+        uncachedInputTokens: estimatedInputTokens,
+        cachedInputTokens: 0,
+        outputTokens: config.maxCompletionTokens,
+        toolCostUsd: 0,
+      },
+      snapshotPricing(model),
+    );
+    const creditCheck = checkCredits(entitlement, estimatedCredits);
+    return corsResponse(
+      JSON.stringify({
+        status: "ok",
+        action: "estimate",
+        selectedModelId: model.id,
+        modelDisplayName: model.display_name,
+        estimatedInputTokens,
+        estimatedOutputTokens: config.maxCompletionTokens,
+        estimatedCredits,
+        availableCredits: creditCheck.availableCredits,
+        allowed: creditCheck.allowed,
+        minimumChargeCredits: model.minimum_charge_credits,
+      }),
+      { status: 200 },
+    );
+  }
+
+  // 3. Actual checks get a stable idempotency key. Estimate requests never
+  // participate in the billable idempotency path.
   const idempotencyKey = await computeIdempotencyKey(userId, request);
 
   // 3. Capture the duration start IMMEDIATELY before the runner call so
@@ -371,7 +404,7 @@ export async function handleCoherenceCheck(
     return errorResponse(code, message, 502);
   }
 
-  // 4. Audit log (best-effort, never throws).
+  // 5. Audit log (best-effort, never throws).
   await writeCoherenceAuditLog(
     deps.adminClient,
     request,
@@ -380,7 +413,7 @@ export async function handleCoherenceCheck(
     featureResult.llmDurationMs,
   );
 
-  // 5. Format the iOS response byte-shape.
+  // 6. Format the iOS response byte-shape.
   const diagnostics = {
     raw_content: featureResult.rawContent,
     finish_reason: providerResult.finishReason ?? "unknown",

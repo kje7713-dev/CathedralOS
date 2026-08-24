@@ -185,6 +185,8 @@ enum JSONValue: Codable {
 
 /// Request body posted to /functions/v1/coherence-check. v2.1 shape.
 struct CoherenceCheckRequestBody: Codable {
+    let action: String
+    let selected_model_id: String?
     let output_text: String
     let current_section: CurrentSection?
     let prior_canon: PriorCanon
@@ -193,8 +195,35 @@ struct CoherenceCheckRequestBody: Codable {
 
 /// Response body returned from /functions/v1/coherence-check. v2.1 shape.
 struct CoherenceCheckResponseBody: Codable {
+    let status: String?
+    let action: String?
+    let selectedModelId: String?
+    let modelDisplayName: String?
+    let estimatedInputTokens: Int?
+    let estimatedOutputTokens: Int?
+    let estimatedCredits: Double?
+    let availableCredits: Int?
+    let allowed: Bool?
+    let minimumChargeCredits: Int?
     let warnings: [CoherenceWarning]?
     let diagnostics: CoherenceDiagnostics?
+
+    enum CodingKeys: String, CodingKey {
+        case status, action, warnings, diagnostics, selectedModelId,
+             modelDisplayName, estimatedInputTokens, estimatedOutputTokens,
+             estimatedCredits, availableCredits, allowed, minimumChargeCredits
+    }
+}
+
+struct CoherenceCostEstimate: Codable {
+    let selectedModelId: String
+    let modelDisplayName: String
+    let estimatedInputTokens: Int
+    let estimatedOutputTokens: Int
+    let estimatedCredits: Double
+    let availableCredits: Int
+    let allowed: Bool
+    let minimumChargeCredits: Int
 }
 
 struct CoherenceCheckService {
@@ -211,45 +240,74 @@ struct CoherenceCheckService {
 
     // MARK: - Public API
 
-    /// Run the user-initiated coherence check. Fetches the current section's
-    /// intent + the project's prior canon (both in parallel), then calls the
-    /// coherence-check edge function. Returns a tuple of (warnings,
-    /// rawResponseBody) so the caller can display the actual response (e.g.,
-    /// for diagnostics on TestFlight). Throws on network / server / auth errors.
+    /// Run the user-initiated coherence check after the user confirms the
+    /// server-authoritative estimate. Each call is a fresh billable check.
     func check(
         outputText: String,
         projectID: String,
-        sectionID: UUID? = nil
+        sectionID: UUID? = nil,
+        selectedModelID: String? = nil
     ) async throws -> (warnings: [CoherenceWarning], rawResponseBody: String) {
-        let currentSection: CurrentSection?
-        let priorCanon: PriorCanon
-
-        if let sectionID = sectionID {
-            // Parallel fetches — current_section intent + prior_canon retrieval
-            // are independent network calls.
-            async let currentSectionTask = fetchCurrentSection(sectionID: sectionID)
-            async let priorCanonTask = fetchPriorCanon(
-                projectID: projectID,
-                excludeSectionID: sectionID
-            )
-            currentSection = try await currentSectionTask
-            priorCanon = try await priorCanonTask
-        } else {
-            // No sectionID = no current_section intent. Prior canon still useful
-            // if the project has accepted sections.
-            currentSection = nil
-            priorCanon = try await fetchPriorCanon(
-                projectID: projectID,
-                excludeSectionID: nil
-            )
-        }
-
+        let context = try await fetchContext(projectID: projectID, sectionID: sectionID)
         return try await callEdgeFunction(
+            action: "check",
+            selectedModelID: selectedModelID,
             outputText: outputText,
-            currentSection: currentSection,
-            priorCanon: priorCanon,
+            currentSection: context.currentSection,
+            priorCanon: context.priorCanon,
             projectID: projectID
         )
+    }
+
+    /// Estimate the maximum possible coherence charge without invoking the
+    /// provider or inserting a usage row. The backend owns pricing and balance.
+    func estimate(
+        outputText: String,
+        projectID: String,
+        sectionID: UUID? = nil,
+        selectedModelID: String? = nil
+    ) async throws -> CoherenceCostEstimate {
+        let context = try await fetchContext(projectID: projectID, sectionID: sectionID)
+        let response = try await callEdgeFunctionBody(
+            action: "estimate",
+            selectedModelID: selectedModelID,
+            outputText: outputText,
+            currentSection: context.currentSection,
+            priorCanon: context.priorCanon,
+            projectID: projectID
+        )
+        guard let selectedModelId = response.selectedModelId,
+              let modelDisplayName = response.modelDisplayName,
+              let estimatedInputTokens = response.estimatedInputTokens,
+              let estimatedOutputTokens = response.estimatedOutputTokens,
+              let estimatedCredits = response.estimatedCredits,
+              let availableCredits = response.availableCredits,
+              let allowed = response.allowed,
+              let minimumChargeCredits = response.minimumChargeCredits else {
+            throw CoherenceCheckError.invalidResponse("Estimate response missing required fields")
+        }
+        return CoherenceCostEstimate(
+            selectedModelId: selectedModelId,
+            modelDisplayName: modelDisplayName,
+            estimatedInputTokens: estimatedInputTokens,
+            estimatedOutputTokens: estimatedOutputTokens,
+            estimatedCredits: estimatedCredits,
+            availableCredits: availableCredits,
+            allowed: allowed,
+            minimumChargeCredits: minimumChargeCredits
+        )
+    }
+
+    private func fetchContext(
+        projectID: String,
+        sectionID: UUID?
+    ) async throws -> (currentSection: CurrentSection?, priorCanon: PriorCanon) {
+        if let sectionID {
+            async let currentSectionTask = fetchCurrentSection(sectionID: sectionID)
+            async let priorCanonTask = fetchPriorCanon(projectID: projectID, excludeSectionID: sectionID)
+            return (try await currentSectionTask, try await priorCanonTask)
+        }
+        return (nil, try await fetchPriorCanon(projectID: projectID, excludeSectionID: nil))
     }
 
     /// Lower-level entry point for callers that already have current_section
@@ -261,6 +319,8 @@ struct CoherenceCheckService {
         projectID: String? = nil
     ) async throws -> (warnings: [CoherenceWarning], rawResponseBody: String) {
         return try await callEdgeFunction(
+            action: "check",
+            selectedModelID: nil,
             outputText: outputText,
             currentSection: currentSection,
             priorCanon: priorCanon,
@@ -464,11 +524,33 @@ struct CoherenceCheckService {
     // MARK: - Edge function call
 
     private func callEdgeFunction(
+        action: String,
+        selectedModelID: String?,
         outputText: String,
         currentSection: CurrentSection?,
         priorCanon: PriorCanon,
         projectID: String?
     ) async throws -> (warnings: [CoherenceWarning], rawResponseBody: String) {
+        let body = try await callEdgeFunctionBody(
+            action: action,
+            selectedModelID: selectedModelID,
+            outputText: outputText,
+            currentSection: currentSection,
+            priorCanon: priorCanon,
+            projectID: projectID
+        )
+        let rawBody = try JSONEncoder().encode(body)
+        return (body.warnings ?? [], String(data: rawBody, encoding: .utf8) ?? "")
+    }
+
+    private func callEdgeFunctionBody(
+        action: String,
+        selectedModelID: String?,
+        outputText: String,
+        currentSection: CurrentSection?,
+        priorCanon: PriorCanon,
+        projectID: String?
+    ) async throws -> CoherenceCheckResponseBody {
         let client = try requireClient()
         guard let token = authService.currentAccessToken else {
             throw CoherenceCheckError.notAuthenticated
@@ -478,25 +560,18 @@ struct CoherenceCheckService {
         urlRequest.httpMethod = "POST"
         urlRequest.timeoutInterval = 30
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
         let body = CoherenceCheckRequestBody(
+            action: action,
+            selected_model_id: selectedModelID,
             output_text: outputText,
             current_section: currentSection,
             prior_canon: priorCanon,
             project_id: projectID
         )
         urlRequest.httpBody = try JSONEncoder().encode(body)
-
         let (data, response) = try await performRequest(urlRequest)
         try checkStatus(response: response, data: data)
-        let decoded = try decode(CoherenceCheckResponseBody.self, from: data)
-        let warnings = decoded.warnings ?? []
-        // Return the raw response body so the caller can surface it in the UI
-        // for diagnostics. We deliberately do NOT log to console here — the
-        // TestFlight build can't reach a console, so the only way to see the
-        // response is to show it in the build itself.
-        let rawBody = String(data: data, encoding: .utf8) ?? ""
-        return (warnings, rawBody)
+        return try decode(CoherenceCheckResponseBody.self, from: data)
     }
 
     // MARK: - helpers (mirror RunOutlineService helpers)

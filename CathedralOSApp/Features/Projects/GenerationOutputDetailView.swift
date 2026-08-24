@@ -183,6 +183,12 @@ struct GenerationOutputDetailView: View {
     // diagnostic info is visible without an iOS console (which TestFlight
     // builds can't reach). Empty string when no check has run yet.
     @State private var coherenceCheckRawBody: String = ""
+    @State private var coherenceModels: [GenerationModelOption] = []
+    @State private var coherenceSelectedModelID: String?
+    @State private var coherenceEstimate: CoherenceCostEstimate?
+    @State private var coherencePreparing = false
+    @State private var showCoherenceConfirmation = false
+    private let coherenceModelService: any GenerationModelServiceProtocol = BackendGenerationModelService()
 
     /// Reverse-direction visibility context for this output's source.
     /// `.section` is the precise link (set via `output.outlineSectionID`); `.project`
@@ -344,6 +350,40 @@ struct GenerationOutputDetailView: View {
     /// RAG retrieval and posts it + the output text to the edge function.
     /// Errors are surfaced to the user (not silently swallowed).
     @MainActor
+    private func prepareCoherenceCheck() async {
+        coherencePreparing = true
+        coherenceCheckError = nil
+        defer { coherencePreparing = false }
+        guard let projectID = output.project?.id.uuidString else {
+            coherenceCheckError = "No project linked to this output."
+            return
+        }
+        do {
+            if coherenceModels.isEmpty {
+                coherenceModels = try await coherenceModelService.fetchEnabledModels()
+            }
+            if coherenceSelectedModelID == nil {
+                coherenceSelectedModelID = coherenceModels.first?.id
+            }
+            let estimate = try await CoherenceCheckService().estimate(
+                outputText: output.outputText,
+                projectID: projectID,
+                sectionID: output.outlineSectionID,
+                selectedModelID: coherenceSelectedModelID
+            )
+            coherenceEstimate = estimate
+            guard estimate.allowed else {
+                coherenceCheckError = "Not enough credits. Need \(estimate.estimatedCredits) but have \(estimate.availableCredits)."
+                return
+            }
+            showCoherenceConfirmation = true
+        } catch {
+            coherenceCheckError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+    }
+
+    @MainActor
     private func runCoherenceCheck() async {
         coherenceCheckLoading = true
         coherenceCheckError = nil
@@ -356,7 +396,8 @@ struct GenerationOutputDetailView: View {
             let result = try await CoherenceCheckService().check(
                 outputText: output.outputText,
                 projectID: projectID,
-                sectionID: output.outlineSectionID
+                sectionID: output.outlineSectionID,
+                selectedModelID: coherenceSelectedModelID
             )
             coherenceCheckResult = result.warnings
             coherenceCheckRawBody = result.rawResponseBody
@@ -423,27 +464,49 @@ struct GenerationOutputDetailView: View {
         }
     }
 
-    /// Coherence v2: button that triggers the user-initiated coherence check.
-    /// Renders inline near the LLMPromptDebugView so the user has a discoverable
-    /// way to opt in. Each tap is a fresh LLM call (and a fresh charge).
+    /// Coherence v2: model picker + button for the user-initiated check.
+    /// The estimate is fetched before confirmation; each confirmed tap is a
+    /// fresh LLM call and fresh charge.
     @ViewBuilder
-    private var coherenceCheckButton: some View {
-        Button {
-            Task { await runCoherenceCheck() }
-        } label: {
-            HStack(spacing: CathedralTheme.Spacing.xs) {
-                Image(systemName: "checklist")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("Check for inconsistencies")
-                    .font(CathedralTheme.Typography.label(12, weight: .semibold))
+    private var coherenceCheckControls: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            if !coherenceModels.isEmpty {
+                Picker("Model", selection: $coherenceSelectedModelID) {
+                    ForEach(coherenceModels) { model in
+                        Text(model.displayName).tag(Optional(model.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(CathedralTheme.Typography.caption())
+                .onChange(of: coherenceSelectedModelID) { _, _ in
+                    coherenceEstimate = nil
+                }
             }
-            .padding(.horizontal, CathedralTheme.Spacing.sm)
-            .padding(.vertical, CathedralTheme.Spacing.xs)
-            .background(CathedralTheme.Colors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+            Button {
+                Task { await prepareCoherenceCheck() }
+            } label: {
+                HStack(spacing: CathedralTheme.Spacing.xs) {
+                    Image(systemName: "checklist")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Check for inconsistencies")
+                        .font(CathedralTheme.Typography.label(12, weight: .semibold))
+                }
+                .padding(.horizontal, CathedralTheme.Spacing.sm)
+                .padding(.vertical, CathedralTheme.Spacing.xs)
+                .background(CathedralTheme.Colors.surface)
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+            }
+            .buttonStyle(.plain)
+            .disabled(coherenceCheckLoading || coherencePreparing)
+            if coherencePreparing {
+                ProgressView("Estimating cost…")
+                    .font(CathedralTheme.Typography.caption())
+            } else if let estimate = coherenceEstimate {
+                Text("Up to \(estimate.estimatedCredits) credits · \(estimate.availableCredits) remaining")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(estimate.allowed ? CathedralTheme.Colors.secondaryText : CathedralTheme.Colors.destructive)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(coherenceCheckLoading)
     }
 
     /// Diagnostic: surfaces the raw edge function response in the build itself
@@ -473,7 +536,7 @@ struct GenerationOutputDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
                 coherenceCheckCard
-                coherenceCheckButton
+                coherenceCheckControls
                 coherenceCheckDebugLabel
                 sourceContextHeader
                 metadataSection
@@ -506,6 +569,24 @@ struct GenerationOutputDetailView: View {
                 publishError = persisted
             }
             loadSourceContext()
+        }
+        .task {
+            if coherenceModels.isEmpty {
+                coherenceModels = (try? await coherenceModelService.fetchEnabledModels()) ?? []
+                coherenceSelectedModelID = coherenceModels.first?.id
+            }
+        }
+        .alert("Run coherence check?", isPresented: $showCoherenceConfirmation) {
+            Button("Run Check") {
+                Task { await runCoherenceCheck() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if let estimate = coherenceEstimate {
+                Text("\(estimate.modelDisplayName) may use up to \(estimate.estimatedCredits) credits. Your balance is \(estimate.availableCredits).")
+            } else {
+                Text("The check compares this output against the project's canon and charges actual usage.")
+            }
         }
         .alert(
             output.cloudGenerationOutputID.isEmpty ? "Delete this local output?" : "Delete this output everywhere?",

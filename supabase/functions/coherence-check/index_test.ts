@@ -71,6 +71,32 @@ Deno.test("validateRequest: accepts empty prior_canon (no prior sections)", () =
   assertEquals(result.ok, true);
 });
 
+Deno.test("validateRequest: accepts estimate action and selected model", () => {
+  const result = validateRequest({
+    action: "estimate",
+    selected_model_id: "model-1",
+    output_text: "hello",
+    prior_canon: { sections: [] },
+  });
+  assertEquals(result.ok, true);
+  if (result.ok) {
+    assertEquals(result.request.action, "estimate");
+    assertEquals(result.request.selected_model_id, "model-1");
+  }
+});
+
+Deno.test("validateRequest: rejects invalid action", () => {
+  const result = validateRequest({
+    action: "charge",
+    output_text: "hello",
+    prior_canon: { sections: [] },
+  });
+  assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.error, "action must be estimate or check");
+  }
+});
+
 Deno.test("validateRequest: accepts current_section as null", () => {
   const result = validateRequest({
     output_text: "hello",
