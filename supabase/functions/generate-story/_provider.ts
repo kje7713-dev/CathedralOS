@@ -192,11 +192,26 @@ export interface LLMResponse {
   toolCostUsd?: number;
 }
 
+/**
+ * Provider-specific knobs. Coherence-check sets `responseFormat` to enable
+ * Structured Outputs via the chat/completions endpoint. Generate-story leaves
+ * it unset and uses the Responses API path. `temperature` is forwarded to
+ * chat/completions when set; ignored by the Responses API (it controls its
+ * own sampling).
+ */
+export interface LLMProviderOptions {
+  /** OpenAI Structured Outputs json_schema payload. */
+  responseFormat?: unknown;
+  /** Sampling temperature (0-2). Only forwarded by the chat/completions path. */
+  temperature?: number;
+}
+
 export interface LLMProvider {
   complete(
     messages: LLMMessage[],
     maxTokens: number,
     providerModel?: string,
+    options?: LLMProviderOptions,
   ): Promise<LLMResponse>;
 }
 
@@ -223,8 +238,28 @@ export class OpenAIProvider implements LLMProvider {
     messages: LLMMessage[],
     maxTokens: number,
     providerModel?: string,
+    options?: LLMProviderOptions,
   ): Promise<LLMResponse> {
     const resolvedModel = providerModel ?? this.model;
+    // Route on options.responseFormat: if set, use chat/completions with
+    // Structured Outputs (coherence-check path). Otherwise use the Responses
+    // API (generate-story path; preserves prior behavior).
+    if (options?.responseFormat) {
+      return await this.callChatCompletions(
+        messages,
+        maxTokens,
+        resolvedModel,
+        options,
+      );
+    }
+    return await this.callResponses(messages, maxTokens, resolvedModel);
+  }
+
+  private async callResponses(
+    messages: LLMMessage[],
+    maxTokens: number,
+    resolvedModel: string,
+  ): Promise<LLMResponse> {
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(),
@@ -289,6 +324,94 @@ export class OpenAIProvider implements LLMProvider {
       inputTokens: json.usage?.input_tokens,
       cachedInputTokens: json.usage?.input_tokens_details?.cached_tokens,
       outputTokens: json.usage?.output_tokens,
+      totalTokens: json.usage?.total_tokens,
+      toolCostUsd: 0,
+    };
+  }
+
+  /**
+   * chat/completions path used by coherence-check. Returns content from
+   * `choices[0].message.content` and token counts from `usage`. Supports
+   * Structured Outputs via `response_format` when supplied.
+   */
+  private async callChatCompletions(
+    messages: LLMMessage[],
+    maxTokens: number,
+    resolvedModel: string,
+    options: LLMProviderOptions,
+  ): Promise<LLMResponse> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    // deno-lint-ignore no-explicit-any
+    const body: any = {
+      model: resolvedModel,
+      messages,
+      max_completion_tokens: maxTokens,
+    };
+    if (options.responseFormat) {
+      body.response_format = options.responseFormat;
+    }
+    if (typeof options.temperature === "number") {
+      body.temperature = options.temperature;
+    }
+
+    // deno-lint-ignore no-explicit-any
+    let resp: Response;
+    try {
+      resp = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new ProviderError(
+          `OpenAI chat/completions timed out after ${this.timeoutMs}ms (model=${resolvedModel})`,
+          "provider_timeout",
+          false,
+        );
+      }
+      throw new ProviderError(
+        `OpenAI chat/completions network error: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        "unknown",
+        true,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      const details = extractOpenAIErrorDetails(resp.status, text);
+      const code = classifyOpenAIStatus(resp.status, details.code);
+      throw new ProviderError(
+        formatOpenAIError(details),
+        code,
+        code === "provider_overloaded",
+      );
+    }
+
+    // deno-lint-ignore no-explicit-any
+    const json: any = await resp.json();
+    const choice = json.choices?.[0];
+    const content = typeof choice?.message?.content === "string"
+      ? choice.message.content
+      : "";
+    return {
+      content,
+      modelName: json.model ?? resolvedModel,
+      finishReason: choice?.finish_reason,
+      inputTokens: json.usage?.prompt_tokens,
+      cachedInputTokens: json.usage?.prompt_tokens_details?.cached_tokens,
+      outputTokens: json.usage?.completion_tokens,
       totalTokens: json.usage?.total_tokens,
       toolCostUsd: 0,
     };
