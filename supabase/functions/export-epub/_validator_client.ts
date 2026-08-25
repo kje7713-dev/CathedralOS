@@ -13,11 +13,14 @@
 //   - 200 with invalid EPUB: do NOT retry — repair layer handles this
 // =============================================================================
 
-const VALIDATOR_URL = Deno.env.get("EPUBCHECK_VALIDATOR_URL");
-const HMAC_SECRET = Deno.env.get("EPUBCHECK_VALIDATOR_HMAC_SECRET");
-
-if (!VALIDATOR_URL) console.error("EPUBCHECK_VALIDATOR_URL not set");
-if (!HMAC_SECRET) console.error("EPUBCHECK_VALIDATOR_HMAC_SECRET not set");
+// Read env vars at CALL time (not module-load time) so:
+// - Tests that set env after import still see them
+// - Cloud Run runtime env vars are picked up on every request
+function readConfig(): { url: string; secret: string } {
+  const url = Deno.env.get("EPUBCHECK_VALIDATOR_URL") ?? "";
+  const secret = Deno.env.get("EPUBCHECK_VALIDATOR_HMAC_SECRET") ?? "";
+  return { url, secret };
+}
 
 export interface ValidationDiagnostic {
   severity: "fatal" | "error" | "warning" | "info";
@@ -66,6 +69,7 @@ export async function validateEpub(
 ): Promise<ValidationResult> {
   const { maxRetries = 2, timeoutMs = 65_000 } = options;
 
+  const { url: VALIDATOR_URL, secret: HMAC_SECRET } = readConfig();
   if (!VALIDATOR_URL || !HMAC_SECRET) {
     throw new ValidatorFailureError(
       "Validator not configured (missing URL or HMAC secret)",
@@ -115,25 +119,35 @@ export async function validateEpub(
       }
       if (response.status >= 500) {
         throw new ValidatorFailureError(
-          `Validator server error (${response.status})`,
+          `Validator error (${response.status}, server_error)`,
           "server_error",
         );
       }
       if (!response.ok) {
         throw new ValidatorFailureError(
-          `Validator returned ${response.status}`,
+          `Validator error (${response.status}, server_error)`,
           "server_error",
         );
       }
 
-      const result = (await response.json()) as ValidationResult;
+      let result: ValidationResult;
+      try {
+        result = (await response.json()) as ValidationResult;
+      } catch (parseErr) {
+        throw new ValidatorFailureError(
+          `Malformed validator response: invalid JSON (${
+            (parseErr as Error).message
+          })`,
+          "malformed_response",
+        );
+      }
 
       if (
         typeof result?.valid !== "boolean" ||
         !Array.isArray(result?.diagnostics)
       ) {
         throw new ValidatorFailureError(
-          "Malformed validator response",
+          "Malformed validator response: missing required fields",
           "malformed_response",
         );
       }
