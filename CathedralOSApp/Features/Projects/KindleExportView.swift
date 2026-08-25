@@ -127,6 +127,18 @@ struct KindleExportView: View {
         )
     }
 
+    private var cancelButton: some View {
+        Button("Cancel") { dismiss() }
+            .foregroundStyle(CathedralTheme.Colors.accent)
+            .disabled(jobState.isInFlight)
+    }
+
+    private var exportToolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            cancelButton
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -139,11 +151,7 @@ struct KindleExportView: View {
             .navigationTitle("Export to Kindle")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                        .disabled(jobState.isInFlight)
-                }
+                exportToolbar
             }
             .disabled(jobState.isInFlight)
             .alert(
