@@ -124,5 +124,5 @@ export async function walkSections(
     ch.sections.push(...children);
   }
 
-  return { id: project.id, title: project.title ?? "", chapters };
+  return { id: outline.id, title: outline.name ?? "", chapters };
 }
