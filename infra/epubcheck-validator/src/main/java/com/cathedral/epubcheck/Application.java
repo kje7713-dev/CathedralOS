@@ -104,7 +104,7 @@ public class Application {
                 ValidationResult result = service.validate(signedUrl, validationId, tempDir);
                 ctx.json(MAPPER.writeValueAsString(result));
             } catch (EpubcheckService.SizeException e) {
-                ctx.status(HttpStatus.PAYLOAD_TOO_LARGE).json(Map.of("error", "epub_too_large", "message", e.getMessage()));
+                ctx.status(HttpStatus.CONTENT_TOO_LARGE).json(Map.of("error", "epub_too_large", "message", e.getMessage()));
             } catch (EpubcheckService.DownloadException e) {
                 ctx.status(HttpStatus.BAD_GATEWAY).json(Map.of("error", "download_failed", "message", e.getMessage()));
             } catch (EpubcheckService.TimeoutException e) {
