@@ -506,37 +506,104 @@ Deno.test("validateEpub: HMAC signature header includes t=<timestamp> and v1=<he
 // Mock client that records every .from(...) table + .select + .eq/.update/.insert payloads
 // per call, and returns canned responses per table+filter.
 class MockSupabase {
-  calls: Array<{ table: string; op: string; payload?: unknown }> = [];
-  responses: Record<string, unknown[]> = {};
+  calls: Array<{ table: string; op: string; payload?: any }> = [];
+  responses: Record<string, any[]> = {};
 
-  setResponse(table: string, rows: unknown[]) {
+  setResponse(table: string, rows: any[]) {
     this.responses[table] = rows;
+  }
+
+  // Helper to build a terminal { data, error } result for a given table.
+  private terminal(table: string) {
+    const rows = this.responses[table] ?? [];
+    return {
+      maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
+      single: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
+    };
   }
 
   from(table: string) {
     const calls = this.calls;
+    const self = this;
     return {
-      select: (_cols: string) => ({
-        eq: (_col: string, _val: string) => ({
-          eq: (_col2: string, _val2: string) => {
-            calls.push({ table, op: "select", payload: { eq: [_col, _val, _col2, _val2] } });
-            const rows = this.responses[table] ?? [];
-            return { maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }), single: () => Promise.resolve({ data: rows[0] ?? null, error: null }) };
+      select(_cols: string) {
+        return {
+          // 2-arg eq chain
+          eq(_col: string, _val: any) {
+            calls.push({ table, op: "select-eq1", payload: { col: _col, val: _val } });
+            return {
+              eq(_col2: string, _val2: any) {
+                calls.push({ table, op: "select-eq2", payload: { col: _col, val: _val, col2: _col2, val2: _val2 } });
+                return {
+                  order(_col: string, _opts?: any) {
+                    calls.push({ table, op: "select-order", payload: { col: _col, opts: _opts } });
+                    return self.terminal(table);
+                  },
+                  maybeSingle: self.terminal(table).maybeSingle,
+                  single: self.terminal(table).single,
+                  eq(_col3: string, _val3: any) {
+                    calls.push({ table, op: "select-eq3", payload: { col: _col, val: _val, col2: _col2, val2: _val2, col3: _col3, val3: _val3 } });
+                    return {
+                      order(_col: string, _opts?: any) {
+                        calls.push({ table, op: "select-order", payload: { col: _col, opts: _opts } });
+                        return self.terminal(table);
+                      },
+                      maybeSingle: self.terminal(table).maybeSingle,
+                      single: self.terminal(table).single,
+                    };
+                  },
+                };
+              },
+              // single-eq1 (no second eq)
+              order(_col: string, _opts?: any) {
+                calls.push({ table, op: "select-order", payload: { col: _col, opts: _opts } });
+                return self.terminal(table);
+              },
+              maybeSingle: self.terminal(table).maybeSingle,
+              single: self.terminal(table).single,
+            };
           },
-        }),
-      }),
-      insert: (payload: unknown) => {
-        calls.push({ table, op: "insert", payload });
-        return { select: () => ({ single: () => Promise.resolve({ data: { id: "job-uuid" }, error: null }) }) };
-      },
-      update: (payload: unknown) => {
-        const updateChain = {
-          eq: (col: string, val: string) => {
-            calls.push({ table, op: "update", payload: { update: payload, eq: { col, val } } });
-            return { eq: (_c: string, _v: string) => ({ neq: () => Promise.resolve({ data: null, error: null }) }) };
+          // select().maybeSingle() / single() (no filter)
+          maybeSingle: self.terminal(table).maybeSingle,
+          single: self.terminal(table).single,
+          order(_col: string, _opts?: any) {
+            calls.push({ table, op: "select-order", payload: { col: _col, opts: _opts } });
+            return self.terminal(table);
           },
         };
-        return updateChain;
+      },
+      insert(payload: any) {
+        calls.push({ table, op: "insert", payload });
+        return {
+          select() {
+            return {
+              single: () => Promise.resolve({ data: { id: "job-uuid" }, error: null }),
+            };
+          },
+        };
+      },
+      update(payload: any) {
+        const updateCalls = calls;
+        return {
+          eq(col: string, val: any) {
+            updateCalls.push({ table, op: "update-eq1", payload: { update: payload, col, val } });
+            return {
+              eq(_col: string, _val: any) {
+                updateCalls.push({ table, op: "update-eq2", payload: { update: payload, col, val, col2: _col, val2: _val } });
+                return {
+                  neq() {
+                    updateCalls.push({ table, op: "update-neq", payload: { update: payload } });
+                    return Promise.resolve({ data: null, error: null });
+                  },
+                };
+              },
+              neq() {
+                updateCalls.push({ table, op: "update-neq", payload: { update: payload } });
+                return Promise.resolve({ data: null, error: null });
+              },
+            };
+          },
+        };
       },
     };
   }
@@ -589,7 +656,8 @@ Deno.test("orchestrator: createJob receives snapshotProjectId, not localProjectI
   if (payload.project_id !== snapshotProjectId) {
     throw new Error(`expected snapshotProjectId=${snapshotProjectId}, got ${payload.project_id}`);
   }
-  if (payload.project_id === localProjectId) {
+  // String() wrap avoids TS2367 literal-type narrowing on payload.project_id
+  if (String(payload.project_id) === String(localProjectId)) {
     throw new Error("FK violation: localProjectId leaked into export_jobs.project_id");
   }
 });
