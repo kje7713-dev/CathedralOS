@@ -19,6 +19,10 @@
 //   - Typography: serif, ~1.3em line-height, justified
 // =============================================================================
 
+// jszip doesn't declare a default export in esm.sh's .d.ts, but the runtime
+// CommonJS interop provides one. @ts-expect-error suppresses the type-only error.
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-expect-error — jszip default export works at runtime via CommonJS interop
 import JSZip from "https://esm.sh/jszip@3.10.1";
 import type { ExportMetadata } from "./_metadata.ts";
 import type { ProjectOutline } from "./_section_walker.ts";
