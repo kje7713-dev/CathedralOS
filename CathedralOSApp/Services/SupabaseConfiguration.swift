@@ -65,6 +65,15 @@ struct ValidatedSupabaseConfiguration {
             .appendingPathComponent("v1")
             .appendingPathComponent(path)
     }
+
+    /// Builds the full URL for a Supabase Storage object (upload or download).
+    /// Path is `/storage/v1/object/{bucket}/{path}`.
+    func storageObjectURL(bucket: String, path: String) -> URL {
+        projectURL
+            .appendingPathComponent("storage/v1/object")
+            .appendingPathComponent(bucket)
+            .appendingPathComponent(path)
+    }
 }
 
 // MARK: - SupabaseConfiguration

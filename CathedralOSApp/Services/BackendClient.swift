@@ -40,6 +40,15 @@ protocol BackendClient {
 
     /// Builds a full URL for the given Supabase Edge Function path.
     func edgeFunctionURL(path: String) -> URL
+
+    /// Builds a full URL for a Supabase Storage object (upload or download).
+    func storageObjectURL(bucket: String, path: String) -> URL
+
+    /// Returns the anon (publishable) key for Supabase API auth on the client.
+    var anonKey: String { get }
+
+    /// Returns a URLRequest with the Supabase auth headers applied.
+    func authorizedRequest(for url: URL, userAccessToken: String?) -> URLRequest
 }
 
 // MARK: - BackendClient default implementation
@@ -47,6 +56,23 @@ protocol BackendClient {
 extension BackendClient {
     func edgeFunctionURL(path: String) -> URL {
         configuration.edgeFunctionURL(path: path)
+    }
+
+    func storageObjectURL(bucket: String, path: String) -> URL {
+        configuration.storageObjectURL(bucket: bucket, path: path)
+    }
+
+    var anonKey: String { configuration.anonKey }
+
+    func authorizedRequest(for url: URL, userAccessToken: String?) -> URLRequest {
+        var request = URLRequest(url: url)
+        let bearerToken = userAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let bearerToken, !bearerToken.isEmpty {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return request
     }
 }
 
