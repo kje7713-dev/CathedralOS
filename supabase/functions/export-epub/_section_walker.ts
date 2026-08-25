@@ -35,29 +35,35 @@ export interface ProjectOutline {
 
 export async function walkSections(
   client: SupabaseClient,
-  projectId: string,
+  userId: string,
+  localProjectId: string,
+  _snapshotProjectId: string,
 ): Promise<ProjectOutline> {
-  // 1. Fetch project info
-  const { data: project, error: projectError } = await client
-    .from("projects")
-    .select("id, title")
-    .eq("id", projectId)
-    .single();
-  if (projectError || !project) {
-    throw new Error(`project not found: ${projectId}`);
+  // 1. Resolve outline via (user_id, local_project_id). The stale schema
+  //    referenced a non-existent `projects` table + `outline_sections.project_id`;
+  //    current Cathedral schema has `outlines` keyed on (user_id, local_project_id)
+  //    and `outline_sections` keyed on `outline_id`.
+  const { data: outline, error: outlineError } = await client
+    .from("outlines")
+    .select("id, name")
+    .eq("user_id", userId)
+    .eq("local_project_id", localProjectId)
+    .maybeSingle();
+  if (outlineError || !outline) {
+    throw new Error(`outline not found for project ${localProjectId}`);
   }
 
-  // 2. Fetch all sections for this project, ordered by position
+  // 2. Fetch all sections for this outline, ordered by position
   const { data: sections, error: sectionsError } = await client
     .from("outline_sections")
-    .select("id, project_id, container, title, pov, position, parent_id")
-    .eq("project_id", projectId)
+    .select("id, outline_id, container, title, pov, position, parent_id")
+    .eq("outline_id", outline.id)
     .order("position", { ascending: true });
   if (sectionsError) {
     throw new Error(`fetching sections failed: ${sectionsError.message}`);
   }
   if (!sections || sections.length === 0) {
-    return { id: project.id, title: project.title ?? "", chapters: [] };
+    return { id: outline.id, title: outline.name ?? "", chapters: [] };
   }
 
   // 3. Fetch latest generation_output per section
@@ -118,5 +124,5 @@ export async function walkSections(
     ch.sections.push(...children);
   }
 
-  return { id: project.id, title: project.title ?? "", chapters };
+  return { id: outline.id, title: outline.name ?? "", chapters };
 }
