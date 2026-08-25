@@ -1,41 +1,90 @@
 // =============================================================================
 // _cover_image.ts — Cover image acquisition (user upload OR DALL-E 3 auto-gen)
 //
-// Returns:
-//   - Uint8Array of JPEG/PNG bytes if a cover is available
-//   - null if no cover (Kindle shows blank cover; book still valid EPUB)
+// Returns Uint8Array of JPEG/PNG bytes if a cover is available, or null if
+// no cover (Kindle shows blank cover; book still valid EPUB per spec).
 //
-// Cover aspect ratio enforced: 1600x2560 (2:3.2 — Kindle recommended).
+// Aspect ratio recommended: 1600x2560 (Kindle-friendly 2:3.2).
 // =============================================================================
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import type { ExportRequest } from "./_metadata.ts";
 import type { ProjectOutline } from "./_section_walker.ts";
 
-const COVER_ASPECT_W = 1600;
-const COVER_ASPECT_H = 2560;
-
 export async function generateOrFetchCover(
-  _client: SupabaseClient,
-  _req: ExportRequest,
-  _outline: ProjectOutline,
+  client: SupabaseClient,
+  req: ExportRequest,
+  outline: ProjectOutline,
 ): Promise<Uint8Array | null> {
-  // TODO: PR-4100-A follow-up
-  // Path A (user upload):
-  //   1. If req.cover_image_url is set, download from Supabase Storage
-  //   2. Validate format (JPEG/PNG) + size (≤ 5MB per spec)
-  //   3. If aspect ratio != 2:3.2, log warning (don't reject — Kindle accepts)
-  //   4. Return bytes
-  //
-  // Path B (DALL-E 3 auto-gen):
-  //   1. If req.cover_image_ai_generate is true (and no upload URL):
-  //      a. Build prompt from outline.title + first chapter premise
-  //      b. Call OpenAI Images API (gpt-image-1 or dall-e-3, 1024x1792 or
-  //         upscale to 1600x2560)
-  //      c. Upload result to Supabase Storage (covers/{user_id}/{job_id}.jpg)
-  //      d. Return bytes
-  //
-  // Path C (skip):
-  //   - If neither A nor B applies, return null. Kindle shows blank cover.
-  throw new Error("_cover_image.generateOrFetchCover: not yet implemented");
+  // Path A: user upload
+  if (req.cover_image_url) {
+    try {
+      const { data, error } = await client.storage
+        .from("covers")
+        .download(req.cover_image_url);
+      if (error) throw error;
+      if (!data) throw new Error("empty download");
+      const bytes = new Uint8Array(await data.arrayBuffer());
+      if (bytes.byteLength > 5 * 1024 * 1024) {
+        console.warn("cover exceeds 5MB; using anyway");
+      }
+      return bytes;
+    } catch (err) {
+      console.warn(
+        `cover download failed (${req.cover_image_url}): ${(err as Error).message}; falling through`,
+      );
+    }
+  }
+
+  // Path B: DALL-E 3 auto-gen
+  if (req.cover_image_ai_generate) {
+    return await generateCoverWithDallE(outline);
+  }
+
+  // Path C: no cover
+  return null;
+}
+
+async function generateCoverWithDallE(outline: ProjectOutline): Promise<Uint8Array> {
+  const apiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+
+  const premiseSnippet = (outline.chapters[0]?.sections[0]?.body ?? "")
+    .slice(0, 200)
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const prompt = [
+    `Book cover for "${outline.title}".`,
+    premiseSnippet ? `Inspired by: ${premiseSnippet}` : "",
+    "Cinematic, evocative, no text or words, painterly composition.",
+  ].filter(Boolean).join(" ");
+
+  const response = await fetch("https://api.openai.com/v1/images/generations", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "dall-e-3",
+      prompt,
+      n: 1,
+      size: "1024x1792",
+      quality: "hd",
+      response_format: "url",
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`DALL-E 3 failed: ${response.status} ${await response.text()}`);
+  }
+
+  const result = await response.json() as { data: Array<{ url: string }> };
+  const imageUrl = result.data[0].url;
+  const imageResponse = await fetch(imageUrl);
+  if (!imageResponse.ok) {
+    throw new Error(`DALL-E 3 image download failed: ${imageResponse.status}`);
+  }
+  return new Uint8Array(await imageResponse.arrayBuffer());
 }

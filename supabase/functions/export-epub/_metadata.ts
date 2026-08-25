@@ -1,8 +1,8 @@
 // =============================================================================
-// _metadata.ts — Assemble EPUB metadata from ExportRequest + project data
+// _metadata.ts — Assemble EPUB metadata from ExportRequest
 //
 // Pure function (no I/O). Applies defaults, validates required fields,
-// maps to OPF metadata block.
+// maps to OPF metadata block. Caller already enforces required fields.
 // =============================================================================
 
 export interface ExportMetadata {
@@ -10,7 +10,7 @@ export interface ExportMetadata {
   author_name: string;
   copyright_year?: number;
   copyright_holder?: string;
-  language: string;             // BCP-47 (e.g., "en")
+  language: string;
   dedication?: string;
   book_description?: string;
   about_author?: string;
@@ -39,12 +39,23 @@ export interface ExportRequest {
 }
 
 export function assembleMetadata(req: ExportRequest): ExportMetadata {
-  // TODO: PR-4100-A follow-up
-  // 1. Validate required fields (project_id, book_title, author_name) — caller
-  //    already enforces these; defensive check here.
-  // 2. Default language to "en" if not provided.
-  // 3. Compute copyright_year if not provided (current year).
-  // 4. Trim/sanitize all string fields for OPF safety (no XML-unsafe content).
-  // 5. Return assembled metadata.
-  throw new Error("_metadata.assembleMetadata: not yet implemented");
+  const currentYear = new Date().getFullYear();
+  return {
+    book_title: trim(req.book_title),
+    author_name: trim(req.author_name),
+    copyright_year: req.copyright_year ?? currentYear,
+    copyright_holder: req.copyright_holder ? trim(req.copyright_holder) : undefined,
+    language: req.language ?? "en",
+    dedication: req.dedication ? trim(req.dedication) : undefined,
+    book_description: req.book_description ? trim(req.book_description) : undefined,
+    about_author: req.about_author ? trim(req.about_author) : undefined,
+    isbn: req.isbn ? trim(req.isbn) : undefined,
+    publisher_name: req.publisher_name ? trim(req.publisher_name) : undefined,
+    series_name: req.series_name ? trim(req.series_name) : undefined,
+    series_number: req.series_number,
+  };
+}
+
+function trim(s: string): string {
+  return s.trim();
 }

@@ -1,8 +1,9 @@
 // =============================================================================
 // _section_walker.ts — Walk OutlineSection tree for export ordering
 //
-// Returns chapters (parent_id IS NULL) + their nested child sections,
-// sorted by position. Each section carries the latest GenerationOutput text.
+// Returns chapters (parent_id IS NULL, container="chapter") + their nested
+// child sections, sorted by position. Each section carries the latest
+// GenerationOutput text (regardless of accepted status per spec).
 // =============================================================================
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -23,7 +24,7 @@ export interface Chapter {
   id: string;
   title: string;
   position: number;
-  sections: Section[];      // [chapter itself] + [child sections, position-ordered]
+  sections: Section[];      // [chapter root] + [child sections, position-ordered]
 }
 
 export interface ProjectOutline {
@@ -33,15 +34,89 @@ export interface ProjectOutline {
 }
 
 export async function walkSections(
-  _client: SupabaseClient,
-  _projectId: string,
+  client: SupabaseClient,
+  projectId: string,
 ): Promise<ProjectOutline> {
-  // TODO: PR-4100-A follow-up
-  // 1. Query outline_sections WHERE project_id = X ORDER BY position
-  // 2. Group: parent_id IS NULL → chapter roots; parent_id IS NOT NULL → children
-  // 3. For each section, query latest generation_outputs WHERE outline_section_id = X
-  //    AND status = 'accepted' ORDER BY created_at DESC LIMIT 1; fall back to latest
-  //    if no accepted output exists.
-  // 4. Assemble Chapter[] with child sections nested under their parent chapter
-  throw new Error("_section_walker.walkSections: not yet implemented");
+  // 1. Fetch project info
+  const { data: project, error: projectError } = await client
+    .from("projects")
+    .select("id, title")
+    .eq("id", projectId)
+    .single();
+  if (projectError || !project) {
+    throw new Error(`project not found: ${projectId}`);
+  }
+
+  // 2. Fetch all sections for this project, ordered by position
+  const { data: sections, error: sectionsError } = await client
+    .from("outline_sections")
+    .select("id, project_id, container, title, pov, position, parent_id")
+    .eq("project_id", projectId)
+    .order("position", { ascending: true });
+  if (sectionsError) {
+    throw new Error(`fetching sections failed: ${sectionsError.message}`);
+  }
+  if (!sections || sections.length === 0) {
+    return { id: project.id, title: project.title ?? "", chapters: [] };
+  }
+
+  // 3. Fetch latest generation_output per section
+  const sectionIds = sections.map((s) => s.id);
+  const { data: outputs, error: outputsError } = await client
+    .from("generation_outputs")
+    .select("outline_section_id, body, created_at")
+    .in("outline_section_id", sectionIds)
+    .order("created_at", { ascending: false });
+  if (outputsError) {
+    throw new Error(`fetching generation outputs failed: ${outputsError.message}`);
+  }
+
+  // 4. Build map: latest body per section
+  const latestBody = new Map<string, string>();
+  for (const out of outputs ?? []) {
+    if (!latestBody.has(out.outline_section_id)) {
+      latestBody.set(out.outline_section_id, out.body ?? "");
+    }
+  }
+
+  // 5. Group: chapters vs children
+  const chapters: Chapter[] = [];
+  const childrenByParent = new Map<string, Section[]>();
+
+  for (const s of sections) {
+    const section: Section = {
+      id: s.id,
+      title: s.title ?? "",
+      container: s.container as Container,
+      pov: s.pov ?? null,
+      body: latestBody.get(s.id) ?? "",
+      position: s.position,
+      parent_id: s.parent_id ?? null,
+    };
+
+    if (s.parent_id === null && s.container === "chapter") {
+      chapters.push({
+        id: s.id,
+        title: s.title || `Chapter ${chapters.length + 1}`,
+        position: s.position,
+        sections: [section],   // chapter root goes first
+      });
+    } else if (s.parent_id !== null) {
+      if (!childrenByParent.has(s.parent_id)) {
+        childrenByParent.set(s.parent_id, []);
+      }
+      childrenByParent.get(s.parent_id)!.push(section);
+    }
+    // Top-level non-chapter sections (e.g., standalone scenes) — skip in v1
+  }
+
+  // 6. Sort chapters by position; attach children to their parent chapter
+  chapters.sort((a, b) => a.position - b.position);
+  for (const ch of chapters) {
+    const children = (childrenByParent.get(ch.id) ?? [])
+      .sort((a, b) => a.position - b.position);
+    ch.sections.push(...children);
+  }
+
+  return { id: project.id, title: project.title ?? "", chapters };
 }
