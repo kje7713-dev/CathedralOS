@@ -9,8 +9,6 @@ struct ChapterReaderView: View {
     let project: StoryProject
 
     @Environment(\.modelContext) private var modelContext
-    @State private var showKindleExport = false
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
@@ -24,25 +22,6 @@ struct ChapterReaderView: View {
         .background(CathedralTheme.Colors.background)
         .navigationTitle(chapter.title)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    showKindleExport = true
-                } label: {
-                    Image(systemName: "book.closed")
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                }
-                .accessibilityLabel("Export to Kindle")
-            }
-        }
-        .sheet(isPresented: $showKindleExport) {
-            // Per the locked Kindle export spec, the pre-export screen is accessed
-            // from the chapter reader. A `.sheet` presentation matches the existing
-            // modal pattern used throughout this app (see ProjectDetailView, etc.)
-            // rather than introducing a new navigation pattern.
-            KindleExportView(project: project)
-                .tint(CathedralTheme.Colors.accent)
-        }
     }
 
     // MARK: - Sections

@@ -2,7 +2,7 @@ import XCTest
 @testable import CathedralOSApp
 
 // MARK: - KindleExportServiceTests
-// Focused tests for the client-side wiring of the export-pub edge function.
+// Focused tests for the client-side wiring of the export-epub edge function.
 // No live Supabase network calls are made — URLProtocol-based mocking intercepts all requests.
 // Covers: kickoff URL, status URL+query, decoding (kickoff + status with diagnostics ARRAY),
 // 401 auth mapping, and transient poll failure retry behavior.
@@ -97,7 +97,7 @@ final class KindleExportServiceTests: XCTestCase {
         "author_name": "Test Author"
     ]
 
-    // MARK: - 1. kickoff URL is export-pub
+    // MARK: - 1. kickoff URL is export-epub
 
     func testKickoffPostsToExportPubEndpoint() async throws {
         MockURLProtocol.queued = [(202, Self.sampleKickoffResponse, 0)]
@@ -110,7 +110,7 @@ final class KindleExportServiceTests: XCTestCase {
         )
         _ = try await service.kickoff(request: req, userAccessToken: "test-jwt")
         let captured = MockURLProtocol.captured.last!
-        XCTAssertEqual(captured.url?.path, "/functions/v1/export-pub")
+        XCTAssertEqual(captured.url?.path, "/functions/v1/export-epub")
         XCTAssertEqual(captured.httpMethod, "POST")
     }
 
@@ -120,7 +120,7 @@ final class KindleExportServiceTests: XCTestCase {
         MockURLProtocol.queued = [(200, Self.sampleStatusRunning, 0)]
         _ = try await service.status(jobId: "job-abc-123", userAccessToken: "test-jwt")
         let captured = MockURLProtocol.captured.last!
-        XCTAssertEqual(captured.url?.path, "/functions/v1/export-pub/status")
+        XCTAssertEqual(captured.url?.path, "/functions/v1/export-epub/status")
         let comps = URLComponents(url: captured.url!, resolvingAgainstBaseURL: false)
         let jobId = comps?.queryItems?.first(where: { $0.name == "job_id" })?.value
         XCTAssertEqual(jobId, "job-abc-123")
