@@ -714,7 +714,7 @@ Deno.test("orchestrator: current-export demotion uses snapshotProjectId", async 
   const snapshotProjectId = "server-uuid-abcd";
   await mock.from("export_metadata").update({ is_current: false })
     .eq("project_id", snapshotProjectId).eq("is_current", true);
-  const call = mock.calls.find(c => c.table === "export_metadata" && c.op === "update");
+  const call = mock.calls.find(c => c.table === "export_metadata" && c.op === "update-eq1");
   if (!call) throw new Error("no export_metadata update recorded");
 });
 
