@@ -22,7 +22,7 @@ enum CoverChoice: String, CaseIterable, Identifiable {
 
 // MARK: - JobState
 
-enum JobState: Equatable {
+enum JobState {
     case idle
     case kickingOff
     case polling(jobId: String, status: KindleExportStatus, attempt: Int)
@@ -63,18 +63,6 @@ enum JobState: Equatable {
         return nil
     }
 
-    static func == (lhs: JobState, rhs: JobState) -> Bool {
-        switch (lhs, rhs) {
-        case (.idle, .idle): return true
-        case (.kickingOff, .kickingOff): return true
-        case (.polling(let lID, let lS, let lA), .polling(let rID, let rS, let rA)):
-            return lID == rID && lS == rS && lA == rA
-        case (.success(let lM, let lV), .success(let rM, let rV)):
-            return lM == rM && lV == rV
-        case (.failure, .failure): return true
-        default: return false
-        }
-    }
 }
 
 // MARK: - KindleExportView
@@ -208,7 +196,7 @@ struct KindleExportView: View {
 
             switch coverChoice {
             case .skip:
-                Text("KindleBook will will show a blank cover.")
+                Text("Kindle will show a blank cover.")
                     .font(CathedralTheme.Typography.body(12))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             case .upload:
@@ -226,7 +214,7 @@ struct KindleExportView: View {
                     HStack { ProgressView(); Text("Uploading…") }
                 }
             case .aiGenerate:
-                Text("DALL-E 3 will generate a cover from your project premise.")
+                Text("Backend will generate a cover from your project premise.")
                     .font(CathedralTheme.Typography.body(12))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }

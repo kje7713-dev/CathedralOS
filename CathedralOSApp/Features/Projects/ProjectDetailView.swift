@@ -73,7 +73,6 @@ struct ProjectDetailView: View {
     @State private var packToEdit: PromptPack?
     @State private var generationToView: GenerationOutput?
     @State private var outputFilter: OutputListFilter = .all
-    @State private var showKindleExport = false
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
@@ -190,15 +189,6 @@ struct ProjectDetailView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
-                    showKindleExport = true
-                } label: {
-                    Image(systemName: "book.closed")
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                }
-                .accessibilityLabel("Export to Kindle")
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
                     advancedMode.toggle()
                 } label: {
                     Image(systemName: advancedMode ? "rectangle.grid.2x2.fill" : "rectangle.grid.2x2")
@@ -249,10 +239,6 @@ struct ProjectDetailView: View {
         }
         .sheet(isPresented: $showAddPromptPack) {
             PromptPackBuilderView(project: project, pack: nil)
-        }
-        .sheet(isPresented: $showKindleExport) {
-            KindleExportView(project: project)
-                .tint(CathedralTheme.Colors.accent)
         }
         .sheet(item: $packToEdit) { p in
             PromptPackBuilderView(project: project, pack: p)
