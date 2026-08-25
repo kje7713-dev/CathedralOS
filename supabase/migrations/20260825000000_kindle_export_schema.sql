@@ -4,6 +4,11 @@
 -- Adds export_metadata and export_jobs tables for the Kindle export pipeline.
 -- Per docs/pr-plans/2026-08-25-kindle-export-pr5-pr4100a-impl.md (locked 2026-08-25 09:06 EDT).
 --
+-- NOTE: foreign keys reference public.project_snapshots (NOT public.projects —
+-- CathedralOS uses project_snapshots as the canonical project table; there is
+-- no public.projects table). Discovered when first deploy attempt failed with
+-- SQLSTATE 42P01. Orchestrator also updated to query project_snapshots.
+--
 -- - export_metadata: per-(project, version) EPUB metadata + storage path
 -- - export_jobs: async job tracking with validation state machine
 --
@@ -14,7 +19,7 @@
 
 create table if not exists public.export_metadata (
   id                       uuid        primary key default gen_random_uuid(),
-  project_id               uuid        not null references public.projects(id) on delete cascade,
+  project_id               uuid        not null references public.project_snapshots(id) on delete cascade,
   version_id               uuid        not null default gen_random_uuid(),
 
   -- User-supplied metadata

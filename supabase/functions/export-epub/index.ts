@@ -95,7 +95,7 @@ async function handleExport(req: Request, userId: string): Promise<Response> {
   }
 
   const { data: project, error: projectError } = await supabaseAdmin
-    .from("projects")
+    .from("project_snapshots")
     .select("id, user_id")
     .eq("id", body.project_id)
     .single();
