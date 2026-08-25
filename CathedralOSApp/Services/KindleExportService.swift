@@ -37,8 +37,8 @@ enum KindleExportError: Error, LocalizedError {
 
 // MARK: - Request/Response Types
 
-/// Request body for POST /functions/v1/export-pub.
-/// Field order matches the backend `ExportRequest` interface in supabase/functions/export-pub/index.ts.
+/// Request body for POST /functions/v1/export-epub.
+/// Field order matches the backend `ExportRequest` interface in supabase/functions/export-epub/index.ts.
 struct KindleExportRequest: Codable {
     let project_id: String
     let book_title: String
@@ -57,14 +57,14 @@ struct KindleExportRequest: Codable {
     let cover_image_ai_generate: Bool?
 }
 
-/// Response from POST /functions/v1/export-pub (HTTP 202).
+/// Response from POST /functions/v1/export-epub (HTTP 202).
 /// Server kicks off the export and returns a job_id for polling.
 struct KindleExportKickoffResponse: Codable {
     let job_id: String
     let status: String
 }
 
-/// Response from GET /functions/v1/export-pub/status?job_id=X.
+/// Response from GET /functions/v1/export-epub/status?job_id=X.
 struct KindleExportStatusResponse: Codable {
     let job_id: String
     let status: String
@@ -130,11 +130,11 @@ struct KindleExportDiagnostic: Codable {
 
 // MARK: - KindleExportService
 
-/// Client for the `export-pub` Supabase Edge Function (PR-4100-A, deployed 2026-08-25).
+/// Client for the `export-epub` Supabase Edge Function (PR-4100-A, deployed 2026-08-25).
 ///
 /// Endpoints:
-/// - POST /functions/v1/export-pub → { job_id, status: "pending" } (HTTP 202)
-/// - GET /functions/v1/export-pub/status?job_id=X → { status, error_count, ... }
+/// - POST /functions/v1/export-epub → { job_id, status: "pending" } (HTTP 202)
+/// - GET /functions/v1/export-epub/status?job_id=X → { status, error_count, ... }
 ///
 /// State machine: pending → writing → validating → (repairing →) validating → validated → uploaded.
 /// Failures: failed_validation (EPUB invalid after bounded repair), failed_validator (network/timeout).
@@ -156,7 +156,7 @@ final class KindleExportService {
         request: KindleExportRequest,
         userAccessToken: String,
     ) async throws -> KindleExportKickoffResponse {
-        let url = backend.edgeFunctionURL(path: "export-pub")
+        let url = backend.edgeFunctionURL(path: "export-epub")
         var urlRequest = backend.authorizedRequest(for: url, userAccessToken: userAccessToken)
         urlRequest.httpMethod = "POST"
 
@@ -201,7 +201,7 @@ final class KindleExportService {
         userAccessToken: String,
     ) async throws -> KindleExportStatusResponse {
         guard var components = URLComponents(
-            url: backend.edgeFunctionURL(path: "export-pub/status"),
+            url: backend.edgeFunctionURL(path: "export-epub/status"),
             resolvingAgainstBaseURL: false
         ) else {
             throw KindleExportError.invalidResponse("Could not build status URL")

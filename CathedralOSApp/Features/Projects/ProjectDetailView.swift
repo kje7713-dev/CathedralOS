@@ -66,6 +66,7 @@ struct ProjectDetailView: View {
     @State private var showAddRelationship = false
     @State private var relationshipToEdit: StoryRelationship?
     @State private var showAddThemeQuestion = false
+    @State private var showKindleExport = false
     @State private var themeQuestionToEdit: ThemeQuestion?
     @State private var showAddMotif = false
     @State private var motifToEdit: Motif?
@@ -196,6 +197,19 @@ struct ProjectDetailView: View {
                 }
                 .accessibilityLabel(advancedMode ? "Exit advanced mode" : "Enter advanced mode")
             }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    showKindleExport = true
+                } label: {
+                    Image(systemName: "book.closed")
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+                }
+                .accessibilityLabel("Export to Kindle")
+            }
+        }
+        .sheet(isPresented: $showKindleExport) {
+            KindleExportView(project: project)
+                .tint(CathedralTheme.Colors.accent)
         }
         .tint(CathedralTheme.Colors.accent)
         .sheet(isPresented: $showAddCharacter) {
