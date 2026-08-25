@@ -1,0 +1,38 @@
+name: PR-4100-A CI
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/functions/export-epub/**'
+      - 'infra/epubcheck-validator/**'
+      - '.github/workflows/pr-4100-a-ci.yml'
+  push:
+    branches: [main]
+
+jobs:
+  deno-check:
+    name: Deno check + test (export-epub edge function)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+      - name: Type check
+        run: deno check supabase/functions/export-epub/index.ts
+      - name: Run tests (12 cases per impl plan §9)
+        run: deno test -A supabase/functions/export-epub/index_test.ts
+
+  java-build:
+    name: Java build (Cloud Run EPUBCheck validator)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Compile (offline smoke check; full package happens at deploy)
+        run: |
+          cd infra/epubcheck-validator
+          mvn -B -q compile
