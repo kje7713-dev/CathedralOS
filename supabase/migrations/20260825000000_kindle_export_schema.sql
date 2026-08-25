@@ -94,7 +94,7 @@ create policy "Users can delete own exports"
 
 create table if not exists public.export_jobs (
   id                  uuid        primary key default gen_random_uuid(),
-  project_id          uuid        not null references public.projects(id) on delete cascade,
+  project_id          uuid        not null references public.project_snapshots(id) on delete cascade,
   user_id             uuid        not null references auth.users(id),
   export_metadata_id  uuid        references public.export_metadata(id) on delete set null,
 
