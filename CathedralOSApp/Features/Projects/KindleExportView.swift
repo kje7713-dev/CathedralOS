@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import PhotosUI
+import UIKit
 
 // MARK: - CoverChoice
 
@@ -108,6 +109,24 @@ struct KindleExportView: View {
         }
     }
 
+    private var failureAlertBinding: Binding<Bool> {
+        Binding(
+            get: { jobState.isFailure },
+            set: { isPresented in
+                if !isPresented { jobState = .idle }
+            }
+        )
+    }
+
+    private var successAlertBinding: Binding<Bool> {
+        Binding(
+            get: { jobState.isSuccess },
+            set: { isPresented in
+                if !isPresented { dismiss() }
+            }
+        )
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -129,10 +148,7 @@ struct KindleExportView: View {
             .disabled(jobState.isInFlight)
             .alert(
                 "Export Failed",
-                isPresented: Binding(
-                    get: { jobState.isFailure },
-                    set: { if !$0 { jobState = .idle } }
-                ),
+                isPresented: failureAlertBinding,
                 presenting: jobState.failureMessage
             ) {
                 Button("Try Again") { jobState = .idle }
@@ -142,10 +158,7 @@ struct KindleExportView: View {
             }
             .alert(
                 "Export Complete",
-                isPresented: Binding(
-                    get: { jobState.isSuccess },
-                    set: { if !$0 { dismiss() } }
-                ),
+                isPresented: successAlertBinding,
                 presenting: jobState.successMessage
             ) {
                 Button("Done") { dismiss() }
@@ -314,6 +327,12 @@ struct KindleExportView: View {
     }
 
     private func kickoffExport() {
+        Task { @MainActor in
+            await performKickoffExport()
+        }
+    }
+
+    private func performKickoffExport() async {
         guard let service = service else {
             jobState = .failure(.notConfigured(reason: "BackendClient not initialized"))
             return
@@ -324,7 +343,7 @@ struct KindleExportView: View {
         }
 
         let request = KindleExportRequest(
-            project_id: project.id,
+            project_id: project.id.uuidString,
             book_title: bookTitle.trimmingCharacters(in: .whitespaces),
             author_name: authorName.trimmingCharacters(in: .whitespaces),
             copyright_year: Int(copyrightYear),
@@ -342,18 +361,16 @@ struct KindleExportView: View {
         )
 
         jobState = .kickingOff
-        Task {
-            do {
-                let resp = try await service.kickoff(
-                    request: request,
-                    userAccessToken: token
-                )
-                jobState = .polling(jobId: resp.job_id, status: .pending, attempt: 0)
-            } catch let err as KindleExportError {
-                jobState = .failure(err)
-            } catch {
-                jobState = .failure(.networkError(error.localizedDescription))
-            }
+        do {
+            let resp = try await service.kickoff(
+                request: request,
+                userAccessToken: token
+            )
+            jobState = .polling(jobId: resp.job_id, status: .pending, attempt: 0)
+        } catch let err as KindleExportError {
+            jobState = .failure(err)
+        } catch {
+            jobState = .failure(.networkError(error.localizedDescription))
         }
     }
 
@@ -415,11 +432,13 @@ struct KindleExportView: View {
         defer { isUploadingCover = false }
 
         do {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
-                jobState = .failure(.invalidResponse("Could not load photo data"))
+            guard let sourceData = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: sourceData),
+                  let data = image.jpegData(compressionQuality: 0.9) else {
+                jobState = .failure(.invalidResponse("Could not decode cover image as JPEG"))
                 return
             }
-            // Validate size (5 MB cap per spec).
+            // Validate encoded JPEG size (5 MB cap per spec).
             if data.count > 5 * 1024 * 1024 {
                 jobState = .failure(.invalidResponse("Cover image exceeds 5MB"))
                 return
@@ -454,18 +473,19 @@ struct KindleExportView: View {
     }
 
     private func computeContentCounts() -> ContentCountsResult {
-        // Walk project outline sections from SwiftData.
-        let descriptor = FetchDescriptor<OutlineSection>(
-            predicate: #Predicate { $0.project?.id == project.id },
-            sortBy: [SortDescriptor(\.position)]
-        )
-        let sections = (try? modelContext.fetch(descriptor)) ?? []
-
-        let chapters = sections.filter { $0.parent == nil && $0.container == "chapter" }
-        let childSections = sections.filter { $0.parent != nil }
+        // Walk the shipped SwiftData graph: project -> outline -> sections.
+        let sections: [OutlineSection] = project.outlines
+            .flatMap { $0.sections }
+            .sorted { $0.position < $1.position }
+        let chapters: [OutlineSection] = sections.filter { section in
+            section.parent == nil && section.container == "chapter"
+        }
+        let childSections: [OutlineSection] = sections.filter { section in
+            section.parent != nil
+        }
 
         let previewTitles = chapters.prefix(3).map { chapter -> String in
-            chapter.title?.isEmpty == false ? chapter.title! : "Untitled Chapter"
+            chapter.title.isEmpty ? "Untitled Chapter" : chapter.title
         }
 
         return ContentCountsResult(

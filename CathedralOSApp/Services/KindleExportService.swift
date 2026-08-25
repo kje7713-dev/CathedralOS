@@ -70,7 +70,7 @@ struct KindleExportStatusResponse: Codable {
     let status: String
     let error_count: Int?
     let warning_count: Int?
-    let diagnostics: KindleExportDiagnostics?
+    let diagnostics: [KindleExportDiagnostic]?
     let epubcheck_version: String?
     let retry_count: Int?
     let export_metadata_id: String?
@@ -119,7 +119,7 @@ enum KindleExportStatus: String, Codable, CaseIterable {
 
 /// Structured diagnostic from EPUBCheck (mirrors backend `_validator_client.ts`).
 /// Optional fields keep the decoder tolerant of backend additions.
-struct KindleExportDiagnostics: Codable {
+struct KindleExportDiagnostic: Codable {
     let severity: String
     let code: String
     let message: String

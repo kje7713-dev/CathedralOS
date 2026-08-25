@@ -46,6 +46,9 @@ protocol BackendClient {
 
     /// Returns the anon (publishable) key for Supabase API auth on the client.
     var anonKey: String { get }
+
+    /// Returns a URLRequest with the Supabase auth headers applied.
+    func authorizedRequest(for url: URL, userAccessToken: String?) -> URLRequest
 }
 
 // MARK: - BackendClient default implementation
@@ -60,6 +63,17 @@ extension BackendClient {
     }
 
     var anonKey: String { configuration.anonKey }
+
+    func authorizedRequest(for url: URL, userAccessToken: String?) -> URLRequest {
+        var request = URLRequest(url: url)
+        let bearerToken = userAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let bearerToken, !bearerToken.isEmpty {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return request
+    }
 }
 
 // MARK: - SupabaseBackendClient
