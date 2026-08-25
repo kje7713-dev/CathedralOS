@@ -158,7 +158,7 @@ struct KindleExportView: View {
                 "Export Failed",
                 isPresented: failureAlertBinding,
                 presenting: jobState.failureMessage
-            ) {
+            ) { _ in
                 Button("Try Again") { jobState = .idle }
                 Button("Cancel", role: .cancel) { dismiss() }
             } message: { msg in
@@ -168,7 +168,7 @@ struct KindleExportView: View {
                 "Export Complete",
                 isPresented: successAlertBinding,
                 presenting: jobState.successMessage
-            ) {
+            ) { _ in
                 Button("Done") { dismiss() }
             } message: { msg in
                 Text(msg)
@@ -177,7 +177,7 @@ struct KindleExportView: View {
         .tint(CathedralTheme.Colors.accent)
         .task {
             if service == nil { service = makeService() }
-            if bookTitle.isEmpty { bookTitle = project.title }
+            if bookTitle.isEmpty { bookTitle = project.name }
         }
         .task(id: jobState.pollToken) {
             await pollJobIfNeeded()
