@@ -10,7 +10,7 @@ Per `docs/pr-plans/2026-08-25-kindle-export-pr5-pr4100a-impl.md`.
 - **EPUBCheck:** official W3C JAR (pinned to 5.3.0, vendored into the container)
 - **Auth:** HMAC-SHA256 shared secret from Google Secret Manager
 - **Transport:** receives signed URL pointing at Supabase Storage; downloads EPUB, validates, returns structured JSON
-- **Security:** fixed CLI args, size limits, timeouts, randomized temp dirs, guaranteed cleanup, bounded concurrency, no persistent storage, no public access
+- **Security:** fixed CLI args, size limits, timeouts, randomized temp dirs, guaranteed cleanup, bounded concurrency, no persistent storage, public Cloud Run ingress with HMAC-protected validation endpoint
 
 ## Endpoints
 
@@ -91,7 +91,7 @@ gcloud config set project cathedral-epub-validator
 # 2. Enable required APIs
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com secretmanager.googleapis.com
 
-# 3. Create service account for Cloud Run identity
+# 3. Create service account for Cloud Run runtime identity
 gcloud iam service-accounts create epubcheck-validator-sa \
   --display-name="EPUB Check Validator Service Account"
 
@@ -102,8 +102,12 @@ HMAC=$(openssl rand -hex 32)
 echo -n "$HMAC" | gcloud secrets create EPUBCHECK_HMAC_SECRET \
   --replication-policy=automatic --data-file=-
 
-# 6. Mirror to Supabase Edge Function secrets
-supabase secrets set EPUBCHECK_VALIDATOR_URL=https://epubcheck-validator-HASH-uc.a.run.app
+# 6. Allow the Cloud Run runtime identity to read only this secret
+gcloud secrets add-iam-policy-binding EPUBCHECK_HMAC_SECRET \
+  --member="serviceAccount:epubcheck-validator-sa@cathedral-epub-validator.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+
+# 7. Mirror the HMAC secret to Supabase
 supabase secrets set EPUBCHECK_VALIDATOR_HMAC_SECRET="$HMAC"
 ```
 
@@ -112,6 +116,13 @@ supabase secrets set EPUBCHECK_VALIDATOR_HMAC_SECRET="$HMAC"
 ```bash
 export GCP_PROJECT=cathedral-epub-validator
 ./deploy.sh
+
+SERVICE_URL=$(gcloud run services describe epubcheck-validator \
+  --project "$GCP_PROJECT" \
+  --region us-east1 \
+  --format='value(status.url)')
+
+supabase secrets set EPUBCHECK_VALIDATOR_URL="$SERVICE_URL"
 ```
 
 The deploy script:

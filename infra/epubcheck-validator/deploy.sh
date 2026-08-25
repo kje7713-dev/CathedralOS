@@ -35,13 +35,14 @@ gcloud run deploy epubcheck-validator \
   --image "${IMAGE}" \
   --region "${REGION}" \
   --platform managed \
+  --service-account "epubcheck-validator-sa@${GCP_PROJECT}.iam.gserviceaccount.com" \
   --min-instances 0 \
   --max-instances 5 \
   --memory 1Gi \
   --cpu 1 \
   --timeout 60s \
   --concurrency 4 \
-  --no-allow-unauthenticated \
+  --allow-unauthenticated \
   --set-secrets "HMAC_SECRET=${HMAC_SECRET_SECRET_NAME}:latest" \
   --set-env-vars "EPUBCHECK_VERSION=${EPUBCHECK_VERSION},MAX_EPUB_SIZE_MB=100"
 
