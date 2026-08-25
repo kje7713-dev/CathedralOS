@@ -94,23 +94,29 @@ async function handleExport(req: Request, userId: string): Promise<Response> {
     }, 400);
   }
 
+  // Two-ID boundary: localProjectId is the iOS-side UUID (project_snapshots.local_project_id);
+  // snapshotProjectId is the server-generated row PK (FK target for export_jobs + export_metadata).
+  const localProjectId = body.project_id;
   const { data: project, error: projectError } = await supabaseAdmin
     .from("project_snapshots")
     .select("id, user_id")
-    .eq("id", body.project_id)
-    .single();
+    .eq("user_id", userId)
+    .eq("local_project_id", localProjectId)
+    .maybeSingle();
 
   if (projectError || !project) return json({ error: "project_not_found" }, 404);
-  if (project.user_id !== userId) return json({ error: "forbidden" }, 403);
+  // No separate user_id !== userId check: filtering by user_id already scoped the lookup;
+  // returning 404 (not 403) avoids leaking existence of other users' projects.
 
+  const snapshotProjectId = project.id;
   const jobId = await createJob(supabaseAdmin, {
-    project_id: body.project_id,
+    project_id: snapshotProjectId,
     user_id: userId,
   });
 
   // Background processing via Supabase's EdgeRuntime.waitUntil
   // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-  EdgeRuntime.waitUntil(processJob(jobId, body, userId));
+  EdgeRuntime.waitUntil(processJob(jobId, body, userId, localProjectId, snapshotProjectId));
 
   return json({ job_id: jobId, status: "pending" }, 202);
 }
@@ -119,6 +125,8 @@ async function processJob(
   jobId: string,
   req: ExportRequest,
   userId: string,
+  localProjectId: string,
+  snapshotProjectId: string,
 ): Promise<void> {
   let attemptCount = 0;
 
@@ -131,7 +139,9 @@ async function processJob(
       const metadata = assembleMetadata(req);
       const outline: ProjectOutline = await walkSections(
         supabaseAdmin,
-        req.project_id,
+        userId,
+        localProjectId,
+        snapshotProjectId,
       );
       const coverBuffer = await generateOrFetchCover(
         supabaseAdmin,
@@ -218,7 +228,7 @@ async function processJob(
 
       await updateJobStatus(supabaseAdmin, jobId, { status: "validated" });
 
-      const finalPath = `exports/${req.project_id}/${jobId}.epub`;
+      const finalPath = `exports/${localProjectId}/${jobId}.epub`;
 
       // Compute SHA-256 of the validated EPUB
       const sha256Hex = await sha256HexOf(epub);
@@ -241,7 +251,7 @@ async function processJob(
       const { data: metaData, error: metaError } = await supabaseAdmin
         .from("export_metadata")
         .insert({
-          project_id: req.project_id,
+          project_id: snapshotProjectId,
           book_title: metadata.book_title,
           author_name: metadata.author_name,
           copyright_year: metadata.copyright_year ?? null,
@@ -275,7 +285,7 @@ async function processJob(
       await supabaseAdmin
         .from("export_metadata")
         .update({ is_current: false })
-        .eq("project_id", req.project_id)
+        .eq("project_id", snapshotProjectId)
         .eq("is_current", true)
         .neq("id", metaData.id);
 
