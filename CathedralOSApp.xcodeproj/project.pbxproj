@@ -386,7 +386,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1E924C11523F443693AB42C2 /* KindleExportServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1038,6 +1037,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 				00000000000000000000019A /* DiagnosticsTests.swift in Sources */,
 				0000000000000000000001A4 /* ProjectCloudSyncTests.swift in Sources */,
 				0000000000000000000001B0 /* TestSupabaseConfiguration.swift in Sources */,
+				1E924C11523F443693AB42C2 /* KindleExportServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
