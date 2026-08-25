@@ -143,7 +143,7 @@ struct KindleExportDiagnostics: Codable {
 ///
 /// Mirrors CoherenceCheckService / RunOutlineService structure: SupabaseBackendClient + URLSession.
 final class KindleExportService {
-    private let backend: BackendClient
+    let backend: BackendClient
     private let session: URLSession
 
     init(backend: BackendClient, session: URLSession = .shared) {

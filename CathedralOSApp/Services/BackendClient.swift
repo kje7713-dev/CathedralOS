@@ -40,6 +40,12 @@ protocol BackendClient {
 
     /// Builds a full URL for the given Supabase Edge Function path.
     func edgeFunctionURL(path: String) -> URL
+
+    /// Builds a full URL for a Supabase Storage object (upload or download).
+    func storageObjectURL(bucket: String, path: String) -> URL
+
+    /// Returns the anon (publishable) key for Supabase API auth on the client.
+    var anonKey: String { get }
 }
 
 // MARK: - BackendClient default implementation
@@ -48,6 +54,12 @@ extension BackendClient {
     func edgeFunctionURL(path: String) -> URL {
         configuration.edgeFunctionURL(path: path)
     }
+
+    func storageObjectURL(bucket: String, path: String) -> URL {
+        configuration.storageObjectURL(bucket: bucket, path: path)
+    }
+
+    var anonKey: String { configuration.anonKey }
 }
 
 // MARK: - SupabaseBackendClient

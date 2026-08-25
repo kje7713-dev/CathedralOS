@@ -83,7 +83,6 @@ struct KindleExportView: View {
     let project: StoryProject
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.authSession) private var authSession
 
     // Book metadata
     @State private var bookTitle: String = ""
@@ -110,6 +109,16 @@ struct KindleExportView: View {
 
     // Service (created lazily; uses default BackendClient)
     @State private var service: KindleExportService?
+
+    /// Fetches the current access token via the shared AuthSessionResolver.
+    /// Returns nil if the session is missing or expired.
+    private func currentAccessToken() async -> String? {
+        do {
+            return try await AuthSessionResolver.shared.validAccessToken(forceRefresh: false)
+        } catch {
+            return nil
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -309,14 +318,11 @@ struct KindleExportView: View {
         && !authorName.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    private func makeService() -> KindleExportService {
+    private func makeService() -> KindleExportService? {
         // Lazily create the service. If BackendClient can't init (missing Info.plist keys),
-        // surface that as a job failure on first kickoff attempt.
-        if let backend = try? SupabaseBackendClient() {
-            return KindleExportService(backend: backend)
-        }
-        // Fallback: service with a backend that will throw notConfigured on use.
-        return KindleExportService(backend: FailingBackendClient())
+        // return nil and surface a job failure on first kickoff attempt.
+        guard let backend = try? SupabaseBackendClient() else { return nil }
+        return KindleExportService(backend: backend)
     }
 
     private func kickoffExport() {
@@ -324,7 +330,7 @@ struct KindleExportView: View {
             jobState = .failure(.notConfigured(reason: "BackendClient not initialized"))
             return
         }
-        guard let token = authSession?.accessToken, !token.isEmpty else {
+        guard let token = await currentAccessToken() else {
             jobState = .failure(.notAuthenticated)
             return
         }
@@ -366,7 +372,7 @@ struct KindleExportView: View {
     private func pollJobIfNeeded() async {
         guard case let .polling(jobId, _, attempt) = jobState else { return }
         guard let service = service else { return }
-        guard let token = authSession?.accessToken, !token.isEmpty else {
+        guard let token = await currentAccessToken() else {
             jobState = .failure(.notAuthenticated)
             return
         }
@@ -415,7 +421,7 @@ struct KindleExportView: View {
 
     private func uploadCoverImage(_ item: PhotosPickerItem) async {
         guard let service = service else { return }
-        guard let token = authSession?.accessToken else { return }
+        guard let token = await currentAccessToken() else { return }
 
         isUploadingCover = true
         defer { isUploadingCover = false }
@@ -432,11 +438,11 @@ struct KindleExportView: View {
             }
             // Upload via Supabase Storage "covers" bucket.
             let path = "exports/\(project.id)/cover-\(UUID().uuidString).jpg"
-            let url = service.backendCoverURL(bucket: "covers", path: path)
+            let url = service.backend.storageObjectURL(bucket: "covers", path: path)
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            request.setValue(service.backendAnnonKey(), forHTTPHeaderField: "apikey")
+            request.setValue(service.backend.anonKey, forHTTPHeaderField: "apikey")
             request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
             request.httpBody = data
 
@@ -482,59 +488,6 @@ struct KindleExportView: View {
     }
 }
 
-// MARK: - AuthSession environment key
 
-/// Minimal env key for the auth session. The real CathedralOS app injects this
-/// from its own AuthSessionResolver at app root.
-private struct AuthSessionKey: EnvironmentKey {
-    static let defaultValue: AuthSessionAccessor? = nil
-}
 
-extension EnvironmentValues {
-    var authSession: AuthSessionAccessor? {
-        get { self[AuthSessionKey.self] }
-        set { self[AuthSessionKey.self] = newValue }
-    }
-}
 
-/// Tiny accessor so views can read the current access token without
-/// importing the full AuthService. The real CathedralOS app provides
-/// a concrete implementation at app root.
-protocol AuthSessionAccessor {
-    var accessToken: String? { get }
-}
-
-// MARK: - FailingBackendClient fallback (so the view compiles when BackendClient can't init)
-
-private final class FailingBackendClient: BackendClient {
-    let configuration: ValidatedSupabaseConfiguration = {
-        // Synthesize a minimal "not configured" configuration for type satisfaction.
-        // The configuration is unused because any call will throw before reaching it.
-        fatalError("FailingBackendClient.configuration should never be read")
-    }()
-
-    func edgeFunctionURL(path: String) -> URL {
-        URL(string: "https://invalid.example/\(path)")!
-    }
-}
-
-// MARK: - KindleExportService + Storage helper (extension)
-
-extension KindleExportService {
-    /// Build a Supabase Storage upload URL for a given bucket + path.
-    /// Used by the view to upload cover images without going through the export pipeline.
-    func backendCoverURL(bucket: String, path: String) -> URL {
-        // Pull project URL from the BackendClient's configuration.
-        // We assume the configuration exposes a public url.
-        let projectURL = (try? SupabaseConfiguration.validatedConfiguration().projectURL)
-            ?? URL(string: "https://invalid.example")!
-        return projectURL
-            .appendingPathComponent("storage/v1/object")
-            .appendingPathComponent(bucket)
-            .appendingPathComponent(path)
-    }
-
-    func backendAnnonKey() -> String {
-        (try? SupabaseConfiguration.validatedConfiguration().anonKey) ?? ""
-    }
-}
