@@ -96,6 +96,12 @@ struct KindleExportView: View {
     // Job state
     @State private var jobState: JobState = .idle
 
+    // PR-4100-C: reader/share sheet state for Open / Share buttons.
+    @State private var readerURL: URL?
+    @State private var shareURL: URL?
+    @State private var showReader = false
+    @State private var showShare = false
+
     // Service (created lazily; uses default BackendClient)
     @State private var service: KindleExportService?
 
@@ -169,9 +175,21 @@ struct KindleExportView: View {
                 isPresented: successAlertBinding,
                 presenting: jobState.successMessage
             ) { _ in
-                Button("Done") { dismiss() }
+                Button("Open") { Task { await prepareOpen() } }
+                Button("Share") { Task { await prepareShare() } }
+                Button("Done", role: .cancel) { dismiss() }
             } message: { msg in
                 Text(msg)
+            }
+            .sheet(isPresented: $showReader) {
+                if let url = readerURL {
+                    KindleExportReaderView(fileURL: url, bookTitle: bookTitle)
+                }
+            }
+            .sheet(isPresented: $showShare) {
+                if let url = shareURL {
+                    KindleExportShareSheet(items: [url])
+                }
             }
         }
         .tint(CathedralTheme.Colors.accent)
@@ -332,6 +350,53 @@ struct KindleExportView: View {
         // return nil and surface a job failure on first kickoff attempt.
         guard let backend = try? SupabaseBackendClient() else { return nil }
         return KindleExportService(backend: backend)
+    }
+
+    // MARK: - PR-4100-C: Open / Share helpers
+
+    /// Reads the current export_metadata_id from the success state.
+    private var currentExportMetadataId: String? {
+        if case .success(let id, _) = jobState { return id }
+        return nil
+    }
+
+    /// Fetches the EPUB via `KindleExportDownloader` (cache-first) and
+    /// presents the Readium reader sheet. Surfaces no error in v1 (would
+    /// become a toast or alert in a follow-up).
+    private func prepareOpen() async {
+        guard let metadataId = currentExportMetadataId,
+              let token = await currentAccessToken(),
+              let service = service else { return }
+        let downloader = KindleExportDownloader(backend: service.backend)
+        do {
+            let url = try await downloader.downloadOrCache(
+                exportMetadataId: metadataId,
+                userAccessToken: token,
+            )
+            readerURL = url
+            showReader = true
+        } catch {
+            // swallow for v1
+        }
+    }
+
+    /// Same fetch as `prepareOpen` but presents the iOS share sheet
+    /// (UIActivityViewController) instead of the reader.
+    private func prepareShare() async {
+        guard let metadataId = currentExportMetadataId,
+              let token = await currentAccessToken(),
+              let service = service else { return }
+        let downloader = KindleExportDownloader(backend: service.backend)
+        do {
+            let url = try await downloader.downloadOrCache(
+                exportMetadataId: metadataId,
+                userAccessToken: token,
+            )
+            shareURL = url
+            showShare = true
+        } catch {
+            // swallow for v1
+        }
     }
 
     private func kickoffExport() {
