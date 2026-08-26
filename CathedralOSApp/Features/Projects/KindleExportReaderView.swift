@@ -80,10 +80,15 @@ private final class ReadiumEPUBViewController: UIViewController {
     }
 
     private func loadPublication() async {
+        guard let readiumFileURL = FileURL(url: fileURL) else {
+            onError("The cached EPUB URL is invalid.")
+            return
+        }
+
         let httpClient = DefaultHTTPClient(configuration: .ephemeral)
         let assetRetriever = AssetRetriever(httpClient: httpClient)
         let assetResult = await assetRetriever.retrieve(
-            url: fileURL,
+            url: readiumFileURL,
             hints: FormatHints(mediaType: .epub)
         )
 
