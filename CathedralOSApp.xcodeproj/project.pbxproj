@@ -1051,6 +1051,9 @@ echo \"Runtime config plist injection completed: keys present\"";
 				CE6DCCA8C9F944B1852D774C /* KindleExportService.swift in Sources */,
 				429CAF78133F46C2B22E9FE3 /* KindleExportView.swift in Sources */,
 				AABBCCDD000000000000A001 /* KindleExportPoller.swift in Sources */,
+				AABBCCDD000000000000E001 /* KindleExportDownloader.swift in Sources */,
+				AABBCCDD000000000000E003 /* KindleExportReaderView.swift in Sources */,
+				AABBCCDD000000000000E005 /* KindleExportShareSheet.swift in Sources */,
 
 			);
 			runOnlyForDeploymentPostprocessing = 0;
