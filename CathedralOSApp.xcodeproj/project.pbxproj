@@ -1337,10 +1337,6 @@ echo \"Runtime config plist injection completed: keys present\"";
 		};
 		000000000000000000000009 /* Build configuration list for PBXNativeTarget "CathedralOSAppTests" */ = {
 			isa = XCConfigurationList;
-				AABBCCDD000000000000E007 /* KindleExportDownloaderTests.swift in Sources */,
-				AABBCCDD000000000000E001 /* KindleExportDownloader.swift in Sources */,
-				AABBCCDD000000000000E003 /* KindleExportReaderView.swift in Sources */,
-				AABBCCDD000000000000E005 /* KindleExportShareSheet.swift in Sources */,
 			buildConfigurations = (
 				00000000000000000000000D /* Debug */,
 				00000000000000000000000E /* Release */,
