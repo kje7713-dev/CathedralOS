@@ -129,28 +129,31 @@ public class EpubcheckService {
         }
     }
 
-    private ValidationResult parseOutput(ProcessResult proc) {
+    ValidationResult parseOutput(ProcessResult proc) {
         ValidationResult result = new ValidationResult();
         result.diagnostics = new ArrayList<>();
         result.error_count = 0;
         result.warning_count = 0;
 
-        // EPUBCheck exit codes:
-        // 0 = no errors or warnings (valid)
-        // 1 = warnings only (still valid — warnings logged but don't block)
-        // 2 = errors (invalid)
-        // 3 = fatal errors (invalid)
-        boolean parseSucceeded = false;
+        // EPUBCheck exit codes (the canonical "valid" signal):
+        //   0 = no errors or warnings (valid)
+        //   1 = warnings only (still valid — warnings logged but don't block)
+        //   2 = errors (invalid)
+        //   3 = fatal errors (invalid)
+
+        // Parse BOTH stdout and stderr (whichever is nonblank). EPUBCheck
+        // emits most output to stderr when invoked with --mode exp; the
+        // previous code only parsed stderr when stdout was blank AND
+        // parseText() did not throw, so an unparseable stdout blocked
+        // stderr parsing entirely. Parse both streams independently.
         if (!proc.stdout.isBlank()) {
             try {
                 parseText(proc.stdout, result);
-                parseSucceeded = true;
             } catch (Exception e) {
-                System.err.println("text parse failed: " + e.getMessage());
+                System.err.println("stdout parse failed: " + e.getMessage());
             }
         }
-
-        if (!parseSucceeded && !proc.stderr.isBlank()) {
+        if (!proc.stderr.isBlank()) {
             try {
                 parseText(proc.stderr, result);
             } catch (Exception e) {
@@ -158,18 +161,55 @@ public class EpubcheckService {
             }
         }
 
-        // valid = (no fatal/error diagnostics)
+        // Default-true for EPUBCheck exit 0/1. Previously result.valid
+        // was a Java primitive boolean defaulting to false and never set
+        // to true, which is the root cause of the 2026-08-26 06:01 EDT
+        // smoke (EPUB clean, EPUBCheck exit 0, 0 diagnostics, but result
+        // reported valid=false). Override below via parsed error/fatal
+        // diagnostics and via exitCode >= 2.
+        result.valid = (proc.exitCode == 0 || proc.exitCode == 1);
+
+        // Force false if any parsed diagnostic is error/fatal severity
+        // (covers edge cases like EPUBCheck exiting 0 but stderr having
+        // a late-arriving error line during cleanup).
         for (ValidationResult.Diagnostic d : result.diagnostics) {
             if ("fatal".equals(d.severity) || "error".equals(d.severity)) {
                 result.valid = false;
                 break;
             }
         }
-        if (result.error_count == 0 && proc.exitCode >= 2) {
-            // Exit code suggests errors but none parsed — mark invalid defensively
+
+        // EPUBCheck exit code is authoritative for invalidity.
+        if (proc.exitCode >= 2) {
             result.valid = false;
+            // If EPUBCheck said invalid but the parser found nothing,
+            // emit a synthetic diagnostic + log the raw output. Without
+            // this we would return valid=false with diagnostics=[] and
+            // no clue what EPUBCheck actually said — making future
+            // parser-vs-EPUBCheck mismatches blind.
+            if (result.diagnostics.isEmpty()) {
+                System.err.println(
+                    "validator: EPUBCheck exit=" + proc.exitCode
+                    + " but parsed 0 diagnostics."
+                    + "  stdout: " + truncate(proc.stdout, 500)
+                    + "  stderr: " + truncate(proc.stderr, 500)
+                );
+                ValidationResult.Diagnostic synth = new ValidationResult.Diagnostic();
+                synth.severity = "error";
+                synth.code = "PARSE-000";
+                synth.message = "EPUBCheck reported invalid (exit " + proc.exitCode
+                    + ") but no diagnostics matched the text format. "
+                    + "Check parser regex or EPUBCheck version compatibility.";
+                result.diagnostics.add(synth);
+                result.error_count++;
+            }
         }
         return result;
+    }
+
+    private static String truncate(String s, int maxLen) {
+        if (s == null) return "";
+        return s.length() > maxLen ? s.substring(0, maxLen) + "...[truncated]" : s;
     }
 
     /** EPUBCheck text format: "ERROR(RSC-005): message (path:line:col)" */
@@ -210,7 +250,7 @@ public class EpubcheckService {
         }
     }
 
-    private static class ProcessResult {
+    static class ProcessResult {
         String stdout = "";
         String stderr = "";
         int exitCode = -1;

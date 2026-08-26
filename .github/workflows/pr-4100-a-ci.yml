@@ -36,3 +36,8 @@ jobs:
         run: |
           cd infra/epubcheck-validator
           mvn -B -q compile
+
+      - name: Run tests (parseOutput unit tests, 8 cases)
+        run: |
+          cd infra/epubcheck-validator
+          mvn -B test
