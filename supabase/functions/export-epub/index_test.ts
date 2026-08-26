@@ -733,6 +733,16 @@ Deno.test("orchestrator: current-export demotion uses snapshotProjectId", async 
   if (!call) throw new Error("no export_metadata update recorded");
 });
 
+Deno.test("orchestrator: export metadata replacement uses transactional RPC", () => {
+  const src = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
+  assertStringIncludes(src, `.rpc(
+        "replace_export_metadata"`);
+  if (src.includes(`.from("export_metadata")
+        .insert(`)) {
+    throw new Error("export_metadata must be replaced through the transactional RPC");
+  }
+});
+
 Deno.test("walker: top-level outline section with non-chapter container becomes a Kindle chapter", () => {
   // Per Kevin 2026-08-25 19:58 EDT: "Each generate section from section outlined
   // accepted is a chapter in the kindle book." A beat / scene / set-piece / summary

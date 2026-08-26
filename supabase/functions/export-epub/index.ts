@@ -247,51 +247,42 @@ async function processJob(
       // Cleanup temp
       await supabaseAdmin.storage.from("export-tmp").remove([tempPath]);
 
-      // Create export_metadata row (latest + active)
-      const { data: metaData, error: metaError } = await supabaseAdmin
-        .from("export_metadata")
-        .insert({
-          project_id: snapshotProjectId,
-          book_title: metadata.book_title,
-          author_name: metadata.author_name,
-          copyright_year: metadata.copyright_year ?? null,
-          copyright_holder: metadata.copyright_holder ?? null,
-          language: metadata.language,
-          dedication: metadata.dedication ?? null,
-          book_description: metadata.book_description ?? null,
-          about_author: metadata.about_author ?? null,
-          isbn: metadata.isbn ?? null,
-          publisher_name: metadata.publisher_name ?? null,
-          series_name: metadata.series_name ?? null,
-          series_number: metadata.series_number ?? null,
-          cover_image_url: req.cover_image_url ?? null,
-          cover_image_ai_generated: req.cover_image_ai_generate ?? false,
-          epub_storage_path: finalPath,
-          epub_sha256: sha256Hex,
-          is_current: true,
-          is_active: true,
-          exported_by_user_id: userId,
-        })
-        .select("id")
-        .single();
+      // Replace the current/active metadata row inside one database transaction.
+      // The partial unique indexes reject a new current/active row if the old one
+      // is demoted afterward; the RPC keeps history while making replacement atomic.
+      const { data: metaId, error: metaError } = await supabaseAdmin.rpc(
+        "replace_export_metadata",
+        {
+          p_project_id: snapshotProjectId,
+          p_book_title: metadata.book_title,
+          p_author_name: metadata.author_name,
+          p_copyright_year: metadata.copyright_year ?? null,
+          p_copyright_holder: metadata.copyright_holder ?? null,
+          p_language: metadata.language,
+          p_dedication: metadata.dedication ?? null,
+          p_book_description: metadata.book_description ?? null,
+          p_about_author: metadata.about_author ?? null,
+          p_isbn: metadata.isbn ?? null,
+          p_publisher_name: metadata.publisher_name ?? null,
+          p_series_name: metadata.series_name ?? null,
+          p_series_number: metadata.series_number ?? null,
+          p_cover_image_url: req.cover_image_url ?? null,
+          p_cover_image_ai_generated: req.cover_image_ai_generate ?? false,
+          p_epub_storage_path: finalPath,
+          p_epub_sha256: sha256Hex,
+          p_exported_by_user_id: userId,
+        },
+      );
 
-      if (metaError || !metaData) {
+      if (metaError || !metaId) {
         throw new Error(
           `Failed to create export_metadata: ${metaError?.message}`,
         );
       }
 
-      // Demote previous current to not-current (latest model)
-      await supabaseAdmin
-        .from("export_metadata")
-        .update({ is_current: false })
-        .eq("project_id", snapshotProjectId)
-        .eq("is_current", true)
-        .neq("id", metaData.id);
-
       await updateJobStatus(supabaseAdmin, jobId, {
         status: "uploaded",
-        export_metadata_id: metaData.id,
+        export_metadata_id: metaId,
         completed_at: new Date().toISOString(),
       });
 
