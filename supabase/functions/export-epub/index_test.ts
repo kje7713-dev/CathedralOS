@@ -520,6 +520,9 @@ class MockSupabase {
     return {
       maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
       single: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
+      order: (_col: string, _opts?: any) => Promise.resolve({ data: rows, error: null }),
+      eq: (_col: string, _val: any) => Promise.resolve({ data: rows, error: null }),
+      in: (_col: string, _vals: any) => Promise.resolve({ data: rows, error: null }),
     };
   }
 
@@ -528,6 +531,25 @@ class MockSupabase {
     const self = this;
     return {
       select(_cols: string) {
+        calls.push({ table, op: "select", payload: { cols: _cols } });
+        const rowsFor = (table: string) => self.responses[table] ?? [];
+        const resolveRows = () => Promise.resolve({ data: rowsFor(table), error: null });
+        const makeTail = () => ({
+          order(_col: string, _opts?: any) {
+            calls.push({ table, op: "select-order", payload: { col: _col, opts: _opts } });
+            return resolveRows();
+          },
+          maybeSingle: () => Promise.resolve({ data: rowsFor(table)[0] ?? null, error: null }),
+          single: () => Promise.resolve({ data: rowsFor(table)[0] ?? null, error: null }),
+          eq(_col2: string, _val2: any) {
+            calls.push({ table, op: "select-eq2", payload: { col: _col2, val2: _val2 } });
+            return makeTail();
+          },
+          in(_col2: string, _vals: any) {
+            calls.push({ table, op: "select-in", payload: { col: _col2, vals: _vals } });
+            return makeTail();
+          },
+        });
         return {
           // 2-arg eq chain
           eq(_col: string, _val: any) {
@@ -535,41 +557,33 @@ class MockSupabase {
             return {
               eq(_col2: string, _val2: any) {
                 calls.push({ table, op: "select-eq2", payload: { col: _col, val: _val, col2: _col2, val2: _val2 } });
-                return {
-                  order(_col: string, _opts?: any) {
-                    calls.push({ table, op: "select-order", payload: { col: _col, opts: _opts } });
-                    return self.terminal(table);
-                  },
-                  maybeSingle: self.terminal(table).maybeSingle,
-                  single: self.terminal(table).single,
-                  eq(_col3: string, _val3: any) {
-                    calls.push({ table, op: "select-eq3", payload: { col: _col, val: _val, col2: _col2, val2: _val2, col3: _col3, val3: _val3 } });
-                    return {
-                      order(_col: string, _opts?: any) {
-                        calls.push({ table, op: "select-order", payload: { col: _col, opts: _opts } });
-                        return self.terminal(table);
-                      },
-                      maybeSingle: self.terminal(table).maybeSingle,
-                      single: self.terminal(table).single,
-                    };
-                  },
-                };
+                return makeTail();
               },
-              // single-eq1 (no second eq)
+              // single-eq1 + .in()
+              in(_col2: string, _vals: any) {
+                calls.push({ table, op: "select-in", payload: { col: _col2, vals: _vals, from_eq1: true } });
+                return makeTail();
+              },
+              // single-eq1 (no further chain)
               order(_col: string, _opts?: any) {
                 calls.push({ table, op: "select-order", payload: { col: _col, opts: _opts } });
-                return self.terminal(table);
+                return Promise.resolve({ data: (self.responses[table] ?? []), error: null });
               },
-              maybeSingle: self.terminal(table).maybeSingle,
-              single: self.terminal(table).single,
+              maybeSingle: () => Promise.resolve({ data: (self.responses[table] ?? [])[0] ?? null, error: null }),
+              single: () => Promise.resolve({ data: (self.responses[table] ?? [])[0] ?? null, error: null }),
             };
           },
+          // direct .in() after .select() (no prior .eq)
+          in(_col: string, _vals: any) {
+            calls.push({ table, op: "select-in", payload: { col: _col, vals: _vals } });
+            return makeTail();
+          },
           // select().maybeSingle() / single() (no filter)
-          maybeSingle: self.terminal(table).maybeSingle,
-          single: self.terminal(table).single,
+          maybeSingle: () => Promise.resolve({ data: (self.responses[table] ?? [])[0] ?? null, error: null }),
+          single: () => Promise.resolve({ data: (self.responses[table] ?? [])[0] ?? null, error: null }),
           order(_col: string, _opts?: any) {
             calls.push({ table, op: "select-order", payload: { col: _col, opts: _opts } });
-            return self.terminal(table);
+            return Promise.resolve({ data: (self.responses[table] ?? []), error: null });
           },
         };
       },
@@ -745,58 +759,9 @@ Deno.test("walker: top-level outline section with non-chapter container becomes 
 
 
 
-Deno.test("walker: normalizes localProjectId to UPPERCASE before .eq() — lowercase input", async () => {
-  // Per PR-4100-D: walkSections must uppercase the localProjectId before the .eq()
-  // call so the case-sensitive lookup matches the canonical UPPERCASE stored
-  // value in outlines.local_project_id. We invoke walkSections() directly so
-  // the actual normalization logic runs (not just the mock chain).
-  const mock = new MockSupabase();
-  const lowercaseInput = "7f1de7c0-9b0a-463b-8a0f-733cb3f76e88";
-  const expectedUpper = "7F1DE7C0-9B0A-463B-8A0F-733CB3F76E88";
-  const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
-  mock.setResponse("outlines", [{ id: "outline-uuid", name: "Test Outline" }]);
-  mock.setResponse("outline_sections", []);
-  mock.setResponse("generation_outputs", []);
-  try {
-    await walkSections(mock as any, "user-1", lowercaseInput, snapshotProjectId);
-  } catch (_err) {
-    // Walker may throw on missing sections — irrelevant; we only inspect the mock.calls.
-  }
-  // The walker calls .eq("user_id", userId).eq("local_project_id", normalizedProjectId).
-  // The SECOND .eq() is recorded as select-eq2 (col2="local_project_id", val2=normalized).
-  const eqCall = mock.calls.find(c =>
-    c.table === "outlines" &&
-    c.op === "select-eq2" &&
-    (c.payload as any).col2 === "local_project_id" &&
-    (c.payload as any).val2 === expectedUpper
-  );
-  if (!eqCall) {
-    throw new Error(`expected .eq("local_project_id", "${expectedUpper}") in 2nd .eq(). Recorded: ${JSON.stringify(mock.calls.filter(c => c.table === "outlines"))}`);
-  }
-});
 
-Deno.test("walker: passes through already-uppercase localProjectId unchanged", async () => {
-  // Per PR-4100-D: the normalization is idempotent — uppercase input stays uppercase.
-  // We invoke walkSections() directly to exercise the actual logic.
-  const mock = new MockSupabase();
-  const upperInput = "7F1DE7C0-9B0A-463B-8A0F-733CB3F76E88";
-  const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
-  mock.setResponse("outlines", [{ id: "outline-uuid", name: "Test Outline" }]);
-  mock.setResponse("outline_sections", []);
-  mock.setResponse("generation_outputs", []);
-  try {
-    await walkSections(mock as any, "user-1", upperInput, snapshotProjectId);
-  } catch (_err) {
-    // ignore
-  }
-  const eqCall = mock.calls.find(c =>
-    c.table === "outlines" &&
-    c.op === "select-eq2" &&
-    (c.payload as any).col2 === "local_project_id" &&
-    (c.payload as any).val2 === upperInput
-  );
-  if (!eqCall) throw new Error("expected uppercase local_project_id in 2nd .eq() call");
-});
+
+
 
 Deno.test("embed-section: canonicalizes body.project_id.toUpperCase() before outlines upsert (static check)", () => {
   // Per PR-4100-D: embed-section/index.ts must canonicalize the local_project_id
@@ -838,6 +803,112 @@ Deno.test("extract trigger: UPPER(o ->> localProjectID) in migration (static che
   }
   if (!src.includes("UPPER(local_project_id)")) {
     throw new Error("migration missing UPPER() backfill in UPDATE");
+  }
+});
+
+Deno.test("walker: uses snapshot_json as authoritative structure (4 sections, NOT 105 stale rows)", async () => {
+  const mock = new MockSupabase();
+  const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
+  const localProjectId = "7f1de7c0-9b0a-463b-8a0f-733cb3f76e88";
+  mock.setResponse("project_snapshots", [{
+    id: snapshotProjectId,
+    snapshot_json: {
+      outlines: [{
+        id: "outline-uuid",
+        name: "Test Outline",
+        localProjectID: localProjectId,
+        lineageID: "lineage-uuid",
+        sections: [
+          { id: "sec-1", title: "Chapter 1", status: "accepted", container: "chapter", position: 0, parentID: null },
+          { id: "sec-2", title: "Section 2", status: "accepted", container: "scene", position: 1, parentID: null },
+          { id: "sec-3", title: "Section 3", status: "accepted", container: "scene", position: 2, parentID: null },
+          { id: "sec-4", title: "Section 4", status: "accepted", container: "scene", position: 3, parentID: null },
+        ],
+      }],
+    },
+  }]);
+  mock.setResponse("generation_outputs", []);
+  const outline = await walkSections(mock as any, "user-1", localProjectId, snapshotProjectId);
+  const totalSections = outline.chapters.reduce((acc, ch) => acc + ch.sections.length, 0);
+  if (totalSections !== 4) throw new Error(`expected 4 current sections from snapshot, got ${totalSections}`);
+  const relationalCall = mock.calls.find((c) => c.table === "outline_sections");
+  if (relationalCall) throw new Error("walker must not query outline_sections (use snapshot_json instead)");
+  const projectSnapshotsCall = mock.calls.find((c) => c.table === "project_snapshots");
+  if (!projectSnapshotsCall) throw new Error("walker must query project_snapshots to get snapshot_json");
+});
+
+Deno.test("walker: queries generation_outputs.output_text (not body)", async () => {
+  const mock = new MockSupabase();
+  const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
+  mock.setResponse("project_snapshots", [{
+    snapshot_json: { outlines: [{ id: "o", name: "n", localProjectID: "ios-uuid-1", lineageID: "l", sections: [{ id: "s1", title: "t", status: "accepted", container: "chapter", position: 0, parentID: null }] }] },
+  }]);
+  mock.setResponse("generation_outputs", []);
+  await walkSections(mock as any, "user-1", "ios-uuid-1", snapshotProjectId);
+  const allGenCalls = mock.calls.filter((c) => c.table === "generation_outputs");
+  const callsWithBody = allGenCalls.filter((c) => {
+    const payload = c.payload as Record<string, unknown>;
+    return JSON.stringify(payload).includes('"body"');
+  });
+  if (callsWithBody.length > 0) {
+    throw new Error("walker still uses 'body' column somewhere: " + JSON.stringify(callsWithBody));
+  }
+  const inCall = allGenCalls.find((c) => c.op === "select-in");
+  if (!inCall) throw new Error("walker must use .in() on generation_outputs (expected op=select-in)");
+});
+
+Deno.test("walker: maps out.output_text to section.body in the in-memory EPUB model", async () => {
+  const mock = new MockSupabase();
+  const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
+  const secId = "sec-1";
+  mock.setResponse("project_snapshots", [{
+    snapshot_json: { outlines: [{
+      id: "o", name: "n", localProjectID: "ios-uuid-1", lineageID: "l",
+      sections: [{ id: secId, title: "Chapter 1", status: "accepted", container: "chapter", position: 0, parentID: null }],
+    }] },
+  }]);
+  mock.setResponse("generation_outputs", [{
+    outline_section_id: secId,
+    output_text: "the actual generated body content for the EPUB",
+    created_at: "2026-08-25T12:00:00Z",
+  }]);
+  const outline = await walkSections(mock as any, "user-1", "ios-uuid-1", snapshotProjectId);
+  if (outline.chapters.length !== 1) throw new Error(`expected 1 chapter, got ${outline.chapters.length}`);
+  const sec = outline.chapters[0].sections[0];
+  if (sec.body !== "the actual generated body content for the EPUB") {
+    throw new Error(`expected body from output_text, got: ${sec.body}`);
+  }
+});
+
+Deno.test("walker: missing generation output preserves existing placeholder/empty behavior", async () => {
+  const mock = new MockSupabase();
+  const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
+  const secId = "sec-1";
+  mock.setResponse("project_snapshots", [{
+    snapshot_json: { outlines: [{
+      id: "o", name: "n", localProjectID: "ios-uuid-1", lineageID: "l",
+      sections: [{ id: secId, title: "Chapter 1", status: "accepted", container: "chapter", position: 0, parentID: null }],
+    }] },
+  }]);
+  mock.setResponse("generation_outputs", []);
+  const outline = await walkSections(mock as any, "user-1", "ios-uuid-1", snapshotProjectId);
+  const sec = outline.chapters[0].sections[0];
+  if (sec.body !== "") throw new Error(`expected empty body for missing generation, got: "${sec.body}"`);
+});
+
+Deno.test("walker: uppercase/lowercase localProjectId normalization still works (PR-4100-D)", async () => {
+  const mock = new MockSupabase();
+  const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
+  mock.setResponse("project_snapshots", [{
+    snapshot_json: { outlines: [{
+      id: "o", name: "n", localProjectID: "7F1DE7C0-9B0A-463B-8A0F-733CB3F76E88", lineageID: "l",
+      sections: [{ id: "s1", title: "Chapter 1", status: "accepted", container: "chapter", position: 0, parentID: null }],
+    }] },
+  }]);
+  mock.setResponse("generation_outputs", []);
+  const outline = await walkSections(mock as any, "user-1", "7f1de7c0-9b0a-463b-8a0f-733cb3f76e88", snapshotProjectId);
+  if (outline.chapters.length !== 1) {
+    throw new Error("walker failed to resolve outline for lowercase localProjectId");
   }
 });
 
