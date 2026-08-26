@@ -370,12 +370,21 @@ struct KindleExportView: View {
     }
 
     /// Fetches the EPUB via `KindleExportDownloader` (cache-first) and
-    /// presents the Readium reader sheet. Surfaces no error in v1 (would
-    /// become a toast or alert in a follow-up).
+    /// presents the Readium reader sheet. Download failures stay on this
+    /// screen and are surfaced through the existing failure alert.
     private func prepareOpen(exportMetadataId metadataId: String?) async {
-        guard let metadataId,
-              let token = await currentAccessToken(),
-              let service = service else { return }
+        guard let metadataId else {
+            jobState = .failure(.invalidResponse("Missing export metadata ID"))
+            return
+        }
+        guard let token = await currentAccessToken() else {
+            jobState = .failure(.notAuthenticated)
+            return
+        }
+        guard let service else {
+            jobState = .failure(.notConfigured(reason: "BackendClient not initialized"))
+            return
+        }
         let downloader = KindleExportDownloader(backend: service.backend)
         do {
             let url = try await downloader.downloadOrCache(
@@ -384,17 +393,28 @@ struct KindleExportView: View {
             )
             readerURL = url
             showReader = true
+        } catch let error as KindleExportError {
+            jobState = .failure(error)
         } catch {
-            // swallow for v1
+            jobState = .failure(.networkError(error.localizedDescription))
         }
     }
 
     /// Same fetch as `prepareOpen` but presents the iOS share sheet
     /// (UIActivityViewController) instead of the reader.
     private func prepareShare(exportMetadataId metadataId: String?) async {
-        guard let metadataId,
-              let token = await currentAccessToken(),
-              let service = service else { return }
+        guard let metadataId else {
+            jobState = .failure(.invalidResponse("Missing export metadata ID"))
+            return
+        }
+        guard let token = await currentAccessToken() else {
+            jobState = .failure(.notAuthenticated)
+            return
+        }
+        guard let service else {
+            jobState = .failure(.notConfigured(reason: "BackendClient not initialized"))
+            return
+        }
         let downloader = KindleExportDownloader(backend: service.backend)
         do {
             let url = try await downloader.downloadOrCache(
@@ -403,8 +423,10 @@ struct KindleExportView: View {
             )
             shareURL = url
             showShare = true
+        } catch let error as KindleExportError {
+            jobState = .failure(error)
         } catch {
-            // swallow for v1
+            jobState = .failure(.networkError(error.localizedDescription))
         }
     }
 
