@@ -185,8 +185,12 @@
 		CE6DCCA8C9F944B1852D774C /* KindleExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE081CFD695E4DA88E45692C /* KindleExportService.swift */; };
 		429CAF78133F46C2B22E9FE3 /* KindleExportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC5807B76D6B4F249A87440C /* KindleExportView.swift */; };
 		AABBCCDD000000000000A001 /* KindleExportPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABBCCDD000000000000A002 /* KindleExportPoller.swift */; };
+		AABBCCDD000000000000E001 /* KindleExportDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABBCCDD000000000000E002 /* KindleExportDownloader.swift */; };
+		AABBCCDD000000000000E003 /* KindleExportReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABBCCDD000000000000E004 /* KindleExportReaderView.swift */; };
+		AABBCCDD000000000000E005 /* KindleExportShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABBCCDD000000000000E006 /* KindleExportShareSheet.swift */; };
 		7EDD7D6456B247229EF219F0 /* KindleExportServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C80967683CED4FC99C3473F1 /* KindleExportServiceTests.swift */; };
 		AABBCCDD000000000000B001 /* KindleExportPollerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABBCCDD000000000000B002 /* KindleExportPollerTests.swift */; };
+		AABBCCDD000000000000E007 /* KindleExportDownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABBCCDD000000000000E008 /* KindleExportDownloaderTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -380,9 +384,13 @@
 		FF0000000000000000000A01 /* ChapterReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChapterReaderView.swift; sourceTree = "<group>"; };
 		CE081CFD695E4DA88E45692C /* KindleExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportService.swift; sourceTree = "<group>"; };
 		AC5807B76D6B4F249A87440C /* KindleExportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportView.swift; sourceTree = "<group>"; };
+		AABBCCDD000000000000E002 /* KindleExportDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportDownloader.swift; sourceTree = "<group>"; };
+		AABBCCDD000000000000E004 /* KindleExportReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportReaderView.swift; sourceTree = "<group>"; };
+		AABBCCDD000000000000E006 /* KindleExportShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportShareSheet.swift; sourceTree = "<group>"; };
 		AABBCCDD000000000000A002 /* KindleExportPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportPoller.swift; sourceTree = "<group>"; };
 		C80967683CED4FC99C3473F1 /* KindleExportServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportServiceTests.swift; sourceTree = "<group>"; };
 		AABBCCDD000000000000B002 /* KindleExportPollerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportPollerTests.swift; sourceTree = "<group>"; };
+		AABBCCDD000000000000E008 /* KindleExportDownloaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportDownloaderTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -596,6 +604,8 @@
 				00000000000000000000015D /* GenerationBackendServiceTests.swift */,
 				C80967683CED4FC99C3473F1 /* KindleExportServiceTests.swift */,
 				AABBCCDD000000000000B002 /* KindleExportPollerTests.swift */,
+				AABBCCDD000000000000E008 /* KindleExportDownloaderTests.swift 				AABBCCDD000000000000E002 /* KindleExportDownloader.swift */,
+*/,
 			);
 			path = CathedralOSAppTests;
 			sourceTree = "<group>";
@@ -651,6 +661,8 @@
 				00000000000000000000018B /* CreditStateService.swift */,
 				000000000000000000000193 /* BackendHealthService.swift */,
 				000000000000000000000195 /* DiagnosticsViewModel.swift */,
+				AABBCCDD000000000000E004 /* KindleExportReaderView.swift */,
+				AABBCCDD000000000000E006 /* KindleExportShareSheet.swift */,
 				00000000000000000000019C /* GenerationModelService.swift */,
 				0000000000000000000001A3 /* ProjectCloudSyncService.swift */,
 				0000000000000000000001AC /* AuthSessionResolver.swift */,		81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */,
@@ -1294,6 +1306,10 @@ echo \"Runtime config plist injection completed: keys present\"";
 			buildConfigurations = (
 				00000000000000000000000F /* Debug */,
 				000000000000000000000010 /* Release */,
+				AABBCCDD000000000000E001 /* KindleExportDownloader.swift in Sources */,
+				AABBCCDD000000000000E003 /* KindleExportReaderView.swift in Sources */,
+				AABBCCDD000000000000E005 /* KindleExportShareSheet.swift in Sources */,
+				AABBCCDD000000000000E007 /* KindleExportDownloaderTests.swift in Sources */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
