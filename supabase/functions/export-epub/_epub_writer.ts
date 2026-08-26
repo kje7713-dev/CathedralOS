@@ -63,21 +63,22 @@ export async function writeEpub(
     const chapter = outline.chapters[ci];
     const chapterTitle = chapter.title || `Chapter ${ci + 1}`;
     const chapterRoot = chapter.sections[0];
+    const generatedSections = chapter.sections.filter((section) =>
+      section.body.trim().length > 0
+    );
 
-    // Body: chapter root + child sections concatenated as <p> blocks
+    // Do not publish empty outline placeholders as EPUB chapters. An outline
+    // can contain many accepted sections before prose has been generated; only
+    // sections with actual generated text belong in the book.
+    if (generatedSections.length === 0) continue;
+
+    // Body: generated chapter root + child sections concatenated as <p> blocks
     const bodyParts: string[] = [`<h1>${escapeXml(chapterTitle)}</h1>`];
-    for (let si = 1; si < chapter.sections.length; si++) {
-      const child = chapter.sections[si];
-      if (child.title) {
-        bodyParts.push(`<h2>${escapeXml(child.title)}</h2>`);
+    for (const section of generatedSections) {
+      if (section !== chapterRoot && section.title) {
+        bodyParts.push(`<h2>${escapeXml(section.title)}</h2>`);
       }
-      if (child.body) {
-        bodyParts.push(`<p>${escapeXml(child.body)}</p>`);
-      }
-    }
-    // The chapter root's own body (if any) flows after the title
-    if (chapterRoot?.body) {
-      bodyParts.push(`<p>${escapeXml(chapterRoot.body)}</p>`);
+      bodyParts.push(`<p>${escapeXml(section.body)}</p>`);
     }
 
     sectionFiles.push({

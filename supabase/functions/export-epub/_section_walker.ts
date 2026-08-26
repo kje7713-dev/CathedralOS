@@ -88,6 +88,19 @@ export async function walkSections(
     }
   }
 
+  // Do not create a technically valid but useless EPUB containing only outline
+  // headings. Legacy generation_outputs rows may have project_local_id but no
+  // outline_section_id; there is no safe way to infer which section they belong
+  // to, so they must not be silently substituted for current section prose.
+  const generatedSectionCount = snapshotSections.filter((section) =>
+    String(latestBody.get(String(section.id)) ?? "").trim().length > 0
+  ).length;
+  if (snapshotSections.length > 0 && generatedSectionCount === 0) {
+    throw new Error(
+      `no generated content found for outline ${String(currentOutline.id ?? "unknown")}; export requires section-linked generation outputs`,
+    );
+  }
+
   const chapters: Chapter[] = [];
   const childrenByParent = new Map<string, Section[]>();
 
