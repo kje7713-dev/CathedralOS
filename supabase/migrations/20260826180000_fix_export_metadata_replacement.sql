@@ -60,7 +60,7 @@ revoke all on function public.replace_export_metadata(
   int, text, boolean, text, text, uuid
 ) from public;
 grant execute on function public.replace_export_metadata(
-  uuid, text, text, int, text, text, text, text, text, text, text, int,
+  uuid, text, text, int, text, text, text, text, text, text, text, text, int,
   text, boolean, text, text, uuid
 ) to service_role;
 
