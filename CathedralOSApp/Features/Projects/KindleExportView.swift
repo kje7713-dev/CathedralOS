@@ -365,6 +365,16 @@ struct KindleExportView: View {
                         .buttonStyle(.plain)
 
                         Button {
+                            Task { await prepareShare(exportMetadataId: export.id) }
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                                .foregroundStyle(CathedralTheme.Colors.accent)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Share EPUB")
+                        .disabled(jobState.isInFlight)
+
+                        Button {
                             regenerate(export)
                         } label: {
                             Image(systemName: "arrow.clockwise")
