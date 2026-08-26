@@ -72,7 +72,6 @@ async function generateCoverWithDallE(outline: ProjectOutline): Promise<Uint8Arr
       n: 1,
       size: "1024x1792",
       quality: "hd",
-      response_format: "url",
     }),
   });
 
