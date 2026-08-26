@@ -868,7 +868,7 @@ Deno.test("walker: queries generation_outputs.output_text (not body)", async () 
 Deno.test("walker: maps out.output_text to section.body in the in-memory EPUB model", async () => {
   const mock = new MockSupabase();
   const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
-  const secId = "sec-1";
+  const secId = "SEC-1";
   mock.setResponse("project_snapshots", [{
     snapshot_json: { outlines: [{
       id: "o", name: "n", localProjectID: "ios-uuid-1", lineageID: "l",
@@ -876,7 +876,7 @@ Deno.test("walker: maps out.output_text to section.body in the in-memory EPUB mo
     }] },
   }]);
   mock.setResponse("generation_outputs", [{
-    outline_section_id: secId,
+    outline_section_id: secId.toLowerCase(),
     output_text: "the actual generated body content for the EPUB",
     created_at: "2026-08-25T12:00:00Z",
   }]);
