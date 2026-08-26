@@ -39,6 +39,14 @@ export async function walkSections(
   localProjectId: string,
   _snapshotProjectId: string,
 ): Promise<ProjectOutline> {
+  // Normalize at the read boundary so the lookup matches the canonical UPPERCASE
+  // form stored in outlines.local_project_id (per PR-4100-D migration
+  // 20260826000000_normalize_outlines_local_project_id.sql — CHECK constraint
+  // outlines_local_project_id_uppercase). The CHECK constraint does NOT make
+  // .eq() case-insensitive, so we normalize before the .eq() call. This also
+  // means both uppercase and lowercase callers resolve the same canonical row.
+  const normalizedProjectId = localProjectId.toUpperCase();
+
   // 1. Resolve outline via (user_id, local_project_id). The stale schema
   //    referenced a non-existent `projects` table + `outline_sections.project_id`;
   //    current Cathedral schema has `outlines` keyed on (user_id, local_project_id)
@@ -47,10 +55,10 @@ export async function walkSections(
     .from("outlines")
     .select("id, name")
     .eq("user_id", userId)
-    .eq("local_project_id", localProjectId)
+    .eq("local_project_id", normalizedProjectId)
     .maybeSingle();
   if (outlineError || !outline) {
-    throw new Error(`outline not found for project ${localProjectId}`);
+    throw new Error(`outline not found for project ${localProjectId} (normalized: ${normalizedProjectId})`);
   }
 
   // 2. Fetch all sections for this outline, ordered by position
