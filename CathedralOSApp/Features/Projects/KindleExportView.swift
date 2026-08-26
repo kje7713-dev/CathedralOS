@@ -486,7 +486,10 @@ struct KindleExportView: View {
             .flatMap { $0.sections }
             .sorted { $0.position < $1.position }
         let chapters: [OutlineSection] = sections.filter { section in
-            section.parent == nil && section.container == "chapter"
+            // Every top-level outline section = 1 Kindle chapter, regardless of `container`
+            // value. Per Kevin 2026-08-25 19:58 EDT: "Each generate section from
+            // section outlined accepted is a chapter in the kindle book."
+            section.parent == nil
         }
         let childSections: [OutlineSection] = sections.filter { section in
             section.parent != nil

@@ -100,7 +100,10 @@ export async function walkSections(
       parent_id: s.parent_id ?? null,
     };
 
-    if (s.parent_id === null && s.container === "chapter") {
+    // Every top-level outline section = 1 Kindle chapter, regardless of container value.
+    // Per Kevin 2026-08-25 19:58 EDT: "Each generate section from section outlined
+    // accepted is a chapter in the kindle book."
+    if (s.parent_id === null) {
       chapters.push({
         id: s.id,
         title: s.title || `Chapter ${chapters.length + 1}`,
