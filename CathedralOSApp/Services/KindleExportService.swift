@@ -79,6 +79,20 @@ struct KindleExportStatusResponse: Codable {
     let error_message: String?
 }
 
+/// A previously generated EPUB available for this project.
+struct KindleExportHistoryItem: Codable, Identifiable {
+    let id: String
+    let book_title: String
+    let author_name: String
+    let is_current: Bool
+    let is_active: Bool
+    let created_at: String
+}
+
+private struct KindleExportHistoryResponse: Codable {
+    let exports: [KindleExportHistoryItem]
+}
+
 /// Mirrors the backend's CHECK constraint on export_jobs.status.
 enum KindleExportStatus: String, Codable, CaseIterable {
     case pending
@@ -192,6 +206,44 @@ final class KindleExportService {
         } catch {
             throw KindleExportError.jobCreationFailed(
                 "Could not decode response: \(error.localizedDescription)")
+        }
+    }
+
+    /// Lists previously generated EPUBs for the local project.
+    func listPreviousExports(
+        projectID: String,
+        userAccessToken: String,
+    ) async throws -> [KindleExportHistoryItem] {
+        let url = backend.edgeFunctionURL(path: "export-epub-list")
+        var request = backend.authorizedRequest(for: url, userAccessToken: userAccessToken)
+        request.httpMethod = "POST"
+        do {
+            request.httpBody = try JSONEncoder().encode(["project_id": projectID])
+        } catch {
+            throw KindleExportError.invalidResponse(
+                "Could not encode project identifier: \(error.localizedDescription)")
+        }
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw KindleExportError.networkError(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw KindleExportError.invalidResponse("Non-HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw KindleExportError.serverError(
+                statusCode: http.statusCode,
+                message: String(data: data, encoding: .utf8),
+            )
+        }
+        do {
+            return try JSONDecoder().decode(KindleExportHistoryResponse.self, from: data).exports
+        } catch {
+            throw KindleExportError.invalidResponse(
+                "Could not decode previous exports: \(error.localizedDescription)")
         }
     }
 

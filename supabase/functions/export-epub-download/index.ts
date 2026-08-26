@@ -13,7 +13,7 @@
 //   Auth: Authorization: Bearer <user_jwt>
 //   Response 200: { signed_url, expires_at, export_metadata_id, book_title,
 //                  author_name, epub_sha256, file_size_bytes, is_current,
-//                  is_active, local_project_id, project_id, created_at }
+//                  is_active, project_id, created_at }
 //   Response 401: missing_authorization | invalid_token
 //   Response 400: invalid_json | missing_export_metadata_id
 //   Response 403: forbidden (ownership_mismatch — non-owner)
@@ -45,7 +45,6 @@ const corsHeaders = {
 export interface ExportMetadataRow {
   id: string;
   project_id: string;
-  local_project_id: string;
   book_title: string;
   author_name: string;
   epub_storage_path: string;
@@ -68,7 +67,6 @@ export interface DownloadResponse {
   file_size_bytes: number | null;
   is_current: boolean;
   is_active: boolean;
-  local_project_id: string;
   project_id: string;
   created_at: string;
 }
@@ -112,10 +110,9 @@ export async function lookupExportMetadata(
   const { data, error } = await adminClient
     .from("export_metadata")
     .select(
-      // Do not project is_active here: the live PostgREST schema cache can
-      // reject the entire query with 42703 while the catalog has the column.
-      // The owner check below still protects the signed URL.
-      "id, project_id, local_project_id, book_title, author_name, epub_storage_path, epub_sha256, is_current, exported_by_user_id, created_at",
+      // Keep this projection limited to columns present in export_metadata.
+      // local_project_id belongs to project_snapshots, not this table.
+      "id, project_id, book_title, author_name, epub_storage_path, epub_sha256, is_current, is_active, exported_by_user_id, created_at",
     )
     .eq("id", id)
     .maybeSingle();
@@ -246,7 +243,6 @@ serve(async (req: Request) => {
     file_size_bytes: null,
     is_current: row.is_current,
     is_active: row.is_active,
-    local_project_id: row.local_project_id,
     project_id: row.project_id,
     created_at: row.created_at,
   };

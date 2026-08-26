@@ -99,6 +99,10 @@ jobs:
         # coherence-check fix is a no-op until someone manually redeploys.
         if: ${{ hashFiles('supabase/functions/coherence-check/index.ts') != '' }}
         run: supabase functions deploy coherence-check --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Deploy Edge Function - export-epub-list
+        if: ${{ hashFiles('supabase/functions/export-epub-list/index.ts') != '' && success() }}
+        run: supabase functions deploy export-epub-list --project-ref "$SUPABASE_PROJECT_REF"
+
       - name: Deploy Edge Function - export-epub
         # Added 2026-08-25: PR-4100-A Kindle export backend (merge 7012059,
         # folded into PR-4100-B merge 3a77e37) was never listed here, so

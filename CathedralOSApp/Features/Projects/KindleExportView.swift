@@ -101,6 +101,12 @@ struct KindleExportView: View {
     @State private var shareURL: URL?
     @State private var showReader = false
     @State private var showShare = false
+    @State private var readerBookTitle = ""
+
+    // Previously generated EPUBs for this project.
+    @State private var previousExports: [KindleExportHistoryItem] = []
+    @State private var isLoadingPreviousExports = false
+    @State private var previousExportsError: String?
 
     // Service (created lazily; uses default BackendClient)
     @State private var service: KindleExportService?
@@ -155,6 +161,7 @@ struct KindleExportView: View {
                 coverImageSection
                 sectionPreviewSection
                 optionalMetadataSection
+                previousExportsSection
                 statusSection
                 }
             .navigationTitle("Export to Kindle")
@@ -192,7 +199,7 @@ struct KindleExportView: View {
             }
             .sheet(isPresented: $showReader) {
                 if let url = readerURL {
-                    KindleExportReaderView(fileURL: url, bookTitle: bookTitle)
+                    KindleExportReaderView(fileURL: url, bookTitle: readerBookTitle)
                 }
             }
             .sheet(isPresented: $showShare) {
@@ -205,6 +212,7 @@ struct KindleExportView: View {
         .task {
             if service == nil { service = makeService() }
             if bookTitle.isEmpty { bookTitle = project.name }
+            await loadPreviousExports()
         }
         .task(id: jobState.pollToken) {
             await pollKindleExportIfNeeded()
@@ -314,6 +322,61 @@ struct KindleExportView: View {
         }
     }
 
+    private var previousExportsSection: some View {
+        Section("Previous EPUBs") {
+            if isLoadingPreviousExports {
+                HStack {
+                    ProgressView()
+                    Text("Loading previous exports…")
+                }
+            } else if previousExports.isEmpty {
+                Text("No previous EPUBs for this project yet.")
+                    .font(CathedralTheme.Typography.body(13))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            } else {
+                ForEach(previousExports) { export in
+                    Button {
+                        Task {
+                            await prepareOpen(
+                                exportMetadataId: export.id,
+                                title: export.book_title,
+                            )
+                        }
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(export.book_title.isEmpty ? "Untitled EPUB" : export.book_title)
+                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                Text(export.author_name)
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                            }
+                            Spacer()
+                            if export.is_current {
+                                Text("Current")
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.accent)
+                            }
+                            Image(systemName: "arrow.up.forward.app")
+                                .foregroundStyle(CathedralTheme.Colors.accent)
+                        }
+                    }
+                }
+            }
+
+            if let previousExportsError {
+                Text(previousExportsError)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(.red)
+            }
+
+            Button("Refresh Previous EPUBs", systemImage: "arrow.clockwise") {
+                Task { await loadPreviousExports() }
+            }
+            .disabled(isLoadingPreviousExports || jobState.isInFlight)
+        }
+    }
+
     @ViewBuilder
     private var statusSection: some View {
         switch jobState {
@@ -361,7 +424,28 @@ struct KindleExportView: View {
         return KindleExportService(backend: backend)
     }
 
-    // MARK: - PR-4100-C: Open / Share helpers
+    // MARK: - Previous EPUBs / Open / Share helpers
+
+    private func loadPreviousExports() async {
+        guard let service else { return }
+        guard let token = await currentAccessToken() else {
+            previousExportsError = KindleExportError.notAuthenticated.errorDescription
+            return
+        }
+
+        isLoadingPreviousExports = true
+        previousExportsError = nil
+        defer { isLoadingPreviousExports = false }
+        do {
+            previousExports = try await service.listPreviousExports(
+                projectID: project.id.uuidString,
+                userAccessToken: token,
+            )
+        } catch {
+            previousExportsError = error.localizedDescription
+        }
+    }
+
 
     /// Reads the current export_metadata_id from the success state.
     private var currentExportMetadataId: String? {
@@ -372,7 +456,10 @@ struct KindleExportView: View {
     /// Fetches the EPUB via `KindleExportDownloader` (cache-first) and
     /// presents the Readium reader sheet. Download failures stay on this
     /// screen and are surfaced through the existing failure alert.
-    private func prepareOpen(exportMetadataId metadataId: String?) async {
+    private func prepareOpen(
+        exportMetadataId metadataId: String?,
+        title: String? = nil,
+    ) async {
         guard let metadataId else {
             jobState = .failure(.invalidResponse("Missing export metadata ID"))
             return
@@ -392,6 +479,7 @@ struct KindleExportView: View {
                 userAccessToken: token,
             )
             readerURL = url
+            readerBookTitle = title ?? bookTitle
             showReader = true
         } catch let error as KindleExportError {
             jobState = .failure(error)
