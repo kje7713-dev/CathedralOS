@@ -78,6 +78,14 @@ jobs:
         if: ${{ hashFiles('supabase/functions/embed-section/index.ts') != '' && success() }}
         run: supabase functions deploy embed-section --project-ref "$SUPABASE_PROJECT_REF"
 
+      # PR-4100-C: per-user ownership enforcement + 5-min signed URL for the
+      # iOS read path. JWT-verified (no --no-verify-jwt) — caller must present
+      # the user's own JWT, and the function checks exported_by_user_id == auth.uid()
+      # before issuing the signed URL.
+      - name: Deploy Edge Function - export-epub-download
+        if: ${{ hashFiles('supabase/functions/export-epub-download/index.ts') != '' && success() }}
+        run: supabase functions deploy export-epub-download --project-ref "$SUPABASE_PROJECT_REF"
+
       - name: Deploy Edge Function - sync-story-arc
         if: ${{ hashFiles('supabase/functions/sync-story-arc/index.ts') != '' }}
         run: supabase functions deploy sync-story-arc --project-ref "$SUPABASE_PROJECT_REF"
