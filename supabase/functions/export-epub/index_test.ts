@@ -827,7 +827,11 @@ Deno.test("walker: uses snapshot_json as authoritative structure (4 sections, NO
       }],
     },
   }]);
-  mock.setResponse("generation_outputs", []);
+  mock.setResponse("generation_outputs", [{
+    outline_section_id: "sec-1",
+    output_text: "chapter body",
+    created_at: "2026-08-25T12:00:00Z",
+  }]);
   const outline = await walkSections(mock as any, "user-1", localProjectId, snapshotProjectId);
   const totalSections = outline.chapters.reduce((acc, ch) => acc + ch.sections.length, 0);
   if (totalSections !== 4) throw new Error(`expected 4 current sections from snapshot, got ${totalSections}`);
@@ -843,7 +847,11 @@ Deno.test("walker: queries generation_outputs.output_text (not body)", async () 
   mock.setResponse("project_snapshots", [{
     snapshot_json: { outlines: [{ id: "o", name: "n", localProjectID: "ios-uuid-1", lineageID: "l", sections: [{ id: "s1", title: "t", status: "accepted", container: "chapter", position: 0, parentID: null }] }] },
   }]);
-  mock.setResponse("generation_outputs", []);
+  mock.setResponse("generation_outputs", [{
+    outline_section_id: "s1",
+    output_text: "body",
+    created_at: "2026-08-25T12:00:00Z",
+  }]);
   await walkSections(mock as any, "user-1", "ios-uuid-1", snapshotProjectId);
   const allGenCalls = mock.calls.filter((c) => c.table === "generation_outputs");
   const callsWithBody = allGenCalls.filter((c) => {
@@ -880,7 +888,7 @@ Deno.test("walker: maps out.output_text to section.body in the in-memory EPUB mo
   }
 });
 
-Deno.test("walker: missing generation output preserves existing placeholder/empty behavior", async () => {
+Deno.test("walker: rejects outline with no section-linked generated content", async () => {
   const mock = new MockSupabase();
   const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
   const secId = "sec-1";
@@ -891,9 +899,11 @@ Deno.test("walker: missing generation output preserves existing placeholder/empt
     }] },
   }]);
   mock.setResponse("generation_outputs", []);
-  const outline = await walkSections(mock as any, "user-1", "ios-uuid-1", snapshotProjectId);
-  const sec = outline.chapters[0].sections[0];
-  if (sec.body !== "") throw new Error(`expected empty body for missing generation, got: "${sec.body}"`);
+  await assertRejects(
+    () => walkSections(mock as any, "user-1", "ios-uuid-1", snapshotProjectId),
+    Error,
+    "no generated content found",
+  );
 });
 
 Deno.test("walker: uppercase/lowercase localProjectId normalization still works (PR-4100-D)", async () => {
@@ -905,7 +915,11 @@ Deno.test("walker: uppercase/lowercase localProjectId normalization still works 
       sections: [{ id: "s1", title: "Chapter 1", status: "accepted", container: "chapter", position: 0, parentID: null }],
     }] },
   }]);
-  mock.setResponse("generation_outputs", []);
+  mock.setResponse("generation_outputs", [{
+    outline_section_id: "s1",
+    output_text: "body",
+    created_at: "2026-08-25T12:00:00Z",
+  }]);
   const outline = await walkSections(mock as any, "user-1", "7f1de7c0-9b0a-463b-8a0f-733cb3f76e88", snapshotProjectId);
   if (outline.chapters.length !== 1) {
     throw new Error("walker failed to resolve outline for lowercase localProjectId");

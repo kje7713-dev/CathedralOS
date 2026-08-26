@@ -335,31 +335,44 @@ struct KindleExportView: View {
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             } else {
                 ForEach(previousExports) { export in
-                    Button {
-                        Task {
-                            await prepareOpen(
-                                exportMetadataId: export.id,
-                                title: export.book_title,
-                            )
-                        }
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(export.book_title.isEmpty ? "Untitled EPUB" : export.book_title)
-                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                                Text(export.author_name)
-                                    .font(CathedralTheme.Typography.caption())
-                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    HStack(spacing: 12) {
+                        Button {
+                            Task {
+                                await prepareOpen(
+                                    exportMetadataId: export.id,
+                                    title: export.book_title,
+                                )
                             }
-                            Spacer()
-                            if export.is_current {
-                                Text("Current")
-                                    .font(CathedralTheme.Typography.caption())
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(export.book_title.isEmpty ? "Untitled EPUB" : export.book_title)
+                                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                    Text(export.author_name)
+                                        .font(CathedralTheme.Typography.caption())
+                                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                                }
+                                Spacer()
+                                if export.is_current {
+                                    Text("Current")
+                                        .font(CathedralTheme.Typography.caption())
+                                        .foregroundStyle(CathedralTheme.Colors.accent)
+                                }
+                                Image(systemName: "arrow.up.forward.app")
                                     .foregroundStyle(CathedralTheme.Colors.accent)
                             }
-                            Image(systemName: "arrow.up.forward.app")
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            regenerate(export)
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
                                 .foregroundStyle(CathedralTheme.Colors.accent)
                         }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Regenerate EPUB")
+                        .disabled(jobState.isInFlight)
                     }
                 }
             }
@@ -524,7 +537,22 @@ struct KindleExportView: View {
         }
     }
 
-    private func performKickoffExport() async {
+    /// Rebuilds a historical EPUB from the project's current outline. The old
+    /// artifact remains available in Previous EPUBs; this creates a new export.
+    private func regenerate(_ export: KindleExportHistoryItem) {
+        let title = export.book_title
+        let author = export.author_name
+        bookTitle = title
+        authorName = author
+        Task { @MainActor in
+            await performKickoffExport(bookTitleOverride: title, authorNameOverride: author)
+        }
+    }
+
+    private func performKickoffExport(
+        bookTitleOverride: String? = nil,
+        authorNameOverride: String? = nil,
+    ) async {
         guard let service = service else {
             jobState = .failure(.notConfigured(reason: "BackendClient not initialized"))
             return
@@ -536,8 +564,8 @@ struct KindleExportView: View {
 
         let request = KindleExportRequest(
             project_id: project.id.uuidString,
-            book_title: bookTitle.trimmingCharacters(in: .whitespaces),
-            author_name: authorName.trimmingCharacters(in: .whitespaces),
+            book_title: (bookTitleOverride ?? bookTitle).trimmingCharacters(in: .whitespaces),
+            author_name: (authorNameOverride ?? authorName).trimmingCharacters(in: .whitespaces),
             copyright_year: Int(copyrightYear),
             copyright_holder: copyrightHolder.isEmpty ? nil : copyrightHolder,
             language: language.isEmpty ? "en" : language,
@@ -552,8 +580,15 @@ struct KindleExportView: View {
             cover_image_ai_generate: coverChoice == .aiGenerate ? true : nil
         )
 
+        // The exporter reads project_snapshots.snapshot_json as its source of
+        // truth. Push the current outline before kickoff so a newly generated
+        // section cannot be missing from the EPUB's snapshot.
         jobState = .kickingOff
         do {
+            try await ProjectCloudSyncService.shared.syncProject(
+                project,
+                modelContext: modelContext
+            )
             let resp = try await service.kickoff(
                 request: request,
                 userAccessToken: token
