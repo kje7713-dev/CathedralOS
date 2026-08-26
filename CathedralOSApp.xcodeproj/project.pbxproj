@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+	F4100C000000000000000001 /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = F4100C000000000000000011 /* ReadiumShared */; };
+	F4100C000000000000000002 /* ReadiumStreamer in Frameworks */ = {isa = PBXBuildFile; productRef = F4100C000000000000000012 /* ReadiumStreamer */; };
+	F4100C000000000000000003 /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = F4100C000000000000000013 /* ReadiumNavigator */; };
 		000000000000000000000040 /* CathedralOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000030 /* CathedralOSApp.swift */; };
 		000000000000000000000041 /* CathedralView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000031 /* CathedralView.swift */; };
 		000000000000000000000042 /* Compiler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000032 /* Compiler.swift */; };
@@ -398,6 +401,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F4100C000000000000000001 /* ReadiumShared in Frameworks */,
+				F4100C000000000000000002 /* ReadiumStreamer in Frameworks */,
+				F4100C000000000000000003 /* ReadiumNavigator in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -773,6 +779,11 @@
 			);
 			dependencies = (
 			);
+			packageProductDependencies = (
+				F4100C000000000000000011 /* ReadiumShared */,
+				F4100C000000000000000012 /* ReadiumStreamer */,
+				F4100C000000000000000013 /* ReadiumNavigator */,
+			);
 			name = CathedralOSApp;
 			productName = CathedralOSApp;
 			productReference = 000000000000000000000006 /* CathedralOSApp.app */;
@@ -796,6 +807,35 @@
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		F4100C000000000000000011 /* ReadiumShared */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F4100C000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumShared;
+		};
+		F4100C000000000000000012 /* ReadiumStreamer */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F4100C000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumStreamer;
+		};
+		F4100C000000000000000013 /* ReadiumNavigator */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F4100C000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumNavigator;
+		};
+/* End XCSwiftPackageProductDependency section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		F4100C000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/readium/swift-toolkit.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.11.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin PBXProject section */
 		000000000000000000000001 /* Project object */ = {
@@ -824,6 +864,9 @@
 			);
 			mainGroup = 000000000000000000000002;
 			productRefGroup = 000000000000000000000003 /* Products */;
+			packageReferences = (
+				F4100C000000000000000010 /* XCRemoteSwiftPackageReference "swift-toolkit" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -1008,6 +1051,9 @@ echo \"Runtime config plist injection completed: keys present\"";
 				CE6DCCA8C9F944B1852D774C /* KindleExportService.swift in Sources */,
 				429CAF78133F46C2B22E9FE3 /* KindleExportView.swift in Sources */,
 				AABBCCDD000000000000A001 /* KindleExportPoller.swift in Sources */,
+				AABBCCDD000000000000E001 /* KindleExportDownloader.swift in Sources */,
+				AABBCCDD000000000000E003 /* KindleExportReaderView.swift in Sources */,
+				AABBCCDD000000000000E005 /* KindleExportShareSheet.swift in Sources */,
 
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1294,10 +1340,6 @@ echo \"Runtime config plist injection completed: keys present\"";
 		};
 		000000000000000000000009 /* Build configuration list for PBXNativeTarget "CathedralOSAppTests" */ = {
 			isa = XCConfigurationList;
-				AABBCCDD000000000000E007 /* KindleExportDownloaderTests.swift in Sources */,
-				AABBCCDD000000000000E001 /* KindleExportDownloader.swift in Sources */,
-				AABBCCDD000000000000E003 /* KindleExportReaderView.swift in Sources */,
-				AABBCCDD000000000000E005 /* KindleExportShareSheet.swift in Sources */,
 			buildConfigurations = (
 				00000000000000000000000D /* Debug */,
 				00000000000000000000000E /* Release */,
