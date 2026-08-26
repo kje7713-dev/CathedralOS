@@ -128,7 +128,10 @@ struct KindleExportView: View {
         Binding(
             get: { jobState.isSuccess },
             set: { isPresented in
-                if !isPresented { dismiss() }
+                // Dismissing the alert is not the same as dismissing the export
+                // screen. Open/Share need this view alive while their async
+                // download finishes and presents the next sheet.
+                if !isPresented { jobState = .idle }
             }
         )
     }
@@ -175,8 +178,14 @@ struct KindleExportView: View {
                 isPresented: successAlertBinding,
                 presenting: jobState.successMessage
             ) { _ in
-                Button("Open") { Task { await prepareOpen() } }
-                Button("Share") { Task { await prepareShare() } }
+                Button("Open") {
+                    let metadataId = currentExportMetadataId
+                    Task { await prepareOpen(exportMetadataId: metadataId) }
+                }
+                Button("Share") {
+                    let metadataId = currentExportMetadataId
+                    Task { await prepareShare(exportMetadataId: metadataId) }
+                }
                 Button("Done", role: .cancel) { dismiss() }
             } message: { msg in
                 Text(msg)
@@ -363,8 +372,8 @@ struct KindleExportView: View {
     /// Fetches the EPUB via `KindleExportDownloader` (cache-first) and
     /// presents the Readium reader sheet. Surfaces no error in v1 (would
     /// become a toast or alert in a follow-up).
-    private func prepareOpen() async {
-        guard let metadataId = currentExportMetadataId,
+    private func prepareOpen(exportMetadataId metadataId: String?) async {
+        guard let metadataId,
               let token = await currentAccessToken(),
               let service = service else { return }
         let downloader = KindleExportDownloader(backend: service.backend)
@@ -382,8 +391,8 @@ struct KindleExportView: View {
 
     /// Same fetch as `prepareOpen` but presents the iOS share sheet
     /// (UIActivityViewController) instead of the reader.
-    private func prepareShare() async {
-        guard let metadataId = currentExportMetadataId,
+    private func prepareShare(exportMetadataId metadataId: String?) async {
+        guard let metadataId,
               let token = await currentAccessToken(),
               let service = service else { return }
         let downloader = KindleExportDownloader(backend: service.backend)
