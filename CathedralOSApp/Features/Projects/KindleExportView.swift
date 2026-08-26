@@ -26,7 +26,7 @@ enum CoverChoice: String, CaseIterable, Identifiable {
 enum JobState {
     case idle
     case kickingOff
-    case polling(jobId: String, status: KindleExportStatus, attempt: Int)
+    case polling(jobId: String, status: KindleExportStatus)
     case success(exportMetadataId: String?, epubcheckVersion: String?)
     case failure(KindleExportError)
 
@@ -60,7 +60,7 @@ enum JobState {
     }
 
     var pollToken: String? {
-        if case .polling(let id, _, _) = self { return id }
+        if case .polling(let id, _) = self { return id }
         return nil
     }
 
@@ -180,7 +180,7 @@ struct KindleExportView: View {
             if bookTitle.isEmpty { bookTitle = project.name }
         }
         .task(id: jobState.pollToken) {
-            await pollJobIfNeeded()
+            await pollKindleExportIfNeeded()
         }
         .onChange(of: selectedPhotoItem) { _, newItem in
             guard let newItem else { return }
@@ -294,7 +294,7 @@ struct KindleExportView: View {
             Section {
                 HStack { ProgressView(); Text("Kicking off export…") }
             }
-        case .polling(_, let status, _):
+        case .polling(_, let status):
             Section {
                 HStack {
                     ProgressView()
@@ -374,7 +374,7 @@ struct KindleExportView: View {
                 request: request,
                 userAccessToken: token
             )
-            jobState = .polling(jobId: resp.job_id, status: .pending, attempt: 0)
+            jobState = .polling(jobId: resp.job_id, status: .pending)
         } catch let err as KindleExportError {
             jobState = .failure(err)
         } catch {
@@ -382,54 +382,36 @@ struct KindleExportView: View {
         }
     }
 
-    private func pollJobIfNeeded() async {
-        guard case let .polling(jobId, _, attempt) = jobState else { return }
-        guard let service = service else { return }
-        guard let token = await currentAccessToken() else {
-            jobState = .failure(.notAuthenticated)
+    /// Spinner phase driver — runs the KindleExportPoller loop until terminal /
+    /// cancellation / transient budget exhaustion. The poller is created here
+    /// (not stored in @State) because its lifetime is bound to this Task; when
+    /// the Task ends (terminal reached, dismissed view, or SwiftUI cancels the
+    /// `.task(id: jobState.pollToken)` because jobId changed), the poller is
+    /// deallocated naturally. See KindleExportPoller.swift for the loop design.
+    private func pollKindleExportIfNeeded() async {
+        guard let jobId = jobState.pollToken else { return }
+        guard let service = service else {
+            jobState = .failure(.notConfigured(reason: "BackendClient not initialized"))
             return
         }
-
-        // Backoff: 2s for first retry, then 4s, then 8s.
-        let delaySec = pow(2.0, Double(attempt))
-        try? await Task.sleep(nanoseconds: UInt64(delaySec * 1_000_000_000))
-
-        do {
-            let status = try await service.status(jobId: jobId, userAccessToken: token)
-            let parsedStatus = KindleExportStatus(rawValue: status.status) ?? .pending
-
-            if parsedStatus.isTerminal {
-                if parsedStatus.isSuccess {
-                    jobState = .success(
-                        exportMetadataId: status.export_metadata_id,
-                        epubcheckVersion: status.epubcheck_version
-                    )
-                } else {
-                    let message = status.error_message ?? "Export failed (\(parsedStatus.displayName))"
-                    jobState = .failure(.serverError(statusCode: 0, message: message))
+        let poller = KindleExportPoller(
+            jobId: jobId,
+            service: service,
+            getAccessToken: { await self.currentAccessToken() },
+            onUpdate: { response in
+                let parsedStatus = KindleExportStatus(rawValue: response.status) ?? .pending
+                self.jobState = .polling(jobId: jobId, status: parsedStatus)
+            },
+            onTerminal: { result in
+                switch result {
+                case .success(let metaId, let version):
+                    self.jobState = .success(exportMetadataId: metaId, epubcheckVersion: version)
+                case .failure(let err):
+                    self.jobState = .failure(err)
                 }
-            } else {
-                jobState = .polling(
-                    jobId: jobId,
-                    status: parsedStatus,
-                    attempt: attempt + 1
-                )
             }
-        } catch let err as KindleExportError {
-            // Distinguish transient network errors from server errors.
-            switch err {
-            case .networkError, .pollFailed:
-                if attempt < 3 {
-                    jobState = .polling(jobId: jobId, status: .validating, attempt: attempt + 1)
-                } else {
-                    jobState = .failure(err)
-                }
-            default:
-                jobState = .failure(err)
-            }
-        } catch {
-            jobState = .failure(.networkError(error.localizedDescription))
-        }
+        )
+        await poller.run()
     }
 
     private func uploadCoverImage(_ item: PhotosPickerItem) async {
