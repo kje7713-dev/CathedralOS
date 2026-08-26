@@ -80,9 +80,12 @@ export async function walkSections(
     throw new Error(`fetching generation outputs failed: ${outputsError.message}`);
   }
 
+  // UUID text may arrive with different casing between JSON snapshots and
+  // PostgREST rows. Normalize IDs before joining; UUID equality is
+  // case-insensitive in Postgres, but Map lookups are not.
   const latestBody = new Map<string, string>();
   for (const out of (outputs ?? []) as Array<Record<string, unknown>>) {
-    const sid = String(out.outline_section_id);
+    const sid = String(out.outline_section_id).toLowerCase();
     if (!latestBody.has(sid)) {
       latestBody.set(sid, String(out.output_text ?? ""));
     }
@@ -93,7 +96,7 @@ export async function walkSections(
   // outline_section_id; there is no safe way to infer which section they belong
   // to, so they must not be silently substituted for current section prose.
   const generatedSectionCount = snapshotSections.filter((section) =>
-    String(latestBody.get(String(section.id)) ?? "").trim().length > 0
+    String(latestBody.get(String(section.id).toLowerCase()) ?? "").trim().length > 0
   ).length;
   if (snapshotSections.length > 0 && generatedSectionCount === 0) {
     throw new Error(
@@ -111,7 +114,7 @@ export async function walkSections(
       title: String(s.title ?? ""),
       container: (String(s.container ?? "scene")) as Container,
       pov: s.pov ? String(s.pov) : null,
-      body: latestBody.get(sid) ?? "",
+      body: latestBody.get(sid.toLowerCase()) ?? "",
       position: Number(s.position ?? 0),
       parent_id: s.parentID ? String(s.parentID) : null,
     };
