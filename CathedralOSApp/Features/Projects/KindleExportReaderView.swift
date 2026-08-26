@@ -1,10 +1,10 @@
+import Foundation
+import ReadiumNavigator
+import ReadiumShared
+import ReadiumStreamer
 import SwiftUI
-import WebKit
 
-/// In-app EPUB reader using WKWebView. Per Kevin's 2026-08-26 10:42 EDT scope:
-/// keep Readium for EPUB rendering — the Readium SDK SPM dep is deferred to
-/// a follow-up PR (the pbxproj surgery for SwiftPM packages is non-trivial);
-/// v1 uses WKWebView which renders EPUBs directly via file:// URLs.
+/// In-app EPUB reader backed by Readium's EPUB navigator.
 ///
 /// Limited to read/share — no library, bookmark, or highlight features.
 struct KindleExportReaderView: View {
@@ -12,47 +12,54 @@ struct KindleExportReaderView: View {
     let bookTitle: String
 
     @Environment(\.dismiss) private var dismiss
+    @State private var loadError: String?
 
     var body: some View {
         NavigationStack {
-            EPUBWebView(fileURL: fileURL)
-                .ignoresSafeArea()
-                .navigationTitle(bookTitle)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { dismiss() }
-                    }
+            ReadiumEPUBView(fileURL: fileURL) { message in
+                loadError = message
+            }
+            .ignoresSafeArea()
+            .navigationTitle(bookTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
                 }
+            }
+            .alert("Unable to open EPUB", isPresented: .constant(loadError != nil)) {
+                Button("Done") {
+                    loadError = nil
+                    dismiss()
+                }
+            } message: {
+                Text(loadError ?? "The EPUB could not be opened.")
+            }
         }
     }
 }
 
-/// WKWebView wrapper that loads a local EPUB file. WKWebView renders EPUBs
-/// directly via the file:// URL (Safari-style). The `loadFileURL` overload
-/// (vs `load(_:)`) gives the web view read access to the file without
-/// triggering WKWebView's ATS restrictions on file:// URLs.
-private struct EPUBWebView: UIViewControllerRepresentable {
+private struct ReadiumEPUBView: UIViewControllerRepresentable {
     let fileURL: URL
+    let onError: @MainActor (String) -> Void
 
-    func makeUIViewController(context: Context) -> EPUBViewController {
-        return EPUBViewController(fileURL: fileURL)
+    func makeUIViewController(context: Context) -> ReadiumEPUBViewController {
+        ReadiumEPUBViewController(fileURL: fileURL, onError: onError)
     }
 
-    func updateUIViewController(_ uiViewController: EPUBViewController, context: Context) {}
+    func updateUIViewController(_ viewController: ReadiumEPUBViewController, context: Context) {}
 }
 
-private final class EPUBViewController: UIViewController, WKNavigationDelegate {
+@MainActor
+private final class ReadiumEPUBViewController: UIViewController {
     private let fileURL: URL
-    private let webView: WKWebView
+    private let onError: @MainActor (String) -> Void
+    private var navigator: EPUBNavigatorViewController?
+    private var loadTask: Task<Void, Never>?
 
-    init(fileURL: URL) {
+    init(fileURL: URL, onError: @escaping @MainActor (String) -> Void) {
         self.fileURL = fileURL
-        let config = WKWebViewConfiguration()
-        config.allowsInlineMediaPlayback = true
-        // The default WKWebView allows file:// URL access only via
-        // loadFileURL(_:allowingReadAccessTo:), which scopes read access.
-        self.webView = WKWebView(frame: .zero, configuration: config)
+        self.onError = onError
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -63,15 +70,57 @@ private final class EPUBViewController: UIViewController, WKNavigationDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        webView.navigationDelegate = self
-        view.addSubview(webView)
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: view.topAnchor),
-            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
-        webView.loadFileURL(fileURL, allowingReadAccessTo: fileURL.deletingLastPathComponent())
+        loadTask = Task { [weak self] in
+            await self?.loadPublication()
+        }
+    }
+
+    deinit {
+        loadTask?.cancel()
+    }
+
+    private func loadPublication() async {
+        let httpClient = DefaultHTTPClient(configuration: .ephemeral)
+        let assetRetriever = AssetRetriever(httpClient: httpClient)
+        let assetResult = await assetRetriever.retrieve(
+            url: fileURL,
+            hints: FormatHints(mediaType: .epub)
+        )
+
+        guard case let .success(asset) = assetResult else {
+            onError("Readium could not read the downloaded EPUB.")
+            return
+        }
+
+        let opener = PublicationOpener(parser: EPUBParser())
+        let publicationResult = await opener.open(
+            asset: asset,
+            allowUserInteraction: false
+        )
+
+        guard case let .success(publication) = publicationResult else {
+            onError("Readium could not parse the downloaded EPUB.")
+            return
+        }
+
+        do {
+            let navigator = try EPUBNavigatorViewController(
+                publication: publication,
+                initialLocation: nil
+            )
+            addChild(navigator)
+            view.addSubview(navigator.view)
+            navigator.view.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                navigator.view.topAnchor.constraint(equalTo: view.topAnchor),
+                navigator.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                navigator.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                navigator.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            ])
+            navigator.didMove(toParent: self)
+            self.navigator = navigator
+        } catch {
+            onError("Readium could not create the EPUB reader.")
+        }
     }
 }
