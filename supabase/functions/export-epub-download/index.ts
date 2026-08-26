@@ -51,7 +51,9 @@ export interface ExportMetadataRow {
   epub_storage_path: string;
   epub_sha256: string;
   is_current: boolean;
-  is_active: boolean;
+  // Optional because older PostgREST schema caches may not expose this
+  // column even when it exists in the catalog. Ownership remains mandatory.
+  is_active?: boolean;
   exported_by_user_id: string;
   created_at: string;
 }
@@ -110,7 +112,10 @@ export async function lookupExportMetadata(
   const { data, error } = await adminClient
     .from("export_metadata")
     .select(
-      "id, project_id, local_project_id, book_title, author_name, epub_storage_path, epub_sha256, is_current, is_active, exported_by_user_id, created_at",
+      // Do not project is_active here: the live PostgREST schema cache can
+      // reject the entire query with 42703 while the catalog has the column.
+      // The owner check below still protects the signed URL.
+      "id, project_id, local_project_id, book_title, author_name, epub_storage_path, epub_sha256, is_current, exported_by_user_id, created_at",
     )
     .eq("id", id)
     .maybeSingle();
@@ -149,7 +154,8 @@ export function ownershipError(
   userId: string,
 ): string | null {
   if (row.exported_by_user_id !== userId) return "forbidden";
-  if (!row.is_active) return "export_inactive";
+  // Treat a missing legacy-cache field as active; ownership is still explicit.
+  if (row.is_active === false) return "export_inactive";
   return null;
 }
 
