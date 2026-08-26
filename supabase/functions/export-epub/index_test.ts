@@ -26,6 +26,7 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { walkSections } from "./_section_walker.ts";
+import { splitParagraphs } from "./_paragraphs.ts";
 import {
   stub,
   type Stub,
@@ -108,6 +109,22 @@ function makeWarningOnlyResult(): ValidationResult {
     ],
   });
 }
+
+Deno.test("EPUB writer: preserves blank-line paragraph boundaries", () => {
+  assertEquals(
+    splitParagraphs("First paragraph.\n\nSecond paragraph.\r\n\r\nThird paragraph."),
+    ["First paragraph.", "Second paragraph.", "Third paragraph."],
+  );
+  assertEquals(splitParagraphs("  One paragraph with\nline wrapping.  "), [
+    "One paragraph with\nline wrapping.",
+  ]);
+});
+
+Deno.test("EPUB writer: emits spacing between separate paragraphs", () => {
+  const src = Deno.readTextFileSync(new URL("./_epub_writer.ts", import.meta.url));
+  assertStringIncludes(src, "splitParagraphs(section.body)");
+  assertStringIncludes(src, "p + p");
+});
 
 // ---------------------------------------------------------------------------
 // Test: validator client — valid EPUB passes

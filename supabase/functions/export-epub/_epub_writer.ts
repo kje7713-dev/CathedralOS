@@ -25,6 +25,7 @@
 import JSZip from "https://esm.sh/jszip@3.10.1";
 import type { ExportMetadata } from "./_metadata.ts";
 import type { ProjectOutline } from "./_section_walker.ts";
+import { splitParagraphs } from "./_paragraphs.ts";
 
 export async function writeEpub(
   metadata: ExportMetadata,
@@ -78,7 +79,9 @@ export async function writeEpub(
       if (section !== chapterRoot && section.title) {
         bodyParts.push(`<h2>${escapeXml(section.title)}</h2>`);
       }
-      bodyParts.push(`<p>${escapeXml(section.body)}</p>`);
+      for (const paragraph of splitParagraphs(section.body)) {
+        bodyParts.push(`<p>${escapeXml(paragraph)}</p>`);
+      }
     }
 
     sectionFiles.push({
@@ -215,6 +218,10 @@ h2 {
 p {
   margin: 0;
   text-indent: 1.5em;
+}
+p + p {
+  margin-top: 1em;
+  text-indent: 0;
 }
 p:first-of-type {
   text-indent: 0;
