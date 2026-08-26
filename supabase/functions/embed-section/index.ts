@@ -303,7 +303,7 @@ Deno.serve(async (req: Request) => {
   const { error: outlineErr } = await adminClient.from("outlines").upsert({
     id: body.outline_id,
     user_id: user.id,
-    local_project_id: body.project_id,
+    local_project_id: body.project_id.toUpperCase(),
     lineage_id: body.project_id,
     name: "Outline",
   }, { onConflict: "id" });

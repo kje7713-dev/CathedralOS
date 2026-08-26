@@ -25,6 +25,7 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { walkSections } from "./_section_walker.ts";
 import {
   stub,
   type Stub,
@@ -739,6 +740,104 @@ Deno.test("walker: top-level outline section with non-chapter container becomes 
     if (wouldBeKindleChapter !== shape.shouldBeKindleChapter) {
       throw new Error(`container=${shape.container} (parent_id=null): expected Kindle chapter = ${shape.shouldBeKindleChapter}, got ${wouldBeKindleChapter}`);
     }
+  }
+});
+
+
+
+Deno.test("walker: normalizes localProjectId to UPPERCASE before .eq() — lowercase input", async () => {
+  // Per PR-4100-D: walkSections must uppercase the localProjectId before the .eq()
+  // call so the case-sensitive lookup matches the canonical UPPERCASE stored
+  // value in outlines.local_project_id. We invoke walkSections() directly so
+  // the actual normalization logic runs (not just the mock chain).
+  const mock = new MockSupabase();
+  const lowercaseInput = "7f1de7c0-9b0a-463b-8a0f-733cb3f76e88";
+  const expectedUpper = "7F1DE7C0-9B0A-463B-8A0F-733CB3F76E88";
+  const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
+  mock.setResponse("outlines", [{ id: "outline-uuid", name: "Test Outline" }]);
+  mock.setResponse("outline_sections", []);
+  mock.setResponse("generation_outputs", []);
+  try {
+    await walkSections(mock as any, "user-1", lowercaseInput, snapshotProjectId);
+  } catch (_err) {
+    // Walker may throw on missing sections — irrelevant; we only inspect the mock.calls.
+  }
+  // The walker calls .eq("user_id", userId).eq("local_project_id", normalizedProjectId).
+  // The SECOND .eq() is recorded as select-eq2 (col2="local_project_id", val2=normalized).
+  const eqCall = mock.calls.find(c =>
+    c.table === "outlines" &&
+    c.op === "select-eq2" &&
+    (c.payload as any).col2 === "local_project_id" &&
+    (c.payload as any).val2 === expectedUpper
+  );
+  if (!eqCall) {
+    throw new Error(`expected .eq("local_project_id", "${expectedUpper}") in 2nd .eq(). Recorded: ${JSON.stringify(mock.calls.filter(c => c.table === "outlines"))}`);
+  }
+});
+
+Deno.test("walker: passes through already-uppercase localProjectId unchanged", async () => {
+  // Per PR-4100-D: the normalization is idempotent — uppercase input stays uppercase.
+  // We invoke walkSections() directly to exercise the actual logic.
+  const mock = new MockSupabase();
+  const upperInput = "7F1DE7C0-9B0A-463B-8A0F-733CB3F76E88";
+  const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
+  mock.setResponse("outlines", [{ id: "outline-uuid", name: "Test Outline" }]);
+  mock.setResponse("outline_sections", []);
+  mock.setResponse("generation_outputs", []);
+  try {
+    await walkSections(mock as any, "user-1", upperInput, snapshotProjectId);
+  } catch (_err) {
+    // ignore
+  }
+  const eqCall = mock.calls.find(c =>
+    c.table === "outlines" &&
+    c.op === "select-eq2" &&
+    (c.payload as any).col2 === "local_project_id" &&
+    (c.payload as any).val2 === upperInput
+  );
+  if (!eqCall) throw new Error("expected uppercase local_project_id in 2nd .eq() call");
+});
+
+Deno.test("embed-section: canonicalizes body.project_id.toUpperCase() before outlines upsert (static check)", () => {
+  // Per PR-4100-D: embed-section/index.ts must canonicalize the local_project_id
+  // it upserts to outlines so future lowercase callers do not hit the new
+  // outlines_local_project_id_uppercase CHECK constraint.
+  const src = Deno.readTextFileSync(
+    new URL("../embed-section/index.ts", import.meta.url).pathname
+  );
+  if (!src.includes("local_project_id: body.project_id.toUpperCase()")) {
+    throw new Error(
+      "embed-section no longer canonicalizes local_project_id. " +
+      "File does not contain: local_project_id: body.project_id.toUpperCase()"
+    );
+  }
+  // Defensive: also assert the OLD non-canonicalized form is gone
+  if (src.match(/local_project_id:\s*body\.project_id\s*,\s*\n/)) {
+    throw new Error("embed-section still has the old non-canonicalized local_project_id upsert");
+  }
+});
+
+Deno.test("extract trigger: UPPER(o ->> localProjectID) in migration (static check)", () => {
+  // Per PR-4100-D: extract_outlines_from_snapshot in the new migration must use
+  // UPPER(o ->> 'localProjectID') so the DB extraction path canonicalizes.
+  // Relative path from supabase/functions/export-pub/index_test.ts to migrations/:
+  //   up 1 (export-pub) -> supabase/functions
+  //   up 2 (functions)  -> supabase
+  //   then into migrations/
+  const src = Deno.readTextFileSync(
+    new URL("../../migrations/20260826000000_normalize_outlines_local_project_id.sql", import.meta.url).pathname
+  );
+  if (!src.includes("UPPER(o ->> 'localProjectID')")) {
+    throw new Error("migration missing UPPER(o ->> 'localProjectID') canonicalization");
+  }
+  if (src.includes("(o ->> 'localProjectID')::uuid")) {
+    throw new Error("migration still contains the lowercasing (o ->> 'localProjectID')::uuid cast");
+  }
+  if (!src.includes("outlines_local_project_id_uppercase")) {
+    throw new Error("migration missing CHECK constraint outlines_local_project_id_uppercase");
+  }
+  if (!src.includes("UPPER(local_project_id)")) {
+    throw new Error("migration missing UPPER() backfill in UPDATE");
   }
 });
 
