@@ -133,6 +133,8 @@ Deno.test("EPUB writer: puts cover document first in reading order", () => {
   assertStringIncludes(src, '"OEBPS/cover.xhtml"');
   assertStringIncludes(src, 'src="cover-image.jpg"');
   assertStringIncludes(src, 'class="cover-metadata"');
+  assertStringIncludes(src, 'flex-direction: column');
+  assertStringIncludes(src, 'max-height: 62vh');
   assertStringIncludes(src, 'By ${escapeXml(metadata.author_name)}');
 });
 
