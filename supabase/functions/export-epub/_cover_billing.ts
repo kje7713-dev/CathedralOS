@@ -177,7 +177,7 @@ export async function settleAiCoverCredits(
     provider_cogs_cents: billing.providerCogsCents,
     customer_revenue_cents: billing.customerRevenueCents,
     margin_cents: billing.marginCents,
-  }, { onConflict: "user_id,idempotency_key" });
+  }, { onConflict: "user_id,idempotency_key,purpose" });
   if (error) {
     throw new Error(`AI cover telemetry write failed: ${error.message}`);
   }
