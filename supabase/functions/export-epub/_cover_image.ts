@@ -78,6 +78,7 @@ async function generateCoverWithDallE(
       n: 1,
       size: "1024x1536",
       quality: "high",
+      output_format: "jpeg",
     }),
   });
 

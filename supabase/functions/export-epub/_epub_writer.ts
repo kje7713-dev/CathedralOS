@@ -115,23 +115,66 @@ export async function writeEpub(
     .join("\n    ");
 
   const copyrightLine = metadata.copyright_holder
-    ? `Copyright © ${metadata.copyright_year ?? new Date().getFullYear()} ${escapeXml(metadata.copyright_holder)}`
+    ? `Copyright © ${metadata.copyright_year ?? new Date().getFullYear()} ${
+      escapeXml(metadata.copyright_holder)
+    }`
     : "";
 
-  const metadataBlock = `<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+  const metadataBlock =
+    `<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
     <dc:identifier id="BookId">urn:uuid:${uuid}</dc:identifier>
     <dc:title>${escapeXml(metadata.book_title)}</dc:title>
     <dc:creator id="creator">${escapeXml(metadata.author_name)}</dc:creator>
     <dc:language>${metadata.language}</dc:language>
-    ${metadata.copyright_year ? `<dc:date>${metadata.copyright_year}</dc:date>` : ""}
+    ${
+      metadata.copyright_year
+        ? `<dc:date>${metadata.copyright_year}</dc:date>`
+        : ""
+    }
     ${copyrightLine ? `<dc:rights>${escapeXml(copyrightLine)}</dc:rights>` : ""}
-    ${metadata.isbn ? `<dc:identifier id="ISBN">${escapeXml(metadata.isbn)}</dc:identifier>` : ""}
-    ${metadata.publisher_name ? `<dc:publisher>${escapeXml(metadata.publisher_name)}</dc:publisher>` : ""}
-    ${metadata.book_description ? `<dc:description>${escapeXml(metadata.book_description)}</dc:description>` : ""}
-    ${metadata.series_name ? `<meta property="belongs-to-collection" id="collection">${escapeXml(metadata.series_name)}</meta>` : ""}
-    ${metadata.series_number ? `<meta refines="#collection" property="group-position">${metadata.series_number}</meta>` : ""}
+    ${
+      metadata.isbn
+        ? `<dc:identifier id="ISBN">${escapeXml(metadata.isbn)}</dc:identifier>`
+        : ""
+    }
+    ${
+      metadata.publisher_name
+        ? `<dc:publisher>${escapeXml(metadata.publisher_name)}</dc:publisher>`
+        : ""
+    }
+    ${
+      metadata.book_description
+        ? `<dc:description>${
+          escapeXml(metadata.book_description)
+        }</dc:description>`
+        : ""
+    }
+    ${
+      metadata.about_author
+        ? `<meta property="x-about-author">${
+          escapeXml(metadata.about_author)
+        }</meta>`
+        : ""
+    }
+    ${
+      metadata.series_name
+        ? `<meta property="belongs-to-collection" id="collection">${
+          escapeXml(metadata.series_name)
+        }</meta>`
+        : ""
+    }
+    ${
+      metadata.series_number
+        ? `<meta refines="#collection" property="group-position">${metadata.series_number}</meta>`
+        : ""
+    }
     <meta property="dcterms:modified">${now}</meta>
-    ${metadata.dedication ? `<dc:subject>${escapeXml(metadata.dedication)}</dc:subject>` : ""}
+    ${coverBuffer ? `<meta name="cover" content="cover-image"/>` : ""}
+    ${
+      metadata.dedication
+        ? `<dc:subject>${escapeXml(metadata.dedication)}</dc:subject>`
+        : ""
+    }
   </metadata>`;
 
   zip.file(
@@ -172,7 +215,9 @@ export async function writeEpub(
   // 6. OEBPS/toc.ncx
   const navPoints = sectionFiles
     .map((sf, i) =>
-      `<navPoint id="navPoint-${i + 1}" playOrder="${i + 1}"><navLabel><text>${escapeXml(sf.title)}</text></navLabel><content src="${sf.href}"/></navPoint>`
+      `<navPoint id="navPoint-${i + 1}" playOrder="${i + 1}"><navLabel><text>${
+        escapeXml(sf.title)
+      }</text></navLabel><content src="${sf.href}"/></navPoint>`
     )
     .join("\n    ");
   zip.file(
