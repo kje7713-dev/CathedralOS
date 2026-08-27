@@ -5,7 +5,7 @@ import UIKit
 
 // MARK: - CoverChoice
 
-enum CoverChoice: String, CaseIterable, Identifiable {
+enum CoverChoice: String, CaseIterable, Identifiable, Codable {
     case skip
     case upload
     case aiGenerate
@@ -19,6 +19,25 @@ enum CoverChoice: String, CaseIterable, Identifiable {
         case .aiGenerate: return "Auto-generate"
         }
     }
+}
+
+// MARK: - Saved Metadata
+
+private struct KindleExportMetadataDraft: Codable {
+    var bookTitle: String
+    var authorName: String
+    var copyrightYear: String
+    var copyrightHolder: String
+    var language: String
+    var dedication: String
+    var bookDescription: String
+    var aboutAuthor: String
+    var isbn: String
+    var publisherName: String
+    var seriesName: String
+    var seriesNumber: String
+    var coverChoice: CoverChoice
+    var coverUploadPath: String?
 }
 
 // MARK: - JobState
@@ -92,6 +111,7 @@ struct KindleExportView: View {
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var coverUploadPath: String?
     @State private var isUploadingCover = false
+    @State private var metadataWasSaved = false
 
     // Job state
     @State private var jobState: JobState = .idle
@@ -211,6 +231,7 @@ struct KindleExportView: View {
         .tint(CathedralTheme.Colors.accent)
         .task {
             if service == nil { service = makeService() }
+            loadSavedMetadata()
             if bookTitle.isEmpty { bookTitle = project.name }
             await loadPreviousExports()
         }
@@ -318,6 +339,14 @@ struct KindleExportView: View {
                 TextField("#", text: $seriesNumber)
                     .keyboardType(.numberPad)
                     .frame(width: 50)
+            }
+            Button("Save Metadata", systemImage: "square.and.arrow.down") {
+                saveMetadata()
+            }
+            if metadataWasSaved {
+                Label("Metadata saved for this project", systemImage: "checkmark.circle.fill")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
         }
     }
@@ -431,6 +460,59 @@ struct KindleExportView: View {
                 .disabled(!canKickoff || jobState.isInFlight)
             }
         }
+    }
+
+    // MARK: - Metadata persistence
+
+    private var metadataDefaultsKey: String {
+        "kindleExportMetadata.\(project.id.uuidString)"
+    }
+
+    private func saveMetadata() {
+        let draft = KindleExportMetadataDraft(
+            bookTitle: bookTitle,
+            authorName: authorName,
+            copyrightYear: copyrightYear,
+            copyrightHolder: copyrightHolder,
+            language: language,
+            dedication: dedication,
+            bookDescription: bookDescription,
+            aboutAuthor: aboutAuthor,
+            isbn: isbn,
+            publisherName: publisherName,
+            seriesName: seriesName,
+            seriesNumber: seriesNumber,
+            coverChoice: coverChoice,
+            coverUploadPath: coverUploadPath
+        )
+        do {
+            UserDefaults.standard.set(try JSONEncoder().encode(draft), forKey: metadataDefaultsKey)
+            metadataWasSaved = true
+        } catch {
+            jobState = .failure(.invalidResponse("Could not save metadata: \(error.localizedDescription)"))
+        }
+    }
+
+    private func loadSavedMetadata() {
+        guard let data = UserDefaults.standard.data(forKey: metadataDefaultsKey),
+              let draft = try? JSONDecoder().decode(KindleExportMetadataDraft.self, from: data) else {
+            return
+        }
+        bookTitle = draft.bookTitle
+        authorName = draft.authorName
+        copyrightYear = draft.copyrightYear
+        copyrightHolder = draft.copyrightHolder
+        language = draft.language
+        dedication = draft.dedication
+        bookDescription = draft.bookDescription
+        aboutAuthor = draft.aboutAuthor
+        isbn = draft.isbn
+        publisherName = draft.publisherName
+        seriesName = draft.seriesName
+        seriesNumber = draft.seriesNumber
+        coverChoice = draft.coverChoice
+        coverUploadPath = draft.coverUploadPath
+        metadataWasSaved = true
     }
 
     // MARK: - Actions
