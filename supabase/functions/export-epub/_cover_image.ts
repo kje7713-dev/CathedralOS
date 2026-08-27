@@ -10,12 +10,22 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import type { ExportRequest } from "./_metadata.ts";
 import type { ProjectOutline } from "./_section_walker.ts";
+import {
+  actualAiCoverBilling,
+  AI_COVER_IMAGE_OUTPUT_TOKENS,
+  type AiCoverBilling,
+} from "./_cover_billing.ts";
+
+export interface CoverResult {
+  bytes: Uint8Array;
+  billing?: AiCoverBilling;
+}
 
 export async function generateOrFetchCover(
   client: SupabaseClient,
   req: ExportRequest,
   outline: ProjectOutline,
-): Promise<Uint8Array | null> {
+): Promise<CoverResult | null> {
   // Path A: user upload
   if (req.cover_image_url) {
     try {
@@ -28,7 +38,7 @@ export async function generateOrFetchCover(
       if (bytes.byteLength > 5 * 1024 * 1024) {
         console.warn("cover exceeds 5MB; using anyway");
       }
-      return bytes;
+      return { bytes };
     } catch (err) {
       console.warn(
         `cover download failed (${req.cover_image_url}): ${
@@ -49,7 +59,7 @@ export async function generateOrFetchCover(
 
 async function generateCoverWithDallE(
   outline: ProjectOutline,
-): Promise<Uint8Array> {
+): Promise<CoverResult> {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
@@ -82,6 +92,7 @@ async function generateCoverWithDallE(
 
   const result = await response.json() as {
     data?: Array<{ url?: string; b64_json?: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
   const image = result.data?.[0];
   if (!image) {
@@ -94,7 +105,14 @@ async function generateCoverWithDallE(
     const binary = atob(image.b64_json);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
+    return {
+      bytes,
+      billing: actualAiCoverBilling(
+        result.usage?.input_tokens,
+        result.usage?.output_tokens ?? AI_COVER_IMAGE_OUTPUT_TOKENS,
+        prompt,
+      ),
+    };
   }
 
   if (!image.url) {
@@ -106,9 +124,16 @@ async function generateCoverWithDallE(
   if (!imageResponse.ok) {
     throw new Error(`OpenAI image download failed: ${imageResponse.status}`);
   }
-  return new Uint8Array(await imageResponse.arrayBuffer());
+  const bytes = new Uint8Array(await imageResponse.arrayBuffer());
+  return {
+    bytes,
+    billing: actualAiCoverBilling(
+      result.usage?.input_tokens,
+      result.usage?.output_tokens ?? AI_COVER_IMAGE_OUTPUT_TOKENS,
+      prompt,
+    ),
+  };
 }
-
 
 export function buildCoverPrompt(outline: ProjectOutline): string {
   const brief = outline.storyBrief ?? {};

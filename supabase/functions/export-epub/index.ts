@@ -20,22 +20,27 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import {
   validateEpub,
-  ValidatorFailureError,
   type ValidationResult,
+  ValidatorFailureError,
 } from "./_validator_client.ts";
+import { createJob, getJob, updateJobStatus } from "./_job_status.ts";
+import { type ProjectOutline, walkSections } from "./_section_walker.ts";
 import {
-  createJob,
-  updateJobStatus,
-  getJob,
-} from "./_job_status.ts";
-import { walkSections, type ProjectOutline } from "./_section_walker.ts";
-import { assembleMetadata, type ExportMetadata, type ExportRequest } from "./_metadata.ts";
-import { generateOrFetchCover } from "./_cover_image.ts";
+  assembleMetadata,
+  type ExportMetadata,
+  type ExportRequest,
+} from "./_metadata.ts";
+import {
+  buildCoverPrompt,
+  type CoverResult,
+  generateOrFetchCover,
+} from "./_cover_image.ts";
 import {
   AiCoverInsufficientCreditsError,
-  completeAiCoverCredits,
+  estimateAiCoverBilling,
   refundAiCoverCredits,
   reserveAiCoverCredits,
+  settleAiCoverCredits,
 } from "./_cover_billing.ts";
 import { writeEpub } from "./_epub_writer.ts";
 import { attemptRepair, type RepairContext } from "./_repair.ts";
@@ -64,9 +69,10 @@ serve(async (req: Request) => {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return json({ error: "missing_authorization" }, 401);
 
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(
-      authHeader.replace("Bearer ", ""),
-    );
+    const { data: { user }, error: authError } = await supabaseAdmin.auth
+      .getUser(
+        authHeader.replace("Bearer ", ""),
+      );
     if (authError || !user) return json({ error: "invalid_token" }, 401);
 
     if (req.method === "POST" && (path === "" || path === "/")) {
@@ -110,7 +116,9 @@ async function handleExport(req: Request, userId: string): Promise<Response> {
     .eq("local_project_id", localProjectId)
     .maybeSingle();
 
-  if (projectError || !project) return json({ error: "project_not_found" }, 404);
+  if (projectError || !project) {
+    return json({ error: "project_not_found" }, 404);
+  }
   // No separate user_id !== userId check: filtering by user_id already scoped the lookup;
   // returning 404 (not 403) avoids leaking existence of other users' projects.
 
@@ -122,7 +130,9 @@ async function handleExport(req: Request, userId: string): Promise<Response> {
 
   // Background processing via Supabase's EdgeRuntime.waitUntil
   // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-  EdgeRuntime.waitUntil(processJob(jobId, body, userId, localProjectId, snapshotProjectId));
+  EdgeRuntime.waitUntil(
+    processJob(jobId, body, userId, localProjectId, snapshotProjectId),
+  );
 
   return json({ job_id: jobId, status: "pending" }, 202);
 }
@@ -137,26 +147,8 @@ async function processJob(
   let attemptCount = 0;
   let aiCoverReserved = false;
   let coverReady = false;
-  let cachedCover: Uint8Array | null = null;
-
-  // Reserve before any material provider call. The reservation is idempotent
-  // on job ID, so validator retries cannot charge twice.
-  if (req.cover_image_ai_generate) {
-    try {
-      await reserveAiCoverCredits(supabaseAdmin, userId, jobId);
-      aiCoverReserved = true;
-    } catch (err) {
-      const message = err instanceof AiCoverInsufficientCreditsError
-        ? "Not enough credits for an AI-generated cover."
-        : String(err);
-      await updateJobStatus(supabaseAdmin, jobId, {
-        status: "failed_validation",
-        completed_at: new Date().toISOString(),
-        error_message: message,
-      });
-      return;
-    }
-  }
+  let cachedCover: CoverResult | null = null;
+  let aiCoverBilling: ReturnType<typeof estimateAiCoverBilling> | null = null;
 
   // Outer loop for VALIDATOR FAILURE retries (max 2 per job)
   while (true) {
@@ -172,10 +164,35 @@ async function processJob(
         snapshotProjectId,
       );
       if (!coverReady) {
+        if (req.cover_image_ai_generate && !aiCoverReserved) {
+          try {
+            const estimatedBilling = estimateAiCoverBilling(
+              buildCoverPrompt(outline),
+            );
+            await reserveAiCoverCredits(
+              supabaseAdmin,
+              userId,
+              jobId,
+              estimatedBilling,
+            );
+            aiCoverReserved = true;
+          } catch (err) {
+            const message = err instanceof AiCoverInsufficientCreditsError
+              ? "Not enough credits for an AI-generated cover."
+              : String(err);
+            await updateJobStatus(supabaseAdmin, jobId, {
+              status: "failed_validation",
+              completed_at: new Date().toISOString(),
+              error_message: message,
+            });
+            return;
+          }
+        }
         cachedCover = await generateOrFetchCover(supabaseAdmin, req, outline);
+        aiCoverBilling = cachedCover?.billing ?? null;
         coverReady = true;
       }
-      const coverBuffer = cachedCover;
+      const coverBuffer = cachedCover?.bytes ?? null;
 
       let epub: Uint8Array = await writeEpub(metadata, outline, coverBuffer);
 
@@ -195,7 +212,9 @@ async function processJob(
             upsert: true,
           });
         if (uploadError) {
-          throw new Error(`upload to export-tmp failed: ${uploadError.message}`);
+          throw new Error(
+            `upload to export-tmp failed: ${uploadError.message}`,
+          );
         }
 
         // Generate 5-min signed URL
@@ -225,7 +244,11 @@ async function processJob(
         // INVALID — attempt repair on first try only
         if (repairAttempts === 0) {
           await updateJobStatus(supabaseAdmin, jobId, { status: "repairing" });
-          const repairContext: RepairContext = { metadata, outline, coverBuffer };
+          const repairContext: RepairContext = {
+            metadata,
+            outline,
+            coverBuffer,
+          };
           const repair = await attemptRepair(
             epub,
             result.diagnostics,
@@ -244,7 +267,9 @@ async function processJob(
           status: "failed_validation",
           completed_at: new Date().toISOString(),
           error_message:
-            `EPUB failed EPUBCheck validation (v${result.epubcheck_version}) after ${repairAttempts + 1} attempt(s); ${result.error_count} error(s), ${result.warning_count} warning(s)`,
+            `EPUB failed EPUBCheck validation (v${result.epubcheck_version}) after ${
+              repairAttempts + 1
+            } attempt(s); ${result.error_count} error(s), ${result.warning_count} warning(s)`,
         });
         return;
       }
@@ -269,7 +294,9 @@ async function processJob(
           upsert: true,
         });
       if (finalUploadError) {
-        throw new Error(`upload to exports failed: ${finalUploadError.message}`);
+        throw new Error(
+          `upload to exports failed: ${finalUploadError.message}`,
+        );
       }
 
       // Cleanup temp
@@ -309,7 +336,15 @@ async function processJob(
       }
 
       if (aiCoverReserved) {
-        await completeAiCoverCredits(supabaseAdmin, userId, jobId);
+        if (!aiCoverBilling) {
+          throw new Error("AI cover generation returned no billing usage");
+        }
+        await settleAiCoverCredits(
+          supabaseAdmin,
+          userId,
+          jobId,
+          aiCoverBilling,
+        );
         aiCoverReserved = false;
       }
       await updateJobStatus(supabaseAdmin, jobId, {
