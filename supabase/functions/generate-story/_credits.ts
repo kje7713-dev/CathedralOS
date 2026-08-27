@@ -156,6 +156,7 @@ export interface CreditStore {
     cost: number,
     entitlement: UserEntitlement,
     relatedOutputId: string | null,
+    relatedExportJobId?: string | null,
   ): Promise<UserEntitlement>;
 }
 
@@ -221,6 +222,7 @@ export class SupabaseCreditStore implements CreditStore {
     cost: number,
     entitlement: UserEntitlement,
     relatedOutputId: string | null,
+    relatedExportJobId: string | null = null,
   ): Promise<UserEntitlement> {
     const { newMonthlyAllowance, newPurchasedBalance } = computeCharge(
       entitlement,
@@ -248,6 +250,7 @@ export class SupabaseCreditStore implements CreditStore {
         delta: -cost,
         reason: "generation_charge",
         related_generation_output_id: relatedOutputId,
+        related_export_job_id: relatedExportJobId,
         metadata: {},
       });
 
@@ -261,5 +264,193 @@ export class SupabaseCreditStore implements CreditStore {
       purchased_credit_balance: newPurchasedBalance,
       updated_at: new Date().toISOString(),
     };
+  }
+
+  async reserve(
+    userId: string,
+    cost: number,
+    relatedExportJobId: string,
+    metadata: Record<string, unknown> = {},
+  ): Promise<{ remainingCredits: number; alreadyReserved: boolean }> {
+    const entitlement = await this.loadOrDefault(userId);
+    const { data: prior, error: priorError } = await this.db
+      .from("user_credit_ledger")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("related_export_job_id", relatedExportJobId)
+      .eq("reason", "generation_reservation")
+      .maybeSingle();
+    if (priorError) {
+      throw new Error(
+        `credit reservation lookup failed: ${priorError.message}`,
+      );
+    }
+    if (prior) {
+      return {
+        remainingCredits: availableCredits(entitlement),
+        alreadyReserved: true,
+      };
+    }
+    if (availableCredits(entitlement) < cost) {
+      throw new Error(
+        `insufficient_credits: need ${cost}, have ${
+          availableCredits(entitlement)
+        }`,
+      );
+    }
+    const charged = computeCharge(entitlement, cost);
+    const { error: updateError } = await this.db.from("user_entitlements")
+      .update({
+        monthly_credit_allowance: charged.newMonthlyAllowance,
+        purchased_credit_balance: charged.newPurchasedBalance,
+      })
+      .eq("user_id", userId);
+    if (updateError) {
+      throw new Error(
+        `credit reservation update failed: ${updateError.message}`,
+      );
+    }
+    const monthly = Math.min(entitlement.monthly_credit_allowance, cost);
+    const { error: ledgerError } = await this.db.from("user_credit_ledger")
+      .insert({
+        user_id: userId,
+        delta: -cost,
+        reason: "generation_reservation",
+        related_generation_output_id: null,
+        related_export_job_id: relatedExportJobId,
+        metadata: {
+          ...metadata,
+          monthly_credits: monthly,
+          purchased_credits: cost - monthly,
+        },
+      });
+    if (ledgerError) {
+      throw new Error(
+        `credit reservation ledger failed: ${ledgerError.message}`,
+      );
+    }
+    return {
+      remainingCredits: availableCredits(entitlement) - cost,
+      alreadyReserved: false,
+    };
+  }
+
+  async settleReservation(
+    userId: string,
+    actualCost: number,
+    relatedExportJobId: string,
+    metadata: Record<string, unknown> = {},
+  ): Promise<UserEntitlement> {
+    const currentBeforeSettlement = await this.loadOrDefault(userId);
+    const { data: priorCharge, error: priorChargeError } = await this.db
+      .from("user_credit_ledger").select("id")
+      .eq("user_id", userId).eq("related_export_job_id", relatedExportJobId)
+      .eq("reason", "generation_charge").maybeSingle();
+    if (priorChargeError) {
+      throw new Error(
+        `credit settlement lookup failed: ${priorChargeError.message}`,
+      );
+    }
+    if (priorCharge) return currentBeforeSettlement;
+
+    const { data: reservation, error } = await this.db.from(
+      "user_credit_ledger",
+    )
+      .select("*").eq("user_id", userId).eq(
+        "related_export_job_id",
+        relatedExportJobId,
+      )
+      .eq("reason", "generation_reservation").maybeSingle();
+    if (error || !reservation) {
+      throw new Error(
+        `credit reservation not found: ${error?.message ?? relatedExportJobId}`,
+      );
+    }
+    const current = await this.loadOrDefault(userId);
+    const restored = {
+      ...current,
+      monthly_credit_allowance: current.monthly_credit_allowance +
+        Number(reservation.metadata?.monthly_credits ?? 0),
+      purchased_credit_balance: current.purchased_credit_balance +
+        Number(reservation.metadata?.purchased_credits ?? 0),
+    };
+    if (availableCredits(restored) < actualCost) {
+      throw new Error(
+        `credit settlement exceeds reservation: need ${actualCost}`,
+      );
+    }
+    const charged = computeCharge(restored, actualCost);
+    const { error: updateError } = await this.db.from("user_entitlements")
+      .update({
+        monthly_credit_allowance: charged.newMonthlyAllowance,
+        purchased_credit_balance: charged.newPurchasedBalance,
+      }).eq("user_id", userId);
+    if (updateError) {
+      throw new Error(
+        `credit settlement update failed: ${updateError.message}`,
+      );
+    }
+    const { error: ledgerError } = await this.db.from("user_credit_ledger")
+      .insert([
+        {
+          user_id: userId,
+          delta: -Number(reservation.delta),
+          reason: "generation_reservation_release",
+          related_export_job_id: relatedExportJobId,
+          metadata: { actual_cost: actualCost },
+        },
+        {
+          user_id: userId,
+          delta: -actualCost,
+          reason: "generation_charge",
+          related_generation_output_id: null,
+          related_export_job_id: relatedExportJobId,
+          metadata,
+        },
+      ]);
+    if (ledgerError) {
+      throw new Error(
+        `credit settlement ledger failed: ${ledgerError.message}`,
+      );
+    }
+    return {
+      ...restored,
+      monthly_credit_allowance: charged.newMonthlyAllowance,
+      purchased_credit_balance: charged.newPurchasedBalance,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  async refundReservation(
+    userId: string,
+    relatedExportJobId: string,
+  ): Promise<void> {
+    const { data: reservation } = await this.db.from("user_credit_ledger")
+      .select("*")
+      .eq("user_id", userId).eq("related_export_job_id", relatedExportJobId)
+      .eq("reason", "generation_reservation").maybeSingle();
+    if (!reservation) return;
+    const { data: prior } = await this.db.from("user_credit_ledger").select(
+      "id",
+    )
+      .eq("user_id", userId).eq("related_export_job_id", relatedExportJobId)
+      .eq("reason", "generation_reservation_refund").maybeSingle();
+    if (prior) return;
+    const { data: ent } = await this.db.from("user_entitlements").select("*")
+      .eq("user_id", userId).single();
+    if (!ent) return;
+    await this.db.from("user_entitlements").update({
+      monthly_credit_allowance: ent.monthly_credit_allowance +
+        Number(reservation.metadata?.monthly_credits ?? 0),
+      purchased_credit_balance: ent.purchased_credit_balance +
+        Number(reservation.metadata?.purchased_credits ?? 0),
+    }).eq("user_id", userId);
+    await this.db.from("user_credit_ledger").insert({
+      user_id: userId,
+      delta: -Number(reservation.delta),
+      reason: "generation_reservation_refund",
+      related_export_job_id: relatedExportJobId,
+      metadata: {},
+    });
   }
 }

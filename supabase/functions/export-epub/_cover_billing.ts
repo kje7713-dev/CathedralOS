@@ -1,5 +1,9 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import {
+  availableCredits,
+  SupabaseCreditStore,
+} from "../generate-story/_credits.ts";
+import {
   computeActualChargeCredits,
   computeMarginCents,
   computeProviderCogsCents,
@@ -113,32 +117,29 @@ export async function reserveAiCoverCredits(
   estimatedBilling: AiCoverBilling,
   modelName = Deno.env.get("OPENAI_IMAGE_MODEL") ?? AI_COVER_MODEL,
 ): Promise<{ remainingCredits: number; alreadyReserved: boolean }> {
-  const { data, error } = await client.rpc("reserve_ai_cover_credits", {
-    p_user_id: userId,
-    p_export_job_id: exportJobId,
-    p_cost: estimatedBilling.actualCharge,
-    p_model_name: modelName,
-    p_input_tokens: estimatedBilling.usage.uncachedInputTokens,
-    p_output_tokens: estimatedBilling.usage.outputTokens,
-    p_provider_cogs_cents: estimatedBilling.providerCogsCents,
-    p_customer_revenue_cents: estimatedBilling.customerRevenueCents,
-    p_margin_cents: estimatedBilling.marginCents,
-  }).maybeSingle();
-  if (error) {
-    if (error.message?.includes("insufficient_ai_cover_credits")) {
-      throw new AiCoverInsufficientCreditsError(error.message);
+  const store = new SupabaseCreditStore(client);
+  try {
+    return await store.reserve(
+      userId,
+      estimatedBilling.actualCharge,
+      exportJobId,
+      {
+        purpose: "ai-cover",
+        model_name: modelName,
+        estimated_input_tokens: estimatedBilling.usage.uncachedInputTokens,
+        estimated_output_tokens: estimatedBilling.usage.outputTokens,
+        estimated_provider_cogs_cents: estimatedBilling.providerCogsCents,
+        estimated_customer_revenue_cents: estimatedBilling.customerRevenueCents,
+        estimated_margin_cents: estimatedBilling.marginCents,
+      },
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("insufficient_credits")) {
+      throw new AiCoverInsufficientCreditsError(message);
     }
-    throw new Error(`AI cover credit reservation failed: ${error.message}`);
+    throw new Error(`AI cover credit reservation failed: ${message}`);
   }
-  if (!data) throw new Error("AI cover credit reservation returned no result");
-  const result = data as {
-    available_credits?: number;
-    already_reserved?: boolean;
-  };
-  return {
-    remainingCredits: Number(result.available_credits ?? 0),
-    alreadyReserved: Boolean(result.already_reserved),
-  };
 }
 
 export async function settleAiCoverCredits(
@@ -147,23 +148,40 @@ export async function settleAiCoverCredits(
   exportJobId: string,
   billing: AiCoverBilling,
 ): Promise<number> {
-  const { data, error } = await client.rpc("settle_ai_cover_credits", {
-    p_user_id: userId,
-    p_export_job_id: exportJobId,
-    p_actual_cost: billing.actualCharge,
-    p_input_tokens: billing.usage.uncachedInputTokens,
-    p_output_tokens: billing.usage.outputTokens,
-    p_provider_cogs_cents: billing.providerCogsCents,
-    p_customer_revenue_cents: billing.customerRevenueCents,
-    p_margin_cents: billing.marginCents,
-  }).maybeSingle();
-  if (error) {
-    throw new Error(`AI cover credit settlement failed: ${error.message}`);
-  }
-  if (!data) throw new Error("AI cover credit settlement returned no result");
-  return Number(
-    (data as { available_credits?: number }).available_credits ?? 0,
+  const store = new SupabaseCreditStore(client);
+  const updated = await store.settleReservation(
+    userId,
+    billing.actualCharge,
+    exportJobId,
+    {
+      purpose: "ai-cover",
+      model_name: AI_COVER_MODEL,
+      input_tokens: billing.usage.uncachedInputTokens,
+      output_tokens: billing.usage.outputTokens,
+      provider_cogs_cents: billing.providerCogsCents,
+      customer_revenue_cents: billing.customerRevenueCents,
+      margin_cents: billing.marginCents,
+    },
   );
+  const { error } = await client.from("generation_usage_events").upsert({
+    user_id: userId,
+    action: "generate",
+    purpose: "ai-cover",
+    model_name: AI_COVER_MODEL,
+    generation_length_mode: "short",
+    status: "complete",
+    idempotency_key: `export-job:${exportJobId}`,
+    input_tokens: billing.usage.uncachedInputTokens,
+    output_tokens: billing.usage.outputTokens,
+    credit_revenue_usd: billing.customerRevenueCents / 100,
+    provider_cogs_cents: billing.providerCogsCents,
+    customer_revenue_cents: billing.customerRevenueCents,
+    margin_cents: billing.marginCents,
+  }, { onConflict: "user_id,idempotency_key" });
+  if (error) {
+    throw new Error(`AI cover telemetry write failed: ${error.message}`);
+  }
+  return availableCredits(updated);
 }
 
 export async function refundAiCoverCredits(
@@ -171,9 +189,5 @@ export async function refundAiCoverCredits(
   userId: string,
   exportJobId: string,
 ): Promise<void> {
-  const { error } = await client.rpc("refund_ai_cover_credits", {
-    p_user_id: userId,
-    p_export_job_id: exportJobId,
-  });
-  if (error) console.error("AI cover credit refund failed:", error.message);
+  await new SupabaseCreditStore(client).refundReservation(userId, exportJobId);
 }
