@@ -31,6 +31,12 @@ import {
 import { walkSections, type ProjectOutline } from "./_section_walker.ts";
 import { assembleMetadata, type ExportMetadata, type ExportRequest } from "./_metadata.ts";
 import { generateOrFetchCover } from "./_cover_image.ts";
+import {
+  AiCoverInsufficientCreditsError,
+  completeAiCoverCredits,
+  refundAiCoverCredits,
+  reserveAiCoverCredits,
+} from "./_cover_billing.ts";
 import { writeEpub } from "./_epub_writer.ts";
 import { attemptRepair, type RepairContext } from "./_repair.ts";
 
@@ -129,6 +135,28 @@ async function processJob(
   snapshotProjectId: string,
 ): Promise<void> {
   let attemptCount = 0;
+  let aiCoverReserved = false;
+  let coverReady = false;
+  let cachedCover: Uint8Array | null = null;
+
+  // Reserve before any material provider call. The reservation is idempotent
+  // on job ID, so validator retries cannot charge twice.
+  if (req.cover_image_ai_generate) {
+    try {
+      await reserveAiCoverCredits(supabaseAdmin, userId, jobId);
+      aiCoverReserved = true;
+    } catch (err) {
+      const message = err instanceof AiCoverInsufficientCreditsError
+        ? "Not enough credits for an AI-generated cover."
+        : String(err);
+      await updateJobStatus(supabaseAdmin, jobId, {
+        status: "failed_validation",
+        completed_at: new Date().toISOString(),
+        error_message: message,
+      });
+      return;
+    }
+  }
 
   // Outer loop for VALIDATOR FAILURE retries (max 2 per job)
   while (true) {
@@ -143,11 +171,11 @@ async function processJob(
         localProjectId,
         snapshotProjectId,
       );
-      const coverBuffer = await generateOrFetchCover(
-        supabaseAdmin,
-        req,
-        outline,
-      );
+      if (!coverReady) {
+        cachedCover = await generateOrFetchCover(supabaseAdmin, req, outline);
+        coverReady = true;
+      }
+      const coverBuffer = cachedCover;
 
       let epub: Uint8Array = await writeEpub(metadata, outline, coverBuffer);
 
@@ -280,6 +308,10 @@ async function processJob(
         );
       }
 
+      if (aiCoverReserved) {
+        await completeAiCoverCredits(supabaseAdmin, userId, jobId);
+        aiCoverReserved = false;
+      }
       await updateJobStatus(supabaseAdmin, jobId, {
         status: "uploaded",
         export_metadata_id: metaId,
@@ -305,6 +337,10 @@ async function processJob(
         }
 
         // Exhausted retries — fail closed, do NOT mark EPUB as validated
+        if (aiCoverReserved) {
+          await refundAiCoverCredits(supabaseAdmin, userId, jobId);
+          aiCoverReserved = false;
+        }
         await updateJobStatus(supabaseAdmin, jobId, {
           status: "failed_validator",
           completed_at: new Date().toISOString(),
@@ -314,7 +350,13 @@ async function processJob(
         return;
       }
 
-      // Other failure (writer error, storage error, etc.) — fail closed
+      // Other failure (writer error, storage error, etc.) — fail closed.
+      // The customer did not receive a usable export, so release the cover
+      // reservation. The RPC is itself idempotent.
+      if (aiCoverReserved) {
+        await refundAiCoverCredits(supabaseAdmin, userId, jobId);
+        aiCoverReserved = false;
+      }
       console.error("Job failed:", err);
       await updateJobStatus(supabaseAdmin, jobId, {
         status: "failed_validation",

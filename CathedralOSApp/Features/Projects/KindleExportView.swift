@@ -112,6 +112,7 @@ struct KindleExportView: View {
     @State private var coverUploadPath: String?
     @State private var isUploadingCover = false
     @State private var metadataWasSaved = false
+    @State private var showAICoverCreditConfirmation = false
 
     // Job state
     @State private var jobState: JobState = .idle
@@ -190,6 +191,17 @@ struct KindleExportView: View {
                 exportToolbar
             }
             .disabled(jobState.isInFlight)
+            .alert(
+                "AI Cover Uses 25 Credits",
+                isPresented: $showAICoverCreditConfirmation
+            ) {
+                Button("Generate and Export") {
+                    Task { @MainActor in await performKickoffExport() }
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Creating an AI cover is a paid image-generation call. 25 credits will be reserved for this export and refunded if generation or export fails.")
+            }
             .alert(
                 "Export Failed",
                 isPresented: failureAlertBinding,
@@ -291,7 +303,7 @@ struct KindleExportView: View {
                     HStack { ProgressView(); Text("Uploading…") }
                 }
             case .aiGenerate:
-                Text("Backend will generate a cover from your project premise.")
+                Text("Backend will generate a story-wide cover from your recipe and prompt-pack. This uses 25 credits.")
                     .font(CathedralTheme.Typography.body(12))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
@@ -624,8 +636,12 @@ struct KindleExportView: View {
     }
 
     private func kickoffExport() {
-        Task { @MainActor in
-            await performKickoffExport()
+        if coverChoice == .aiGenerate {
+            showAICoverCreditConfirmation = true
+        } else {
+            Task { @MainActor in
+                await performKickoffExport()
+            }
         }
     }
 

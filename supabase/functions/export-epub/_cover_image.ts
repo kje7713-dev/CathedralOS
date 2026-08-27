@@ -53,16 +53,7 @@ async function generateCoverWithDallE(
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
-  const premiseSnippet = (outline.chapters[0]?.sections[0]?.body ?? "")
-    .slice(0, 200)
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const prompt = [
-    `Book cover for "${outline.title}".`,
-    premiseSnippet ? `Inspired by: ${premiseSnippet}` : "",
-    "Cinematic, evocative, no text or words, painterly composition.",
-  ].filter(Boolean).join(" ");
+  const prompt = buildCoverPrompt(outline);
 
   const model = Deno.env.get("OPENAI_IMAGE_MODEL") ?? "gpt-image-1";
 
@@ -116,4 +107,20 @@ async function generateCoverWithDallE(
     throw new Error(`OpenAI image download failed: ${imageResponse.status}`);
   }
   return new Uint8Array(await imageResponse.arrayBuffer());
+}
+
+
+export function buildCoverPrompt(outline: ProjectOutline): string {
+  const brief = outline.storyBrief ?? {};
+  return [
+    `Create a cohesive literary book cover for "${outline.title}" representing the whole story, not one isolated scene.`,
+    brief.projectSummary ? `Premise: ${brief.projectSummary}` : "",
+    brief.recipe ? `Recipe and story arc: ${brief.recipe}` : "",
+    brief.setting ? `Setting and atmosphere: ${brief.setting}` : "",
+    brief.characters ? `Key characters: ${brief.characters}` : "",
+    brief.conflict ? `Central conflict and stakes: ${brief.conflict}` : "",
+    brief.themes ? `Themes and motifs: ${brief.themes}` : "",
+    brief.endingTexture ? `Emotional aftertaste: ${brief.endingTexture}` : "",
+    "Use the recurring visual idea that best unifies these signals. Cinematic, evocative, painterly composition; no readable text, letters, logos, or words; no spoilers.",
+  ].filter(Boolean).join(" ");
 }

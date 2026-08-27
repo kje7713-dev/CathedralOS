@@ -329,7 +329,10 @@ p:first-of-type {
       `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>${escapeXml(metadata.book_title)}</title></head>
+<head>
+<link rel="stylesheet" type="text/css" href="styles.css"/>
+<title>${escapeXml(metadata.book_title)}</title>
+</head>
 <body class="cover">
 <img src="cover-image.jpg" alt="${escapeXml(metadata.book_title)}"/>
 <div class="cover-metadata">
