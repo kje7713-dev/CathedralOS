@@ -25,7 +25,8 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { walkSections } from "./_section_walker.ts";
+import { walkSections, type ProjectOutline } from "./_section_walker.ts";
+import { buildCoverPrompt } from "./_cover_image.ts";
 import { splitParagraphs } from "./_paragraphs.ts";
 import {
   stub,
@@ -110,6 +111,29 @@ function makeWarningOnlyResult(): ValidationResult {
   });
 }
 
+Deno.test("AI cover prompt uses story-wide recipe signals", () => {
+  const outline: ProjectOutline = {
+    id: "outline-1",
+    title: "The Long Return",
+    chapters: [],
+    storyBrief: {
+      projectSummary: "A cartographer returns to a drowned city.",
+      recipe: "saltwater gothic; outline signals: the map burns",
+      setting: "flooded harbor under permanent dusk",
+      characters: "Mara (cartographer, afraid of forgetting)",
+      conflict: "A buried promise threatens the city's survivors.",
+      themes: "memory versus truth; recurring bells",
+      endingTexture: "haunted but tender",
+    },
+  };
+  const prompt = buildCoverPrompt(outline);
+  assertStringIncludes(prompt, "drowned city");
+  assertStringIncludes(prompt, "saltwater gothic");
+  assertStringIncludes(prompt, "Mara");
+  assertStringIncludes(prompt, "memory versus truth");
+  assertStringIncludes(prompt, "whole story");
+});
+
 Deno.test("EPUB writer: preserves blank-line paragraph boundaries", () => {
   assertEquals(
     splitParagraphs("First paragraph.\n\nSecond paragraph.\r\n\r\nThird paragraph."),
@@ -132,6 +156,7 @@ Deno.test("EPUB writer: puts cover document first in reading order", () => {
   assertStringIncludes(src, '<itemref idref="cover"/>');
   assertStringIncludes(src, '"OEBPS/cover.xhtml"');
   assertStringIncludes(src, 'src="cover-image.jpg"');
+  assertStringIncludes(src, 'href="styles.css"');
   assertStringIncludes(src, 'class="cover-metadata"');
   assertStringIncludes(src, 'flex-direction: column');
   assertStringIncludes(src, 'max-height: 62vh');

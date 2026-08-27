@@ -36,10 +36,21 @@ export interface Chapter {
   sections: Section[];
 }
 
+export interface StoryBrief {
+  projectSummary?: string;
+  setting?: string;
+  recipe?: string;
+  characters?: string;
+  conflict?: string;
+  themes?: string;
+  endingTexture?: string;
+}
+
 export interface ProjectOutline {
   id: string;
   title: string;
   chapters: Chapter[];
+  storyBrief?: StoryBrief;
 }
 
 export async function walkSections(
@@ -143,5 +154,53 @@ export async function walkSections(
     id: String(currentOutline.id ?? snapshotProjectId),
     title: String(currentOutline.name ?? ""),
     chapters,
+    storyBrief: buildStoryBrief(snapshot.snapshot_json, currentOutline, snapshotSections),
+  };
+}
+
+
+function buildStoryBrief(
+  snapshot: Record<string, unknown>,
+  outline: Record<string, unknown>,
+  sections: Array<Record<string, unknown>>,
+): StoryBrief {
+  const text = (value: unknown, limit = 700): string => {
+    if (Array.isArray(value)) {
+      return value.map((item) => text(item, 300)).filter(Boolean).join(", ").slice(0, limit);
+    }
+    if (typeof value !== "string") return "";
+    return value.replace(/\s+/g, " ").trim().slice(0, limit);
+  };
+  const join = (values: unknown[], limit = 1200): string =>
+    values.map((v) => text(v, 400)).filter(Boolean).join("; ").slice(0, limit);
+  const project = (snapshot.project ?? {}) as Record<string, unknown>;
+  const setting = (snapshot.setting ?? {}) as Record<string, unknown>;
+  const packs = Array.isArray(snapshot.promptPacks) ? snapshot.promptPacks as Array<Record<string, unknown>> : [];
+  const pack = packs.find((p) => String(p.localProjectID ?? "") === String(outline.localProjectID ?? "")) ?? packs[0];
+  const selectedIds = new Set(Array.isArray(pack?.selectedCharacterIDs) ? pack.selectedCharacterIDs.map(String) : []);
+  const characters = Array.isArray(snapshot.characters) ? snapshot.characters as Array<Record<string, unknown>> : [];
+  const selectedCharacters = characters.filter((c) => selectedIds.size === 0 || selectedIds.has(String(c.id)));
+  const sparks = Array.isArray(snapshot.storySparks) ? snapshot.storySparks as Array<Record<string, unknown>> : [];
+  const sparkID = pack?.selectedStorySparkID ? String(pack.selectedStorySparkID) : "";
+  const spark = sparks.find((s) => String(s.id) === sparkID) ?? sparks[0];
+  const aftertastes = Array.isArray(snapshot.aftertastes) ? snapshot.aftertastes as Array<Record<string, unknown>> : [];
+  const aftertasteID = pack?.selectedAftertasteID ? String(pack.selectedAftertasteID) : "";
+  const aftertaste = aftertastes.find((a) => String(a.id) === aftertasteID) ?? aftertastes[0];
+  const themes = Array.isArray(snapshot.themeQuestions) ? snapshot.themeQuestions as Array<Record<string, unknown>> : [];
+  const motifs = Array.isArray(snapshot.motifs) ? snapshot.motifs as Array<Record<string, unknown>> : [];
+  const selectedThemeIDs = new Set(Array.isArray(pack?.selectedThemeQuestionIDs) ? pack.selectedThemeQuestionIDs.map(String) : []);
+  const selectedMotifIDs = new Set(Array.isArray(pack?.selectedMotifIDs) ? pack.selectedMotifIDs.map(String) : []);
+  const outlineSignals = sections.map((s) => `${text(s.title, 100)}: ${text(s.summary, 180)}`).filter(Boolean).join(" | ").slice(0, 1800);
+  return {
+    projectSummary: text(project.summary, 1000),
+    setting: join([setting.summary, setting.domains, setting.themes, setting.environmentalPressure, setting.mythicFrame], 1200),
+    characters: selectedCharacters.map((c) => `${text(c.name, 100)} (${join([c.roles, c.goals, c.fears, c.secrets], 240)})`).join("; ").slice(0, 1400),
+    conflict: join([spark?.title, spark?.situation, spark?.stakes, spark?.twist, spark?.threat, spark?.complication, spark?.clock], 1400),
+    themes: themes.filter((t) => selectedThemeIDs.size === 0 || selectedThemeIDs.has(String(t.id))).map((t) => join([t.question, t.coreTension, t.valueConflict, t.moralFaultLine], 350)).filter(Boolean).concat(
+      motifs.filter((m) => selectedMotifIDs.size === 0 || selectedMotifIDs.has(String(m.id))).map((m) => join([m.label, m.meaning, m.examples], 250)).filter(Boolean)
+    ).join("; ").slice(0, 1400),
+    endingTexture: join([aftertaste?.label, aftertaste?.emotionalResidue, aftertaste?.endingTexture, aftertaste?.lastImageFeeling], 800),
+    // Keep the outline itself in the brief so sparse recipes still reflect the whole book.
+    recipe: [join([pack?.name, pack?.notes, pack?.instructionBias], 900), `Outline signals: ${outlineSignals}`].filter(Boolean).join(" ").slice(0, 1800),
   };
 }
