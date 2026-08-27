@@ -192,7 +192,7 @@ struct KindleExportView: View {
             }
             .disabled(jobState.isInFlight)
             .alert(
-                "AI Cover Uses 25 Credits",
+                "AI Cover Uses Credits",
                 isPresented: $showAICoverCreditConfirmation
             ) {
                 Button("Generate and Export") {
@@ -200,7 +200,7 @@ struct KindleExportView: View {
                 }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("Creating an AI cover is a paid image-generation call. 25 credits will be reserved for this export and refunded if generation or export fails.")
+                Text("Creating an AI cover is a paid image-generation call. Credits will be held based on the estimated usage, then the actual usage plus margin will be charged. Unused held credits are released, and the hold is refunded if generation or export fails.")
             }
             .alert(
                 "Export Failed",
@@ -303,7 +303,7 @@ struct KindleExportView: View {
                     HStack { ProgressView(); Text("Uploading…") }
                 }
             case .aiGenerate:
-                Text("Backend will generate a story-wide cover from your recipe and prompt-pack. This uses 25 credits.")
+                Text("Backend will generate a story-wide cover from your recipe and prompt-pack. The final credit charge is based on actual image usage plus margin.")
                     .font(CathedralTheme.Typography.body(12))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
