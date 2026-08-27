@@ -64,6 +64,18 @@ struct KindleExportKickoffResponse: Codable {
     let status: String
 }
 
+private struct KindleExportEstimateRequest: Codable {
+    let project_id: String
+    let book_title: String
+    let author_name: String
+    let cover_image_ai_generate: Bool
+    let estimate_only: Bool
+}
+
+private struct KindleExportEstimateResponse: Codable {
+    let estimated_credit_charge: Int
+}
+
 /// Response from GET /functions/v1/export-epub/status?job_id=X.
 struct KindleExportStatusResponse: Codable {
     let job_id: String
@@ -206,6 +218,54 @@ final class KindleExportService {
         } catch {
             throw KindleExportError.jobCreationFailed(
                 "Could not decode response: \(error.localizedDescription)")
+        }
+    }
+
+    /// Returns the server-computed whole-credit estimate for an AI cover.
+    func estimateAICover(
+        projectID: String,
+        bookTitle: String,
+        authorName: String,
+        userAccessToken: String,
+    ) async throws -> Int {
+        let url = backend.edgeFunctionURL(path: "export-epub")
+        var request = backend.authorizedRequest(for: url, userAccessToken: userAccessToken)
+        request.httpMethod = "POST"
+        let body = KindleExportEstimateRequest(
+            project_id: projectID,
+            book_title: bookTitle,
+            author_name: authorName,
+            cover_image_ai_generate: true,
+            estimate_only: true
+        )
+        do {
+            request.httpBody = try JSONEncoder().encode(body)
+        } catch {
+            throw KindleExportError.invalidResponse(
+                "Could not encode AI-cover estimate request: \(error.localizedDescription)")
+        }
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw KindleExportError.networkError(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw KindleExportError.invalidResponse("Non-HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw KindleExportError.serverError(
+                statusCode: http.statusCode,
+                message: String(data: data, encoding: .utf8),
+            )
+        }
+        do {
+            return try JSONDecoder().decode(KindleExportEstimateResponse.self, from: data)
+                .estimated_credit_charge
+        } catch {
+            throw KindleExportError.invalidResponse(
+                "Could not decode AI-cover estimate: \(error.localizedDescription)")
         }
     }
 

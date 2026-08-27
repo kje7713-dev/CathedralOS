@@ -123,6 +123,22 @@ async function handleExport(req: Request, userId: string): Promise<Response> {
   // returning 404 (not 403) avoids leaking existence of other users' projects.
 
   const snapshotProjectId = project.id;
+  if (body.estimate_only) {
+    if (!body.cover_image_ai_generate) {
+      return json({ error: "ai_cover_estimate_requires_ai_cover" }, 400);
+    }
+    const outline = await walkSections(
+      supabaseAdmin,
+      userId,
+      localProjectId,
+      snapshotProjectId,
+    );
+    const estimatedBilling = estimateAiCoverBilling(buildCoverPrompt(outline));
+    return json({
+      estimated_credit_charge: Math.ceil(estimatedBilling.actualCharge),
+    });
+  }
+
   const jobId = await createJob(supabaseAdmin, {
     project_id: snapshotProjectId,
     user_id: userId,
