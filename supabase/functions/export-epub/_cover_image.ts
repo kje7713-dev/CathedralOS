@@ -146,6 +146,6 @@ export function buildCoverPrompt(outline: ProjectOutline): string {
     brief.conflict ? `Central conflict and stakes: ${brief.conflict}` : "",
     brief.themes ? `Themes and motifs: ${brief.themes}` : "",
     brief.endingTexture ? `Emotional aftertaste: ${brief.endingTexture}` : "",
-    "Use the recurring visual idea that best unifies these signals. Cinematic, evocative, painterly composition; no readable text, letters, logos, or words; no spoilers.",
+    "Use the recurring visual idea that best unifies these signals. No readable text, letters, logos, or words; no spoilers.",
   ].filter(Boolean).join(" ");
 }

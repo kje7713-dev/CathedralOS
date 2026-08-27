@@ -113,6 +113,8 @@ struct KindleExportView: View {
     @State private var isUploadingCover = false
     @State private var metadataWasSaved = false
     @State private var showAICoverCreditConfirmation = false
+    @State private var aiCoverEstimatedCharge: Int?
+    @State private var isEstimatingAICover = false
 
     // Job state
     @State private var jobState: JobState = .idle
@@ -200,7 +202,7 @@ struct KindleExportView: View {
                 }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("Creating an AI cover is a paid image-generation call. Credits will be held based on the estimated usage, then the actual usage plus margin will be charged. Unused held credits are released, and the hold is refunded if generation or export fails.")
+                Text("Creating an AI cover is a paid image-generation call. Estimated charge: approximately \(aiCoverEstimatedCharge ?? 0) credits. Credits will be held based on estimated usage and charged based on actual usage.")
             }
             .alert(
                 "Export Failed",
@@ -637,11 +639,44 @@ struct KindleExportView: View {
 
     private func kickoffExport() {
         if coverChoice == .aiGenerate {
-            showAICoverCreditConfirmation = true
+            Task { @MainActor in
+                await prepareAICoverConfirmation()
+            }
         } else {
             Task { @MainActor in
                 await performKickoffExport()
             }
+        }
+    }
+
+    private func prepareAICoverConfirmation() async {
+        guard let service else {
+            jobState = .failure(.notConfigured(reason: "BackendClient not initialized"))
+            return
+        }
+        guard let token = await currentAccessToken() else {
+            jobState = .failure(.notAuthenticated)
+            return
+        }
+
+        isEstimatingAICover = true
+        defer { isEstimatingAICover = false }
+        do {
+            try await ProjectCloudSyncService.shared.syncProject(
+                project,
+                modelContext: modelContext
+            )
+            aiCoverEstimatedCharge = try await service.estimateAICover(
+                projectID: project.id.uuidString,
+                bookTitle: bookTitle.trimmingCharacters(in: .whitespaces),
+                authorName: authorName.trimmingCharacters(in: .whitespaces),
+                userAccessToken: token,
+            )
+            showAICoverCreditConfirmation = true
+        } catch let err as KindleExportError {
+            jobState = .failure(err)
+        } catch {
+            jobState = .failure(.networkError(error.localizedDescription))
         }
     }
 
@@ -653,7 +688,9 @@ struct KindleExportView: View {
         bookTitle = title
         authorName = author
         if coverChoice == .aiGenerate {
-            showAICoverCreditConfirmation = true
+            Task { @MainActor in
+                await prepareAICoverConfirmation()
+            }
         } else {
             Task { @MainActor in
                 await performKickoffExport(bookTitleOverride: title, authorNameOverride: author)

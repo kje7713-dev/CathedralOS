@@ -36,6 +36,7 @@ export interface ExportRequest {
   series_number?: number;
   cover_image_url?: string;
   cover_image_ai_generate?: boolean;
+  estimate_only?: boolean;
 }
 
 export function assembleMetadata(req: ExportRequest): ExportMetadata {
