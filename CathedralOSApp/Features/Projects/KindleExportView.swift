@@ -652,8 +652,12 @@ struct KindleExportView: View {
         let author = export.author_name
         bookTitle = title
         authorName = author
-        Task { @MainActor in
-            await performKickoffExport(bookTitleOverride: title, authorNameOverride: author)
+        if coverChoice == .aiGenerate {
+            showAICoverCreditConfirmation = true
+        } else {
+            Task { @MainActor in
+                await performKickoffExport(bookTitleOverride: title, authorNameOverride: author)
+            }
         }
     }
 
