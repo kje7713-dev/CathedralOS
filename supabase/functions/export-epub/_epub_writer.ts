@@ -287,8 +287,15 @@ p:first-of-type {
 }
 .cover img {
   max-width: 100%;
-  max-height: 100vh;
+  max-height: calc(100vh - 8rem);
   object-fit: contain;
+}
+.cover-metadata {
+  margin: 1rem 0 0;
+}
+.cover-metadata h1,
+.cover-metadata p {
+  margin: 0.25rem 0;
 }
 `,
   );
@@ -309,6 +316,10 @@ p:first-of-type {
 <head><title>${escapeXml(metadata.book_title)}</title></head>
 <body class="cover">
 <img src="cover-image.jpg" alt="${escapeXml(metadata.book_title)}"/>
+<div class="cover-metadata">
+<h1>${escapeXml(metadata.book_title)}</h1>
+<p>By ${escapeXml(metadata.author_name)}</p>
+</div>
 </body>
 </html>`,
     );
