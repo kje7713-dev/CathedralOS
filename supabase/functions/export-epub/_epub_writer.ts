@@ -279,23 +279,39 @@ p:first-of-type {
 }
 .cover {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
   min-height: 100vh;
   margin: 0;
+  padding: 2rem 1.25rem;
+  gap: 1rem;
   text-align: center;
 }
 .cover img {
   max-width: 100%;
-  max-height: calc(100vh - 8rem);
+  max-height: 62vh;
   object-fit: contain;
 }
 .cover-metadata {
-  margin: 1rem 0 0;
+  margin: 0;
+  max-width: 100%;
 }
 .cover-metadata h1,
 .cover-metadata p {
-  margin: 0.25rem 0;
+  margin: 0;
+}
+.cover-metadata h1 {
+  font-size: 1.35rem;
+  line-height: 1.2;
+  font-weight: 600;
+}
+.cover-metadata p {
+  margin-top: 0.35rem;
+  color: #555;
+  font-size: 1rem;
+  line-height: 1.3;
 }
 `,
   );
