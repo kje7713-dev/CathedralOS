@@ -126,6 +126,14 @@ Deno.test("EPUB writer: emits spacing between separate paragraphs", () => {
   assertStringIncludes(src, "p + p");
 });
 
+Deno.test("EPUB writer: puts cover document first in reading order", () => {
+  const src = Deno.readTextFileSync(new URL("./_epub_writer.ts", import.meta.url));
+  assertStringIncludes(src, 'id="cover" href="cover.xhtml"');
+  assertStringIncludes(src, '<itemref idref="cover"/>');
+  assertStringIncludes(src, '"OEBPS/cover.xhtml"');
+  assertStringIncludes(src, 'src="cover-image.jpg"');
+});
+
 // ---------------------------------------------------------------------------
 // Test: validator client — valid EPUB passes
 // ---------------------------------------------------------------------------

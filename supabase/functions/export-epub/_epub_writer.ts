@@ -100,8 +100,13 @@ export async function writeEpub(
     `<item id="css" href="styles.css" media-type="text/css"/>`,
   ];
   if (coverBuffer) {
+    // Keep the image resource marked as the EPUB cover and add a readable
+    // cover document so navigators such as Readium present it before prose.
     manifestItems.push(
       `<item id="cover-image" href="cover-image.jpg" media-type="image/jpeg" properties="cover-image"/>`,
+    );
+    manifestItems.push(
+      `<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>`,
     );
   }
   for (const sf of sectionFiles) {
@@ -110,9 +115,10 @@ export async function writeEpub(
     );
   }
 
-  const spineItems = sectionFiles
-    .map((sf) => `<itemref idref="${sf.id}"/>`)
-    .join("\n    ");
+  const spineEntries: string[] = [];
+  if (coverBuffer) spineEntries.push(`<itemref idref="cover"/>`);
+  spineEntries.push(...sectionFiles.map((sf) => `<itemref idref="${sf.id}"/>`));
+  const spineItems = spineEntries.join("\n    ");
 
   const copyrightLine = metadata.copyright_holder
     ? `Copyright © ${metadata.copyright_year ?? new Date().getFullYear()} ${
@@ -271,6 +277,19 @@ p + p {
 p:first-of-type {
   text-indent: 0;
 }
+.cover {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  margin: 0;
+  text-align: center;
+}
+.cover img {
+  max-width: 100%;
+  max-height: 100vh;
+  object-fit: contain;
+}
 `,
   );
 
@@ -279,7 +298,23 @@ p:first-of-type {
     zip.file("OEBPS/cover-image.jpg", coverBuffer);
   }
 
-  // 9. Section files (one per chapter)
+  // 9. Cover document — a manifest-only image is not shown by every EPUB
+  // navigator. Put the cover in the spine so Readium opens it first.
+  if (coverBuffer) {
+    zip.file(
+      "OEBPS/cover.xhtml",
+      `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>${escapeXml(metadata.book_title)}</title></head>
+<body class="cover">
+<img src="cover-image.jpg" alt="${escapeXml(metadata.book_title)}"/>
+</body>
+</html>`,
+    );
+  }
+
+  // 10. Section files (one per chapter)
   for (const sf of sectionFiles) {
     zip.file(
       `OEBPS/${sf.href}`,
