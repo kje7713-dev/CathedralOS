@@ -93,6 +93,8 @@ struct ProjectDetailView: View {
     @State private var selectedPOV: POV = .defaultPOV
     @State private var terminalBeat: String = ""
     @State private var generationModels: [GenerationModelOption] = []
+    @State private var isLoadingGenerationModels = false
+    @State private var generationModelError: String?
     @State private var showChapterConfirm = false
     @State private var selectedBudgetPreset: BudgetPreset = .defaultPreset
     @AppStorage("cathedralos.generation.selectedModelID") private var selectedModelId: String = "gpt-5.6-luna"
@@ -1015,7 +1017,7 @@ struct ProjectDetailView: View {
 
     private var compileGenerateCTA: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
-            Text("Compile a recipe into a finished scene.")
+            Text("Choose a model and POV, then run sections from your Outline.")
                 .font(CathedralTheme.Typography.caption())
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1040,20 +1042,8 @@ struct ProjectDetailView: View {
             } else {
                 VStack(spacing: CathedralTheme.Spacing.sm) {
                     modelPicker
-                    containerPicker
                     povPicker
-
-                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-                        Text("END THIS PIECE WHEN…".uppercased())
-                            .font(CathedralTheme.Typography.label(10, weight: .semibold))
-                            .tracking(1.5)
-                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        TextField("e.g. Jonah admits the lie. His father takes the letter.", text: $terminalBeat, axis: .vertical)
-                            .lineLimit(1...3)
-                            .textFieldStyle(.roundedBorder)
-                            .font(CathedralTheme.Typography.body(14))
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    }
+                    sectionsToRunSection
 
                     if let errorMessage = generationError {
                         errorBanner(errorMessage)
@@ -1068,24 +1058,7 @@ struct ProjectDetailView: View {
                         diagnosticsBlock(diagnostics)
                     }
 
-                    creditEstimateRow
-
-                    CathedralPrimaryButton(
-                        isGenerating ? "Generating…" : "Generate",
-                        systemImage: isGenerating ? "arrow.trianglehead.2.clockwise" : "sparkles"
-                    ) {
-                        if selectedLengthMode == .chapter {
-                            showChapterConfirm = true
-                        } else {
-                            guard !isGenerating else { return }
-                            isGenerating = true
-                            markFirstGenerateCompleted()
-                            Task { await triggerGenerationForProject() }
-                        }
-                    }
-                    .disabled(isGenerating || isEstimating || costEstimate?.allowed == false)
-
-                    Text("Sends this project's first recipe to your generation backend. Results appear under Generated Outputs.")
+                    Text("Run sections from the Outline tab. Each section owns its Container and ending instruction; this screen only sets the model and POV context.")
                         .font(CathedralTheme.Typography.caption())
                         .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                         .multilineTextAlignment(.center)
@@ -1111,10 +1084,36 @@ struct ProjectDetailView: View {
                 .font(CathedralTheme.Typography.label(10, weight: .semibold))
                 .tracking(1.5)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            if generationModels.isEmpty {
-                Text("Loading models…")
-                    .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            if isLoadingGenerationModels {
+                HStack(spacing: CathedralTheme.Spacing.xs) {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                    Text("Loading models…")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+            } else if let generationModelError {
+                HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
+                    Text(generationModelError)
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Retry") {
+                        Task { await loadGenerationModels() }
+                    }
+                    .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                }
+            } else if generationModels.isEmpty {
+                HStack {
+                    Text("No enabled models are available.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    Spacer()
+                    Button("Retry") {
+                        Task { await loadGenerationModels() }
+                    }
+                    .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                }
             } else {
                 Picker("Model", selection: $selectedModelId) {
                     ForEach(generationModels) { model in
@@ -1184,6 +1183,50 @@ struct ProjectDetailView: View {
         let raw = baseCredits * model.outputCreditRate
         let cost = max(model.minimumChargeCredits, Int(ceil(raw)))
         return "\(cost) cr · \(preset.coverageHint)"
+    }
+
+    private var sectionsToRunSection: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            Text("SECTIONS TO RUN")
+                .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+
+            if outlineSections.isEmpty {
+                Text("Add sections in Outline before running the novel.")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                CathedralPrimaryButton("Open Outline", systemImage: "list.number") {
+                    storyEditorModeRaw = StoryEditorMode.outline.rawValue
+                }
+            } else {
+                ForEach(outlineSections.sorted(by: { $0.position < $1.position })) { section in
+                    Button {
+                        storyEditorModeRaw = StoryEditorMode.outline.rawValue
+                    } label: {
+                        HStack(spacing: CathedralTheme.Spacing.sm) {
+                            Image(systemName: "list.number")
+                                .foregroundStyle(CathedralTheme.Colors.accent)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(section.title.isEmpty ? "Untitled section" : section.title)
+                                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                    .lineLimit(1)
+                                let containerName = section.container.flatMap(Container.init(rawValue:))?.displayName ?? "Container not set"
+                                Text("\(containerName) · Run from Outline")
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     private var containerPicker: some View {
@@ -1565,9 +1608,17 @@ struct ProjectDetailView: View {
 
     @MainActor
     private func loadGenerationModels() async {
+        guard !isLoadingGenerationModels else { return }
+        isLoadingGenerationModels = true
+        generationModelError = nil
+        defer { isLoadingGenerationModels = false }
         do {
             let models = try await generationModelService.fetchEnabledModels()
             generationModels = models
+            if models.isEmpty {
+                generationModelError = "No enabled models are available."
+                return
+            }
             // Migrate the pre-model-picker fallback without overriding an
             // explicit model choice the user has already made.
             if selectedModelId.isEmpty || selectedModelId == "gpt-4o-mini" {
@@ -1579,7 +1630,7 @@ struct ProjectDetailView: View {
             }
         } catch {
             generationModels = []
-            generationError = (error as? GenerationModelServiceError)?.errorDescription ?? error.localizedDescription
+            generationModelError = (error as? GenerationModelServiceError)?.errorDescription ?? error.localizedDescription
         }
     }
 
