@@ -589,13 +589,13 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             let existing = findLocal(cloudID: record.id, localID: record.localGenerationId, in: context)
 
             if let local = existing {
-                if local.project == nil {
-                    local.project = GenerationOutputRecoveryProjectResolver.resolveProject(
-                        projectID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
-                        projectName: record.projectName,
-                        in: context,
-                        recoverySource: "cloud recovery"
-                    )
+                // Section identity is authoritative for Novel Compile outputs.
+                // The section already belongs to the user's local project, so
+                // prefer that relationship over the legacy project-name fallback
+                // (multiple projects may legitimately share the same name).
+                let resolvedProject = projectForOutput(record, in: context)
+                if local.project !== resolvedProject {
+                    local.project = resolvedProject
                 }
                 // Backfill outlineSectionID independently of the timestamp rule.
                 // The SQL backfill that populated `outline_section_id` did not advance
@@ -717,13 +717,30 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         output.updatedAt     = record.updatedAt
         output.syncStatus    = SyncStatus.synced.rawValue
         output.lastSyncedAt  = Date()
-        output.project = GenerationOutputRecoveryProjectResolver.resolveProject(
+        output.project = projectForOutput(record, in: context)
+        return output
+    }
+
+    /// Resolve a synced output to the project that owns its outline section.
+    /// This is the canonical path for Novel Compile records; name matching is
+    /// only a legacy fallback for outputs without section identity.
+    private func projectForOutput(
+        _ record: GenerationOutputCloudRecord,
+        in context: ModelContext
+    ) -> StoryProject {
+        if let sectionID = record.outlineSectionID.flatMap(UUID.init),
+           let section = (try? context.fetch(FetchDescriptor<OutlineSection>(
+               predicate: #Predicate { $0.id == sectionID }
+           )))?.first,
+           let project = section.outline?.project {
+            return project
+        }
+        return GenerationOutputRecoveryProjectResolver.resolveProject(
             projectID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
             projectName: record.projectName,
             in: context,
             recoverySource: "cloud recovery"
         )
-        return output
     }
 
     private func localizedMessage(for error: Error) -> String {

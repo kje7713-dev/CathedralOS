@@ -273,6 +273,8 @@ interface GenerationOutputInsert {
   user_id: string;
   local_generation_id: string | null;
   project_name: string;
+  // Stable local project identity used by iOS output sync.
+  project_local_id: string | null;
   prompt_pack_name: string;
   title: string;
   output_text: string;
@@ -2883,6 +2885,7 @@ async function handler(
                 user_id: userId,
                 local_generation_id: body.localGenerationID ?? null,
                 project_name: projectName,
+                project_local_id: projectID || null,
                 prompt_pack_name: promptPackName,
                 title,
                 output_text: generatedText,
