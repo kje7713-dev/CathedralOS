@@ -3,7 +3,7 @@ import SwiftData
 
 /// Focused entry point for users who want useful prose from one idea.
 /// The generated output remains attached to the normal StoryProject graph so
-/// existing regenerate, continue, sharing, publishing, and export flows apply.
+/// existing sharing, publishing, and export flows apply.
 struct QuickStoryView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -17,7 +17,7 @@ struct QuickStoryView: View {
     let creditStateService: any CreditStateServiceProtocol
     let onBuildIntoNovel: () -> Void
 
-    @AppStorage("cathedralos.generation.selectedModelID") private var selectedModelId = "gpt-4o-mini"
+    @AppStorage("cathedralos.generation.selectedModelID") private var selectedModelId = "gpt-5.6-luna"
     @State private var idea = ""
     @State private var tone = ""
     @State private var selectedLengthMode: GenerationLengthMode = .medium
@@ -127,7 +127,7 @@ struct QuickStoryView: View {
             Text("Start with one idea")
                 .font(CathedralTheme.Typography.headline(22))
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
-            Text("We’ll turn it into a readable story. You can continue it or build it into a novel afterward.")
+            Text("We’ll turn it into a readable story. You can build it into a novel afterward.")
                 .font(CathedralTheme.Typography.body())
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
