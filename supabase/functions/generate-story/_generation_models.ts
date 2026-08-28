@@ -143,7 +143,7 @@ export class SupabaseGenerationModelStore implements GenerationModelStore {
     const { data, error } = await this.db
       .from("generation_models")
       .select(
-        "id, display_name, description, input_credit_rate, output_credit_rate, minimum_charge_credits, max_output_tokens, sort_order, cache_mode",
+        "id, display_name, description, input_credit_rate, output_credit_rate, minimum_charge_credits, max_output_tokens, sort_order",
       )
       .eq("enabled", true)
       .order("sort_order", { ascending: true })
