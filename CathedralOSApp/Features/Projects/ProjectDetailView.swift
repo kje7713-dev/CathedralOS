@@ -142,6 +142,9 @@ struct ProjectDetailView: View {
         VStack(spacing: 0) {
             modePicker
             List {
+                if !advancedMode {
+                    novelWorkflowSection
+                }
                 if advancedMode {
                     summarySection
                     audienceSection
@@ -303,6 +306,179 @@ struct ProjectDetailView: View {
         .padding(.horizontal, CathedralTheme.Spacing.base)
         .padding(.vertical, CathedralTheme.Spacing.sm)
         .background(CathedralTheme.Colors.background)
+    }
+
+    // MARK: - Novel workflow guidance
+
+    private enum NovelWorkflowStage: String, CaseIterable, Identifiable {
+        case define, shape, outline, write, review, read, export
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .define: return "Define"
+            case .shape: return "Shape"
+            case .outline: return "Outline"
+            case .write: return "Write"
+            case .review: return "Review"
+            case .read: return "Read"
+            case .export: return "Export"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .define: return "lightbulb"
+            case .shape: return "point.3.connected.trianglepath.dotted"
+            case .outline: return "list.number"
+            case .write: return "pencil.line"
+            case .review: return "checkmark.circle"
+            case .read: return "book"
+            case .export: return "square.and.arrow.up"
+            }
+        }
+    }
+
+    private var outlineSections: [OutlineSection] {
+        project.outlines.flatMap(\.sections)
+    }
+
+    private var workflowCompletion: [NovelWorkflowStage: Bool] {
+        let latestIsFinished = latestGeneration.map {
+            $0.status == GenerationStatus.complete.rawValue || $0.wasTruncated
+        } ?? false
+        return [
+            .define: !project.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            .shape: !project.storyArcs.isEmpty,
+            .outline: !outlineSections.isEmpty,
+            .write: !project.generations.isEmpty,
+            .review: latestIsFinished,
+            // Reading and exporting are always available actions; there is no
+            // persisted completion marker for either existing destination.
+            .read: false,
+            .export: false
+        ]
+    }
+
+    private var nextWorkflowStage: NovelWorkflowStage {
+        for stage in NovelWorkflowStage.allCases {
+            if workflowCompletion[stage] == false {
+                return stage
+            }
+        }
+        return .export
+    }
+
+    private var workflowCompletedCount: Int {
+        workflowCompletion.values.filter { $0 }.count
+    }
+
+    private var novelWorkflowSection: some View {
+        Section {
+            CathedralCard {
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                            Text("Novel Workspace")
+                                .font(CathedralTheme.Typography.body(17, weight: .semibold))
+                                .foregroundStyle(CathedralTheme.Colors.primaryText)
+                            Text("An optional path through your existing tools")
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        }
+                        Spacer()
+                        Text("\(workflowCompletedCount) milestones")
+                            .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                            .foregroundStyle(CathedralTheme.Colors.accent)
+                    }
+
+                    HStack(spacing: CathedralTheme.Spacing.xs) {
+                        ForEach(NovelWorkflowStage.allCases) { stage in
+                            VStack(spacing: 4) {
+                                Image(systemName: stage.icon)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(workflowCompletion[stage] == true
+                                        ? CathedralTheme.Colors.accent
+                                        : CathedralTheme.Colors.tertiaryText)
+                                Text(stage.title)
+                                    .font(CathedralTheme.Typography.label(9, weight: .medium))
+                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                    }
+
+                    Button {
+                        performWorkflowAction(nextWorkflowStage)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Next useful step")
+                                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                                Text(workflowActionTitle(nextWorkflowStage))
+                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.right.circle.fill")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(CathedralTheme.Colors.accent)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Next useful step: \(workflowActionTitle(nextWorkflowStage))")
+                }
+            }
+        } header: {
+            CathedralSectionHeader("Your path")
+                .listRowInsets(EdgeInsets(top: CathedralTheme.Spacing.sm,
+                                          leading: CathedralTheme.Spacing.base,
+                                          bottom: 0,
+                                          trailing: CathedralTheme.Spacing.base))
+        }
+        .listRowBackground(CathedralTheme.Colors.background)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: CathedralTheme.Spacing.xs,
+                                  leading: CathedralTheme.Spacing.base,
+                                  bottom: CathedralTheme.Spacing.sm,
+                                  trailing: CathedralTheme.Spacing.base))
+    }
+
+    private func workflowActionTitle(_ stage: NovelWorkflowStage) -> String {
+        switch stage {
+        case .define: return "Define your premise"
+        case .shape: return "Shape the story arc"
+        case .outline: return "Add an outline section"
+        case .write: return "Write your first section"
+        case .review: return "Review your latest output"
+        case .read: return "Read your latest output"
+        case .export: return "Export your novel"
+        }
+    }
+
+    private func performWorkflowAction(_ stage: NovelWorkflowStage) {
+        switch stage {
+        case .define:
+            storyEditorModeRaw = StoryEditorMode.story.rawValue
+        case .shape, .outline:
+            storyEditorModeRaw = StoryEditorMode.outline.rawValue
+        case .write:
+            storyEditorModeRaw = StoryEditorMode.compile.rawValue
+        case .review:
+            storyEditorModeRaw = StoryEditorMode.output.rawValue
+        case .read:
+            if let latest = latestGeneration {
+                generationToView = latest
+            } else {
+                storyEditorModeRaw = StoryEditorMode.output.rawValue
+            }
+        case .export:
+            showKindleExport = true
+        }
     }
 
     // MARK: - Outputs jump section
