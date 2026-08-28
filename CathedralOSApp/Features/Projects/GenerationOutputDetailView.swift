@@ -1645,36 +1645,6 @@ struct GenerationOutputDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
 
-            if output.wasTruncated && !output.outputText.isEmpty {
-                CathedralPrimaryButton("Continue", systemImage: "text.append") {
-                    Task { await performAction("continue") }
-                }
-                .disabled(isActioning || !hasSufficientCredits)
-            }
-
-            // Regenerate
-            CathedralPrimaryButton(
-                isActioning ? "Working…" : "Regenerate",
-                systemImage: isActioning ? "arrow.trianglehead.2.clockwise" : "arrow.clockwise"
-            ) {
-                Task { await performAction("regenerate") }
-            }
-            .disabled(isActioning || !hasSufficientCredits)
-
-            // Continue — only meaningful when there is prior output text
-            if !output.outputText.isEmpty && !output.wasTruncated {
-                CathedralSecondaryButton("Continue", systemImage: "text.append") {
-                    Task { await performAction("continue") }
-                }
-                .disabled(isActioning || !hasSufficientCredits)
-            }
-
-            // Remix
-            CathedralSecondaryButton("Remix", systemImage: "shuffle") {
-                Task { await performAction("remix") }
-            }
-            .disabled(isActioning || !hasSufficientCredits)
-
             if !hasSufficientCredits {
                 Text("Not enough credits for \(selectedLengthMode.displayName) generation (\(selectedCreditCost) required, \(creditState.availableCredits) available).")
                     .font(CathedralTheme.Typography.caption())
