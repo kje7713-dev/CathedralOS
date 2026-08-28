@@ -95,7 +95,7 @@ struct ProjectDetailView: View {
     @State private var generationModels: [GenerationModelOption] = []
     @State private var showChapterConfirm = false
     @State private var selectedBudgetPreset: BudgetPreset = .defaultPreset
-    @AppStorage("cathedralos.generation.selectedModelID") private var selectedModelId: String = "gpt-4o-mini"
+    @AppStorage("cathedralos.generation.selectedModelID") private var selectedModelId: String = "gpt-5.6-luna"
 
     @AppStorage("cathedralos.firstGenerateCompleted") private var firstGenerateCompleted = false
 
@@ -1382,8 +1382,14 @@ struct ProjectDetailView: View {
         do {
             let models = try await generationModelService.fetchEnabledModels()
             generationModels = models
-            if !models.contains(where: { $0.id == selectedModelId }) {
-                selectedModelId = models.first?.id ?? "gpt-4o-mini"
+            // Migrate the pre-model-picker fallback without overriding an
+            // explicit model choice the user has already made.
+            if selectedModelId.isEmpty || selectedModelId == "gpt-4o-mini" {
+                selectedModelId = models.first(where: { $0.id == "gpt-5.6-luna" })?.id
+                    ?? models.first?.id
+                    ?? "gpt-5.6-luna"
+            } else if !models.contains(where: { $0.id == selectedModelId }) {
+                selectedModelId = models.first?.id ?? "gpt-5.6-luna"
             }
         } catch {
             generationModels = []

@@ -4718,6 +4718,16 @@ Deno.test("buildPrompt: does not contain the fixed prose example (She set down t
   assertEquals(craft.includes("## Examples"), false);
 });
 
+Deno.test("buildPrompt: project-level generation has an explicit Narrative POV anchor", () => {
+  const { craft, context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    pov: "firstPerson",
+  });
+  assertStringIncludes(craft, "## Narrative POV");
+  assertStringIncludes(craft, "Narrate the piece in first person");
+  assertEquals(context.includes("## Section Contract"), false);
+});
+
 Deno.test("buildPrompt: contains ## Literary Execution block with the 14 craft bullets", () => {
   const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
   assertStringIncludes(craft, "## Literary Execution");

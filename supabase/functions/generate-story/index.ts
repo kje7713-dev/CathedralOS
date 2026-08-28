@@ -1743,6 +1743,12 @@ Structural limits:
       cfg.stoppingRule,
     ),
     "",
+    "## Narrative POV",
+    "",
+    `Narrate the piece in ${
+      povInstruction(req.pov)
+    }. Keep this viewpoint consistent throughout the entire output.`,
+    "",
   ];
 
   // PR-360-Z: Section Contract (AUTHORITATIVE) — system-level anchor for
