@@ -33,6 +33,30 @@ struct PromptPackBuilderView: View {
                     CathedralFormSectionHeader("Name")
                 }
 
+                // Project context stays visible while the author creates an
+                // explicit recipe. It informs the recipe without replacing it.
+                Section {
+                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                        if !project.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text(project.summary)
+                                .font(CathedralTheme.Typography.body())
+                                .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        } else {
+                            Text("Add a project summary in Define to give this recipe more context.")
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                        }
+                        Text("Available context: \(project.characters.count) character\(project.characters.count == 1 ? "" : "s"), \(project.storySparks.count) spark\(project.storySparks.count == 1 ? "" : "s"), \(project.themeQuestions.count) theme question\(project.themeQuestions.count == 1 ? "" : "s"), and \(project.projectSetting == nil ? "no" : "a") setting.")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
+                } header: {
+                    CathedralFormSectionHeader("Project Context")
+                } footer: {
+                    Text("Use this as context while shaping the authored recipe. The recipe remains a distinct brief for Suggest and generation.")
+                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                }
+
                 // Characters
                 Section {
                     let sorted = project.characters.sorted { $0.name < $1.name }

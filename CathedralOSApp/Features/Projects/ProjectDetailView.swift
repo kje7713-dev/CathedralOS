@@ -140,11 +140,11 @@ struct ProjectDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if !advancedMode {
+                novelWorkflowSection
+            }
             modePicker
             List {
-                if !advancedMode {
-                    novelWorkflowSection
-                }
                 if advancedMode {
                     summarySection
                     audienceSection
@@ -311,13 +311,14 @@ struct ProjectDetailView: View {
     // MARK: - Novel workflow guidance
 
     private enum NovelWorkflowStage: String, CaseIterable, Identifiable {
-        case define, shape, outline, write, review, read, export
+        case define, recipe, shape, outline, write, review, read, export
 
         var id: String { rawValue }
 
         var title: String {
             switch self {
             case .define: return "Define"
+            case .recipe: return "Recipe"
             case .shape: return "Shape"
             case .outline: return "Outline"
             case .write: return "Write"
@@ -330,6 +331,7 @@ struct ProjectDetailView: View {
         var icon: String {
             switch self {
             case .define: return "lightbulb"
+            case .recipe: return "list.bullet.rectangle"
             case .shape: return "point.3.connected.trianglepath.dotted"
             case .outline: return "list.number"
             case .write: return "pencil.line"
@@ -350,6 +352,7 @@ struct ProjectDetailView: View {
         } ?? false
         return [
             .define: !project.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            .recipe: !project.promptPacks.isEmpty,
             .shape: !project.storyArcs.isEmpty,
             .outline: !outlineSections.isEmpty,
             .write: !project.generations.isEmpty,
@@ -451,6 +454,7 @@ struct ProjectDetailView: View {
     private func workflowActionTitle(_ stage: NovelWorkflowStage) -> String {
         switch stage {
         case .define: return "Define your premise"
+        case .recipe: return "Create or refine your recipe"
         case .shape: return "Shape the story arc"
         case .outline: return "Add an outline section"
         case .write: return "Write your first section"
@@ -464,6 +468,12 @@ struct ProjectDetailView: View {
         switch stage {
         case .define:
             storyEditorModeRaw = StoryEditorMode.story.rawValue
+        case .recipe:
+            if project.promptPacks.isEmpty {
+                showAddPromptPack = true
+            } else {
+                storyEditorModeRaw = StoryEditorMode.recipe.rawValue
+            }
         case .shape, .outline:
             storyEditorModeRaw = StoryEditorMode.outline.rawValue
         case .write:
