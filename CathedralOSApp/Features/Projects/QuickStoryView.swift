@@ -349,7 +349,11 @@ struct QuickStoryView: View {
                 selectedContainer: nil,
                 selectedPOV: selectedPOV,
                 terminalBeat: nil,
-                selectedModelId: selectedModelId
+                selectedModelId: selectedModelId,
+                pov: selectedPOV.rawValue,
+                sectionTitle: nil,
+                sectionSummary: nil,
+                outlineSectionID: nil
             )
             output.outputText = response.generatedText
             output.modelName = response.modelName
