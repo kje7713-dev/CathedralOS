@@ -52,6 +52,7 @@
 		0000000000000000000000BE /* PromptPack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000BD /* PromptPack.swift */; };
 		0000000000000000000000C0 /* ProjectSetting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000BF /* ProjectSetting.swift */; };
 		0000000000000000000000C2 /* ProjectsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000C1 /* ProjectsListView.swift */; };
+		0000000000000000000000D2 /* QuickStoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000D1 /* QuickStoryView.swift */; };
 		0000000000000000000000C4 /* ProjectDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000C3 /* ProjectDetailView.swift */; };
 		0000000000000000000000C6 /* CharacterFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000C5 /* CharacterFormView.swift */; };
 		0000000000000000000000C8 /* SettingEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000C7 /* SettingEditorView.swift */; };
@@ -251,6 +252,7 @@
 		0000000000000000000000BD /* PromptPack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPack.swift; sourceTree = "<group>"; };
 		0000000000000000000000BF /* ProjectSetting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSetting.swift; sourceTree = "<group>"; };
 		0000000000000000000000C1 /* ProjectsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsListView.swift; sourceTree = "<group>"; };
+		0000000000000000000000D1 /* QuickStoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickStoryView.swift; sourceTree = "<group>"; };
 		0000000000000000000000C3 /* ProjectDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectDetailView.swift; sourceTree = "<group>"; };
 		0000000000000000000000C5 /* CharacterFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CharacterFormView.swift; sourceTree = "<group>"; };
 		0000000000000000000000C7 /* SettingEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingEditorView.swift; sourceTree = "<group>"; };
@@ -706,6 +708,7 @@
 			isa = PBXGroup;
 			children = (
 				0000000000000000000000C1 /* ProjectsListView.swift */,
+				0000000000000000000000D1 /* QuickStoryView.swift */,
 				0000000000000000000000C3 /* ProjectDetailView.swift */,
 				0000000000000000000000C5 /* CharacterFormView.swift */,
 				0000000000000000000000C7 /* SettingEditorView.swift */,
@@ -949,6 +952,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 				0000000000000000000000BE /* PromptPack.swift in Sources */,
 				0000000000000000000000C0 /* ProjectSetting.swift in Sources */,
 				0000000000000000000000C2 /* ProjectsListView.swift in Sources */,
+				0000000000000000000000D2 /* QuickStoryView.swift in Sources */,
 				0000000000000000000000C4 /* ProjectDetailView.swift in Sources */,
 				0000000000000000000000C6 /* CharacterFormView.swift in Sources */,
 				0000000000000000000000C8 /* SettingEditorView.swift in Sources */,
