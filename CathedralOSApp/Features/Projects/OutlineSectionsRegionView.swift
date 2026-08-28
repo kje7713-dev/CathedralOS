@@ -12,6 +12,15 @@ struct OutlineGenerationTarget: Identifiable {
     let id = UUID()
     let section: OutlineSection
     let outlineID: UUID
+    let initialScope: String?
+    let modelID: String?
+
+    init(section: OutlineSection, outlineID: UUID, initialScope: String? = nil, modelID: String? = nil) {
+        self.section = section
+        self.outlineID = outlineID
+        self.initialScope = initialScope
+        self.modelID = modelID
+    }
 }
 
 
@@ -54,6 +63,13 @@ struct OutlineSectionsRegionView: View {
 
     @Bindable var project: StoryProject
     let modelContext: ModelContext
+    @Binding var generationLaunch: OutlineGenerationLaunch?
+
+    init(project: StoryProject, modelContext: ModelContext, generationLaunch: Binding<OutlineGenerationLaunch?> = .constant(nil)) {
+        self.project = project
+        self.modelContext = modelContext
+        self._generationLaunch = generationLaunch
+    }
 
     // PR #338: observe DataDurabilityCoordinator so the @Published flips from
     // runOperation (isRunning, operationState, lastSyncFinishedAt, etc.) trigger
@@ -192,6 +208,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             ensureOutline()
             syncSectionsOrder()
             refreshAllOutputs()
+            consumeGenerationLaunch()
+        }
+        .onChange(of: generationLaunch?.id) { _, _ in
+            consumeGenerationLaunch()
         }
         // PR #342: observe the cathedralOSGenerationOutputsChanged notification
         // posted by DataDurabilityCoordinator.runOperation after any sync (manual
@@ -235,6 +255,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             KickoffConfirmationSheet(
                 project: project,
                 section: target.section,
+                initialScope: target.initialScope,
+                modelID: target.modelID,
                 isStarting: isKickingOff,
                 runOutlineError: runOutlineError,
                 onConfirm: { selectedModelId, selectedScope in
@@ -308,6 +330,20 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         sectionsOrder = outline.sections
             .filter { $0.parent == nil }
             .sorted(by: { $0.position < $1.position })
+    }
+
+    private func consumeGenerationLaunch() {
+        guard let launch = generationLaunch,
+              let outline = currentOutline,
+              let section = outline.sections.first(where: { $0.id == launch.sectionID }) else { return }
+        generationLaunch = nil
+        generationTarget = OutlineGenerationTarget(
+            section: section,
+            outlineID: outline.id,
+            initialScope: launch.scope,
+            modelID: launch.modelID
+        )
+        runOutlineError = nil
     }
 
     /// Auto-create the project's outline if missing. PR #2c keeps it
@@ -942,6 +978,8 @@ struct OutlineSectionRow: View {
 struct KickoffConfirmationSheet: View {
     let project: StoryProject
     let section: OutlineSection
+    let initialScope: String?
+    let modelID: String?
     let isStarting: Bool
     let runOutlineError: String?
     let onConfirm: (String?, String?) async -> Void
@@ -982,7 +1020,7 @@ struct KickoffConfirmationSheet: View {
 
     /// Mirrors `estimateLengthModeFromContainer` in supabase/functions/run-outline/index.ts.
     /// chapter / episode / novella → .chapter; shortStory → .short; else → .long.
-    private var lengthModeForContainer: GenerationLengthMode {
+    private func lengthMode(for section: OutlineSection) -> GenerationLengthMode {
         switch section.container {
         case "chapter", "episode", "novella": return .chapter
         case "shortStory": return .short
@@ -990,12 +1028,34 @@ struct KickoffConfirmationSheet: View {
         }
     }
 
-    private var selectedContainerEnum: Container? {
-        section.container.flatMap(Container.init(rawValue:))
-    }
-
-    private var selectedPOVEnum: POV? {
-        section.pov.flatMap(POV.init(rawValue:))
+    /// Mirrors run-outline's section walker so the confirmation sheet estimates
+    /// the same ordered set that the backend will execute.
+    private var sectionsForSelectedScope: [OutlineSection] {
+        let allSections = project.outlines.first?.sections.sorted(by: { $0.position < $1.position }) ?? []
+        switch selectedScope {
+        case "from_here":
+            return allSections.filter { $0.position >= section.position }
+        case "chapter":
+            var chapter = section
+            while let parent = chapter.parent {
+                chapter = parent
+            }
+            let chapterID = chapter.id
+            var descendantIDs: Set<UUID> = [chapterID]
+            var added = true
+            while added {
+                added = false
+                for candidate in allSections where !descendantIDs.contains(candidate.id) {
+                    if let parent = candidate.parent, descendantIDs.contains(parent.id) {
+                        descendantIDs.insert(candidate.id)
+                        added = true
+                    }
+                }
+            }
+            return allSections.filter { descendantIDs.contains($0.id) }
+        default:
+            return [section]
+        }
     }
 
     private var canStart: Bool {
@@ -1010,9 +1070,9 @@ struct KickoffConfirmationSheet: View {
                 .font(.system(size: 44))
                 .foregroundStyle(.tint)
                 .padding(.top, CathedralTheme.Spacing.sm)
-            Text("Generate Section")
+            Text(selectedScope == "single" ? "Generate Section" : "Generate \(sectionsForSelectedScope.count) Sections")
                 .font(CathedralTheme.Typography.headline(20, weight: .semibold))
-            Text("'\(section.title.isEmpty ? "Untitled section" : section.title)'")
+            Text(scopeDescription)
                 .font(CathedralTheme.Typography.body(15))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 .multilineTextAlignment(.center)
@@ -1057,6 +1117,9 @@ struct KickoffConfirmationSheet: View {
             await loadModelsAndEstimate()
         }
         .onChange(of: selectedModelId) { _, _ in
+            Task { await refreshEstimate() }
+        }
+        .onChange(of: selectedScope) { _, _ in
             Task { await refreshEstimate() }
         }
     }
@@ -1119,11 +1182,11 @@ struct KickoffConfirmationSheet: View {
                         ? CathedralTheme.Colors.secondaryText
                         : CathedralTheme.Colors.destructive)
                 if estimate.allowed {
-                    Text("Up to: \(estimate.estimatedCredits) \(estimate.estimatedCredits <= 1 ? "credit" : "credits") · \(estimate.availableCredits) remaining")
+                    Text("Up to: \(estimate.estimatedCredits) \(estimate.estimatedCredits <= 1 ? "credit" : "credits")\(sectionsForSelectedScope.count > 1 ? " total" : "") · \(estimate.availableCredits) remaining")
                         .font(CathedralTheme.Typography.label(11, weight: .regular))
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 } else {
-                    Text("Need \(estimate.estimatedCredits) \(estimate.estimatedCredits <= 1 ? "credit" : "credits"), you have \(estimate.availableCredits)")
+                    Text("Need \(estimate.estimatedCredits) \(estimate.estimatedCredits <= 1 ? "credit" : "credits") total, you have \(estimate.availableCredits)")
                         .font(CathedralTheme.Typography.label(11, weight: .regular))
                         .foregroundStyle(CathedralTheme.Colors.destructive)
                 }
@@ -1135,6 +1198,8 @@ struct KickoffConfirmationSheet: View {
     init(
         project: StoryProject,
         section: OutlineSection,
+        initialScope: String? = nil,
+        modelID: String? = nil,
         isStarting: Bool,
         runOutlineError: String?,
         onConfirm: @escaping (String?, String?) async -> Void,
@@ -1142,24 +1207,37 @@ struct KickoffConfirmationSheet: View {
     ) {
         self.project = project
         self.section = section
+        self.initialScope = initialScope
+        self.modelID = modelID
         self.isStarting = isStarting
         self.runOutlineError = runOutlineError
         self.onConfirm = onConfirm
         self.onCancel = onCancel
         self._generationModels = State(initialValue: [])
-        self._selectedModelId = State(initialValue: nil)
+        self._selectedModelId = State(initialValue: modelID)
         self._costEstimate = State(initialValue: nil)
         self._isEstimating = State(initialValue: false)
         self._estimateError = State(initialValue: nil)
         // Default scope: chapter rows start at "chapter" (multi-section), sub-sections at "single" (current behavior).
-        self._selectedScope = State(initialValue: section.parent == nil ? "chapter" : "single")
+        self._selectedScope = State(initialValue: initialScope ?? (section.parent == nil ? "chapter" : "single"))
+    }
+
+    private var scopeDescription: String {
+        switch selectedScope {
+        case "from_here":
+            return "Starts with '\(section.title.isEmpty ? "Untitled section" : section.title)' and queues the remaining sections in outline order."
+        case "chapter":
+            return "Queues this chapter's sections in outline order."
+        default:
+            return "Runs only '\(section.title.isEmpty ? "Untitled section" : section.title)'."
+        }
     }
 
     /// Scope picker UI. Three modes: single (just this section), chapter (this chapter + all
     /// descendants), from_here (this section + all subsequent sections in outline order).
     private var scopePicker: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-            Text("Scope")
+            Text("Run scope")
                 .font(CathedralTheme.Typography.caption(13, weight: .semibold))
             Picker("Scope", selection: $selectedScope) {
                 Text("This section").tag("single")
@@ -1193,14 +1271,36 @@ struct KickoffConfirmationSheet: View {
         isEstimating = true
         estimateError = nil
         do {
-            costEstimate = try await estimateService.estimateGenerationCost(
-                project: project,
-                pack: pack,
-                lengthMode: lengthModeForContainer,
-                selectedContainer: selectedContainerEnum,
-                selectedPOV: selectedPOVEnum,
-                terminalBeat: section.terminalBeat,
-                selectedModelId: selectedModelId
+            var estimates: [GenerationCostEstimate] = []
+            for candidate in sectionsForSelectedScope {
+                let estimate = try await estimateService.estimateGenerationCost(
+                    project: project,
+                    pack: pack,
+                    lengthMode: lengthMode(for: candidate),
+                    selectedContainer: candidate.container.flatMap(Container.init(rawValue:)),
+                    selectedPOV: candidate.pov.flatMap(POV.init(rawValue:)),
+                    terminalBeat: candidate.terminalBeat,
+                    selectedModelId: selectedModelId
+                )
+                estimates.append(estimate)
+            }
+            guard let first = estimates.first else {
+                costEstimate = nil
+                estimateError = "No sections are available to estimate."
+                isEstimating = false
+                return
+            }
+            costEstimate = GenerationCostEstimate(
+                status: first.status,
+                selectedModelId: first.selectedModelId,
+                modelDisplayName: first.modelDisplayName,
+                storyGoal: first.storyGoal,
+                estimatedInputTokens: estimates.reduce(0) { $0 + $1.estimatedInputTokens },
+                estimatedOutputTokens: estimates.reduce(0) { $0 + $1.estimatedOutputTokens },
+                estimatedCredits: estimates.reduce(0) { $0 + $1.estimatedCredits },
+                availableCredits: first.availableCredits,
+                allowed: estimates.reduce(0) { $0 + $1.estimatedCredits } <= Double(first.availableCredits),
+                minimumChargeCredits: estimates.reduce(0) { $0 + $1.minimumChargeCredits }
             )
         } catch {
             estimateError = error.localizedDescription
