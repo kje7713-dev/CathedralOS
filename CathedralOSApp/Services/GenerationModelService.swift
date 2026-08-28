@@ -99,6 +99,7 @@ final class BackendGenerationModelService: GenerationModelServiceProtocol {
         let url = client.edgeFunctionURL(path: SupabaseConfiguration.generationModelsEdgeFunctionPath)
         var request = client.authorizedRequest(for: url, userAccessToken: authService.currentAccessToken)
         request.httpMethod = "GET"
+        request.timeoutInterval = 15
 
         let data: Data
         let response: URLResponse
