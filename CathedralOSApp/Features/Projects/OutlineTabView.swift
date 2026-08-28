@@ -9,12 +9,18 @@ import SwiftData
 struct OutlineTabView: View {
     @Bindable var project: StoryProject
     @Environment(\.modelContext) private var modelContext
+    @Binding var generationLaunch: OutlineGenerationLaunch?
+
+    init(project: StoryProject, generationLaunch: Binding<OutlineGenerationLaunch?>) {
+        self.project = project
+        self._generationLaunch = generationLaunch
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: CathedralTheme.Spacing.base) {
                 StoryArcRegionView(project: project, modelContext: modelContext)
-                OutlineSectionsRegionView(project: project, modelContext: modelContext)
+                OutlineSectionsRegionView(project: project, modelContext: modelContext, generationLaunch: $generationLaunch)
             }
             .padding(.vertical, CathedralTheme.Spacing.base)
         }
