@@ -380,7 +380,8 @@ struct ProjectDetailView: View {
     }
 
     private var novelWorkflowSection: some View {
-        Section {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            CathedralSectionHeader("Your path")
             CathedralCard {
                 VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
                     HStack(alignment: .firstTextBaseline) {
@@ -438,19 +439,9 @@ struct ProjectDetailView: View {
                     .accessibilityLabel("Next useful step: \(workflowActionTitle(nextWorkflowStage))")
                 }
             }
-        } header: {
-            CathedralSectionHeader("Your path")
-                .listRowInsets(EdgeInsets(top: CathedralTheme.Spacing.sm,
-                                          leading: CathedralTheme.Spacing.base,
-                                          bottom: 0,
-                                          trailing: CathedralTheme.Spacing.base))
         }
-        .listRowBackground(CathedralTheme.Colors.background)
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: CathedralTheme.Spacing.xs,
-                                  leading: CathedralTheme.Spacing.base,
-                                  bottom: CathedralTheme.Spacing.sm,
-                                  trailing: CathedralTheme.Spacing.base))
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.bottom, CathedralTheme.Spacing.sm)
     }
 
     private func workflowActionTitle(_ stage: NovelWorkflowStage) -> String {
