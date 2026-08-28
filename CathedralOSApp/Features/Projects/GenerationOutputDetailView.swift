@@ -152,7 +152,6 @@ struct GenerationOutputDetailView: View {
     }
 
     @State private var copiedOutput      = false
-    @State private var copiedJSON        = false
     @State private var copiedShareLink   = false
     @State private var showPayloadJSON   = false
     @State private var showShareSheet    = false
@@ -1523,10 +1522,6 @@ struct GenerationOutputDetailView: View {
 
     private var actionButtons: some View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
-            if !output.sourcePayloadJSON.isEmpty {
-                generationActions
-            }
-
             if !output.outputText.isEmpty {
                 CathedralPrimaryButton(
                     copiedOutput ? "Copied!" : "Copy Output",
@@ -1536,19 +1531,6 @@ struct GenerationOutputDetailView: View {
                     copiedOutput = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         copiedOutput = false
-                    }
-                }
-            }
-
-            if !output.sourcePayloadJSON.isEmpty {
-                CathedralSecondaryButton(
-                    copiedJSON ? "Copied!" : "Copy Source JSON",
-                    systemImage: "doc.on.doc"
-                ) {
-                    UIPasteboard.general.string = output.sourcePayloadJSON
-                    copiedJSON = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        copiedJSON = false
                     }
                 }
             }
