@@ -6,7 +6,7 @@ struct ProjectsListView: View {
     @Query(sort: \StoryProject.name) private var projects: [StoryProject]
 
     @State private var navigationPath = NavigationPath()
-    @State private var showAddProject = false
+    @State private var projectCreationRoute: ProjectCreationRoute?
     @State private var newProjectName = ""
     @State private var projectToRename: StoryProject?
     @State private var renameText = ""
@@ -21,6 +21,24 @@ struct ProjectsListView: View {
     @State private var restoreSuccessMessage: String?
     @State private var deleteErrorMessage: String?
     private let projectDeletionService: any ProjectDeletionServiceProtocol = ProjectDeletionService.shared
+
+    private enum ProjectCreationIntent {
+        case quickStory
+        case novel
+    }
+
+    private enum ProjectCreationRoute: Identifiable {
+        case choices
+        case name(ProjectCreationIntent)
+
+        var id: String {
+            switch self {
+            case .choices: return "choices"
+            case .name(.quickStory): return "name-quick-story"
+            case .name(.novel): return "name-novel"
+            }
+        }
+    }
 
     // MARK: - Top-of-list summary + Generate / Output toggle
 
@@ -200,7 +218,7 @@ struct ProjectsListView: View {
                         }
 
 
-                        Button { showAddProject = true } label: {
+                        Button { projectCreationRoute = .choices } label: {
                             Image(systemName: "plus")
                                 .foregroundStyle(CathedralTheme.Colors.accent)
                         }
@@ -225,13 +243,18 @@ struct ProjectsListView: View {
                 pendingNavigationProject = project
             })
         }
-        .sheet(isPresented: $showAddProject, onDismiss: {
+        .sheet(item: $projectCreationRoute, onDismiss: {
             if let project = pendingNavigationProject {
                 navigationPath.append(project)
                 pendingNavigationProject = nil
             }
-        }) {
-            addProjectSheet
+        }) { route in
+            switch route {
+            case .choices:
+                creationChoicesSheet
+            case .name(let intent):
+                addProjectSheet(intent: intent)
+            }
         }
         .sheet(item: $projectToRename) { project in
             renameProjectSheet(project: project)
@@ -304,7 +327,7 @@ struct ProjectsListView: View {
             }
 
             CathedralPrimaryButton("New Project", systemImage: "plus") {
-                showAddProject = true
+                projectCreationRoute = .choices
             }
             .padding(.horizontal, CathedralTheme.Spacing.xxl)
 
@@ -396,16 +419,99 @@ struct ProjectsListView: View {
         return pills
     }
 
+    // MARK: Creation
+
+    private var creationChoicesSheet: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                    Text("What are you making?")
+                        .font(CathedralTheme.Typography.headline(22))
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    Text("Choose the outcome you want to start with. You can use every CathedralOS tool later.")
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(spacing: CathedralTheme.Spacing.sm) {
+                    creationChoiceButton(
+                        title: "Write a Quick Story",
+                        subtitle: "Get useful prose quickly from one idea.",
+                        systemImage: "bolt.fill"
+                    ) {
+                        projectCreationRoute = .name(.quickStory)
+                    }
+                    creationChoiceButton(
+                        title: "Build a Novel",
+                        subtitle: "Develop your story deliberately over time.",
+                        systemImage: "books.vertical.fill"
+                    ) {
+                        projectCreationRoute = .name(.novel)
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(CathedralTheme.Spacing.base)
+            .background(CathedralTheme.Colors.background.ignoresSafeArea())
+            .navigationTitle("New Project")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { projectCreationRoute = nil }
+                }
+            }
+        }
+    }
+
+    private func creationChoiceButton(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: CathedralTheme.Spacing.md) {
+                Image(systemName: systemImage)
+                    .font(.title3)
+                    .foregroundStyle(CathedralTheme.Colors.accent)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(CathedralTheme.Typography.body(16, weight: .semibold))
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    Text(subtitle)
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+            }
+            .padding(CathedralTheme.Spacing.base)
+            .background(CathedralTheme.Colors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            .overlay(
+                RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                    .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: Add Sheet
 
-    private var addProjectSheet: some View {
+    private func addProjectSheet(intent: ProjectCreationIntent) -> some View {
         NavigationStack {
             Form {
                 Section {
                     TextField("Project Name", text: $newProjectName)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                 } footer: {
-                    Text("A project gathers one story's characters, setting, sparks, and a generation-ready pack. Start with a name — you can rename anytime.")
+                    Text(creationFooter(for: intent))
                         .font(CathedralTheme.Typography.caption())
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
@@ -417,7 +523,7 @@ struct ProjectsListView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         newProjectName = ""
-                        showAddProject = false
+                        projectCreationRoute = nil
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -427,6 +533,15 @@ struct ProjectsListView: View {
             }
         }
         .interactiveDismissDisabled(!newProjectName.trimmingCharacters(in: .whitespaces).isEmpty)
+    }
+
+    private func creationFooter(for intent: ProjectCreationIntent) -> String {
+        switch intent {
+        case .quickStory:
+            return "Start with a name for the story you want to write quickly. This creates the normal project that will hold it."
+        case .novel:
+            return "A novel project gathers one story's characters, setting, sparks, and a generation-ready pack. Start with a name — you can rename anytime."
+        }
     }
 
     // MARK: Rename Sheet
@@ -471,7 +586,7 @@ struct ProjectsListView: View {
         // raced with sheet teardown and popped the new project back to the list.
         pendingNavigationProject = p
         newProjectName = ""
-        showAddProject = false
+        projectCreationRoute = nil
         Task { await DataDurabilityCoordinator.shared.saveProject(p, context: modelContext) }
     }
 
