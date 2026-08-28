@@ -82,6 +82,7 @@ struct ProjectDetailView: View {
     @State private var generationToView: GenerationOutput?
     @State private var pendingOutlineGeneration: OutlineGenerationLaunch?
     @State private var outputFilter: OutputListFilter = .all
+    @State private var readLatestOutputID: UUID?
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
@@ -138,6 +139,10 @@ struct ProjectDetailView: View {
         estimateService: (any GenerationCostEstimateServiceProtocol)? = nil
     ) {
         self.project = project
+        self._readLatestOutputID = State(
+            initialValue: UserDefaults.standard.string(forKey: Self.readMarkerKey(for: project))
+                .flatMap(UUID.init(uuidString:))
+        )
         self.generationService = generationService
         self.generationModelService = generationModelService
         self.usageLimitService = usageLimitService
@@ -271,7 +276,11 @@ struct ProjectDetailView: View {
             PromptPackBuilderView(project: project, pack: p)
         }
         .navigationDestination(item: $generationToView) { g in
-            GenerationOutputDetailView(output: g, hidePager: true)
+            GenerationOutputDetailView(
+                output: g,
+                hidePager: true,
+                onRead: { markLatestOutputRead(g) }
+            )
         }
         .alert("Generate Chapter?", isPresented: $showChapterConfirm) {
             Button("Cancel", role: .cancel) {}
@@ -367,9 +376,9 @@ struct ProjectDetailView: View {
             .outline: !outlineSections.isEmpty,
             .write: !project.generations.isEmpty,
             .review: latestIsFinished,
-            // Reading and exporting are always available actions; there is no
-            // persisted completion marker for either existing destination.
-            .read: false,
+            // Reading is completed when the latest output is opened from this
+            // workflow. Export remains the final explicit destination.
+            .read: readLatestOutputID == latestGeneration?.id && latestIsFinished,
             .export: false
         ]
     }
@@ -499,6 +508,15 @@ struct ProjectDetailView: View {
 
     private var latestGeneration: GenerationOutput? {
         project.generations.sorted { $0.createdAt > $1.createdAt }.first
+    }
+
+    private static func readMarkerKey(for project: StoryProject) -> String {
+        "cathedralos.novelWorkflow.readLatestOutput.\(project.stableLineageID.uuidString)"
+    }
+
+    private func markLatestOutputRead(_ output: GenerationOutput) {
+        readLatestOutputID = output.id
+        UserDefaults.standard.set(output.id.uuidString, forKey: Self.readMarkerKey(for: project))
     }
 
     @ViewBuilder

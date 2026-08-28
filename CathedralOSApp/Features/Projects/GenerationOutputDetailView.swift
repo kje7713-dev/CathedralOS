@@ -119,6 +119,10 @@ struct GenerationOutputDetailView: View {
     /// default since swiping siblings is the natural UX there.
     private let hidePager: Bool
 
+    /// Optional workflow callback fired when this output is opened for reading.
+    /// Other output entry points do not need to track Novel Workspace progress.
+    private let onRead: (() -> Void)?
+
     init(output: GenerationOutput,
          generationService: GenerationService = StoryGenerationService(),
          sharingService: PublicSharingService = BackendPublicSharingService(
@@ -129,7 +133,8 @@ struct GenerationOutputDetailView: View {
          outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
          outputDeletionService: any GenerationOutputDeletionServiceProtocol = GenerationOutputDeletionService.shared,
          isInnerPage: Bool = false,
-         hidePager: Bool = false) {
+         hidePager: Bool = false,
+         onRead: (() -> Void)? = nil) {
         self._output = Bindable(output)
         self.generationService = generationService
         self.sharingService = sharingService
@@ -139,6 +144,7 @@ struct GenerationOutputDetailView: View {
         self.outputDeletionService = outputDeletionService
         self.isInnerPage = isInnerPage
         self.hidePager = hidePager
+        self.onRead = onRead
     }
 
     /// Sibling outputs from the same recipe (same sourcePromptPackID),
@@ -568,6 +574,7 @@ struct GenerationOutputDetailView: View {
                 publishError = persisted
             }
             loadSourceContext()
+            onRead?()
         }
         .task {
             if coherenceModels.isEmpty {
