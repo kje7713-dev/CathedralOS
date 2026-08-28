@@ -176,10 +176,13 @@ struct QuickStoryView: View {
             }
             .pickerStyle(.menu)
 
-            TextField("Tone or feel (optional)", text: $tone)
+            TextField("Tone or creative direction (optional)", text: $tone)
                 .textFieldStyle(.roundedBorder)
                 .font(CathedralTheme.Typography.body(15))
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
+            Text("Uses this project’s existing recipe instruction bias; it is included in the generation payload.")
+                .font(CathedralTheme.Typography.caption(11))
+                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
         }
     }
 
