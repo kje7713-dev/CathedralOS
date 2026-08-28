@@ -22,20 +22,16 @@ struct ProjectsListView: View {
     @State private var deleteErrorMessage: String?
     private let projectDeletionService: any ProjectDeletionServiceProtocol = ProjectDeletionService.shared
 
-    private enum ProjectCreationIntent {
-        case quickStory
-        case novel
-    }
-
     private enum ProjectCreationRoute: Identifiable {
         case choices
-        case name(ProjectCreationIntent)
+        case name
+        case quickStory(StoryProject)
 
         var id: String {
             switch self {
             case .choices: return "choices"
-            case .name(.quickStory): return "name-quick-story"
-            case .name(.novel): return "name-novel"
+            case .name: return "name"
+            case .quickStory(let project): return "quick-story-\(project.id.uuidString)"
             }
         }
     }
@@ -252,8 +248,13 @@ struct ProjectsListView: View {
             switch route {
             case .choices:
                 creationChoicesSheet
-            case .name(let intent):
-                addProjectSheet(intent: intent)
+            case .name:
+                addProjectSheet
+            case .quickStory(let project):
+                QuickStoryView(project: project) {
+                    pendingNavigationProject = project
+                    projectCreationRoute = nil
+                }
             }
         }
         .sheet(item: $projectToRename) { project in
@@ -440,14 +441,14 @@ struct ProjectsListView: View {
                         subtitle: "Get useful prose quickly from one idea.",
                         systemImage: "bolt.fill"
                     ) {
-                        projectCreationRoute = .name(.quickStory)
+                        startQuickStory()
                     }
                     creationChoiceButton(
                         title: "Build a Novel",
                         subtitle: "Develop your story deliberately over time.",
                         systemImage: "books.vertical.fill"
                     ) {
-                        projectCreationRoute = .name(.novel)
+                        projectCreationRoute = .name
                     }
                 }
 
@@ -504,14 +505,14 @@ struct ProjectsListView: View {
 
     // MARK: Add Sheet
 
-    private func addProjectSheet(intent: ProjectCreationIntent) -> some View {
+    private var addProjectSheet: some View {
         NavigationStack {
             Form {
                 Section {
                     TextField("Project Name", text: $newProjectName)
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                 } footer: {
-                    Text(creationFooter(for: intent))
+                    Text("A novel project gathers one story's characters, setting, sparks, and a generation-ready pack. Start with a name — you can rename anytime.")
                         .font(CathedralTheme.Typography.caption())
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
@@ -533,15 +534,6 @@ struct ProjectsListView: View {
             }
         }
         .interactiveDismissDisabled(!newProjectName.trimmingCharacters(in: .whitespaces).isEmpty)
-    }
-
-    private func creationFooter(for intent: ProjectCreationIntent) -> String {
-        switch intent {
-        case .quickStory:
-            return "Start with a name for the story you want to write quickly. This creates the normal project that will hold it."
-        case .novel:
-            return "A novel project gathers one story's characters, setting, sparks, and a generation-ready pack. Start with a name — you can rename anytime."
-        }
     }
 
     // MARK: Rename Sheet
@@ -588,6 +580,18 @@ struct ProjectsListView: View {
         newProjectName = ""
         projectCreationRoute = nil
         Task { await DataDurabilityCoordinator.shared.saveProject(p, context: modelContext) }
+    }
+
+    private func startQuickStory() {
+        let project = StoryProject(name: "Quick Story")
+        let pack = PromptPack(name: "Quick Story")
+        modelContext.insert(project)
+        modelContext.insert(pack)
+        project.promptPacks.append(pack)
+        pack.project = project
+        pendingNavigationProject = nil
+        projectCreationRoute = .quickStory(project)
+        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
     }
 
     private func refreshBackupAvailability() {
