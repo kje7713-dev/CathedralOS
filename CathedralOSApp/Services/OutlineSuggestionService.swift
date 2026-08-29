@@ -153,7 +153,14 @@ struct OutlineSuggestionService {
     ) async throws -> [OutlineSuggestion] {
         while !Task.isCancelled {
             try await Task.sleep(nanoseconds: 3_000_000_000)
-            let statusURL = client.edgeFunctionURL(path: "outline-from-recipe?run_id=\(runID)")
+            var statusComponents = URLComponents(
+                url: client.edgeFunctionURL(path: "outline-from-recipe"),
+                resolvingAgainstBaseURL: false
+            )
+            statusComponents?.queryItems = [URLQueryItem(name: "run_id", value: runID)]
+            guard let statusURL = statusComponents?.url else {
+                throw OutlineSuggestionError.invalidResponse("Could not build suggestion status URL")
+            }
             var request = client.authorizedRequest(for: statusURL, userAccessToken: token)
             request.httpMethod = "GET"
             request.timeoutInterval = 30
