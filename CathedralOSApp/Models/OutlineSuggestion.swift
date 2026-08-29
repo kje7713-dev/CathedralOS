@@ -98,4 +98,13 @@ struct ExistingSectionBlob: Codable {
 struct OutlineSuggestionResponse: Codable {
     let suggestions: [OutlineSuggestion]
     let warnings: [String]?
+    let creditCostCharged: Double?
+    let remainingCredits: Double?
+}
+
+struct OutlineSuggestionResult {
+    let suggestions: [OutlineSuggestion]
+    let warnings: [String]
+    let creditCostCharged: Double?
+    let remainingCredits: Double?
 }

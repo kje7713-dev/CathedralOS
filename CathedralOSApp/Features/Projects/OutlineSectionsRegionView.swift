@@ -165,6 +165,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestions: [OutlineSuggestion] = []
     @State private var suggestionsLoading = false
     @State private var suggestionsError: String?
+    @State private var suggestionsFeedback: String?
+    @State private var showingSuggestionChargeWarning = false
     @State private var acceptingSectionID: UUID?
     @State private var embedError: String?
     @State private var deleteError: String?
@@ -271,6 +273,24 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 // Clear any stale "Outline not found." from the previous attempt.
                 runOutlineError = nil
             }
+        }
+        .alert("Suggest Sections Uses Credits", isPresented: $showingSuggestionChargeWarning) {
+            Button("Continue") { Task { await loadSuggestions() } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Suggest Sections makes paid AI calls. Credits are charged from actual usage, and the final charge may vary.")
+        }
+        .alert("Suggestions Ready", isPresented: Binding(
+            get: { suggestionsFeedback != nil },
+            set: { if !$0 { suggestionsFeedback = nil } }
+        )) {
+            Button("Review Suggestions") {
+                suggestionsFeedback = nil
+                showingSuggestionSheet = true
+            }
+            Button("OK", role: .cancel) { suggestionsFeedback = nil }
+        } message: {
+            Text(suggestionsFeedback ?? "Suggestions are ready.")
         }
         .alert("Suggest Sections Failed", isPresented: Binding(
             get: { suggestionsError != nil },
@@ -390,8 +410,15 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 arcTemplate: template,
                 existingSections: currentOutline?.sections ?? []
             )
-            suggestions = result
-            showingSuggestionSheet = true
+            suggestions = result.suggestions
+            var feedback = "Suggestions generated. Charged \(String(format: "%.2f", result.creditCostCharged ?? 0)) credits."
+            if let remaining = result.remainingCredits {
+                feedback += " Remaining balance: \(String(format: "%.2f", remaining)) credits."
+            }
+            if !result.warnings.isEmpty {
+                feedback += " \(result.warnings.count) suggestion warning\(result.warnings.count == 1 ? "" : "s") were reported."
+            }
+            suggestionsFeedback = feedback
         } catch let error as OutlineSuggestionError {
             suggestionsError = error.localizedDescription
         } catch {
@@ -414,7 +441,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 }
                 .disabled(sectionsOrder.isEmpty)
                 Button {
-                    Task { await loadSuggestions() }
+                    showingSuggestionChargeWarning = true
                 } label: {
                     if suggestionsLoading {
                         ProgressView()
