@@ -432,7 +432,7 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         let url = client.edgeFunctionURL(path: SupabaseConfiguration.generationEdgeFunctionPath)
         let userAccessToken: String
         do {
-            userAccessToken = try await resolveAccessTokenForRequest()
+            userAccessToken = try await resolveAccessTokenForRequest(forceRefresh: false)
         } catch {
             throw error
         }
@@ -756,9 +756,16 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         )
     }
 
-    /// Retrieves a fresh session immediately before each backend request and returns
-    /// the current non-empty access token for Authorization.
-    private func resolveAccessTokenForRequest() async throws -> String {
+    /// Returns a non-empty access token for Authorization. Material generation
+    /// requests force a refresh; repeated cost estimates reuse the current token
+    /// to avoid an auth-refresh burst.
+    private func resolveAccessTokenForRequest(forceRefresh: Bool = true) async throws -> String {
+        if !forceRefresh,
+           let currentToken = authService.currentAccessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !currentToken.isEmpty {
+            return currentToken
+        }
+
         do {
             try await authService.refreshSession()
         } catch AuthServiceError.sessionExpired {
