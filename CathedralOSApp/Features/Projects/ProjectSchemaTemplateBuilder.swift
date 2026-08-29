@@ -793,10 +793,21 @@ enum ProjectSchemaTemplateBuilder {
         }
 
         let outlinePayloads = project.outlines.map { outline -> ProjectImportExportPayload.OutlinePayload in
-            // Top-level sections only (parent == nil). Grouped sections (parent_id != nil) defer to a follow-up.
-            let sectionPayloads: [ProjectImportExportPayload.OutlineSectionPayload] = outline.sections
-                .filter { $0.parent == nil }
-                .sorted(by: { $0.position < $1.position })
+            // Do not serialize outline.sections directly. SwiftData relationship
+            // collections can be incomplete/stale after background sync or a
+            // delete; the persisted root fetch is authoritative for the cloud
+            // snapshot. This also keeps snapshot uploads from silently shrinking
+            // a project to whichever section the relationship cache happens to
+            // contain.
+            let outlineID = outline.id
+            let descriptor = FetchDescriptor<OutlineSection>(
+                predicate: #Predicate<OutlineSection> { section in
+                    section.outline?.id == outlineID && section.parent == nil
+                },
+                sortBy: [SortDescriptor(\.position)]
+            )
+            let authoritativeSections = (try? modelContext.fetch(descriptor)) ?? []
+            let sectionPayloads: [ProjectImportExportPayload.OutlineSectionPayload] = authoritativeSections
                 .map { section in
                     ProjectImportExportPayload.OutlineSectionPayload(
                         id: section.id.uuidString,
