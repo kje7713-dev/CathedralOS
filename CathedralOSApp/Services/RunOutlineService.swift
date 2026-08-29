@@ -6,8 +6,10 @@ import Foundation
 // kicks off a generation run. The function walks the outline, generates each
 // section, persists the output, and extracts structured memory.
 //
-// The kickoff is synchronous (the function returns when the run finishes or
-// fails). For long runs, the iOS UI polls the status endpoint.
+// The kickoff is asynchronous: the function reserves credits, queues the
+// server-side worker, and returns a durable run ID immediately. The iOS UI
+// polls the status endpoint, but the generation continues if the app is
+// suspended or the phone screen locks.
 //
 // Auth: signed-in user's JWT via the user's Authorization header.
 // Source: StoryArcSyncService pattern (SupabaseBackendClient + URLSession).
@@ -49,7 +51,7 @@ enum RunOutlineError: Error, LocalizedError {
 }
 
 /// Response from POST /functions/v1/run-outline (kickoff).
-/// The function returns when the run finishes or fails.
+/// The function queues the run and returns immediately with its durable ID.
 struct RunOutlineKickoffResponse: Codable {
     let run_id: String
     let status: String
@@ -110,8 +112,8 @@ struct RunOutlineService {
         self.session = session
     }
 
-    /// Kick off a run. The function returns when the run finishes or fails.
-    /// For long runs, the status poll endpoint is the primary way to track progress.
+    /// Queue a run. The function returns immediately with a durable run ID.
+    /// The status poll endpoint is the primary way to track progress.
     func kickoff(
         outlineID: String,
         startParentSectionID: String,
@@ -125,7 +127,7 @@ struct RunOutlineService {
         let url = client.edgeFunctionURL(path: "run-outline")
         var urlRequest = client.authorizedRequest(for: url, userAccessToken: token)
         urlRequest.httpMethod = "POST"
-        urlRequest.timeoutInterval = 180 // long runs; the function returns on completion
+        urlRequest.timeoutInterval = 30 // kickoff only queues the server-side worker
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = [
             "outline_id": outlineID,

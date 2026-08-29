@@ -1,4 +1,11 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { runBillableLLM } from "../_shared/billable-llm.ts";
+import { SupabaseCreditStore } from "../generate-story/_credits.ts";
+import { SupabaseGenerationModelStore } from "../generate-story/_generation_models.ts";
+import {
+  type LLMMessage,
+  OpenAIProvider,
+} from "../generate-story/_provider.ts";
 
 // =============================================================================
 // index.ts — outline-from-recipe Edge Function
@@ -17,7 +24,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //
 // Auth: requires a valid Supabase user JWT in the Authorization header.
 // Rate limiting: 5/min, 30/hour per user (uses generation_request_logs).
-// Credits: not charged for Phase 2 (suggestions helper, not generation).
+// Credits: each material LLM call is charged using actual token usage.
+// The request itself is a durable background job so app suspension is safe.
 //
 // Request:
 //   POST {
@@ -28,9 +36,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //   }
 //
 // Response:
-//   200 { "suggestions": [ { title, summary, container, pov, terminalBeat,
-//                            storyArcBeatID }, ... ],
-//         "warnings": [...optional] }
+//   POST 202 { "run_id": "...", "status": "pending" }
+//   GET  200 { "run_id": "...", "status": "completed", "suggestions": [...],
+//              "warnings": [...optional] }
 //   400 invalid_request — malformed body
 //   401 not_authenticated — missing or invalid JWT
 //   429 rate_limited — Retry-After header set
@@ -180,6 +188,14 @@ interface ExistingSectionBlob {
   storyArcBeatID?: string; // null for manual/free-form sections
 }
 
+type SuggestionLLMCall = (
+  system: string,
+  user: string,
+  maxOutputTokens: number,
+  responseFormat: unknown,
+  action: string,
+) => Promise<string>;
+
 interface Suggestion {
   title: string;
   summary: string;
@@ -284,6 +300,7 @@ Respond with structured JSON matching the schema.`;
 async function planSectionAllocation(
   req: OutlineFromRecipeRequest,
   apiKey: string,
+  billableCall?: SuggestionLLMCall,
 ): Promise<Map<string, { count: number; rationale: string }>> {
   const system =
     `You are an expert novel outliner. Given a recipe (curated characters, sparks, themes, motifs) and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular novel.
@@ -317,10 +334,18 @@ Output JSON only. No commentary, no prose.`;
     2,
   );
 
-  const raw = await callOpenAI(system, user, apiKey, {
-    maxTokens: 2048,
-    useJsonSchema: false,
-  });
+  const raw = billableCall
+    ? await billableCall(
+      system,
+      user,
+      2048,
+      { type: "json_object" },
+      "outline-plan",
+    )
+    : await callOpenAI(system, user, apiKey, {
+      maxTokens: 2048,
+      useJsonSchema: false,
+    });
 
   let parsed: any = {};
   try {
@@ -515,13 +540,109 @@ function makeSupabase(url: string, anonKey: string, authHeader: string) {
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Durable background handler
+// ---------------------------------------------------------------------------
+
+const admin = () =>
+  createClient(
+    Deno.env.get("SUPABASE_URL") ?? "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+    { auth: { persistSession: false } },
+  );
+
+async function runSuggestionJob(
+  runId: string,
+  body: OutlineFromRecipeRequest,
+  userId: string,
+  openaiKey: string,
+): Promise<void> {
+  const db = admin();
+  await db.from("outline_suggestion_runs").update({ status: "running" }).eq(
+    "id",
+    runId,
+  );
+  try {
+    const modelStore = new SupabaseGenerationModelStore(db);
+    const model = await modelStore.getEnabledModelById(OPENAI_MODEL);
+    if (!model) {
+      throw new Error(`Enabled billing model not found: ${OPENAI_MODEL}`);
+    }
+    const creditStore = new SupabaseCreditStore(db);
+    const provider = new OpenAIProvider(openaiKey, OPENAI_MODEL);
+    const billableCall: SuggestionLLMCall = async (
+      system,
+      user,
+      maxOutputTokens,
+      responseFormat,
+      action,
+    ) => {
+      const messages: LLMMessage[] = [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ];
+      const result = await runBillableLLM({
+        userID: userId,
+        purpose: "outline-suggestion",
+        action,
+        model,
+        messages,
+        maxOutputTokens,
+        providerOptions: { responseFormat, temperature: 0.7 },
+        usageContext: {
+          generationLengthMode: "outline",
+          outputBudget: maxOutputTokens,
+          idempotencyKey: `${runId}:${action}`,
+        },
+        onProviderSuccess: async (providerResult) => providerResult.content,
+      }, { adminClient: db, provider, creditStore });
+      return result.featureResult;
+    };
+
+    const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
+    const allocation = await planSectionAllocation(
+      body,
+      openaiKey,
+      billableCall,
+    );
+    const { system, user: userPrompt } = buildPrompt(body, allocation);
+    const rawResponse = await billableCall(
+      system,
+      userPrompt,
+      16000,
+      {
+        type: "json_schema",
+        json_schema: {
+          name: "outline_suggestions",
+          strict: true,
+          schema: RESPONSE_SCHEMA,
+        },
+      },
+      "outline-suggestions",
+    );
+    const parsed = JSON.parse(rawResponse);
+    const result = validateSuggestions(parsed, beatIds);
+    await db.from("outline_suggestion_runs").update({
+      status: "completed",
+      suggestions: result.suggestions,
+      warnings: result.warnings,
+      completed_at: new Date().toISOString(),
+    }).eq("id", runId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await db.from("outline_suggestion_runs").update({
+      status: "failed",
+      error: message.slice(0, 2000),
+      completed_at: new Date().toISOString(),
+    }).eq("id", runId);
+  }
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsResponse("", { status: 204 });
-  if (req.method !== "POST") {
-    return errorResponse("method_not_allowed", "POST only", 405);
+  if (req.method !== "GET" && req.method !== "POST") {
+    return errorResponse("method_not_allowed", "GET or POST required", 405);
   }
-
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) {
     return errorResponse(
@@ -530,22 +651,39 @@ Deno.serve(async (req: Request) => {
       401,
     );
   }
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+  const userClient = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: authHeader } },
+    auth: { persistSession: false },
+  });
+  const { data: { user }, error: authErr } = await userClient.auth.getUser();
+  if (authErr || !user) {
+    return errorResponse("not_authenticated", "Invalid token", 401);
+  }
+
+  if (req.method === "GET") {
+    const runId = new URL(req.url).searchParams.get("run_id");
+    if (!runId) {
+      return errorResponse("missing_param", "run_id query param required", 400);
+    }
+    const { data: run, error } = await userClient.from(
+      "outline_suggestion_runs",
+    )
+      .select(
+        "id, status, suggestions, warnings, error, created_at, updated_at, completed_at",
+      )
+      .eq("id", runId).single();
+    if (error || !run) return errorResponse("not_found", "run not found", 404);
+    return corsResponse(JSON.stringify({ run_id: run.id, ...run }), {
+      status: 200,
+    });
+  }
 
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
   if (!openaiKey) {
     return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
   }
-
-  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return errorResponse(
-      "not_configured",
-      "Supabase URL or anon key missing",
-      500,
-    );
-  }
-
   let body: OutlineFromRecipeRequest;
   try {
     body = await req.json();
@@ -556,17 +694,8 @@ Deno.serve(async (req: Request) => {
   if (validationError) {
     return errorResponse("invalid_request", validationError, 400);
   }
-
-  const supabase = makeSupabase(supabaseUrl, supabaseAnonKey, authHeader);
-
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return errorResponse("not_authenticated", "Invalid token", 401);
-  }
-
-  const rateResult = await checkRateLimit(supabase, user.id);
+  const rateResult = await checkRateLimit(userClient, user.id);
   if (!rateResult.allowed) {
-    await logRequest(supabase, user.id, "rate_limited", "rate_limited");
     return corsResponse(
       JSON.stringify({
         errorCode: "rate_limited",
@@ -578,58 +707,28 @@ Deno.serve(async (req: Request) => {
       },
     );
   }
-
-  const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
-
-  // Stage 1: per-beat section allocation plan.
-  let allocation: Map<string, { count: number; rationale: string }>;
-  try {
-    allocation = await planSectionAllocation(body, openaiKey);
-  } catch (err) {
-    await logRequest(supabase, user.id, "failed", "planning_failed");
-    return errorResponse("planning_failed", String(err), 502);
-  }
-
-  // Stage 2: generate sections using the allocation plan.
-  const { system, user: userPrompt } = buildPrompt(body, allocation);
-
-  let rawResponse: string;
-  try {
-    rawResponse = await callOpenAI(system, userPrompt, openaiKey, {
-      maxTokens: 16000,
-    });
-  } catch (err) {
-    await logRequest(supabase, user.id, "failed", "provider_error");
-    return errorResponse("provider_error", String(err), 502);
-  }
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(rawResponse);
-  } catch {
-    await logRequest(supabase, user.id, "failed", "invalid_response");
+  const db = admin();
+  const { data: run, error } = await db.from("outline_suggestion_runs").insert({
+    user_id: user.id,
+    request_json: body,
+    status: "pending",
+  }).select("id, created_at, updated_at").single();
+  if (error || !run) {
     return errorResponse(
-      "invalid_response",
-      "Could not parse LLM response",
-      502,
+      "db_error",
+      error?.message ?? "Could not create suggestion run",
+      500,
     );
   }
-
-  let result: { suggestions: Suggestion[]; warnings: string[] };
-  try {
-    result = validateSuggestions(parsed, beatIds);
-  } catch (err) {
-    await logRequest(supabase, user.id, "failed", "invalid_response");
-    return errorResponse("invalid_response", String(err), 502);
-  }
-
-  await logRequest(supabase, user.id, "success");
-
+  // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+  EdgeRuntime.waitUntil(runSuggestionJob(run.id, body, user.id, openaiKey));
   return corsResponse(
     JSON.stringify({
-      suggestions: result.suggestions,
-      warnings: result.warnings.length > 0 ? result.warnings : undefined,
+      run_id: run.id,
+      status: "pending",
+      created_at: run.created_at,
+      updated_at: run.updated_at,
     }),
-    { status: 200 },
+    { status: 202 },
   );
 });

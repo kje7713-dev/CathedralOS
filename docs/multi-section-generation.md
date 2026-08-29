@@ -85,6 +85,8 @@ iOS tap "Generate chapter"
       idempotency_key (optional, UUID),
     }
      (auth, rate-limit, credit reservation at entry)
+  → 202 { run_id, status: "running" } immediately
+  → server continues the worker via EdgeRuntime.waitUntil
   → for each section in canonical order (children of start_parent_section_id, by `outline_sections.position`):
        1. Fetch narrow prior context (per Rules 2-7):
           - Query section_embeddings for all prior sections in outline order (Rule 6, no intent fields)
@@ -101,6 +103,11 @@ iOS tap "Generate chapter"
 
 iOS polls GET /functions/v1/run-outline/{run_id}/status
   → returns { status, sections_done, sections_total, current_section, errors, immediate_previous_section_id }
+
+The kickoff is deliberately asynchronous. The durable `chapter_runs` row and
+server-side worker own the run; iOS polling is only progress/recovery UI. A
+locked screen, suspended app, or dismissed generation sheet cannot cancel the
+server-side generation.
 ```
 
 Two new artifacts needed:

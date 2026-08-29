@@ -7,7 +7,8 @@ import Foundation
 //
 // Auth: signed-in user's JWT via the user's Authorization header.
 // Source: GenerationBackendService pattern (SupabaseBackendClient + URLSession).
-// Timeout: 180s (LLM call — slower than app-level).
+// The POST only queues a server-side job. Progress is polled independently
+// so the suggestion run survives screen lock and view dismissal.
 
 enum OutlineSuggestionError: Error, LocalizedError {
     case notConfigured(reason: String)
@@ -98,11 +99,9 @@ struct OutlineSuggestionService {
 
         var urlRequest = client.authorizedRequest(for: url, userAccessToken: userAccessToken)
         urlRequest.httpMethod = "POST"
-        urlRequest.timeoutInterval = 180
+        urlRequest.timeoutInterval = 30
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let encoder = JSONEncoder()
-        urlRequest.httpBody = try encoder.encode(request)
+        urlRequest.httpBody = try JSONEncoder().encode(request)
 
         let data: Data
         let response: URLResponse
@@ -111,31 +110,74 @@ struct OutlineSuggestionService {
         } catch {
             throw OutlineSuggestionError.networkError(error.localizedDescription)
         }
-
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OutlineSuggestionError.networkError("Non-HTTP response")
         }
-
         switch httpResponse.statusCode {
+        case 202:
+            let queued = try decodeJob(data)
+            return try await poll(runID: queued.run_id, client: client, token: userAccessToken)
         case 200...299:
-            do {
-                let decoder = JSONDecoder()
-                let response = try decoder.decode(OutlineSuggestionResponse.self, from: data)
-                return response.suggestions
-            } catch {
-                throw OutlineSuggestionError.invalidResponse("Could not decode: \(error.localizedDescription)")
-            }
-        case 401:
-            throw OutlineSuggestionError.notAuthenticated
-        case 429:
-            throw OutlineSuggestionError.rateLimited
-        case 500:
-            throw OutlineSuggestionError.notConfigured(reason: "Server returned 500")
-        case 502:
-            throw OutlineSuggestionError.providerError
-        default:
-            throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode)
+            // Backwards-compatible with an older deployed function.
+            return try decodeResult(data).suggestions
+        case 401: throw OutlineSuggestionError.notAuthenticated
+        case 429: throw OutlineSuggestionError.rateLimited
+        case 500: throw OutlineSuggestionError.notConfigured(reason: "Server returned 500")
+        case 502: throw OutlineSuggestionError.providerError
+        default: throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode)
         }
+    }
+
+    private struct JobResponse: Codable {
+        let run_id: String
+        let status: String
+        let suggestions: [OutlineSuggestion]?
+        let warnings: [String]?
+        let error: String?
+    }
+
+    private func decodeJob(_ data: Data) throws -> JobResponse {
+        do { return try JSONDecoder().decode(JobResponse.self, from: data) }
+        catch { throw OutlineSuggestionError.invalidResponse("Could not decode job: \(error.localizedDescription)") }
+    }
+
+    private func decodeResult(_ data: Data) throws -> OutlineSuggestionResponse {
+        do { return try JSONDecoder().decode(OutlineSuggestionResponse.self, from: data) }
+        catch { throw OutlineSuggestionError.invalidResponse("Could not decode: \(error.localizedDescription)") }
+    }
+
+    private func poll(
+        runID: String,
+        client: SupabaseBackendClient,
+        token: String
+    ) async throws -> [OutlineSuggestion] {
+        while !Task.isCancelled {
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+            let statusURL = client.edgeFunctionURL(path: "outline-from-recipe?run_id=\(runID)")
+            var request = client.authorizedRequest(for: statusURL, userAccessToken: token)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 30
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw OutlineSuggestionError.networkError("Non-HTTP response")
+                }
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    if httpResponse.statusCode == 401 { throw OutlineSuggestionError.notAuthenticated }
+                    throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode)
+                }
+                let job = try decodeJob(data)
+                if job.status == "completed" { return job.suggestions ?? [] }
+                if job.status == "failed" {
+                    throw OutlineSuggestionError.providerError
+                }
+            } catch let error as OutlineSuggestionError {
+                throw error
+            } catch {
+                // Keep polling through transient network interruptions.
+            }
+        }
+        throw OutlineSuggestionError.networkError("Suggestion run was cancelled")
     }
 
     // MARK: - Request body builders

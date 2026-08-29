@@ -677,7 +677,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
     // MARK: - Day 4 generation wiring
 
-    /// Kick off a run for the given generation target and start polling for status.
+    /// Queue a server-side generation run for the given target and start
+    /// polling for status. The server owns the long-running work, so locking
+    /// the phone or leaving this view cannot cancel generation.
     /// Called from the KickoffConfirmationSheet's onConfirm.
     ///
     /// The outlineID is captured at Generate-tap time and passed through here.
@@ -724,11 +726,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 updated_at: response.updated_at,
                 completed_at: response.completed_at
             )
-            // Kickoff is synchronous on the server: it returns when the run
-            // finishes (or fails). If the response already has a terminal
-            // status, sync immediately rather than waiting for a polling
-            // Task to detect it -- PR #345 attempted that and the polling
-            // path was silently failing in practice.
+            // The server now returns a queued/running response immediately.
+            // Keep the terminal branch for backwards compatibility with an
+            // older deployed function during rollout.
             if response.status == "completed" || response.status == "failed" {
                 DiagnosticLog.write("kickoff: run finished during kickoff (\(response.status)); triggering syncAll")
                 _ = await DataDurabilityCoordinator.shared.performManualSyncAll(context: modelContext)
@@ -1374,8 +1374,8 @@ struct ActiveRunBanner: View {
         let total = status.sections_total ?? 0
         if isCompleted { return "Done (\(done) of \(total) sections)" }
         if let current = status.current_section {
-            return "Section \(done + 1) of \(total): \(current.title)"
+            return "Section \(done + 1) of \(total): \(current.title) • continues in background"
         }
-        return "Running"
+        return "Running in background"
     }
 }

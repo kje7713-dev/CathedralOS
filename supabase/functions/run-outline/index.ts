@@ -19,7 +19,8 @@
 //   Rule 9: raw_text is stored but not injected by default
 //
 // Endpoints:
-//   POST /functions/v1/run-outline          — kickoff (auth + idempotency + cost-reserve + run loop)
+//   POST /functions/v1/run-outline          — kickoff (auth + idempotency + cost-reserve)
+//                                             returns immediately; worker runs in background
 //   GET  /functions/v1/run-outline?run_id=… — status poll
 // =============================================================================
 
@@ -270,39 +271,50 @@ async function handleKickoff(req: Request): Promise<Response> {
     }`,
   );
 
-  // 8. Run the outline-walker + per-section loop synchronously. Day 4 will
-  //    move this to EdgeRuntime.waitUntil for true async.
-  await runOutline(
-    run.id,
-    body.outline_id,
-    body.start_parent_section_id,
-    body.model,
-    adminClient,
-    userId,
-    estimatedCost,
-    sections,
-    authHeader,
+  // 8. Return immediately and let the server own the long-running work.
+  // iOS may be suspended or terminated when the phone locks; the generation
+  // must not be tied to the lifetime of the POST request or its view task.
+  // Supabase keeps this promise alive through EdgeRuntime.waitUntil while the
+  // durable chapter_runs row remains the source of truth for polling/recovery.
+  // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+  EdgeRuntime.waitUntil(
+    runOutline(
+      run.id,
+      body.outline_id,
+      body.start_parent_section_id,
+      body.model,
+      adminClient,
+      userId,
+      estimatedCost,
+      sections,
+      authHeader,
+    ).catch(async (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[run-outline] background run ${run.id} crashed: ${message}`,
+      );
+      await markRunFailed(adminClient, run.id, message);
+    }),
   );
 
-  // 9. Re-fetch and return final state.
-  const { data: finalRun } = await adminClient
-    .from("chapter_runs")
-    .select()
-    .eq("id", run.id)
-    .single();
   return corsResponse(
     JSON.stringify({
       run_id: run.id,
-      status: finalRun?.status ?? "unknown",
-      sections: finalRun?.sections ?? [],
-      cost_cents_reserved: finalRun?.cost_cents_reserved ?? estimatedCost,
-      cost_cents_actual: finalRun?.cost_cents_actual ?? 0,
-      error: finalRun?.error,
-      created_at: finalRun?.created_at,
-      updated_at: finalRun?.updated_at,
-      completed_at: finalRun?.completed_at,
+      status: "running",
+      sections: sections.map((section) => ({
+        id: section.id,
+        title: section.title,
+        position: section.position,
+        status: "pending",
+      })),
+      cost_cents_reserved: estimatedCost,
+      cost_cents_actual: 0,
+      error: null,
+      created_at: run.created_at,
+      updated_at: run.updated_at,
+      completed_at: null,
     }),
-    { status: 200 },
+    { status: 202 },
   );
 }
 
