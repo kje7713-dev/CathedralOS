@@ -60,7 +60,7 @@ struct OutlineSuggestionService {
         arcTemplate: StoryArcTemplate,
         hint: String? = nil,
         existingSections: [OutlineSection] = []
-    ) async throws -> [OutlineSuggestion] {
+    ) async throws -> OutlineSuggestionResult {
         guard let project = recipe.project else {
             throw OutlineSuggestionError.invalidResponse("Recipe has no project")
         }
@@ -119,7 +119,13 @@ struct OutlineSuggestionService {
             return try await poll(runID: queued.run_id, client: client, token: userAccessToken)
         case 200...299:
             // Backwards-compatible with an older deployed function.
-            return try decodeResult(data).suggestions
+            let result = try decodeResult(data)
+            return OutlineSuggestionResult(
+                suggestions: result.suggestions,
+                warnings: result.warnings ?? [],
+                creditCostCharged: result.creditCostCharged,
+                remainingCredits: result.remainingCredits
+            )
         case 401: throw OutlineSuggestionError.notAuthenticated
         case 429: throw OutlineSuggestionError.rateLimited
         case 500: throw OutlineSuggestionError.notConfigured(reason: "Server returned 500")
@@ -134,6 +140,8 @@ struct OutlineSuggestionService {
         let suggestions: [OutlineSuggestion]?
         let warnings: [String]?
         let error: String?
+        let creditCostCharged: Double?
+        let remainingCredits: Double?
     }
 
     private func decodeJob(_ data: Data) throws -> JobResponse {
@@ -150,7 +158,7 @@ struct OutlineSuggestionService {
         runID: String,
         client: SupabaseBackendClient,
         token: String
-    ) async throws -> [OutlineSuggestion] {
+    ) async throws -> OutlineSuggestionResult {
         while !Task.isCancelled {
             try await Task.sleep(nanoseconds: 3_000_000_000)
             var statusComponents = URLComponents(
@@ -174,7 +182,14 @@ struct OutlineSuggestionService {
                     throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode)
                 }
                 let job = try decodeJob(data)
-                if job.status == "completed" { return job.suggestions ?? [] }
+                if job.status == "completed" {
+                    return OutlineSuggestionResult(
+                        suggestions: job.suggestions ?? [],
+                        warnings: job.warnings ?? [],
+                        creditCostCharged: job.creditCostCharged,
+                        remainingCredits: job.remainingCredits
+                    )
+                }
                 if job.status == "failed" {
                     throw OutlineSuggestionError.providerError
                 }

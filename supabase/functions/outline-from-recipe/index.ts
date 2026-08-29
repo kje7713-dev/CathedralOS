@@ -139,7 +139,7 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Content-Type": "application/json",
 };
 
@@ -188,13 +188,19 @@ interface ExistingSectionBlob {
   storyArcBeatID?: string; // null for manual/free-form sections
 }
 
+interface SuggestionLLMResult {
+  content: string;
+  creditCostCharged: number;
+  remainingCredits: number;
+}
+
 type SuggestionLLMCall = (
   system: string,
   user: string,
   maxOutputTokens: number,
   responseFormat: unknown,
   action: string,
-) => Promise<string>;
+) => Promise<SuggestionLLMResult>;
 
 interface Suggestion {
   title: string;
@@ -334,7 +340,7 @@ Output JSON only. No commentary, no prose.`;
     2,
   );
 
-  const raw = billableCall
+  const rawResult = billableCall
     ? await billableCall(
       system,
       user,
@@ -342,10 +348,15 @@ Output JSON only. No commentary, no prose.`;
       { type: "json_object" },
       "outline-plan",
     )
-    : await callOpenAI(system, user, apiKey, {
-      maxTokens: 2048,
-      useJsonSchema: false,
-    });
+    : {
+      content: await callOpenAI(system, user, apiKey, {
+        maxTokens: 2048,
+        useJsonSchema: false,
+      }),
+      creditCostCharged: 0,
+      remainingCredits: 0,
+    };
+  const raw = rawResult.content;
 
   let parsed: any = {};
   try {
@@ -570,6 +581,22 @@ async function runSuggestionJob(
     }
     const creditStore = new SupabaseCreditStore(db);
     const provider = new OpenAIProvider(openaiKey, OPENAI_MODEL);
+    let creditCostCharged = 0;
+    let remainingCredits: number | null = null;
+    const persistBilling = async (
+      result: {
+        actualCharge: number;
+        charged: boolean;
+        remainingCredits: number;
+      },
+    ) => {
+      if (result.charged) creditCostCharged += result.actualCharge;
+      remainingCredits = result.remainingCredits;
+      await db.from("outline_suggestion_runs").update({
+        credit_cost_charged: creditCostCharged,
+        remaining_credits: remainingCredits,
+      }).eq("id", runId);
+    };
     const billableCall: SuggestionLLMCall = async (
       system,
       user,
@@ -596,7 +623,12 @@ async function runSuggestionJob(
         },
         onProviderSuccess: async (providerResult) => providerResult.content,
       }, { adminClient: db, provider, creditStore });
-      return result.featureResult;
+      await persistBilling(result);
+      return {
+        content: result.featureResult,
+        creditCostCharged: result.charged ? result.actualCharge : 0,
+        remainingCredits: result.remainingCredits,
+      };
     };
 
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
@@ -620,12 +652,14 @@ async function runSuggestionJob(
       },
       "outline-suggestions",
     );
-    const parsed = JSON.parse(rawResponse);
+    const parsed = JSON.parse(rawResponse.content);
     const result = validateSuggestions(parsed, beatIds);
     await db.from("outline_suggestion_runs").update({
       status: "completed",
       suggestions: result.suggestions,
       warnings: result.warnings,
+      credit_cost_charged: creditCostCharged,
+      remaining_credits: remainingCredits,
       completed_at: new Date().toISOString(),
     }).eq("id", runId);
   } catch (err) {
@@ -671,13 +705,29 @@ Deno.serve(async (req: Request) => {
       "outline_suggestion_runs",
     )
       .select(
-        "id, status, suggestions, warnings, error, created_at, updated_at, completed_at",
+        "id, status, suggestions, warnings, error, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits",
       )
       .eq("id", runId).single();
-    if (error || !run) return errorResponse("not_found", "run not found", 404);
-    return corsResponse(JSON.stringify({ run_id: run.id, ...run }), {
-      status: 200,
-    });
+    if (error) {
+      console.error("[outline-from-recipe] polling query failed", error);
+      return errorResponse("db_error", "Could not read suggestion run", 500);
+    }
+    if (!run) return errorResponse("not_found", "run not found", 404);
+    return corsResponse(
+      JSON.stringify({
+        run_id: run.id,
+        status: run.status,
+        suggestions: run.suggestions,
+        warnings: run.warnings,
+        error: run.error,
+        created_at: run.created_at,
+        updated_at: run.updated_at,
+        completed_at: run.completed_at,
+        creditCostCharged: run.credit_cost_charged,
+        remainingCredits: run.remaining_credits,
+      }),
+      { status: 200 },
+    );
   }
 
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
