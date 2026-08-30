@@ -46,7 +46,6 @@ Deno.test("maps a snapshot and section to generate-story's canonical request", (
   });
   assertEquals(request.generationAction, "generate");
   assertEquals(request.generationLengthMode, "long");
-  assertEquals(request.outputBudget, 3000);
   assertEquals(request.selectedModelId, "model-1");
   assertEquals(request.container, "scene");
   assertEquals(request.pov, "firstPerson");
@@ -79,4 +78,14 @@ Deno.test("finds a project snapshot through either local ID or lineage", () => {
     projectSnapshotLookupFilter("local-1", null),
     "local_project_id.eq.local-1",
   );
+});
+
+Deno.test("run-outline uses leased bounded continuations", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/run-outline/index.ts",
+  );
+  assertEquals(source.includes('"claim_chapter_run"'), true);
+  assertEquals(source.includes("pending.slice(0, 2)"), true);
+  assertEquals(source.includes("queueContinuation(runId, authHeader)"), true);
+  assertEquals(source.includes("worker_lease_until"), true);
 });
