@@ -392,11 +392,15 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
       auth: { persistSession: false },
     });
     const { data: durableRun } = await adminClient.from("chapter_runs")
-      .select("worker_lease_until")
+      .select("worker_lease_until, next_retry_at")
       .eq("id", runId).maybeSingle();
+    const retryAt = durableRun?.next_retry_at
+      ? new Date(durableRun.next_retry_at).getTime()
+      : 0;
     if (
-      !durableRun?.worker_lease_until ||
-      new Date(durableRun.worker_lease_until).getTime() < Date.now()
+      retryAt <= Date.now() &&
+      (!durableRun?.worker_lease_until ||
+        new Date(durableRun.worker_lease_until).getTime() < Date.now())
     ) {
       await queueContinuation(runId, authHeader);
     }
@@ -456,10 +460,18 @@ async function runOutline(
 
   const { data: run, error: runError } = await adminClient.from("chapter_runs")
     .select(
-      "id, outline_id, user_id, model, credits_reserved, created_at, sections",
+      "id, outline_id, user_id, model, credits_reserved, created_at, sections, next_retry_at",
     )
     .eq("id", runId).single();
   if (runError || !run) throw new Error("run disappeared after claim");
+
+  const retryAt = run.next_retry_at
+    ? new Date(String(run.next_retry_at)).getTime()
+    : 0;
+  if (retryAt > Date.now()) {
+    await releaseRunLease(adminClient, runId);
+    return;
+  }
 
   const sections = Array.isArray(run.sections)
     ? run.sections as Array<Record<string, unknown>>
@@ -555,6 +567,34 @@ async function runOutline(
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof RetryableGenerationError) {
+        const retryAt = new Date(
+          Date.now() + err.retryAfterSeconds * 1000,
+        ).toISOString();
+        await updateSectionStatus(adminClient, runId, {
+          ...section,
+          status: "pending",
+          error: msg,
+          retry_after_seconds: err.retryAfterSeconds,
+        });
+        await adminClient.from("chapter_runs").update({
+          next_retry_at: retryAt,
+        }).eq("id", runId).eq("status", "running");
+        await releaseRunLease(adminClient, runId);
+        // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
+        EdgeRuntime.waitUntil(
+          queueContinuationAfterDelay(
+            runId,
+            authHeader,
+            err.retryAfterSeconds,
+          ).catch((queueError) => {
+            console.error(
+              `[run-outline] delayed retry queue failed for ${runId}: ${queueError}`,
+            );
+          }),
+        );
+        return;
+      }
       await updateSectionStatus(adminClient, runId, {
         ...section,
         status: "failed",
@@ -579,6 +619,8 @@ async function runOutline(
     after?.status === "running" &&
     afterSections.some((s) => s.status === "pending")
   ) {
+    await adminClient.from("chapter_runs").update({ next_retry_at: null })
+      .eq("id", runId).eq("status", "running");
     await releaseRunLease(adminClient, runId);
     await queueContinuation(runId, authHeader);
   } else if (after?.status === "running") {
@@ -628,6 +670,15 @@ async function releaseRunLease(
     .eq("id", runId).eq("status", "running");
 }
 
+async function queueContinuationAfterDelay(
+  runId: string,
+  authHeader: string,
+  retryAfterSeconds: number,
+): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1000));
+  await queueContinuation(runId, authHeader);
+}
+
 async function queueContinuation(
   runId: string,
   authHeader: string,
@@ -666,6 +717,7 @@ async function finalizeRun(
     credits_actual: actual,
     completed_at: new Date().toISOString(),
     worker_lease_until: null,
+    next_retry_at: null,
   }).eq("id", runId);
   console.log(
     `[run-outline] run_id=${runId} completed; actual_credits=${actual}`,
@@ -1073,6 +1125,16 @@ async function findRunOutput(
   return String(data.id);
 }
 
+class RetryableGenerationError extends Error {
+  readonly retryAfterSeconds: number;
+
+  constructor(message: string, retryAfterSeconds: number) {
+    super(message);
+    this.name = "RetryableGenerationError";
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 async function callGenerateStory(
   payload: Record<string, unknown>,
   authHeader: string,
@@ -1090,6 +1152,25 @@ async function callGenerateStory(
   });
   if (!response.ok) {
     const errBody = await response.text();
+    if (response.status === 429) {
+      let retryAfterSeconds = Number(response.headers.get("Retry-After"));
+      try {
+        const parsed = JSON.parse(errBody) as { retryAfterSeconds?: number };
+        if (typeof parsed.retryAfterSeconds === "number") {
+          retryAfterSeconds = parsed.retryAfterSeconds;
+        }
+      } catch {
+        // Fall back to the HTTP Retry-After header below.
+      }
+      if (!Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
+        retryAfterSeconds = 60;
+      }
+      retryAfterSeconds = Math.min(Math.ceil(retryAfterSeconds), 3600);
+      throw new RetryableGenerationError(
+        `generate-story returned 429: ${errBody.slice(0, 200)}`,
+        retryAfterSeconds,
+      );
+    }
     throw new Error(
       `generate-story returned ${response.status}: ${errBody.slice(0, 200)}`,
     );
