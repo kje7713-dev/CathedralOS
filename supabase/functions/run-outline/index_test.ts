@@ -89,4 +89,8 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   assertEquals(source.includes("pending.slice(0, 2)"), true);
   assertEquals(source.includes("queueContinuation(runId, authHeader)"), true);
   assertEquals(source.includes("worker_lease_until"), true);
+  assertEquals(source.includes("RetryableGenerationError"), true);
+  assertEquals(source.includes("retryAfterSeconds"), true);
+  assertEquals(source.includes("next_retry_at"), true);
+  assertEquals(source.includes("queueContinuationAfterDelay"), true);
 });
