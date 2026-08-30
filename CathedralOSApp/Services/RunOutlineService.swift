@@ -56,8 +56,8 @@ struct RunOutlineKickoffResponse: Codable {
     let run_id: String
     let status: String
     let sections: [RunOutlineSectionStatus]?
-    let cost_cents_reserved: Int?
-    let cost_cents_actual: Int?
+    let credits_reserved: Int?
+    let credits_actual: Int?
     let error: String?
     let created_at: String?
     let updated_at: String?
@@ -76,8 +76,8 @@ struct RunOutlineStatus: Codable {
     let current_section: RunOutlineCurrentSection?
     let sections: [RunOutlineSectionStatus]?
     let error: String?
-    let cost_cents_reserved: Int?
-    let cost_cents_actual: Int?
+    let credits_reserved: Int?
+    let credits_actual: Int?
     let created_at: String?
     let updated_at: String?
     let completed_at: String?
@@ -153,7 +153,11 @@ struct RunOutlineService {
         guard let token = authService.currentAccessToken else {
             throw RunOutlineError.notAuthenticated
         }
-        let url = client.edgeFunctionURL(path: "run-outline?run_id=\(runID)")
+        var components = URLComponents(url: client.edgeFunctionURL(path: "run-outline"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "run_id", value: runID)]
+        guard let url = components?.url else {
+            throw RunOutlineError.invalidResponse("Could not construct run status URL")
+        }
         var urlRequest = client.authorizedRequest(for: url, userAccessToken: token)
         urlRequest.httpMethod = "GET"
         urlRequest.timeoutInterval = 30

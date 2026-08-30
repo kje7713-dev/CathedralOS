@@ -64,6 +64,7 @@ const errorResponse = (
   corsResponse(JSON.stringify({ errorCode: code, message }), { status });
 
 interface RunOutlineRequest {
+  resume_run_id?: string;
   outline_id: string;
   start_parent_section_id: string;
   model?: string;
@@ -110,6 +111,17 @@ async function handleKickoff(req: Request): Promise<Response> {
     body = await req.json();
   } catch {
     return errorResponse("invalid_body", "JSON body required", 400);
+  }
+  if (body.resume_run_id) {
+    const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false },
+    });
+    return await handleResume(
+      adminClient,
+      userId,
+      body.resume_run_id,
+      authHeader,
+    );
   }
   if (!body.outline_id || !body.start_parent_section_id) {
     return errorResponse(
@@ -163,7 +175,7 @@ async function handleKickoff(req: Request): Promise<Response> {
       idempotency_key: idempotencyKey,
       status: "running",
       sections: [],
-      cost_cents_reserved: 0,
+      credits_reserved: 0,
     })
     .select()
     .single();
@@ -216,7 +228,7 @@ async function handleKickoff(req: Request): Promise<Response> {
   // 5. Estimate total cost (per docs/multi-section-generation.md: cost reserve at
   //    kickoff; release on failure). Per _credits.ts policy: "Monthly allowance is
   //    drained first, then purchased balance." We use the same drain order at
-  //    commit time. cost_cents_reserved is in integer credits for now (the
+  //    commit time. credits_reserved is in integer credits for now (the
   //    column naming pre-dates the credit/cent distinction; semantics are
   //    "credits" today).
   const estimatedCost = sections.reduce(
@@ -251,7 +263,7 @@ async function handleKickoff(req: Request): Promise<Response> {
       status: "failed",
       error:
         `insufficient_credits: needed ${estimatedCost}, have ${check.availableCredits}`,
-      cost_cents_reserved: 0,
+      credits_reserved: 0,
       completed_at: new Date().toISOString(),
     }).eq("id", run.id);
     return errorResponse(
@@ -261,10 +273,34 @@ async function handleKickoff(req: Request): Promise<Response> {
     );
   }
 
-  // 7. Update cost_cents_reserved + log the kickoff
-  await adminClient.from("chapter_runs").update({
-    cost_cents_reserved: estimatedCost,
+  // Persist the complete work list before the worker starts. This is the
+  // durable queue: a later invocation can resume without reconstructing scope.
+  const initialSections = sections.map((s) => ({
+    id: s.id,
+    title: s.title,
+    position: s.position,
+    summary: s.summary,
+    container: s.container,
+    pov: s.pov,
+    terminal_beat: s.terminal_beat,
+    story_arc_beat_id: s.story_arc_beat_id,
+    status: "pending",
+  }));
+  // 7. Update credits_reserved + log the kickoff
+  const { error: initError } = await adminClient.from("chapter_runs").update({
+    sections: initialSections,
+    credits_reserved: estimatedCost,
+    model: body.model ?? null,
+    user_id: userId,
   }).eq("id", run.id);
+  if (initError) {
+    await markRunFailed(
+      adminClient,
+      run.id,
+      `could not persist run queue: ${initError.message}`,
+    );
+    return errorResponse("db_error", initError.message, 500);
+  }
   console.log(
     `[run-outline] kickoff run_id=${run.id} user=${userId} outline=${body.outline_id} parent=${body.start_parent_section_id} sections=${sections.length} estimated_cost=${estimatedCost} model=${
       body.model ?? "(default)"
@@ -278,17 +314,7 @@ async function handleKickoff(req: Request): Promise<Response> {
   // durable chapter_runs row remains the source of truth for polling/recovery.
   // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
   EdgeRuntime.waitUntil(
-    runOutline(
-      run.id,
-      body.outline_id,
-      body.start_parent_section_id,
-      body.model,
-      adminClient,
-      userId,
-      estimatedCost,
-      sections,
-      authHeader,
-    ).catch(async (err) => {
+    runOutline(run.id, adminClient, authHeader).catch(async (err) => {
       const message = err instanceof Error ? err.message : String(err);
       console.error(
         `[run-outline] background run ${run.id} crashed: ${message}`,
@@ -307,8 +333,8 @@ async function handleKickoff(req: Request): Promise<Response> {
         position: section.position,
         status: "pending",
       })),
-      cost_cents_reserved: estimatedCost,
-      cost_cents_actual: 0,
+      credits_reserved: estimatedCost,
+      credits_actual: 0,
       error: null,
       created_at: run.created_at,
       updated_at: run.updated_at,
@@ -341,11 +367,29 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
   const { data: run, error: runErr } = await userClient
     .from("chapter_runs")
     .select(
-      "id, outline_id, start_parent_section_id, status, sections, cost_cents_reserved, cost_cents_actual, error, created_at, updated_at, completed_at",
+      "id, outline_id, start_parent_section_id, status, sections, credits_reserved, credits_actual, error, created_at, updated_at, completed_at",
     )
     .eq("id", runId)
     .single();
   if (runErr || !run) return errorResponse("not_found", "run not found", 404);
+
+  // A status poll is also a lightweight recovery trigger. If an invocation
+  // died after claiming its lease, enqueue one replacement; the DB claim
+  // function prevents duplicate workers from processing the same run.
+  if (run.status === "running") {
+    const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false },
+    });
+    const { data: durableRun } = await adminClient.from("chapter_runs")
+      .select("worker_lease_until")
+      .eq("id", runId).maybeSingle();
+    if (
+      !durableRun?.worker_lease_until ||
+      new Date(durableRun.worker_lease_until).getTime() < Date.now()
+    ) {
+      await queueContinuation(runId, authHeader);
+    }
+  }
 
   const sections = Array.isArray(run.sections) ? run.sections : [];
   const sections_done =
@@ -374,8 +418,8 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
         : null,
       sections,
       error: run.error,
-      cost_cents_reserved: run.cost_cents_reserved,
-      cost_cents_actual: run.cost_cents_actual,
+      credits_reserved: run.credits_reserved,
+      credits_actual: run.credits_actual,
       created_at: run.created_at,
       updated_at: run.updated_at,
       completed_at: run.completed_at,
@@ -387,153 +431,233 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
 // ---- outline-walker + per-section loop (Day 2) -------------------------
 async function runOutline(
   runId: string,
-  outlineId: string,
-  startParentSectionId: string,
-  model: string | undefined,
   adminClient: ReturnType<typeof createClient>,
-  userId: string,
-  estimatedCost: number,
-  sections: Array<{
-    id: string;
-    title: string;
-    position: number;
-    summary: string;
-    container: string | null;
-    pov: string | null;
-    terminal_beat: string | null;
-    story_arc_beat_id: string | null;
-  }>,
   authHeader: string,
 ): Promise<void> {
-  // Initialize per-section progress in the jsonb column
-  await adminClient.from("chapter_runs").update({
-    sections: sections.map((s) => ({
-      id: s.id,
-      title: s.title,
-      position: s.position,
-      status: "pending",
-    })),
-  }).eq("id", runId);
+  const { data: claimed, error: claimError } = await adminClient.rpc(
+    "claim_chapter_run",
+    { p_run_id: runId, p_lease_seconds: 150 },
+  );
+  if (claimError) throw new Error(`could not claim run: ${claimError.message}`);
+  const ownsLease = claimed === true ||
+    (Array.isArray(claimed) && claimed.length > 0);
+  if (!ownsLease) return; // another live invocation owns the lease
 
-  // We need project_id for embed-section calls (Rule 8: pipeline order).
-  const { data: outlineRow } = await adminClient
-    .from("outlines")
-    .select("local_project_id, lineage_id")
-    .eq("id", outlineId)
-    .single();
-  const projectId = outlineRow?.local_project_id;
-  if (!projectId) {
-    await adminClient.from("chapter_runs").update({
-      status: "failed",
-      error: "outline.local_project_id missing",
-      completed_at: new Date().toISOString(),
-    }).eq("id", runId);
+  const { data: run, error: runError } = await adminClient.from("chapter_runs")
+    .select(
+      "id, outline_id, user_id, model, credits_reserved, created_at, sections",
+    )
+    .eq("id", runId).single();
+  if (runError || !run) throw new Error("run disappeared after claim");
+
+  const sections = Array.isArray(run.sections)
+    ? run.sections as Array<Record<string, unknown>>
+    : [];
+  // Older runs stored only display fields in sections. Hydrate missing inputs
+  // from the authoritative outline so those runs are resumable too.
+  const sectionIds = sections.map((s) => String(s.id)).filter(Boolean);
+  if (sectionIds.length > 0) {
+    const { data: outlineSections } = await adminClient.from("outline_sections")
+      .select(
+        "id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id",
+      )
+      .in("id", sectionIds);
+    const byId = new Map((outlineSections ?? []).map((s) => [s.id, s]));
+    for (const section of sections) {
+      const source = byId.get(String(section.id));
+      if (source) Object.assign(section, source);
+    }
+  }
+  // A killed worker can leave one section marked running. Its output call was
+  // not durably acknowledged, so retry that section on the next lease.
+  for (const section of sections) {
+    if (section.status === "running") section.status = "pending";
+  }
+  await adminClient.from("chapter_runs").update({ sections }).eq("id", runId);
+
+  const pending = sections.filter((s) => s.status === "pending");
+  if (pending.length === 0) {
+    await finalizeRun(adminClient, runId, sections);
     return;
   }
+
+  const { data: outlineRow } = await adminClient.from("outlines")
+    .select("local_project_id, lineage_id").eq("id", run.outline_id).single();
+  const projectId = outlineRow?.local_project_id;
+  if (!projectId) throw new Error("outline.local_project_id missing");
 
   const { data: snapshotRow, error: snapshotError } = await adminClient
-    .from("project_snapshots")
-    .select("snapshot_json")
-    .eq("user_id", userId)
-    // Restored/imported projects can retain a local ID that differs from the
-    // canonical snapshot row.  The outline and snapshot still share lineage,
-    // so accept either identity instead of incorrectly reporting no snapshot.
+    .from("project_snapshots").select("snapshot_json").eq(
+      "user_id",
+      run.user_id,
+    )
     .or(projectSnapshotLookupFilter(projectId, outlineRow.lineage_id))
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .order("updated_at", { ascending: false }).limit(1).maybeSingle();
   if (snapshotError || !snapshotRow?.snapshot_json) {
-    await markRunFailed(
-      adminClient,
-      runId,
-      "project snapshot / prompt-pack data missing",
-    );
-    return;
+    throw new Error("project snapshot / prompt-pack data missing");
   }
 
-  // Iterate sequentially; stop-the-chain on first failure (Kevin 14:22 EDT)
-  let actualCost = 0;
-  for (const section of sections) {
+  // Keep each invocation bounded. Continuations are independent invocations,
+  // so a platform lifetime limit cannot orphan the entire Run All operation.
+  const batch = pending.slice(0, 2);
+  for (const section of batch) {
     await updateSectionStatus(adminClient, runId, {
-      id: section.id,
-      title: section.title,
-      position: section.position,
+      ...section,
       status: "running",
       started_at: new Date().toISOString(),
     });
     try {
-      // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): the fetchPriorContext
-      // call was REMOVED. generate-story fetches its own prior_context for
-      // embed-section internally. run-outline's loop is now just:
-      //   generate (via generate-story) → next section.
-      // Both iOS direct-gen and run-outline paths have identical extraction
-      // behavior because both delegate to generate-story's fire-and-forget
-      // embed-section call.
-
-      // 1. Generate the prose (Rule 8: generate first).
-      //    Kevin 2026-08-21 17:47 EDT architecture spec: generate-story now
-      //    OWNS post-generation extraction (calls embed-section internally
-      //    with raw_text = llmResult.content). run-outline no longer calls
-      //    embed-section — single owner = generate-story. Story arc context
-      //    is also resolved server-side in generate-story (was previously
-      //    fetched here and passed as 5 fields; those fields have been
-      //    removed from buildGenerateStoryRequest).
+      // If the platform killed the worker after generate-story persisted its
+      // output but before this row was updated, reuse that output. This makes
+      // recovery safe and avoids charging the same section twice.
+      const existingOutput = await findRunOutput(
+        adminClient,
+        String(section.id),
+        String(run.created_at),
+      );
+      if (existingOutput) {
+        await updateSectionStatus(adminClient, runId, {
+          ...section,
+          status: "completed",
+          output_id: existingOutput,
+          cost: estimateSectionCost(section.container as string | null),
+          completed_at: new Date().toISOString(),
+        });
+        continue;
+      }
       const generationRequest = buildGenerateStoryRequest({
         snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
         section,
         projectId,
-        selectedModelId: model,
-        lengthMode: estimateLengthModeFromContainer(section.container),
+        selectedModelId: (run.model as string | null) ?? undefined,
+        lengthMode: estimateLengthModeFromContainer(
+          section.container as string | null,
+        ),
       });
       const result = await callGenerateStory(generationRequest, authHeader);
-
-      // 3. Per-section cost tracking.
-      const sectionCost = estimateSectionCost(section.container);
-      actualCost += sectionCost;
       await updateSectionStatus(adminClient, runId, {
-        id: section.id,
-        title: section.title,
-        position: section.position,
+        ...section,
         status: "completed",
         output_id: result.output_id,
-        cost: sectionCost,
+        cost: estimateSectionCost(section.container as string | null),
         completed_at: new Date().toISOString(),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const sectionCost = estimateSectionCost(section.container);
-      // Rollback the cost reserve since this section failed (per
-      // _credits.ts policy: "If the LLM provider call fails: do NOT charge credits").
       await updateSectionStatus(adminClient, runId, {
-        id: section.id,
-        title: section.title,
-        position: section.position,
+        ...section,
         status: "failed",
         error: msg,
         completed_at: new Date().toISOString(),
       });
-      await adminClient.from("chapter_runs").update({
-        status: "failed",
-        error: `section ${section.id} (${section.title}) failed: ${msg}`,
-        cost_cents_actual: actualCost,
-        completed_at: new Date().toISOString(),
-      }).eq("id", runId);
-      console.log(
-        `[run-outline] run_id=${runId} failed at section ${section.id}: ${msg}`,
+      await markRunFailed(
+        adminClient,
+        runId,
+        `section ${section.id} (${section.title}) failed: ${msg}`,
       );
-      return; // stop the chain
+      return;
     }
   }
 
-  // generate-story charges each successfully persisted output. This run keeps
-  // the estimate/actual values for progress reporting but must not debit again.
+  const { data: after } = await adminClient.from("chapter_runs")
+    .select("sections, status").eq("id", runId).single();
+  const afterSections = Array.isArray(after?.sections)
+    ? after.sections as Array<Record<string, unknown>>
+    : [];
+  if (
+    after?.status === "running" &&
+    afterSections.some((s) => s.status === "pending")
+  ) {
+    await releaseRunLease(adminClient, runId);
+    await queueContinuation(runId, authHeader);
+  } else if (after?.status === "running") {
+    await finalizeRun(adminClient, runId, afterSections);
+  }
+}
+
+async function handleResume(
+  adminClient: ReturnType<typeof createClient>,
+  userId: string,
+  runId: string,
+  authHeader: string,
+): Promise<Response> {
+  const { data: run } = await adminClient.from("chapter_runs")
+    .select("id, outline_id, status").eq("id", runId).maybeSingle();
+  if (!run) return errorResponse("not_found", "run not found", 404);
+  const { data: outline } = await adminClient.from("outlines")
+    .select("user_id").eq("id", run.outline_id).single();
+  if (outline?.user_id !== userId) {
+    return errorResponse("not_found", "run not found", 404);
+  }
+  if (run.status !== "running") {
+    return corsResponse(JSON.stringify({ run_id: runId, status: run.status }), {
+      status: 200,
+    });
+  }
+  // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
+  EdgeRuntime.waitUntil(
+    runOutline(runId, adminClient, authHeader).catch(async (err) => {
+      await markRunFailed(
+        adminClient,
+        runId,
+        err instanceof Error ? err.message : String(err),
+      );
+    }),
+  );
+  return corsResponse(JSON.stringify({ run_id: runId, status: "running" }), {
+    status: 202,
+  });
+}
+
+async function releaseRunLease(
+  adminClient: ReturnType<typeof createClient>,
+  runId: string,
+): Promise<void> {
+  await adminClient.from("chapter_runs").update({ worker_lease_until: null })
+    .eq("id", runId).eq("status", "running");
+}
+
+async function queueContinuation(
+  runId: string,
+  authHeader: string,
+): Promise<void> {
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/run-outline`, {
+    method: "POST",
+    headers: {
+      "Authorization": authHeader,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ resume_run_id: runId }),
+  });
+  if (!response.ok && response.status !== 409) {
+    throw new Error(`continuation queue returned ${response.status}`);
+  }
+}
+
+async function finalizeRun(
+  adminClient: ReturnType<typeof createClient>,
+  runId: string,
+  sections: Array<Record<string, unknown>>,
+): Promise<void> {
+  const failed = sections.find((s) => s.status === "failed");
+  if (failed) {
+    await markRunFailed(
+      adminClient,
+      runId,
+      String(failed.error ?? "section failed"),
+    );
+    return;
+  }
+  const actual = sections.filter((s) => s.status === "completed")
+    .reduce((sum, s) => sum + Number(s.cost ?? 0), 0);
   await adminClient.from("chapter_runs").update({
     status: "completed",
-    cost_cents_actual: actualCost,
+    credits_actual: actual,
     completed_at: new Date().toISOString(),
+    worker_lease_until: null,
   }).eq("id", runId);
   console.log(
-    `[run-outline] run_id=${runId} completed; actual_cost=${actualCost} reserved=${estimatedCost}`,
+    `[run-outline] run_id=${runId} completed; actual_credits=${actual}`,
   );
 }
 
@@ -925,6 +1049,19 @@ function aggregateProjectState(
 
 // ---- Rule 8: pipeline order (generate → persist → extract → next) ------
 
+async function findRunOutput(
+  adminClient: ReturnType<typeof createClient>,
+  sectionId: string,
+  runCreatedAt: string,
+): Promise<string | null> {
+  const { data, error } = await adminClient.from("generation_outputs")
+    .select("id").eq("outline_section_id", sectionId)
+    .gte("created_at", runCreatedAt)
+    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+  if (error || !data?.id) return null;
+  return String(data.id);
+}
+
 async function callGenerateStory(
   payload: Record<string, unknown>,
   authHeader: string,
@@ -1049,7 +1186,11 @@ async function updateSectionStatus(
   const idx = sections.findIndex((s) => s.id === sectionStatus.id);
   if (idx >= 0) sections[idx] = { ...sections[idx], ...sectionStatus };
   else sections.push(sectionStatus);
-  await adminClient.from("chapter_runs").update({ sections }).eq("id", runId);
+  const { error } = await adminClient.from("chapter_runs").update({ sections })
+    .eq("id", runId);
+  if (error) {
+    throw new Error(`could not persist section progress: ${error.message}`);
+  }
 }
 
 async function markRunFailed(
@@ -1057,9 +1198,21 @@ async function markRunFailed(
   runId: string,
   error: string,
 ): Promise<void> {
+  const { data: run } = await adminClient.from("chapter_runs")
+    .select("sections").eq("id", runId).maybeSingle();
+  const sections = Array.isArray(run?.sections)
+    ? run.sections as Array<Record<string, unknown>>
+    : [];
+  const actual = sections.filter((s) => s.status === "completed")
+    .reduce((sum, s) => sum + Number(s.cost ?? 0), 0);
+  // generate-story owns the real debit. The orchestrator reports successful
+  // section charges and clears its estimate on failure (no failed-call charge).
   await adminClient.from("chapter_runs").update({
     status: "failed",
     error,
+    credits_reserved: 0,
+    credits_actual: actual,
     completed_at: new Date().toISOString(),
+    worker_lease_until: null,
   }).eq("id", runId);
 }

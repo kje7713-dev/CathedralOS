@@ -747,8 +747,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 current_section: nil,
                 sections: response.sections,
                 error: response.error,
-                cost_cents_reserved: response.cost_cents_reserved,
-                cost_cents_actual: response.cost_cents_actual,
+                credits_reserved: response.credits_reserved,
+                credits_actual: response.credits_actual,
                 created_at: response.created_at,
                 updated_at: response.updated_at,
                 completed_at: response.completed_at
