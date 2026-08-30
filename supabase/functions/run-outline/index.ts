@@ -147,6 +147,17 @@ async function handleKickoff(req: Request): Promise<Response> {
     .eq("idempotency_key", idempotencyKey)
     .maybeSingle();
   if (existing && existing.status === "running") {
+    // A prior worker may have died before claiming a lease (or while the app
+    // was offline). Keep the idempotency response, but also use this retry as
+    // a recovery trigger. claim_chapter_run makes this safe if a worker is
+    // already active.
+    EdgeRuntime.waitUntil(
+      queueContinuation(existing.id, authHeader).catch((err) => {
+        console.error(
+          `[run-outline] resume queue failed for ${existing.id}: ${err}`,
+        );
+      }),
+    );
     return corsResponse(
       JSON.stringify({ errorCode: "already_running", run_id: existing.id }),
       { status: 409 },
