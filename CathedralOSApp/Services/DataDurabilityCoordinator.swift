@@ -59,8 +59,12 @@ final class DataDurabilityCoordinator: ObservableObject {
 
         var progressMessage: String {
             switch self {
-            case .restoreAll, .restoreDeletedProjects: return "Restoring from cloud…"
-            default: return "Syncing…"
+            case .syncAll, .appLaunch, .signIn:
+                return "Uploading projects and reconciling sections on the server…"
+            case .restoreAll, .restoreDeletedProjects:
+                return "Restoring from cloud…"
+            default:
+                return "Syncing…"
             }
         }
     }
@@ -190,7 +194,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     func performManualSyncAll(context: ModelContext) async -> SyncOperationResult {
         await runOperation(kind: .syncAll) {
             try await self.syncAllData(in: context)
-            return "All data synced."
+            return "Cloud sync complete. Server-side project reconciliation finished."
         }
     }
 

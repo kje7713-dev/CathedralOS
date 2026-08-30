@@ -480,7 +480,7 @@ struct AccountView: View {
                     Task { await attemptSyncEverything() }
                 } label: {
                     Label(
-                        durabilityCoordinator.isRunning ? "Syncing…" : "Sync Everything",
+                        durabilityCoordinator.isRunning ? "Working on server…" : "Sync Everything",
                         systemImage: durabilityCoordinator.isRunning ? "arrow.trianglehead.2.clockwise" : "arrow.triangle.2.circlepath"
                     )
                 }
@@ -518,13 +518,21 @@ struct AccountView: View {
                     Text("Sign in to sync data between devices.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else {
+                    Text("Sync Everything uploads the project snapshot. The server reconciles its outline sections before reporting success.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 switch durabilityCoordinator.operationState {
                 case .succeeded(_, let message):
-                    Text(message).font(.caption).foregroundStyle(.secondary)
+                    Label(message, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(CathedralTheme.Colors.accent)
                 case .failed(_, let message):
-                    Text(message).font(.caption).foregroundStyle(.red)
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 case .idle, .running:
                     EmptyView()
                 }
