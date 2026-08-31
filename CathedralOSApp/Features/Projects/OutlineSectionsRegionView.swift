@@ -769,6 +769,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 durabilityCoordinator.startPolling(
                     runID: response.run_id,
                     initialStatus: initialStatus,
+                    projectLineageID: project.stableLineageID,
                     runOutlineService: runOutlineService,
                     context: modelContext,
                     onSyncCompleted: { [self] context in
@@ -778,6 +779,31 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 )
             }
         } catch let error as RunOutlineError {
+            if case .alreadyRunning(let runID) = error {
+                // A retry can discover a durable server run that was started
+                // before this view was recreated. Adopt it instead of leaving
+                // the user with a dead-end 409 alert.
+                do {
+                    let status = try await runOutlineService.status(runID: runID)
+                    generationTarget = nil
+                    runOutlineError = nil
+                    durabilityCoordinator.startPolling(
+                        runID: runID,
+                        initialStatus: status,
+                        projectLineageID: project.stableLineageID,
+                        runOutlineService: runOutlineService,
+                        context: modelContext,
+                        onSyncCompleted: { [self] context in
+                            self.refreshAllOutputs()
+                            self.recordEyeDebug(context: context)
+                        }
+                    )
+                    return
+                } catch {
+                    runOutlineError = error.localizedDescription
+                    return
+                }
+            }
             runOutlineError = error.errorDescription
         } catch {
             runOutlineError = error.localizedDescription
