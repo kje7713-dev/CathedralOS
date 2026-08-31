@@ -1,4 +1,5 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { acceptRunTerminalOutcome } from "./_outcome.ts";
 
 // Durable Accept All worker. The iOS client submits the complete suggestion
 // batch once, then polls this job. Embedding remains the canonical pipeline,
@@ -170,7 +171,16 @@ async function mergeSectionsIntoSnapshot(
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (snapshotError || !snapshot) return;
+  if (snapshotError) {
+    throw new Error(
+      `Could not read project snapshot: ${snapshotError.message}`,
+    );
+  }
+  if (!snapshot) {
+    throw new Error(
+      `Could not update project snapshot: no snapshot found for project ${request.project_id}`,
+    );
+  }
   const { data: rows, error: rowsError } = await db.from("outline_sections")
     .select(
       "id,position,title,summary,container,pov,terminal_beat,status,parent_id,story_arc_beat_id",
@@ -189,7 +199,11 @@ async function mergeSectionsIntoSnapshot(
   const outline = outlines.find((candidate) =>
     candidate.id === request.outline_id
   );
-  if (!outline) return;
+  if (!outline) {
+    throw new Error(
+      `Could not update project snapshot: outline ${request.outline_id} not found in snapshot`,
+    );
+  }
   const existing = Array.isArray(outline.sections)
     ? outline.sections as Record<string, unknown>[]
     : [];
@@ -315,7 +329,8 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     );
     let done = completedIDs.size;
     let failed = 0;
-    const failureDetails: Array<{ id: string; title: string; error: string }> = [];
+    const failureDetails: Array<{ id: string; title: string; error: string }> =
+      [];
     await db.from("outline_accept_runs").update({
       sections_done: done,
       sections_failed: 0,
@@ -354,7 +369,9 @@ async function runJob(runID: string, authHeader: string, userID: string) {
           if (!embedResponse.ok) {
             const detail = (await embedResponse.text()).trim();
             throw new Error(
-              `embed-section returned ${embedResponse.status}${detail ? `: ${detail.slice(0, 500)}` : ""}`,
+              `embed-section returned ${embedResponse.status}${
+                detail ? `: ${detail.slice(0, 500)}` : ""
+              }`,
             );
           }
           await db.from("outline_sections").update({ status: "accepted" }).eq(
@@ -386,17 +403,29 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     // The project snapshot is the source restored by iOS. Keep it in sync
     // with the relational rows before reporting the job as terminal; otherwise
     // a successful Accept All is immediately erased by the next cloud restore.
-    await mergeSectionsIntoSnapshot(db, normalizedRequest, userID);
-    const error = failureDetails.length
+    // A merge error must remain a failed job even when every section embedded.
+    let snapshotError: string | null = null;
+    try {
+      await mergeSectionsIntoSnapshot(db, normalizedRequest, userID);
+    } catch (err) {
+      snapshotError = err instanceof Error ? err.message : String(err);
+      console.error("[accept-outline-sections] snapshot merge failed", err);
+    }
+    const sectionError = failureDetails.length
       ? failureDetails.map((failure) =>
         `${failure.title} (${failure.id}): ${failure.error}`
-      ).join("; ").slice(0, 2000)
+      ).join("; ")
       : null;
+    const outcome = acceptRunTerminalOutcome(
+      failed,
+      snapshotError,
+      sectionError,
+    );
     await db.from("outline_accept_runs").update({
-      status: failed ? "failed" : "completed",
+      status: outcome.status,
       sections_done: done,
       sections_failed: failed,
-      error,
+      error: outcome.error,
       completed_at: new Date().toISOString(),
     }).eq("id", runID);
   } catch (err) {

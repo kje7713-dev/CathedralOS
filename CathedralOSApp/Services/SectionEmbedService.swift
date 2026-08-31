@@ -276,12 +276,20 @@ struct AcceptOutlineSectionsRequest: Codable {
     let sections: [AcceptOutlineSection]
 }
 
-struct AcceptOutlineSectionsResult {
+struct AcceptOutlineSectionsResult: Equatable {
     let runID: String
+    let status: String
     let sectionsTotal: Int
     let sectionsDone: Int
     let sectionsFailed: Int
     let error: String?
+
+    /// A server job is successful only when its durable terminal status says
+    /// completed and no section failure was reported. In particular, a failed
+    /// snapshot commit can be 6/6 with sectionsFailed == 0.
+    var isSuccessful: Bool {
+        status == "completed" && sectionsFailed == 0 && error == nil
+    }
 }
 
 private struct AcceptOutlineJobResponse: Codable {
@@ -364,6 +372,7 @@ extension SectionEmbedService {
             if job.status == "completed" || job.status == "failed" {
                 return AcceptOutlineSectionsResult(
                     runID: job.run_id,
+                    status: job.status,
                     sectionsTotal: job.sections_total ?? 0,
                     sectionsDone: job.sections_done ?? 0,
                     sectionsFailed: job.sections_failed ?? 0,

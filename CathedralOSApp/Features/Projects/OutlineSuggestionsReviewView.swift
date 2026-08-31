@@ -94,7 +94,7 @@ struct OutlineSuggestionsReviewView: View {
                 }
             }
         }
-        .alert("Acceptance Completed", isPresented: Binding(
+        .alert("Accept All", isPresented: Binding(
             get: { acceptErrorMessage != nil },
             set: { if !$0 { acceptErrorMessage = nil } }
         )) {
@@ -139,29 +139,32 @@ struct OutlineSuggestionsReviewView: View {
                     startingPosition: (outline.sections.map { $0.position }.max() ?? -1) + 1,
                     idempotencyKey: acceptanceIdempotencyKey
                 )
-                // Reconcile even when the server reports a partial failure.
-                // The worker may have completed other sections, and those must
-                // not disappear just because one embedding call was rate-limited.
-                _ = await DataDurabilityCoordinator.shared.performCloudRestore(context: modelContext)
-                if result.sectionsFailed > 0 {
-                    throw SectionEmbedError.serverError(
-                        statusCode: 500,
-                        body: result.error ?? "\(result.sectionsFailed) section(s) failed"
-                    )
+                // Only a completed server job has a snapshot that is safe to
+                // reconcile. A failed job may have created relational rows before
+                // its final snapshot commit failed; restoring the older snapshot
+                // here would erase that accepted state again.
+                guard result.isSuccessful else {
+                    let detail = result.error ??
+                        (result.sectionsFailed > 0
+                            ? "\(result.sectionsFailed) section(s) failed"
+                            : "The server could not commit the accepted sections.")
+                    throw SectionEmbedError.serverError(statusCode: 500, body: detail)
                 }
+                _ = await DataDurabilityCoordinator.shared.performCloudRestore(context: modelContext)
 
                 accepting = false
                 acceptingProgress = ""
                 dismiss()
             } catch let error as SectionEmbedError {
-                // A canceled poll or transport error must not hide sections the
-                // server already accepted while this screen was leaving.
-                _ = await DataDurabilityCoordinator.shared.performCloudRestore(context: modelContext)
+                // Do not restore an older snapshot after a failed Accept All.
+                // The server may have created accepted relational rows before a
+                // final snapshot commit failed.
                 accepting = false
                 acceptingProgress = ""
                 acceptErrorMessage = error.localizedDescription
             } catch {
-                _ = await DataDurabilityCoordinator.shared.performCloudRestore(context: modelContext)
+                // Failed jobs are intentionally left untouched locally; a stale
+                // snapshot restore could erase rows the server already created.
                 accepting = false
                 acceptingProgress = ""
                 acceptErrorMessage = error.localizedDescription
