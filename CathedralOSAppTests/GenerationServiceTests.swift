@@ -567,3 +567,47 @@ final class OutlineSuggestionErrorContractTests: XCTestCase {
         XCTAssertEqual(error.localizedDescription, "Server error 500.")
     }
 }
+
+// MARK: - Accept All terminal contract
+
+final class AcceptAllContractTests: XCTestCase {
+    func testFailedSnapshotCommitWithAllSectionsDoneIsNotSuccess() {
+        let result = AcceptOutlineSectionsResult(
+            runID: "run-1",
+            status: "failed",
+            sectionsTotal: 6,
+            sectionsDone: 6,
+            sectionsFailed: 0,
+            error: "snapshot update failed"
+        )
+
+        XCTAssertFalse(result.isSuccessful)
+        XCTAssertEqual(result.error, "snapshot update failed")
+    }
+
+    func testCompletedAcceptIsSuccessfulOnlyAfterSnapshotCommit() {
+        let result = AcceptOutlineSectionsResult(
+            runID: "run-2",
+            status: "completed",
+            sectionsTotal: 6,
+            sectionsDone: 6,
+            sectionsFailed: 0,
+            error: nil
+        )
+
+        XCTAssertTrue(result.isSuccessful)
+    }
+
+    func testPartialAcceptFailureIsNotSuccess() {
+        let result = AcceptOutlineSectionsResult(
+            runID: "run-3",
+            status: "failed",
+            sectionsTotal: 6,
+            sectionsDone: 5,
+            sectionsFailed: 1,
+            error: "one section failed"
+        )
+
+        XCTAssertFalse(result.isSuccessful)
+    }
+}
