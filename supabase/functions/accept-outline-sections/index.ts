@@ -315,6 +315,7 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     );
     let done = completedIDs.size;
     let failed = 0;
+    const failureDetails: Array<{ id: string; title: string; error: string }> = [];
     await db.from("outline_accept_runs").update({
       sections_done: done,
       sections_failed: 0,
@@ -351,7 +352,10 @@ async function runJob(runID: string, authHeader: string, userID: string) {
             },
           );
           if (!embedResponse.ok) {
-            throw new Error(`embed-section returned ${embedResponse.status}`);
+            const detail = (await embedResponse.text()).trim();
+            throw new Error(
+              `embed-section returned ${embedResponse.status}${detail ? `: ${detail.slice(0, 500)}` : ""}`,
+            );
           }
           await db.from("outline_sections").update({ status: "accepted" }).eq(
             "id",
@@ -359,6 +363,12 @@ async function runJob(runID: string, authHeader: string, userID: string) {
           ).eq("outline_id", normalizedRequest.outline_id);
           return true;
         } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          failureDetails.push({
+            id: section.id,
+            title: section.title,
+            error: message.slice(0, 700),
+          });
           console.error(
             `[accept-outline-sections] section ${section.id} failed`,
             err,
@@ -373,11 +383,20 @@ async function runJob(runID: string, authHeader: string, userID: string) {
         sections_failed: failed,
       }).eq("id", runID);
     }
+    // The project snapshot is the source restored by iOS. Keep it in sync
+    // with the relational rows before reporting the job as terminal; otherwise
+    // a successful Accept All is immediately erased by the next cloud restore.
+    await mergeSectionsIntoSnapshot(db, normalizedRequest, userID);
+    const error = failureDetails.length
+      ? failureDetails.map((failure) =>
+        `${failure.title} (${failure.id}): ${failure.error}`
+      ).join("; ").slice(0, 2000)
+      : null;
     await db.from("outline_accept_runs").update({
       status: failed ? "failed" : "completed",
       sections_done: done,
       sections_failed: failed,
-      error: failed ? `${failed} section(s) failed to embed` : null,
+      error,
       completed_at: new Date().toISOString(),
     }).eq("id", runID);
   } catch (err) {

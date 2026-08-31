@@ -104,6 +104,8 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// `startPolling` on the coordinator's detached polling Task and persisted
     /// by project lineage so it survives view destruction and app relaunch.
     @Published private(set) var activeRunStatus: RunOutlineStatus?
+    /// User-visible state when the server run is alive but status polling is failing.
+    @Published private(set) var activeRunPollingError: String?
     @Published private(set) var activeRunProjectLineageID: UUID?
     @Published private(set) var storeMode: StoreMode = .normal
     @Published private(set) var storePath: String?
@@ -274,6 +276,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         pollingTask?.cancel()
         activeRunProjectLineageID = projectLineageID
         activeRunStatus = initialStatus
+        activeRunPollingError = nil
         if let initialStatus {
             persistRunStatus(initialStatus, for: projectLineageID)
         }
@@ -283,25 +286,34 @@ final class DataDurabilityCoordinator: ObservableObject {
             let service = runOutlineService
             let modelContext = context
             let callback = onSyncCompleted
+            var consecutiveErrors = 0
 
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
                 do {
                     let status = try await service.status(runID: runID)
+                    consecutiveErrors = 0
+                    coordinator.activeRunPollingError = nil
                     coordinator.activeRunStatus = status
                     coordinator.activeRunProjectLineageID = projectLineageID
                     coordinator.persistRunStatus(status, for: projectLineageID)
+                    DiagnosticLog.write("poll: status=\(status.status) done=\(status.sections_done ?? 0)/\(status.sections_total ?? 0)")
                     if status.status == "completed" || status.status == "failed" {
-                        DiagnosticLog.write("poll: run finished (\(status.status)); triggering syncAll")
-                        _ = await coordinator.performManualSyncAll(context: modelContext)
-                        DiagnosticLog.write("poll: syncAll complete")
+                        DiagnosticLog.write("poll: run finished (\(status.status)); triggering pull reconciliation")
+                        _ = await coordinator.performCloudRestore(context: modelContext)
+                        _ = await coordinator.performOutputSync(context: modelContext)
+                        DiagnosticLog.write("poll: pull reconciliation complete")
                         callback(modelContext)
                         coordinator.pollingTask = nil
                         break
                     }
                 } catch {
-                    // keep polling on transient errors
+                    consecutiveErrors += 1
+                    DiagnosticLog.write("poll: status request failed (attempt \(consecutiveErrors)): \(error.localizedDescription)")
+                    if consecutiveErrors >= 2 {
+                        coordinator.activeRunPollingError = "Status refresh is temporarily unavailable; generation continues on the server."
+                    }
                 }
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
     }
@@ -321,6 +333,7 @@ final class DataDurabilityCoordinator: ObservableObject {
 
         activeRunProjectLineageID = projectLineageID
         activeRunStatus = status
+        activeRunPollingError = nil
         guard status.status == "queued" || status.status == "running" else { return }
         startPolling(
             runID: status.run_id,
@@ -343,6 +356,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         pollingTask?.cancel()
         pollingTask = nil
         activeRunStatus = nil
+        activeRunPollingError = nil
         activeRunProjectLineageID = nil
     }
 
