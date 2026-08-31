@@ -198,7 +198,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     var body: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
             if let status = projectRunStatus {
-                ActiveRunBanner(status: status)
+                ActiveRunBanner(
+                    status: status,
+                    pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
+                        ? durabilityCoordinator.activeRunPollingError
+                        : nil
+                )
             }
             header
             if currentOutline != nil {
@@ -1381,6 +1386,7 @@ struct KickoffConfirmationSheet: View {
 /// 3 seconds while running).
 struct ActiveRunBanner: View {
     let status: RunOutlineStatus
+    var pollingError: String? = nil
 
     var body: some View {
         HStack(spacing: CathedralTheme.Spacing.md) {
@@ -1434,6 +1440,7 @@ struct ActiveRunBanner: View {
     }
 
     private var subtitle: String {
+        if isRunning, let pollingError { return pollingError }
         if let error = status.error { return error }
         let done = status.sections_done ?? 0
         let total = status.sections_total ?? 0

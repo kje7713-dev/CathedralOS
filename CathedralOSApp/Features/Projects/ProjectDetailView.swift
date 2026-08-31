@@ -527,7 +527,12 @@ struct ProjectDetailView: View {
             Button {
                 storyEditorModeRaw = StoryEditorMode.outline.rawValue
             } label: {
-                ActiveRunBanner(status: status)
+                ActiveRunBanner(
+                    status: status,
+                    pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
+                        ? durabilityCoordinator.activeRunPollingError
+                        : nil
+                )
             }
             .buttonStyle(.plain)
             .accessibilityLabel("View Run All status in Outline")
