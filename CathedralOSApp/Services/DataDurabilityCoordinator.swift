@@ -100,9 +100,11 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// transient notification, this state remains observable when a view is
     /// recreated or temporarily unsubscribed.
     @Published private(set) var outputRefreshRevision: UInt = 0
-    /// Latest status for an active generation run. Updated by `startPolling`
-    /// on the coordinator's detached polling Task. Survives view destruction.
+    /// Latest status for the most recent generation run. Updated by
+    /// `startPolling` on the coordinator's detached polling Task and persisted
+    /// by project lineage so it survives view destruction and app relaunch.
     @Published private(set) var activeRunStatus: RunOutlineStatus?
+    @Published private(set) var activeRunProjectLineageID: UUID?
     @Published private(set) var storeMode: StoreMode = .normal
     @Published private(set) var storePath: String?
 
@@ -120,6 +122,11 @@ final class DataDurabilityCoordinator: ObservableObject {
     private let outputSyncService: any GenerationOutputSyncServiceProtocol
     private let logger = Logger(subsystem: "CathedralOS", category: "DataDurability")
     private var activeOperation: Task<SyncOperationResult, Never>?
+    private let runStatusDefaults = UserDefaults.standard
+
+    private static func runStatusKey(for projectLineageID: UUID) -> String {
+        "cathedralos.runOutline.status.\(projectLineageID.uuidString)"
+    }
 
     // MARK: - Init
 
@@ -245,6 +252,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     ///
     /// - Parameters:
     ///   - runID: The run identifier returned by the kickoff endpoint.
+    ///   - projectLineageID: The project whose status card should show this run.
     ///   - runOutlineService: The service used to poll status. Captured by
     ///     value in the detached Task.
     ///   - context: The `ModelContext` used by `performManualSyncAll` and
@@ -258,12 +266,17 @@ final class DataDurabilityCoordinator: ObservableObject {
     func startPolling(
         runID: String,
         initialStatus: RunOutlineStatus?,
+        projectLineageID: UUID,
         runOutlineService: RunOutlineService,
         context: ModelContext,
         onSyncCompleted: @escaping @MainActor (ModelContext) -> Void
     ) {
         pollingTask?.cancel()
+        activeRunProjectLineageID = projectLineageID
         activeRunStatus = initialStatus
+        if let initialStatus {
+            persistRunStatus(initialStatus, for: projectLineageID)
+        }
 
         let coordinator = self
         pollingTask = Task.detached(priority: .userInitiated) { @MainActor in
@@ -276,6 +289,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                 do {
                     let status = try await service.status(runID: runID)
                     coordinator.activeRunStatus = status
+                    coordinator.activeRunProjectLineageID = projectLineageID
+                    coordinator.persistRunStatus(status, for: projectLineageID)
                     if status.status == "completed" || status.status == "failed" {
                         DiagnosticLog.write("poll: run finished (\(status.status)); triggering syncAll")
                         _ = await coordinator.performManualSyncAll(context: modelContext)
@@ -291,11 +306,49 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
     }
 
+    /// Resume a persisted run when a project is reopened after the view or app
+    /// was suspended. Terminal statuses remain available as the last-run card.
+    func resumePollingIfNeeded(
+        for projectLineageID: UUID,
+        runOutlineService: RunOutlineService,
+        context: ModelContext,
+        onSyncCompleted: @escaping @MainActor (ModelContext) -> Void
+    ) {
+        guard pollingTask == nil,
+              let data = runStatusDefaults.data(forKey: Self.runStatusKey(for: projectLineageID)),
+              let status = try? JSONDecoder().decode(RunOutlineStatus.self, from: data)
+        else { return }
+
+        activeRunProjectLineageID = projectLineageID
+        activeRunStatus = status
+        guard status.status == "queued" || status.status == "running" else { return }
+        startPolling(
+            runID: status.run_id,
+            initialStatus: status,
+            projectLineageID: projectLineageID,
+            runOutlineService: runOutlineService,
+            context: context,
+            onSyncCompleted: onSyncCompleted
+        )
+    }
+
+    /// The last persisted run status for a project, including terminal status.
+    func runStatus(for projectLineageID: UUID) -> RunOutlineStatus? {
+        guard let data = runStatusDefaults.data(forKey: Self.runStatusKey(for: projectLineageID)) else { return nil }
+        return try? JSONDecoder().decode(RunOutlineStatus.self, from: data)
+    }
+
     /// Cancel the active polling task if any. Does not affect in-flight syncs.
     func stopPolling() {
         pollingTask?.cancel()
         pollingTask = nil
         activeRunStatus = nil
+        activeRunProjectLineageID = nil
+    }
+
+    private func persistRunStatus(_ status: RunOutlineStatus, for projectLineageID: UUID) {
+        guard let data = try? JSONEncoder().encode(status) else { return }
+        runStatusDefaults.set(data, forKey: Self.runStatusKey(for: projectLineageID))
     }
 
     private func runOperation(

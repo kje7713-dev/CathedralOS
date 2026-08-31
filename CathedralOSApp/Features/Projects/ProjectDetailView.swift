@@ -114,6 +114,7 @@ struct ProjectDetailView: View {
     @State private var isEstimating = false
     @State private var estimateError: String?
     @State private var estimateTask: Task<Void, Never>?
+    @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator = .shared
 
     private func markFirstGenerateCompleted() {
         guard !firstGenerateCompleted else { return }
@@ -160,6 +161,9 @@ struct ProjectDetailView: View {
             }
             modePicker
             List {
+                if let runStatus = projectRunStatus {
+                    runAllStatusSection(runStatus)
+                }
                 if advancedMode {
                     summarySection
                     audienceSection
@@ -230,6 +234,14 @@ struct ProjectDetailView: View {
                 .tint(CathedralTheme.Colors.accent)
         }
         .tint(CathedralTheme.Colors.accent)
+        .task {
+            durabilityCoordinator.resumePollingIfNeeded(
+                for: project.stableLineageID,
+                runOutlineService: RunOutlineService(),
+                context: modelContext,
+                onSyncCompleted: { _ in }
+            )
+        }
         .sheet(isPresented: $showAddCharacter) {
             NavigationStack {
                 CharacterFormView(project: project, character: nil)
@@ -498,6 +510,35 @@ struct ProjectDetailView: View {
             }
         case .export:
             showKindleExport = true
+        }
+    }
+
+    private var projectRunStatus: RunOutlineStatus? {
+        guard durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID else {
+            return durabilityCoordinator.runStatus(for: project.stableLineageID)
+        }
+        return durabilityCoordinator.activeRunStatus
+            ?? durabilityCoordinator.runStatus(for: project.stableLineageID)
+    }
+
+    @ViewBuilder
+    private func runAllStatusSection(_ status: RunOutlineStatus) -> some View {
+        Section {
+            Button {
+                storyEditorModeRaw = StoryEditorMode.outline.rawValue
+            } label: {
+                ActiveRunBanner(status: status)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("View Run All status in Outline")
+            .listRowBackground(CathedralTheme.Colors.background)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(
+                top: CathedralTheme.Spacing.sm,
+                leading: CathedralTheme.Spacing.base,
+                bottom: CathedralTheme.Spacing.sm,
+                trailing: CathedralTheme.Spacing.base
+            ))
         }
     }
 
