@@ -34,6 +34,7 @@ Deno.test("maps a snapshot and section to generate-story's canonical request", (
   const request = buildGenerateStoryRequest({
     snapshot,
     section: {
+      id: "section-1",
       title: "Arrival",
       summary: "Ada enters.",
       container: "scene",
@@ -93,4 +94,6 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   assertEquals(source.includes("retryAfterSeconds"), true);
   assertEquals(source.includes("next_retry_at"), true);
   assertEquals(source.includes("queueContinuationAfterDelay"), true);
+  assertEquals(source.includes("estimateRunCost("), true);
+  assertEquals(source.includes('generationAction: "estimate"'), true);
 });

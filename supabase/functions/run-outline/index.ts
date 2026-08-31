@@ -242,10 +242,21 @@ async function handleKickoff(req: Request): Promise<Response> {
   //    commit time. credits_reserved is in integer credits for now (the
   //    column naming pre-dates the credit/cent distinction; semantics are
   //    "credits" today).
-  const estimatedCost = sections.reduce(
-    (sum, s) => sum + estimateSectionCost(s.container),
-    0,
-  );
+  let estimatedCost: number;
+  try {
+    estimatedCost = await estimateRunCost(
+      adminClient,
+      userId,
+      authHeader,
+      body.outline_id,
+      sections,
+      body.model,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await markRunFailed(adminClient, run.id, msg);
+    return errorResponse("estimate_failed", msg, 502);
+  }
 
   // 6. Credit check: load entitlement + verify available >= estimated.
   const { data: entData, error: entErr } = await adminClient
@@ -744,6 +755,84 @@ function estimateLengthModeFromContainer(container: string | null): LengthMode {
 
 function estimateSectionCost(container: string | null): number {
   return getCreditCost(estimateLengthModeFromContainer(container));
+}
+
+/**
+ * Estimate the reserve with the exact same generate-story pricing path used by
+ * the iOS estimate UI. The old fixed per-length-mode reserve (1/2/4/8) could
+ * disagree with model/token pricing and reject an otherwise affordable run.
+ */
+async function estimateRunCost(
+  adminClient: ReturnType<typeof createClient>,
+  userId: string,
+  authHeader: string,
+  outlineId: string,
+  sections: Array<Record<string, unknown>>,
+  selectedModelId?: string,
+): Promise<number> {
+  const { data: outline, error: outlineError } = await adminClient
+    .from("outlines").select("local_project_id, lineage_id").eq("id", outlineId)
+    .single();
+  if (outlineError || !outline?.local_project_id) {
+    throw new Error("outline.local_project_id missing");
+  }
+
+  const { data: snapshotRow, error: snapshotError } = await adminClient
+    .from("project_snapshots").select("snapshot_json").eq("user_id", userId)
+    .or(projectSnapshotLookupFilter(
+      String(outline.local_project_id),
+      outline.lineage_id,
+    )).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+  if (snapshotError || !snapshotRow?.snapshot_json) {
+    throw new Error("project snapshot / prompt-pack data missing");
+  }
+
+  const endpoint = `${SUPABASE_URL}/functions/v1/generate-story`;
+  const estimates = await Promise.all(sections.map(async (section) => {
+    const request = {
+      ...buildGenerateStoryRequest({
+        snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
+        section: section as {
+          id: string;
+          title: string;
+          summary: string;
+          container: string | null;
+          pov: string | null;
+          terminal_beat: string | null;
+        },
+        projectId: String(outline.local_project_id),
+        selectedModelId,
+        lengthMode: estimateLengthModeFromContainer(
+          section.container as string | null,
+        ),
+      }),
+      generationAction: "estimate",
+    };
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Authorization": authHeader,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+    const result = await response.json().catch(() => null) as
+      | Record<
+        string,
+        unknown
+      >
+      | null;
+    const credits = Number(result?.estimatedCredits);
+    if (!response.ok || !Number.isFinite(credits)) {
+      throw new Error(
+        `generation cost estimate failed (${response.status}): ${
+          String(result?.errorMessage ?? result?.message ?? "unknown error")
+        }`,
+      );
+    }
+    return credits;
+  }));
+  return estimates.reduce((sum, cost) => sum + cost, 0);
 }
 
 async function collectSectionsToGenerate(
