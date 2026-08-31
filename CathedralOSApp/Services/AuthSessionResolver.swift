@@ -125,7 +125,12 @@ final class AuthSessionResolver: SupabaseSessionProvider {
         guard let body = String(data: data, encoding: .utf8)?.lowercased() else {
             return false
         }
-        return body.contains("pgrst303") && body.contains("jwt expired")
+        // Supabase REST reports expired JWTs as PGRST303, while Edge
+        // Functions authenticate with auth.getUser() and return the same
+        // condition as { errorCode: "unauthorized", message: "invalid JWT" }.
+        // Both responses must trigger the one-shot session refresh.
+        return (body.contains("pgrst303") && body.contains("jwt expired"))
+            || body.contains("invalid jwt")
     }
 
     static func isSessionExpiredError(_ error: Error) -> Bool {

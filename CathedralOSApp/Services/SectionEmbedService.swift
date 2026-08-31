@@ -344,13 +344,18 @@ extension SectionEmbedService {
         client: SupabaseBackendClient,
         token: String
     ) async throws -> AcceptOutlineSectionsResult {
+        var currentToken = token
         while !Task.isCancelled {
+            // A previous poll may have refreshed an expired JWT. Resolve the
+            // latest token before every request so the next poll does not
+            // retry with the original stale token.
+            currentToken = try await validAccessToken()
             var components = URLComponents(url: client.edgeFunctionURL(path: "accept-outline-sections"), resolvingAgainstBaseURL: false)
             components?.queryItems = [URLQueryItem(name: "run_id", value: runID)]
             guard let statusURL = components?.url else {
                 throw SectionEmbedError.invalidResponse("Could not construct Accept All status URL")
             }
-            var request = client.authorizedRequest(for: statusURL, userAccessToken: token)
+            var request = client.authorizedRequest(for: statusURL, userAccessToken: currentToken)
             request.httpMethod = "GET"
             request.timeoutInterval = 30
             let (data, response) = try await performRequest(request)
