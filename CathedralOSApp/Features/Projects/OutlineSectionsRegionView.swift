@@ -177,6 +177,18 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         project.outlines.first
     }
 
+    /// Only show the coordinator's live run when it belongs to this project.
+    /// The coordinator is shared across project views, so using
+    /// `activeRunStatus` directly can leak another project's polling banner
+    /// into this outline view.
+    private var projectRunStatus: RunOutlineStatus? {
+        guard durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID else {
+            return durabilityCoordinator.runStatus(for: project.stableLineageID)
+        }
+        return durabilityCoordinator.activeRunStatus
+            ?? durabilityCoordinator.runStatus(for: project.stableLineageID)
+    }
+
     /// Beat picker source — current arc's beats (empty if no arc picked yet).
     private var availableBeats: [StoryArcBeat] {
         guard let arc = project.storyArcs.first else { return [] }
@@ -185,7 +197,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 
     var body: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
-            if let status = durabilityCoordinator.activeRunStatus {
+            if let status = projectRunStatus {
                 ActiveRunBanner(status: status)
             }
             header
