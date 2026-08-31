@@ -788,50 +788,59 @@ async function estimateRunCost(
   }
 
   const endpoint = `${SUPABASE_URL}/functions/v1/generate-story`;
-  const estimates = await Promise.all(sections.map(async (section) => {
-    const request = {
-      ...buildGenerateStoryRequest({
-        snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
-        section: section as {
-          id: string;
-          title: string;
-          summary: string;
-          container: string | null;
-          pov: string | null;
-          terminal_beat: string | null;
+  // Keep the estimate fan-out below the database/runtime concurrency ceiling.
+  // A 45-section run must not launch 45 authenticated estimate requests at
+  // once: that can exhaust PostgREST workers and surface as a generic 502.
+  const estimateConcurrency = 4;
+  const estimates: number[] = [];
+  for (let i = 0; i < sections.length; i += estimateConcurrency) {
+    const batch = sections.slice(i, i + estimateConcurrency);
+    const batchEstimates = await Promise.all(batch.map(async (section) => {
+      const request = {
+        ...buildGenerateStoryRequest({
+          snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
+          section: section as {
+            id: string;
+            title: string;
+            summary: string;
+            container: string | null;
+            pov: string | null;
+            terminal_beat: string | null;
+          },
+          projectId: String(outline.local_project_id),
+          selectedModelId,
+          lengthMode: estimateLengthModeFromContainer(
+            section.container as string | null,
+          ),
+        }),
+        generationAction: "estimate",
+      };
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Authorization": authHeader,
+          "Content-Type": "application/json",
         },
-        projectId: String(outline.local_project_id),
-        selectedModelId,
-        lengthMode: estimateLengthModeFromContainer(
-          section.container as string | null,
-        ),
-      }),
-      generationAction: "estimate",
-    };
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Authorization": authHeader,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(request),
-    });
-    const result = await response.json().catch(() => null) as
-      | Record<
-        string,
-        unknown
-      >
-      | null;
-    const credits = Number(result?.estimatedCredits);
-    if (!response.ok || !Number.isFinite(credits)) {
-      throw new Error(
-        `generation cost estimate failed (${response.status}): ${
-          String(result?.errorMessage ?? result?.message ?? "unknown error")
-        }`,
-      );
-    }
-    return credits;
-  }));
+        body: JSON.stringify(request),
+      });
+      const result = await response.json().catch(() => null) as
+        | Record<
+          string,
+          unknown
+        >
+        | null;
+      const credits = Number(result?.estimatedCredits);
+      if (!response.ok || !Number.isFinite(credits)) {
+        throw new Error(
+          `generation cost estimate failed (${response.status}): ${
+            String(result?.errorMessage ?? result?.message ?? "unknown error")
+          }`,
+        );
+      }
+      return credits;
+    }));
+    estimates.push(...batchEstimates);
+  }
   return estimates.reduce((sum, cost) => sum + cost, 0);
 }
 
