@@ -221,6 +221,38 @@ async function mergeSectionsIntoSnapshot(
   }
 }
 
+async function embedSectionWithRetry(
+  embedURL: string,
+  authHeader: string,
+  anonKey: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  for (let attempt = 0;; attempt += 1) {
+    const response = await fetch(embedURL, {
+      method: "POST",
+      headers: {
+        Authorization: authHeader,
+        apikey: anonKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (response.status !== 429 || attempt >= 2) return response;
+    const retryBody = await response.clone().json().catch(() => null) as
+      | Record<string, unknown>
+      | null;
+    const retryAfter = Number(
+      retryBody?.retryAfterSeconds ?? response.headers.get("Retry-After"),
+    );
+    const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter > 0
+      ? Math.min(Math.ceil(retryAfter), 120)
+      : 60;
+    await new Promise((resolve) =>
+      setTimeout(resolve, retryAfterSeconds * 1000)
+    );
+  }
+}
+
 async function runJob(runID: string, authHeader: string, userID: string) {
   const db = admin();
   const { data: claimed, error: claimError } = await db.rpc(
@@ -266,20 +298,39 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       Deno.env.get("SUPABASE_URL")
     }/functions/v1/embed-section`;
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-    let done = 0;
+    const { data: existingEmbeddings, error: embeddingError } = await db
+      .from("section_embeddings")
+      .select("outline_section_id")
+      .in(
+        "outline_section_id",
+        normalizedSections.map((section) => section.id),
+      );
+    if (embeddingError) {
+      throw new Error(
+        `Could not read existing embeddings: ${embeddingError.message}`,
+      );
+    }
+    const completedIDs = new Set(
+      (existingEmbeddings ?? []).map((row) => String(row.outline_section_id)),
+    );
+    let done = completedIDs.size;
     let failed = 0;
-    for (let i = 0; i < normalizedSections.length; i += 4) {
-      const batch = normalizedSections.slice(i, i + 4);
+    await db.from("outline_accept_runs").update({
+      sections_done: done,
+      sections_failed: 0,
+    }).eq("id", runID);
+    const pendingSections = normalizedSections.filter((section) =>
+      !completedIDs.has(section.id)
+    );
+    for (let i = 0; i < pendingSections.length; i += 4) {
+      const batch = pendingSections.slice(i, i + 4);
       const results = await Promise.all(batch.map(async (section) => {
         try {
-          const embedResponse = await fetch(embedURL, {
-            method: "POST",
-            headers: {
-              Authorization: authHeader,
-              apikey: anonKey,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
+          const embedResponse = await embedSectionWithRetry(
+            embedURL,
+            authHeader,
+            anonKey,
+            {
               outline_section_id: section.id,
               outline_id: normalizedRequest.outline_id,
               project_id: normalizedRequest.project_id,
@@ -296,9 +347,9 @@ async function runJob(runID: string, authHeader: string, userID: string) {
                 section.terminalBeat
                   ? `Terminal Beat: ${section.terminalBeat}`
                   : "",
-              ].filter(Boolean).join("\\n\\n"),
-            }),
-          });
+              ].filter(Boolean).join("\n\n"),
+            },
+          );
           if (!embedResponse.ok) {
             throw new Error(`embed-section returned ${embedResponse.status}`);
           }
@@ -321,16 +372,6 @@ async function runJob(runID: string, authHeader: string, userID: string) {
         sections_done: done,
         sections_failed: failed,
       }).eq("id", runID);
-    }
-    if (!failed) {
-      try {
-        await mergeSectionsIntoSnapshot(db, normalizedRequest, userID);
-      } catch (snapshotError) {
-        console.error(
-          "[accept-outline-sections] snapshot merge failed",
-          snapshotError,
-        );
-      }
     }
     await db.from("outline_accept_runs").update({
       status: failed ? "failed" : "completed",
@@ -421,6 +462,16 @@ Deno.serve(async (req) => {
   const resolvedRun = run;
   if (!resolvedRun) {
     return errorResponse("db_error", "Could not resolve accept run", 500);
+  }
+  if (resolvedRun.status === "failed") {
+    const { error: retryError } = await db.from("outline_accept_runs").update({
+      status: "pending",
+      sections_done: 0,
+      sections_failed: 0,
+      error: null,
+      completed_at: null,
+    }).eq("id", resolvedRun.id).eq("status", "failed");
+    if (retryError) return errorResponse("db_error", retryError.message, 500);
   }
   // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime.
   EdgeRuntime.waitUntil(

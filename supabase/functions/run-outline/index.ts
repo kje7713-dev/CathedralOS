@@ -815,20 +815,35 @@ async function estimateRunCost(
         }),
         generationAction: "estimate",
       };
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Authorization": authHeader,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(request),
-      });
-      const result = await response.json().catch(() => null) as
-        | Record<
-          string,
-          unknown
-        >
-        | null;
+      let response: Response;
+      let result: Record<string, unknown> | null = null;
+      for (let attempt = 0;; attempt += 1) {
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Authorization": authHeader,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(request),
+        });
+        result = await response.json().catch(() => null) as
+          | Record<string, unknown>
+          | null;
+
+        // Estimate requests are intentionally non-billable, but the function
+        // gateway can still rate-limit a burst. Do not turn a transient 429
+        // into a terminal Run All failure; honor the server's retry hint once.
+        if (response.status !== 429 || attempt >= 1) break;
+        const retryAfter = Number(
+          result?.retryAfterSeconds ?? response.headers.get("Retry-After"),
+        );
+        const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter > 0
+          ? Math.min(Math.ceil(retryAfter), 120)
+          : 60;
+        await new Promise((resolve) =>
+          setTimeout(resolve, retryAfterSeconds * 1000)
+        );
+      }
       const credits = Number(result?.estimatedCredits);
       if (!response.ok || !Number.isFinite(credits)) {
         throw new Error(
