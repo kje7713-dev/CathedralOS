@@ -24,6 +24,7 @@ enum RunOutlineError: Error, LocalizedError {
     case providerError
     case invalidResponse(String)
     case serverError(statusCode: Int, body: String?)
+    case runNotFound(runID: String)
     case networkError(String)
     case noOutline
     case noParentSection
@@ -38,6 +39,7 @@ enum RunOutlineError: Error, LocalizedError {
         case .rateLimited: return "Too many requests. Try again in a minute."
         case .providerError: return "The generation failed. Try again."
         case .invalidResponse(let m): return "Invalid response: \(m)"
+        case .runNotFound(let runID): return "Generation run \(runID) is no longer available. Reconciling cloud outputs…"
         case .serverError(let c, let b):
             if let b, !b.isEmpty {
                 return "Server error \(c).\n\n\(b)"
@@ -145,6 +147,25 @@ struct RunOutlineService {
         return try decode(RunOutlineKickoffResponse.self, from: data)
     }
 
+    /// Find the current attempt for an idempotent outline/section pair. This
+    /// lets a poller adopt a replacement without guessing from unrelated runs.
+    func latestStatus(outlineID: String, startParentSectionID: String) async throws -> RunOutlineStatus {
+        let client = try requireClient()
+        let token = try await validAccessToken()
+        var components = URLComponents(url: client.edgeFunctionURL(path: "run-outline"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "outline_id", value: outlineID),
+            URLQueryItem(name: "start_parent_section_id", value: startParentSectionID)
+        ]
+        guard let url = components?.url else { throw RunOutlineError.invalidResponse("Could not construct latest run URL") }
+        var request = client.authorizedRequest(for: url, userAccessToken: token)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        let (data, response) = try await performRequest(request)
+        try checkStatus(response: response, data: data)
+        return try decode(RunOutlineStatus.self, from: data)
+    }
+
     /// Poll the status of an in-flight or completed run. The iOS UI calls this
     /// every 3 seconds while a run is active to update the progress banner.
     func status(runID: String) async throws -> RunOutlineStatus {
@@ -226,15 +247,15 @@ struct RunOutlineService {
             throw RunOutlineError.insufficientCredits(needed: 0, available: 0)
         }
         if httpResponse.statusCode == 404 {
-            // Do NOT assume 404 means "outline not found". The Edge Function
-            // may not be deployed (live Supabase was missing this one), or the
-            // path may be wrong. Surface the response body so the real error
-            // is visible. Only throw noOutline if the backend explicitly says
-            // the outline is missing (JSON body with an outline-related error).
             let body = String(data: data, encoding: .utf8) ?? ""
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let error = json["error"] as? String,
-               error.lowercased().contains("outline") {
+               json["errorCode"] as? String == "not_found",
+               json["message"] as? String == "run not found" {
+                throw RunOutlineError.runNotFound(runID: "requested")
+            }
+            // A deployed/path error remains a server error; do not treat every 404 as a missing run.
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let error = json["error"] as? String, error.lowercased().contains("outline") {
                 throw RunOutlineError.noOutline
             }
             throw RunOutlineError.serverError(statusCode: 404, body: body)

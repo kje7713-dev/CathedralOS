@@ -140,7 +140,9 @@ async function handleKickoff(req: Request): Promise<Response> {
 
   // Idempotency: check for existing run first.
   // - running → return 409 already_running
-  // - terminal (failed/completed) → delete it, then insert a fresh run
+  // - terminal (failed/completed) → preserve the historical row and release
+  //   the key before inserting a fresh attempt. Never delete a durable run ID:
+  //   older clients may still be polling it.
   const { data: existing } = await adminClient
     .from("chapter_runs")
     .select("id, status")
@@ -164,15 +166,17 @@ async function handleKickoff(req: Request): Promise<Response> {
     );
   }
   if (existing) {
-    const { error: delErr } = await adminClient
+    const { error: releaseErr } = await adminClient
       .from("chapter_runs")
-      .delete()
+      .update({ idempotency_key: null })
       .eq("id", existing.id);
-    if (delErr) {
-      console.error(`[run-outline] stale run delete failed: ${delErr.message}`);
+    if (releaseErr) {
+      console.error(
+        `[run-outline] terminal run key release failed: ${releaseErr.message}`,
+      );
       return errorResponse(
         "db_error",
-        `Stale run cleanup failed: ${delErr.message}`,
+        `Previous run cleanup failed: ${releaseErr.message}`,
         500,
       );
     }
@@ -369,8 +373,14 @@ async function handleKickoff(req: Request): Promise<Response> {
 // ---- GET /functions/v1/run-outline?run_id=… ------------------------------
 async function handleStatus(req: Request, url: URL): Promise<Response> {
   const runId = url.searchParams.get("run_id");
-  if (!runId) {
-    return errorResponse("missing_param", "run_id query param required", 400);
+  const outlineID = url.searchParams.get("outline_id");
+  const startParentSectionID = url.searchParams.get("start_parent_section_id");
+  if (!runId && (!outlineID || !startParentSectionID)) {
+    return errorResponse(
+      "missing_param",
+      "run_id or outline_id + start_parent_section_id required",
+      400,
+    );
   }
 
   const authHeader = req.headers.get("Authorization");
@@ -386,13 +396,21 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
     return errorResponse("unauthorized", "invalid JWT", 401);
   }
 
-  const { data: run, error: runErr } = await userClient
+  const runQuery = userClient
     .from("chapter_runs")
     .select(
       "id, outline_id, start_parent_section_id, status, sections, credits_reserved, credits_actual, error, created_at, updated_at, completed_at",
-    )
-    .eq("id", runId)
-    .single();
+    );
+  const { data: run, error: runErr } = runId
+    ? await runQuery.eq("id", runId).single()
+    : await runQuery
+      .eq(
+        "idempotency_key",
+        `${userData.user.id}:${outlineID}:${startParentSectionID}`,
+      )
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
   if (runErr || !run) return errorResponse("not_found", "run not found", 404);
 
   // A status poll is also a lightweight recovery trigger. If an invocation

@@ -15,8 +15,9 @@ enum OutlineSuggestionError: Error, LocalizedError {
     case notAuthenticated
     case rateLimited
     case providerError
+    case insufficientCredits(needed: Double?, available: Double?, message: String)
     case invalidResponse(String)
-    case serverError(statusCode: Int)
+    case serverError(statusCode: Int, body: String? = nil)
     case networkError(String)
 
     var errorDescription: String? {
@@ -25,22 +26,34 @@ enum OutlineSuggestionError: Error, LocalizedError {
         case .notAuthenticated:      return "Sign in to suggest sections."
         case .rateLimited:           return "Too many suggestion requests. Try again in a minute."
         case .providerError:         return "The AI suggestion failed. Try again."
+        case .insufficientCredits(let needed, let available, let message):
+            if let needed, let available { return "Insufficient credits: need \(needed.cleanCreditCount), have \(available.cleanCreditCount)." }
+            return message
         case .invalidResponse(let m): return "Invalid response: \(m)"
-        case .serverError(let c):    return "Server error \(c)."
+        case .serverError(let c, let body):
+            if let body, !body.isEmpty { return "Server error \(c).\n\n\(body)" }
+            return "Server error \(c)."
         case .networkError(let m):   return "Network error: \(m)"
         }
     }
 }
 
+private extension Double {
+    var cleanCreditCount: String {
+        truncatingRemainder(dividingBy: 1) == 0 ? String(Int(self)) : String(format: "%.2f", self)
+    }
+}
+
 struct OutlineSuggestionService {
-    private let authService: AuthService
+    private let sessionProvider: any SupabaseSessionProvider
     private let session: URLSession
 
     init(
         authService: AuthService = BackendAuthService.shared,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        sessionProvider: (any SupabaseSessionProvider)? = nil
     ) {
-        self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.session = session
     }
 
@@ -93,9 +106,7 @@ struct OutlineSuggestionService {
         }
 
         let url = client.edgeFunctionURL(path: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath)
-        guard let userAccessToken = authService.currentAccessToken else {
-            throw OutlineSuggestionError.notAuthenticated
-        }
+        let userAccessToken = try await validAccessToken()
 
         var urlRequest = client.authorizedRequest(for: url, userAccessToken: userAccessToken)
         urlRequest.httpMethod = "POST"
@@ -106,7 +117,9 @@ struct OutlineSuggestionService {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: urlRequest)
+            (data, response) = try await performRequest(urlRequest)
+        } catch let error as OutlineSuggestionError {
+            throw error
         } catch {
             throw OutlineSuggestionError.networkError(error.localizedDescription)
         }
@@ -116,7 +129,7 @@ struct OutlineSuggestionService {
         switch httpResponse.statusCode {
         case 202:
             let queued = try decodeJob(data)
-            return try await poll(runID: queued.run_id, client: client, token: userAccessToken)
+            return try await poll(runID: queued.run_id, client: client)
         case 200...299:
             // Backwards-compatible with an older deployed function.
             let result = try decodeResult(data)
@@ -130,7 +143,7 @@ struct OutlineSuggestionService {
         case 429: throw OutlineSuggestionError.rateLimited
         case 500: throw OutlineSuggestionError.notConfigured(reason: "Server returned 500")
         case 502: throw OutlineSuggestionError.providerError
-        default: throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode)
+        default: throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode, body: String(data: data, encoding: .utf8))
         }
     }
 
@@ -140,6 +153,7 @@ struct OutlineSuggestionService {
         let suggestions: [OutlineSuggestion]?
         let warnings: [String]?
         let error: String?
+        let errorCode: String?
         let creditCostCharged: Double?
         let remainingCredits: Double?
     }
@@ -156,8 +170,7 @@ struct OutlineSuggestionService {
 
     private func poll(
         runID: String,
-        client: SupabaseBackendClient,
-        token: String
+        client: SupabaseBackendClient
     ) async throws -> OutlineSuggestionResult {
         while !Task.isCancelled {
             try await Task.sleep(nanoseconds: 3_000_000_000)
@@ -169,29 +182,28 @@ struct OutlineSuggestionService {
             guard let statusURL = statusComponents?.url else {
                 throw OutlineSuggestionError.invalidResponse("Could not build suggestion status URL")
             }
-            var request = client.authorizedRequest(for: statusURL, userAccessToken: token)
+            var request = client.authorizedRequest(for: statusURL, userAccessToken: try await validAccessToken())
             request.httpMethod = "GET"
             request.timeoutInterval = 30
             do {
-                let (data, response) = try await session.data(for: request)
+                let (data, response) = try await performRequest(request)
                 guard let httpResponse = response as? HTTPURLResponse else {
                     throw OutlineSuggestionError.networkError("Non-HTTP response")
                 }
                 guard (200...299).contains(httpResponse.statusCode) else {
                     if httpResponse.statusCode == 401 { throw OutlineSuggestionError.notAuthenticated }
-                    throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode)
+                    if httpResponse.statusCode == 429 { throw OutlineSuggestionError.rateLimited }
+                    throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode, body: String(data: data, encoding: .utf8))
                 }
                 let job = try decodeJob(data)
                 if job.status == "completed" {
                     return OutlineSuggestionResult(
-                        suggestions: job.suggestions ?? [],
-                        warnings: job.warnings ?? [],
-                        creditCostCharged: job.creditCostCharged,
-                        remainingCredits: job.remainingCredits
+                        suggestions: job.suggestions ?? [], warnings: job.warnings ?? [],
+                        creditCostCharged: job.creditCostCharged, remainingCredits: job.remainingCredits
                     )
                 }
                 if job.status == "failed" {
-                    throw OutlineSuggestionError.providerError
+                    throw Self.errorForFailedJob(errorCode: job.errorCode, message: job.error)
                 }
             } catch let error as OutlineSuggestionError {
                 throw error
@@ -200,6 +212,30 @@ struct OutlineSuggestionService {
             }
         }
         throw OutlineSuggestionError.networkError("Suggestion run was cancelled")
+    }
+
+    static func errorForFailedJob(errorCode: String?, message: String?) -> OutlineSuggestionError {
+        let text = message ?? "The suggestion job failed."
+        if errorCode == "insufficient_credits" || text.lowercased().contains("insufficient") || text.lowercased().contains("requires ~") {
+            let numbers = text.split { !$0.isNumber && $0 != "." }.compactMap { Double($0) }
+            return .insufficientCredits(needed: numbers.first, available: numbers.dropFirst().first, message: text)
+        }
+        if errorCode == "provider_error" || errorCode == "invalid_response" { return .providerError }
+        return .serverError(statusCode: 500, body: text)
+    }
+
+    private func validAccessToken() async throws -> String {
+        do { return try await sessionProvider.validAccessToken(forceRefresh: false) }
+        catch let error as SupabaseSessionProviderError {
+            switch error { case .notSignedIn, .sessionExpired: throw OutlineSuggestionError.notAuthenticated }
+        } catch { throw OutlineSuggestionError.networkError(error.localizedDescription) }
+    }
+
+    private func performRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        do { return try await sessionProvider.retryOnceAfterExpiredJWT(request: request, session: session) }
+        catch let error as SupabaseSessionProviderError {
+            switch error { case .notSignedIn, .sessionExpired: throw OutlineSuggestionError.notAuthenticated }
+        } catch { throw OutlineSuggestionError.networkError(error.localizedDescription) }
     }
 
     // MARK: - Request body builders

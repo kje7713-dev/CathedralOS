@@ -287,10 +287,11 @@ final class DataDurabilityCoordinator: ObservableObject {
             let modelContext = context
             let callback = onSyncCompleted
             var consecutiveErrors = 0
+            var polledRunID = runID
 
             while !Task.isCancelled {
                 do {
-                    let status = try await service.status(runID: runID)
+                    let status = try await service.status(runID: polledRunID)
                     consecutiveErrors = 0
                     coordinator.activeRunPollingError = nil
                     coordinator.activeRunStatus = status
@@ -299,12 +300,42 @@ final class DataDurabilityCoordinator: ObservableObject {
                     DiagnosticLog.write("poll: status=\(status.status) done=\(status.sections_done ?? 0)/\(status.sections_total ?? 0)")
                     if status.status == "completed" || status.status == "failed" {
                         DiagnosticLog.write("poll: run finished (\(status.status)); triggering pull reconciliation")
-                        _ = await coordinator.performCloudRestore(context: modelContext)
-                        _ = await coordinator.performOutputSync(context: modelContext)
-                        DiagnosticLog.write("poll: pull reconciliation complete")
-                        callback(modelContext)
+                        await coordinator.reconcileRunOutputs(context: modelContext, callback: callback)
                         coordinator.pollingTask = nil
                         break
+                    }
+                } catch let error as RunOutlineError {
+                    if case .runNotFound = error {
+                        // First look up the exact idempotent replacement. This is safe because
+                        // the server scopes the lookup to this user's outline + start section.
+                        if let initialStatus,
+                           let outlineID = initialStatus.outline_id,
+                           let startSectionID = initialStatus.start_parent_section_id,
+                           let replacement = try? await service.latestStatus(
+                               outlineID: outlineID, startParentSectionID: startSectionID),
+                           replacement.run_id != polledRunID {
+                            polledRunID = replacement.run_id
+                            coordinator.activeRunStatus = replacement
+                            coordinator.persistRunStatus(replacement, for: projectLineageID)
+                            consecutiveErrors = 0
+                            DiagnosticLog.write("poll: adopted replacement run \(replacement.run_id)")
+                            continue
+                        }
+                        // No exact replacement exists. Reconcile cloud state once (outputs may
+                        // already exist), then clear the stale banner/status.
+                        DiagnosticLog.write("poll: run ID missing; reconciling cloud outputs and clearing stale status")
+                        await coordinator.reconcileRunOutputs(context: modelContext, callback: callback)
+                        coordinator.clearPersistedRunStatus(for: projectLineageID)
+                        coordinator.activeRunStatus = nil
+                        coordinator.activeRunPollingError = nil
+                        coordinator.activeRunProjectLineageID = nil
+                        coordinator.pollingTask = nil
+                        break
+                    }
+                    consecutiveErrors += 1
+                    DiagnosticLog.write("poll: status request failed (attempt \(consecutiveErrors)): \(error.localizedDescription)")
+                    if consecutiveErrors >= 2 {
+                        coordinator.activeRunPollingError = "Status refresh is temporarily unavailable; generation continues on the server."
                     }
                 } catch {
                     consecutiveErrors += 1
@@ -316,6 +347,16 @@ final class DataDurabilityCoordinator: ObservableObject {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
+    }
+
+    private func reconcileRunOutputs(
+        context: ModelContext,
+        callback: @escaping @MainActor (ModelContext) -> Void
+    ) async {
+        _ = await performCloudRestore(context: context)
+        _ = await performOutputSync(context: context)
+        DiagnosticLog.write("poll: pull reconciliation complete")
+        callback(context)
     }
 
     /// Resume a persisted run when a project is reopened after the view or app
@@ -349,6 +390,10 @@ final class DataDurabilityCoordinator: ObservableObject {
     func runStatus(for projectLineageID: UUID) -> RunOutlineStatus? {
         guard let data = runStatusDefaults.data(forKey: Self.runStatusKey(for: projectLineageID)) else { return nil }
         return try? JSONDecoder().decode(RunOutlineStatus.self, from: data)
+    }
+
+    private func clearPersistedRunStatus(for projectLineageID: UUID) {
+        runStatusDefaults.removeObject(forKey: Self.runStatusKey(for: projectLineageID))
     }
 
     /// Cancel the active polling task if any. Does not affect in-flight syncs.

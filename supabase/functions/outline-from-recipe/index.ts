@@ -663,9 +663,18 @@ async function runSuggestionJob(
       completed_at: new Date().toISOString(),
     }).eq("id", runId);
   } catch (err) {
+    const errorCode = err && typeof err === "object" && "code" in err
+      ? String((err as { code?: unknown }).code)
+      : (err instanceof Error &&
+          /insufficient credits|requires ~|you have/i.test(err.message)
+        ? "insufficient_credits"
+        : (err instanceof Error && /openai|provider/i.test(err.message)
+          ? "provider_error"
+          : "server_error"));
     const message = err instanceof Error ? err.message : String(err);
     await db.from("outline_suggestion_runs").update({
       status: "failed",
+      error_code: errorCode,
       error: message.slice(0, 2000),
       completed_at: new Date().toISOString(),
     }).eq("id", runId);
@@ -705,7 +714,7 @@ Deno.serve(async (req: Request) => {
       "outline_suggestion_runs",
     )
       .select(
-        "id, status, suggestions, warnings, error, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits",
+        "id, status, suggestions, warnings, error_code, error, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits",
       )
       .eq("id", runId).single();
     if (error) {
@@ -719,6 +728,7 @@ Deno.serve(async (req: Request) => {
         status: run.status,
         suggestions: run.suggestions,
         warnings: run.warnings,
+        errorCode: run.error_code,
         error: run.error,
         created_at: run.created_at,
         updated_at: run.updated_at,
