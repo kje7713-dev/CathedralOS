@@ -43,14 +43,15 @@ enum SectionEmbedError: Error, LocalizedError {
 }
 
 struct SectionEmbedService {
-    private let authService: AuthService
+    private let sessionProvider: any SupabaseSessionProvider
     private let session: URLSession
 
     init(
         authService: AuthService = BackendAuthService.shared,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        sessionProvider: (any SupabaseSessionProvider)? = nil
     ) {
-        self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.session = session
     }
 
@@ -104,9 +105,7 @@ struct SectionEmbedService {
         }
 
         let url = client.edgeFunctionURL(path: SupabaseConfiguration.embedSectionEdgeFunctionPath)
-        guard let userAccessToken = authService.currentAccessToken else {
-            throw SectionEmbedError.notAuthenticated
-        }
+        let userAccessToken = try await validAccessToken()
 
         var urlRequest = client.authorizedRequest(for: url, userAccessToken: userAccessToken)
         urlRequest.httpMethod = "POST"
@@ -305,9 +304,7 @@ extension SectionEmbedService {
         startingPosition: Int,
         idempotencyKey: String
     ) async throws -> AcceptOutlineSectionsResult {
-        guard let userAccessToken = authService.currentAccessToken else {
-            throw SectionEmbedError.notAuthenticated
-        }
+        let userAccessToken = try await validAccessToken()
         let client: SupabaseBackendClient
         do { client = try SupabaseBackendClient() }
         catch { throw SectionEmbedError.notConfigured(reason: String(describing: error)) }
@@ -336,7 +333,7 @@ extension SectionEmbedService {
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(requestBody)
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await performRequest(request)
         try checkAcceptStatus(response: response, data: data)
         let queued = try decodeAcceptJob(data)
         return try await pollAcceptAll(runID: queued.run_id, client: client, token: userAccessToken)
@@ -356,7 +353,7 @@ extension SectionEmbedService {
             var request = client.authorizedRequest(for: statusURL, userAccessToken: token)
             request.httpMethod = "GET"
             request.timeoutInterval = 30
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await performRequest(request)
             try checkAcceptStatus(response: response, data: data)
             let job = try decodeAcceptJob(data)
             if job.status == "completed" || job.status == "failed" {
@@ -371,6 +368,35 @@ extension SectionEmbedService {
             try await Task.sleep(nanoseconds: 3_000_000_000)
         }
         throw SectionEmbedError.networkError("Accept All run was cancelled")
+    }
+
+    private func validAccessToken() async throws -> String {
+        do {
+            return try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn, .sessionExpired:
+                throw SectionEmbedError.notAuthenticated
+            }
+        } catch {
+            throw SectionEmbedError.networkError(error.localizedDescription)
+        }
+    }
+
+    private func performRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        do {
+            return try await sessionProvider.retryOnceAfterExpiredJWT(
+                request: request,
+                session: session
+            )
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn, .sessionExpired:
+                throw SectionEmbedError.notAuthenticated
+            }
+        } catch {
+            throw SectionEmbedError.networkError(error.localizedDescription)
+        }
     }
 
     private func decodeAcceptJob(_ data: Data) throws -> AcceptOutlineJobResponse {

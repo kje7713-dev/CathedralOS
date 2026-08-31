@@ -101,14 +101,15 @@ struct RunOutlineSectionStatus: Codable {
 }
 
 struct RunOutlineService {
-    private let authService: AuthService
+    private let sessionProvider: any SupabaseSessionProvider
     private let session: URLSession
 
     init(
         authService: AuthService = BackendAuthService.shared,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        sessionProvider: (any SupabaseSessionProvider)? = nil
     ) {
-        self.authService = authService
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.session = session
     }
 
@@ -121,9 +122,7 @@ struct RunOutlineService {
         scope: String? = nil
     ) async throws -> RunOutlineKickoffResponse {
         let client = try requireClient()
-        guard let token = authService.currentAccessToken else {
-            throw RunOutlineError.notAuthenticated
-        }
+        let token = try await validAccessToken()
         let url = client.edgeFunctionURL(path: "run-outline")
         var urlRequest = client.authorizedRequest(for: url, userAccessToken: token)
         urlRequest.httpMethod = "POST"
@@ -150,9 +149,7 @@ struct RunOutlineService {
     /// every 3 seconds while a run is active to update the progress banner.
     func status(runID: String) async throws -> RunOutlineStatus {
         let client = try requireClient()
-        guard let token = authService.currentAccessToken else {
-            throw RunOutlineError.notAuthenticated
-        }
+        let token = try await validAccessToken()
         var components = URLComponents(url: client.edgeFunctionURL(path: "run-outline"), resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "run_id", value: runID)]
         guard let url = components?.url else {
@@ -180,9 +177,30 @@ struct RunOutlineService {
         }
     }
 
+    private func validAccessToken() async throws -> String {
+        do {
+            return try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn, .sessionExpired:
+                throw RunOutlineError.notAuthenticated
+            }
+        } catch {
+            throw RunOutlineError.networkError(error.localizedDescription)
+        }
+    }
+
     private func performRequest(_ urlRequest: URLRequest) async throws -> (Data, URLResponse) {
         do {
-            return try await session.data(for: urlRequest)
+            return try await sessionProvider.retryOnceAfterExpiredJWT(
+                request: urlRequest,
+                session: session
+            )
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn, .sessionExpired:
+                throw RunOutlineError.notAuthenticated
+            }
         } catch {
             throw RunOutlineError.networkError(error.localizedDescription)
         }
