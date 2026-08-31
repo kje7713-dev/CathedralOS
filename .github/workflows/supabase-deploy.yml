@@ -77,6 +77,9 @@ jobs:
       - name: Deploy Edge Function - embed-section
         if: ${{ hashFiles('supabase/functions/embed-section/index.ts') != '' && success() }}
         run: supabase functions deploy embed-section --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Deploy Edge Function - accept-outline-sections
+        if: ${{ hashFiles('supabase/functions/accept-outline-sections/index.ts') != '' && success() }}
+        run: supabase functions deploy accept-outline-sections --project-ref "$SUPABASE_PROJECT_REF"
 
       # PR-4100-C: per-user ownership enforcement + 5-min signed URL for the
       # iOS read path. JWT-verified (no --no-verify-jwt) — caller must present
