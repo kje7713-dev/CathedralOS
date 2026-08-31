@@ -540,3 +540,30 @@ final class GenerationServiceTests: XCTestCase {
         XCTAssertEqual(mock.lastLengthMode, .medium)
     }
 }
+
+
+final class OutlineSuggestionErrorContractTests: XCTestCase {
+    func testInsufficientCreditsIsDistinctFromProviderFailure() {
+        let error = OutlineSuggestionService.errorForFailedJob(
+            errorCode: "insufficient_credits",
+            message: "Billable LLM call requires ~8.00 credits; you have 6.00."
+        )
+        XCTAssertTrue(error.localizedDescription.contains("Insufficient credits"))
+        XCTAssertFalse(error.localizedDescription.contains("AI suggestion failed"))
+    }
+
+    func testProviderFailureRemainsProviderError() {
+        let error = OutlineSuggestionService.errorForFailedJob(errorCode: "provider_error", message: "OpenAI timeout")
+        XCTAssertEqual(error.localizedDescription, "The AI suggestion failed. Try again.")
+    }
+
+    func testGenericJobFailureRemainsServerError() {
+        let error = OutlineSuggestionService.errorForFailedJob(errorCode: "server_error", message: "database failure")
+        XCTAssertEqual(error.localizedDescription, "Server error 500.")
+    }
+
+    func testCompletedJobHasNoFailureMapping() {
+        let error = OutlineSuggestionService.errorForFailedJob(errorCode: nil, message: nil)
+        XCTAssertEqual(error.localizedDescription, "Server error 500.")
+    }
+}

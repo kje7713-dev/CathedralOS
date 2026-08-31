@@ -87,6 +87,13 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   );
   assertEquals(source.includes('"claim_chapter_run"'), true);
   assertEquals(source.includes("existing.id, authHeader"), true);
+  assertEquals(source.includes("idempotency_key: null"), true);
+  assertEquals(source.includes("latest replacement"), false); // replacement lookup is client/server contract
+  assertEquals(source.includes("outline_id + start_parent_section_id"), true);
+  assertEquals(
+    source.includes('.from("chapter_runs")\n      .delete()'),
+    false,
+  );
   assertEquals(source.includes("pending.slice(0, 2)"), true);
   assertEquals(source.includes("queueContinuation(runId, authHeader)"), true);
   assertEquals(source.includes("worker_lease_until"), true);
@@ -96,4 +103,26 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   assertEquals(source.includes("queueContinuationAfterDelay"), true);
   assertEquals(source.includes("estimateRunCost("), true);
   assertEquals(source.includes('generationAction: "estimate"'), true);
+});
+
+Deno.test("missing-run recovery is definitive while transient errors remain retryable", async () => {
+  const source = await Deno.readTextFile(
+    "./CathedralOSApp/Services/DataDurabilityCoordinator.swift",
+  );
+  assertEquals(source.includes("case .runNotFound"), true);
+  assertEquals(source.includes("clearPersistedRunStatus"), true);
+  assertEquals(source.includes("reconcileRunOutputs"), true);
+  assertEquals(source.includes("generation continues on the server"), true);
+});
+
+Deno.test("run status endpoint exposes an exact idempotent replacement lookup", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/run-outline/index.ts",
+  );
+  assertEquals(source.includes("idempotency_key"), true);
+  assertEquals(
+    source.includes('order("created_at", { ascending: false })'),
+    true,
+  );
+  assertEquals(source.includes("maybeSingle()"), true);
 });
