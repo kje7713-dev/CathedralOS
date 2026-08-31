@@ -139,6 +139,10 @@ struct OutlineSuggestionsReviewView: View {
                     startingPosition: (outline.sections.map { $0.position }.max() ?? -1) + 1,
                     idempotencyKey: acceptanceIdempotencyKey
                 )
+                // Reconcile even when the server reports a partial failure.
+                // The worker may have completed other sections, and those must
+                // not disappear just because one embedding call was rate-limited.
+                _ = await DataDurabilityCoordinator.shared.performCloudRestore(context: modelContext)
                 if result.sectionsFailed > 0 {
                     throw SectionEmbedError.serverError(
                         statusCode: 500,
@@ -146,18 +150,18 @@ struct OutlineSuggestionsReviewView: View {
                     )
                 }
 
-                // Pull the server-created sections into the local cache. If the
-                // app was suspended during the job, the next normal cloud sync
-                // will perform the same reconciliation.
-                _ = await DataDurabilityCoordinator.shared.performCloudRestore(context: modelContext)
                 accepting = false
                 acceptingProgress = ""
                 dismiss()
             } catch let error as SectionEmbedError {
+                // A canceled poll or transport error must not hide sections the
+                // server already accepted while this screen was leaving.
+                _ = await DataDurabilityCoordinator.shared.performCloudRestore(context: modelContext)
                 accepting = false
                 acceptingProgress = ""
                 acceptErrorMessage = error.localizedDescription
             } catch {
+                _ = await DataDurabilityCoordinator.shared.performCloudRestore(context: modelContext)
                 accepting = false
                 acceptingProgress = ""
                 acceptErrorMessage = error.localizedDescription
