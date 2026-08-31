@@ -256,3 +256,140 @@ struct EmbedSectionResponse: Codable {
     let extracted_summary: String
     let embedding_dim: Int
 }
+
+// MARK: - Durable Accept All
+
+struct AcceptOutlineSection: Codable {
+    let id: String
+    let position: Int
+    let title: String
+    let summary: String
+    let container: String?
+    let pov: String?
+    let terminalBeat: String?
+    let storyArcBeatID: String?
+}
+
+struct AcceptOutlineSectionsRequest: Codable {
+    let outline_id: String
+    let project_id: String
+    let idempotency_key: String
+    let sections: [AcceptOutlineSection]
+}
+
+struct AcceptOutlineSectionsResult {
+    let runID: String
+    let sectionsTotal: Int
+    let sectionsDone: Int
+    let sectionsFailed: Int
+    let error: String?
+}
+
+private struct AcceptOutlineJobResponse: Codable {
+    let run_id: String
+    let status: String
+    let sections_total: Int?
+    let sections_done: Int?
+    let sections_failed: Int?
+    let error: String?
+}
+
+extension SectionEmbedService {
+    /// Submit the complete Accept All batch to the durable server-side worker.
+    /// The server owns section creation and embedding; the caller only polls.
+    func acceptAll(
+        edgeFunctionURL: URL,
+        outlineID: UUID,
+        projectID: UUID,
+        suggestions: [OutlineSuggestion],
+        startingPosition: Int,
+        idempotencyKey: String
+    ) async throws -> AcceptOutlineSectionsResult {
+        guard let userAccessToken = authService.currentAccessToken else {
+            throw SectionEmbedError.notAuthenticated
+        }
+        let client: SupabaseBackendClient
+        do { client = try SupabaseBackendClient() }
+        catch { throw SectionEmbedError.notConfigured(reason: String(describing: error)) }
+
+        let sections = suggestions.enumerated().map { offset, suggestion in
+            AcceptOutlineSection(
+                id: UUID().uuidString,
+                position: startingPosition + offset,
+                title: suggestion.title,
+                summary: suggestion.summary,
+                container: suggestion.container,
+                pov: suggestion.pov,
+                terminalBeat: suggestion.terminalBeat,
+                storyArcBeatID: suggestion.storyArcBeatID
+            )
+        }
+        let requestBody = AcceptOutlineSectionsRequest(
+            outline_id: outlineID.uuidString,
+            project_id: projectID.uuidString,
+            idempotency_key: idempotencyKey,
+            sections: sections
+        )
+        let url = edgeFunctionURL
+        var request = client.authorizedRequest(for: url, userAccessToken: userAccessToken)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(requestBody)
+        let (data, response) = try await session.data(for: request)
+        try checkAcceptStatus(response: response, data: data)
+        let queued = try decodeAcceptJob(data)
+        return try await pollAcceptAll(runID: queued.run_id, client: client, token: userAccessToken)
+    }
+
+    private func pollAcceptAll(
+        runID: String,
+        client: SupabaseBackendClient,
+        token: String
+    ) async throws -> AcceptOutlineSectionsResult {
+        while !Task.isCancelled {
+            var components = URLComponents(url: client.edgeFunctionURL(path: "accept-outline-sections"), resolvingAgainstBaseURL: false)
+            components?.queryItems = [URLQueryItem(name: "run_id", value: runID)]
+            guard let statusURL = components?.url else {
+                throw SectionEmbedError.invalidResponse("Could not construct Accept All status URL")
+            }
+            var request = client.authorizedRequest(for: statusURL, userAccessToken: token)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 30
+            let (data, response) = try await session.data(for: request)
+            try checkAcceptStatus(response: response, data: data)
+            let job = try decodeAcceptJob(data)
+            if job.status == "completed" || job.status == "failed" {
+                return AcceptOutlineSectionsResult(
+                    runID: job.run_id,
+                    sectionsTotal: job.sections_total ?? 0,
+                    sectionsDone: job.sections_done ?? 0,
+                    sectionsFailed: job.sections_failed ?? 0,
+                    error: job.error
+                )
+            }
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+        }
+        throw SectionEmbedError.networkError("Accept All run was cancelled")
+    }
+
+    private func decodeAcceptJob(_ data: Data) throws -> AcceptOutlineJobResponse {
+        do { return try JSONDecoder().decode(AcceptOutlineJobResponse.self, from: data) }
+        catch { throw SectionEmbedError.invalidResponse("Could not decode Accept All job: \(error.localizedDescription)") }
+    }
+
+    private func checkAcceptStatus(response: URLResponse, data: Data) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw SectionEmbedError.networkError("Non-HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8)
+            switch http.statusCode {
+            case 401: throw SectionEmbedError.notAuthenticated
+            case 429: throw SectionEmbedError.rateLimited
+            case 502: throw SectionEmbedError.providerError
+            default: throw SectionEmbedError.serverError(statusCode: http.statusCode, body: body)
+            }
+        }
+    }
+}

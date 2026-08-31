@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import CryptoKit
 
 /// Review sheet for AI-generated outline suggestions (Phase 2).
 ///
@@ -23,6 +24,16 @@ struct OutlineSuggestionsReviewView: View {
     @State private var accepting = false
     @State private var acceptingProgress: String = ""
     @State private var acceptErrorMessage: String?
+
+    // Stable across view recreation so repeated taps/reopened sheets resolve
+    // to the same server job instead of creating a second batch.
+    private var acceptanceIdempotencyKey: String {
+        let content = suggestions.map { "\($0.title)|\($0.summary)|\($0.container)|\($0.pov)|\($0.terminalBeat)|\($0.storyArcBeatID)" }.joined(separator: "\n")
+        let digest = SHA256.hash(data: Data(content.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "\(outline.id.uuidString):\(digest)"
+    }
 
     var body: some View {
         NavigationStack {
@@ -96,106 +107,60 @@ struct OutlineSuggestionsReviewView: View {
     private func acceptAll() {
         guard !accepting else { return }
         accepting = true
-        acceptingProgress = "Preparing…"
+        acceptingProgress = "Starting server job…"
 
         Task {
-            // Step 1: Create OutlineSection records locally.
-            let basePosition = (outline.sections.map { $0.position }.max() ?? -1) + 1
-            var createdSections: [OutlineSection] = []
-            for (offset, suggestion) in suggestions.enumerated() {
-                let section = OutlineSection(
-                    position: basePosition + offset,
-                    title: suggestion.title,
-                    summary: suggestion.summary
-                )
-                modelContext.insert(section)
-                section.container = suggestion.container
-                section.pov = suggestion.pov
-                section.terminalBeat = suggestion.terminalBeat
-                section.storyArcBeatID = UUID(uuidString: suggestion.storyArcBeatID)
-                section.outline = outline
-                createdSections.append(section)
-            }
-            do {
-                try modelContext.save()
-            } catch {
-                accepting = false
-                acceptingProgress = ""
-                acceptErrorMessage = "Could not save sections: \(error.localizedDescription)"
-                return
-            }
-
-            // Step 2: Bulk accept each section via embed-section. PR B — Kevin
-            // asked for Accept All to also trigger the embedding flow, not just
-            // create local draft rows. Each section takes ~3-5s (LLM extraction).
-            guard let baseURL = SupabaseConfiguration.projectURL else {
-                accepting = false
-                acceptingProgress = ""
-                acceptErrorMessage = "Backend not configured."
-                return
-            }
             guard let projectID = outline.project?.id else {
                 accepting = false
                 acceptingProgress = ""
                 acceptErrorMessage = "Outline has no project."
                 return
             }
-            let outlineID = outline.id
-            let embedURL = baseURL
-                .appendingPathComponent("functions/v1")
-                .appendingPathComponent(SupabaseConfiguration.embedSectionEdgeFunctionPath)
 
-            // Pre-sync: ensure arc + beats are uploaded to Supabase before
-            // embed-section runs. The 500ms debounce on addBeat/deleteBeats/
-            // moveBeats can race with Accept All, leaving beat IDs in iOS-local
-            // but not in remote story_arc_beats. Without pre-sync, embed-section's
-            // FK lookup hits "no such beat" and the beat reference is silently
-            // dropped (PR #287's defensive null fallback). Don't block on
-            // failure — embed-section handles missing beats gracefully.
+            // Sync arc beats before submission so the server can preserve valid
+            // storyArcBeatID foreign keys. The actual Accept All loop is now
+            // durable and server-owned; leaving the app cannot stop it.
             if let arc = project.storyArcs.first {
-                let syncService = StoryArcSyncService()
-                do {
-                    _ = try await syncService.syncArc(arc: arc, modelContext: modelContext)
-                } catch {
-                    // Pre-sync failed; continue with Accept All.
-                }
+                do { _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext) }
+                catch { /* embed-section safely nulls unavailable beat IDs */ }
             }
 
-            let service = SectionEmbedService()
-            var failedAccepts: [(OutlineSection, String)] = []
-
-            for (index, section) in createdSections.enumerated() {
-                acceptingProgress = "Accepting \(index + 1)/\(createdSections.count)…"
-                do {
-                    _ = try await service.embedSection(
-                        edgeFunctionURL: embedURL,
-                        projectID: projectID,
-                        outlineID: outlineID,
-                        section: section
+            do {
+                let service = SectionEmbedService()
+                guard let baseURL = SupabaseConfiguration.projectURL else {
+                    throw SectionEmbedError.notConfigured(reason: "Backend not configured.")
+                }
+                let edgeURL = baseURL.appendingPathComponent("functions/v1/accept-outline-sections")
+                let result = try await service.acceptAll(
+                    edgeFunctionURL: edgeURL,
+                    outlineID: outline.id,
+                    projectID: projectID,
+                    suggestions: suggestions,
+                    startingPosition: (outline.sections.map { $0.position }.max() ?? -1) + 1,
+                    idempotencyKey: acceptanceIdempotencyKey
+                )
+                if result.sectionsFailed > 0 {
+                    throw SectionEmbedError.serverError(
+                        statusCode: 500,
+                        body: result.error ?? "\(result.sectionsFailed) section(s) failed"
                     )
-                    section.status = "accepted"
-                    try? modelContext.save()
-                } catch {
-                    failedAccepts.append((section, error.localizedDescription))
                 }
-            }
 
-            // Step 3: Wrap up — save + sync.
-            try? modelContext.save()
-            Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
-
-            accepting = false
-            acceptingProgress = ""
-
-            if failedAccepts.isEmpty {
+                // Pull the server-created sections into the local cache. If the
+                // app was suspended during the job, the next normal cloud sync
+                // will perform the same reconciliation.
+                _ = await DataDurabilityCoordinator.shared.performCloudRestore(context: modelContext)
+                accepting = false
+                acceptingProgress = ""
                 dismiss()
-            } else {
-                let failedCount = failedAccepts.count
-                let totalCount = createdSections.count
-                let succeededCount = totalCount - failedCount
-                let failedTitles = failedAccepts.prefix(5).map { "• \($0.0.title): \($0.1)" }.joined(separator: "\n")
-                let extra = failedAccepts.count > 5 ? "\n…and \(failedAccepts.count - 5) more" : ""
-                acceptErrorMessage = "Accepted \(succeededCount) of \(totalCount). Failed:\n\n\(failedTitles)\(extra)"
+            } catch let error as SectionEmbedError {
+                accepting = false
+                acceptingProgress = ""
+                acceptErrorMessage = error.localizedDescription
+            } catch {
+                accepting = false
+                acceptingProgress = ""
+                acceptErrorMessage = error.localizedDescription
             }
         }
     }
