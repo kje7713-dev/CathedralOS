@@ -124,6 +124,38 @@ function sectionRow(section: Section, outlineID: string, position: number) {
   };
 }
 
+async function normalizeStoryArcBeatIDs(
+  db: ReturnType<typeof admin>,
+  sections: Section[],
+) {
+  const requestedIDs = [
+    ...new Set(
+      sections
+        .map((section) => section.storyArcBeatID)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (!requestedIDs.length) return sections;
+
+  const { data, error } = await db.from("story_arc_beats").select("id").in(
+    "id",
+    requestedIDs,
+  );
+  if (error) {
+    throw new Error(`Could not validate story arc beats: ${error.message}`);
+  }
+  const validIDs = new Set((data ?? []).map((row) => row.id));
+  return sections.map((section) => ({
+    ...section,
+    // Match embed-section's defensive FK behavior: a stale/local-only beat
+    // must not prevent the entire Accept All batch from being inserted.
+    storyArcBeatID: section.storyArcBeatID &&
+        validIDs.has(section.storyArcBeatID)
+      ? section.storyArcBeatID
+      : null,
+  }));
+}
+
 async function mergeSectionsIntoSnapshot(
   db: ReturnType<typeof admin>,
   request: RequestBody,
@@ -197,17 +229,22 @@ async function runJob(runID: string, authHeader: string, userID: string) {
   );
   if (claimError || !claimed?.[0]) return;
   const request = claimed[0].request_json as RequestBody;
-  const sectionIDs = request.sections.map((s) => s.id);
   try {
+    const normalizedSections = await normalizeStoryArcBeatIDs(
+      db,
+      request.sections,
+    );
+    const normalizedRequest = { ...request, sections: normalizedSections };
+    const sectionIDs = normalizedSections.map((s) => s.id);
     await db.from("outline_accept_runs").update({
-      sections_total: request.sections.length,
+      sections_total: normalizedSections.length,
       section_ids: sectionIDs,
     }).eq("id", runID);
     const { data: positions, error: positionError } = await db.from(
       "outline_sections",
     )
       .select("position")
-      .eq("outline_id", request.outline_id)
+      .eq("outline_id", normalizedRequest.outline_id)
       .order("position", { ascending: false })
       .limit(1);
     if (positionError) {
@@ -217,8 +254,8 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     }
     const basePosition = (positions?.[0]?.position ?? -1) + 1;
     const { error: insertError } = await db.from("outline_sections").upsert(
-      request.sections.map((s, index) =>
-        sectionRow(s, request.outline_id, basePosition + index)
+      normalizedSections.map((s, index) =>
+        sectionRow(s, normalizedRequest.outline_id, basePosition + index)
       ),
       { onConflict: "id" },
     );
@@ -231,8 +268,8 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
     let done = 0;
     let failed = 0;
-    for (let i = 0; i < request.sections.length; i += 4) {
-      const batch = request.sections.slice(i, i + 4);
+    for (let i = 0; i < normalizedSections.length; i += 4) {
+      const batch = normalizedSections.slice(i, i + 4);
       const results = await Promise.all(batch.map(async (section) => {
         try {
           const embedResponse = await fetch(embedURL, {
@@ -244,8 +281,8 @@ async function runJob(runID: string, authHeader: string, userID: string) {
             },
             body: JSON.stringify({
               outline_section_id: section.id,
-              outline_id: request.outline_id,
-              project_id: request.project_id,
+              outline_id: normalizedRequest.outline_id,
+              project_id: normalizedRequest.project_id,
               position: section.position,
               title: section.title,
               summary: section.summary,
@@ -268,7 +305,7 @@ async function runJob(runID: string, authHeader: string, userID: string) {
           await db.from("outline_sections").update({ status: "accepted" }).eq(
             "id",
             section.id,
-          ).eq("outline_id", request.outline_id);
+          ).eq("outline_id", normalizedRequest.outline_id);
           return true;
         } catch (err) {
           console.error(
@@ -287,7 +324,7 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     }
     if (!failed) {
       try {
-        await mergeSectionsIntoSnapshot(db, request, userID);
+        await mergeSectionsIntoSnapshot(db, normalizedRequest, userID);
       } catch (snapshotError) {
         console.error(
           "[accept-outline-sections] snapshot merge failed",
