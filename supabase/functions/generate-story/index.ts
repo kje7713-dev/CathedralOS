@@ -111,6 +111,7 @@ type GenerationAction = typeof ALLOWED_ACTIONS[number];
 
 /** Estimate-only action — returns a cost estimate without calling the LLM. */
 const ESTIMATE_ACTION = "estimate" as const;
+const BULK_ESTIMATE_ACTION = "estimate_bulk" as const;
 
 const MAX_BUDGET: Record<LengthMode, number> = {
   short: 800,
@@ -205,12 +206,23 @@ function providerErrorResponse(
 // Request body type
 // ---------------------------------------------------------------------------
 
+interface BulkEstimateSection {
+  id?: string;
+  title?: string;
+  summary?: string;
+  container?: string;
+  pov?: string;
+  terminalBeat?: string;
+}
+
 interface GenerateStoryRequest {
   projectName?: string;
   promptPackName?: string;
   sourcePayloadJSON: unknown; // object or JSON string
   generationAction: string;
   generationLengthMode: string;
+  // One non-billable request can estimate an entire Run All queue.
+  estimateSections?: BulkEstimateSection[];
   // Style picker (replaces length-based density guidance in the prompt).
   // “auto” = no length target, model writes naturally within budget.
   // “compact/standard/expansive” = density hint the model can honor.
@@ -2368,7 +2380,9 @@ async function handler(
   // Server-side validation
   // -------------------------------------------------------------------------
 
-  const isEstimate = body.generationAction === ESTIMATE_ACTION;
+  const isBulkEstimate = body.generationAction === BULK_ESTIMATE_ACTION;
+  const isEstimate = body.generationAction === ESTIMATE_ACTION ||
+    isBulkEstimate;
 
   if (
     !isEstimate &&
@@ -2380,7 +2394,7 @@ async function handler(
         errorCode: "invalid_request",
         errorMessage: `Invalid generationAction. Allowed values: ${
           ALLOWED_ACTIONS.join(", ")
-        }, ${ESTIMATE_ACTION}`,
+        }, ${ESTIMATE_ACTION}, ${BULK_ESTIMATE_ACTION}`,
       }),
       { status: 422 },
     );
@@ -2425,6 +2439,24 @@ async function handler(
     validContainers.includes(body.container as Container)
       ? body.container as Container
       : "scene";
+
+  if (
+    isBulkEstimate &&
+    (!Array.isArray(body.estimateSections) ||
+      body.estimateSections.length === 0 ||
+      body.estimateSections.length > 100 ||
+      body.estimateSections.some((section) => !section?.id))
+  ) {
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "invalid_request",
+        errorMessage:
+          "estimateSections must contain between 1 and 100 sections with ids",
+      }),
+      { status: 422 },
+    );
+  }
 
   // POV picker: defaults to "thirdPersonLimited" (most common in modern
   // fiction). Coerces unknown values to the default.
@@ -2543,6 +2575,91 @@ async function handler(
   // Estimate-only path — returns a cost estimate without calling the LLM,
   // persisting any row, or charging credits.
   // -------------------------------------------------------------------------
+
+  if (isBulkEstimate) {
+    // Keep the per-section pricing path identical to the single estimate
+    // action, but do all sections in one Edge Function invocation. This
+    // avoids creating a gateway request burst for large Run All queues.
+    const estimatePricing = snapshotPricing(selectedModel);
+    const estimates = body.estimateSections!.map((section) => {
+      const sectionContainer: Container = validContainers.includes(
+          section.container as Container,
+        )
+        ? section.container as Container
+        : "scene";
+      const sectionPOV: POV = validPOVs.includes(section.pov as POV)
+        ? section.pov as POV
+        : "thirdPersonLimited";
+      const sectionLengthMode: LengthMode =
+        sectionContainer === "chapter" || sectionContainer === "episode" ||
+          sectionContainer === "novella"
+          ? "chapter"
+          : sectionContainer === "shortStory"
+          ? "short"
+          : "long";
+      const sectionMaxCompletionTokens = Math.min(
+        CONTAINER_HARD_CAPS[sectionContainer],
+        selectedModel.max_output_tokens ??
+          CONTAINER_HARD_CAPS[sectionContainer],
+      );
+      const { stableBlocks, volatileBlocks } = buildPrompt({
+        sourcePayloadJSON: body.sourcePayloadJSON,
+        generationAction: "generate",
+        generationLengthMode: sectionLengthMode,
+        container: sectionContainer,
+        pov: sectionPOV,
+        outputBudget: sectionMaxCompletionTokens,
+        previousOutputText: undefined,
+        readingLevel: body.readingLevel,
+        contentRating: body.contentRating,
+        audienceNotes: body.audienceNotes,
+        terminalBeat: section.terminalBeat,
+        projectName,
+        promptPackName,
+        sectionTitle: section.title,
+        sectionSummary: section.summary,
+      });
+      const estimatedInputTokens = estimateTokensFromText(
+        stableBlocks.join("\n"),
+      ) + estimateTokensFromText(volatileBlocks.join("\n"));
+      const estimatedCredits = computeMaxChargeCredits(
+        {
+          uncachedInputTokens: estimatedInputTokens,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: CONTAINER_HARD_CAPS[sectionContainer],
+          toolCostUsd: 0,
+        },
+        estimatePricing,
+      );
+      return {
+        sectionId: section.id,
+        estimatedInputTokens,
+        estimatedOutputTokens: sectionMaxCompletionTokens,
+        estimatedCredits,
+      };
+    });
+    const estimatedCredits = estimates.reduce(
+      (sum, estimate) => sum + estimate.estimatedCredits,
+      0,
+    );
+    const entitlement = await store.loadOrDefault(userId);
+    const creditCheck = checkCredits(entitlement, estimatedCredits);
+
+    return corsResponse(
+      JSON.stringify({
+        status: "ok",
+        selectedModelId: selectedModel.id,
+        modelDisplayName: selectedModel.display_name,
+        estimatedCredits,
+        estimates,
+        availableCredits: creditCheck.availableCredits,
+        allowed: creditCheck.allowed,
+        minimumChargeCredits: selectedModel.minimum_charge_credits,
+      }),
+      { status: 200 },
+    );
+  }
 
   if (isEstimate) {
     const { stableBlocks, volatileBlocks } = buildPrompt({

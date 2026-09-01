@@ -1294,7 +1294,8 @@ Deno.test("handler: missing selectedModelId defaults to gpt-4o-mini", async () =
   const { store: rateLimitStore } = makeMockRateLimitStore({ allowed: true });
   const { store: generationModelStore, state: modelState } =
     makeMockGenerationModelStore();
-  const { store: persistenceStore } = makeMockPersistenceStore();
+  const { store: persistenceStore, state: persistenceState } =
+    makeMockPersistenceStore();
 
   const resp = await handler(
     makeAuthRequest(makeBaseRequest({ selectedModelId: undefined })),
@@ -1757,6 +1758,61 @@ Deno.test("handler: estimate action returns ok with required estimate fields", a
   // No rows should be inserted.
   assertEquals(persistenceState.outputInsertCalls.length, 0);
   assertEquals(persistenceState.usageInsertCalls.length, 0);
+});
+
+Deno.test("handler: bulk estimate action prices all sections in one request", async () => {
+  const { store: creditStore } = makeMockCreditStore(makeEntitlement());
+  const { store: rateLimitStore, state: rateLimitState } =
+    makeMockRateLimitStore({ allowed: false });
+  const { store: generationModelStore } = makeMockGenerationModelStore();
+  const { store: persistenceStore, state: persistenceState } =
+    makeMockPersistenceStore();
+
+  const resp = await handler(
+    makeAuthRequest(makeBaseRequest({
+      generationAction: "estimate_bulk",
+      estimateSections: [
+        {
+          id: "section-1",
+          title: "Arrival",
+          summary: "Ada enters.",
+          container: "scene",
+          pov: "firstPerson",
+        },
+        {
+          id: "section-2",
+          title: "The Door",
+          summary: "The lock turns.",
+          container: "shortStory",
+          pov: "thirdPersonLimited",
+        },
+      ],
+    })),
+    {
+      provider: _mockSuccessProvider,
+      creditStore,
+      rateLimitStore,
+      generationModelStore,
+      authenticatedUserId: FAKE_USER_ID,
+      persistenceStore,
+    },
+  );
+
+  const body = await resp.json();
+  assertEquals(resp.status, 200);
+  assertEquals(body.status, "ok");
+  assertEquals(body.estimates.length, 2);
+  assertEquals(
+    body.estimatedCredits,
+    body.estimates.reduce(
+      (sum: number, estimate: { estimatedCredits: number }) =>
+        sum + estimate.estimatedCredits,
+      0,
+    ),
+  );
+  // Bulk estimates remain non-billable and bypass the per-generation limiter.
+  assertEquals(rateLimitState.recordRequestCalls.length, 0);
+  assertEquals(persistenceState.outputInsertCalls.length, 0);
 });
 
 Deno.test("handler: estimate action returns allowed=false when credits are insufficient", async () => {
