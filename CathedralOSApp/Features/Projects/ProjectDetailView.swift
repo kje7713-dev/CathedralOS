@@ -81,6 +81,7 @@ struct ProjectDetailView: View {
     @State private var packToEdit: PromptPack?
     @State private var generationToView: GenerationOutput?
     @State private var pendingOutlineGeneration: OutlineGenerationLaunch?
+    @State private var isRunAllStarting = false
     @State private var outputFilter: OutputListFilter = .all
     @State private var readLatestOutputID: UUID?
 
@@ -178,6 +179,7 @@ struct ProjectDetailView: View {
                     OutlineTabView(
                         project: project,
                         generationLaunch: $pendingOutlineGeneration,
+                        isGenerationStarting: $isRunAllStarting,
                         onGenerationCompleted: {
                             advancedMode = false
                             storyEditorModeRaw = StoryEditorMode.output.rawValue
@@ -221,6 +223,22 @@ struct ProjectDetailView: View {
             .scrollContentBackground(.hidden)
         }
         .background(CathedralTheme.Colors.background.ignoresSafeArea())
+        // Keep the existing confirmation and kickoff flow alive while the user
+        // remains on Novel Workspace instead of switching to Outline.
+        .background {
+            if storyEditorMode != .outline && !advancedMode {
+                OutlineTabView(
+                    project: project,
+                    generationLaunch: $pendingOutlineGeneration,
+                    isGenerationStarting: $isRunAllStarting,
+                    onGenerationCompleted: {
+                        advancedMode = false
+                        storyEditorModeRaw = StoryEditorMode.output.rawValue
+                    }
+                )
+                .hidden()
+            }
+        }
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
@@ -428,6 +446,16 @@ struct ProjectDetailView: View {
             CathedralSectionHeader("Your path")
             CathedralCard {
                 VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+                    if isRunAllStarting {
+                        GenerationStartingBanner()
+                    } else if let status = projectRunStatus {
+                        ActiveRunBanner(
+                            status: status,
+                            pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
+                                ? durabilityCoordinator.activeRunPollingError
+                                : nil
+                        )
+                    }
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
                             Text("Novel Workspace")
@@ -1376,7 +1404,6 @@ struct ProjectDetailView: View {
             scope: scope,
             modelID: selectedModelId
         )
-        storyEditorModeRaw = StoryEditorMode.outline.rawValue
     }
 
     private var containerPicker: some View {

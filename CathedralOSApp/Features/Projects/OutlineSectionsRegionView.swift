@@ -64,17 +64,20 @@ struct OutlineSectionsRegionView: View {
     @Bindable var project: StoryProject
     let modelContext: ModelContext
     @Binding var generationLaunch: OutlineGenerationLaunch?
+    @Binding var isGenerationStarting: Bool
     let onGenerationCompleted: (() -> Void)?
 
     init(
         project: StoryProject,
         modelContext: ModelContext,
         generationLaunch: Binding<OutlineGenerationLaunch?> = .constant(nil),
+        isGenerationStarting: Binding<Bool> = .constant(false),
         onGenerationCompleted: (() -> Void)? = nil
     ) {
         self.project = project
         self.modelContext = modelContext
         self._generationLaunch = generationLaunch
+        self._isGenerationStarting = isGenerationStarting
         self.onGenerationCompleted = onGenerationCompleted
     }
 
@@ -97,7 +100,6 @@ struct OutlineSectionsRegionView: View {
     @State private var readerSection: OutlineSection?
     @State private var generationTarget: OutlineGenerationTarget?
     @State private var isKickingOff = false
-    @State private var isGenerationStarting = false
     @State private var runOutlineError: String?
     // PR #341: bypass SwiftData's @Query auto-refresh path. The @Query has been
     // failing silently to refresh for programmatic inserts (a known SwiftData
@@ -816,6 +818,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         }
                     }
                 )
+                // The coordinator now owns the durable active status; switch
+                // the workspace banner from "Starting" to progress.
+                isGenerationStarting = false
             }
         } catch let error as RunOutlineError {
             if case .alreadyRunning(let runID) = error {
@@ -835,8 +840,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         onSyncCompleted: { [self] context in
                             self.refreshAllOutputs()
                             self.recordEyeDebug(context: context)
+                            self.isGenerationStarting = false
+                            if scope == "from_here",
+                               self.durabilityCoordinator.runStatus(for: project.stableLineageID)?.status == "completed" {
+                                self.onGenerationCompleted?()
+                            }
                         }
                     )
+                    isGenerationStarting = false
                     return
                 } catch {
                     isGenerationStarting = false

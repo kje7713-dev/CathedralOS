@@ -10,15 +10,18 @@ struct OutlineTabView: View {
     @Bindable var project: StoryProject
     @Environment(\.modelContext) private var modelContext
     @Binding var generationLaunch: OutlineGenerationLaunch?
+    @Binding var isGenerationStarting: Bool
     let onGenerationCompleted: (() -> Void)?
 
     init(
         project: StoryProject,
         generationLaunch: Binding<OutlineGenerationLaunch?>,
+        isGenerationStarting: Binding<Bool> = .constant(false),
         onGenerationCompleted: (() -> Void)? = nil
     ) {
         self.project = project
         self._generationLaunch = generationLaunch
+        self._isGenerationStarting = isGenerationStarting
         self.onGenerationCompleted = onGenerationCompleted
     }
 
@@ -30,6 +33,7 @@ struct OutlineTabView: View {
                     project: project,
                     modelContext: modelContext,
                     generationLaunch: $generationLaunch,
+                    isGenerationStarting: $isGenerationStarting,
                     onGenerationCompleted: onGenerationCompleted
                 )
             }
