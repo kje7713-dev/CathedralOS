@@ -28,3 +28,33 @@ Deno.test("Accept All preserves partial section failure details", () => {
     error: "Section title failed",
   });
 });
+
+Deno.test("Accept All uses the shared service without nested embed-section HTTP", async () => {
+  const source = await Deno.readTextFile(
+    new URL("./index.ts", import.meta.url),
+  );
+  assertEquals(source.includes("processSectionMemory"), true);
+  assertEquals(source.includes("functions/v1/embed-section"), false);
+  assertEquals(source.includes("embedSectionWithRetry"), false);
+});
+
+Deno.test("Accept All memory stage cannot rewrite outline section ownership", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../_shared/section-embedding.ts", import.meta.url),
+  );
+  const start = source.indexOf("export async function processSectionMemory");
+  const end = source.indexOf("export async function processEmbedSection");
+  const memoryStage = source.slice(start, end);
+  assertEquals(memoryStage.includes('from("outline_sections")'), false);
+  assertEquals(memoryStage.includes("position: body.position"), false);
+  assertEquals(memoryStage.includes('from("section_embeddings")'), true);
+});
+
+Deno.test("embed-section adapter maps typed shared results and errors", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../embed-section/index.ts", import.meta.url),
+  );
+  assertEquals(source.includes("SectionEmbeddingError"), true);
+  assertEquals(source.includes("JSON.stringify(result)"), true);
+  assertEquals(source.includes("errorResponse(err.code, err.message"), true);
+});
