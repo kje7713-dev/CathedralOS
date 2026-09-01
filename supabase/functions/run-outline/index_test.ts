@@ -103,6 +103,8 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   assertEquals(source.includes("queueContinuationAfterDelay"), true);
   assertEquals(source.includes("estimateRunCost("), true);
   assertEquals(source.includes('generationAction: "estimate"'), true);
+  assertEquals(source.includes('status: "queued"'), true);
+  assertEquals(source.includes("prepareRun("), true);
 });
 
 Deno.test("missing-run recovery is definitive while transient errors remain retryable", async () => {

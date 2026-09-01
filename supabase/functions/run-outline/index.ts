@@ -148,7 +148,9 @@ async function handleKickoff(req: Request): Promise<Response> {
     .select("id, status")
     .eq("idempotency_key", idempotencyKey)
     .maybeSingle();
-  if (existing && existing.status === "running") {
+  if (
+    existing && (existing.status === "queued" || existing.status === "running")
+  ) {
     // A prior worker may have died before claiming a lease (or while the app
     // was offline). Keep the idempotency response, but also use this retry as
     // a recovery trigger. claim_chapter_run makes this safe if a worker is
@@ -188,7 +190,7 @@ async function handleKickoff(req: Request): Promise<Response> {
       outline_id: body.outline_id,
       start_parent_section_id: body.start_parent_section_id,
       idempotency_key: idempotencyKey,
-      status: "running",
+      status: "queued",
       sections: [],
       credits_reserved: 0,
     })
@@ -240,67 +242,10 @@ async function handleKickoff(req: Request): Promise<Response> {
     );
   }
 
-  // 5. Estimate total cost (per docs/multi-section-generation.md: cost reserve at
-  //    kickoff; release on failure). Per _credits.ts policy: "Monthly allowance is
-  //    drained first, then purchased balance." We use the same drain order at
-  //    commit time. credits_reserved is in integer credits for now (the
-  //    column naming pre-dates the credit/cent distinction; semantics are
-  //    "credits" today).
-  let estimatedCost: number;
-  try {
-    estimatedCost = await estimateRunCost(
-      adminClient,
-      userId,
-      authHeader,
-      body.outline_id,
-      sections,
-      body.model,
-    );
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    await markRunFailed(adminClient, run.id, msg);
-    return errorResponse("estimate_failed", msg, 502);
-  }
-
-  // 6. Credit check: load entitlement + verify available >= estimated.
-  const { data: entData, error: entErr } = await adminClient
-    .from("user_entitlements")
-    .select(
-      "user_id, plan_name, is_pro, monthly_credit_allowance, purchased_credit_balance, current_period_start, current_period_end, entitlement_source, updated_at",
-    )
-    .eq("user_id", userId)
-    .single();
-  if (entErr || !entData) {
-    await adminClient.from("chapter_runs").update({
-      status: "failed",
-      error: "could not load user entitlement",
-      completed_at: new Date().toISOString(),
-    }).eq("id", run.id);
-    return errorResponse(
-      "entitlement_error",
-      "could not load user entitlement",
-      500,
-    );
-  }
-  const ent = entData as UserEntitlement;
-  const check = checkCredits(ent, estimatedCost);
-  if (!check.allowed) {
-    await adminClient.from("chapter_runs").update({
-      status: "failed",
-      error:
-        `insufficient_credits: needed ${estimatedCost}, have ${check.availableCredits}`,
-      credits_reserved: 0,
-      completed_at: new Date().toISOString(),
-    }).eq("id", run.id);
-    return errorResponse(
-      "insufficient_credits",
-      `needed ${estimatedCost}, have ${check.availableCredits}`,
-      402,
-    );
-  }
-
-  // Persist the complete work list before the worker starts. This is the
-  // durable queue: a later invocation can resume without reconstructing scope.
+  // 5. Persist the complete work list before the durable preflight worker.
+  // The old implementation estimated every section synchronously here. That
+  // made a 45-section kickoff exceed the Edge Function request lifetime and
+  // return a generic 502 before a run could be polled.
   const initialSections = sections.map((s) => ({
     id: s.id,
     title: s.title,
@@ -312,10 +257,8 @@ async function handleKickoff(req: Request): Promise<Response> {
     story_arc_beat_id: s.story_arc_beat_id,
     status: "pending",
   }));
-  // 7. Update credits_reserved + log the kickoff
   const { error: initError } = await adminClient.from("chapter_runs").update({
     sections: initialSections,
-    credits_reserved: estimatedCost,
     model: body.model ?? null,
     user_id: userId,
   }).eq("id", run.id);
@@ -327,23 +270,15 @@ async function handleKickoff(req: Request): Promise<Response> {
     );
     return errorResponse("db_error", initError.message, 500);
   }
-  console.log(
-    `[run-outline] kickoff run_id=${run.id} user=${userId} outline=${body.outline_id} parent=${body.start_parent_section_id} sections=${sections.length} estimated_cost=${estimatedCost} model=${
-      body.model ?? "(default)"
-    }`,
-  );
 
-  // 8. Return immediately and let the server own the long-running work.
-  // iOS may be suspended or terminated when the phone locks; the generation
-  // must not be tied to the lifetime of the POST request or its view task.
-  // Supabase keeps this promise alive through EdgeRuntime.waitUntil while the
-  // durable chapter_runs row remains the source of truth for polling/recovery.
+  // 6. Return quickly. The queued status is visible to iOS immediately, and
+  // the durable worker performs estimates, credit reservation, and generation.
   // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
   EdgeRuntime.waitUntil(
-    runOutline(run.id, adminClient, authHeader).catch(async (err) => {
+    prepareRun(run.id, adminClient, authHeader).catch(async (err) => {
       const message = err instanceof Error ? err.message : String(err);
       console.error(
-        `[run-outline] background run ${run.id} crashed: ${message}`,
+        `[run-outline] preparation ${run.id} crashed: ${message}`,
       );
       await markRunFailed(adminClient, run.id, message);
     }),
@@ -352,14 +287,14 @@ async function handleKickoff(req: Request): Promise<Response> {
   return corsResponse(
     JSON.stringify({
       run_id: run.id,
-      status: "running",
+      status: "queued",
       sections: sections.map((section) => ({
         id: section.id,
         title: section.title,
         position: section.position,
         status: "pending",
       })),
-      credits_reserved: estimatedCost,
+      credits_reserved: 0,
       credits_actual: 0,
       error: null,
       created_at: run.created_at,
@@ -368,6 +303,89 @@ async function handleKickoff(req: Request): Promise<Response> {
     }),
     { status: 202 },
   );
+}
+
+// ---- durable estimate/credit preflight ------------------------------------
+async function prepareRun(
+  runId: string,
+  adminClient: ReturnType<typeof createClient>,
+  authHeader: string,
+): Promise<void> {
+  const { data: claimed, error: claimError } = await adminClient.rpc(
+    "claim_chapter_run",
+    { p_run_id: runId, p_lease_seconds: 150 },
+  );
+  if (claimError) {
+    throw new Error(`could not claim preparation: ${claimError.message}`);
+  }
+  const ownsLease = claimed === true ||
+    (Array.isArray(claimed) && claimed.length > 0);
+  if (!ownsLease) return;
+
+  const { data: run, error: runError } = await adminClient.from("chapter_runs")
+    .select("id, outline_id, user_id, model, sections, status")
+    .eq("id", runId).single();
+  if (runError || !run) throw new Error("run disappeared during preparation");
+  if (run.status !== "queued") {
+    await releaseRunLease(adminClient, runId);
+    return;
+  }
+
+  const sections = Array.isArray(run.sections)
+    ? run.sections as Array<Record<string, unknown>>
+    : [];
+  if (sections.length === 0) throw new Error("run queue is empty");
+
+  let estimatedCost: number;
+  try {
+    estimatedCost = await estimateRunCost(
+      adminClient,
+      String(run.user_id),
+      authHeader,
+      String(run.outline_id),
+      sections,
+      (run.model as string | null) ?? undefined,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await markRunFailed(adminClient, runId, msg);
+    return;
+  }
+
+  const { data: entData, error: entErr } = await adminClient
+    .from("user_entitlements")
+    .select(
+      "user_id, plan_name, is_pro, monthly_credit_allowance, purchased_credit_balance, current_period_start, current_period_end, entitlement_source, updated_at",
+    )
+    .eq("user_id", run.user_id)
+    .single();
+  if (entErr || !entData) {
+    await markRunFailed(adminClient, runId, "could not load user entitlement");
+    return;
+  }
+  const check = checkCredits(entData as UserEntitlement, estimatedCost);
+  if (!check.allowed) {
+    await adminClient.from("chapter_runs").update({
+      status: "failed",
+      error:
+        `insufficient_credits: needed ${estimatedCost}, have ${check.availableCredits}`,
+      credits_reserved: 0,
+      completed_at: new Date().toISOString(),
+      worker_lease_until: null,
+    }).eq("id", runId);
+    return;
+  }
+
+  const { error: startError } = await adminClient.from("chapter_runs").update({
+    status: "running",
+    credits_reserved: estimatedCost,
+    worker_lease_until: null,
+  }).eq("id", runId).eq("status", "queued");
+  if (startError) {
+    throw new Error(`could not start prepared run: ${startError.message}`);
+  }
+
+  await queueContinuation(runId, authHeader);
 }
 
 // ---- GET /functions/v1/run-outline?run_id=… ------------------------------
@@ -416,7 +434,7 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
   // A status poll is also a lightweight recovery trigger. If an invocation
   // died after claiming its lease, enqueue one replacement; the DB claim
   // function prevents duplicate workers from processing the same run.
-  if (run.status === "running") {
+  if (run.status === "queued" || run.status === "running") {
     const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
       auth: { persistSession: false },
     });
@@ -489,10 +507,14 @@ async function runOutline(
 
   const { data: run, error: runError } = await adminClient.from("chapter_runs")
     .select(
-      "id, outline_id, user_id, model, credits_reserved, created_at, sections, next_retry_at",
+      "id, outline_id, user_id, model, credits_reserved, created_at, sections, next_retry_at, status",
     )
     .eq("id", runId).single();
   if (runError || !run) throw new Error("run disappeared after claim");
+  if (run.status !== "running") {
+    await releaseRunLease(adminClient, runId);
+    return;
+  }
 
   const retryAt = run.next_retry_at
     ? new Date(String(run.next_retry_at)).getTime()
@@ -671,22 +693,24 @@ async function handleResume(
   if (outline?.user_id !== userId) {
     return errorResponse("not_found", "run not found", 404);
   }
-  if (run.status !== "running") {
+  if (run.status !== "queued" && run.status !== "running") {
     return corsResponse(JSON.stringify({ run_id: runId, status: run.status }), {
       status: 200,
     });
   }
   // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
   EdgeRuntime.waitUntil(
-    runOutline(runId, adminClient, authHeader).catch(async (err) => {
-      await markRunFailed(
-        adminClient,
-        runId,
-        err instanceof Error ? err.message : String(err),
-      );
-    }),
+    (run.status === "queued"
+      ? prepareRun(runId, adminClient, authHeader)
+      : runOutline(runId, adminClient, authHeader)).catch(async (err) => {
+        await markRunFailed(
+          adminClient,
+          runId,
+          err instanceof Error ? err.message : String(err),
+        );
+      }),
   );
-  return corsResponse(JSON.stringify({ run_id: runId, status: "running" }), {
+  return corsResponse(JSON.stringify({ run_id: runId, status: run.status }), {
     status: 202,
   });
 }
