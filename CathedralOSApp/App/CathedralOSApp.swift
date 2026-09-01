@@ -78,6 +78,10 @@ private struct AppRootView: View {
         // Mid-session expiry is still handled by
         // AuthSessionResolver.retryOnceAfterExpiredJWT.
         _ = try? await AuthSessionResolver.shared.refreshSessionIfNeeded()
+        // Reattach Accept All before the normal launch sync. If the worker
+        // completed while the app was gone, its reconciliation must not be
+        // preceded by a stale local snapshot upload.
+        DataDurabilityCoordinator.shared.resumeAcceptAllIfNeeded(context: modelContext)
         _ = await DataDurabilityCoordinator.shared.performAppLaunch(
             context: modelContext,
             isFirstLaunchAfterUpdate: firstLaunchAfterUpdate,
