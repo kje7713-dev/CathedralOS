@@ -1,5 +1,6 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { acceptRunTerminalOutcome } from "./_outcome.ts";
+import { processSectionMemory } from "../_shared/section-embedding.ts";
 
 // Durable Accept All worker. The iOS client submits the complete suggestion
 // batch once, then polls this job. Embedding remains the canonical pipeline,
@@ -235,38 +236,6 @@ async function mergeSectionsIntoSnapshot(
   }
 }
 
-async function embedSectionWithRetry(
-  embedURL: string,
-  authHeader: string,
-  anonKey: string,
-  body: Record<string, unknown>,
-): Promise<Response> {
-  for (let attempt = 0;; attempt += 1) {
-    const response = await fetch(embedURL, {
-      method: "POST",
-      headers: {
-        Authorization: authHeader,
-        apikey: anonKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    if (response.status !== 429 || attempt >= 2) return response;
-    const retryBody = await response.clone().json().catch(() => null) as
-      | Record<string, unknown>
-      | null;
-    const retryAfter = Number(
-      retryBody?.retryAfterSeconds ?? response.headers.get("Retry-After"),
-    );
-    const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter > 0
-      ? Math.min(Math.ceil(retryAfter), 120)
-      : 60;
-    await new Promise((resolve) =>
-      setTimeout(resolve, retryAfterSeconds * 1000)
-    );
-  }
-}
-
 async function runJob(runID: string, authHeader: string, userID: string) {
   const db = admin();
   const { data: claimed, error: claimError } = await db.rpc(
@@ -275,6 +244,8 @@ async function runJob(runID: string, authHeader: string, userID: string) {
   );
   if (claimError || !claimed?.[0]) return;
   const request = claimed[0].request_json as RequestBody;
+  const openaiKey = Deno.env.get("OPENAI_API_KEY") ?? "";
+  if (!openaiKey) throw new Error("OPENAI_API_KEY missing");
   try {
     const normalizedSections = await normalizeStoryArcBeatIDs(
       db,
@@ -308,10 +279,6 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     if (insertError) {
       throw new Error(`Could not create sections: ${insertError.message}`);
     }
-    const embedURL = `${
-      Deno.env.get("SUPABASE_URL")
-    }/functions/v1/embed-section`;
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
     const { data: existingEmbeddings, error: embeddingError } = await db
       .from("section_embeddings")
       .select("outline_section_id")
@@ -338,14 +305,12 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     const pendingSections = normalizedSections.filter((section) =>
       !completedIDs.has(section.id)
     );
-    for (let i = 0; i < pendingSections.length; i += 4) {
-      const batch = pendingSections.slice(i, i + 4);
+    for (let i = 0; i < pendingSections.length; i += 2) {
+      // Keep internal embed-section fan-out below the Edge Runtime burst limit.
+      const batch = pendingSections.slice(i, i + 2);
       const results = await Promise.all(batch.map(async (section) => {
         try {
-          const embedResponse = await embedSectionWithRetry(
-            embedURL,
-            authHeader,
-            anonKey,
+          await processSectionMemory(
             {
               outline_section_id: section.id,
               outline_id: normalizedRequest.outline_id,
@@ -365,15 +330,9 @@ async function runJob(runID: string, authHeader: string, userID: string) {
                   : "",
               ].filter(Boolean).join("\n\n"),
             },
+            db,
+            openaiKey,
           );
-          if (!embedResponse.ok) {
-            const detail = (await embedResponse.text()).trim();
-            throw new Error(
-              `embed-section returned ${embedResponse.status}${
-                detail ? `: ${detail.slice(0, 500)}` : ""
-              }`,
-            );
-          }
           await db.from("outline_sections").update({ status: "accepted" }).eq(
             "id",
             section.id,
