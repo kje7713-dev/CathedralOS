@@ -10,7 +10,7 @@ import {
 // =============================================================================
 // index.ts — outline-from-recipe Edge Function
 //
-// Takes a recipe (PromptPack-shaped) + arc template (StoryArcTemplate-shaped),
+// Takes a canonical PromptPackExportPayload + arc template (StoryArcTemplate-shaped),
 // returns the validated per-beat set of suggested OutlineSection payloads.
 //
 // Phase 2 of novel-building per docs/novel-building.md. Suggestions are not
@@ -29,8 +29,7 @@ import {
 //
 // Request:
 //   POST {
-//     "recipe": { id, name, characters[], storySpark|null, aftertaste|null,
-//                 themes[], motifs[], notes? },
+//     "recipe": <canonical PromptPackExportPayload>,
 //     "arcTemplate": { id, name, description?, beats[] },
 //     "hint": "optional user prompt"
 //   }
@@ -147,12 +146,30 @@ const CORS_HEADERS = {
 // Types
 // ---------------------------------------------------------------------------
 
-/**
- * The recipe is the canonical PromptPackExportPayload produced by iOS. Keep
- * this open because the export schema is deliberately lossless and evolves
- * independently from this function's arc contract.
+const CANONICAL_RECIPE_SCHEMA = "cathedralos.story_packet";
+
+/** The subset of the canonical PromptPackExportPayload validated or addressed
+ * directly here. The complete object is forwarded unchanged to both LLM calls.
  */
-type RecipeBlob = Record<string, unknown>;
+interface CanonicalRecipeEnvelope {
+  schema: string;
+  version: number;
+  project: { id: string; summary?: string };
+  setting: { included: boolean };
+  selectedCharacters: unknown[];
+  selectedStorySpark: unknown | null;
+  selectedAftertaste: unknown | null;
+  selectedRelationships: unknown[];
+  selectedThemeQuestions: unknown[];
+  selectedMotifs: unknown[];
+  promptPack: {
+    id: string;
+    name: string;
+    includeProjectSetting?: boolean;
+    notes?: string;
+    instructionBias?: string;
+  };
+}
 
 interface ArcTemplateBlob {
   id: string;
@@ -164,7 +181,7 @@ interface ArcTemplateBlob {
 }
 
 interface OutlineFromRecipeRequest {
-  recipe: RecipeBlob;
+  recipe: CanonicalRecipeEnvelope;
   arcTemplate: ArcTemplateBlob;
   hint?: string;
   existingSections?: ExistingSectionBlob[]; // iOS-side outline state at request time
@@ -221,17 +238,43 @@ function errorResponse(
   return corsResponse(JSON.stringify({ errorCode: code, message }), { status });
 }
 
-function validateRequest(req: unknown): string | null {
+export function validateRequest(req: unknown): string | null {
   if (!req || typeof req !== "object") return "request must be an object";
   const r = req as Partial<OutlineFromRecipeRequest>;
-  if (!r.recipe?.id || !r.recipe?.name) {
-    return "recipe.id and recipe.name required";
+  const recipe = r.recipe;
+  if (!recipe || typeof recipe !== "object") {
+    return "canonical recipe payload required";
+  }
+  if (recipe.schema !== CANONICAL_RECIPE_SCHEMA) {
+    return `recipe.schema must be ${CANONICAL_RECIPE_SCHEMA}`;
   }
   if (
-    !r.arcTemplate?.id || !Array.isArray(r.arcTemplate.beats) ||
+    !recipe.project || typeof recipe.project.id !== "string" ||
+    recipe.project.id.trim() === ""
+  ) {
+    return "recipe.project.id required";
+  }
+  if (
+    !recipe.promptPack || typeof recipe.promptPack.id !== "string" ||
+    recipe.promptPack.id.trim() === "" ||
+    typeof recipe.promptPack.name !== "string" ||
+    recipe.promptPack.name.trim() === ""
+  ) {
+    return "recipe.promptPack.id and recipe.promptPack.name required";
+  }
+  if (
+    !r.arcTemplate || typeof r.arcTemplate.id !== "string" ||
+    r.arcTemplate.id.trim() === "" || !Array.isArray(r.arcTemplate.beats) ||
     r.arcTemplate.beats.length === 0
   ) {
     return "arcTemplate.id and non-empty arcTemplate.beats required";
+  }
+  if (
+    r.arcTemplate.beats.some((beat) =>
+      !beat || typeof beat.id !== "string" || beat.id.trim() === ""
+    )
+  ) {
+    return "arcTemplate.beats must have non-empty ids";
   }
   return null;
 }
@@ -254,7 +297,7 @@ export function buildPrompt(
 
 ## Use the allocation plan exactly
 
-For each beat, generate EXACTLY the allocated number of distinct sections - no fewer, no more. Each section must advance the story with a new event, consequence, decision, or revelation rather than paraphrasing another section.
+For each beat, generate EXACTLY the allocated number of distinct sections - no fewer, no more. A beat allocated 0 is already covered and must produce no new suggestion. Each generated section must advance the story with a new event, consequence, decision, or revelation rather than paraphrasing an existing or generated section.
 
 ${allocationLines}
 
@@ -291,13 +334,13 @@ const ALLOCATION_SCHEMA = {
   properties: {
     allocations: {
       type: "array",
-      minItems: 1,
+      minItems: 0,
       maxItems: 100,
       items: {
         type: "object",
         properties: {
           beatID: { type: "string", minLength: 1 },
-          sectionCount: { type: "integer", minimum: 1, maximum: 10 },
+          sectionCount: { type: "integer", minimum: 0, maximum: 10 },
           rationale: { type: "string", minLength: 1, maxLength: 500 },
         },
         required: ["beatID", "sectionCount", "rationale"],
@@ -354,7 +397,7 @@ export function parseAndValidateAllocation(
     if (seen.has(beatID)) {
       throw new Error(`allocation contains duplicate beatID: ${beatID}`);
     }
-    if (!Number.isInteger(count) || Number(count) < 1 || Number(count) > 10) {
+    if (!Number.isInteger(count) || Number(count) < 0 || Number(count) > 10) {
       throw new Error(`allocation has invalid sectionCount for beat ${beatID}`);
     }
     if (typeof rationale !== "string" || rationale.trim() === "") {
@@ -373,7 +416,7 @@ export function parseAndValidateAllocation(
     (sum, item) => sum + item.count,
     0,
   );
-  if (total < beats.length || total > 100) {
+  if (total < 0 || total > 100) {
     throw new Error(`allocation total is not sensible: ${total}`);
   }
   return new Map(beats.map((beat) => [beat.id, out.get(beat.id)!]));
@@ -387,7 +430,7 @@ export function buildAllocationPrompt(
 
 Some beats are quick transitions (1-2 sections). Some are major movements unfolding across many scenes (5-10+ sections). The same arc template produces very different outlines for different recipes. Let the supplied premise, characters, and arc determine density; do not expand merely because the output is called a novel.
 
-For each beat, output exactly one JSON object with beatID matching the supplied UUID exactly, sectionCount as an integer from 1 through 10, and a concise rationale. Include every beat exactly once. Do not output any other root key. The total may be short or long; do not target a fixed total.
+For each beat, output exactly one JSON object with beatID matching the supplied UUID exactly, sectionCount as an integer from 0 through 10, and a concise rationale. Include every beat exactly once, including beats with sectionCount 0. A beat sufficiently covered by existing sections may receive 0; an uncovered beat in an empty outline should receive 1 or more when the story needs it. Do not output any other root key. The total may be short or long; do not target a fixed total.
 
 Output JSON only. No commentary, no prose.`;
 
@@ -403,7 +446,20 @@ Output JSON only. No commentary, no prose.`;
           description: b.description,
         })),
       },
-      existingSections: req.existingSections ?? [],
+      existingSectionsByBeat: Object.fromEntries(
+        req.arcTemplate.beats.map((beat) => [
+          beat.id,
+          (req.existingSections ?? []).filter((section) =>
+            section.storyArcBeatID === beat.id
+          ),
+        ]),
+      ),
+      existingUnlinkedSections: (req.existingSections ?? []).filter((section) =>
+        !section.storyArcBeatID ||
+        !req.arcTemplate.beats.some((beat) =>
+          beat.id === section.storyArcBeatID
+        )
+      ),
     },
     null,
     2,
@@ -638,13 +694,10 @@ export function validateSuggestions(
         );
       }
     }
-    if (
-      valid.length !==
-        Array.from(allocation.values()).reduce(
-          (sum, plan) => sum + plan.count,
-          0,
-        )
-    ) {
+    const expectedTotal = Array.from(allocation.values())
+      .filter((plan) => plan.count > 0)
+      .reduce((sum, plan) => sum + plan.count, 0);
+    if (valid.length !== expectedTotal) {
       throw new Error(
         "outline generation count does not equal allocation total",
       );

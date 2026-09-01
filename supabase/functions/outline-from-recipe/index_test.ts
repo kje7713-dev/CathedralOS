@@ -16,6 +16,7 @@ import {
   buildAllocationPrompt,
   buildPrompt,
   parseAndValidateAllocation,
+  validateRequest,
   validateSuggestions,
 } from "./index.ts";
 
@@ -67,6 +68,24 @@ const sparseRequest = {
     ],
   },
 };
+
+Deno.test("canonical recipe payload passes request validation", () => {
+  assertEquals(validateRequest(sparseRequest), null);
+  assertEquals(
+    validateRequest({
+      recipe: { id: "legacy", name: "old shape" },
+      arcTemplate: sparseRequest.arcTemplate,
+    }),
+    "recipe.schema must be cathedralos.story_packet",
+  );
+  assertEquals(
+    validateRequest({
+      recipe: sparseRequest.recipe,
+      arcTemplate: { ...sparseRequest.arcTemplate, beats: [] },
+    }),
+    "arcTemplate.id and non-empty arcTemplate.beats required",
+  );
+});
 
 Deno.test("sparse recipe context is preserved for allocation and outline prompts", () => {
   const allocation = new Map([
@@ -126,6 +145,84 @@ Deno.test("allocation parser preserves varying counts and rejects malformed root
     missingError = String(caught);
   }
   assertEquals(missingError.includes("missing beat"), true);
+
+  for (
+    const invalid of [
+      {
+        allocations: [
+          { beatID: "beat-1", sectionCount: 1, rationale: "setup" },
+          { beatID: "beat-1", sectionCount: 1, rationale: "duplicate" },
+          { beatID: "beat-2", sectionCount: 1, rationale: "break" },
+        ],
+      },
+      {
+        allocations: [
+          { beatID: "unknown", sectionCount: 1, rationale: "unknown" },
+          { beatID: "beat-1", sectionCount: 1, rationale: "setup" },
+          { beatID: "beat-2", sectionCount: 1, rationale: "break" },
+        ],
+      },
+      {
+        allocations: [
+          { beatID: "beat-1", sectionCount: 1.5, rationale: "not integer" },
+          { beatID: "beat-2", sectionCount: 1, rationale: "break" },
+        ],
+      },
+    ]
+  ) {
+    let invalidError = "";
+    try {
+      parseAndValidateAllocation(JSON.stringify(invalid), beats);
+    } catch (caught) {
+      invalidError = String(caught);
+    }
+    assertEquals(invalidError.length > 0, true);
+    assertEquals(invalidError.includes("default"), false);
+  }
+});
+
+Deno.test("existing beat coverage allows zero allocation and emits no duplicate", () => {
+  const requestWithExisting = {
+    ...sparseRequest,
+    existingSections: [{
+      title: "Already accepted",
+      summary: "The opening image is already established.",
+      storyArcBeatID: "beat-1",
+    }],
+  };
+  const plannerPrompt = buildAllocationPrompt(requestWithExisting as any);
+  assertEquals(plannerPrompt.user.includes("Already accepted"), true);
+  assertEquals(plannerPrompt.user.includes("existingSectionsByBeat"), true);
+
+  const allocation = parseAndValidateAllocation(
+    JSON.stringify({
+      allocations: [
+        { beatID: "beat-1", sectionCount: 0, rationale: "already covered" },
+        { beatID: "beat-2", sectionCount: 1, rationale: "new escalation" },
+      ],
+    }),
+    requestWithExisting.arcTemplate.beats,
+  );
+  const generated = {
+    suggestions: [{
+      title: "The Flight",
+      summary: "Douche escapes as monsters hunt humans.",
+      container: "scene",
+      pov: "thirdPersonLimited",
+      terminalBeat: "The shelter fails.",
+      storyArcBeatID: "beat-2",
+    }],
+  };
+  const result = validateSuggestions(
+    generated,
+    new Set(["beat-1", "beat-2"]),
+    allocation,
+  );
+  assertEquals(result.suggestions.length, 1);
+  assertEquals(
+    result.suggestions.some((s) => s.storyArcBeatID === "beat-1"),
+    false,
+  );
 });
 
 Deno.test("outline validation requires the exact allocation total and grounded content", () => {
