@@ -828,77 +828,92 @@ async function estimateRunCost(
   if (snapshotError || !snapshotRow?.snapshot_json) {
     throw new Error("project snapshot / prompt-pack data missing");
   }
+  if (sections.length === 0) return 0;
 
   const endpoint = `${SUPABASE_URL}/functions/v1/generate-story`;
-  // Keep the estimate fan-out below the database/runtime concurrency ceiling.
-  // A 45-section run must not launch 45 authenticated estimate requests at
-  // once: that can exhaust PostgREST workers and surface as a generic 502.
-  const estimateConcurrency = 4;
-  const estimates: number[] = [];
-  for (let i = 0; i < sections.length; i += estimateConcurrency) {
-    const batch = sections.slice(i, i + estimateConcurrency);
-    const batchEstimates = await Promise.all(batch.map(async (section) => {
-      const request = {
-        ...buildGenerateStoryRequest({
-          snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
-          section: section as {
-            id: string;
-            title: string;
-            summary: string;
-            container: string | null;
-            pov: string | null;
-            terminal_beat: string | null;
-          },
-          projectId: String(outline.local_project_id),
-          selectedModelId,
-          lengthMode: estimateLengthModeFromContainer(
-            section.container as string | null,
-          ),
-        }),
-        generationAction: "estimate",
-      };
-      let response: Response;
-      let result: Record<string, unknown> | null = null;
-      for (let attempt = 0;; attempt += 1) {
-        response = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Authorization": authHeader,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(request),
-        });
-        result = await response.json().catch(() => null) as
-          | Record<string, unknown>
-          | null;
+  const firstSection = sections[0];
+  const request = {
+    ...buildGenerateStoryRequest({
+      snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
+      section: firstSection as {
+        id: string;
+        title: string;
+        summary: string;
+        container: string | null;
+        pov: string | null;
+        terminal_beat: string | null;
+      },
+      projectId: String(outline.local_project_id),
+      selectedModelId,
+      lengthMode: estimateLengthModeFromContainer(
+        firstSection.container as string | null,
+      ),
+    }),
+    // One server-authoritative estimate request avoids a gateway burst for
+    // large Run All queues while retaining per-section container pricing.
+    generationAction: "estimate_bulk",
+    estimateSections: sections.map((section) => ({
+      id: String(section.id),
+      title: String(section.title ?? ""),
+      summary: String(section.summary ?? ""),
+      container: section.container == null
+        ? undefined
+        : String(section.container),
+      pov: section.pov == null ? undefined : String(section.pov),
+      terminalBeat: section.terminal_beat == null
+        ? undefined
+        : String(section.terminal_beat),
+    })),
+  };
 
-        // Estimate requests are intentionally non-billable, but the function
-        // gateway can still rate-limit a burst. Do not turn a transient 429
-        // into a terminal Run All failure; honor the server's retry hint once.
-        if (response.status !== 429 || attempt >= 1) break;
-        const retryAfter = Number(
-          result?.retryAfterSeconds ?? response.headers.get("Retry-After"),
-        );
-        const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter > 0
-          ? Math.min(Math.ceil(retryAfter), 120)
-          : 60;
-        await new Promise((resolve) =>
-          setTimeout(resolve, retryAfterSeconds * 1000)
-        );
-      }
-      const credits = Number(result?.estimatedCredits);
-      if (!response.ok || !Number.isFinite(credits)) {
-        throw new Error(
-          `generation cost estimate failed (${response.status}): ${
-            String(result?.errorMessage ?? result?.message ?? "unknown error")
-          }`,
-        );
-      }
-      return credits;
-    }));
-    estimates.push(...batchEstimates);
+  let response: Response;
+  let result: Record<string, unknown> | null = null;
+  for (let attempt = 0;; attempt += 1) {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Authorization": authHeader,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+    result = await response.json().catch(() => null) as
+      | Record<string, unknown>
+      | null;
+
+    // The bulk path should not normally hit the gateway burst limiter, but
+    // retain one bounded retry for a transient 429 during deployment traffic.
+    if (response.status !== 429 || attempt >= 1) break;
+    const retryAfter = Number(
+      result?.retryAfterSeconds ?? response.headers.get("Retry-After"),
+    );
+    const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter > 0
+      ? Math.min(Math.ceil(retryAfter), 120)
+      : 60;
+    await new Promise((resolve) =>
+      setTimeout(resolve, retryAfterSeconds * 1000)
+    );
   }
-  return estimates.reduce((sum, cost) => sum + cost, 0);
+
+  const estimates = Array.isArray(result?.estimates) ? result.estimates : [];
+  if (!response.ok || estimates.length !== sections.length) {
+    throw new Error(
+      `generation cost estimate failed (${response.status}): ${
+        String(
+          result?.errorMessage ?? result?.message ?? "invalid bulk estimate",
+        )
+      }`,
+    );
+  }
+  const costs = estimates.map((estimate) =>
+    Number((estimate as Record<string, unknown>).estimatedCredits)
+  );
+  if (costs.some((cost) => !Number.isFinite(cost))) {
+    throw new Error(
+      "generation cost estimate failed: invalid section estimate",
+    );
+  }
+  return costs.reduce((sum, cost) => sum + cost, 0);
 }
 
 async function collectSectionsToGenerate(
