@@ -176,4 +176,9 @@ Deno.test("run status endpoint exposes an exact idempotent replacement lookup", 
     true,
   );
   assertEquals(source.includes("maybeSingle()"), true);
+  assertEquals(source.includes('.eq("user_id", userData.user.id)'), true);
+  assertEquals(
+    source.includes("causing a false 404"),
+    true,
+  );
 });
