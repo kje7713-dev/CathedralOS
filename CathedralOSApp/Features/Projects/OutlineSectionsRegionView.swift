@@ -1424,6 +1424,33 @@ struct KickoffConfirmationSheet: View {
 
 }
 
+/// Project-scoped progress for the active durable Accept All job. Terminal
+/// states are intentionally handled by the coordinator's reconciliation/error
+/// lifecycle and are not rendered here.
+struct AcceptRunBanner: View {
+    let run: DataDurabilityCoordinator.AcceptRunMetadata
+
+    var body: some View {
+        HStack(spacing: CathedralTheme.Spacing.md) {
+            ProgressView()
+                .controlSize(.small)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Accepting suggested sections")
+                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                Text("\(run.sectionsDone)/\(max(run.sectionsTotal, 1)) sections accepted")
+                    .font(CathedralTheme.Typography.caption(12))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            Spacer()
+        }
+        .padding(CathedralTheme.Spacing.md)
+        .background(CathedralTheme.Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Accepting suggested sections, \(run.sectionsDone) of \(max(run.sectionsTotal, 1)) accepted")
+    }
+}
+
 /// Immediate feedback while the app syncs and queues the durable run.
 /// The server-backed ActiveRunBanner replaces this as soon as kickoff returns.
 struct GenerationStartingBanner: View {

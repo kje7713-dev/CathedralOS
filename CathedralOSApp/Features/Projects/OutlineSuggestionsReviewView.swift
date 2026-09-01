@@ -24,6 +24,7 @@ struct OutlineSuggestionsReviewView: View {
 
     private var activeAcceptRun: DataDurabilityCoordinator.AcceptRunMetadata? {
         guard let run = durabilityCoordinator.activeAcceptRun,
+              run.isActive,
               run.outlineID == outline.id else { return nil }
         return run
     }
