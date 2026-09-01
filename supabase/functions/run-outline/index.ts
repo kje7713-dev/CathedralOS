@@ -416,11 +416,20 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
     return errorResponse("unauthorized", "invalid JWT", 401);
   }
 
-  const runQuery = userClient
+  // Authenticate with the user client, then read through the service-role
+  // client with an explicit user_id filter. The chapter_runs SELECT policy
+  // depends on the related outlines row; immediately after kickoff that
+  // relationship can briefly lag the run insert, causing a false 404 even
+  // though the user's durable run exists and is already progressing.
+  const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false },
+  });
+  const runQuery = adminClient
     .from("chapter_runs")
     .select(
       "id, outline_id, start_parent_section_id, status, sections, credits_reserved, credits_actual, error, created_at, updated_at, completed_at",
-    );
+    )
+    .eq("user_id", userData.user.id);
   const { data: run, error: runErr } = runId
     ? await runQuery.eq("id", runId).single()
     : await runQuery
@@ -442,7 +451,7 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
     });
     const { data: durableRun } = await adminClient.from("chapter_runs")
       .select("worker_lease_until, next_retry_at")
-      .eq("id", runId).maybeSingle();
+      .eq("id", run.id).maybeSingle();
     const retryAt = durableRun?.next_retry_at
       ? new Date(durableRun.next_retry_at).getTime()
       : 0;
