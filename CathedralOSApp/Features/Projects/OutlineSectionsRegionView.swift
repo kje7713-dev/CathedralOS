@@ -248,6 +248,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // subscription still observes the latest completed sync.
         .onChange(of: durabilityCoordinator.outputRefreshRevision) { _, _ in
             refreshAllOutputs()
+            syncSectionsOrder()
         }
         .onChange(of: sectionsKey) { _, _ in
             syncSectionsOrder()

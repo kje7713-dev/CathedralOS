@@ -611,3 +611,54 @@ final class AcceptAllContractTests: XCTestCase {
         XCTAssertFalse(result.isSuccessful)
     }
 }
+
+// MARK: - Durable Accept All lifecycle metadata
+
+@MainActor
+final class AcceptAllLifecycleMetadataTests: XCTestCase {
+    func testPersistedAcceptRunMetadataRoundTripsAllLifecycleFields() throws {
+        let metadata = DataDurabilityCoordinator.AcceptRunMetadata(
+            runID: "e3192eb6-f9bf-470c-b8d9-a729cdb28585",
+            projectID: UUID(),
+            projectLineageID: UUID(),
+            outlineID: UUID(),
+            status: "running",
+            sectionsTotal: 6,
+            sectionsDone: 4,
+            sectionsFailed: 0,
+            error: nil
+        )
+
+        let encoded = try JSONEncoder().encode(metadata)
+        let decoded = try JSONDecoder().decode(
+            DataDurabilityCoordinator.AcceptRunMetadata.self,
+            from: encoded
+        )
+
+        XCTAssertEqual(decoded, metadata)
+        XCTAssertEqual(decoded.status, "running")
+        XCTAssertEqual(decoded.sectionsDone, 4)
+    }
+
+    func testFailedAcceptMetadataRetainsServerErrorForSurface() throws {
+        let metadata = DataDurabilityCoordinator.AcceptRunMetadata(
+            runID: "run-failed",
+            projectID: UUID(),
+            projectLineageID: UUID(),
+            outlineID: UUID(),
+            status: "failed",
+            sectionsTotal: 6,
+            sectionsDone: 6,
+            sectionsFailed: 0,
+            error: "Could not update project snapshot"
+        )
+
+        let decoded = try JSONDecoder().decode(
+            DataDurabilityCoordinator.AcceptRunMetadata.self,
+            from: JSONEncoder().encode(metadata)
+        )
+
+        XCTAssertEqual(decoded.status, "failed")
+        XCTAssertEqual(decoded.error, "Could not update project snapshot")
+    }
+}

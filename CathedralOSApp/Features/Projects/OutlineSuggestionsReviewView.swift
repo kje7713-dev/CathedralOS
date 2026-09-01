@@ -15,15 +15,26 @@ import CryptoKit
 /// Per-suggestion edit/delete is a follow-up (Phase 2 stretch).
 struct OutlineSuggestionsReviewView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator = .shared
 
     let outline: Outline
     let suggestions: [OutlineSuggestion]
     let project: StoryProject
     let modelContext: ModelContext
 
-    @State private var accepting = false
-    @State private var acceptingProgress: String = ""
-    @State private var acceptErrorMessage: String?
+    private var activeAcceptRun: DataDurabilityCoordinator.AcceptRunMetadata? {
+        guard let run = durabilityCoordinator.activeAcceptRun,
+              run.outlineID == outline.id else { return nil }
+        return run
+    }
+
+    private var accepting: Bool { activeAcceptRun != nil }
+    private var acceptingProgress: String {
+        guard let run = activeAcceptRun else { return "" }
+        return "\(run.sectionsDone)/\(max(run.sectionsTotal, 1)) accepted…"
+    }
+    private var acceptErrorMessage: String? { activeAcceptRun == nil ? durabilityCoordinator.acceptRunError : nil }
+    @State private var hasStartedAcceptance = false
 
     // Stable across view recreation so repeated taps/reopened sheets resolve
     // to the same server job instead of creating a second batch.
@@ -94,82 +105,54 @@ struct OutlineSuggestionsReviewView: View {
                 }
             }
         }
+        .task {
+            durabilityCoordinator.resumeAcceptAllIfNeeded(context: modelContext)
+            hasStartedAcceptance = activeAcceptRun != nil
+        }
+        .onChange(of: durabilityCoordinator.acceptRunRevision) { _, _ in
+            if hasStartedAcceptance && durabilityCoordinator.acceptRunError == nil {
+                dismiss()
+            }
+        }
         .alert("Accept All", isPresented: Binding(
             get: { acceptErrorMessage != nil },
-            set: { if !$0 { acceptErrorMessage = nil } }
+            set: { if !$0 { durabilityCoordinator.dismissAcceptRunError() } }
         )) {
-            Button("OK", role: .cancel) { acceptErrorMessage = nil }
+            Button("OK", role: .cancel) { durabilityCoordinator.dismissAcceptRunError() }
         } message: {
             Text(acceptErrorMessage ?? "An unknown error occurred.")
         }
     }
 
     private func acceptAll() {
-        guard !accepting else { return }
-        accepting = true
-        acceptingProgress = "Starting server job…"
-
-        Task {
-            guard let projectID = outline.project?.id else {
-                accepting = false
-                acceptingProgress = ""
-                acceptErrorMessage = "Outline has no project."
-                return
-            }
-
-            // Sync arc beats before submission so the server can preserve valid
-            // storyArcBeatID foreign keys. The actual Accept All loop is now
-            // durable and server-owned; leaving the app cannot stop it.
-            if let arc = project.storyArcs.first {
-                do { _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext) }
-                catch { /* embed-section safely nulls unavailable beat IDs */ }
-            }
-
-            do {
-                let service = SectionEmbedService()
-                guard let baseURL = SupabaseConfiguration.projectURL else {
-                    throw SectionEmbedError.notConfigured(reason: "Backend not configured.")
-                }
-                let edgeURL = baseURL.appendingPathComponent("functions/v1/accept-outline-sections")
-                let result = try await service.acceptAll(
-                    edgeFunctionURL: edgeURL,
-                    outlineID: outline.id,
-                    projectID: projectID,
-                    suggestions: suggestions,
-                    startingPosition: (outline.sections.map { $0.position }.max() ?? -1) + 1,
-                    idempotencyKey: acceptanceIdempotencyKey
-                )
-                // Only a completed server job has a snapshot that is safe to
-                // reconcile. A failed job may have created relational rows before
-                // its final snapshot commit failed; restoring the older snapshot
-                // here would erase that accepted state again.
-                guard result.isSuccessful else {
-                    let detail = result.error ??
-                        (result.sectionsFailed > 0
-                            ? "\(result.sectionsFailed) section(s) failed"
-                            : "The server could not commit the accepted sections.")
-                    throw SectionEmbedError.serverError(statusCode: 500, body: detail)
-                }
-                _ = await DataDurabilityCoordinator.shared.performCloudRestore(context: modelContext)
-
-                accepting = false
-                acceptingProgress = ""
-                dismiss()
-            } catch let error as SectionEmbedError {
-                // Do not restore an older snapshot after a failed Accept All.
-                // The server may have created accepted relational rows before a
-                // final snapshot commit failed.
-                accepting = false
-                acceptingProgress = ""
-                acceptErrorMessage = error.localizedDescription
-            } catch {
-                // Failed jobs are intentionally left untouched locally; a stale
-                // snapshot restore could erase rows the server already created.
-                accepting = false
-                acceptingProgress = ""
-                acceptErrorMessage = error.localizedDescription
-            }
+        guard !accepting,
+              let projectID = outline.project?.id,
+              let baseURL = SupabaseConfiguration.projectURL else { return }
+        hasStartedAcceptance = true
+        guard let arc = project.storyArcs.first else {
+            // Arc sync is best-effort and no longer owns the acceptance task.
+            beginAccept(projectID: projectID, baseURL: baseURL)
+            return
         }
+        Task {
+            do { _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext) }
+            catch { /* server safely nulls unavailable beat IDs */ }
+            beginAccept(projectID: projectID, baseURL: baseURL)
+        }
+    }
+
+    private func beginAccept(projectID: UUID, baseURL: URL) {
+        let edgeURL = baseURL.appendingPathComponent("functions/v1/accept-outline-sections")
+        durabilityCoordinator.beginAcceptAll(
+            edgeFunctionURL: edgeURL,
+            outlineID: outline.id,
+            projectID: projectID,
+            projectLineageID: project.stableLineageID,
+            suggestions: suggestions,
+            startingPosition: (outline.sections.map { $0.position }.max() ?? -1) + 1,
+            idempotencyKey: acceptanceIdempotencyKey,
+            context: modelContext
+        )
     }
 
     private struct Badge: View {

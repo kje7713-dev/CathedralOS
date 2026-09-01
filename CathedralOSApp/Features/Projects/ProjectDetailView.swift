@@ -235,6 +235,7 @@ struct ProjectDetailView: View {
         }
         .tint(CathedralTheme.Colors.accent)
         .task {
+            durabilityCoordinator.resumeAcceptAllIfNeeded(context: modelContext)
             durabilityCoordinator.resumePollingIfNeeded(
                 for: project.stableLineageID,
                 runOutlineService: RunOutlineService(),

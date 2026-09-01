@@ -176,6 +176,17 @@ final class DataDurabilityCoordinator: ObservableObject {
             logger.log("App launch in recovery mode — pulling cloud data to recovery store.")
         }
 
+        // A persisted Accept All job owns the project's snapshot until its
+        // terminal reconciliation finishes. Do not upload the older local
+        // snapshot during launch; the replacement-semantics trigger could
+        // delete accepted relational sections before the worker is restored.
+        if hasPersistedAcceptRun {
+            return await runOperation(kind: .appLaunch) {
+                try await self.outputSyncService.syncAll(in: context)
+                return "Cloud output sync complete; Accept All reconciliation is in progress."
+            }
+        }
+
         return await runOperation(kind: .appLaunch) {
             try await self.syncAllData(in: context)
             return "Cloud sync complete."
@@ -234,6 +245,161 @@ final class DataDurabilityCoordinator: ObservableObject {
             try await self.authService.refreshSession()
             return "Session refreshed."
         }
+    }
+
+    // MARK: - Durable Accept All polling
+
+    struct AcceptRunMetadata: Codable, Equatable {
+        let runID: String
+        let projectID: UUID
+        let projectLineageID: UUID
+        let outlineID: UUID
+        var status: String
+        var sectionsTotal: Int
+        var sectionsDone: Int
+        var sectionsFailed: Int
+        var error: String?
+    }
+
+    @Published private(set) var activeAcceptRun: AcceptRunMetadata?
+    @Published private(set) var acceptRunError: String?
+    @Published private(set) var acceptRunRevision: UInt = 0
+    private var acceptPollingTask: Task<Void, Never>?
+    private let acceptRunDefaults = UserDefaults.standard
+    private static let acceptRunKey = "cathedralos.acceptOutline.activeRun"
+
+    /// Starts the server-owned Accept All job. The task and all completion work
+    /// belong to this coordinator, so dismissing the review sheet cannot cancel
+    /// reconciliation. A second call while a run is active is ignored.
+    func beginAcceptAll(
+        edgeFunctionURL: URL,
+        outlineID: UUID,
+        projectID: UUID,
+        projectLineageID: UUID,
+        suggestions: [OutlineSuggestion],
+        startingPosition: Int,
+        idempotencyKey: String,
+        context: ModelContext,
+        service: SectionEmbedService = SectionEmbedService()
+    ) {
+        guard acceptPollingTask == nil, activeAcceptRun == nil else { return }
+        acceptRunError = nil
+        acceptPollingTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let queued = try await service.startAcceptAll(
+                    edgeFunctionURL: edgeFunctionURL,
+                    outlineID: outlineID,
+                    projectID: projectID,
+                    suggestions: suggestions,
+                    startingPosition: startingPosition,
+                    idempotencyKey: idempotencyKey
+                )
+                var metadata = AcceptRunMetadata(
+                    runID: queued.runID,
+                    projectID: projectID,
+                    projectLineageID: projectLineageID,
+                    outlineID: outlineID,
+                    status: queued.status,
+                    sectionsTotal: queued.sectionsTotal,
+                    sectionsDone: queued.sectionsDone,
+                    sectionsFailed: queued.sectionsFailed,
+                    error: queued.error
+                )
+                self.activeAcceptRun = metadata
+                self.persistAcceptRun(metadata)
+                await self.pollAcceptRun(context: context, service: service)
+            } catch {
+                self.acceptPollingTask = nil
+                self.activeAcceptRun = nil
+                self.acceptRunError = error.localizedDescription
+                self.acceptRunRevision &+= 1
+            }
+        }
+    }
+
+    /// Reattaches the live coordinator to a persisted job after app launch or
+    /// project navigation. Terminal completed jobs are reconciled immediately.
+    func resumeAcceptAllIfNeeded(context: ModelContext, service: SectionEmbedService = SectionEmbedService()) {
+        guard acceptPollingTask == nil else { return }
+        guard let data = acceptRunDefaults.data(forKey: Self.acceptRunKey),
+              let metadata = try? JSONDecoder().decode(AcceptRunMetadata.self, from: data)
+        else { return }
+        activeAcceptRun = metadata
+        acceptRunError = metadata.error
+        if metadata.status == "completed" || metadata.status == "failed" {
+            acceptPollingTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.finishAcceptRun(metadata, context: context)
+            }
+        } else {
+            acceptPollingTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.pollAcceptRun(context: context, service: service)
+            }
+        }
+    }
+
+    private func pollAcceptRun(context: ModelContext, service: SectionEmbedService) async {
+        guard var metadata = activeAcceptRun else { return }
+        while !Task.isCancelled {
+            do {
+                let result = try await service.acceptAllStatus(runID: metadata.runID)
+                metadata.status = result.status
+                metadata.sectionsTotal = result.sectionsTotal
+                metadata.sectionsDone = result.sectionsDone
+                metadata.sectionsFailed = result.sectionsFailed
+                metadata.error = result.error
+                activeAcceptRun = metadata
+                persistAcceptRun(metadata)
+                acceptRunError = nil
+                if result.status == "completed" || result.status == "failed" {
+                    await finishAcceptRun(metadata, context: context)
+                    return
+                }
+            } catch is CancellationError {
+                break
+            } catch {
+                // Keep the persisted running metadata and continue retrying.
+                // A later project/app reopen can also reattach if the process
+                // was suspended or terminated; a transient poll failure must
+                // never orphan the server-owned job.
+                acceptRunError = error.localizedDescription
+            }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        }
+        acceptPollingTask = nil
+    }
+
+    private func finishAcceptRun(_ metadata: AcceptRunMetadata, context: ModelContext) async {
+        if metadata.status == "completed" && metadata.sectionsFailed == 0 && metadata.error == nil {
+            let result = await performCloudRestore(context: context)
+            if let error = result.errorMessage {
+                acceptRunError = error
+            }
+        } else {
+            acceptRunError = metadata.error ??
+                (metadata.sectionsFailed > 0 ? "\(metadata.sectionsFailed) section(s) failed." : "Accept All failed.")
+        }
+        acceptRunDefaults.removeObject(forKey: Self.acceptRunKey)
+        activeAcceptRun = nil
+        acceptPollingTask = nil
+        acceptRunRevision &+= 1
+        outputRefreshRevision &+= 1
+        NotificationCenter.default.post(name: .cathedralOSGenerationOutputsChanged, object: nil)
+    }
+
+    func dismissAcceptRunError() {
+        acceptRunError = nil
+    }
+
+    private var hasPersistedAcceptRun: Bool {
+        acceptRunDefaults.data(forKey: Self.acceptRunKey) != nil
+    }
+
+    private func persistAcceptRun(_ metadata: AcceptRunMetadata) {
+        guard let data = try? JSONEncoder().encode(metadata) else { return }
+        acceptRunDefaults.set(data, forKey: Self.acceptRunKey)
     }
 
     // MARK: - Run polling

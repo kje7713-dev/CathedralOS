@@ -302,9 +302,10 @@ private struct AcceptOutlineJobResponse: Codable {
 }
 
 extension SectionEmbedService {
-    /// Submit the complete Accept All batch to the durable server-side worker.
-    /// The server owns section creation and embedding; the caller only polls.
-    func acceptAll(
+    /// Submit the complete Accept All batch and return as soon as the durable
+    /// server job has an id. Polling is intentionally separate so an app-level
+    /// coordinator, not a review sheet, owns the job lifecycle.
+    func startAcceptAll(
         edgeFunctionURL: URL,
         outlineID: UUID,
         projectID: UUID,
@@ -344,41 +345,69 @@ extension SectionEmbedService {
         let (data, response) = try await performRequest(request)
         try checkAcceptStatus(response: response, data: data)
         let queued = try decodeAcceptJob(data)
-        return try await pollAcceptAll(runID: queued.run_id, client: client, token: userAccessToken)
+        return AcceptOutlineSectionsResult(
+            runID: queued.run_id,
+            status: queued.status,
+            sectionsTotal: queued.sections_total ?? 0,
+            sectionsDone: queued.sections_done ?? 0,
+            sectionsFailed: queued.sections_failed ?? 0,
+            error: queued.error
+        )
     }
 
-    private func pollAcceptAll(
-        runID: String,
-        client: SupabaseBackendClient,
-        token: String
+    /// Backwards-compatible convenience for callers that still want to wait
+    /// for the terminal result.
+    func acceptAll(
+        edgeFunctionURL: URL,
+        outlineID: UUID,
+        projectID: UUID,
+        suggestions: [OutlineSuggestion],
+        startingPosition: Int,
+        idempotencyKey: String
     ) async throws -> AcceptOutlineSectionsResult {
-        var currentToken = token
+        let queued = try await startAcceptAll(
+            edgeFunctionURL: edgeFunctionURL,
+            outlineID: outlineID,
+            projectID: projectID,
+            suggestions: suggestions,
+            startingPosition: startingPosition,
+            idempotencyKey: idempotencyKey
+        )
+        return try await pollAcceptAll(runID: queued.runID)
+    }
+
+    /// Fetch one durable Accept All status. This is one request; the caller
+    /// controls polling and may persist the returned status after every poll.
+    func acceptAllStatus(runID: String) async throws -> AcceptOutlineSectionsResult {
+        let client: SupabaseBackendClient
+        do { client = try SupabaseBackendClient() }
+        catch { throw SectionEmbedError.notConfigured(reason: String(describing: error)) }
+        let currentToken = try await validAccessToken()
+        var components = URLComponents(url: client.edgeFunctionURL(path: "accept-outline-sections"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "run_id", value: runID)]
+        guard let statusURL = components?.url else {
+            throw SectionEmbedError.invalidResponse("Could not construct Accept All status URL")
+        }
+        var request = client.authorizedRequest(for: statusURL, userAccessToken: currentToken)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        let (data, response) = try await performRequest(request)
+        try checkAcceptStatus(response: response, data: data)
+        let job = try decodeAcceptJob(data)
+        return AcceptOutlineSectionsResult(
+            runID: job.run_id,
+            status: job.status,
+            sectionsTotal: job.sections_total ?? 0,
+            sectionsDone: job.sections_done ?? 0,
+            sectionsFailed: job.sections_failed ?? 0,
+            error: job.error
+        )
+    }
+
+    private func pollAcceptAll(runID: String) async throws -> AcceptOutlineSectionsResult {
         while !Task.isCancelled {
-            // A previous poll may have refreshed an expired JWT. Resolve the
-            // latest token before every request so the next poll does not
-            // retry with the original stale token.
-            currentToken = try await validAccessToken()
-            var components = URLComponents(url: client.edgeFunctionURL(path: "accept-outline-sections"), resolvingAgainstBaseURL: false)
-            components?.queryItems = [URLQueryItem(name: "run_id", value: runID)]
-            guard let statusURL = components?.url else {
-                throw SectionEmbedError.invalidResponse("Could not construct Accept All status URL")
-            }
-            var request = client.authorizedRequest(for: statusURL, userAccessToken: currentToken)
-            request.httpMethod = "GET"
-            request.timeoutInterval = 30
-            let (data, response) = try await performRequest(request)
-            try checkAcceptStatus(response: response, data: data)
-            let job = try decodeAcceptJob(data)
-            if job.status == "completed" || job.status == "failed" {
-                return AcceptOutlineSectionsResult(
-                    runID: job.run_id,
-                    status: job.status,
-                    sectionsTotal: job.sections_total ?? 0,
-                    sectionsDone: job.sections_done ?? 0,
-                    sectionsFailed: job.sections_failed ?? 0,
-                    error: job.error
-                )
-            }
+            let result = try await acceptAllStatus(runID: runID)
+            if result.status == "completed" || result.status == "failed" { return result }
             try await Task.sleep(nanoseconds: 3_000_000_000)
         }
         throw SectionEmbedError.networkError("Accept All run was cancelled")
