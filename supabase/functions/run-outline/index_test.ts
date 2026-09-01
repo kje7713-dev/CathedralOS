@@ -2,6 +2,7 @@ import {
   assertEquals,
   assertExists,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { prepareCreditReservation } from "./_credit_preflight.ts";
 import {
   buildGenerateStoryRequest,
   generationOutputId,
@@ -29,6 +30,35 @@ const snapshot = {
     selectedMotifIDs: [],
   }],
 };
+
+const entitlement = {
+  user_id: "user-1",
+  plan_name: "free",
+  is_pro: false,
+  monthly_credit_allowance: 100,
+  purchased_credit_balance: 0,
+  current_period_start: null,
+  current_period_end: null,
+  entitlement_source: "test",
+  updated_at: new Date().toISOString(),
+};
+
+Deno.test("rounds fractional bulk estimates up for integer run reservations", () => {
+  const result = prepareCreditReservation(48.703689999999995, entitlement);
+  assertEquals(result.reservedCredits, 49);
+  assertEquals(result.check.allowed, true);
+  assertEquals(result.check.requiredCredits, 49);
+});
+
+Deno.test("uses the rounded reserve for insufficient-credit preflight", () => {
+  const result = prepareCreditReservation(48.703689999999995, {
+    ...entitlement,
+    monthly_credit_allowance: 48,
+  });
+  assertEquals(result.reservedCredits, 49);
+  assertEquals(result.check.allowed, false);
+  assertEquals(result.check.requiredCredits, 49);
+});
 
 Deno.test("maps a snapshot and section to generate-story's canonical request", () => {
   const request = buildGenerateStoryRequest({
@@ -106,6 +136,13 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   assertEquals(source.includes('generationAction: "estimate_bulk"'), true);
   assertEquals(source.includes('status: "queued"'), true);
   assertEquals(source.includes("prepareRun("), true);
+  assertEquals(source.includes("credits_reserved: reservedCredits"), true);
+  assertEquals(source.includes("needed ${reservedCredits}"), true);
+  assertEquals(
+    source.indexOf("queueContinuation(runId, authHeader)") >
+      source.indexOf("if (!check.allowed)"),
+    true,
+  );
 });
 
 Deno.test("missing-run recovery is definitive while transient errors remain retryable", async () => {
@@ -116,6 +153,17 @@ Deno.test("missing-run recovery is definitive while transient errors remain retr
   assertEquals(source.includes("clearPersistedRunStatus"), true);
   assertEquals(source.includes("reconcileRunOutputs"), true);
   assertEquals(source.includes("generation continues on the server"), true);
+  assertEquals(source.includes("installRunStatus"), true);
+});
+
+Deno.test("terminal kickoff status is installed before reconciliation", async () => {
+  const source = await Deno.readTextFile(
+    "./CathedralOSApp/Features/Projects/OutlineSectionsRegionView.swift",
+  );
+  const install = source.indexOf("durabilityCoordinator.installRunStatus(");
+  const reconcile = source.indexOf("performManualSyncAll", install);
+  assertEquals(install >= 0, true);
+  assertEquals(reconcile > install, true);
 });
 
 Deno.test("run status endpoint exposes an exact idempotent replacement lookup", async () => {
