@@ -48,6 +48,7 @@
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { verifyRunOutlineToken } from "../_shared/run-outline-auth.ts";
 import {
   buildProviderFromEnv,
   LLMContentBlock,
@@ -63,6 +64,7 @@ import {
   SupabaseCreditStore,
 } from "./_credits.ts";
 import {
+  type RateLimitRequestClass,
   type RateLimitStore,
   SupabaseRateLimitStore,
 } from "./_rate_limiter.ts";
@@ -2404,6 +2406,58 @@ async function handler(
     ? "generate"
     : body.generationAction as GenerationAction;
 
+  // Run All is a durable, credit-authorized job. Validate its ownership and
+  // section membership before treating its per-section calls as job work
+  // rather than interactive requests. A caller cannot obtain the exemption by
+  // merely sending an arbitrary run_id.
+  let requestClass: RateLimitRequestClass = "interactive";
+  const durableRunId = typeof body.run_id === "string"
+    ? body.run_id.trim()
+    : "";
+  if (durableRunId && !isEstimate) {
+    const durableRunToken = typeof body.run_outline_token === "string"
+      ? body.run_outline_token
+      : "";
+    const tokenValid = await verifyRunOutlineToken(
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+      durableRunToken,
+      userId,
+      durableRunId,
+      String(body.outline_section_id ?? ""),
+    );
+    const { data: durableRun, error: durableRunError } = adminClient
+      ? await adminClient
+        .from("chapter_runs")
+        .select("id, status, user_id, sections")
+        .eq("id", durableRunId)
+        .eq("user_id", userId)
+        .maybeSingle()
+      : { data: null, error: new Error("admin client unavailable") };
+    const runSections = Array.isArray(durableRun?.sections)
+      ? durableRun.sections as Array<Record<string, unknown>>
+      : [];
+    const sectionBelongsToRun = runSections.some((section) =>
+      String(section.id ?? "") === String(body.outline_section_id ?? "")
+    );
+    if (
+      durableRunError ||
+      !tokenValid ||
+      !durableRun ||
+      (durableRun.status !== "queued" && durableRun.status !== "running") ||
+      !sectionBelongsToRun
+    ) {
+      return corsResponse(
+        JSON.stringify({
+          status: "failed",
+          errorCode: "invalid_run",
+          errorMessage: "Invalid or unauthorized Run All request",
+        }),
+        { status: 403 },
+      );
+    }
+    requestClass = "durable_run";
+  }
+
   if (!ALLOWED_LENGTH_MODES.includes(body.generationLengthMode as LengthMode)) {
     return corsResponse(
       JSON.stringify({
@@ -2730,7 +2784,7 @@ async function handler(
   // back off appropriately.
   // -------------------------------------------------------------------------
 
-  const rateLimitCheck = await limiter.checkLimits(userId);
+  const rateLimitCheck = await limiter.checkLimits(userId, requestClass);
   if (!rateLimitCheck.allowed) {
     await limiter.recordRequest(userId, {
       requestId,

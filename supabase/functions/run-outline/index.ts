@@ -25,6 +25,7 @@
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createRunOutlineToken } from "../_shared/run-outline-auth.ts";
 import {
   getCreditCost,
   type LengthMode,
@@ -614,11 +615,20 @@ async function runOutline(
         snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
         section,
         projectId,
+        runId: run.id,
         selectedModelId: (run.model as string | null) ?? undefined,
         lengthMode: estimateLengthModeFromContainer(
           section.container as string | null,
         ),
       });
+      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+      (generationRequest as Record<string, unknown>).run_outline_token =
+        await createRunOutlineToken(
+          serviceRoleKey,
+          String(run.user_id),
+          run.id,
+          String(section.id),
+        );
       const result = await callGenerateStory(generationRequest, authHeader);
       await updateSectionStatus(adminClient, runId, {
         ...section,

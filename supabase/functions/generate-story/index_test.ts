@@ -62,6 +62,7 @@ import {
   type RateLimitResult,
   type RateLimitStore,
   type RequestLogParams,
+  SupabaseRateLimitStore,
 } from "./_rate_limiter.ts";
 import {
   MAX_PREVIOUS_OUTPUT_CHARS,
@@ -291,7 +292,10 @@ function makeMockRateLimitStore(
   };
 
   const store: RateLimitStore = {
-    checkLimits(_userId: string): Promise<RateLimitResult> {
+    checkLimits(
+      _userId: string,
+      _requestClass?: "interactive" | "durable_run",
+    ): Promise<RateLimitResult> {
       state.checkLimitsCalls++;
       return Promise.resolve(state.limitResult);
     },
@@ -925,6 +929,20 @@ Deno.test("MockRateLimitStore: checkLimits returns configured result", async () 
   const result = await store.checkLimits(FAKE_USER_ID);
   assertEquals(result.allowed, false);
   assertEquals(result.retryAfterSeconds, 60);
+});
+
+Deno.test("durable_run rate-limit class bypasses interactive windows", async () => {
+  let dbCalls = 0;
+  const store = new SupabaseRateLimitStore({
+    from() {
+      dbCalls++;
+      throw new Error("durable runs must not query interactive limits");
+    },
+  });
+  assertEquals(await store.checkLimits(FAKE_USER_ID, "durable_run"), {
+    allowed: true,
+  });
+  assertEquals(dbCalls, 0);
 });
 
 Deno.test("MockRateLimitStore: recordRequest captures params", async () => {

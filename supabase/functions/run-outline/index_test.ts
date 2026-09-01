@@ -72,12 +72,14 @@ Deno.test("maps a snapshot and section to generate-story's canonical request", (
       terminal_beat: "The door locks.",
     },
     projectId: "project-1",
+    runId: "run-1",
     selectedModelId: "model-1",
     lengthMode: "long",
   });
   assertEquals(request.generationAction, "generate");
   assertEquals(request.generationLengthMode, "long");
   assertEquals(request.selectedModelId, "model-1");
+  assertEquals(request.run_id, "run-1");
   assertEquals(request.container, "scene");
   assertEquals(request.pov, "firstPerson");
   assertEquals(request.terminalBeat, "The door locks.");
