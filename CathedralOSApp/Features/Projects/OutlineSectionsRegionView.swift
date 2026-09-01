@@ -789,6 +789,13 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             // Keep the terminal branch for backwards compatibility with an
             // older deployed function during rollout.
             if response.status == "completed" || response.status == "failed" {
+                // Preserve a terminal kickoff response before reconciliation.
+                // The server run ID now has a durable project-scoped status,
+                // including its failure message, even if sync finds no outputs.
+                durabilityCoordinator.installRunStatus(
+                    initialStatus,
+                    for: project.stableLineageID
+                )
                 DiagnosticLog.write("kickoff: run finished during kickoff (\(response.status)); triggering syncAll")
                 _ = await DataDurabilityCoordinator.shared.performManualSyncAll(context: modelContext)
                 DiagnosticLog.write("kickoff: syncAll complete")

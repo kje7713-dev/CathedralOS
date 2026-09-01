@@ -26,8 +26,6 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
-  availableCredits,
-  checkCredits,
   getCreditCost,
   type LengthMode,
   type UserEntitlement,
@@ -37,6 +35,7 @@ import {
   generationOutputId,
   projectSnapshotLookupFilter,
 } from "./_generation_request.ts";
+import { prepareCreditReservation } from "./_credit_preflight.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -363,12 +362,15 @@ async function prepareRun(
     await markRunFailed(adminClient, runId, "could not load user entitlement");
     return;
   }
-  const check = checkCredits(entData as UserEntitlement, estimatedCost);
+  const { reservedCredits, check } = prepareCreditReservation(
+    estimatedCost,
+    entData as UserEntitlement,
+  );
   if (!check.allowed) {
     await adminClient.from("chapter_runs").update({
       status: "failed",
       error:
-        `insufficient_credits: needed ${estimatedCost}, have ${check.availableCredits}`,
+        `insufficient_credits: needed ${reservedCredits}, have ${check.availableCredits}`,
       credits_reserved: 0,
       completed_at: new Date().toISOString(),
       worker_lease_until: null,
@@ -378,7 +380,7 @@ async function prepareRun(
 
   const { error: startError } = await adminClient.from("chapter_runs").update({
     status: "running",
-    credits_reserved: estimatedCost,
+    credits_reserved: reservedCredits,
     worker_lease_until: null,
   }).eq("id", runId).eq("status", "queued");
   if (startError) {

@@ -525,6 +525,16 @@ final class DataDurabilityCoordinator: ObservableObject {
         callback(context)
     }
 
+    /// Install a server status before terminal kickoff reconciliation. This
+    /// preserves immediate completed/failed responses as the project's last
+    /// run status instead of allowing sync reconciliation to hide them.
+    func installRunStatus(_ status: RunOutlineStatus, for projectLineageID: UUID) {
+        activeRunProjectLineageID = projectLineageID
+        activeRunStatus = status
+        activeRunPollingError = nil
+        persistRunStatus(status, for: projectLineageID)
+    }
+
     /// Resume a persisted run when a project is reopened after the view or app
     /// was suspended. Terminal statuses remain available as the last-run card.
     func resumePollingIfNeeded(
