@@ -64,11 +64,18 @@ struct OutlineSectionsRegionView: View {
     @Bindable var project: StoryProject
     let modelContext: ModelContext
     @Binding var generationLaunch: OutlineGenerationLaunch?
+    let onGenerationCompleted: (() -> Void)?
 
-    init(project: StoryProject, modelContext: ModelContext, generationLaunch: Binding<OutlineGenerationLaunch?> = .constant(nil)) {
+    init(
+        project: StoryProject,
+        modelContext: ModelContext,
+        generationLaunch: Binding<OutlineGenerationLaunch?> = .constant(nil),
+        onGenerationCompleted: (() -> Void)? = nil
+    ) {
         self.project = project
         self.modelContext = modelContext
         self._generationLaunch = generationLaunch
+        self.onGenerationCompleted = onGenerationCompleted
     }
 
     // PR #338: observe DataDurabilityCoordinator so the @Published flips from
@@ -90,6 +97,7 @@ struct OutlineSectionsRegionView: View {
     @State private var readerSection: OutlineSection?
     @State private var generationTarget: OutlineGenerationTarget?
     @State private var isKickingOff = false
+    @State private var isGenerationStarting = false
     @State private var runOutlineError: String?
     // PR #341: bypass SwiftData's @Query auto-refresh path. The @Query has been
     // failing silently to refresh for programmatic inserts (a known SwiftData
@@ -197,6 +205,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 
     var body: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+            if isGenerationStarting && projectRunStatus == nil {
+                GenerationStartingBanner()
+            }
             if let status = projectRunStatus {
                 ActiveRunBanner(
                     status: status,
@@ -477,12 +488,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     @ViewBuilder
-    private func sectionRowContent(_ section: OutlineSection, onOpen: (() -> Void)? = nil) -> some View {
+    private func sectionRowContent(_ section: OutlineSection) -> some View {
         OutlineSectionRow(
             section: section,
             arcBeatLabel: arcBeatLabel(for: section),
             outputs: outputsBySection[section.id] ?? [],
-            onOpen: onOpen,
             onEdit: { editingSection = section },
             onGenerate: {
                 if let outline = currentOutline {
@@ -529,10 +539,16 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         List {
             ForEach(sectionsOrder, id: \.id) { section in
                 if section.parent == nil {
-                    // Keep chapter navigation on the title only. The row contains
-                    // independent Edit/Accept/Generate buttons; wrapping the whole
-                    // row in another Button makes the nested Generate tap unreliable.
-                    sectionRowContent(section, onOpen: { readerSection = section })
+                    // Chapter row (top-level) -- wrap in NavigationLink to chapter reader.
+                    // .buttonStyle(.plain) is required so the List's drag gesture (for
+                    // .onMove reorder) can win against the NavigationLink's default
+                    // button-style tap handler. Without it, drag-to-reorder is dead.
+                    Button {
+                        readerSection = section
+                    } label: {
+                        sectionRowContent(section)
+                    }
+                    .buttonStyle(.plain)
                 } else {
                     // Sub-section row -- current behavior (tap to edit)
                     sectionRowContent(section)
@@ -731,6 +747,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         let outlineID = target.outlineID
         DiagnosticLog.write("kickoff: outlineID=\(outlineID.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
         isKickingOff = true
+        isGenerationStarting = true
         defer { isKickingOff = false }
         do {
             // Sync the outline to the cloud before kickoff. The edge function
@@ -775,6 +792,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 DiagnosticLog.write("kickoff: syncAll complete")
                 refreshAllOutputs()
                 recordEyeDebug(context: modelContext)
+                isGenerationStarting = false
+                if scope == "from_here" && response.status == "completed" {
+                    onGenerationCompleted?()
+                }
             } else {
                 // Long-running kickoff (multi-section runs that exceed the
                 // 180s kickoff timeout, or async backend). Fall back to the
@@ -788,6 +809,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     onSyncCompleted: { [self] context in
                         self.refreshAllOutputs()
                         self.recordEyeDebug(context: context)
+                        self.isGenerationStarting = false
+                        if scope == "from_here",
+                           self.durabilityCoordinator.activeRunStatus?.status == "completed" {
+                            self.onGenerationCompleted?()
+                        }
                     }
                 )
             }
@@ -813,12 +839,15 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     )
                     return
                 } catch {
+                    isGenerationStarting = false
                     runOutlineError = error.localizedDescription
                     return
                 }
             }
+            isGenerationStarting = false
             runOutlineError = error.errorDescription
         } catch {
+            isGenerationStarting = false
             runOutlineError = error.localizedDescription
         }
     }
@@ -837,7 +866,6 @@ struct OutlineSectionRow: View {
     @Bindable var section: OutlineSection
     let arcBeatLabel: String?
     var outputs: [GenerationOutput] = []
-    var onOpen: (() -> Void)? = nil
     var onEdit: (() -> Void)? = nil
     var onGenerate: (() -> Void)? = nil
     var onAccept: (() async -> Void)? = nil
@@ -848,23 +876,11 @@ struct OutlineSectionRow: View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
             // Row 1: Title (full card width, no position number competing for space).
             // Wraps to 2 lines if needed.
-            if let onOpen {
-                Button(action: onOpen) {
-                    Text(section.title.isEmpty ? "Untitled section" : section.title)
-                        .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open chapter: \(section.title.isEmpty ? "Untitled section" : section.title)")
-            } else {
-                Text(section.title.isEmpty ? "Untitled section" : section.title)
-                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            Text(section.title.isEmpty ? "Untitled section" : section.title)
+                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             // Row 2: Status badge + beat label (own row, left-aligned, Spacer pushes
             // any remaining width to the right).
@@ -960,12 +976,12 @@ struct OutlineSectionRow: View {
                 }
                 if let onGenerate {
                     Button(action: onGenerate) {
-                        Label("Generate now", systemImage: "sparkles")
-                            .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                        Image(systemName: "sparkles")
+                            .font(CathedralTheme.Typography.body(15, weight: .semibold))
                             .foregroundStyle(.tint)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityLabel("Generate now for section")
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Generate section")
                 }
             }
         }
@@ -1388,6 +1404,28 @@ struct KickoffConfirmationSheet: View {
         isEstimating = false
     }
 
+}
+
+/// Immediate feedback while the app syncs and queues the durable run.
+/// The server-backed ActiveRunBanner replaces this as soon as kickoff returns.
+struct GenerationStartingBanner: View {
+    var body: some View {
+        HStack(spacing: CathedralTheme.Spacing.md) {
+            ProgressView()
+                .controlSize(.small)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Starting generation")
+                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                Text("Preparing the run…")
+                    .font(CathedralTheme.Typography.caption(12))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            Spacer()
+        }
+        .padding(CathedralTheme.Spacing.md)
+        .background(CathedralTheme.Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
 }
 
 /// Progress banner shown at the top of the OutlineSectionsRegionView while
