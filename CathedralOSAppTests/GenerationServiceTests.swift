@@ -640,6 +640,29 @@ final class AcceptAllLifecycleMetadataTests: XCTestCase {
         XCTAssertEqual(decoded.sectionsDone, 4)
     }
 
+    func testPendingAcceptMetadataIsActiveAndTerminalStatesAreNot() {
+        let metadata = DataDurabilityCoordinator.AcceptRunMetadata(
+            runID: "run-pending",
+            projectID: UUID(),
+            projectLineageID: UUID(),
+            outlineID: UUID(),
+            status: "pending",
+            sectionsTotal: 45,
+            sectionsDone: 2,
+            sectionsFailed: 0,
+            error: nil
+        )
+
+        XCTAssertEqual(metadata.typedStatus, .pending)
+        XCTAssertTrue(metadata.isActive)
+        XCTAssertFalse(metadata.isTerminal)
+
+        var completed = metadata
+        completed.status = "completed"
+        XCTAssertFalse(completed.isActive)
+        XCTAssertTrue(completed.isTerminal)
+    }
+
     func testFailedAcceptMetadataRetainsServerErrorForSurface() throws {
         let metadata = DataDurabilityCoordinator.AcceptRunMetadata(
             runID: "run-failed",

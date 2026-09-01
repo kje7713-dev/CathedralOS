@@ -446,6 +446,9 @@ struct ProjectDetailView: View {
             CathedralSectionHeader("Your path")
             CathedralCard {
                 VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+                    if let acceptRun = projectAcceptRun {
+                        AcceptRunBanner(run: acceptRun)
+                    }
                     if isRunAllStarting {
                         GenerationStartingBanner()
                     } else if let status = projectRunStatus {
@@ -554,6 +557,13 @@ struct ProjectDetailView: View {
         case .export:
             showKindleExport = true
         }
+    }
+
+    private var projectAcceptRun: DataDurabilityCoordinator.AcceptRunMetadata? {
+        guard let run = durabilityCoordinator.activeAcceptRun,
+              run.isActive,
+              run.projectLineageID == project.stableLineageID else { return nil }
+        return run
     }
 
     private var projectRunStatus: RunOutlineStatus? {

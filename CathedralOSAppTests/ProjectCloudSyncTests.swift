@@ -1182,8 +1182,16 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
         let localProjectID = UUID()
         let project = StoryProject(name: "Test Story")
+        let outline = Outline(name: "Outline")
+        let section = OutlineSection(position: 0, title: "Accepted section", summary: "Cloud section")
+        section.status = "accepted"
+        outline.sections = [section]
+        outline.project = project
+        project.outlines = [outline]
         let payload = ProjectSchemaTemplateBuilder.build(project: project)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
+        let cloudOutlineID = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(payload.outlines.first?.id)))
+        let cloudSectionID = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(payload.outlines.first?.sections.first?.id)))
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
@@ -1195,14 +1203,42 @@ final class ProjectCloudSyncTests: XCTestCase {
             session: session,
             configuration: .makeForTesting()
         )
-        let context = ModelContext(try makeProjectContainer())
-        let insertReport = try await service.restoreAllProjects(into: context)
-        XCTAssertTrue(insertReport.summaryMessage.contains("Projects restored: 1"), insertReport.summaryMessage)
-        XCTAssertTrue(insertReport.summaryMessage.contains("Projects updated: 0"), insertReport.summaryMessage)
+        let container = try makeProjectContainer()
+        let contextA = ModelContext(container)
+        let localProject = StoryProject(name: "Local placeholder")
+        localProject.id = localProjectID
+        contextA.insert(localProject)
+        try contextA.save()
 
-        let updateReport = try await service.restoreAllProjects(into: context)
+        let insertReport = try await service.restoreAllProjects(into: contextA)
+        XCTAssertTrue(insertReport.summaryMessage.contains("Projects restored: 0"), insertReport.summaryMessage)
+        XCTAssertTrue(insertReport.summaryMessage.contains("Projects updated: 1"), insertReport.summaryMessage)
+        try contextA.save()
+
+        // The original regression only appeared after the restore context was
+        // released. A fresh context must see the complete persisted graph.
+        let contextB = ModelContext(container)
+        let restoredProject = try XCTUnwrap(try contextB.fetch(FetchDescriptor<StoryProject>()).first)
+        XCTAssertEqual(restoredProject.outlines.count, 1)
+        let restoredOutline = try XCTUnwrap(restoredProject.outlines.first)
+        XCTAssertEqual(restoredOutline.id, cloudOutlineID)
+        XCTAssertEqual(restoredOutline.sections.count, 1)
+        let restoredSection = try XCTUnwrap(restoredOutline.sections.first)
+        XCTAssertEqual(restoredSection.id, cloudSectionID)
+        XCTAssertEqual(restoredSection.status, "accepted")
+        XCTAssertEqual(restoredSection.title, "Accepted section")
+        XCTAssertEqual(restoredSection.summary, "Cloud section")
+
+        let updateReport = try await service.restoreAllProjects(into: contextB)
         XCTAssertTrue(updateReport.summaryMessage.contains("Projects restored: 0"), updateReport.summaryMessage)
         XCTAssertTrue(updateReport.summaryMessage.contains("Projects updated: 1"), updateReport.summaryMessage)
+        try contextB.save()
+        XCTAssertEqual(try contextB.fetch(FetchDescriptor<StoryProject>()).count, 1)
+        XCTAssertEqual(try contextB.fetch(FetchDescriptor<Outline>()).count, 1)
+        XCTAssertEqual(try contextB.fetch(FetchDescriptor<OutlineSection>()).count, 1)
+        let idempotentProject = try XCTUnwrap(try contextB.fetch(FetchDescriptor<StoryProject>()).first)
+        XCTAssertEqual(idempotentProject.outlines.count, 1)
+        XCTAssertEqual(idempotentProject.outlines.first?.sections.count, 1)
     }
 
     @MainActor
@@ -1570,6 +1606,8 @@ private final class ThrowingProjectBackupDeletionService: ProjectBackupDeletionS
     private func makeProjectContainer() throws -> ModelContainer {
         let schema = Schema([
             StoryProject.self,
+            Outline.self,
+            OutlineSection.self,
             ProjectSetting.self,
             StoryCharacter.self,
             StorySpark.self,

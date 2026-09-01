@@ -1621,14 +1621,24 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         )
         for payload in payloads {
             let parsedID = payload.id.flatMap(UUID.init(uuidString:))
-            let outline = parsedID.flatMap { existingByID.removeValue(forKey: $0) } ?? Outline()
-            if let parsedID { outline.id = parsedID }
+            let outline: Outline
+            if let parsedID, let existing = existingByID.removeValue(forKey: parsedID) {
+                outline = existing
+            } else {
+                let newOutline = Outline()
+                if let parsedID { newOutline.id = parsedID }
+                context.insert(newOutline)
+                outline = newOutline
+            }
             if let storyArcIDString = payload.storyArcID,
                let storyArcID = UUID(uuidString: storyArcIDString) {
                 outline.storyArcID = storyArcID
             }
             outline.name = payload.name
             outline.project = project
+            if !project.outlines.contains(where: { $0.id == outline.id }) {
+                project.outlines.append(outline)
+            }
             reconcileOutlineSections(payload.sections, for: outline, in: context)
         }
     }
@@ -1645,12 +1655,19 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         )
         for payload in payloads {
             let parsedID = payload.id.flatMap(UUID.init(uuidString:))
-            let section = parsedID.flatMap { existingByID.removeValue(forKey: $0) } ?? OutlineSection(
-                position: payload.position,
-                title: payload.title,
-                summary: payload.summary
-            )
-            if let parsedID { section.id = parsedID }
+            let section: OutlineSection
+            if let parsedID, let existing = existingByID.removeValue(forKey: parsedID) {
+                section = existing
+            } else {
+                let newSection = OutlineSection(
+                    position: payload.position,
+                    title: payload.title,
+                    summary: payload.summary
+                )
+                if let parsedID { newSection.id = parsedID }
+                context.insert(newSection)
+                section = newSection
+            }
             section.position = payload.position
             section.title = payload.title
             section.summary = payload.summary
@@ -1664,6 +1681,9 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             }
             // parentID deferred (grouping is a follow-up).
             section.outline = outline
+            if !outline.sections.contains(where: { $0.id == section.id }) {
+                outline.sections.append(section)
+            }
         }
     }
 

@@ -30,6 +30,23 @@ enum ProjectSaveResult {
     case localOnly(reason: String)
 }
 
+// MARK: - Accept All status
+
+enum AcceptRunStatus: String, Codable, Equatable {
+    case pending
+    case running
+    case completed
+    case failed
+
+    var isActive: Bool {
+        self == .pending || self == .running
+    }
+
+    var isTerminal: Bool {
+        self == .completed || self == .failed
+    }
+}
+
 // MARK: - DataDurabilityCoordinator
 //
 // Central coordinator for cloud-first data lifecycle events.
@@ -259,6 +276,10 @@ final class DataDurabilityCoordinator: ObservableObject {
         var sectionsDone: Int
         var sectionsFailed: Int
         var error: String?
+
+        var typedStatus: AcceptRunStatus? { AcceptRunStatus(rawValue: status) }
+        var isActive: Bool { typedStatus?.isActive == true }
+        var isTerminal: Bool { typedStatus?.isTerminal == true }
     }
 
     @Published private(set) var activeAcceptRun: AcceptRunMetadata?
@@ -327,7 +348,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         else { return }
         activeAcceptRun = metadata
         acceptRunError = metadata.error
-        if metadata.status == "completed" || metadata.status == "failed" {
+        if metadata.isTerminal {
             acceptPollingTask = Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.finishAcceptRun(metadata, context: context)
@@ -353,7 +374,7 @@ final class DataDurabilityCoordinator: ObservableObject {
                 activeAcceptRun = metadata
                 persistAcceptRun(metadata)
                 acceptRunError = nil
-                if result.status == "completed" || result.status == "failed" {
+                if metadata.isTerminal {
                     await finishAcceptRun(metadata, context: context)
                     return
                 }
@@ -372,7 +393,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     }
 
     private func finishAcceptRun(_ metadata: AcceptRunMetadata, context: ModelContext) async {
-        if metadata.status == "completed" && metadata.sectionsFailed == 0 && metadata.error == nil {
+        if metadata.typedStatus == .completed && metadata.sectionsFailed == 0 && metadata.error == nil {
             let result = await performCloudRestore(context: context)
             if let error = result.errorMessage {
                 acceptRunError = error
