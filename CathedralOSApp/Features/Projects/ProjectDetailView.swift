@@ -1107,6 +1107,7 @@ struct ProjectDetailView: View {
                 VStack(spacing: CathedralTheme.Spacing.sm) {
                     modelPicker
                     povPicker
+                    generateNowSection
                     sectionsToRunSection
 
                     if let errorMessage = generationError {
@@ -1247,6 +1248,40 @@ struct ProjectDetailView: View {
         let raw = baseCredits * model.outputCreditRate
         let cost = max(model.minimumChargeCredits, Int(ceil(raw)))
         return "\(cost) cr · \(preset.coverageHint)"
+    }
+
+    @ViewBuilder
+    private var generateNowSection: some View {
+        if let firstSection = outlineSections
+            .filter({ $0.parent == nil })
+            .sorted(by: { $0.position < $1.position })
+            .first {
+            Button {
+                launchOutlineGeneration(sectionID: firstSection.id, scope: "single")
+            } label: {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 15, weight: .semibold))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Generate now")
+                            .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                        Text("Generate the first section of this outline")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.right")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(CathedralTheme.Spacing.sm)
+                .background(CathedralTheme.Colors.accent.opacity(0.16))
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens generation confirmation for the first section")
+        }
     }
 
     private var sectionsToRunSection: some View {

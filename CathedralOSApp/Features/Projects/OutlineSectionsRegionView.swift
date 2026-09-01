@@ -477,11 +477,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     @ViewBuilder
-    private func sectionRowContent(_ section: OutlineSection) -> some View {
+    private func sectionRowContent(_ section: OutlineSection, onOpen: (() -> Void)? = nil) -> some View {
         OutlineSectionRow(
             section: section,
             arcBeatLabel: arcBeatLabel(for: section),
             outputs: outputsBySection[section.id] ?? [],
+            onOpen: onOpen,
             onEdit: { editingSection = section },
             onGenerate: {
                 if let outline = currentOutline {
@@ -528,16 +529,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         List {
             ForEach(sectionsOrder, id: \.id) { section in
                 if section.parent == nil {
-                    // Chapter row (top-level) -- wrap in NavigationLink to chapter reader.
-                    // .buttonStyle(.plain) is required so the List's drag gesture (for
-                    // .onMove reorder) can win against the NavigationLink's default
-                    // button-style tap handler. Without it, drag-to-reorder is dead.
-                    Button {
-                        readerSection = section
-                    } label: {
-                        sectionRowContent(section)
-                    }
-                    .buttonStyle(.plain)
+                    // Keep chapter navigation on the title only. The row contains
+                    // independent Edit/Accept/Generate buttons; wrapping the whole
+                    // row in another Button makes the nested Generate tap unreliable.
+                    sectionRowContent(section, onOpen: { readerSection = section })
                 } else {
                     // Sub-section row -- current behavior (tap to edit)
                     sectionRowContent(section)
@@ -842,6 +837,7 @@ struct OutlineSectionRow: View {
     @Bindable var section: OutlineSection
     let arcBeatLabel: String?
     var outputs: [GenerationOutput] = []
+    var onOpen: (() -> Void)? = nil
     var onEdit: (() -> Void)? = nil
     var onGenerate: (() -> Void)? = nil
     var onAccept: (() async -> Void)? = nil
@@ -852,11 +848,23 @@ struct OutlineSectionRow: View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
             // Row 1: Title (full card width, no position number competing for space).
             // Wraps to 2 lines if needed.
-            Text(section.title.isEmpty ? "Untitled section" : section.title)
-                .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if let onOpen {
+                Button(action: onOpen) {
+                    Text(section.title.isEmpty ? "Untitled section" : section.title)
+                        .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open chapter: \(section.title.isEmpty ? "Untitled section" : section.title)")
+            } else {
+                Text(section.title.isEmpty ? "Untitled section" : section.title)
+                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             // Row 2: Status badge + beat label (own row, left-aligned, Spacer pushes
             // any remaining width to the right).
@@ -952,12 +960,12 @@ struct OutlineSectionRow: View {
                 }
                 if let onGenerate {
                     Button(action: onGenerate) {
-                        Image(systemName: "sparkles")
-                            .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                        Label("Generate now", systemImage: "sparkles")
+                            .font(CathedralTheme.Typography.caption(12, weight: .semibold))
                             .foregroundStyle(.tint)
                     }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Generate section")
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityLabel("Generate now for section")
                 }
             }
         }
