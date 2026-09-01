@@ -104,6 +104,7 @@ export function buildGenerateStoryRequest(args: {
     terminal_beat: string | null;
   };
   projectId: string;
+  runId?: string;
   selectedModelId?: string;
   lengthMode: LengthMode;
   // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): the 5 Story Arc
@@ -142,6 +143,9 @@ export function buildGenerateStoryRequest(args: {
     promptPackID: promptPack.id ?? "",
     promptPackName: promptPack.name ?? "",
     outline_section_id: args.section.id,
+    // Durable Run All identity. generate-story validates ownership and section
+    // membership before applying the durable-job rate-limit class.
+    run_id: args.runId,
     // PR-360-Z: canonical explicit section context fields. Replaces the
     // "smuggle section into promptPack.notes" pattern. The prompt assembly
     // reads from these fields directly (with sanitizeTitleForLLM applied

@@ -6,6 +6,10 @@
 //   PER_HOUR     — max requests per user per rolling 60-minute window
 //   FAILED_HOUR  — max failed requests per user per rolling 60-minute window
 //
+// Durable Run All requests are authenticated and authorized by generate-story
+// before they use the durable_run class; they are governed by run credits and
+// worker/provider retry controls rather than interactive request-count limits.
+//
 // The limiter reads the generation_request_logs table (service-role client).
 // Rate limit checks happen BEFORE the LLM provider call and credit deduction.
 //
@@ -38,6 +42,8 @@ export interface RateLimitResult {
   retryAfterSeconds?: number;
 }
 
+export type RateLimitRequestClass = "interactive" | "durable_run";
+
 export interface RequestLogParams {
   requestId: string;
   action: string;
@@ -67,7 +73,10 @@ export interface RateLimitStore {
    * Returns { allowed: true } if the request may proceed, or
    * { allowed: false, retryAfterSeconds } when a limit is hit.
    */
-  checkLimits(userId: string): Promise<RateLimitResult>;
+  checkLimits(
+    userId: string,
+    requestClass?: RateLimitRequestClass,
+  ): Promise<RateLimitResult>;
 
   /**
    * Inserts a structured metadata row into generation_request_logs.
@@ -91,7 +100,18 @@ export class SupabaseRateLimitStore implements RateLimitStore {
     this.db = adminClient;
   }
 
-  async checkLimits(userId: string): Promise<RateLimitResult> {
+  async checkLimits(
+    userId: string,
+    requestClass: RateLimitRequestClass = "interactive",
+  ): Promise<RateLimitResult> {
+    // A Run All job is already a credit-authorized, durable queue with its own
+    // lease and retry controls. Applying the interactive request-count limits
+    // to each section makes every 30+ section run impossible and also counts
+    // our own 429 responses against the failed-request limit. Provider errors
+    // are still handled by generate-story's provider classification and by
+    // run-outline's durable retry path.
+    if (requestClass === "durable_run") return { allowed: true };
+
     const now = Date.now();
     const oneMinuteAgo = new Date(now - 60_000).toISOString();
     const oneHourAgo = new Date(now - 3_600_000).toISOString();
