@@ -240,43 +240,11 @@ struct OutlineSuggestionService {
 
     // MARK: - Request body builders
 
-    private func buildRecipeBlob(recipe: PromptPack, project: StoryProject) -> RecipeBlob {
-        let characters: [CharacterBlob] = project.characters
-            .filter { recipe.selectedCharacterIDs.contains($0.id) }
-            .map { CharacterBlob(id: $0.id.uuidString, name: $0.name, summary: $0.roles.joined(separator: ", ")) }
-
-        let storySpark: StorySparkBlob? = recipe.selectedStorySparkID.flatMap { sparkID in
-            project.storySparks.first(where: { $0.id == sparkID }).map {
-                StorySparkBlob(id: $0.id.uuidString, title: $0.title, situation: $0.situation, stakes: $0.stakes)
-            }
-        }
-
-        let aftertaste: AftertasteBlob? = {
-            guard let atID = recipe.selectedAftertasteID,
-                  let found = project.aftertastes.first(where: { $0.id == atID }) else {
-                return nil
-            }
-            return AftertasteBlob(id: found.id.uuidString, label: found.label, note: found.note)
-        }()
-
-        let themes: [ThemeBlob] = project.themeQuestions
-            .filter { recipe.selectedThemeQuestionIDs.contains($0.id) }
-            .map { ThemeBlob(id: $0.id.uuidString, question: $0.question, coreTension: $0.coreTension) }
-
-        let motifs: [MotifBlob] = project.motifs
-            .filter { recipe.selectedMotifIDs.contains($0.id) }
-            .map { MotifBlob(id: $0.id.uuidString, label: $0.label, meaning: $0.meaning) }
-
-        return RecipeBlob(
-            id: recipe.id.uuidString,
-            name: recipe.name,
-            characters: characters,
-            storySpark: storySpark,
-            aftertaste: aftertaste,
-            themes: themes,
-            motifs: motifs,
-            notes: recipe.notes
-        )
+    private func buildRecipeBlob(recipe: PromptPack, project: StoryProject) -> PromptPackExportPayload {
+        // Use the same lossless, selection-aware payload sent to story generation.
+        // Do not maintain a second abbreviated recipe schema here: it drops the
+        // project premise, relationships, rich character fields, and settings.
+        PromptPackExportBuilder.build(pack: recipe, project: project)
     }
 
     private func buildArcTemplateBlob(arc: StoryArc, template: StoryArcTemplate) -> ArcTemplateBlob {
