@@ -585,7 +585,7 @@ async function runOutline(
 
   // Keep each invocation bounded. Continuations are independent invocations,
   // so a platform lifetime limit cannot orphan the entire Run All operation.
-  const batch = pending.slice(0, 2);
+  const batch = pending.slice(0, 1);
   for (const section of batch) {
     await updateSectionStatus(adminClient, runId, {
       ...section,
