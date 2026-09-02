@@ -121,7 +121,7 @@ const CONTAINER_EXPECTED_RANGES: Record<string, [number, number]> = {
 };
 const NOVEL_TARGET_WORDS: [number, number] = [70000, 90000];
 const TOKENS_PER_WORD = 1.3;
-const MAX_PLANNED_SECTIONS = 100;
+const MAX_PLANNED_SECTIONS = 200;
 
 const ALLOWED_CONTAINERS = new Set([
   "beat",

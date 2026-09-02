@@ -456,6 +456,7 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);
   assertEquals(source.includes("sectionCount"), false);
+  assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
   assertEquals(source.includes("maxItems: MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("if (needsNovelExpansion(result.suggestions))"), true);
