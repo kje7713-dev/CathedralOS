@@ -496,6 +496,53 @@ const ALLOCATION_SCHEMA = {
 
 type Allocation = { count: number; rationale: string };
 
+export function suggestionContractFingerprint(suggestion: Suggestion): string {
+  return `${suggestion.title}|${suggestion.summary}|${suggestion.storyArcBeatID}`;
+}
+
+export function mergeSuggestionsByBeatOrder(
+  beatOrder: string[],
+  firstPass: Suggestion[],
+  repaired: Suggestion[],
+): Suggestion[] {
+  const beatSet = new Set(beatOrder);
+  const seen = new Set<string>();
+  const byBeat = new Map<string, { firstPass: Suggestion[]; repaired: Suggestion[] }>();
+  for (const beatID of beatOrder) {
+    byBeat.set(beatID, { firstPass: [], repaired: [] });
+  }
+
+  for (const [source, suggestions] of [["first-pass", firstPass], ["repair", repaired]] as const) {
+    for (const suggestion of suggestions) {
+      if (!beatSet.has(suggestion.storyArcBeatID)) {
+        throw new Error(`${source} suggestion references unknown beat ${suggestion.storyArcBeatID}`);
+      }
+      const fingerprint = suggestionContractFingerprint(suggestion);
+      if (seen.has(fingerprint)) {
+        throw new Error(`duplicate section contract returned by ${source}: ${fingerprint}`);
+      }
+      seen.add(fingerprint);
+      byBeat.get(suggestion.storyArcBeatID)![source === "first-pass" ? "firstPass" : "repaired"].push(suggestion);
+    }
+  }
+
+  return beatOrder.flatMap((beatID) => {
+    const grouped = byBeat.get(beatID)!;
+    return [...grouped.firstPass, ...grouped.repaired];
+  });
+}
+
+export function mergeRepairedSuggestions(
+  beatOrder: string[],
+  beatIds: Set<string>,
+  allocation: Map<string, Allocation>,
+  firstPass: Suggestion[],
+  repaired: Suggestion[],
+): Suggestion[] {
+  const merged = mergeSuggestionsByBeatOrder(beatOrder, firstPass, repaired);
+  return validateSuggestions({ suggestions: merged }, beatIds, allocation).suggestions;
+}
+
 export function parseAndValidateAllocation(
   raw: string,
   beats: Array<{ id: string }>,
@@ -987,15 +1034,30 @@ async function runSuggestionJob(
       const parsed = JSON.parse(rawResponse.content);
       try {
         if (!correction) {
-          result = validateSuggestions(parsed, beatIds, allocation);
+          const firstPass = validateSuggestions(parsed, beatIds, allocation);
+          result = {
+            suggestions: mergeRepairedSuggestions(
+              body.arcTemplate.beats.map((beat) => beat.id),
+              beatIds,
+              allocation,
+              firstPass.suggestions,
+              [],
+            ),
+            warnings: firstPass.warnings,
+          };
           break;
         }
         const repaired = validateSuggestions(parsed, beatIds, repairAllocation!);
-        result = validateSuggestions(
-          { suggestions: [...partialSuggestions, ...repaired.suggestions] },
-          beatIds,
-          allocation,
-        );
+        result = {
+          suggestions: mergeRepairedSuggestions(
+            body.arcTemplate.beats.map((beat) => beat.id),
+            beatIds,
+            allocation,
+            partialSuggestions,
+            repaired.suggestions,
+          ),
+          warnings: repaired.warnings,
+        };
         break;
       } catch (error) {
         if (!(error instanceof Error)) throw error;

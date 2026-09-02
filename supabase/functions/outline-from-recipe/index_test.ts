@@ -17,6 +17,7 @@ import {
   buildExpansionPrompt,
   buildPrompt,
   calculateRemainingAllocation,
+  mergeRepairedSuggestions,
   mergeExpansionAdditions,
   needsNovelExpansion,
   projectedExpectedTokens,
@@ -244,29 +245,144 @@ Deno.test("zero allocation accepts an empty suggestion result", () => {
   assertEquals(result.suggestions, []);
 });
 
-Deno.test("repair allocation targets only missing sections from a partial response", () => {
-  const allocation = new Map([
-    ["beat-1", { count: 1, rationale: "setup" }],
-    ["beat-2", { count: 4, rationale: "escalation" }],
+const repairAllocation = new Map([
+  ["beat-1", { count: 1, rationale: "setup" }],
+  ["beat-2", { count: 4, rationale: "escalation" }],
+  ["beat-3", { count: 2, rationale: "aftermath" }],
+]);
+const repairBeatOrder = ["beat-1", "beat-2", "beat-3"];
+const repairBeatIds = new Set(repairBeatOrder);
+
+function repairSuggestion(title: string, beatID: string): any {
+  return {
+    title,
+    summary: `${title} changes the story.`,
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends with a consequential turn.`,
+    storyArcBeatID: beatID,
+  };
+}
+
+Deno.test("repair flow merges an earlier beat in canonical arc order", () => {
+  const firstPass = [
+    repairSuggestion("Beat 1 first", "beat-1"),
+    repairSuggestion("Beat 2 first", "beat-2"),
+    repairSuggestion("Beat 2 second", "beat-2"),
+    repairSuggestion("Beat 3 first", "beat-3"),
+    repairSuggestion("Beat 3 second", "beat-3"),
+  ];
+  const repaired = [
+    repairSuggestion("Beat 2 repaired first", "beat-2"),
+    repairSuggestion("Beat 2 repaired second", "beat-2"),
+  ];
+  const merged = mergeRepairedSuggestions(
+    repairBeatOrder,
+    repairBeatIds,
+    repairAllocation,
+    firstPass,
+    repaired,
+  );
+  assertEquals(merged.map((suggestion) => suggestion.title), [
+    "Beat 1 first",
+    "Beat 2 first",
+    "Beat 2 second",
+    "Beat 2 repaired first",
+    "Beat 2 repaired second",
+    "Beat 3 first",
+    "Beat 3 second",
   ]);
-  const partial = [{
-    title: "The First Attack",
-    summary: "The threat becomes undeniable.",
-    container: "scene",
-    pov: "thirdPersonLimited",
-    terminalBeat: "The shelter fails.",
-    storyArcBeatID: "beat-1",
-  }, {
-    title: "The First Escape",
-    summary: "Douche escapes the first attack.",
-    container: "scene",
-    pov: "thirdPersonLimited",
-    terminalBeat: "The path closes.",
-    storyArcBeatID: "beat-2",
-  }];
-  const remaining = calculateRemainingAllocation(allocation, partial);
-  assertEquals(remaining.get("beat-1")?.count, 0);
-  assertEquals(remaining.get("beat-2")?.count, 3);
+});
+
+Deno.test("repair flow rejects a duplicate of a salvaged section", () => {
+  let error = "";
+  try {
+    mergeRepairedSuggestions(
+      ["beat-1", "beat-2"],
+      new Set(["beat-1", "beat-2"]),
+      new Map([
+        ["beat-1", { count: 0, rationale: "covered" }],
+        ["beat-2", { count: 2, rationale: "escalation" }],
+      ]),
+      [repairSuggestion("The First Escape", "beat-2")],
+      [repairSuggestion("The First Escape", "beat-2")],
+    );
+  } catch (caught) {
+    error = String(caught);
+  }
+  assertEquals(error.includes("duplicate section contract"), true);
+});
+
+Deno.test("repair flow rejects duplicates within the repair response", () => {
+  let error = "";
+  try {
+    mergeRepairedSuggestions(
+      ["beat-1", "beat-2"],
+      new Set(["beat-1", "beat-2"]),
+      new Map([
+        ["beat-1", { count: 0, rationale: "covered" }],
+        ["beat-2", { count: 2, rationale: "escalation" }],
+      ]),
+      [],
+      [
+        repairSuggestion("New section", "beat-2"),
+        repairSuggestion("New section", "beat-2"),
+      ],
+    );
+  } catch (caught) {
+    error = String(caught);
+  }
+  assertEquals(error.includes("duplicate section contract"), true);
+});
+
+Deno.test("repair flow rejects repair over-generation", () => {
+  let error = "";
+  try {
+    mergeRepairedSuggestions(
+      ["beat-1", "beat-2"],
+      new Set(["beat-1", "beat-2"]),
+      new Map([
+        ["beat-1", { count: 0, rationale: "covered" }],
+        ["beat-2", { count: 2, rationale: "escalation" }],
+      ]),
+      [],
+      [
+        repairSuggestion("Repair one", "beat-2"),
+        repairSuggestion("Repair two", "beat-2"),
+        repairSuggestion("Repair three", "beat-2"),
+      ],
+    );
+  } catch (caught) {
+    error = String(caught);
+  }
+  assertEquals(error.includes("expected 2"), true);
+});
+
+Deno.test("valid partial plus repair preserves content, exact allocation, and order", () => {
+  const firstPass = [
+    repairSuggestion("Beat 1 first", "beat-1"),
+    repairSuggestion("Beat 2 first", "beat-2"),
+    repairSuggestion("Beat 2 second", "beat-2"),
+    repairSuggestion("Beat 3 first", "beat-3"),
+    repairSuggestion("Beat 3 second", "beat-3"),
+  ];
+  const repaired = [
+    repairSuggestion("Beat 2 repaired first", "beat-2"),
+    repairSuggestion("Beat 2 repaired second", "beat-2"),
+  ];
+  const merged = mergeRepairedSuggestions(
+    repairBeatOrder,
+    repairBeatIds,
+    repairAllocation,
+    firstPass,
+    repaired,
+  );
+  assertEquals(merged.length, 7);
+  assertEquals(merged[0], firstPass[0]);
+  assertEquals(merged[1], firstPass[1]);
+  assertEquals(merged[2], firstPass[2]);
+  assertEquals(merged[3], repaired[0]);
+  assertEquals(merged[4], repaired[1]);
 });
 
 Deno.test("outline validation requires the exact allocation total and grounded content", () => {
