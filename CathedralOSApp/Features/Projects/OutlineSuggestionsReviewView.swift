@@ -136,9 +136,12 @@ struct OutlineSuggestionsReviewView: View {
             return
         }
         Task {
-            do { _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext) }
-            catch { /* server safely nulls unavailable beat IDs */ }
-            beginAccept(projectID: projectID, baseURL: baseURL)
+            do {
+                _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                beginAccept(projectID: projectID, baseURL: baseURL)
+            } catch {
+                durabilityCoordinator.reportAcceptRunError("Could not sync the Story Arc before acceptance: \(error.localizedDescription)")
+            }
         }
     }
 

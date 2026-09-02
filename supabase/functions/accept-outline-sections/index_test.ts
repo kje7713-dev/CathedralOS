@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import { acceptRunTerminalOutcome } from "./_outcome.ts";
+import { sectionRow } from "./index.ts";
 
 Deno.test("Accept All completes only after all sections and snapshot merge succeed", () => {
   assertEquals(acceptRunTerminalOutcome(0, null, null), {
@@ -57,4 +58,20 @@ Deno.test("embed-section adapter maps typed shared results and errors", async ()
   assertEquals(source.includes("SectionEmbeddingError"), true);
   assertEquals(source.includes("JSON.stringify(result)"), true);
   assertEquals(source.includes("errorResponse(err.code, err.message"), true);
+});
+
+
+Deno.test("arc linkage is persisted for single and bulk section acceptance", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/accept-outline-sections/index.ts");
+  assertEquals(source.includes("story_arc_beat_id: section.storyArcBeatID ?? null"), true);
+  assertEquals(source.includes("storyArcBeatID: row.story_arc_beat_id"), true);
+  assertEquals(source.includes("return sections;"), true);
+  assertEquals(source.includes("Story arc beat linkage is unavailable"), true);
+  assertEquals(source.includes("story_arc_beat_id: section.storyArcBeatID ?? null"), true);
+  const row = sectionRow({ id: "section-1", position: 0, title: "One", summary: "Event", storyArcBeatID: "beat-1" }, "outline-1", 4);
+  assertEquals(row.story_arc_beat_id, "beat-1");
+  const service = await Deno.readTextFile("./CathedralOSApp/Services/SectionEmbedService.swift");
+  const restore = await Deno.readTextFile("./CathedralOSApp/Services/ProjectCloudSyncService.swift");
+  assertEquals(service.includes("storyArcBeatID: suggestion.storyArcBeatID"), true);
+  assertEquals(restore.includes("section.storyArcBeatID = storyArcBeatID"), true);
 });

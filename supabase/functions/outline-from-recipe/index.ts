@@ -110,6 +110,19 @@ const RESPONSE_SCHEMA = {
   "additionalProperties": false,
 } as const;
 
+// Literary planning ranges, deliberately separate from generate-story's provider
+// hard caps. These are only used to estimate whether a novel plan has enough
+// distinct dramatic material; they are never sent as completion ceilings.
+const CONTAINER_EXPECTED_RANGES: Record<string, [number, number]> = {
+  beat: [75, 250], moment: [200, 500], vignette: [300, 900],
+  microScene: [400, 900], scene: [800, 1800], developedScene: [1500, 3000],
+  setPiece: [2000, 5000], sceneSequence: [3000, 7000], shortStory: [2500, 8000],
+  chapter: [3000, 8000], episode: [5000, 15000],
+};
+const NOVEL_TARGET_WORDS: [number, number] = [70000, 90000];
+const TOKENS_PER_WORD = 1.3;
+const MAX_PLANNED_SECTIONS = 100;
+
 const ALLOWED_CONTAINERS = new Set([
   "beat",
   "moment",
@@ -279,6 +292,95 @@ export function validateRequest(req: unknown): string | null {
   return null;
 }
 
+export function projectedTokenRange(suggestions: Array<{ container: string }>): [number, number] {
+  return suggestions.reduce<[number, number]>((range, suggestion) => {
+    const [min, max] = CONTAINER_EXPECTED_RANGES[suggestion.container] ?? [800, 1800];
+    return [range[0] + min, range[1] + max];
+  }, [0, 0]);
+}
+
+export function projectedExpectedTokens(suggestions: Array<{ container: string }>): number {
+  return suggestions.reduce((total, suggestion) => {
+    const [min, max] = CONTAINER_EXPECTED_RANGES[suggestion.container] ?? [800, 1800];
+    return total + (min + max) / 2;
+  }, 0);
+}
+
+export function needsNovelExpansion(suggestions: Array<{ container: string }>): boolean {
+  return projectedExpectedTokens(suggestions) < NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD * 0.8;
+}
+
+const EXPANSION_SCHEMA = {
+  type: "object",
+  properties: {
+    suggestions: {
+      type: "array", minItems: 1, maxItems: MAX_PLANNED_SECTIONS,
+      items: {
+        type: "object", additionalProperties: false,
+        properties: {
+          title: { type: "string", minLength: 1, maxLength: 120 },
+          summary: { type: "string", minLength: 1, maxLength: 2000 },
+          container: { type: "string", enum: [...ALLOWED_CONTAINERS] },
+          pov: { type: "string", enum: [...ALLOWED_POVS] },
+          terminalBeat: { type: "string", minLength: 1, maxLength: 500 },
+          storyArcBeatID: { type: "string" },
+          insertAfterTitle: { type: ["string", "null"] },
+        },
+        required: ["title", "summary", "container", "pov", "terminalBeat", "storyArcBeatID", "insertAfterTitle"],
+      },
+    },
+  },
+  required: ["suggestions"], additionalProperties: false,
+} as const;
+
+type ExpansionAddition = Suggestion & { insertAfterTitle: string | null };
+
+export function buildExpansionPrompt(req: OutlineFromRecipeRequest, current: Suggestion[]): { system: string; user: string } {
+  return {
+    system: `The current outline is compressed for a novel. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add events, consequences, decisions, reversals, tests, discoveries, and aftermath needed to fully realize compressed arc movements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Add sections when material is compressed; Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Return JSON matching the expansion schema.`,
+    user: JSON.stringify({ recipe: req.recipe, arcTemplate: req.arcTemplate, existingSections: req.existingSections ?? [], currentSuggestions: current }, null, 2),
+  };
+}
+
+function validateExpansionAdditions(parsed: any, beatIds: Set<string>, original: Suggestion[]): ExpansionAddition[] {
+  if (!parsed || !Array.isArray(parsed.suggestions)) throw new Error("expansion response missing suggestions array");
+  const originalTitles = new Set(original.map((s) => s.title));
+  const additions: ExpansionAddition[] = [];
+  const fingerprints = new Set(original.map((s) => `${s.title}|${s.summary}|${s.storyArcBeatID}`));
+  for (const raw of parsed.suggestions) {
+    const { insertAfterTitle } = raw ?? {};
+    const validated = validateSuggestions({ suggestions: [raw] }, beatIds).suggestions[0];
+    if (!validated) throw new Error("expansion returned an invalid addition");
+    if (insertAfterTitle !== null && typeof insertAfterTitle !== "string") throw new Error("expansion placement must be a title or null");
+    if (insertAfterTitle !== null && !originalTitles.has(insertAfterTitle)) throw new Error("expansion placement must reference an original section");
+    if (insertAfterTitle !== null) {
+      const anchor = original.find((s) => s.title === insertAfterTitle);
+      if (!anchor || anchor.storyArcBeatID !== validated.storyArcBeatID) throw new Error("expansion placement crosses arc beats");
+    }
+    const fingerprint = `${validated.title}|${validated.summary}|${validated.storyArcBeatID}`;
+    if (fingerprints.has(fingerprint)) throw new Error("expansion introduced a duplicate section contract");
+    fingerprints.add(fingerprint);
+    additions.push({ ...validated, insertAfterTitle });
+  }
+  return additions;
+}
+
+export function mergeExpansionAdditions(original: Suggestion[], additions: ExpansionAddition[]): Suggestion[] {
+  const result: Suggestion[] = [...original];
+  for (const addition of additions) {
+    const index = addition.insertAfterTitle === null
+      ? result.map((s) => s.storyArcBeatID).lastIndexOf(addition.storyArcBeatID)
+      : result.findIndex((s) => s.title === addition.insertAfterTitle);
+    if (index < 0) throw new Error("expansion placement could not be resolved");
+    result.splice(index + 1, 0, addition);
+  }
+  return result.map((suggestion) => {
+    const clean = { ...suggestion } as Suggestion;
+    delete (clean as Suggestion & { insertAfterTitle?: string | null }).insertAfterTitle;
+    return clean;
+  });
+}
+
 export function buildPrompt(
   req: OutlineFromRecipeRequest,
   allocation: Map<string, { count: number; rationale: string }>,
@@ -294,6 +396,16 @@ export function buildPrompt(
 
   const system =
     `You are an expert novel outliner. Use the complete canonical recipe/project payload below, including its premise, selected characters and their populated fields, selected relationships, themes, motifs, story spark, aftertaste, recipe instructions, and included setting. Treat supplied facts as authoritative; do not infer personality traits from a character name alone. Given the story arc and per-beat allocation plan, produce the section-by-section outline.
+
+## Container semantics for planning
+
+Choose a container for the scale of one dramatic unit, not to fake novel length:
+- scene: one continuous dramatic event, expected 800-1,800 tokens
+- developedScene: a fuller scene with escalation and multiple tactics, 1,500-3,000
+- setPiece: a major action, confrontation, ceremony, or reveal, 2,000-5,000
+- sceneSequence: several connected scenes pursuing one objective, 3,000-7,000
+- chapter: a publishing or pacing division, 3,000-8,000+
+The expected ranges are literary targets; runtime/provider headroom is not a desired length.
 
 ## Use the allocation plan exactly
 
@@ -335,7 +447,7 @@ const ALLOCATION_SCHEMA = {
     allocations: {
       type: "array",
       minItems: 0,
-      maxItems: 100,
+      maxItems: MAX_PLANNED_SECTIONS,
       items: {
         type: "object",
         properties: {
@@ -428,9 +540,9 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert novel outliner. Given a complete canonical recipe/project payload and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular novel.
 
-Some beats are quick transitions (1-2 sections). Some are major movements unfolding across many scenes (5-10+ sections). The same arc template produces very different outlines for different recipes. Let the supplied premise, characters, and arc determine density; do not expand merely because the output is called a novel.
+This request is for a novel. Plan enough distinct dramatic material for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections. Use the supplied premise, characters, and arc to decide where density belongs.
 
-For each beat, output exactly one JSON object with beatID matching the supplied UUID exactly, sectionCount as an integer from 0 through 10, and a concise rationale. Include every beat exactly once, including beats with sectionCount 0. A beat sufficiently covered by existing sections may receive 0; an uncovered beat in an empty outline should receive 1 or more when the story needs it. Do not output any other root key. The total may be short or long; do not target a fixed total.
+For each beat, output exactly one JSON object with beatID matching the supplied UUID exactly, sectionCount as an integer from 0 through 10, and a concise rationale. Include every beat exactly once, including beats with sectionCount 0. A beat sufficiently covered by existing sections may receive 0; an uncovered beat in this novel should receive enough sections for its dramatic material. Do not output any other root key.
 
 Output JSON only. No commentary, no prose.`;
 
@@ -849,6 +961,24 @@ async function runSuggestionJob(
     }
     if (!result) {
       throw generationError ?? new Error("outline generation failed");
+    }
+
+    // Validate projected scale after the complete section list exists. If the
+    // plan is still dramatically short, use one focused expansion pass that
+    // adds events rather than silently inflating container sizes.
+    if (needsNovelExpansion(result.suggestions)) {
+      const expansion = buildExpansionPrompt(body, result.suggestions);
+      const expandedRaw = await billableCall(
+        expansion.system, expansion.user, 16000,
+        { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: EXPANSION_SCHEMA } },
+        "outline-expansion",
+      );
+      const additions = validateExpansionAdditions(JSON.parse(expandedRaw.content), beatIds, result.suggestions);
+      const merged = mergeExpansionAdditions(result.suggestions, additions);
+      if (merged.length > MAX_PLANNED_SECTIONS || needsNovelExpansion(merged)) {
+        throw new Error("outline expansion did not reach plausible novel scale");
+      }
+      result = { suggestions: merged, warnings: result.warnings };
     }
     await db.from("outline_suggestion_runs").update({
       status: "completed",

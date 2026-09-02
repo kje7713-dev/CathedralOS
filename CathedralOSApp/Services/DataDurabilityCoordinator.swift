@@ -414,6 +414,11 @@ final class DataDurabilityCoordinator: ObservableObject {
         acceptRunError = nil
     }
 
+    func reportAcceptRunError(_ message: String) {
+        acceptRunError = message
+        acceptRunRevision &+= 1
+    }
+
     private var hasPersistedAcceptRun: Bool {
         acceptRunDefaults.data(forKey: Self.acceptRunKey) != nil
     }
