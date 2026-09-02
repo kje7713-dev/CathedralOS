@@ -130,11 +130,43 @@ struct OutlineSuggestionsReviewView: View {
               let projectID = outline.project?.id,
               let baseURL = SupabaseConfiguration.projectURL else { return }
         hasStartedAcceptance = true
-        guard let arc = project.storyArcs.first else {
-            // Arc sync is best-effort and no longer owns the acceptance task.
-            beginAccept(projectID: projectID, baseURL: baseURL)
+
+        // Do not trust the relationship collection here: restored/legacy projects
+        // can have a persisted StoryArc whose relationship is not materialized on
+        // StoryProject, while the suggestions still carry its beat UUIDs. Fetch
+        // the root model and require every suggestion beat to belong to that arc
+        // before submitting anything to the durable Accept All job.
+        let parsedBeatIDs = suggestions.map { suggestion in
+            (
+                raw: suggestion.storyArcBeatID,
+                id: UUID(uuidString: suggestion.storyArcBeatID)
+            )
+        }
+        let malformedBeatIDs = parsedBeatIDs
+            .filter { $0.id == nil }
+            .map { $0.raw }
+        guard malformedBeatIDs.isEmpty else {
+            durabilityCoordinator.reportAcceptRunError(
+                "Could not accept these suggestions because they contain invalid Story Arc beat IDs: \(malformedBeatIDs.joined(separator: ", "))"
+            )
             return
         }
+        let expectedBeatIDs = Set(parsedBeatIDs.compactMap { $0.id })
+        let persistedArcs = (try? modelContext.fetch(FetchDescriptor<StoryArc>())) ?? []
+        guard let arc = persistedArcs.first(where: { candidate in
+            guard candidate.project?.id == projectID else { return false }
+            let beatIDs = Set(StoryArcSyncService.fetchAuthoritativeBeats(
+                arc: candidate,
+                modelContext: modelContext
+            ).map(\.id))
+            return expectedBeatIDs.isSubset(of: beatIDs)
+        }) else {
+            durabilityCoordinator.reportAcceptRunError(
+                "Could not find the Story Arc beats for these suggestions. Open the Story Arc, save it, and try Accept All again."
+            )
+            return
+        }
+
         Task {
             do {
                 _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
