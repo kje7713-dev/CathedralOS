@@ -381,6 +381,36 @@ export function mergeExpansionAdditions(original: Suggestion[], additions: Expan
   });
 }
 
+export function calculateRemainingAllocation(
+  allocation: Map<string, Allocation>,
+  partial: Suggestion[],
+): Map<string, Allocation> {
+  const counts = new Map<string, number>();
+  for (const suggestion of partial) {
+    counts.set(
+      suggestion.storyArcBeatID,
+      (counts.get(suggestion.storyArcBeatID) ?? 0) + 1,
+    );
+  }
+  for (const [beatID, plan] of allocation) {
+    const actual = counts.get(beatID) ?? 0;
+    if (actual > plan.count) {
+      throw new Error(
+        `outline generation returned ${actual} sections for beat ${beatID}; expected ${plan.count}`,
+      );
+    }
+  }
+  return new Map(
+    Array.from(allocation.entries()).map(([beatID, plan]) => [
+      beatID,
+      {
+        count: plan.count - (counts.get(beatID) ?? 0),
+        rationale: `repair missing sections for ${beatID}`,
+      },
+    ]),
+  );
+}
+
 export function buildPrompt(
   req: OutlineFromRecipeRequest,
   allocation: Map<string, { count: number; rationale: string }>,
@@ -465,6 +495,53 @@ const ALLOCATION_SCHEMA = {
 } as const;
 
 type Allocation = { count: number; rationale: string };
+
+export function suggestionContractFingerprint(suggestion: Suggestion): string {
+  return `${suggestion.title}|${suggestion.summary}|${suggestion.storyArcBeatID}`;
+}
+
+export function mergeSuggestionsByBeatOrder(
+  beatOrder: string[],
+  firstPass: Suggestion[],
+  repaired: Suggestion[],
+): Suggestion[] {
+  const beatSet = new Set(beatOrder);
+  const seen = new Set<string>();
+  const byBeat = new Map<string, { firstPass: Suggestion[]; repaired: Suggestion[] }>();
+  for (const beatID of beatOrder) {
+    byBeat.set(beatID, { firstPass: [], repaired: [] });
+  }
+
+  for (const [source, suggestions] of [["first-pass", firstPass], ["repair", repaired]] as const) {
+    for (const suggestion of suggestions) {
+      if (!beatSet.has(suggestion.storyArcBeatID)) {
+        throw new Error(`${source} suggestion references unknown beat ${suggestion.storyArcBeatID}`);
+      }
+      const fingerprint = suggestionContractFingerprint(suggestion);
+      if (seen.has(fingerprint)) {
+        throw new Error(`duplicate section contract returned by ${source}: ${fingerprint}`);
+      }
+      seen.add(fingerprint);
+      byBeat.get(suggestion.storyArcBeatID)![source === "first-pass" ? "firstPass" : "repaired"].push(suggestion);
+    }
+  }
+
+  return beatOrder.flatMap((beatID) => {
+    const grouped = byBeat.get(beatID)!;
+    return [...grouped.firstPass, ...grouped.repaired];
+  });
+}
+
+export function mergeRepairedSuggestions(
+  beatOrder: string[],
+  beatIds: Set<string>,
+  allocation: Map<string, Allocation>,
+  firstPass: Suggestion[],
+  repaired: Suggestion[],
+): Suggestion[] {
+  const merged = mergeSuggestionsByBeatOrder(beatOrder, firstPass, repaired);
+  return validateSuggestions({ suggestions: merged }, beatIds, allocation).suggestions;
+}
 
 export function parseAndValidateAllocation(
   raw: string,
@@ -931,25 +1008,56 @@ async function runSuggestionJob(
     const expectedTotal = Array.from(allocation.values())
       .reduce((sum, plan) => sum + plan.count, 0);
     let generationError: Error | undefined;
+    let repairAllocation: Map<string, Allocation> | undefined;
+    let partialSuggestions: Suggestion[] = [];
     if (expectedTotal === 0) {
       result = { suggestions: [], warnings: [] };
     }
     for (const correction of expectedTotal === 0 ? [] : [false, true]) {
-      const correctionSystem = correction
-        ? `${system}\n\nThe previous response failed validation: ${
-          generationError?.message ?? "it did not satisfy the allocation"
-        }. Return a complete corrected response. Recount the suggestions for every beat before responding. Do not omit, merge, or add sections; a beat allocated 0 must still have no suggestions.`
-        : system;
+      let correctionSystem = system;
+      let correctionUser = userPrompt;
+      if (correction) {
+        if (!repairAllocation) {
+          throw generationError ?? new Error("outline generation repair unavailable");
+        }
+        const repairPrompt = buildPrompt(body, repairAllocation);
+        correctionSystem = `${repairPrompt.system}\n\nThis is a bounded repair pass. Return ONLY the missing sections listed in this repair allocation. Do not repeat any accepted section below. Recount each remaining beat before responding; beats allocated 0 must have no suggestions.`;
+        correctionUser = `${repairPrompt.user}\n\nAlready accepted sections from the previous response (do not repeat):\n${JSON.stringify(partialSuggestions, null, 2)}`;
+      }
       const rawResponse = await billableCall(
         correctionSystem,
-        userPrompt,
+        correctionUser,
         16000,
         responseFormat,
         correction ? "outline-suggestions-retry" : "outline-suggestions",
       );
       const parsed = JSON.parse(rawResponse.content);
       try {
-        result = validateSuggestions(parsed, beatIds, allocation);
+        if (!correction) {
+          const firstPass = validateSuggestions(parsed, beatIds, allocation);
+          result = {
+            suggestions: mergeRepairedSuggestions(
+              body.arcTemplate.beats.map((beat) => beat.id),
+              beatIds,
+              allocation,
+              firstPass.suggestions,
+              [],
+            ),
+            warnings: firstPass.warnings,
+          };
+          break;
+        }
+        const repaired = validateSuggestions(parsed, beatIds, repairAllocation!);
+        result = {
+          suggestions: mergeRepairedSuggestions(
+            body.arcTemplate.beats.map((beat) => beat.id),
+            beatIds,
+            allocation,
+            partialSuggestions,
+            repaired.suggestions,
+          ),
+          warnings: repaired.warnings,
+        };
         break;
       } catch (error) {
         if (!(error instanceof Error)) throw error;
@@ -957,6 +1065,9 @@ async function runSuggestionJob(
         // Retry only validation failures. Provider and JSON errors retain their
         // existing failure behavior and must not trigger another charge.
         if (correction) throw error;
+        const partial = validateSuggestions(parsed, beatIds);
+        partialSuggestions = partial.suggestions;
+        repairAllocation = calculateRemainingAllocation(allocation, partialSuggestions);
       }
     }
     if (!result) {
