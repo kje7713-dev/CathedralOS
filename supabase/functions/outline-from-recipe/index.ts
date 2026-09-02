@@ -10,8 +10,8 @@ import {
 // =============================================================================
 // index.ts — outline-from-recipe Edge Function
 //
-// Takes a recipe (PromptPack-shaped) + arc template (StoryArcTemplate-shaped),
-// returns 5-15 suggested OutlineSection payloads.
+// Takes a canonical PromptPackExportPayload + arc template (StoryArcTemplate-shaped),
+// returns the validated per-beat set of suggested OutlineSection payloads.
 //
 // Phase 2 of novel-building per docs/novel-building.md. Suggestions are not
 // persisted — the user accepts/edits before locking in.
@@ -29,8 +29,7 @@ import {
 //
 // Request:
 //   POST {
-//     "recipe": { id, name, characters[], storySpark|null, aftertaste|null,
-//                 themes[], motifs[], notes? },
+//     "recipe": <canonical PromptPackExportPayload>,
 //     "arcTemplate": { id, name, description?, beats[] },
 //     "hint": "optional user prompt"
 //   }
@@ -56,7 +55,7 @@ const RESPONSE_SCHEMA = {
   "properties": {
     "suggestions": {
       "type": "array",
-      "minItems": 5,
+      "minItems": 1,
       "maxItems": 100,
       "items": {
         "type": "object",
@@ -147,20 +146,29 @@ const CORS_HEADERS = {
 // Types
 // ---------------------------------------------------------------------------
 
-interface RecipeBlob {
-  id: string;
-  name: string;
-  characters?: Array<{ id: string; name: string; summary?: string }>;
-  storySpark?: {
+const CANONICAL_RECIPE_SCHEMA = "cathedralos.story_packet";
+
+/** The subset of the canonical PromptPackExportPayload validated or addressed
+ * directly here. The complete object is forwarded unchanged to both LLM calls.
+ */
+interface CanonicalRecipeEnvelope {
+  schema: string;
+  version: number;
+  project: { id: string; summary?: string };
+  setting: { included: boolean };
+  selectedCharacters: unknown[];
+  selectedStorySpark: unknown | null;
+  selectedAftertaste: unknown | null;
+  selectedRelationships: unknown[];
+  selectedThemeQuestions: unknown[];
+  selectedMotifs: unknown[];
+  promptPack: {
     id: string;
-    title: string;
-    situation?: string;
-    stakes?: string;
-  } | null;
-  aftertaste?: { id: string; label: string; note?: string } | null;
-  themes?: Array<{ id: string; question: string; coreTension?: string }>;
-  motifs?: Array<{ id: string; label: string; meaning?: string }>;
-  notes?: string;
+    name: string;
+    includeProjectSetting?: boolean;
+    notes?: string;
+    instructionBias?: string;
+  };
 }
 
 interface ArcTemplateBlob {
@@ -173,7 +181,7 @@ interface ArcTemplateBlob {
 }
 
 interface OutlineFromRecipeRequest {
-  recipe: RecipeBlob;
+  recipe: CanonicalRecipeEnvelope;
   arcTemplate: ArcTemplateBlob;
   hint?: string;
   existingSections?: ExistingSectionBlob[]; // iOS-side outline state at request time
@@ -230,22 +238,48 @@ function errorResponse(
   return corsResponse(JSON.stringify({ errorCode: code, message }), { status });
 }
 
-function validateRequest(req: unknown): string | null {
+export function validateRequest(req: unknown): string | null {
   if (!req || typeof req !== "object") return "request must be an object";
   const r = req as Partial<OutlineFromRecipeRequest>;
-  if (!r.recipe?.id || !r.recipe?.name) {
-    return "recipe.id and recipe.name required";
+  const recipe = r.recipe;
+  if (!recipe || typeof recipe !== "object") {
+    return "canonical recipe payload required";
+  }
+  if (recipe.schema !== CANONICAL_RECIPE_SCHEMA) {
+    return `recipe.schema must be ${CANONICAL_RECIPE_SCHEMA}`;
   }
   if (
-    !r.arcTemplate?.id || !Array.isArray(r.arcTemplate.beats) ||
+    !recipe.project || typeof recipe.project.id !== "string" ||
+    recipe.project.id.trim() === ""
+  ) {
+    return "recipe.project.id required";
+  }
+  if (
+    !recipe.promptPack || typeof recipe.promptPack.id !== "string" ||
+    recipe.promptPack.id.trim() === "" ||
+    typeof recipe.promptPack.name !== "string" ||
+    recipe.promptPack.name.trim() === ""
+  ) {
+    return "recipe.promptPack.id and recipe.promptPack.name required";
+  }
+  if (
+    !r.arcTemplate || typeof r.arcTemplate.id !== "string" ||
+    r.arcTemplate.id.trim() === "" || !Array.isArray(r.arcTemplate.beats) ||
     r.arcTemplate.beats.length === 0
   ) {
     return "arcTemplate.id and non-empty arcTemplate.beats required";
   }
+  if (
+    r.arcTemplate.beats.some((beat) =>
+      !beat || typeof beat.id !== "string" || beat.id.trim() === ""
+    )
+  ) {
+    return "arcTemplate.beats must have non-empty ids";
+  }
   return null;
 }
 
-function buildPrompt(
+export function buildPrompt(
   req: OutlineFromRecipeRequest,
   allocation: Map<string, { count: number; rationale: string }>,
 ): { system: string; user: string } {
@@ -259,33 +293,26 @@ function buildPrompt(
     .join("\n");
 
   const system =
-    `You are an expert novel outliner. Given a recipe (curated characters, sparks, themes, motifs), a story arc template (ordered beats), and a per-beat section allocation plan, produce a novel outline — the section-by-section blueprint a writer would actually draft over many chapters.
+    `You are an expert novel outliner. Use the complete canonical recipe/project payload below, including its premise, selected characters and their populated fields, selected relationships, themes, motifs, story spark, aftertaste, recipe instructions, and included setting. Treat supplied facts as authoritative; do not infer personality traits from a character name alone. Given the story arc and per-beat allocation plan, produce the section-by-section outline.
 
 ## Use the allocation plan exactly
 
-This particular novel has been planned with the following per-beat allocation. For each beat, generate EXACTLY the allocated number of sections — no fewer, no more:
+For each beat, generate EXACTLY the allocated number of distinct sections - no fewer, no more. A beat allocated 0 is already covered and must produce no new suggestion. Each generated section must advance the story with a new event, consequence, decision, or revelation rather than paraphrasing an existing or generated section.
 
 ${allocationLines}
 
-Each section should be a distinct scene/chapter within its beat, exploring different moments, characters, or sub-events.
-
 ${
       req.existingSections && req.existingSections.length > 0
-        ? `Existing sections already in this outline (DO NOT duplicate — build on them where natural; prefer beats without existing sections):
+        ? `Existing sections already in this outline (do not duplicate; build forward from them where natural):
 ${
           req.existingSections.map((s) =>
             `- "${s.title ?? "(untitled)"}" (${s.container ?? "scene"}, ${
               s.pov ?? "thirdPersonLimited"
             }): ${s.summary ?? ""}`
           ).join("\n")
-        }
-
-`
+        }\n\n`
         : ""
-    }Distribute the arc beats across the suggestions — every beat should appear in at least one suggestion's storyArcBeatID. Skip beats already covered by an existing section if possible. You may reuse beats across suggestions if multiple sections handle the same beat from different angles.
-
-Respond with structured JSON matching the schema.`;
-
+    }Respond with structured JSON matching the schema.`;
   const user = JSON.stringify(
     {
       recipe: req.recipe,
@@ -300,25 +327,110 @@ Respond with structured JSON matching the schema.`;
 }
 
 // Stage 1: planner. Decides how many sections each arc beat deserves
-// before the generation call runs. Output is a per-beat allocation
-// that the buildPrompt step consumes as context. Keeps the model from
-// defaulting to one-section-per-beat when called cold.
-async function planSectionAllocation(
+// before the generation call runs. The response is strict and validated so a
+// malformed planner response can never silently become three sections/beat.
+const ALLOCATION_SCHEMA = {
+  type: "object",
+  properties: {
+    allocations: {
+      type: "array",
+      minItems: 0,
+      maxItems: 100,
+      items: {
+        type: "object",
+        properties: {
+          beatID: { type: "string", minLength: 1 },
+          sectionCount: { type: "integer", minimum: 0, maximum: 10 },
+          rationale: { type: "string", minLength: 1, maxLength: 500 },
+        },
+        required: ["beatID", "sectionCount", "rationale"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["allocations"],
+  additionalProperties: false,
+} as const;
+
+type Allocation = { count: number; rationale: string };
+
+export function parseAndValidateAllocation(
+  raw: string,
+  beats: Array<{ id: string }>,
+): Map<string, Allocation> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("allocation planner returned invalid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("allocation planner response must be an object");
+  }
+  const allocations = (parsed as { allocations?: unknown }).allocations;
+  if (!Array.isArray(allocations)) {
+    throw new Error("allocation planner response missing allocations array");
+  }
+
+  const validBeatIDs = new Set(beats.map((beat) => beat.id));
+  const seen = new Set<string>();
+  const out = new Map<string, Allocation>();
+  for (const item of allocations) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("allocation contains a malformed item");
+    }
+    const candidate = item as Record<string, unknown>;
+    const unexpectedKeys = Object.keys(candidate).filter((key) =>
+      !["beatID", "sectionCount", "rationale"].includes(key)
+    );
+    if (unexpectedKeys.length > 0) {
+      throw new Error(
+        `allocation contains unexpected field(s): ${unexpectedKeys.join(", ")}`,
+      );
+    }
+    const beatID = candidate.beatID;
+    const count = candidate.sectionCount;
+    const rationale = candidate.rationale;
+    if (typeof beatID !== "string" || !validBeatIDs.has(beatID)) {
+      throw new Error(`allocation contains unknown beatID: ${String(beatID)}`);
+    }
+    if (seen.has(beatID)) {
+      throw new Error(`allocation contains duplicate beatID: ${beatID}`);
+    }
+    if (!Number.isInteger(count) || Number(count) < 0 || Number(count) > 10) {
+      throw new Error(`allocation has invalid sectionCount for beat ${beatID}`);
+    }
+    if (typeof rationale !== "string" || rationale.trim() === "") {
+      throw new Error(`allocation has missing rationale for beat ${beatID}`);
+    }
+    seen.add(beatID);
+    out.set(beatID, { count: Number(count), rationale });
+  }
+  if (out.size !== validBeatIDs.size) {
+    const missing = beats.filter((beat) => !seen.has(beat.id)).map((beat) =>
+      beat.id
+    );
+    throw new Error(`allocation is missing beat(s): ${missing.join(", ")}`);
+  }
+  const total = Array.from(out.values()).reduce(
+    (sum, item) => sum + item.count,
+    0,
+  );
+  if (total < 0 || total > 100) {
+    throw new Error(`allocation total is not sensible: ${total}`);
+  }
+  return new Map(beats.map((beat) => [beat.id, out.get(beat.id)!]));
+}
+
+export function buildAllocationPrompt(
   req: OutlineFromRecipeRequest,
-  apiKey: string,
-  billableCall?: SuggestionLLMCall,
-): Promise<Map<string, { count: number; rationale: string }>> {
+): { system: string; user: string } {
   const system =
-    `You are an expert novel outliner. Given a recipe (curated characters, sparks, themes, motifs) and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular novel.
+    `You are an expert novel outliner. Given a complete canonical recipe/project payload and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular novel.
 
-A novel outline is built from many sections per beat. Some beats are quick transitions (1-2 sections). Some are major movements unfolding across many scenes (5-10+ sections). The same arc template produces very different outlines for different recipes — a fast-paced thriller might give 1-2 sections per beat; an intimate literary novel might give 8-10 to major beats.
+Some beats are quick transitions (1-2 sections). Some are major movements unfolding across many scenes (5-10+ sections). The same arc template produces very different outlines for different recipes. Let the supplied premise, characters, and arc determine density; do not expand merely because the output is called a novel.
 
-For each beat, output a JSON object with:
-- beatID: the beat's UUID (must match exactly)
-- sectionCount: how many outline sections this beat deserves (1-10)
-- rationale: one sentence explaining why
-
-Total sections across all beats should be 30-60+ for a novel-length outline.
+For each beat, output exactly one JSON object with beatID matching the supplied UUID exactly, sectionCount as an integer from 0 through 10, and a concise rationale. Include every beat exactly once, including beats with sectionCount 0. A beat sufficiently covered by existing sections may receive 0; an uncovered beat in an empty outline should receive 1 or more when the story needs it. Do not output any other root key. The total may be short or long; do not target a fixed total.
 
 Output JSON only. No commentary, no prose.`;
 
@@ -334,52 +446,84 @@ Output JSON only. No commentary, no prose.`;
           description: b.description,
         })),
       },
-      existingSections: req.existingSections ?? [],
+      existingSectionsByBeat: Object.fromEntries(
+        req.arcTemplate.beats.map((beat) => [
+          beat.id,
+          (req.existingSections ?? []).filter((section) =>
+            section.storyArcBeatID === beat.id
+          ),
+        ]),
+      ),
+      existingUnlinkedSections: (req.existingSections ?? []).filter((section) =>
+        !section.storyArcBeatID ||
+        !req.arcTemplate.beats.some((beat) =>
+          beat.id === section.storyArcBeatID
+        )
+      ),
     },
     null,
     2,
   );
+  return { system, user };
+}
 
-  const rawResult = billableCall
-    ? await billableCall(
-      system,
-      user,
-      2048,
-      { type: "json_object" },
-      "outline-plan",
-    )
-    : {
-      content: await callOpenAI(system, user, apiKey, {
-        maxTokens: 2048,
-        useJsonSchema: false,
-      }),
-      creditCostCharged: 0,
-      remainingCredits: 0,
-    };
-  const raw = rawResult.content;
+async function planSectionAllocation(
+  req: OutlineFromRecipeRequest,
+  apiKey: string,
+  billableCall?: SuggestionLLMCall,
+): Promise<Map<string, Allocation>> {
+  const { system, user } = buildAllocationPrompt(req);
+  const responseFormat = {
+    type: "json_schema",
+    json_schema: {
+      name: "outline_section_allocations",
+      strict: true,
+      schema: ALLOCATION_SCHEMA,
+    },
+  };
 
-  let parsed: any = {};
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    parsed = {};
+  const call = async (correction: boolean): Promise<string> => {
+    const callSystem = correction
+      ? `${system}\n\nThe previous allocation was invalid. Return a complete corrected allocation for every beat; never omit, duplicate, or invent a beat.`
+      : system;
+    const rawResult = billableCall
+      ? await billableCall(
+        callSystem,
+        user,
+        2048,
+        responseFormat,
+        correction ? "outline-plan-retry" : "outline-plan",
+      )
+      : {
+        content: await callOpenAI(callSystem, user, apiKey, {
+          maxTokens: 2048,
+          useJsonSchema: true,
+          jsonSchemaName: "outline_section_allocations",
+          jsonSchema: ALLOCATION_SCHEMA,
+        }),
+        creditCostCharged: 0,
+        remainingCredits: 0,
+      };
+    return rawResult.content;
+  };
+
+  let firstError: Error | undefined;
+  for (const correction of [false, true]) {
+    try {
+      return parseAndValidateAllocation(
+        await call(correction),
+        req.arcTemplate.beats,
+      );
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      firstError = error;
+    }
   }
-
-  const allocations: any[] = Array.isArray(parsed)
-    ? parsed
-    : Array.isArray(parsed.allocations)
-    ? parsed.allocations
-    : [];
-
-  const out = new Map<string, { count: number; rationale: string }>();
-  for (const beat of req.arcTemplate.beats) {
-    const planned = allocations.find((p: any) => p?.beatID === beat.id);
-    out.set(beat.id, {
-      count: Math.max(1, Math.min(10, Number(planned?.sectionCount) || 3)),
-      rationale: String(planned?.rationale ?? "default"),
-    });
-  }
-  return out;
+  throw new Error(
+    `allocation planner failed validation after retry: ${
+      firstError?.message ?? "unknown error"
+    }`,
+  );
 }
 
 async function checkRateLimit(
@@ -488,9 +632,10 @@ async function callOpenAI(
   }
 }
 
-function validateSuggestions(
+export function validateSuggestions(
   parsed: any,
   beatIds: Set<string>,
+  allocation?: Map<string, Allocation>,
 ): { suggestions: Suggestion[]; warnings: string[] } {
   const warnings: string[] = [];
   if (!parsed || !Array.isArray(parsed.suggestions)) {
@@ -533,10 +678,34 @@ function validateSuggestions(
     });
     used.add(s.storyArcBeatID);
   }
-  // Soft warning: every supplied beat should be referenced at least once
-  for (const bid of beatIds) {
-    if (!used.has(bid)) {
-      warnings.push(`no suggestion references beat ${bid}`);
+  if (allocation) {
+    const counts = new Map<string, number>();
+    for (const suggestion of valid) {
+      counts.set(
+        suggestion.storyArcBeatID,
+        (counts.get(suggestion.storyArcBeatID) ?? 0) + 1,
+      );
+    }
+    for (const [beatID, plan] of allocation) {
+      const actual = counts.get(beatID) ?? 0;
+      if (actual !== plan.count) {
+        throw new Error(
+          `outline generation returned ${actual} sections for beat ${beatID}; expected ${plan.count}`,
+        );
+      }
+    }
+    const expectedTotal = Array.from(allocation.values())
+      .filter((plan) => plan.count > 0)
+      .reduce((sum, plan) => sum + plan.count, 0);
+    if (valid.length !== expectedTotal) {
+      throw new Error(
+        "outline generation count does not equal allocation total",
+      );
+    }
+  } else {
+    // Backward-compatible validation for callers that do not have a plan.
+    for (const bid of beatIds) {
+      if (!used.has(bid)) warnings.push(`no suggestion references beat ${bid}`);
     }
   }
   return { suggestions: valid, warnings };
@@ -653,7 +822,7 @@ async function runSuggestionJob(
       "outline-suggestions",
     );
     const parsed = JSON.parse(rawResponse.content);
-    const result = validateSuggestions(parsed, beatIds);
+    const result = validateSuggestions(parsed, beatIds, allocation);
     await db.from("outline_suggestion_runs").update({
       status: "completed",
       suggestions: result.suggestions,
