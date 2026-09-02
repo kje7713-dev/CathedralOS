@@ -126,6 +126,9 @@ export function sectionRow(section: Section, outlineID: string, position: number
   };
 }
 
+const STORY_ARC_LINKAGE_READ_RETRIES = 3;
+const STORY_ARC_LINKAGE_RETRY_DELAY_MS = 150;
+
 async function normalizeStoryArcBeatIDs(
   db: ReturnType<typeof admin>,
   sections: Section[],
@@ -139,20 +142,28 @@ async function normalizeStoryArcBeatIDs(
   ];
   if (!requestedIDs.length) return sections;
 
-  const { data, error } = await db.from("story_arc_beats").select("id").in(
-    "id",
-    requestedIDs,
-  );
-  if (error) {
-    throw new Error(`Could not validate story arc beats: ${error.message}`);
-  }
-  const validIDs = new Set((data ?? []).map((row) => row.id));
-  const missing = requestedIDs.filter((id) => !validIDs.has(id));
-  if (missing.length > 0) {
-    // Never silently erase the macro-to-section contract. The caller must
-    // sync the owning arc first; accepting with NULL would make generation
-    // lose Story Arc Context while reporting a successful outline.
-    throw new Error(`Story arc beat linkage is unavailable: ${missing.join(", ")}`);
+  for (let attempt = 0; attempt < STORY_ARC_LINKAGE_READ_RETRIES; attempt++) {
+    const { data, error } = await db.from("story_arc_beats").select("id").in(
+      "id",
+      requestedIDs,
+    );
+    if (error) {
+      throw new Error(`Could not validate story arc beats: ${error.message}`);
+    }
+    const validIDs = new Set((data ?? []).map((row) => row.id));
+    const missing = requestedIDs.filter((id) => !validIDs.has(id));
+    if (missing.length === 0) return sections;
+
+    if (attempt + 1 < STORY_ARC_LINKAGE_READ_RETRIES) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, STORY_ARC_LINKAGE_RETRY_DELAY_MS)
+      );
+    } else {
+      // Never silently erase the macro-to-section contract. The caller must
+      // sync the owning arc first; accepting with NULL would make generation
+      // lose Story Arc Context while reporting a successful outline.
+      throw new Error(`Story arc beat linkage is unavailable: ${missing.join(", ")}`);
+    }
   }
   return sections;
 }

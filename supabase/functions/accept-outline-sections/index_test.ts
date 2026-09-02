@@ -67,6 +67,9 @@ Deno.test("arc linkage is persisted for single and bulk section acceptance", asy
   assertEquals(source.includes("storyArcBeatID: row.story_arc_beat_id"), true);
   assertEquals(source.includes("return sections;"), true);
   assertEquals(source.includes("Story arc beat linkage is unavailable"), true);
+  assertEquals(source.includes("STORY_ARC_LINKAGE_READ_RETRIES"), true);
+  assertEquals(source.includes("STORY_ARC_LINKAGE_RETRY_DELAY_MS"), true);
+  assertEquals(source.includes("attempt + 1 < STORY_ARC_LINKAGE_READ_RETRIES"), true);
   assertEquals(source.includes("story_arc_beat_id: section.storyArcBeatID ?? null"), true);
   const row = sectionRow({ id: "section-1", position: 0, title: "One", summary: "Event", storyArcBeatID: "beat-1" }, "outline-1", 4);
   assertEquals(row.story_arc_beat_id, "beat-1");
