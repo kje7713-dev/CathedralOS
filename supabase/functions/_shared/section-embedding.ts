@@ -33,6 +33,8 @@
 // The HTTP adapter exposes { outline_section_id, extracted_summary, embedding_dim }.
 // =============================================================================
 
+import { canonicalUUID } from "./uuid.ts";
+
 const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
   "gpt-4o-mini";
 const OPENAI_EMBED_MODEL = "text-embedding-3-small";
@@ -245,7 +247,9 @@ export async function ensureOutlineAndSection(
 
   // Step 1.5: Validate story_arc_beat_id exists in story_arc_beats before
   // the section upsert. Defensive: null the FK if bogus.
-  let validatedBeatID: string | null = body.story_arc_beat_id ?? null;
+  let validatedBeatID: string | null = body.story_arc_beat_id
+    ? canonicalUUID(body.story_arc_beat_id)
+    : null;
   if (validatedBeatID) {
     const { data: beatExists, error: beatCheckErr } = await adminClient
       .from("story_arc_beats")

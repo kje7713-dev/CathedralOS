@@ -1,6 +1,8 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { acceptRunTerminalOutcome } from "./_outcome.ts";
 import { processSectionMemory } from "../_shared/section-embedding.ts";
+import { canonicalUUID } from "../_shared/uuid.ts";
+export { canonicalUUID };
 
 // Durable Accept All worker. The iOS client submits the complete suggestion
 // batch once, then polls this job. Embedding remains the canonical pipeline,
@@ -131,10 +133,6 @@ export function sectionRow(section: Section, outlineID: string, position: number
   };
 }
 
-export function canonicalUUID(value: string): string {
-  return value.toLowerCase();
-}
-
 export async function normalizeStoryArcBeatIDs(
   db: ReturnType<typeof admin>,
   sections: Section[],
@@ -167,6 +165,19 @@ export async function normalizeStoryArcBeatIDs(
     throw new Error(`Story arc beat linkage is unavailable: ${missing.join(", ")}`);
   }
   return sections;
+}
+
+export function mergeSectionsByCanonicalID(
+  existing: Record<string, unknown>[],
+  replacements: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const byID = new Map(
+    existing.map((section) => [canonicalUUID(String(section.id)), section]),
+  );
+  for (const replacement of replacements) {
+    byID.set(canonicalUUID(String(replacement.id)), replacement);
+  }
+  return Array.from(byID.values());
 }
 
 async function mergeSectionsIntoSnapshot(
@@ -209,7 +220,7 @@ async function mergeSectionsIntoSnapshot(
     ? payload.outlines as Record<string, unknown>[]
     : [];
   const outline = outlines.find((candidate) =>
-    candidate.id === request.outline_id
+    canonicalUUID(String(candidate.id)) === canonicalUUID(request.outline_id)
   );
   if (!outline) {
     throw new Error(
@@ -219,22 +230,19 @@ async function mergeSectionsIntoSnapshot(
   const existing = Array.isArray(outline.sections)
     ? outline.sections as Record<string, unknown>[]
     : [];
-  const byID = new Map(existing.map((section) => [section.id, section]));
-  for (const row of rows ?? []) {
-    byID.set(row.id, {
-      id: row.id,
-      position: row.position,
-      title: row.title,
-      summary: row.summary,
-      container: row.container,
-      pov: row.pov,
-      terminalBeat: row.terminal_beat,
-      status: row.status,
-      parentID: row.parent_id,
-      storyArcBeatID: row.story_arc_beat_id,
-    });
-  }
-  outline.sections = Array.from(byID.values()).sort((a, b) =>
+  const replacements = (rows ?? []).map((row) => ({
+    id: canonicalUUID(String(row.id)),
+    position: row.position,
+    title: row.title,
+    summary: row.summary,
+    container: row.container,
+    pov: row.pov,
+    terminalBeat: row.terminal_beat,
+    status: row.status,
+    parentID: row.parent_id,
+    storyArcBeatID: row.story_arc_beat_id == null ? null : canonicalUUID(String(row.story_arc_beat_id)),
+  }));
+  outline.sections = mergeSectionsByCanonicalID(existing, replacements).sort((a, b) =>
     Number(a.position ?? 0) - Number(b.position ?? 0)
   );
   const { error: updateError } = await db.from("project_snapshots").update({
@@ -258,10 +266,13 @@ async function runJob(runID: string, authHeader: string, userID: string) {
   const openaiKey = Deno.env.get("OPENAI_API_KEY") ?? "";
   if (!openaiKey) throw new Error("OPENAI_API_KEY missing");
   try {
-    const normalizedSections = await normalizeStoryArcBeatIDs(
+    const normalizedSections = (await normalizeStoryArcBeatIDs(
       db,
       request.sections,
-    );
+    )).map((section) => ({
+      ...section,
+      id: canonicalUUID(section.id),
+    }));
     const normalizedRequest = { ...request, sections: normalizedSections };
     const sectionIDs = normalizedSections.map((s) => s.id);
     await db.from("outline_accept_runs").update({
@@ -295,7 +306,7 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       .select("outline_section_id")
       .in(
         "outline_section_id",
-        normalizedSections.map((section) => section.id),
+        normalizedSections.map((section) => canonicalUUID(section.id)),
       );
     if (embeddingError) {
       throw new Error(
@@ -303,7 +314,7 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       );
     }
     const completedIDs = new Set(
-      (existingEmbeddings ?? []).map((row) => String(row.outline_section_id)),
+      (existingEmbeddings ?? []).map((row) => canonicalUUID(String(row.outline_section_id))),
     );
     let done = completedIDs.size;
     let failed = 0;
@@ -314,7 +325,7 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       sections_failed: 0,
     }).eq("id", runID);
     const pendingSections = normalizedSections.filter((section) =>
-      !completedIDs.has(section.id)
+      !completedIDs.has(canonicalUUID(section.id))
     );
     for (let i = 0; i < pendingSections.length; i += 2) {
       // Keep internal embed-section fan-out below the Edge Runtime burst limit.
