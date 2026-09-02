@@ -120,6 +120,7 @@ const CONTAINER_EXPECTED_RANGES: Record<string, [number, number]> = {
 const NOVEL_TARGET_WORDS: [number, number] = [70000, 90000];
 const TOKENS_PER_WORD = 1.3;
 const MAX_PLANNED_SECTIONS = 200;
+export const MAX_EXPANSION_ROUNDS = 3;
 
 const ALLOWED_CONTAINERS = new Set([
   "beat",
@@ -332,16 +333,121 @@ const EXPANSION_SCHEMA = {
   required: ["suggestions"], additionalProperties: false,
 } as const;
 
-type ExpansionAddition = Suggestion & { insertAfterTitle: string | null };
+export type ExpansionAddition = Suggestion & { insertAfterTitle: string | null };
 
-export function buildExpansionPrompt(req: OutlineFromRecipeRequest, current: Suggestion[]): { system: string; user: string } {
+export class ExpansionValidationError extends Error {}
+
+export interface ExpansionRoundDiagnostic {
+  round: number;
+  sectionCountBefore: number;
+  projectedTokensBefore: number;
+  projectedWordsBefore: number;
+  additionsReturned: number;
+  sectionCountAfter: number;
+  projectedTokensAfter: number;
+  projectedWordsAfter: number;
+  remainingEstimatedDeficitTokens: number;
+  status: "completed" | "invalid" | "capped";
+  error?: string;
+}
+
+export interface ProgressiveExpansionResult {
+  suggestions: Suggestion[];
+  warnings: string[];
+  diagnostics: ExpansionRoundDiagnostic[];
+}
+
+export async function progressivelyExpandOutline(
+  initial: Suggestion[],
+  beatIds: Set<string>,
+  expand: (current: Suggestion[], context: ExpansionPromptContext) => Promise<ExpansionAddition[]>,
+  onRound?: (diagnostic: ExpansionRoundDiagnostic, all: ExpansionRoundDiagnostic[]) => Promise<void> | void,
+): Promise<ProgressiveExpansionResult> {
+  let suggestions = [...initial];
+  const diagnostics: ExpansionRoundDiagnostic[] = [];
+  const warnings: string[] = [];
+  for (let round = 1; round <= MAX_EXPANSION_ROUNDS && needsNovelExpansion(suggestions); round++) {
+    const projectedTokensBefore = projectedExpectedTokens(suggestions);
+    const before: ExpansionPromptContext = {
+      round,
+      projectedTokens: projectedTokensBefore,
+      projectedWords: projectedTokensBefore / TOKENS_PER_WORD,
+      desiredWords: NOVEL_TARGET_WORDS,
+      remainingDeficitTokens: Math.max(0, NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD * 0.8 - projectedTokensBefore),
+    };
+    try {
+      const additions = await expand(suggestions, before);
+      const merged = mergeExpansionAdditions(suggestions, additions);
+      const overCap = merged.length > MAX_PLANNED_SECTIONS;
+      const accepted = overCap ? suggestions : merged;
+      const projectedTokensAfter = projectedExpectedTokens(accepted);
+      const diagnostic: ExpansionRoundDiagnostic = {
+        round, sectionCountBefore: suggestions.length, projectedTokensBefore,
+        projectedWordsBefore: projectedTokensBefore / TOKENS_PER_WORD,
+        additionsReturned: overCap ? 0 : additions.length, sectionCountAfter: accepted.length,
+        projectedTokensAfter, projectedWordsAfter: projectedTokensAfter / TOKENS_PER_WORD,
+        remainingEstimatedDeficitTokens: Math.max(0, NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD * 0.8 - projectedTokensAfter),
+        status: overCap || accepted.length >= MAX_PLANNED_SECTIONS ? "capped" : "completed",
+        ...(overCap ? { error: `global ${MAX_PLANNED_SECTIONS}-section safety cap reached` } : {}),
+      };
+      suggestions = accepted;
+      diagnostics.push(diagnostic);
+      await onRound?.(diagnostic, diagnostics);
+      if (overCap || merged.length >= MAX_PLANNED_SECTIONS) {
+        warnings.push(`Outline expansion stopped at the global ${MAX_PLANNED_SECTIONS}-section safety cap.`);
+        break;
+      }
+      if (additions.length === 0) break;
+    } catch (error) {
+      if (!(error instanceof ExpansionValidationError)) throw error;
+      const diagnostic: ExpansionRoundDiagnostic = {
+        round, sectionCountBefore: suggestions.length, projectedTokensBefore,
+        projectedWordsBefore: projectedTokensBefore / TOKENS_PER_WORD, additionsReturned: 0,
+        sectionCountAfter: suggestions.length, projectedTokensAfter: projectedTokensBefore,
+        projectedWordsAfter: projectedTokensBefore / TOKENS_PER_WORD,
+        remainingEstimatedDeficitTokens: Math.max(0, NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD * 0.8 - projectedTokensBefore),
+        status: "invalid", error: error.message.slice(0, 500),
+      };
+      diagnostics.push(diagnostic);
+      await onRound?.(diagnostic, diagnostics);
+      warnings.push("Novel expansion stopped after an invalid expansion response; the previously valid outline was preserved.");
+      break;
+    }
+  }
+  if (needsNovelExpansion(suggestions)) {
+    warnings.push("Outline meets Story Arc coverage but projected length remains below the preferred novel range.");
+  }
+  return { suggestions, warnings: [...new Set(warnings)], diagnostics };
+}
+
+
+export interface ExpansionPromptContext {
+  round: number;
+  projectedTokens: number;
+  projectedWords: number;
+  desiredWords: [number, number];
+  remainingDeficitTokens: number;
+}
+
+export function buildExpansionPrompt(
+  req: OutlineFromRecipeRequest,
+  current: Suggestion[],
+  context?: ExpansionPromptContext,
+): { system: string; user: string } {
+  const projectedTokens = context?.projectedTokens ?? projectedExpectedTokens(current);
+  const projectedWords = context?.projectedWords ?? projectedTokens / TOKENS_PER_WORD;
+  const remainingDeficitTokens = context?.remainingDeficitTokens ?? Math.max(
+    0,
+    NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD * 0.8 - projectedTokens,
+  );
+  const round = context?.round ?? 1;
   return {
-    system: `The current outline is compressed for a novel. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add events, consequences, decisions, reversals, tests, discoveries, and aftermath needed to fully realize compressed arc movements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Add sections when material is compressed; Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Return JSON matching the expansion schema.`,
-    user: JSON.stringify({ recipe: req.recipe, arcTemplate: req.arcTemplate, existingSections: req.existingSections ?? [], currentSuggestions: current }, null, 2),
+    system: `The current outline is compressed for a novel. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad novel range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Return JSON matching the expansion schema.`,
+    user: JSON.stringify({ recipe: req.recipe, arcTemplate: req.arcTemplate, existingSections: req.existingSections ?? [], currentSuggestions: current, expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens } }, null, 2),
   };
 }
 
-function validateExpansionAdditions(parsed: any, beatIds: Set<string>, original: Suggestion[]): ExpansionAddition[] {
+export function validateExpansionAdditions(parsed: any, beatIds: Set<string>, original: Suggestion[]): ExpansionAddition[] {
   if (!parsed || !Array.isArray(parsed.suggestions)) throw new Error("expansion response missing suggestions array");
   const originalTitles = new Set(original.map((s) => s.title));
   const additions: ExpansionAddition[] = [];
@@ -1039,31 +1145,43 @@ async function runSuggestionJob(
       }
     }
 
-    // Validate projected scale after the complete section list exists. If the
-    // plan is still dramatically short, use one focused expansion pass that
-    // adds events rather than silently inflating container sizes.
+    // Expand progressively in bounded rounds. Every round is additive and starts
+    // from the complete valid outline produced so far.
     if (needsNovelExpansion(result.suggestions)) {
-      diagnostics = { ...diagnostics, stage: "expansion_generation" };
-      const expansion = buildExpansionPrompt(body, result.suggestions);
-      const expandedRaw = await billableCall(
-        expansion.system, expansion.user, 16000,
-        { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: EXPANSION_SCHEMA } },
-        "outline-expansion",
-        (content) => {
-          const additions = validateExpansionAdditions(JSON.parse(content), beatIds, result.suggestions);
-          const merged = mergeExpansionAdditions(result.suggestions, additions);
-          if (merged.length > MAX_PLANNED_SECTIONS || needsNovelExpansion(merged)) {
-            throw new Error("outline expansion did not reach plausible novel scale");
-          }
-          return additions;
+      diagnostics = { ...diagnostics, stage: "expansion_generation", expansionRounds: [] };
+      const expanded = await progressivelyExpandOutline(
+        result.suggestions,
+        beatIds,
+        async (current, context) => {
+          const expansion = buildExpansionPrompt(body, current, context);
+          const expandedRaw = await billableCall(
+            expansion.system,
+            expansion.user,
+            16000,
+            { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: EXPANSION_SCHEMA } },
+            `outline-expansion-${context.round}`,
+            (content) => {
+              try {
+                const additions = validateExpansionAdditions(JSON.parse(content), beatIds, current);
+                const merged = mergeExpansionAdditions(current, additions);
+                if (merged.length > MAX_PLANNED_SECTIONS) {
+                  throw new Error(`outline expansion exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
+                }
+                return additions;
+              } catch (error) {
+                throw new ExpansionValidationError(error instanceof Error ? error.message : String(error));
+              }
+            },
+          );
+          return validateExpansionAdditions(JSON.parse(expandedRaw.content), beatIds, current);
+        },
+        async (roundDiagnostic, allDiagnostics) => {
+          diagnostics = { ...diagnostics, expansionRounds: allDiagnostics };
+          await db.from("outline_suggestion_runs").update({ diagnostics }).eq("id", runId);
         },
       );
-      const additions = validateExpansionAdditions(JSON.parse(expandedRaw.content), beatIds, result.suggestions);
-      const merged = mergeExpansionAdditions(result.suggestions, additions);
-      if (merged.length > MAX_PLANNED_SECTIONS || needsNovelExpansion(merged)) {
-        throw new Error("outline expansion did not reach plausible novel scale");
-      }
-      result = { suggestions: merged, warnings: result.warnings };
+      result = { suggestions: expanded.suggestions, warnings: [...result.warnings, ...expanded.warnings] };
+      diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions) };
     }
     await db.from("outline_suggestion_runs").update({
       status: "completed",

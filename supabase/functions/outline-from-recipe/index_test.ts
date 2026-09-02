@@ -18,6 +18,10 @@ import {
   buildPrompt,
   buildSuggestionResponseSchema,
   calculateRepairAllocation,
+  ExpansionValidationError,
+  MAX_EXPANSION_ROUNDS,
+  progressivelyExpandOutline,
+  validateExpansionAdditions,
   mergeRepairedSuggestions,
   mergeExpansionAdditions,
   needsNovelExpansion,
@@ -457,12 +461,13 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(allocationPrompt.includes("floor, not a target or maximum"), true);
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);
-  assertEquals(source.includes("sectionCount"), false);
+  assertEquals(/\bsectionCount\b/.test(source), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
   assertEquals(source.includes("maxItems: MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("if (needsNovelExpansion(result.suggestions))"), true);
-  assertEquals(source.includes('"outline-expansion"'), true);
+  assertEquals(source.includes("Outline meets Story Arc coverage but projected length remains below the preferred novel range."), true);
+  assertEquals(source.includes("outline-expansion-"), true);
   const outlinePrompt = buildPrompt(sparseRequest as any, new Map([
     ["beat-1", { minSections: 1, rationale: "setup" }],
     ["beat-2", { minSections: 1, rationale: "escalation" }],
@@ -480,7 +485,7 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
     title: "Setup", summary: "A setup", container: "scene", pov: "thirdPersonLimited",
     terminalBeat: "The choice is made", storyArcBeatID: "beat-1",
   }]);
-  assertEquals(expansion.system.includes("Add events, consequences"), true);
+  assertEquals(expansion.system.includes("Add distinct events, consequences"), true);
   assertEquals(expansion.system.includes("Do not inflate containers"), true);
   assertEquals(expansion.system.includes("ONLY ADDITIONAL"), true);
   const original = [{ title: "Setup", summary: "A setup", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Choice", storyArcBeatID: "beat-1" }];
@@ -526,7 +531,7 @@ Deno.test("dynamic response contract removes model-owned beat IDs and target/max
   assertEquals(schema.properties.beats.properties["beat-1"].items.properties.storyArcBeatID, undefined);
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);
-  assertEquals(source.includes("sectionCount"), false);
+  assertEquals(/\bsectionCount\b/.test(source), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
   assertEquals(source.includes("result.suggestions.length > MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
@@ -536,4 +541,86 @@ Deno.test("dynamic response contract removes model-owned beat IDs and target/max
   assertEquals(source.includes("firstPassValidatedCounts"), true);
   assertEquals(source.includes("if (validateResponse) await validateResponse"), true);
   assertEquals(source.includes("if (needsNovelExpansion(result.suggestions))"), true);
+});
+
+
+function expansionSection(title: string, container = "scene", beat = "beat-1", insertAfterTitle: string | null = null): any {
+  return { title, summary: `${title} summary`, container, pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, insertAfterTitle };
+}
+
+function sceneOutline(count: number): any[] {
+  return Array.from({ length: count }, (_, index) => ({
+    title: `Existing ${index + 1}`, summary: `Existing summary ${index + 1}`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `Existing ending ${index + 1}`, storyArcBeatID: "beat-1",
+  }));
+}
+
+Deno.test("progressive expansion runs round 2 after a short round 1 and succeeds when scale is reached", async () => {
+  const calls: any[] = [];
+  const initial = sceneOutline(27);
+  const result = await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async (current, context) => {
+    calls.push({ current: current.length, context });
+    return context.round === 1
+      ? Array.from({ length: 10 }, (_, i) => expansionSection(`Round 1 ${i + 1}`, "scene"))
+      : Array.from({ length: 10 }, (_, i) => expansionSection(`Round 2 ${i + 1}`, "chapter"));
+  });
+  assertEquals(calls.map((call) => call.context.round), [1, 2]);
+  assertEquals(calls[0].current, 27);
+  assertEquals(calls[1].current, 37);
+  assertEquals(result.diagnostics.length, 2);
+  assertEquals(result.diagnostics[0].sectionCountBefore, 27);
+  assertEquals(result.diagnostics[0].sectionCountAfter, 37);
+  assertEquals(result.diagnostics[1].sectionCountBefore, 37);
+  assertEquals(result.diagnostics[1].sectionCountAfter, 47);
+  assertEquals(result.warnings, []);
+});
+
+Deno.test("three short valid expansion rounds return the best outline with a quality warning", async () => {
+  let calls = 0;
+  const initial = sceneOutline(27);
+  const result = await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => {
+    calls++;
+    return [expansionSection(`Small addition ${calls}`)];
+  });
+  assertEquals(calls, MAX_EXPANSION_ROUNDS);
+  assertEquals(result.suggestions.length, 30);
+  assertEquals(result.diagnostics.length, MAX_EXPANSION_ROUNDS);
+  assertEquals(result.warnings, ["Outline meets Story Arc coverage but projected length remains below the preferred novel range."]);
+  assertEquals(result.suggestions.slice(0, 27), initial);
+});
+
+Deno.test("invalid expansion output preserves the prior outline and is rejected before billing", async () => {
+  const initial = sceneOutline(27);
+  const duplicate = expansionSection("New", "scene", "beat-1");
+  let rejected = false;
+  try {
+    validateExpansionAdditions({ suggestions: [duplicate, duplicate] }, new Set(["beat-1"]), initial as any);
+  } catch { rejected = true; }
+  assertEquals(rejected, true);
+  let calls = 0;
+  const result = await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => {
+    calls++;
+    throw new ExpansionValidationError("duplicate section contract");
+  });
+  assertEquals(calls, 1);
+  assertEquals(result.suggestions, initial);
+  assertEquals(result.diagnostics[0].status, "invalid");
+  assertEquals(result.warnings[0].includes("previously valid outline was preserved"), true);
+});
+
+Deno.test("existing sections survive progressive expansion and global cap stops additions safely", async () => {
+  const initial = sceneOutline(199).map((section) => ({ ...section, container: "beat" }));
+  const result = await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => [expansionSection("At cap", "scene"), expansionSection("Over cap", "scene")]);
+  assertEquals(result.suggestions.length, 199);
+  assertEquals(result.suggestions, initial);
+  assertEquals(result.diagnostics[0].status, "capped");
+  assertEquals(result.diagnostics[0].additionsReturned, 0);
+  assertEquals(result.warnings[0].includes("global 200-section safety cap"), true);
+});
+
+Deno.test("expansion prompt includes round projection, broad range, and remaining deficit", () => {
+  const prompt = buildExpansionPrompt(sparseRequest as any, sceneOutline(27) as any, { round: 2, projectedTokens: 35100, projectedWords: 27000, desiredWords: [70000, 90000], remainingDeficitTokens: 22700 });
+  assertEquals(prompt.system.includes("progressive expansion round 2 of 3"), true);
+  assertEquals(prompt.system.includes("remaining estimated deficit"), true);
+  assertEquals(prompt.user.includes("remainingDeficitTokens"), true);
+  assertEquals(prompt.system.includes("never return, rewrite, reorder, or omit existing sections"), true);
 });
