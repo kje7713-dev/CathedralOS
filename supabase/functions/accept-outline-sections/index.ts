@@ -26,6 +26,8 @@ const ALLOWED_CONTAINERS = new Set([
   "chapter",
   "episode",
 ]);
+const MAX_ACCEPTED_SECTIONS = 200;
+
 const ALLOWED_POVS = new Set([
   "firstPerson",
   "secondPerson",
@@ -56,7 +58,7 @@ function response(body: unknown, status = 200) {
 function errorResponse(code: string, message: string, status: number) {
   return response({ errorCode: code, message }, status);
 }
-function isUUID(value: unknown): value is string {
+export function isUUID(value: unknown): value is string {
   return typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       .test(value);
@@ -82,7 +84,7 @@ async function authenticate(req: Request) {
   const { data: { user } } = await client.auth.getUser();
   return user ? { auth, user } : null;
 }
-function validate(body: RequestBody): string | null {
+export function validate(body: RequestBody): string | null {
   if (
     !body || !isUUID(body.outline_id) || typeof body.project_id !== "string" ||
     body.project_id.length === 0
@@ -93,8 +95,8 @@ function validate(body: RequestBody): string | null {
   ) return "idempotency_key is required";
   if (
     !Array.isArray(body.sections) || body.sections.length < 1 ||
-    body.sections.length > 100
-  ) return "sections must contain 1-100 items";
+    body.sections.length > MAX_ACCEPTED_SECTIONS
+  ) return `sections must contain 1-${MAX_ACCEPTED_SECTIONS} items`;
   for (const section of body.sections) {
     if (
       !isUUID(section.id) || !Number.isInteger(section.position) ||
@@ -106,6 +108,9 @@ function validate(body: RequestBody): string | null {
     ) return "invalid section container";
     if (section.pov != null && !ALLOWED_POVS.has(section.pov)) {
       return "invalid section pov";
+    }
+    if (section.storyArcBeatID != null && !isUUID(section.storyArcBeatID)) {
+      return "invalid story arc beat ID";
     }
   }
   return null;
@@ -126,10 +131,11 @@ export function sectionRow(section: Section, outlineID: string, position: number
   };
 }
 
-const STORY_ARC_LINKAGE_READ_RETRIES = 3;
-const STORY_ARC_LINKAGE_RETRY_DELAY_MS = 150;
+export function canonicalUUID(value: string): string {
+  return value.toLowerCase();
+}
 
-async function normalizeStoryArcBeatIDs(
+export async function normalizeStoryArcBeatIDs(
   db: ReturnType<typeof admin>,
   sections: Section[],
 ) {
@@ -137,33 +143,28 @@ async function normalizeStoryArcBeatIDs(
     ...new Set(
       sections
         .map((section) => section.storyArcBeatID)
-        .filter((id): id is string => Boolean(id)),
+        .filter((id): id is string => Boolean(id))
+        .map(canonicalUUID),
     ),
   ];
   if (!requestedIDs.length) return sections;
 
-  for (let attempt = 0; attempt < STORY_ARC_LINKAGE_READ_RETRIES; attempt++) {
-    const { data, error } = await db.from("story_arc_beats").select("id").in(
-      "id",
-      requestedIDs,
-    );
-    if (error) {
-      throw new Error(`Could not validate story arc beats: ${error.message}`);
-    }
-    const validIDs = new Set((data ?? []).map((row) => row.id));
-    const missing = requestedIDs.filter((id) => !validIDs.has(id));
-    if (missing.length === 0) return sections;
-
-    if (attempt + 1 < STORY_ARC_LINKAGE_READ_RETRIES) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, STORY_ARC_LINKAGE_RETRY_DELAY_MS)
-      );
-    } else {
-      // Never silently erase the macro-to-section contract. The caller must
-      // sync the owning arc first; accepting with NULL would make generation
-      // lose Story Arc Context while reporting a successful outline.
-      throw new Error(`Story arc beat linkage is unavailable: ${missing.join(", ")}`);
-    }
+  const { data, error } = await db.from("story_arc_beats").select("id").in(
+    "id",
+    requestedIDs,
+  );
+  if (error) {
+    throw new Error(`Could not validate story arc beats: ${error.message}`);
+  }
+  const validIDs = new Set(
+    (data ?? []).map((row) => canonicalUUID(String(row.id))),
+  );
+  const missing = requestedIDs.filter((id) => !validIDs.has(id));
+  if (missing.length > 0) {
+    // Never silently erase the macro-to-section contract. The caller must
+    // sync the owning arc first; accepting with NULL would make generation
+    // lose Story Arc Context while reporting a successful outline.
+    throw new Error(`Story arc beat linkage is unavailable: ${missing.join(", ")}`);
   }
   return sections;
 }
