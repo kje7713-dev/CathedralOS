@@ -225,6 +225,19 @@ Deno.test("existing beat coverage allows zero allocation and emits no duplicate"
   );
 });
 
+Deno.test("zero allocation accepts an empty suggestion result", () => {
+  const allocation = new Map([
+    ["beat-1", { count: 0, rationale: "already covered" }],
+    ["beat-2", { count: 0, rationale: "already covered" }],
+  ]);
+  const result = validateSuggestions(
+    { suggestions: [] },
+    new Set(["beat-1", "beat-2"]),
+    allocation,
+  );
+  assertEquals(result.suggestions, []);
+});
+
 Deno.test("outline validation requires the exact allocation total and grounded content", () => {
   const allocation = new Map([
     ["beat-1", { count: 1, rationale: "setup" }],

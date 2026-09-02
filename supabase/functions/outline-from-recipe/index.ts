@@ -55,7 +55,7 @@ const RESPONSE_SCHEMA = {
   "properties": {
     "suggestions": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "maxItems": 100,
       "items": {
         "type": "object",
@@ -807,22 +807,49 @@ async function runSuggestionJob(
       billableCall,
     );
     const { system, user: userPrompt } = buildPrompt(body, allocation);
-    const rawResponse = await billableCall(
-      system,
-      userPrompt,
-      16000,
-      {
-        type: "json_schema",
-        json_schema: {
-          name: "outline_suggestions",
-          strict: true,
-          schema: RESPONSE_SCHEMA,
-        },
+    const responseFormat = {
+      type: "json_schema",
+      json_schema: {
+        name: "outline_suggestions",
+        strict: true,
+        schema: RESPONSE_SCHEMA,
       },
-      "outline-suggestions",
-    );
-    const parsed = JSON.parse(rawResponse.content);
-    const result = validateSuggestions(parsed, beatIds, allocation);
+    };
+    let result: { suggestions: Suggestion[]; warnings: string[] } | undefined;
+    const expectedTotal = Array.from(allocation.values())
+      .reduce((sum, plan) => sum + plan.count, 0);
+    let generationError: Error | undefined;
+    if (expectedTotal === 0) {
+      result = { suggestions: [], warnings: [] };
+    }
+    for (const correction of expectedTotal === 0 ? [] : [false, true]) {
+      const correctionSystem = correction
+        ? `${system}\n\nThe previous response failed validation: ${
+          generationError?.message ?? "it did not satisfy the allocation"
+        }. Return a complete corrected response. Recount the suggestions for every beat before responding. Do not omit, merge, or add sections; a beat allocated 0 must still have no suggestions.`
+        : system;
+      const rawResponse = await billableCall(
+        correctionSystem,
+        userPrompt,
+        16000,
+        responseFormat,
+        correction ? "outline-suggestions-retry" : "outline-suggestions",
+      );
+      const parsed = JSON.parse(rawResponse.content);
+      try {
+        result = validateSuggestions(parsed, beatIds, allocation);
+        break;
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        generationError = error;
+        // Retry only validation failures. Provider and JSON errors retain their
+        // existing failure behavior and must not trigger another charge.
+        if (correction) throw error;
+      }
+    }
+    if (!result) {
+      throw generationError ?? new Error("outline generation failed");
+    }
     await db.from("outline_suggestion_runs").update({
       status: "completed",
       suggestions: result.suggestions,
