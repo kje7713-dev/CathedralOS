@@ -5265,3 +5265,33 @@ Deno.test("Story Arc Context resolves within-beat position by canonical order", 
   assertEquals(resolveWithinBeatPosition([10, 20, 30, 40, 50], 30), { position: 2, total: 5 });
   assertEquals(resolveWithinBeatPosition([10, 20, 30, 40, 50], 50), { position: 4, total: 5 });
 });
+
+// PR A fix-forward: canonical chronology and durable Run All memory barriers.
+Deno.test("RAG continuity uses outline chronology and separates immediate handoff from cumulative state", async () => {
+  const source = (await import("node:fs")).readFileSync(
+    "supabase/functions/generate-story/index.ts",
+    "utf8",
+  );
+  const start = source.indexOf("async function fetchProjectStateContext");
+  const end = source.indexOf("// ---- fetchOutlineSectionContext", start);
+  const body = source.slice(start, end);
+  assertStringIncludes(body, "outline_id, position");
+  assertStringIncludes(body, "< Number(current.position");
+  assertStringIncludes(body, "## Previous Canonical Section");
+  assertStringIncludes(body, "## Cumulative Story State");
+  assertEquals(body.includes("order(\"created_at\""), false);
+  assertEquals(body.includes("created_at >"), false);
+});
+
+Deno.test("RAG continuity decodes active fact objects and preserves the output lineage barrier", async () => {
+  const source = (await import("node:fs")).readFileSync(
+    "supabase/functions/generate-story/index.ts",
+    "utf8",
+  );
+  assertStringIncludes(source, "item.active !== true");
+  assertStringIncludes(source, "item.superseded_by");
+  assertStringIncludes(source, "String(item.fact ?? \"\")");
+  assertStringIncludes(source, "generation_output_id");
+  assertStringIncludes(source, "section memory was not durably linked");
+  assertStringIncludes(source, "for (let attempt = 1; attempt <= 2; attempt++)");
+});

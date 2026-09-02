@@ -126,7 +126,7 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
     source.includes('.from("chapter_runs")\n      .delete()'),
     false,
   );
-  assertEquals(source.includes("pending.slice(0, 2)"), true);
+  assertEquals(source.includes("pending.slice(0, 1)"), true);
   assertEquals(source.includes("queueContinuation(runId, authHeader)"), true);
   assertEquals(source.includes("worker_lease_until"), true);
   assertEquals(source.includes("RetryableGenerationError"), true);

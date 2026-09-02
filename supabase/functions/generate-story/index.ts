@@ -219,6 +219,7 @@ interface BulkEstimateSection {
 
 interface GenerateStoryRequest {
   projectName?: string;
+  // Durable Run All identity/token. These are consumed by the handler.
   run_id?: string;
   run_outline_token?: string;
   promptPackName?: string;
@@ -998,158 +999,137 @@ const CONTAINER_HARD_CAPS: Record<Container, number> = {
 async function fetchProjectStateContext(
   adminClient: any,
   projectId: string,
-  // The current section being generated. When set, its section_embeddings
-  // row is excluded from the result — the current section's own prior
-  // memory (latest UPSERT) must not feed back into its own prompt.
-  // Per Kevin 2026-08-21 14:44 EDT smoke-test feedback (cleanup pass fix #1).
   excludeSectionId?: string,
 ): Promise<string> {
   try {
-    // Kevin 2026-08-21 12:55 EDT smoke test fix: defense-in-depth — only include
-    // section_embeddings rows whose source generation_output still exists.
-    // The `!inner` embed forces an INNER JOIN against generation_outputs,
-    // excluding rows where:
-    //   (a) generation_output_id IS NULL (pre-migration rows that survived
-    //       the one-time cleanup)
-    //   (b) the source generation_output was deleted (regardless of whether
-    //       the AFTER DELETE trigger fired — covers iOS-crash-aborts-DELETE
-    //       edge case Kevin's T1 exposed)
-    // This is belt-and-suspenders with the write-time trigger (commit 7031845):
-    // write-time cleanup removes the row, read-time filter excludes it even
-    // if the cleanup missed. Together they enforce the invariant.
-    //
-    // Kevin 2026-08-21 14:44 EDT cleanup pass: also exclude the current
-    // section's section_embeddings row (when excludeSectionId is provided)
-    // so the current section's prior/throwaway memory does not contaminate
-    // its own prompt. UPSERT replaces the row on each regeneration, so the
-    // row's memory is whatever the latest throwaway produced — it is not
-    // "prior state", it is "the current section so far".
-    let query = adminClient
+    // Narrative chronology is the outline's canonical order, never row timestamps.
+    const { data: current, error: currentError } = await adminClient
+      .from("outline_sections")
+      .select("id, outline_id, position")
+      .eq("id", excludeSectionId ?? "")
+      .maybeSingle();
+    if (currentError || !current) return "";
+
+    const { data: memories, error: memoryError } = await adminClient
       .from("section_embeddings")
       .select(
-        "extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, created_at",
+        "outline_section_id, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, generation_output_id, generation_outputs!inner(id)",
       )
-      .eq("project_id", projectId);
-    if (excludeSectionId) {
-      query = query.neq("outline_section_id", excludeSectionId);
-    }
-    const { data, error } = await query.order("created_at", {
-      ascending: true,
-    });
-    console.log(
-      `[generate-story] fetchProjectStateContext: rows=${
-        data?.length ?? 0
-      } for projectId=${projectId} excludeSectionId=${
-        excludeSectionId ?? "none"
-      } error=${error?.message ?? "none"}`,
-    );
-    if (error) {
-      // Surface the actual PostgREST error (defense-in-depth: previously this
-      // was collapsed into a silent "" return, which made the Kevin 14:44 EDT
-      // smoke-test "no Project State block" symptom hard to attribute).
-      console.error(
-        `[generate-story] fetchProjectStateContext query error: ${
-          error.message ?? JSON.stringify(error)
-        }`,
-      );
+      .eq("project_id", projectId)
+      .neq("outline_section_id", current.id);
+    if (memoryError) {
+      console.error(`[generate-story] fetchProjectStateContext query error: ${memoryError.message ?? JSON.stringify(memoryError)}`);
       return "";
     }
-    if (!data || data.length === 0) return "";
+    if (!memories?.length) return "";
 
-    // Iterate in ascending order so later scenes overwrite earlier ones
-    // (Map.set on the same key replaces — gives us "latest entry per X").
-    const charactersByName = new Map<string, any>();
-    const threadsByName = new Map<string, any>();
-    const continuityFacts = new Set<string>();
-    const openLoopsByDesc = new Map<string, any>();
-    let latestSummary = "";
-    let latestEndingState: any = {};
-    let latestCreatedAt = "";
-
-    for (const scene of data) {
-      if (Array.isArray(scene.character_deltas)) {
-        for (const delta of scene.character_deltas) {
-          if (delta && typeof delta === "object" && delta.character_name) {
-            charactersByName.set(delta.character_name, delta);
-          }
-        }
-      }
-      if (Array.isArray(scene.plot_thread_deltas)) {
-        for (const thread of scene.plot_thread_deltas) {
-          if (thread && typeof thread === "object" && thread.thread_name) {
-            threadsByName.set(thread.thread_name, thread);
-          }
-        }
-      }
-      if (Array.isArray(scene.continuity_facts)) {
-        for (const fact of scene.continuity_facts) {
-          if (typeof fact === "string") continuityFacts.add(fact);
-        }
-      }
-      if (Array.isArray(scene.open_loops)) {
-        for (const loop of scene.open_loops) {
-          if (loop && typeof loop === "object" && loop.description) {
-            openLoopsByDesc.set(loop.description, loop);
-          }
-        }
-      }
-      if (scene.created_at > latestCreatedAt) {
-        latestCreatedAt = scene.created_at;
-        latestSummary = scene.extracted_summary || "";
-        latestEndingState = scene.scene_ending_state || {};
+    const ids = memories.map((row: any) => row.outline_section_id).filter(Boolean);
+    const { data: sections, error: sectionError } = await adminClient
+      .from("outline_sections")
+      .select("id, outline_id, position")
+      .in("id", ids);
+    if (sectionError) return "";
+    const order = new Map<string, number>();
+    for (const section of sections ?? []) {
+      if (section.outline_id === current.outline_id) {
+        order.set(String(section.id), Number(section.position ?? 0));
       }
     }
 
-    const lines: string[] = [
-      "## Project state (cumulative across all accepted scenes)",
-    ];
-    lines.push("");
-    if (latestSummary) {
-      lines.push(`**Latest summary:** ${latestSummary}`);
-      lines.push("");
-    }
-    if (charactersByName.size > 0) {
-      lines.push("### Characters (latest known state)");
-      for (const delta of charactersByName.values()) {
-        lines.push(`- **${delta.character_name}**: ${JSON.stringify(delta)}`);
-      }
-      lines.push("");
-    }
-    if (threadsByName.size > 0) {
-      lines.push("### Plot threads (latest status)");
-      for (const thread of threadsByName.values()) {
-        lines.push(
-          `- **${thread.thread_name}** [${thread.status}]: ${thread.description}`,
-        );
-      }
-      lines.push("");
-    }
-    if (continuityFacts.size > 0) {
-      lines.push("### Continuity facts (must not be contradicted)");
-      for (const fact of continuityFacts) lines.push(`- ${fact}`);
-      lines.push("");
-    }
-    if (openLoopsByDesc.size > 0) {
-      lines.push("### Open loops (unresolved)");
-      for (const loop of openLoopsByDesc.values()) {
-        lines.push(`- [${loop.type}] ${loop.description}`);
-      }
-      lines.push("");
-    }
-    if (
-      latestEndingState && typeof latestEndingState === "object" &&
-      Object.keys(latestEndingState).length > 0
-    ) {
-      lines.push("### Ending state (latest scene)");
-      lines.push("```json");
-      lines.push(JSON.stringify(latestEndingState, null, 2));
-      lines.push("```");
-    }
-    return lines.join("\n");
-  } catch (e) {
-    console.error(`[generate-story] fetchProjectStateContext failed: ${e}`);
+    const priorScenes = memories
+      .filter((row: any) => order.has(String(row.outline_section_id)))
+      .filter((row: any) =>
+        (order.get(String(row.outline_section_id)) ?? 0) < Number(current.position ?? 0)
+      )
+      .sort((a: any, b: any) =>
+        (order.get(String(a.outline_section_id)) ?? 0) -
+        (order.get(String(b.outline_section_id)) ?? 0)
+      );
+    if (!priorScenes.length) return "";
+
+    return aggregateProjectStateForGeneration(priorScenes, priorScenes[priorScenes.length - 1]);
+  } catch (error) {
+    console.error(`[generate-story] fetchProjectStateContext failed: ${error}`);
     return "";
   }
+}
+
+function aggregateProjectStateForGeneration(
+  scenes: Array<Record<string, unknown>>,
+  previousScene: Record<string, unknown>,
+): string {
+  const characters = new Map<string, Record<string, unknown>>();
+  const threads = new Map<string, Record<string, unknown>>();
+  const facts = new Map<string, Record<string, unknown>>();
+  const loops = new Map<string, Record<string, unknown>>();
+  const lines = ["## Project State", ""];
+
+  lines.push("## Previous Canonical Section", "");
+  if (typeof previousScene.extracted_summary === "string" && previousScene.extracted_summary) {
+    lines.push(`Summary: ${previousScene.extracted_summary}`, "");
+  }
+  if (previousScene.scene_ending_state && typeof previousScene.scene_ending_state === "object") {
+    lines.push("Ending state:", "```json", JSON.stringify(previousScene.scene_ending_state, null, 2), "```", "");
+  }
+  const previousFacts = Array.isArray(previousScene.continuity_facts) ? previousScene.continuity_facts : [];
+  const factText = previousFacts.map((fact: any) => typeof fact === "string" ? fact : fact?.fact).filter(Boolean);
+  if (factText.length) lines.push("Concrete continuity facts:", ...factText.map((fact) => `- ${fact}`), "");
+
+  for (const scene of scenes) {
+    for (const delta of Array.isArray(scene.character_deltas) ? scene.character_deltas : []) {
+      if (delta && typeof delta === "object" && typeof (delta as any).character_name === "string") {
+        const item = delta as Record<string, unknown>;
+        const name = String(item.character_name);
+        const prior = characters.get(name) ?? {};
+        const merged = { ...prior };
+        for (const [key, value] of Object.entries(item)) {
+          if (value !== null && value !== undefined && value !== "") merged[key] = value;
+        }
+        characters.set(name, merged);
+      }
+    }
+    for (const thread of Array.isArray(scene.plot_thread_deltas) ? scene.plot_thread_deltas : []) {
+      if (thread && typeof thread === "object") {
+        const item = thread as any;
+        const key = String(item.thread_name ?? item.id ?? "");
+        if (key) threads.set(key, item);
+      }
+    }
+    for (const fact of Array.isArray(scene.continuity_facts) ? scene.continuity_facts : []) {
+      if (fact && typeof fact === "object") {
+        const item = fact as any;
+        const key = String(item.id ?? item.fact ?? "");
+        if (!key || item.active !== true) {
+          if (key) facts.delete(key);
+        } else if (item.superseded_by) {
+          facts.delete(String(item.superseded_by));
+          facts.delete(key);
+        } else {
+          facts.set(key, item);
+        }
+      } else if (typeof fact === "string" && fact) {
+        facts.set(fact, { fact });
+      }
+    }
+    for (const loop of Array.isArray(scene.open_loops) ? scene.open_loops : []) {
+      if (loop && typeof loop === "object") {
+        const item = loop as any;
+        const key = String(item.id ?? item.description ?? "");
+        if (key) loops.set(key, item);
+      }
+    }
+  }
+
+  lines.push("## Cumulative Story State", "");
+  if (characters.size) {
+    lines.push("Characters:", ...Array.from(characters.values()).map((item) => `- **${item.character_name}**: ${JSON.stringify(item)}`), "");
+  }
+  if (threads.size) {
+    lines.push("Plot threads:", ...Array.from(threads.values()).map((item) => `- **${item.thread_name}** [${item.status}]: ${item.description ?? ""}`), "");
+  }
+  if (facts.size) lines.push("Continuity Facts:", ...Array.from(facts.values()).map((item) => `- ${String(item.fact ?? "")}`), "");
+  if (loops.size) lines.push("Open loops:", ...Array.from(loops.values()).map((item) => `- [${item.type ?? "unknown"}] ${item.description ?? ""}`), "");
+  return lines.join("\n");
 }
 
 export function resolveWithinBeatPosition(positions: number[], currentPosition: number): { position: number; total: number } | null {
@@ -1919,6 +1899,15 @@ Structural limits:
       contextLines.push(`Beat purpose: ${req.storyArcBeatPurpose}`);
     }
     if (typeof req.storyArcWithinBeatPosition === "number" && typeof req.storyArcWithinBeatTotal === "number") {
+      contextLines.push(
+        `This movement contains ${req.storyArcWithinBeatTotal} planned sections.`,
+        `Current section: ${req.storyArcWithinBeatPosition + 1} of ${req.storyArcWithinBeatTotal}.`,
+      );
+    }
+    if (
+      typeof req.storyArcWithinBeatPosition === "number" &&
+      typeof req.storyArcWithinBeatTotal === "number"
+    ) {
       contextLines.push(
         `This movement contains ${req.storyArcWithinBeatTotal} planned sections.`,
         `Current section: ${req.storyArcWithinBeatPosition + 1} of ${req.storyArcWithinBeatTotal}.`,
@@ -3166,46 +3155,85 @@ async function handler(
                 }`,
               );
             } else if (sectionForEmbed) {
-              const priorContext = await fetchPriorContextForEmbedSection(
-                adminClient,
-                projectID,
-                String(sectionForEmbed.id),
-                String(sectionForEmbed.outline_id),
-                Number(sectionForEmbed.position ?? 0),
-              );
-              void callEmbedSectionForGeneratedOutput(
-                adminClient,
-                adminClient,
-                authHeader,
-                {
-                  outline_section_id: String(sectionForEmbed.id),
-                  outline_id: String(sectionForEmbed.outline_id),
-                  project_id: projectID ?? "",
-                  position: Number(sectionForEmbed.position ?? 0),
-                  title: String(sectionForEmbed.title ?? ""),
-                  summary: String(sectionForEmbed.summary ?? ""),
-                  container: (sectionForEmbed.container ?? null) as
-                    | string
-                    | null,
-                  pov: (sectionForEmbed.pov ?? null) as string | null,
-                  terminal_beat: (sectionForEmbed.terminal_beat ?? null) as
-                    | string
-                    | null,
-                  story_arc_beat_id:
-                    (sectionForEmbed.story_arc_beat_id ?? null) as
-                      | string
-                      | null,
-                  raw_text: providerResult.content,
-                  output_id: outputId,
-                  prior_context: priorContext,
-                },
-              ).catch((e) => {
-                console.error(
-                  `[generate-story] post-generation embed-section failed: ${
-                    (e as Error)?.message ?? String(e)
-                  }`,
+              const priorContext = durableRunId
+                ? await fetchProjectStateContext(
+                  adminClient,
+                  projectID ?? "",
+                  String(sectionForEmbed.id),
+                )
+                : await fetchPriorContextForEmbedSection(
+                  adminClient,
+                  projectID,
+                  String(sectionForEmbed.id),
+                  String(sectionForEmbed.outline_id),
+                  Number(sectionForEmbed.position ?? 0),
                 );
-              });
+              const embedPayload = {
+                outline_section_id: String(sectionForEmbed.id),
+                outline_id: String(sectionForEmbed.outline_id),
+                project_id: projectID ?? "",
+                position: Number(sectionForEmbed.position ?? 0),
+                title: String(sectionForEmbed.title ?? ""),
+                summary: String(sectionForEmbed.summary ?? ""),
+                container: (sectionForEmbed.container ?? null) as string | null,
+                pov: (sectionForEmbed.pov ?? null) as string | null,
+                terminal_beat: (sectionForEmbed.terminal_beat ?? null) as string | null,
+                story_arc_beat_id: (sectionForEmbed.story_arc_beat_id ?? null) as string | null,
+                raw_text: providerResult.content,
+                output_id: outputId,
+                prior_context: priorContext,
+              };
+              if (durableRunId) {
+                // Run All has a hard dependency: extraction must finish and
+                // point at this exact persisted output before the next section.
+                const { processSectionMemory } = await import(
+                  "../_shared/section-embedding.ts"
+                );
+                let extractionError: unknown;
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                  try {
+                    await processSectionMemory(
+                      embedPayload,
+                      adminClient,
+                      Deno.env.get("OPENAI_API_KEY") ?? "",
+                    );
+                    extractionError = undefined;
+                    break;
+                  } catch (error) {
+                    extractionError = error;
+                    console.error(
+                      `[generate-story] Run All memory extraction attempt ${attempt}/2 failed: ${String(error)}`,
+                    );
+                  }
+                }
+                if (extractionError) throw extractionError;
+                const { data: durableMemory, error: durableMemoryError } =
+                  await adminClient.from("section_embeddings")
+                    .select("generation_output_id")
+                    .eq("outline_section_id", sectionForEmbed.id)
+                    .maybeSingle();
+                if (
+                  durableMemoryError ||
+                  durableMemory?.generation_output_id !== outputId
+                ) {
+                  throw new Error(
+                    `section memory was not durably linked to generation output ${outputId}`,
+                  );
+                }
+              } else {
+                void callEmbedSectionForGeneratedOutput(
+                  adminClient,
+                  adminClient,
+                  authHeader,
+                  embedPayload,
+                ).catch((e) => {
+                  console.error(
+                    `[generate-story] post-generation embed-section failed: ${
+                      (e as Error)?.message ?? String(e)
+                    }`,
+                  );
+                });
+              }
             }
           }
 
