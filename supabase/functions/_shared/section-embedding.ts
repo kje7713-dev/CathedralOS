@@ -34,6 +34,12 @@
 // =============================================================================
 
 import { canonicalUUID } from "./uuid.ts";
+import {
+  type DirectBillingContext,
+  preflightDirectUsage,
+  settleDirectUsage,
+} from "./direct-billing.ts";
+import { SupabaseCreditStore } from "../generate-story/_credits.ts";
 
 const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
   "gpt-4o-mini";
@@ -302,6 +308,7 @@ export async function processSectionMemory(
   // deno-lint-ignore no-explicit-any
   adminClient: any,
   openaiKey: string,
+  billing?: DirectBillingContext,
 ): Promise<SectionEmbeddingResult> {
   // Step 3: extract the scene memory via LLM.
   //
@@ -321,6 +328,17 @@ export async function processSectionMemory(
   let sceneMemory: SceneMemory;
   // PR-XXX-A: track LLM call duration for llm_prompts log
   const extractStartMs = Date.now();
+  const extractionInput = body.prior_context
+    ? `${body.prior_context}\n${body.raw_text ?? ""}`
+    : (body.raw_text ?? "");
+  if (billing) {
+    await preflightDirectUsage(
+      billing,
+      OPENAI_MODEL_DEFAULT,
+      Math.ceil(extractionInput.length / 4),
+      8192,
+    );
+  }
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 120_000);
@@ -358,7 +376,7 @@ ${body.raw_text}`
         ],
         // Reasoning models consume part of this budget before emitting JSON.
         // 1500 could truncate the object and surface as "invalid JSON".
-        max_completion_tokens: 4096,
+        max_completion_tokens: 8192,
         temperature: 0.2,
         response_format: SCENE_MEMORY_RESPONSE_FORMAT,
       }),
@@ -376,6 +394,15 @@ ${body.raw_text}`
       );
     }
     const data = await r.json();
+    if (billing) {
+      await settleDirectUsage(
+        billing,
+        "scene-memory-extraction",
+        OPENAI_MODEL_DEFAULT,
+        data.usage?.prompt_tokens ?? Math.ceil(extractionInput.length / 4),
+        data.usage?.completion_tokens ?? 0,
+      );
+    }
     const finishReason = data.choices?.[0]?.finish_reason;
     if (finishReason === "length") {
       console.error(
@@ -524,6 +551,14 @@ ${body.raw_text}`
   let embedding: number[] = [];
   // PR-XXX-A: track embedding call duration
   const embedStartMs = Date.now();
+  if (billing) {
+    await preflightDirectUsage(
+      billing,
+      OPENAI_EMBED_MODEL,
+      Math.ceil(compressedMemory.length / 4),
+      0,
+    );
+  }
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 60_000);
@@ -551,6 +586,15 @@ ${body.raw_text}`
       );
     }
     const data = await r.json();
+    if (billing) {
+      await settleDirectUsage(
+        billing,
+        "scene-memory-embedding",
+        OPENAI_EMBED_MODEL,
+        data.usage?.prompt_tokens ?? Math.ceil(compressedMemory.length / 4),
+        0,
+      );
+    }
     const vec = data.data?.[0]?.embedding;
     if (!Array.isArray(vec)) {
       console.error(`[embed-section] Embedding API returned invalid data`);
@@ -643,5 +687,13 @@ export async function processEmbedSection(
   openaiKey: string,
 ): Promise<SectionEmbeddingResult> {
   await ensureOutlineAndSection(body, userID, adminClient);
-  return processSectionMemory(body, adminClient, openaiKey);
+  return processSectionMemory(body, adminClient, openaiKey, {
+    userID,
+    action: "embed-section",
+    outputID: body.output_id ?? null,
+    projectID: body.project_id,
+    outlineSectionID: body.outline_section_id,
+    adminClient,
+    creditStore: new SupabaseCreditStore(adminClient),
+  });
 }

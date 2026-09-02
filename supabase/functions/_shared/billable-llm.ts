@@ -431,10 +431,14 @@ export async function runBillableLLM<T>(
   //    (atomic billing) covers reconciliation for that audit row.
   let remainingCredits = 0;
   try {
+    // Feature callbacks may perform auxiliary billable calls before the
+    // primary charge (for example scene-memory extraction/embedding). Reload
+    // so those charges are not overwritten by the original preflight snapshot.
+    const currentEntitlement = await deps.creditStore.loadOrDefault(req.userID);
     const updatedEntitlement = await deps.creditStore.charge(
       req.userID,
       actualCharge,
-      entitlement,
+      currentEntitlement,
       req.usageContext.generationOutputID ?? null,
     );
     remainingCredits = updatedEntitlement.monthly_credit_allowance +

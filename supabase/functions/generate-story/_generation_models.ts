@@ -123,6 +123,20 @@ function mapModelRow(row: Record<string, unknown>): GenerationModel {
   };
 }
 
+export async function getEnabledModelByProviderModel(
+  db: any,
+  providerModel: string,
+): Promise<GenerationModel | null> {
+  const { data, error } = await db
+    .from("generation_models")
+    .select("*")
+    .eq("provider_model", providerModel)
+    .eq("enabled", true)
+    .maybeSingle();
+  if (error || !data) return null;
+  return mapModelRow(data as Record<string, unknown>);
+}
+
 export class SupabaseGenerationModelStore implements GenerationModelStore {
   // deno-lint-ignore no-explicit-any
   constructor(private readonly db: any) {}

@@ -3196,6 +3196,15 @@ async function handler(
                       embedPayload,
                       adminClient,
                       Deno.env.get("OPENAI_API_KEY") ?? "",
+                      {
+                        userID: userId,
+                        action: "generate-story",
+                        outputID: outputId,
+                        projectID: projectID,
+                        outlineSectionID: String(sectionForEmbed.id),
+                        adminClient,
+                        creditStore: store,
+                      },
                     );
                     extractionError = undefined;
                     break;
