@@ -219,6 +219,8 @@ interface BulkEstimateSection {
 
 interface GenerateStoryRequest {
   projectName?: string;
+  run_id?: string;
+  run_outline_token?: string;
   promptPackName?: string;
   sourcePayloadJSON: unknown; // object or JSON string
   generationAction: string;
@@ -1150,6 +1152,12 @@ async function fetchProjectStateContext(
   }
 }
 
+export function resolveWithinBeatPosition(positions: number[], currentPosition: number): { position: number; total: number } | null {
+  const ordered = [...positions].sort((a, b) => a - b);
+  const index = ordered.indexOf(currentPosition);
+  return index < 0 ? null : { position: index, total: ordered.length };
+}
+
 // ---- fetchOutlineSectionContext (Kevin 2026-08-21 17:47 EDT architecture spec) ----
 //
 // Resolves outline_section + story_arc context server-side from outline_section_id.
@@ -1188,6 +1196,8 @@ async function fetchOutlineSectionContext(
     beatPurpose?: string;
     position?: number;
     totalBeats?: number;
+    withinBeatPosition?: number;
+    withinBeatTotal?: number;
   };
 }> {
   if (!outlineSectionId) return { section: null, storyArc: {} };
@@ -1208,6 +1218,8 @@ async function fetchOutlineSectionContext(
     beatPurpose?: string;
     position?: number;
     totalBeats?: number;
+    withinBeatPosition?: number;
+    withinBeatTotal?: number;
   } = {};
   try {
     // Query 1: section row only (1-level fetch, reliable).
@@ -1283,6 +1295,22 @@ async function fetchOutlineSectionContext(
             totalBeats = count;
           }
         }
+        const { data: beatSections, error: beatSectionsErr } = await adminClient
+          .from("outline_sections")
+          .select("position")
+          .eq("outline_id", section!.outline_id)
+          .eq("story_arc_beat_id", section!.story_arc_beat_id)
+          .order("position", { ascending: true });
+        let withinBeatPosition: number | undefined;
+        let withinBeatTotal: number | undefined;
+        if (!beatSectionsErr && Array.isArray(beatSections)) {
+          const resolved = resolveWithinBeatPosition(
+            beatSections.map((row: any) => Number(row.position)),
+            section!.position,
+          );
+          withinBeatPosition = resolved?.position;
+          withinBeatTotal = resolved?.total;
+        }
         storyArc = {
           name: template?.name ?? undefined,
           beatLabel: beat.label ?? undefined,
@@ -1294,6 +1322,8 @@ async function fetchOutlineSectionContext(
             ? beat.position
             : undefined,
           totalBeats,
+          withinBeatPosition,
+          withinBeatTotal,
         };
       }
     }
@@ -1447,6 +1477,8 @@ async function callEmbedSectionForGeneratedOutput(
 
 export function buildPrompt(req: {
   sourcePayloadJSON: unknown;
+  run_id?: string;
+  run_outline_token?: string;
   generationAction: GenerationAction;
   generationLengthMode: LengthMode;
   container: Container;
@@ -1484,6 +1516,8 @@ export function buildPrompt(req: {
   storyArcBeatPurpose?: string;
   storyArcPosition?: number;
   storyArcTotalBeats?: number;
+  storyArcWithinBeatPosition?: number;
+  storyArcWithinBeatTotal?: number;
 }): {
   // PR-372: stable/volatile split for OpenAI prompt caching.
   //   stableBlocks   — byte-identical for the same projectId + canon +
@@ -1865,7 +1899,9 @@ Structural limits:
     req.storyArcBeatLabel ||
     req.storyArcBeatPurpose ||
     typeof req.storyArcPosition === "number" ||
-    typeof req.storyArcTotalBeats === "number"
+    typeof req.storyArcTotalBeats === "number" ||
+    typeof req.storyArcWithinBeatPosition === "number" ||
+    typeof req.storyArcWithinBeatTotal === "number"
   ) {
     contextLines.push(
       "## Story Arc Context",
@@ -1881,6 +1917,12 @@ Structural limits:
     }
     if (req.storyArcBeatPurpose) {
       contextLines.push(`Beat purpose: ${req.storyArcBeatPurpose}`);
+    }
+    if (typeof req.storyArcWithinBeatPosition === "number" && typeof req.storyArcWithinBeatTotal === "number") {
+      contextLines.push(
+        `This movement contains ${req.storyArcWithinBeatTotal} planned sections.`,
+        `Current section: ${req.storyArcWithinBeatPosition + 1} of ${req.storyArcWithinBeatTotal}.`,
+      );
     }
     if (
       typeof req.storyArcPosition === "number" &&
@@ -2899,6 +2941,8 @@ async function handler(
     storyArcBeatPurpose: outlineSectionCtx.storyArc.beatPurpose,
     storyArcPosition: outlineSectionCtx.storyArc.position,
     storyArcTotalBeats: outlineSectionCtx.storyArc.totalBeats,
+    storyArcWithinBeatPosition: outlineSectionCtx.storyArc.withinBeatPosition,
+    storyArcWithinBeatTotal: outlineSectionCtx.storyArc.withinBeatTotal,
   });
   const stablePrompt = stableBlocks.join("\n").trim();
   const volatilePrompt = volatileBlocks.join("\n").trim();

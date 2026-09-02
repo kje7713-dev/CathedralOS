@@ -110,7 +110,7 @@ function validate(body: RequestBody): string | null {
   }
   return null;
 }
-function sectionRow(section: Section, outlineID: string, position: number) {
+export function sectionRow(section: Section, outlineID: string, position: number) {
   return {
     id: section.id,
     outline_id: outlineID,
@@ -147,15 +147,14 @@ async function normalizeStoryArcBeatIDs(
     throw new Error(`Could not validate story arc beats: ${error.message}`);
   }
   const validIDs = new Set((data ?? []).map((row) => row.id));
-  return sections.map((section) => ({
-    ...section,
-    // Match embed-section's defensive FK behavior: a stale/local-only beat
-    // must not prevent the entire Accept All batch from being inserted.
-    storyArcBeatID: section.storyArcBeatID &&
-        validIDs.has(section.storyArcBeatID)
-      ? section.storyArcBeatID
-      : null,
-  }));
+  const missing = requestedIDs.filter((id) => !validIDs.has(id));
+  if (missing.length > 0) {
+    // Never silently erase the macro-to-section contract. The caller must
+    // sync the owning arc first; accepting with NULL would make generation
+    // lose Story Arc Context while reporting a successful outline.
+    throw new Error(`Story arc beat linkage is unavailable: ${missing.join(", ")}`);
+  }
+  return sections;
 }
 
 async function mergeSectionsIntoSnapshot(

@@ -14,7 +14,12 @@ Deno.test("outline suggestion polling contract preserves structured failures and
 
 import {
   buildAllocationPrompt,
+  buildExpansionPrompt,
   buildPrompt,
+  mergeExpansionAdditions,
+  needsNovelExpansion,
+  projectedExpectedTokens,
+  projectedTokenRange,
   parseAndValidateAllocation,
   validateRequest,
   validateSuggestions,
@@ -291,4 +296,36 @@ Deno.test("outline validation requires the exact allocation total and grounded c
     error = String(caught);
   }
   assertEquals(error.includes("expected 2"), true);
+});
+
+
+Deno.test("novel planning exposes container semantics and projected-size expansion", () => {
+  const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
+  assertEquals(allocationPrompt.includes("70,000-90,000 word"), true);
+  assertEquals(allocationPrompt.includes("distinct dramatic material"), true);
+  const outlinePrompt = buildPrompt(sparseRequest as any, new Map([
+    ["beat-1", { count: 2, rationale: "setup" }],
+    ["beat-2", { count: 3, rationale: "escalation" }],
+  ])).system;
+  assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
+  assertEquals(projectedTokenRange([
+    { container: "scene" }, { container: "developedScene" },
+  ]), [2300, 4800]);
+  assertEquals(projectedExpectedTokens([{ container: "scene" }]), 1300);
+  assertEquals(projectedExpectedTokens([{ container: "sceneSequence" }]), 5000);
+  assertEquals(projectedExpectedTokens([{ container: "scene" }, { container: "scene" }]), 2600);
+  assertEquals(needsNovelExpansion([{ container: "sceneSequence" }]), true);
+  assertEquals(needsNovelExpansion([{ container: "scene" }]), true);
+  const expansion = buildExpansionPrompt(sparseRequest as any, [{
+    title: "Setup", summary: "A setup", container: "scene", pov: "thirdPersonLimited",
+    terminalBeat: "The choice is made", storyArcBeatID: "beat-1",
+  }]);
+  assertEquals(expansion.system.includes("Add events, consequences"), true);
+  assertEquals(expansion.system.includes("Do not inflate containers"), true);
+  assertEquals(expansion.system.includes("ONLY ADDITIONAL"), true);
+  const original = [{ title: "Setup", summary: "A setup", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Choice", storyArcBeatID: "beat-1" }];
+  const additions = [{ title: "Consequence", summary: "The choice costs something", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Cost", storyArcBeatID: "beat-1", insertAfterTitle: "Setup" }];
+  const merged = mergeExpansionAdditions(original as any, additions as any);
+  assertEquals(merged.map((s) => s.title), ["Setup", "Consequence"]);
+  assertEquals(merged[0], original[0]);
 });

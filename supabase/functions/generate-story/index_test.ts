@@ -5252,3 +5252,16 @@ Deno.test("buildPrompt: Terminal Function block says Structural purpose follows 
     "Stop once the Section Contract's current event has concretely fulfilled the structural purpose",
   );
 });
+
+
+Deno.test("Story Arc Context resolves within-beat position by canonical order", async () => {
+  const source = (await import("node:fs")).readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+  assertStringIncludes(source, 'eq("story_arc_beat_id", section!.story_arc_beat_id)');
+  assertStringIncludes(source, 'order("position", { ascending: true })');
+  assertStringIncludes(source, "This movement contains");
+  assertStringIncludes(source, "Current section:");
+  const { resolveWithinBeatPosition } = await import("./index.ts");
+  assertEquals(resolveWithinBeatPosition([10, 20, 30, 40, 50], 10), { position: 0, total: 5 });
+  assertEquals(resolveWithinBeatPosition([10, 20, 30, 40, 50], 30), { position: 2, total: 5 });
+  assertEquals(resolveWithinBeatPosition([10, 20, 30, 40, 50], 50), { position: 4, total: 5 });
+});
