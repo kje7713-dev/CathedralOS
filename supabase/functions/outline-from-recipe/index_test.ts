@@ -16,6 +16,7 @@ import {
   buildAllocationPrompt,
   buildExpansionPrompt,
   buildPrompt,
+  calculateRemainingAllocation,
   mergeExpansionAdditions,
   needsNovelExpansion,
   projectedExpectedTokens,
@@ -241,6 +242,31 @@ Deno.test("zero allocation accepts an empty suggestion result", () => {
     allocation,
   );
   assertEquals(result.suggestions, []);
+});
+
+Deno.test("repair allocation targets only missing sections from a partial response", () => {
+  const allocation = new Map([
+    ["beat-1", { count: 1, rationale: "setup" }],
+    ["beat-2", { count: 4, rationale: "escalation" }],
+  ]);
+  const partial = [{
+    title: "The First Attack",
+    summary: "The threat becomes undeniable.",
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: "The shelter fails.",
+    storyArcBeatID: "beat-1",
+  }, {
+    title: "The First Escape",
+    summary: "Douche escapes the first attack.",
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: "The path closes.",
+    storyArcBeatID: "beat-2",
+  }];
+  const remaining = calculateRemainingAllocation(allocation, partial);
+  assertEquals(remaining.get("beat-1")?.count, 0);
+  assertEquals(remaining.get("beat-2")?.count, 3);
 });
 
 Deno.test("outline validation requires the exact allocation total and grounded content", () => {

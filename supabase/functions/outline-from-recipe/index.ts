@@ -381,6 +381,36 @@ export function mergeExpansionAdditions(original: Suggestion[], additions: Expan
   });
 }
 
+export function calculateRemainingAllocation(
+  allocation: Map<string, Allocation>,
+  partial: Suggestion[],
+): Map<string, Allocation> {
+  const counts = new Map<string, number>();
+  for (const suggestion of partial) {
+    counts.set(
+      suggestion.storyArcBeatID,
+      (counts.get(suggestion.storyArcBeatID) ?? 0) + 1,
+    );
+  }
+  for (const [beatID, plan] of allocation) {
+    const actual = counts.get(beatID) ?? 0;
+    if (actual > plan.count) {
+      throw new Error(
+        `outline generation returned ${actual} sections for beat ${beatID}; expected ${plan.count}`,
+      );
+    }
+  }
+  return new Map(
+    Array.from(allocation.entries()).map(([beatID, plan]) => [
+      beatID,
+      {
+        count: plan.count - (counts.get(beatID) ?? 0),
+        rationale: `repair missing sections for ${beatID}`,
+      },
+    ]),
+  );
+}
+
 export function buildPrompt(
   req: OutlineFromRecipeRequest,
   allocation: Map<string, { count: number; rationale: string }>,
@@ -931,25 +961,41 @@ async function runSuggestionJob(
     const expectedTotal = Array.from(allocation.values())
       .reduce((sum, plan) => sum + plan.count, 0);
     let generationError: Error | undefined;
+    let repairAllocation: Map<string, Allocation> | undefined;
+    let partialSuggestions: Suggestion[] = [];
     if (expectedTotal === 0) {
       result = { suggestions: [], warnings: [] };
     }
     for (const correction of expectedTotal === 0 ? [] : [false, true]) {
-      const correctionSystem = correction
-        ? `${system}\n\nThe previous response failed validation: ${
-          generationError?.message ?? "it did not satisfy the allocation"
-        }. Return a complete corrected response. Recount the suggestions for every beat before responding. Do not omit, merge, or add sections; a beat allocated 0 must still have no suggestions.`
-        : system;
+      let correctionSystem = system;
+      let correctionUser = userPrompt;
+      if (correction) {
+        if (!repairAllocation) {
+          throw generationError ?? new Error("outline generation repair unavailable");
+        }
+        const repairPrompt = buildPrompt(body, repairAllocation);
+        correctionSystem = `${repairPrompt.system}\n\nThis is a bounded repair pass. Return ONLY the missing sections listed in this repair allocation. Do not repeat any accepted section below. Recount each remaining beat before responding; beats allocated 0 must have no suggestions.`;
+        correctionUser = `${repairPrompt.user}\n\nAlready accepted sections from the previous response (do not repeat):\n${JSON.stringify(partialSuggestions, null, 2)}`;
+      }
       const rawResponse = await billableCall(
         correctionSystem,
-        userPrompt,
+        correctionUser,
         16000,
         responseFormat,
         correction ? "outline-suggestions-retry" : "outline-suggestions",
       );
       const parsed = JSON.parse(rawResponse.content);
       try {
-        result = validateSuggestions(parsed, beatIds, allocation);
+        if (!correction) {
+          result = validateSuggestions(parsed, beatIds, allocation);
+          break;
+        }
+        const repaired = validateSuggestions(parsed, beatIds, repairAllocation!);
+        result = validateSuggestions(
+          { suggestions: [...partialSuggestions, ...repaired.suggestions] },
+          beatIds,
+          allocation,
+        );
         break;
       } catch (error) {
         if (!(error instanceof Error)) throw error;
@@ -957,6 +1003,9 @@ async function runSuggestionJob(
         // Retry only validation failures. Provider and JSON errors retain their
         // existing failure behavior and must not trigger another charge.
         if (correction) throw error;
+        const partial = validateSuggestions(parsed, beatIds);
+        partialSuggestions = partial.suggestions;
+        repairAllocation = calculateRemainingAllocation(allocation, partialSuggestions);
       }
     }
     if (!result) {
