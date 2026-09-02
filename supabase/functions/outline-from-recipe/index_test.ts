@@ -16,7 +16,7 @@ import {
   buildAllocationPrompt,
   buildExpansionPrompt,
   buildPrompt,
-  calculateRemainingAllocation,
+  calculateRepairAllocation,
   mergeRepairedSuggestions,
   mergeExpansionAdditions,
   needsNovelExpansion,
@@ -96,8 +96,8 @@ Deno.test("canonical recipe payload passes request validation", () => {
 
 Deno.test("sparse recipe context is preserved for allocation and outline prompts", () => {
   const allocation = new Map([
-    ["beat-1", { count: 1, rationale: "A concise setup." }],
-    ["beat-2", { count: 2, rationale: "The conflict needs room to escalate." }],
+    ["beat-1", { minSections: 1, targetSections: 1, maxSections: 2, rationale: "A concise setup." }],
+    ["beat-2", { minSections: 1, targetSections: 2, maxSections: 3, rationale: "The conflict needs room to escalate." }],
   ]);
   const { system, user } = buildPrompt(sparseRequest as any, allocation);
   const plannerPrompt = buildAllocationPrompt(sparseRequest as any);
@@ -110,23 +110,24 @@ Deno.test("sparse recipe context is preserved for allocation and outline prompts
   assertEquals(user.includes("Monsters kill humans"), true);
   assertEquals(user.includes("Douche"), true);
   assertEquals(system.includes("30-60"), false);
-  assertEquals(system.includes("Opening Image: 1 sections"), true);
-  assertEquals(system.includes("Break into Two: 2 sections"), true);
+  assertEquals(system.includes("Opening Image: minimum 1, target 1, maximum 2 sections"), true);
+  assertEquals(system.includes("Break into Two: minimum 1, target 2, maximum 3 sections"), true);
 });
 
-Deno.test("allocation parser preserves varying counts and rejects malformed roots", () => {
+Deno.test("allocation parser preserves ranges and rejects malformed plans", () => {
   const beats = sparseRequest.arcTemplate.beats;
   const result = parseAndValidateAllocation(
     JSON.stringify({
       allocations: [
-        { beatID: "beat-1", sectionCount: 1, rationale: "setup" },
-        { beatID: "beat-2", sectionCount: 2, rationale: "escalation" },
+        { beatID: "beat-1", minSections: 2, targetSections: 4, maxSections: 6, rationale: "setup" },
+        { beatID: "beat-2", minSections: 0, targetSections: 1, maxSections: 3, rationale: "escalation" },
       ],
     }),
     beats,
   );
-  assertEquals(result.get("beat-1")?.count, 1);
-  assertEquals(result.get("beat-2")?.count, 2);
+  assertEquals(result.get("beat-1")?.minSections, 2);
+  assertEquals(result.get("beat-1")?.targetSections, 4);
+  assertEquals(result.get("beat-1")?.maxSections, 6);
 
   let error = "";
   try {
@@ -142,7 +143,9 @@ Deno.test("allocation parser preserves varying counts and rejects malformed root
       JSON.stringify({
         allocations: [{
           beatID: "beat-1",
-          sectionCount: 1,
+          minSections: 1,
+          targetSections: 1,
+          maxSections: 2,
           rationale: "setup",
         }],
       }),
@@ -157,22 +160,28 @@ Deno.test("allocation parser preserves varying counts and rejects malformed root
     const invalid of [
       {
         allocations: [
-          { beatID: "beat-1", sectionCount: 1, rationale: "setup" },
-          { beatID: "beat-1", sectionCount: 1, rationale: "duplicate" },
-          { beatID: "beat-2", sectionCount: 1, rationale: "break" },
+          { beatID: "beat-1", minSections: 1, targetSections: 1, maxSections: 2, rationale: "setup" },
+          { beatID: "beat-1", minSections: 1, targetSections: 1, maxSections: 2, rationale: "duplicate" },
+          { beatID: "beat-2", minSections: 1, targetSections: 1, maxSections: 2, rationale: "break" },
         ],
       },
       {
         allocations: [
-          { beatID: "unknown", sectionCount: 1, rationale: "unknown" },
-          { beatID: "beat-1", sectionCount: 1, rationale: "setup" },
-          { beatID: "beat-2", sectionCount: 1, rationale: "break" },
+          { beatID: "unknown", minSections: 1, targetSections: 1, maxSections: 2, rationale: "unknown" },
+          { beatID: "beat-1", minSections: 1, targetSections: 1, maxSections: 2, rationale: "setup" },
+          { beatID: "beat-2", minSections: 1, targetSections: 1, maxSections: 2, rationale: "break" },
         ],
       },
       {
         allocations: [
-          { beatID: "beat-1", sectionCount: 1.5, rationale: "not integer" },
-          { beatID: "beat-2", sectionCount: 1, rationale: "break" },
+          { beatID: "beat-1", minSections: 2, targetSections: 1, maxSections: 3, rationale: "invalid range" },
+          { beatID: "beat-2", minSections: 1, targetSections: 1, maxSections: 2, rationale: "break" },
+        ],
+      },
+      {
+        allocations: [
+          { beatID: "beat-1", minSections: 1.5, targetSections: 2, maxSections: 3, rationale: "not integer" },
+          { beatID: "beat-2", minSections: 1, targetSections: 1, maxSections: 2, rationale: "break" },
         ],
       },
     ]
@@ -204,8 +213,8 @@ Deno.test("existing beat coverage allows zero allocation and emits no duplicate"
   const allocation = parseAndValidateAllocation(
     JSON.stringify({
       allocations: [
-        { beatID: "beat-1", sectionCount: 0, rationale: "already covered" },
-        { beatID: "beat-2", sectionCount: 1, rationale: "new escalation" },
+        { beatID: "beat-1", minSections: 0, targetSections: 0, maxSections: 0, rationale: "already covered" },
+        { beatID: "beat-2", minSections: 1, targetSections: 1, maxSections: 2, rationale: "new escalation" },
       ],
     }),
     requestWithExisting.arcTemplate.beats,
@@ -234,8 +243,8 @@ Deno.test("existing beat coverage allows zero allocation and emits no duplicate"
 
 Deno.test("zero allocation accepts an empty suggestion result", () => {
   const allocation = new Map([
-    ["beat-1", { count: 0, rationale: "already covered" }],
-    ["beat-2", { count: 0, rationale: "already covered" }],
+    ["beat-1", { minSections: 0, targetSections: 0, maxSections: 0, rationale: "already covered" }],
+    ["beat-2", { minSections: 0, targetSections: 0, maxSections: 0, rationale: "already covered" }],
   ]);
   const result = validateSuggestions(
     { suggestions: [] },
@@ -246,9 +255,9 @@ Deno.test("zero allocation accepts an empty suggestion result", () => {
 });
 
 const repairAllocation = new Map([
-  ["beat-1", { count: 1, rationale: "setup" }],
-  ["beat-2", { count: 4, rationale: "escalation" }],
-  ["beat-3", { count: 2, rationale: "aftermath" }],
+  ["beat-1", { minSections: 1, targetSections: 1, maxSections: 1, rationale: "setup" }],
+  ["beat-2", { minSections: 2, targetSections: 4, maxSections: 4, rationale: "escalation" }],
+  ["beat-3", { minSections: 2, targetSections: 2, maxSections: 2, rationale: "aftermath" }],
 ]);
 const repairBeatOrder = ["beat-1", "beat-2", "beat-3"];
 const repairBeatIds = new Set(repairBeatOrder);
@@ -301,8 +310,8 @@ Deno.test("repair flow rejects a duplicate of a salvaged section", () => {
       ["beat-1", "beat-2"],
       new Set(["beat-1", "beat-2"]),
       new Map([
-        ["beat-1", { count: 0, rationale: "covered" }],
-        ["beat-2", { count: 2, rationale: "escalation" }],
+        ["beat-1", { minSections: 0, targetSections: 0, maxSections: 0, rationale: "covered" }],
+        ["beat-2", { minSections: 2, targetSections: 2, maxSections: 2, rationale: "escalation" }],
       ]),
       [repairSuggestion("The First Escape", "beat-2")],
       [repairSuggestion("The First Escape", "beat-2")],
@@ -320,8 +329,8 @@ Deno.test("repair flow rejects duplicates within the repair response", () => {
       ["beat-1", "beat-2"],
       new Set(["beat-1", "beat-2"]),
       new Map([
-        ["beat-1", { count: 0, rationale: "covered" }],
-        ["beat-2", { count: 2, rationale: "escalation" }],
+        ["beat-1", { minSections: 0, targetSections: 0, maxSections: 0, rationale: "covered" }],
+        ["beat-2", { minSections: 2, targetSections: 2, maxSections: 2, rationale: "escalation" }],
       ]),
       [],
       [
@@ -342,8 +351,8 @@ Deno.test("repair flow rejects repair over-generation", () => {
       ["beat-1", "beat-2"],
       new Set(["beat-1", "beat-2"]),
       new Map([
-        ["beat-1", { count: 0, rationale: "covered" }],
-        ["beat-2", { count: 2, rationale: "escalation" }],
+        ["beat-1", { minSections: 0, targetSections: 0, maxSections: 0, rationale: "covered" }],
+        ["beat-2", { minSections: 2, targetSections: 2, maxSections: 2, rationale: "escalation" }],
       ]),
       [],
       [
@@ -355,7 +364,7 @@ Deno.test("repair flow rejects repair over-generation", () => {
   } catch (caught) {
     error = String(caught);
   }
-  assertEquals(error.includes("expected 2"), true);
+  assertEquals(error.includes("maximum is 2"), true);
 });
 
 Deno.test("valid partial plus repair preserves content, exact allocation, and order", () => {
@@ -385,59 +394,57 @@ Deno.test("valid partial plus repair preserves content, exact allocation, and or
   assertEquals(merged[4], repaired[1]);
 });
 
-Deno.test("outline validation requires the exact allocation total and grounded content", () => {
+Deno.test("range validation accepts counts from minimum through maximum", () => {
   const allocation = new Map([
-    ["beat-1", { count: 1, rationale: "setup" }],
-    ["beat-2", { count: 2, rationale: "escalation" }],
+    ["beat-1", { minSections: 2, targetSections: 4, maxSections: 6, rationale: "coverage" }],
   ]);
-  const suggestions = [
-    {
-      title: "The First Attack",
-      summary: "Monsters kill humans; Douche witnesses the first attack.",
+  const make = (count: number) => ({
+    suggestions: Array.from({ length: count }, (_, index) => ({
+      title: `Section ${index + 1}`,
+      summary: `Distinct event ${index + 1}.`,
       container: "scene",
       pov: "thirdPersonLimited",
-      terminalBeat: "The threat is undeniable.",
+      terminalBeat: `Turn ${index + 1}.`,
       storyArcBeatID: "beat-1",
-    },
-    {
-      title: "The Flight",
-      summary: "Douche escapes as monsters hunt humans.",
-      container: "scene",
-      pov: "thirdPersonLimited",
-      terminalBeat: "The shelter fails.",
-      storyArcBeatID: "beat-2",
-    },
-    {
-      title: "The Countermove",
-      summary: "Douche chooses how to protect the remaining humans.",
-      container: "scene",
-      pov: "thirdPersonLimited",
-      terminalBeat: "A plan forms.",
-      storyArcBeatID: "beat-2",
-    },
-  ];
-  const result = validateSuggestions(
-    { suggestions },
-    new Set(["beat-1", "beat-2"]),
+    })),
+  });
+  for (const count of [2, 3, 4, 5, 6]) {
+    const result = validateSuggestions(make(count), new Set(["beat-1"]), allocation);
+    assertEquals(result.suggestions.length, count);
+  }
+
+  let belowMinimum = "";
+  try {
+    validateSuggestions(make(1), new Set(["beat-1"]), allocation);
+  } catch (caught) {
+    belowMinimum = String(caught);
+  }
+  assertEquals(belowMinimum.includes("returned 1 section; minimum is 2"), true);
+
+  let aboveMaximum = "";
+  try {
+    validateSuggestions(make(7), new Set(["beat-1"]), allocation);
+  } catch (caught) {
+    aboveMaximum = String(caught);
+  }
+  assertEquals(aboveMaximum.includes("returned 7 sections; maximum is 6"), true);
+});
+
+Deno.test("below-target beat is valid and repair requests only the minimum shortage", () => {
+  const allocation = new Map([
+    ["beat-1", { minSections: 2, targetSections: 4, maxSections: 6, rationale: "coverage" }],
+  ]);
+  const one = repairSuggestion("One valid section", "beat-1");
+  const repair = calculateRepairAllocation(allocation, [one]);
+  assertEquals(repair.get("beat-1")?.minSections, 1);
+  assertEquals(repair.get("beat-1")?.targetSections, 1);
+  assertEquals(repair.get("beat-1")?.maxSections, 5);
+  const accepted = validateSuggestions(
+    { suggestions: [one, repairSuggestion("Second valid section", "beat-1"), repairSuggestion("Third valid section", "beat-1")] },
+    new Set(["beat-1"]),
     allocation,
   );
-  assertEquals(result.suggestions.length, 3);
-  assertEquals(
-    result.suggestions.filter((s) => s.storyArcBeatID === "beat-2").length,
-    2,
-  );
-
-  let error = "";
-  try {
-    validateSuggestions(
-      { suggestions: suggestions.slice(0, 2) },
-      new Set(["beat-1", "beat-2"]),
-      allocation,
-    );
-  } catch (caught) {
-    error = String(caught);
-  }
-  assertEquals(error.includes("expected 2"), true);
+  assertEquals(accepted.suggestions.length, 3);
 });
 
 
@@ -446,8 +453,8 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(allocationPrompt.includes("70,000-90,000 word"), true);
   assertEquals(allocationPrompt.includes("distinct dramatic material"), true);
   const outlinePrompt = buildPrompt(sparseRequest as any, new Map([
-    ["beat-1", { count: 2, rationale: "setup" }],
-    ["beat-2", { count: 3, rationale: "escalation" }],
+    ["beat-1", { minSections: 1, targetSections: 2, maxSections: 3, rationale: "setup" }],
+    ["beat-2", { minSections: 1, targetSections: 3, maxSections: 4, rationale: "escalation" }],
   ])).system;
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
   assertEquals(projectedTokenRange([

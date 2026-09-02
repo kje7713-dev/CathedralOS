@@ -381,7 +381,7 @@ export function mergeExpansionAdditions(original: Suggestion[], additions: Expan
   });
 }
 
-export function calculateRemainingAllocation(
+export function calculateRepairAllocation(
   allocation: Map<string, Allocation>,
   partial: Suggestion[],
 ): Map<string, Allocation> {
@@ -392,35 +392,36 @@ export function calculateRemainingAllocation(
       (counts.get(suggestion.storyArcBeatID) ?? 0) + 1,
     );
   }
-  for (const [beatID, plan] of allocation) {
-    const actual = counts.get(beatID) ?? 0;
-    if (actual > plan.count) {
-      throw new Error(
-        `outline generation returned ${actual} sections for beat ${beatID}; expected ${plan.count}`,
-      );
-    }
-  }
   return new Map(
-    Array.from(allocation.entries()).map(([beatID, plan]) => [
-      beatID,
-      {
-        count: plan.count - (counts.get(beatID) ?? 0),
+    Array.from(allocation.entries()).map(([beatID, plan]) => {
+      const actual = counts.get(beatID) ?? 0;
+      if (actual > plan.maxSections) {
+        throw new Error(
+          `beat ${beatID} returned ${actual} sections; maximum is ${plan.maxSections}`,
+        );
+      }
+      const shortage = Math.max(0, plan.minSections - actual);
+      return [beatID, {
+        minSections: shortage,
+        targetSections: shortage,
+        maxSections: plan.maxSections - actual,
         rationale: `repair missing sections for ${beatID}`,
-      },
-    ]),
+      }];
+    }),
   );
 }
 
+
 export function buildPrompt(
   req: OutlineFromRecipeRequest,
-  allocation: Map<string, { count: number; rationale: string }>,
+  allocation: Map<string, Allocation>,
 ): { system: string; user: string } {
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
       const beat = req.arcTemplate.beats.find((b) => b.id === beatId);
       return `- ${
         beat?.label ?? beatId
-      }: ${info.count} sections (${info.rationale})`;
+      }: minimum ${info.minSections}, target ${info.targetSections}, maximum ${info.maxSections} sections (${info.rationale})`;
     })
     .join("\n");
 
@@ -437,9 +438,9 @@ Choose a container for the scale of one dramatic unit, not to fake novel length:
 - chapter: a publishing or pacing division, 3,000-8,000+
 The expected ranges are literary targets; runtime/provider headroom is not a desired length.
 
-## Use the allocation plan exactly
+## Use the allocation range
 
-For each beat, generate EXACTLY the allocated number of distinct sections - no fewer, no more. A beat allocated 0 is already covered and must produce no new suggestion. Each generated section must advance the story with a new event, consequence, decision, or revelation rather than paraphrasing an existing or generated section.
+For each beat, generate a number of distinct sections within the stated minimum and maximum. The target is desired narrative weight, not a hard requirement. A beat whose minimum and maximum are both 0 is already covered and must produce no new suggestion. Each generated section must advance the story with a new event, consequence, decision, or revelation rather than paraphrasing an existing or generated section.
 
 ${allocationLines}
 
@@ -470,7 +471,7 @@ ${
 
 // Stage 1: planner. Decides how many sections each arc beat deserves
 // before the generation call runs. The response is strict and validated so a
-// malformed planner response can never silently become three sections/beat.
+// malformed planner response can never silently become an unbounded plan.
 const ALLOCATION_SCHEMA = {
   type: "object",
   properties: {
@@ -482,10 +483,12 @@ const ALLOCATION_SCHEMA = {
         type: "object",
         properties: {
           beatID: { type: "string", minLength: 1 },
-          sectionCount: { type: "integer", minimum: 0, maximum: 10 },
+          minSections: { type: "integer", minimum: 0, maximum: 10 },
+          targetSections: { type: "integer", minimum: 0, maximum: 10 },
+          maxSections: { type: "integer", minimum: 0, maximum: 10 },
           rationale: { type: "string", minLength: 1, maxLength: 500 },
         },
-        required: ["beatID", "sectionCount", "rationale"],
+        required: ["beatID", "minSections", "targetSections", "maxSections", "rationale"],
         additionalProperties: false,
       },
     },
@@ -494,7 +497,12 @@ const ALLOCATION_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-type Allocation = { count: number; rationale: string };
+type Allocation = {
+  minSections: number;
+  targetSections: number;
+  maxSections: number;
+  rationale: string;
+};
 
 export function suggestionContractFingerprint(suggestion: Suggestion): string {
   return `${suggestion.title}|${suggestion.summary}|${suggestion.storyArcBeatID}`;
@@ -570,7 +578,7 @@ export function parseAndValidateAllocation(
     }
     const candidate = item as Record<string, unknown>;
     const unexpectedKeys = Object.keys(candidate).filter((key) =>
-      !["beatID", "sectionCount", "rationale"].includes(key)
+      !["beatID", "minSections", "targetSections", "maxSections", "rationale"].includes(key)
     );
     if (unexpectedKeys.length > 0) {
       throw new Error(
@@ -578,7 +586,9 @@ export function parseAndValidateAllocation(
       );
     }
     const beatID = candidate.beatID;
-    const count = candidate.sectionCount;
+    const minSections = candidate.minSections;
+    const targetSections = candidate.targetSections;
+    const maxSections = candidate.maxSections;
     const rationale = candidate.rationale;
     if (typeof beatID !== "string" || !validBeatIDs.has(beatID)) {
       throw new Error(`allocation contains unknown beatID: ${String(beatID)}`);
@@ -586,14 +596,24 @@ export function parseAndValidateAllocation(
     if (seen.has(beatID)) {
       throw new Error(`allocation contains duplicate beatID: ${beatID}`);
     }
-    if (!Number.isInteger(count) || Number(count) < 0 || Number(count) > 10) {
-      throw new Error(`allocation has invalid sectionCount for beat ${beatID}`);
+    for (const [name, value] of [["minSections", minSections], ["targetSections", targetSections], ["maxSections", maxSections]] as const) {
+      if (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 10) {
+        throw new Error(`allocation has invalid ${name} for beat ${beatID}`);
+      }
+    }
+    if (Number(minSections) > Number(targetSections) || Number(targetSections) > Number(maxSections)) {
+      throw new Error(`allocation range must satisfy minSections <= targetSections <= maxSections for beat ${beatID}`);
     }
     if (typeof rationale !== "string" || rationale.trim() === "") {
       throw new Error(`allocation has missing rationale for beat ${beatID}`);
     }
     seen.add(beatID);
-    out.set(beatID, { count: Number(count), rationale });
+    out.set(beatID, {
+      minSections: Number(minSections),
+      targetSections: Number(targetSections),
+      maxSections: Number(maxSections),
+      rationale,
+    });
   }
   if (out.size !== validBeatIDs.size) {
     const missing = beats.filter((beat) => !seen.has(beat.id)).map((beat) =>
@@ -601,12 +621,12 @@ export function parseAndValidateAllocation(
     );
     throw new Error(`allocation is missing beat(s): ${missing.join(", ")}`);
   }
-  const total = Array.from(out.values()).reduce(
-    (sum, item) => sum + item.count,
+  const totalMax = Array.from(out.values()).reduce(
+    (sum, item) => sum + item.maxSections,
     0,
   );
-  if (total < 0 || total > 100) {
-    throw new Error(`allocation total is not sensible: ${total}`);
+  if (totalMax < 0 || totalMax > 100) {
+    throw new Error(`allocation maximum total is not sensible: ${totalMax}`);
   }
   return new Map(beats.map((beat) => [beat.id, out.get(beat.id)!]));
 }
@@ -619,7 +639,7 @@ export function buildAllocationPrompt(
 
 This request is for a novel. Plan enough distinct dramatic material for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections. Use the supplied premise, characters, and arc to decide where density belongs.
 
-For each beat, output exactly one JSON object with beatID matching the supplied UUID exactly, sectionCount as an integer from 0 through 10, and a concise rationale. Include every beat exactly once, including beats with sectionCount 0. A beat sufficiently covered by existing sections may receive 0; an uncovered beat in this novel should receive enough sections for its dramatic material. Do not output any other root key.
+For each beat, output exactly one JSON object with beatID matching the supplied UUID exactly, minSections, targetSections, and maxSections as integers from 0 through 10, and a concise rationale. Include every beat exactly once. A beat sufficiently covered by existing sections may use zero for all three values; an uncovered beat in this novel should receive enough sections for its dramatic material. Always satisfy minSections <= targetSections <= maxSections. The target expresses desired narrative weight, the minimum is acceptable dramatic coverage, and the maximum prevents runaway expansion. Do not output any other root key.
 
 Output JSON only. No commentary, no prose.`;
 
@@ -877,19 +897,16 @@ export function validateSuggestions(
     }
     for (const [beatID, plan] of allocation) {
       const actual = counts.get(beatID) ?? 0;
-      if (actual !== plan.count) {
+      if (actual < plan.minSections) {
         throw new Error(
-          `outline generation returned ${actual} sections for beat ${beatID}; expected ${plan.count}`,
+          `beat ${beatID} returned ${actual} section${actual === 1 ? "" : "s"}; minimum is ${plan.minSections}`,
         );
       }
-    }
-    const expectedTotal = Array.from(allocation.values())
-      .filter((plan) => plan.count > 0)
-      .reduce((sum, plan) => sum + plan.count, 0);
-    if (valid.length !== expectedTotal) {
-      throw new Error(
-        "outline generation count does not equal allocation total",
-      );
+      if (actual > plan.maxSections) {
+        throw new Error(
+          `beat ${beatID} returned ${actual} sections; maximum is ${plan.maxSections}`,
+        );
+      }
     }
   } else {
     // Backward-compatible validation for callers that do not have a plan.
@@ -1005,15 +1022,15 @@ async function runSuggestionJob(
       },
     };
     let result: { suggestions: Suggestion[]; warnings: string[] } | undefined;
-    const expectedTotal = Array.from(allocation.values())
-      .reduce((sum, plan) => sum + plan.count, 0);
+    const maxPlannedSections = Array.from(allocation.values())
+      .reduce((sum, plan) => sum + plan.maxSections, 0);
     let generationError: Error | undefined;
     let repairAllocation: Map<string, Allocation> | undefined;
     let partialSuggestions: Suggestion[] = [];
-    if (expectedTotal === 0) {
+    if (maxPlannedSections === 0) {
       result = { suggestions: [], warnings: [] };
     }
-    for (const correction of expectedTotal === 0 ? [] : [false, true]) {
+    for (const correction of maxPlannedSections === 0 ? [] : [false, true]) {
       let correctionSystem = system;
       let correctionUser = userPrompt;
       if (correction) {
@@ -1067,7 +1084,7 @@ async function runSuggestionJob(
         if (correction) throw error;
         const partial = validateSuggestions(parsed, beatIds);
         partialSuggestions = partial.suggestions;
-        repairAllocation = calculateRemainingAllocation(allocation, partialSuggestions);
+        repairAllocation = calculateRepairAllocation(allocation, partialSuggestions);
       }
     }
     if (!result) {
