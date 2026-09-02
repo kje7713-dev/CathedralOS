@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert@1";
 import { acceptRunTerminalOutcome } from "./_outcome.ts";
 import {
   canonicalUUID,
+  mergeSectionsByCanonicalID,
   normalizeStoryArcBeatIDs,
   sectionRow,
   validate,
@@ -149,4 +150,28 @@ Deno.test("arc linkage is persisted for single and bulk section acceptance", asy
   const restore = await Deno.readTextFile("./CathedralOSApp/Services/ProjectCloudSyncService.swift");
   assertEquals(service.includes("storyArcBeatID: suggestion.storyArcBeatID"), true);
   assertEquals(restore.includes("section.storyArcBeatID = storyArcBeatID"), true);
+});
+
+Deno.test("Accept All canonicalizes section identity for embeddings and snapshot merge", async () => {
+  const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  assertEquals(source.includes("canonicalUUID(String(row.outline_section_id))"), true);
+  assertEquals(source.includes("!completedIDs.has(canonicalUUID(section.id))"), true);
+  assertEquals(source.includes("canonicalUUID(String(section.id))"), true);
+  assertEquals(source.includes("canonicalUUID(String(row.story_arc_beat_id))"), true);
+});
+
+Deno.test("shared embedding canonicalizes Story Arc FK lookup and persistence", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../_shared/section-embedding.ts", import.meta.url),
+  );
+  assertEquals(source.includes("canonicalUUID(body.story_arc_beat_id)"), true);
+  assertEquals(source.includes("story_arc_beat_id: validatedBeatID"), true);
+});
+
+Deno.test("snapshot merge replaces uppercase section identity without duplication", () => {
+  const merged = mergeSectionsByCanonicalID(
+    [{ id: "CCA975FC-E13A-4ADE-8344-2470A8C2B3A0", title: "old" }],
+    [{ id: "cca975fc-e13a-4ade-8344-2470a8c2b3a0", title: "new" }],
+  );
+  assertEquals(merged, [{ id: "cca975fc-e13a-4ade-8344-2470a8c2b3a0", title: "new" }]);
 });

@@ -31,6 +31,7 @@
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { canonicalUUID, uuidSetsEqual } from "../_shared/uuid.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -179,15 +180,17 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  const canonicalArcID = canonicalUUID(body.story_arc_id as string);
+
   console.log(
-    `[sync-story-arc] start user=${user.id} arc=${body.story_arc_id} beats=${beats.length}`,
+    `[sync-story-arc] start user=${user.id} arc=${canonicalArcID} beats=${beats.length}`,
   );
 
   const adminClient = createClient(supabaseUrl, supabaseServiceKey);
 
   // --- Step 1: UPSERT story_arc (id = client-provided, all fields). ---
   const { error: arcErr } = await adminClient.from("story_arcs").upsert({
-    id: body.story_arc_id,
+    id: canonicalArcID,
     user_id: user.id,
     template_id: body.template_id ?? null,
     local_project_id: body.local_project_id,
@@ -210,7 +213,7 @@ Deno.serve(async (req: Request) => {
   const { data: existingBeats, error: listErr } = await adminClient
     .from("story_arc_beats")
     .select("id")
-    .eq("story_arc_id", body.story_arc_id);
+    .eq("story_arc_id", canonicalArcID);
   if (listErr) {
     console.error(
       `[sync-story-arc] list existing beats failed: ${listErr.message}`,
@@ -221,8 +224,8 @@ Deno.serve(async (req: Request) => {
       500,
     );
   }
-  const existingIds = new Set((existingBeats ?? []).map((b) => b.id));
-  const incomingIds = new Set(beats.map((b) => b.id));
+  const existingIds = new Set((existingBeats ?? []).map((b) => canonicalUUID(String(b.id))));
+  const incomingIds = new Set(beats.map((b) => canonicalUUID(b.id!)));
   const toDelete = [...existingIds].filter((id) => !incomingIds.has(id));
   console.log(
     `[sync-story-arc] beats incoming=${beats.length} existing=${existingIds.size} toDelete=${toDelete.length}`,
@@ -232,8 +235,8 @@ Deno.serve(async (req: Request) => {
   let beatsUpserted = 0;
   if (beats.length > 0) {
     const rows = beats.map((b) => ({
-      id: b.id,
-      story_arc_id: body.story_arc_id,
+      id: canonicalUUID(b.id!),
+      story_arc_id: canonicalArcID,
       position: b.position,
       role: b.role ?? "",
       label: b.label ?? "",
@@ -276,9 +279,38 @@ Deno.serve(async (req: Request) => {
   }
   console.log(`[sync-story-arc] beats deleted=${beatsDeleted}`);
 
+  // Never report success unless the replace operation actually persisted the
+  // exact requested UUID set. UUID values are canonicalized because Swift may
+  // send uppercase while PostgreSQL returns lowercase.
+  const { data: finalBeats, error: finalListErr } = await adminClient
+    .from("story_arc_beats")
+    .select("id")
+    .eq("story_arc_id", canonicalArcID);
+  if (finalListErr) {
+    console.error(
+      `[sync-story-arc] final beat verification failed: ${finalListErr.message}`,
+    );
+    return errorResponse(
+      "database_error",
+      `final beat verification failed: ${finalListErr.message}`,
+      500,
+    );
+  }
+  const finalIds = (finalBeats ?? []).map((beat) => canonicalUUID(String(beat.id)));
+  if (!uuidSetsEqual(finalIds, incomingIds)) {
+    console.error(
+      `[sync-story-arc] final beat set mismatch expected=${incomingIds.size} actual=${finalIds.length}`,
+    );
+    return errorResponse(
+      "database_error",
+      "story arc beat sync did not persist the requested beat set",
+      500,
+    );
+  }
+
   return corsResponse(
     JSON.stringify({
-      story_arc_id: body.story_arc_id,
+      story_arc_id: canonicalArcID,
       beats_upserted: beatsUpserted,
       beats_deleted: beatsDeleted,
     }),
