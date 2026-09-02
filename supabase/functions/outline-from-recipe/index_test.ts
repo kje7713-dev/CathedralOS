@@ -16,6 +16,7 @@ import {
   buildAllocationPrompt,
   buildExpansionPrompt,
   buildPrompt,
+  buildSuggestionResponseSchema,
   calculateRepairAllocation,
   mergeRepairedSuggestions,
   mergeExpansionAdditions,
@@ -23,6 +24,7 @@ import {
   projectedExpectedTokens,
   projectedTokenRange,
   parseAndValidateAllocation,
+  flattenSuggestionResponse,
   validateRequest,
   validateSuggestions,
 } from "./index.ts";
@@ -486,4 +488,52 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   const merged = mergeExpansionAdditions(original as any, additions as any);
   assertEquals(merged.map((s) => s.title), ["Setup", "Consequence"]);
   assertEquals(merged[0], original[0]);
+});
+
+
+Deno.test("dynamic suggestion schema enforces every beat minimum and flattening owns order and IDs", () => {
+  const beats = [{ id: "beat-b" }, { id: "beat-a" }, { id: "beat-c" }];
+  const allocation = new Map([
+    ["beat-b", { minSections: 1, rationale: "b" }],
+    ["beat-a", { minSections: 3, rationale: "a" }],
+    ["beat-c", { minSections: 0, rationale: "c" }],
+  ]);
+  const schema = buildSuggestionResponseSchema(beats, allocation) as any;
+  assertEquals(schema.properties.beats.required, ["beat-b", "beat-a", "beat-c"]);
+  assertEquals(schema.properties.beats.properties["beat-b"].minItems, 1);
+  assertEquals(schema.properties.beats.properties["beat-a"].minItems, 3);
+  assertEquals(schema.properties.beats.properties["beat-c"].minItems, 0);
+  const section = (title: string) => ({ title, summary: title, container: "scene", pov: "thirdPersonLimited", terminalBeat: title });
+  const flattened = flattenSuggestionResponse({ beats: { "beat-b": [section("B")], "beat-a": [section("A1"), section("A2"), section("A3")], "beat-c": [] } }, beats);
+  assertEquals(flattened.suggestions.map((s) => s.title), ["B", "A1", "A2", "A3"]);
+  assertEquals(flattened.suggestions.map((s) => s.storyArcBeatID), ["beat-b", "beat-a", "beat-a", "beat-a"]);
+  let missing = false;
+  try { flattenSuggestionResponse({ beats: { "beat-b": [], "beat-a": [], "beat-c": [] } }, beats); } catch { missing = true; }
+  assertEquals(missing, false);
+  let omitted = false;
+  try { flattenSuggestionResponse({ beats: { "beat-b": [], "beat-a": [] } }, beats); } catch { omitted = true; }
+  assertEquals(omitted, true);
+  let duplicate = false;
+  try {
+    mergeRepairedSuggestions(["beat-b", "beat-a", "beat-c"], new Set(beats.map((b) => b.id)), new Map(), flattened.suggestions, [flattened.suggestions[0]]);
+  } catch { duplicate = true; }
+  assertEquals(duplicate, true);
+});
+
+Deno.test("dynamic response contract removes model-owned beat IDs and target/max allocation semantics", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  const schema = buildSuggestionResponseSchema([{ id: "beat-1" }], new Map([["beat-1", { minSections: 2, rationale: "coverage" }]])) as any;
+  assertEquals(schema.properties.beats.properties["beat-1"].items.properties.storyArcBeatID, undefined);
+  assertEquals(source.includes("targetSections"), false);
+  assertEquals(source.includes("maxSections"), false);
+  assertEquals(source.includes("sectionCount"), false);
+  assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
+  assertEquals(source.includes("result.suggestions.length > MAX_PLANNED_SECTIONS"), true);
+  assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
+  assertEquals(source.includes("diagnostics:"), true);
+  assertEquals(source.includes("plannerAllocationValidatedCountsByBeat"), true);
+  assertEquals(source.includes("firstPassParsedCounts"), true);
+  assertEquals(source.includes("firstPassValidatedCounts"), true);
+  assertEquals(source.includes("if (validateResponse) await validateResponse"), true);
+  assertEquals(source.includes("if (needsNovelExpansion(result.suggestions))"), true);
 });

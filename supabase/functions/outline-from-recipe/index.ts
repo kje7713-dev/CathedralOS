@@ -48,67 +48,65 @@ import {
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-5.6-luna";
 
-// JSON Schema for the structured output. gpt-4o-mini supports structured output
-// with strict: true; this enforces shape + enum + length bounds server-side.
-const RESPONSE_SCHEMA = {
-  "type": "object",
-  "properties": {
-    "suggestions": {
-      "type": "array",
-      "minItems": 0,
-      "maxItems": 100,
-      "items": {
-        "type": "object",
-        "properties": {
-          "title": { "type": "string", "minLength": 1, "maxLength": 120 },
-          "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
-          "container": {
-            "type": "string",
-            "enum": [
-              "beat",
-              "moment",
-              "vignette",
-              "microScene",
-              "scene",
-              "developedScene",
-              "setPiece",
-              "sceneSequence",
-              "shortStory",
-              "chapter",
-              "episode",
-            ],
-          },
-          "pov": {
-            "type": "string",
-            "enum": [
-              "firstPerson",
-              "secondPerson",
-              "thirdPersonLimited",
-              "thirdPersonOmniscient",
-            ],
-          },
-          "terminalBeat": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500,
-          },
-          "storyArcBeatID": { "type": "string" },
-        },
-        "required": [
-          "title",
-          "summary",
-          "container",
-          "pov",
-          "terminalBeat",
-          "storyArcBeatID",
-        ],
-        "additionalProperties": false,
-      },
-    },
+// Base schema for one generated section. The response schema below wraps this
+// per Story Arc beat so minimum coverage is enforced by structured outputs.
+const SECTION_SCHEMA = {
+  type: "object",
+  properties: {
+    title: { type: "string", minLength: 1, maxLength: 120 },
+    summary: { type: "string", minLength: 1, maxLength: 2000 },
+    container: { type: "string", enum: ["beat", "moment", "vignette", "microScene", "scene", "developedScene", "setPiece", "sceneSequence", "shortStory", "chapter", "episode"] },
+    pov: { type: "string", enum: ["firstPerson", "secondPerson", "thirdPersonLimited", "thirdPersonOmniscient"] },
+    terminalBeat: { type: "string", minLength: 1, maxLength: 500 },
   },
-  "required": ["suggestions"],
-  "additionalProperties": false,
+  required: ["title", "summary", "container", "pov", "terminalBeat"],
+  additionalProperties: false,
 } as const;
+
+export function buildSuggestionResponseSchema(
+  beats: Array<{ id: string }>,
+  allocation: Map<string, Allocation>,
+) {
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+  for (const beat of beats) {
+    const minimum = allocation.get(beat.id)?.minSections ?? 0;
+    properties[beat.id] = {
+      type: "array",
+      minItems: minimum,
+      items: SECTION_SCHEMA,
+    };
+    required.push(beat.id);
+  }
+  return {
+    type: "object",
+    properties: { beats: { type: "object", properties, required, additionalProperties: false } },
+    required: ["beats"],
+    additionalProperties: false,
+  };
+}
+
+/** Convert the structured per-beat response into the app-facing flat payload.
+ * The server, not the model, owns Story Arc identity and canonical ordering. */
+export function flattenSuggestionResponse(
+  parsed: unknown,
+  beats: Array<{ id: string }>,
+): { suggestions: Suggestion[] } {
+  if (!parsed || typeof parsed !== "object") throw new Error("response missing beats object");
+  const beatObject = (parsed as { beats?: unknown }).beats;
+  if (!beatObject || typeof beatObject !== "object") throw new Error("response missing beats object");
+  const suggestions: Suggestion[] = [];
+  for (const beat of beats) {
+    const rawSections = (beatObject as Record<string, unknown>)[beat.id];
+    if (!Array.isArray(rawSections)) throw new Error(`response missing beat ${beat.id}`);
+    for (const raw of rawSections) {
+      if (!raw || typeof raw !== "object") throw new Error(`beat ${beat.id} contains an invalid section`);
+      const { storyArcBeatID: _ignored, ...section } = raw as Partial<Suggestion>;
+      suggestions.push({ ...(section as Omit<Suggestion, "storyArcBeatID">), storyArcBeatID: beat.id });
+    }
+  }
+  return { suggestions };
+}
 
 // Literary planning ranges, deliberately separate from generate-story's provider
 // hard caps. These are only used to estimate whether a novel plan has enough
@@ -221,6 +219,7 @@ type SuggestionLLMCall = (
   maxOutputTokens: number,
   responseFormat: unknown,
   action: string,
+  validateResponse?: (content: string) => unknown | Promise<unknown>,
 ) => Promise<SuggestionLLMResult>;
 
 interface Suggestion {
@@ -320,8 +319,8 @@ const EXPANSION_SCHEMA = {
         properties: {
           title: { type: "string", minLength: 1, maxLength: 120 },
           summary: { type: "string", minLength: 1, maxLength: 2000 },
-          container: { type: "string", enum: [...ALLOWED_CONTAINERS] },
-          pov: { type: "string", enum: [...ALLOWED_POVS] },
+          container: { type: "string", enum: ["beat", "moment", "vignette", "microScene", "scene", "developedScene", "setPiece", "sceneSequence", "shortStory", "chapter", "episode"] },
+          pov: { type: "string", enum: ["firstPerson", "secondPerson", "thirdPersonLimited", "thirdPersonOmniscient"] },
           terminalBeat: { type: "string", minLength: 1, maxLength: 500 },
           storyArcBeatID: { type: "string" },
           insertAfterTitle: { type: ["string", "null"] },
@@ -676,6 +675,7 @@ async function planSectionAllocation(
         2048,
         responseFormat,
         correction ? "outline-plan-retry" : "outline-plan",
+        (content) => parseAndValidateAllocation(content, req.arcTemplate.beats),
       )
       : {
         content: await callOpenAI(callSystem, user, apiKey, {
@@ -795,7 +795,7 @@ async function callOpenAI(
             json_schema: {
               name: options?.jsonSchemaName ?? "outline_suggestions",
               strict: true,
-              schema: options?.jsonSchema ?? RESPONSE_SCHEMA,
+              schema: options?.jsonSchema ?? { type: "object" },
             },
           },
         temperature: 0.7,
@@ -813,6 +813,13 @@ async function callOpenAI(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export function countSuggestionsByBeat(suggestions: Suggestion[]): Record<string, number> {
+  return suggestions.reduce<Record<string, number>>((counts, suggestion) => {
+    counts[suggestion.storyArcBeatID] = (counts[suggestion.storyArcBeatID] ?? 0) + 1;
+    return counts;
+  }, {});
 }
 
 export function validateSuggestions(
@@ -917,6 +924,8 @@ async function runSuggestionJob(
     "id",
     runId,
   );
+  let plannedMinimumSections: number | null = null;
+  let diagnostics: Record<string, unknown> = { stage: "starting" };
   try {
     const modelStore = new SupabaseGenerationModelStore(db);
     const model = await modelStore.getEnabledModelById(OPENAI_MODEL);
@@ -947,6 +956,7 @@ async function runSuggestionJob(
       maxOutputTokens,
       responseFormat,
       action,
+      validateResponse,
     ) => {
       const messages: LLMMessage[] = [
         { role: "system", content: system },
@@ -965,7 +975,10 @@ async function runSuggestionJob(
           outputBudget: maxOutputTokens,
           idempotencyKey: `${runId}:${action}`,
         },
-        onProviderSuccess: async (providerResult) => providerResult.content,
+        onProviderSuccess: async (providerResult) => {
+          if (validateResponse) await validateResponse(providerResult.content);
+          return providerResult.content;
+        },
       }, { adminClient: db, provider, creditStore });
       await persistBilling(result);
       return {
@@ -981,94 +994,69 @@ async function runSuggestionJob(
       openaiKey,
       billableCall,
     );
+    const allocationCountsByBeat = Object.fromEntries(
+      Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections]),
+    );
+    diagnostics = {
+      stage: "planner_complete",
+      plannerAllocationFirstPassCountsByBeat: allocationCountsByBeat,
+      plannerAllocationValidatedCountsByBeat: allocationCountsByBeat,
+    };
     const { system, user: userPrompt } = buildPrompt(body, allocation);
+    const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation);
     const responseFormat = {
       type: "json_schema",
-      json_schema: {
-        name: "outline_suggestions",
-        strict: true,
-        schema: RESPONSE_SCHEMA,
-      },
+      json_schema: { name: "outline_suggestions_by_beat", strict: true, schema: responseSchema },
     };
-    let result: { suggestions: Suggestion[]; warnings: string[] } | undefined;
-    const plannedMinimumSections = Array.from(allocation.values())
+    let result: { suggestions: Suggestion[]; warnings: string[] } = { suggestions: [], warnings: [] };
+    plannedMinimumSections = Array.from(allocation.values())
       .reduce((sum, plan) => sum + plan.minSections, 0);
-    let generationError: Error | undefined;
-    let repairAllocation: Map<string, Allocation> | undefined;
-    let partialSuggestions: Suggestion[] = [];
-    if (plannedMinimumSections === 0) {
-      result = { suggestions: [], warnings: [] };
-    }
-    for (const correction of plannedMinimumSections === 0 ? [] : [false, true]) {
-      let correctionSystem = system;
-      let correctionUser = userPrompt;
-      if (correction) {
-        if (!repairAllocation) {
-          throw generationError ?? new Error("outline generation repair unavailable");
-        }
-        const repairPrompt = buildPrompt(body, repairAllocation);
-        correctionSystem = `${repairPrompt.system}\n\nThis is a bounded repair pass. Return ONLY additional sections needed to satisfy deficient minimums. Do not repeat any accepted section below. Beats allocated minimum 0 are satisfied and must have no suggestions.`;
-        correctionUser = `${repairPrompt.user}\n\nAlready accepted sections from the previous response (do not repeat):\n${JSON.stringify(partialSuggestions, null, 2)}`;
-      }
+    diagnostics = { ...diagnostics, stage: "outline_generation", plannedMinimumSections };
+    if (plannedMinimumSections > 0) {
       const rawResponse = await billableCall(
-        correctionSystem,
-        correctionUser,
+        system,
+        userPrompt,
         16000,
         responseFormat,
-        correction ? "outline-suggestions-retry" : "outline-suggestions",
+        "outline-suggestions",
+        (content) => {
+          const flattened = flattenSuggestionResponse(JSON.parse(content), body.arcTemplate.beats);
+          diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
+          const validated = validateSuggestions(flattened, beatIds, allocation);
+          const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []);
+          if (merged.length > MAX_PLANNED_SECTIONS) {
+            throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
+          }
+          return validated;
+        },
       );
-      const parsed = JSON.parse(rawResponse.content);
-      try {
-        if (!correction) {
-          const firstPass = validateSuggestions(parsed, beatIds, allocation);
-          result = {
-            suggestions: mergeRepairedSuggestions(
-              body.arcTemplate.beats.map((beat) => beat.id),
-              beatIds,
-              allocation,
-              firstPass.suggestions,
-              [],
-            ),
-            warnings: firstPass.warnings,
-          };
-          break;
-        }
-        const repaired = validateSuggestions(parsed, beatIds, repairAllocation!);
-        result = {
-          suggestions: mergeRepairedSuggestions(
-            body.arcTemplate.beats.map((beat) => beat.id),
-            beatIds,
-            allocation,
-            partialSuggestions,
-            repaired.suggestions,
-          ),
-          warnings: repaired.warnings,
-        };
-        break;
-      } catch (error) {
-        if (!(error instanceof Error)) throw error;
-        generationError = error;
-        // Retry only validation failures. Provider and JSON errors retain their
-        // existing failure behavior and must not trigger another charge.
-        if (correction) throw error;
-        const partial = validateSuggestions(parsed, beatIds);
-        partialSuggestions = partial.suggestions;
-        repairAllocation = calculateRepairAllocation(allocation, partialSuggestions);
+      const flattened = flattenSuggestionResponse(JSON.parse(rawResponse.content), body.arcTemplate.beats);
+      const validated = validateSuggestions(flattened, beatIds, allocation);
+      result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []), warnings: validated.warnings };
+      diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions) };
+      if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
+        throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
       }
-    }
-    if (!result) {
-      throw generationError ?? new Error("outline generation failed");
     }
 
     // Validate projected scale after the complete section list exists. If the
     // plan is still dramatically short, use one focused expansion pass that
     // adds events rather than silently inflating container sizes.
     if (needsNovelExpansion(result.suggestions)) {
+      diagnostics = { ...diagnostics, stage: "expansion_generation" };
       const expansion = buildExpansionPrompt(body, result.suggestions);
       const expandedRaw = await billableCall(
         expansion.system, expansion.user, 16000,
         { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: EXPANSION_SCHEMA } },
         "outline-expansion",
+        (content) => {
+          const additions = validateExpansionAdditions(JSON.parse(content), beatIds, result.suggestions);
+          const merged = mergeExpansionAdditions(result.suggestions, additions);
+          if (merged.length > MAX_PLANNED_SECTIONS || needsNovelExpansion(merged)) {
+            throw new Error("outline expansion did not reach plausible novel scale");
+          }
+          return additions;
+        },
       );
       const additions = validateExpansionAdditions(JSON.parse(expandedRaw.content), beatIds, result.suggestions);
       const merged = mergeExpansionAdditions(result.suggestions, additions);
@@ -1084,6 +1072,7 @@ async function runSuggestionJob(
       credit_cost_charged: creditCostCharged,
       remaining_credits: remainingCredits,
       completed_at: new Date().toISOString(),
+      diagnostics: { ...diagnostics, stage: "completed", finalSectionCounts: countSuggestionsByBeat(result.suggestions) },
     }).eq("id", runId);
   } catch (err) {
     const errorCode = err && typeof err === "object" && "code" in err
@@ -1099,6 +1088,7 @@ async function runSuggestionJob(
       status: "failed",
       error_code: errorCode,
       error: message.slice(0, 2000),
+      diagnostics: { ...diagnostics, stage: "failed", plannedMinimumSections, error: message.slice(0, 500) },
       completed_at: new Date().toISOString(),
     }).eq("id", runId);
   }
@@ -1137,7 +1127,7 @@ Deno.serve(async (req: Request) => {
       "outline_suggestion_runs",
     )
       .select(
-        "id, status, suggestions, warnings, error_code, error, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits",
+        "id, status, suggestions, warnings, error_code, error, diagnostics, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits",
       )
       .eq("id", runId).single();
     if (error) {
@@ -1153,6 +1143,7 @@ Deno.serve(async (req: Request) => {
         warnings: run.warnings,
         errorCode: run.error_code,
         error: run.error,
+        diagnostics: run.diagnostics,
         created_at: run.created_at,
         updated_at: run.updated_at,
         completed_at: run.completed_at,
