@@ -473,6 +473,9 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
     ["beat-2", { minSections: 1, rationale: "escalation" }],
   ])).system;
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
+  assertEquals(outlinePrompt.includes("Novel-ready section titles"), true);
+  assertEquals(outlinePrompt.includes("Do not restate or lightly rephrase"), true);
+  assertEquals(outlinePrompt.includes("suitable for a novel outline or novel-ready table of contents"), true);
   assertEquals(projectedTokenRange([
     { container: "scene" }, { container: "developedScene" },
   ]), [2300, 4800]);
