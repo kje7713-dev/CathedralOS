@@ -60,6 +60,7 @@ type Section = {
   targetWords?: number | null;
   targetWordsMin?: number | null;
   targetWordsMax?: number | null;
+  recipeRequirementIDs?: string[] | null;
 };
 type RequestBody = {
   outline_id: string;
@@ -128,6 +129,11 @@ export function validate(body: RequestBody): string | null {
     if (section.storyArcBeatID != null && !isUUID(section.storyArcBeatID)) {
       return "invalid story arc beat ID";
     }
+    if (section.recipeRequirementIDs != null && (
+      !Array.isArray(section.recipeRequirementIDs) ||
+      section.recipeRequirementIDs.length > 50 ||
+      section.recipeRequirementIDs.some((id) => typeof id !== "string" || id.length < 1 || id.length > 100)
+    )) return "invalid recipe requirement IDs";
   }
   return null;
 }
@@ -146,6 +152,7 @@ export function sectionRow(section: Section, outlineID: string, position: number
     target_words: section.targetWords ?? null,
     target_words_min: section.targetWordsMin ?? null,
     target_words_max: section.targetWordsMax ?? null,
+    recipe_requirement_ids: section.recipeRequirementIDs ?? [],
     status: "draft",
   };
 }
@@ -249,7 +256,7 @@ async function mergeSectionsIntoSnapshot(
   }
   const { data: rows, error: rowsError } = await db.from("outline_sections")
     .select(
-      "id,position,title,summary,container,pov,terminal_beat,status,parent_id,story_arc_beat_id,target_words,target_words_min,target_words_max",
+      "id,position,title,summary,container,pov,terminal_beat,status,parent_id,story_arc_beat_id,target_words,target_words_min,target_words_max,recipe_requirement_ids",
     )
     .in("id", request.sections.map((section) => section.id));
   if (rowsError) {
@@ -287,6 +294,7 @@ async function mergeSectionsIntoSnapshot(
     targetWords: row.target_words,
     targetWordsMin: row.target_words_min,
     targetWordsMax: row.target_words_max,
+    recipeRequirementIDs: Array.isArray(row.recipe_requirement_ids) ? row.recipe_requirement_ids : [],
   }));
   outline.sections = mergeSectionsByCanonicalID(existing, replacements).sort((a, b) =>
     Number(a.position ?? 0) - Number(b.position ?? 0)

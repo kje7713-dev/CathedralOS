@@ -6,6 +6,12 @@ import {
   type LLMMessage,
   OpenAIProvider,
 } from "../generate-story/_provider.ts";
+import {
+  type RecipeObligation,
+  deriveRecipeObligations,
+  obligationCoverage,
+  renderRecipeObligations,
+} from "./_recipe_obligations.ts";
 
 // =============================================================================
 // index.ts — outline-from-recipe Edge Function
@@ -66,15 +72,31 @@ const SECTION_SCHEMA = {
 export function buildSuggestionResponseSchema(
   beats: Array<{ id: string }>,
   allocation: Map<string, Allocation>,
+  obligations: RecipeObligation[] = [],
 ) {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
+  const sectionSchema = obligations.length > 0
+    ? {
+      ...SECTION_SCHEMA,
+      properties: {
+        ...SECTION_SCHEMA.properties,
+        recipeRequirementIDs: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          items: { type: "string", enum: obligations.map((obligation) => obligation.id) },
+        },
+      },
+      required: [...SECTION_SCHEMA.required, "recipeRequirementIDs"],
+    }
+    : SECTION_SCHEMA;
   for (const beat of beats) {
     const minimum = allocation.get(beat.id)?.minSections ?? 0;
     properties[beat.id] = {
       type: "array",
       minItems: minimum,
-      items: SECTION_SCHEMA,
+      items: sectionSchema,
     };
     required.push(beat.id);
   }
@@ -207,6 +229,7 @@ interface ExistingSectionBlob {
   pov?: string;
   terminalBeat?: string;
   storyArcBeatID?: string; // null for manual/free-form sections
+  recipeRequirementIDs?: string[]; // server-assigned obligations already covered
 }
 
 interface SuggestionLLMResult {
@@ -231,6 +254,7 @@ interface Suggestion {
   pov: string;
   terminalBeat: string;
   storyArcBeatID: string;
+  recipeRequirementIDs?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -326,8 +350,9 @@ const EXPANSION_SCHEMA = {
           terminalBeat: { type: "string", minLength: 1, maxLength: 500 },
           storyArcBeatID: { type: "string" },
           insertAfterTitle: { type: ["string", "null"] },
+          recipeRequirementIDs: { type: "array", minItems: 1, maxItems: 50, items: { type: "string", minLength: 1 } },
         },
-        required: ["title", "summary", "container", "pov", "terminalBeat", "storyArcBeatID", "insertAfterTitle"],
+        required: ["title", "summary", "container", "pov", "terminalBeat", "storyArcBeatID", "insertAfterTitle", "recipeRequirementIDs"],
       },
     },
   },
@@ -339,6 +364,10 @@ export type ExpansionAddition = Suggestion & { insertAfterTitle: string | null }
 export class ExpansionValidationError extends Error {}
 
 export type NovelPlanningFailureCode = "failed_under_target" | "failed_expansion";
+
+export class RecipeObligationValidationError extends Error {
+  readonly code = "missing_recipe_obligations";
+}
 
 export class NovelScalePlanningError extends Error {
   readonly code: NovelPlanningFailureCode;
@@ -451,6 +480,7 @@ export function buildExpansionPrompt(
   req: OutlineFromRecipeRequest,
   current: Suggestion[],
   context?: ExpansionPromptContext,
+  obligations: RecipeObligation[] = [],
 ): { system: string; user: string } {
   const projectedTokens = context?.projectedTokens ?? projectedExpectedTokens(current);
   const projectedWords = context?.projectedWords ?? projectedTokens / TOKENS_PER_WORD;
@@ -460,19 +490,27 @@ export function buildExpansionPrompt(
   );
   const round = context?.round ?? 1;
   return {
-    system: `The current outline is compressed for a novel. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad novel range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Return JSON matching the expansion schema.`,
-    user: JSON.stringify({ recipe: req.recipe, arcTemplate: req.arcTemplate, existingSections: req.existingSections ?? [], currentSuggestions: current, expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens } }, null, 2),
+    system: `The current outline is compressed for a novel. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad novel range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign every addition one or more applicable recipeRequirementIDs from the supplied obligation list. Return JSON matching the expansion schema.
+
+## Recipe obligations
+${renderRecipeObligations(obligations)}`,
+    user: JSON.stringify({ recipe: req.recipe, arcTemplate: req.arcTemplate, recipeObligations: obligations, existingSections: req.existingSections ?? [], currentSuggestions: current, expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens } }, null, 2),
   };
 }
 
-export function validateExpansionAdditions(parsed: any, beatIds: Set<string>, original: Suggestion[]): ExpansionAddition[] {
+export function validateExpansionAdditions(
+  parsed: any,
+  beatIds: Set<string>,
+  original: Suggestion[],
+  obligations: RecipeObligation[] = [],
+): ExpansionAddition[] {
   if (!parsed || !Array.isArray(parsed.suggestions)) throw new Error("expansion response missing suggestions array");
   const originalTitles = new Set(original.map((s) => s.title));
   const additions: ExpansionAddition[] = [];
   const fingerprints = new Set(original.map((s) => `${s.title}|${s.summary}|${s.storyArcBeatID}`));
   for (const raw of parsed.suggestions) {
     const { insertAfterTitle } = raw ?? {};
-    const validated = validateSuggestions({ suggestions: [raw] }, beatIds).suggestions[0];
+    const validated = validateSuggestions({ suggestions: [raw] }, beatIds, undefined, obligations).suggestions[0];
     if (!validated) throw new Error("expansion returned an invalid addition");
     if (insertAfterTitle !== null && typeof insertAfterTitle !== "string") throw new Error("expansion placement must be a title or null");
     if (insertAfterTitle !== null && !originalTitles.has(insertAfterTitle)) throw new Error("expansion placement must reference an original section");
@@ -529,9 +567,24 @@ export function calculateRepairAllocation(
 }
 
 
+export function adjustAllocationForExistingSections(
+  allocation: Map<string, Allocation>,
+  existingSections: ExistingSectionBlob[] = [],
+): Map<string, Allocation> {
+  const counts = new Map<string, number>();
+  for (const section of existingSections) {
+    if (section.storyArcBeatID) counts.set(section.storyArcBeatID, (counts.get(section.storyArcBeatID) ?? 0) + 1);
+  }
+  return new Map(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, {
+    minSections: Math.max(0, plan.minSections - (counts.get(beatID) ?? 0)),
+    rationale: plan.rationale,
+  }]));
+}
+
 export function buildPrompt(
   req: OutlineFromRecipeRequest,
   allocation: Map<string, Allocation>,
+  obligations: RecipeObligation[] = [],
 ): { system: string; user: string } {
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
@@ -555,6 +608,11 @@ Choose a container for the scale of one dramatic unit, not to fake novel length:
 - chapter: a publishing or pacing division, 3,000-8,000+
 The expected ranges are literary targets; runtime/provider headroom is not a desired length.
 
+## Recipe obligations
+
+The following obligations were derived from populated canonical recipe fields. Required obligations must be materially advanced by one or more sections. Supporting items are optional texture and must not be promoted into mandatory plot events. Each section must include one or more applicable recipeRequirementIDs.
+${renderRecipeObligations(obligations)}
+
 ## Use the minimum-only allocation
 
 For each beat, generate at least the stated minimum number of distinct sections. The minimum is a floor for dramatic coverage, not a target or maximum: generate additional sections whenever the material supports distinct events, consequences, decisions, or revelations. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.
@@ -572,7 +630,7 @@ ${
           req.existingSections.map((s) =>
             `- "${s.title ?? "(untitled)"}" (${s.container ?? "scene"}, ${
               s.pov ?? "thirdPersonLimited"
-            }): ${s.summary ?? ""}`
+            }): ${s.summary ?? ""} [recipeRequirementIDs: ${(s.recipeRequirementIDs ?? []).join(", ") || "none"}]`
           ).join("\n")
         }\n\n`
         : ""
@@ -581,6 +639,7 @@ ${
     {
       recipe: req.recipe,
       arcTemplate: req.arcTemplate,
+      recipeObligations: obligations,
       hint: req.hint ?? null,
     },
     null,
@@ -954,6 +1013,7 @@ export function validateSuggestions(
   parsed: any,
   beatIds: Set<string>,
   allocation?: Map<string, Allocation>,
+  obligations: RecipeObligation[] = [],
 ): { suggestions: Suggestion[]; warnings: string[] } {
   const warnings: string[] = [];
   if (!parsed || !Array.isArray(parsed.suggestions)) {
@@ -986,6 +1046,16 @@ export function validateSuggestions(
       );
       continue;
     }
+    const requirementIDs = s.recipeRequirementIDs;
+    if (obligations.length > 0 && (!Array.isArray(requirementIDs) || requirementIDs.length === 0)) {
+      throw new Error(`section ${String(s.title).slice(0, 120)} is missing recipeRequirementIDs`);
+    }
+    const validRequirementIDs = Array.isArray(requirementIDs)
+      ? requirementIDs.filter((id: unknown): id is string => typeof id === "string" && obligations.some((obligation) => obligation.id === id))
+      : [];
+    if (obligations.length > 0 && validRequirementIDs.length !== requirementIDs.length) {
+      throw new Error(`section ${String(s.title).slice(0, 120)} references an unknown recipe requirement`);
+    }
     valid.push({
       title: String(s.title).slice(0, 200),
       summary: String(s.summary).slice(0, 4000),
@@ -993,6 +1063,7 @@ export function validateSuggestions(
       pov: s.pov,
       terminalBeat: String(s.terminalBeat).slice(0, 1000),
       storyArcBeatID: s.storyArcBeatID,
+      ...(validRequirementIDs.length > 0 ? { recipeRequirementIDs: validRequirementIDs } : {}),
     });
     used.add(s.storyArcBeatID);
   }
@@ -1040,6 +1111,46 @@ const admin = () =>
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     { auth: { persistSession: false } },
   );
+
+async function repairRecipeObligations(
+  body: OutlineFromRecipeRequest,
+  current: Suggestion[],
+  beatIds: Set<string>,
+  obligations: RecipeObligation[],
+  billableCall: SuggestionLLMCall,
+): Promise<Suggestion[]> {
+  const missing = obligationCoverage([...(body.existingSections ?? []), ...current], obligations).missingRequired;
+  if (missing.length === 0) return current;
+  const projectedTokens = projectedExpectedTokens(current);
+  const prompt = buildExpansionPrompt(body, current, {
+    round: 1,
+    projectedTokens,
+    projectedWords: projectedTokens / TOKENS_PER_WORD,
+    desiredWords: NOVEL_TARGET_WORDS,
+    remainingDeficitTokens: Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - projectedTokens),
+  }, obligations);
+  const system = `${prompt.system}\n\nThis is a bounded recipe-obligation repair. Add only distinct sections that materially advance every missing REQUIRED obligation listed below; do not rewrite existing sections.\nMissing required obligations: ${missing.map((obligation) => `${obligation.id}: ${obligation.statement}`).join(" | ")}`;
+  const rawResult = await billableCall(
+    system,
+    prompt.user,
+    16000,
+    { type: "json_schema", json_schema: { name: "outline_obligation_repair", strict: true, schema: EXPANSION_SCHEMA } },
+    "outline-obligation-repair",
+    (content) => {
+      const additions = validateExpansionAdditions(JSON.parse(content), beatIds, current, obligations);
+      const merged = mergeExpansionAdditions(current, additions);
+      if (merged.length > MAX_PLANNED_SECTIONS) throw new Error(`outline obligation repair exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
+      return additions;
+    },
+  );
+  const additions = validateExpansionAdditions(JSON.parse(rawResult.content), beatIds, current, obligations);
+  return validateSuggestions(
+    { suggestions: mergeExpansionAdditions(current, additions) },
+    beatIds,
+    undefined,
+    obligations,
+  ).suggestions;
+}
 
 async function runSuggestionJob(
   runId: string,
@@ -1117,11 +1228,13 @@ async function runSuggestionJob(
     };
 
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
-    const allocation = await planSectionAllocation(
+    const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
+    const plannedAllocation = await planSectionAllocation(
       body,
       openaiKey,
       billableCall,
     );
+    const allocation = adjustAllocationForExistingSections(plannedAllocation, body.existingSections);
     const allocationCountsByBeat = Object.fromEntries(
       Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections]),
     );
@@ -1129,9 +1242,10 @@ async function runSuggestionJob(
       stage: "planner_complete",
       plannerAllocationFirstPassCountsByBeat: allocationCountsByBeat,
       plannerAllocationValidatedCountsByBeat: allocationCountsByBeat,
+      recipeObligations,
     };
-    const { system, user: userPrompt } = buildPrompt(body, allocation);
-    const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation);
+    const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations);
+    const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations);
     const responseFormat = {
       type: "json_schema",
       json_schema: { name: "outline_suggestions_by_beat", strict: true, schema: responseSchema },
@@ -1150,7 +1264,7 @@ async function runSuggestionJob(
         (content) => {
           const flattened = flattenSuggestionResponse(JSON.parse(content), body.arcTemplate.beats);
           diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
-          const validated = validateSuggestions(flattened, beatIds, allocation);
+          const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations);
           const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []);
           if (merged.length > MAX_PLANNED_SECTIONS) {
             throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
@@ -1159,11 +1273,35 @@ async function runSuggestionJob(
         },
       );
       const flattened = flattenSuggestionResponse(JSON.parse(rawResponse.content), body.arcTemplate.beats);
-      const validated = validateSuggestions(flattened, beatIds, allocation);
+      const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations);
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []), warnings: validated.warnings };
       diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions) };
       if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
         throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
+      }
+    }
+
+    let coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
+    diagnostics = {
+      ...diagnostics,
+      recipeObligationCoverage: coverage.covered,
+      missingRequiredRecipeObligations: coverage.missingRequired.map((obligation) => obligation.id),
+    };
+    if (coverage.missingRequired.length > 0) {
+      result = {
+        ...result,
+        suggestions: await repairRecipeObligations(body, result.suggestions, beatIds, recipeObligations, billableCall),
+      };
+      coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
+      diagnostics = {
+        ...diagnostics,
+        recipeObligationCoverageAfterRepair: coverage.covered,
+        missingRequiredRecipeObligationsAfterRepair: coverage.missingRequired.map((obligation) => obligation.id),
+      };
+      if (coverage.missingRequired.length > 0) {
+        throw new RecipeObligationValidationError(
+          `required recipe obligations remain uncovered: ${coverage.missingRequired.map((obligation) => obligation.id).join(", ")}`,
+        );
       }
     }
 
@@ -1175,7 +1313,7 @@ async function runSuggestionJob(
         result.suggestions,
         beatIds,
         async (current, context) => {
-          const expansion = buildExpansionPrompt(body, current, context);
+          const expansion = buildExpansionPrompt(body, current, context, recipeObligations);
           const expandedRaw = await billableCall(
             expansion.system,
             expansion.user,
@@ -1184,7 +1322,7 @@ async function runSuggestionJob(
             `outline-expansion-${context.round}`,
             (content) => {
               try {
-                const additions = validateExpansionAdditions(JSON.parse(content), beatIds, current);
+                const additions = validateExpansionAdditions(JSON.parse(content), beatIds, current, recipeObligations);
                 const merged = mergeExpansionAdditions(current, additions);
                 if (merged.length > MAX_PLANNED_SECTIONS) {
                   throw new Error(`outline expansion exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
@@ -1195,7 +1333,7 @@ async function runSuggestionJob(
               }
             },
           );
-          return validateExpansionAdditions(JSON.parse(expandedRaw.content), beatIds, current);
+          return validateExpansionAdditions(JSON.parse(expandedRaw.content), beatIds, current, recipeObligations);
         },
         async (roundDiagnostic, allDiagnostics) => {
           diagnostics = { ...diagnostics, expansionRounds: allDiagnostics };
@@ -1204,6 +1342,12 @@ async function runSuggestionJob(
       );
       result = { suggestions: expanded.suggestions, warnings: [...result.warnings, ...expanded.warnings] };
       diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions) };
+    }
+    coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
+    if (coverage.missingRequired.length > 0) {
+      throw new RecipeObligationValidationError(
+        `required recipe obligations remain uncovered: ${coverage.missingRequired.map((obligation) => obligation.id).join(", ")}`,
+      );
     }
     await db.from("outline_suggestion_runs").update({
       status: "completed",

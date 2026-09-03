@@ -275,7 +275,8 @@ struct OutlineSuggestionService {
                 container: section.container,
                 pov: section.pov,
                 terminalBeat: section.terminalBeat,
-                storyArcBeatID: section.storyArcBeatID?.uuidString
+                storyArcBeatID: section.storyArcBeatID?.uuidString,
+                recipeRequirementIDs: section.recipeRequirementIDs
             )
         }
     }

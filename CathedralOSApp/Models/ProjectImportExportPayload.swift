@@ -310,6 +310,40 @@ struct ProjectImportExportPayload: Codable {
         let status: String
         let parentID: String?
         let storyArcBeatID: String?
+        let recipeRequirementIDs: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case id, position, title, summary, container, pov, terminalBeat, status, parentID, storyArcBeatID, recipeRequirementIDs
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decodeIfPresent(String.self, forKey: .id)
+            position = try c.decode(Int.self, forKey: .position)
+            title = try c.decode(String.self, forKey: .title)
+            summary = try c.decode(String.self, forKey: .summary)
+            container = try c.decodeIfPresent(String.self, forKey: .container)
+            pov = try c.decodeIfPresent(String.self, forKey: .pov)
+            terminalBeat = try c.decodeIfPresent(String.self, forKey: .terminalBeat)
+            status = try c.decode(String.self, forKey: .status)
+            parentID = try c.decodeIfPresent(String.self, forKey: .parentID)
+            storyArcBeatID = try c.decodeIfPresent(String.self, forKey: .storyArcBeatID)
+            recipeRequirementIDs = try c.decodeIfPresent([String].self, forKey: .recipeRequirementIDs) ?? []
+        }
+
+        init(id: String?, position: Int, title: String, summary: String, container: String?, pov: String?, terminalBeat: String?, status: String, parentID: String?, storyArcBeatID: String?, recipeRequirementIDs: [String] = []) {
+            self.id = id
+            self.position = position
+            self.title = title
+            self.summary = summary
+            self.container = container
+            self.pov = pov
+            self.terminalBeat = terminalBeat
+            self.status = status
+            self.parentID = parentID
+            self.storyArcBeatID = storyArcBeatID
+            self.recipeRequirementIDs = recipeRequirementIDs
+        }
     }
     struct PromptPackPayload: Codable {
         let id: String?

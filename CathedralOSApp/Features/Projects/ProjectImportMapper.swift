@@ -255,6 +255,7 @@ enum ProjectImportMapper {
                     if let storyArcBeatID = sp.storyArcBeatID.flatMap(UUID.init(uuidString:)) {
                         section.storyArcBeatID = storyArcBeatID
                     }
+                    section.recipeRequirementIDs = sp.recipeRequirementIDs
                     section.outline = outline
                     return section
                 }

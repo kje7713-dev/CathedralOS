@@ -1678,7 +1678,10 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             if let storyArcBeatIDString = payload.storyArcBeatID,
                let storyArcBeatID = UUID(uuidString: storyArcBeatIDString) {
                 section.storyArcBeatID = storyArcBeatID
+            } else {
+                section.storyArcBeatID = nil
             }
+            section.recipeRequirementIDs = payload.recipeRequirementIDs
             // parentID deferred (grouping is a follow-up).
             section.outline = outline
             if !outline.sections.contains(where: { $0.id == section.id }) {
