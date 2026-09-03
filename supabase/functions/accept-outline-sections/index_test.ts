@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert@1";
 import { acceptRunTerminalOutcome } from "./_outcome.ts";
 import {
   canonicalUUID,
+  buildLengthContract,
   mergeSectionsByCanonicalID,
   normalizeStoryArcBeatIDs,
   sectionRow,
@@ -99,6 +100,27 @@ function validRequest(sectionCount: number, storyArcBeatID: string | null = null
     })),
   };
 }
+
+
+Deno.test("length contract persists novel target and container-derived section ranges", () => {
+  const contract = buildLengthContract([
+    { container: "scene" },
+    { container: "chapter" },
+    { container: "sceneSequence" },
+  ]);
+  assertEquals(contract.outline, {
+    planning_format: "novel",
+    target_word_count: 80000,
+    target_word_count_min: 70000,
+    target_word_count_max: 90000,
+    projected_word_count: 9078,
+  });
+  assertEquals(contract.sections, [
+    { targetWords: 1000, targetWordsMin: 615, targetWordsMax: 1385 },
+    { targetWords: 4231, targetWordsMin: 2308, targetWordsMax: 6154 },
+    { targetWords: 3847, targetWordsMin: 2308, targetWordsMax: 5385 },
+  ]);
+});
 
 Deno.test("arc linkage canonicalizes uppercase request IDs against lowercase DB IDs", async () => {
   const sections = [{ storyArcBeatID: BEAT_A.toUpperCase() }] as any;
