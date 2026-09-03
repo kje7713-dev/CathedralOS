@@ -19,6 +19,7 @@ import {
   buildSuggestionResponseSchema,
   calculateRepairAllocation,
   ExpansionValidationError,
+  NovelScalePlanningError,
   MAX_EXPANSION_ROUNDS,
   progressivelyExpandOutline,
   validateExpansionAdditions,
@@ -466,7 +467,8 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(source.includes("maxItems: MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("if (needsNovelExpansion(result.suggestions))"), true);
-  assertEquals(source.includes("Outline meets Story Arc coverage but projected length remains below the preferred novel range."), true);
+  assertEquals(source.includes("failed_under_target"), true);
+  assertEquals(source.includes("failed_expansion"), true);
   assertEquals(source.includes("outline-expansion-"), true);
   const outlinePrompt = buildPrompt(sparseRequest as any, new Map([
     ["beat-1", { minSections: 1, rationale: "setup" }],
@@ -577,47 +579,53 @@ Deno.test("progressive expansion runs round 2 after a short round 1 and succeeds
   assertEquals(result.warnings, []);
 });
 
-Deno.test("three short valid expansion rounds return the best outline with a quality warning", async () => {
+Deno.test("Test3-shaped undersized outline fails closed after bounded expansion", async () => {
   let calls = 0;
-  const initial = sceneOutline(27);
-  const result = await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => {
-    calls++;
-    return [expansionSection(`Small addition ${calls}`)];
-  });
+  const initial = sceneOutline(22);
+  let failure: unknown;
+  try {
+    await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => {
+      calls++;
+      return [expansionSection(`Small addition ${calls}`)];
+    });
+  } catch (error) {
+    failure = error;
+  }
   assertEquals(calls, MAX_EXPANSION_ROUNDS);
-  assertEquals(result.suggestions.length, 30);
-  assertEquals(result.diagnostics.length, MAX_EXPANSION_ROUNDS);
-  assertEquals(result.warnings, ["Outline meets Story Arc coverage but projected length remains below the preferred novel range."]);
-  assertEquals(result.suggestions.slice(0, 27), initial);
+  assertEquals((failure as NovelScalePlanningError).code, "failed_under_target");
+  assertEquals((failure as NovelScalePlanningError).message.includes("70,000-word minimum"), true);
 });
 
-Deno.test("invalid expansion output preserves the prior outline and is rejected before billing", async () => {
-  const initial = sceneOutline(27);
+Deno.test("invalid expansion placement fails closed with diagnostics", async () => {
+  const initial = sceneOutline(22);
   const duplicate = expansionSection("New", "scene", "beat-1");
   let rejected = false;
   try {
     validateExpansionAdditions({ suggestions: [duplicate, duplicate] }, new Set(["beat-1"]), initial as any);
   } catch { rejected = true; }
   assertEquals(rejected, true);
-  let calls = 0;
-  const result = await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => {
-    calls++;
-    throw new ExpansionValidationError("duplicate section contract");
-  });
-  assertEquals(calls, 1);
-  assertEquals(result.suggestions, initial);
-  assertEquals(result.diagnostics[0].status, "invalid");
-  assertEquals(result.warnings[0].includes("previously valid outline was preserved"), true);
+  let failure: unknown;
+  try {
+    await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => {
+      throw new ExpansionValidationError("expansion placement crosses arc beats");
+    });
+  } catch (error) {
+    failure = error;
+  }
+  assertEquals((failure as NovelScalePlanningError).code, "failed_expansion");
+  assertEquals((failure as NovelScalePlanningError).message.includes("expansion placement crosses arc beats"), true);
 });
 
-Deno.test("existing sections survive progressive expansion and global cap stops additions safely", async () => {
+Deno.test("existing sections survive progressive expansion and global cap fails closed below target", async () => {
   const initial = sceneOutline(199).map((section) => ({ ...section, container: "beat" }));
-  const result = await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => [expansionSection("At cap", "scene"), expansionSection("Over cap", "scene")]);
-  assertEquals(result.suggestions.length, 199);
-  assertEquals(result.suggestions, initial);
-  assertEquals(result.diagnostics[0].status, "capped");
-  assertEquals(result.diagnostics[0].additionsReturned, 0);
-  assertEquals(result.warnings[0].includes("global 200-section safety cap"), true);
+  let failure: unknown;
+  try {
+    await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => [expansionSection("At cap", "scene"), expansionSection("Over cap", "scene")]);
+  } catch (error) {
+    failure = error;
+  }
+  assertEquals((failure as NovelScalePlanningError).code, "failed_under_target");
+  assertEquals((failure as NovelScalePlanningError).message.includes("70,000-word minimum"), true);
 });
 
 Deno.test("expansion prompt includes round projection, broad range, and remaining deficit", () => {
@@ -625,5 +633,6 @@ Deno.test("expansion prompt includes round projection, broad range, and remainin
   assertEquals(prompt.system.includes("progressive expansion round 2 of 3"), true);
   assertEquals(prompt.system.includes("remaining estimated deficit"), true);
   assertEquals(prompt.user.includes("remainingDeficitTokens"), true);
+  assertEquals(prompt.system.includes("22,700"), true);
   assertEquals(prompt.system.includes("never return, rewrite, reorder, or omit existing sections"), true);
 });

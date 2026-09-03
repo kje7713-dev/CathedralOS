@@ -119,6 +119,7 @@ const CONTAINER_EXPECTED_RANGES: Record<string, [number, number]> = {
 };
 const NOVEL_TARGET_WORDS: [number, number] = [70000, 90000];
 const TOKENS_PER_WORD = 1.3;
+const NOVEL_MIN_PROJECTED_TOKENS = NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD;
 const MAX_PLANNED_SECTIONS = 200;
 export const MAX_EXPANSION_ROUNDS = 3;
 
@@ -307,7 +308,7 @@ export function projectedExpectedTokens(suggestions: Array<{ container: string }
 }
 
 export function needsNovelExpansion(suggestions: Array<{ container: string }>): boolean {
-  return projectedExpectedTokens(suggestions) < NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD * 0.8;
+  return projectedExpectedTokens(suggestions) < NOVEL_MIN_PROJECTED_TOKENS;
 }
 
 const EXPANSION_SCHEMA = {
@@ -336,6 +337,18 @@ const EXPANSION_SCHEMA = {
 export type ExpansionAddition = Suggestion & { insertAfterTitle: string | null };
 
 export class ExpansionValidationError extends Error {}
+
+export type NovelPlanningFailureCode = "failed_under_target" | "failed_expansion";
+
+export class NovelScalePlanningError extends Error {
+  readonly code: NovelPlanningFailureCode;
+
+  constructor(code: NovelPlanningFailureCode, message: string) {
+    super(message);
+    this.name = "NovelScalePlanningError";
+    this.code = code;
+  }
+}
 
 export interface ExpansionRoundDiagnostic {
   round: number;
@@ -373,7 +386,7 @@ export async function progressivelyExpandOutline(
       projectedTokens: projectedTokensBefore,
       projectedWords: projectedTokensBefore / TOKENS_PER_WORD,
       desiredWords: NOVEL_TARGET_WORDS,
-      remainingDeficitTokens: Math.max(0, NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD * 0.8 - projectedTokensBefore),
+      remainingDeficitTokens: Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - projectedTokensBefore),
     };
     try {
       const additions = await expand(suggestions, before);
@@ -386,7 +399,7 @@ export async function progressivelyExpandOutline(
         projectedWordsBefore: projectedTokensBefore / TOKENS_PER_WORD,
         additionsReturned: overCap ? 0 : additions.length, sectionCountAfter: accepted.length,
         projectedTokensAfter, projectedWordsAfter: projectedTokensAfter / TOKENS_PER_WORD,
-        remainingEstimatedDeficitTokens: Math.max(0, NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD * 0.8 - projectedTokensAfter),
+        remainingEstimatedDeficitTokens: Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - projectedTokensAfter),
         status: overCap || accepted.length >= MAX_PLANNED_SECTIONS ? "capped" : "completed",
         ...(overCap ? { error: `global ${MAX_PLANNED_SECTIONS}-section safety cap reached` } : {}),
       };
@@ -405,17 +418,22 @@ export async function progressivelyExpandOutline(
         projectedWordsBefore: projectedTokensBefore / TOKENS_PER_WORD, additionsReturned: 0,
         sectionCountAfter: suggestions.length, projectedTokensAfter: projectedTokensBefore,
         projectedWordsAfter: projectedTokensBefore / TOKENS_PER_WORD,
-        remainingEstimatedDeficitTokens: Math.max(0, NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD * 0.8 - projectedTokensBefore),
+        remainingEstimatedDeficitTokens: Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - projectedTokensBefore),
         status: "invalid", error: error.message.slice(0, 500),
       };
       diagnostics.push(diagnostic);
       await onRound?.(diagnostic, diagnostics);
-      warnings.push("Novel expansion stopped after an invalid expansion response; the previously valid outline was preserved.");
-      break;
+      throw new NovelScalePlanningError(
+        "failed_expansion",
+        `Novel expansion failed validation: ${error.message.slice(0, 500)}`,
+      );
     }
   }
   if (needsNovelExpansion(suggestions)) {
-    warnings.push("Outline meets Story Arc coverage but projected length remains below the preferred novel range.");
+    throw new NovelScalePlanningError(
+      "failed_under_target",
+      `Novel outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
+    );
   }
   return { suggestions, warnings: [...new Set(warnings)], diagnostics };
 }
@@ -438,7 +456,7 @@ export function buildExpansionPrompt(
   const projectedWords = context?.projectedWords ?? projectedTokens / TOKENS_PER_WORD;
   const remainingDeficitTokens = context?.remainingDeficitTokens ?? Math.max(
     0,
-    NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD * 0.8 - projectedTokens,
+    NOVEL_MIN_PROJECTED_TOKENS - projectedTokens,
   );
   const round = context?.round ?? 1;
   return {
