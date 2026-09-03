@@ -28,6 +28,18 @@ const ALLOWED_CONTAINERS = new Set([
   "episode",
 ]);
 const MAX_ACCEPTED_SECTIONS = 200;
+const NOVEL_LENGTH_CONTRACT = {
+  planning_format: "novel",
+  target_word_count: 80000,
+  target_word_count_min: 70000,
+  target_word_count_max: 90000,
+} as const;
+const CONTAINER_WORD_RANGES: Record<string, [number, number]> = {
+  beat: [58, 192], moment: [154, 385], vignette: [231, 692],
+  microScene: [308, 692], scene: [615, 1385], developedScene: [1154, 2308],
+  setPiece: [1538, 3846], sceneSequence: [2308, 5385], shortStory: [1923, 6154],
+  chapter: [2308, 6154], episode: [3846, 11538],
+};
 
 const ALLOWED_POVS = new Set([
   "firstPerson",
@@ -45,6 +57,9 @@ type Section = {
   pov?: string | null;
   terminalBeat?: string | null;
   storyArcBeatID?: string | null;
+  targetWords?: number | null;
+  targetWordsMin?: number | null;
+  targetWordsMax?: number | null;
 };
 type RequestBody = {
   outline_id: string;
@@ -128,7 +143,36 @@ export function sectionRow(section: Section, outlineID: string, position: number
     pov: section.pov ?? null,
     terminal_beat: section.terminalBeat ?? null,
     story_arc_beat_id: section.storyArcBeatID ?? null,
+    target_words: section.targetWords ?? null,
+    target_words_min: section.targetWordsMin ?? null,
+    target_words_max: section.targetWordsMax ?? null,
     status: "draft",
+  };
+}
+
+export interface LengthContract {
+  planning_format: string;
+  target_word_count: number;
+  target_word_count_min: number;
+  target_word_count_max: number;
+  projected_word_count: number;
+}
+
+export function buildLengthContract(
+  sections: Array<{ container?: string | null }>,
+): { outline: LengthContract; sections: Array<{ targetWords: number; targetWordsMin: number; targetWordsMax: number }> } {
+  const targets = sections.map((section) => {
+    const [min, max] = CONTAINER_WORD_RANGES[section.container ?? ""] ?? [615, 1385];
+    return { min, max, target: (min + max) / 2 };
+  });
+  const projected = Math.round(targets.reduce((sum, value) => sum + value.target, 0));
+  return {
+    outline: { ...NOVEL_LENGTH_CONTRACT, projected_word_count: projected },
+    sections: targets.map(({ min, max, target }) => ({
+      targetWords: Math.round(target),
+      targetWordsMin: min,
+      targetWordsMax: max,
+    })),
   };
 }
 
@@ -205,7 +249,7 @@ async function mergeSectionsIntoSnapshot(
   }
   const { data: rows, error: rowsError } = await db.from("outline_sections")
     .select(
-      "id,position,title,summary,container,pov,terminal_beat,status,parent_id,story_arc_beat_id",
+      "id,position,title,summary,container,pov,terminal_beat,status,parent_id,story_arc_beat_id,target_words,target_words_min,target_words_max",
     )
     .in("id", request.sections.map((section) => section.id));
   if (rowsError) {
@@ -240,6 +284,9 @@ async function mergeSectionsIntoSnapshot(
     status: row.status,
     parentID: row.parent_id,
     storyArcBeatID: row.story_arc_beat_id == null ? null : canonicalUUID(String(row.story_arc_beat_id)),
+    targetWords: row.target_words,
+    targetWordsMin: row.target_words_min,
+    targetWordsMax: row.target_words_max,
   }));
   outline.sections = mergeSectionsByCanonicalID(existing, replacements).sort((a, b) =>
     Number(a.position ?? 0) - Number(b.position ?? 0)
@@ -289,14 +336,21 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       );
     }
     const basePosition = (positions?.[0]?.position ?? -1) + 1;
+    const lengthContract = buildLengthContract(normalizedSections);
     const { error: insertError } = await db.from("outline_sections").upsert(
       normalizedSections.map((s, index) =>
-        sectionRow(s, normalizedRequest.outline_id, basePosition + index)
+        sectionRow({ ...s, ...lengthContract.sections[index] }, normalizedRequest.outline_id, basePosition + index)
       ),
       { onConflict: "id" },
     );
     if (insertError) {
       throw new Error(`Could not create sections: ${insertError.message}`);
+    }
+    const { error: outlineContractError } = await db.from("outlines")
+      .update(lengthContract.outline)
+      .eq("id", normalizedRequest.outline_id);
+    if (outlineContractError) {
+      throw new Error(`Could not persist outline length contract: ${outlineContractError.message}`);
     }
     // Accept All stores outline planning metadata only. Outline suggestions
     // are not generated prose and must not create RAG embeddings or provider

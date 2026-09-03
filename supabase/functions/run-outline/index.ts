@@ -545,7 +545,7 @@ async function runOutline(
   if (sectionIds.length > 0) {
     const { data: outlineSections } = await adminClient.from("outline_sections")
       .select(
-        "id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id",
+        "id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id, target_words, target_words_min, target_words_max",
       )
       .in("id", sectionIds);
     const byId = new Map((outlineSections ?? []).map((s) => [s.id, s]));
@@ -952,6 +952,9 @@ async function collectSectionsToGenerate(
     pov: string | null;
     terminal_beat: string | null;
     story_arc_beat_id: string | null;
+    target_words: number | null;
+    target_words_min: number | null;
+    target_words_max: number | null;
   }>
 > {
   // Look up the start section (need parent_id for chapter walk + position for from_here)
@@ -971,7 +974,7 @@ async function collectSectionsToGenerate(
     const { data: leaf, error: leafErr } = await adminClient
       .from("outline_sections")
       .select(
-        "id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id",
+        "id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id, target_words, target_words_min, target_words_max",
       )
       .eq("id", startParentSectionId)
       .single();
@@ -986,6 +989,9 @@ async function collectSectionsToGenerate(
         pov: string | null;
         terminal_beat: string | null;
         story_arc_beat_id: string | null;
+        target_words: number | null;
+        target_words_min: number | null;
+        target_words_max: number | null;
       },
     ];
   }
@@ -994,7 +1000,7 @@ async function collectSectionsToGenerate(
   const { data: allSections, error: allErr } = await adminClient
     .from("outline_sections")
     .select(
-      "id, parent_id, position, title, summary, container, pov, terminal_beat, story_arc_beat_id",
+      "id, parent_id, position, title, summary, container, pov, terminal_beat, story_arc_beat_id, target_words, target_words_min, target_words_max",
     )
     .eq("outline_id", outlineId)
     .order("position", { ascending: true });

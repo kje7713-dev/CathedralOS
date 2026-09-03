@@ -102,6 +102,9 @@ export function buildGenerateStoryRequest(args: {
     container: string | null;
     pov: string | null;
     terminal_beat: string | null;
+    target_words?: number | null;
+    target_words_min?: number | null;
+    target_words_max?: number | null;
   };
   projectId: string;
   runId?: string;
@@ -154,6 +157,12 @@ export function buildGenerateStoryRequest(args: {
     // up in Commit 4.
     sectionTitle: args.section.title,
     sectionSummary: args.section.summary,
+    // Planning intent only. generate-story continues to enforce the
+    // container-owned provider hard cap; these fields support planned-vs-
+    // actual length telemetry without asking the model to pad prose.
+    plannedTargetWords: args.section.target_words ?? undefined,
+    plannedTargetWordsMin: args.section.target_words_min ?? undefined,
+    plannedTargetWordsMax: args.section.target_words_max ?? undefined,
     // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): the 5 Story Arc
     // Context fields were REMOVED from the payload. generate-story resolves
     // them server-side from outline_section_id. The buildSourcePayloadJSON
