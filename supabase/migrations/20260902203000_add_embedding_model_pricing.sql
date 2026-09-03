@@ -5,12 +5,12 @@ insert into public.generation_models (
   input_credit_rate, output_credit_rate, minimum_charge_credits,
   max_output_tokens, enabled, sort_order,
   provider_input_usd_per_1m, provider_cached_input_usd_per_1m,
-  provider_output_usd_per_1m, billing_multiplier, cache_mode
+  provider_output_usd_per_1m, billing_multiplier
 ) values (
   'text-embedding-3-small', 'openai', 'text-embedding-3-small',
   'OpenAI Embeddings', 'Scene-memory vector embeddings.',
   0.004, 0, 0, null, true, 900,
-  0.02, 0.02, 0, 2.0, 'none'
+  0.02, 0.02, 0, 2.0
 )
 on conflict (id) do update set
   provider = excluded.provider,
@@ -22,5 +22,4 @@ on conflict (id) do update set
   provider_cached_input_usd_per_1m = excluded.provider_cached_input_usd_per_1m,
   provider_output_usd_per_1m = excluded.provider_output_usd_per_1m,
   billing_multiplier = excluded.billing_multiplier,
-  cache_mode = excluded.cache_mode,
   enabled = true;
