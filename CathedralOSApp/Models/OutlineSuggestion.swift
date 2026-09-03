@@ -11,6 +11,9 @@ struct OutlineSuggestion: Codable, Identifiable, Equatable {
     let pov: String
     let terminalBeat: String
     let storyArcBeatID: String
+    /// Server-derived recipe obligations materially advanced by this section.
+    /// Optional for compatibility with older suggestion responses.
+    let recipeRequirementIDs: [String]?
 
     /// Client-side stable identity for SwiftUI lists. The edge function does not
     /// emit an id field; titles are unique within a response so they're safe.

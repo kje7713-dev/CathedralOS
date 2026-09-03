@@ -1,4 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { deriveRecipeObligations, obligationCoverage } from "./_recipe_obligations.ts";
 
 Deno.test("outline suggestion polling contract preserves structured failures and success", async () => {
   const source = await Deno.readTextFile(
@@ -99,6 +100,36 @@ Deno.test("canonical recipe payload passes request validation", () => {
     }),
     "arcTemplate.id and non-empty arcTemplate.beats required",
   );
+});
+
+Deno.test("recipe obligations derive required plot signals and supporting-only texture", () => {
+  const obligations = deriveRecipeObligations({
+    ...sparseRequest.recipe,
+    project: { ...sparseRequest.recipe.project, summary: "Monsters kill humans to save the world." },
+    selectedStorySpark: { description: "Ted's rage is triggered at random." },
+    selectedCharacters: [{ name: "Ted", goals: ["control the rage"], fears: ["hurting Betty"] }],
+    selectedRelationships: [{ from: "Ted", to: "Betty", dynamic: "control" }],
+    selectedAftertaste: "Can bad people do good things?",
+    selectedThemeQuestions: [{ question: "Can bad people do good things?" }],
+    selectedMotifs: [{ name: "skull" }],
+  } as any);
+  assertEquals(obligations.filter((item) => item.required).map((item) => item.classification), [
+    "hard_premise", "major_plot", "character_arc", "relationship", "ending_intent",
+  ]);
+  assertEquals(obligations.filter((item) => !item.required).map((item) => item.classification), [
+    "supporting_theme", "supporting_motif",
+  ]);
+  assertEquals(obligations.every((item) => item.id.startsWith("R")), true);
+});
+
+Deno.test("recipe obligation coverage reports missing required items without promoting support", () => {
+  const obligations = deriveRecipeObligations(sparseRequest.recipe as any);
+  const coverage = obligationCoverage([{ recipeRequirementIDs: [obligations[0].id] }], obligations);
+  assertEquals(coverage.covered, { R1: 1 });
+  assertEquals(coverage.missingRequired, []);
+  const rich = deriveRecipeObligations({ ...sparseRequest.recipe, selectedStorySpark: { text: "A spark" }, selectedThemeQuestions: [{ text: "A theme" }] } as any);
+  const richCoverage = obligationCoverage([{ recipeRequirementIDs: [rich[0].id] }], rich);
+  assertEquals(richCoverage.missingRequired.map((item) => item.id), ["R2"]);
 });
 
 Deno.test("sparse recipe context is preserved for minimum-only allocation and outline prompts", () => {
@@ -500,6 +531,17 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(merged[0], original[0]);
 });
 
+
+Deno.test("obligation-aware response schema requires auditable section assignments", () => {
+  const obligations = deriveRecipeObligations(sparseRequest.recipe as any);
+  const allocation = new Map([["beat-1", { minSections: 1, rationale: "premise" }], ["beat-2", { minSections: 0, rationale: "transition" }]]);
+  const schema = buildSuggestionResponseSchema(sparseRequest.arcTemplate.beats, allocation, obligations) as any;
+  const item = schema.properties.beats.properties["beat-1"].items;
+  assertEquals(item.required.includes("recipeRequirementIDs"), true);
+  const flattened = flattenSuggestionResponse({ beats: { "beat-1": [{ title: "Premise", summary: "Monsters attack.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "The shelter falls.", recipeRequirementIDs: [obligations[0].id] }], "beat-2": [] } }, sparseRequest.arcTemplate.beats);
+  assertEquals(flattened.suggestions[0].recipeRequirementIDs, [obligations[0].id]);
+  assertEquals(validateSuggestions(flattened, new Set(["beat-1", "beat-2"]), allocation, obligations).suggestions.length, 1);
+});
 
 Deno.test("dynamic suggestion schema enforces every beat minimum and flattening owns order and IDs", () => {
   const beats = [{ id: "beat-b" }, { id: "beat-a" }, { id: "beat-c" }];

@@ -165,6 +165,16 @@ Deno.test("Accept All validation allows 1 through 200 sections and rejects 201",
   assertEquals(validate(validRequest(201)), "sections must contain 1-200 items");
 });
 
+Deno.test("recipe obligation assignments persist with accepted sections", () => {
+  const row = sectionRow({
+    id: "section-1", position: 0, title: "The Premise", summary: "The monsters attack.",
+    recipeRequirementIDs: ["R1", "R4"],
+  }, "outline-1", 2);
+  assertEquals(row.recipe_requirement_ids, ["R1", "R4"]);
+  assertEquals(validate({ ...validRequest(1), sections: [{ ...validRequest(1).sections[0], recipeRequirementIDs: ["R1"] }] }), null);
+  assertEquals(validate({ ...validRequest(1), sections: [{ ...validRequest(1).sections[0], recipeRequirementIDs: ["R".repeat(101)] }] }), "invalid recipe requirement IDs");
+});
+
 Deno.test("arc linkage is persisted for single and bulk section acceptance", async () => {
   const source = await Deno.readTextFile("./supabase/functions/accept-outline-sections/index.ts");
   assertEquals(source.includes("story_arc_beat_id: section.storyArcBeatID ?? null"), true);

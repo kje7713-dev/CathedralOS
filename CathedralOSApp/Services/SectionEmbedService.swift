@@ -267,6 +267,7 @@ struct AcceptOutlineSection: Codable {
     let pov: String?
     let terminalBeat: String?
     let storyArcBeatID: String?
+    let recipeRequirementIDs: [String]?
 }
 
 struct AcceptOutlineSectionsRequest: Codable {
@@ -327,7 +328,8 @@ extension SectionEmbedService {
                 container: suggestion.container,
                 pov: suggestion.pov,
                 terminalBeat: suggestion.terminalBeat,
-                storyArcBeatID: suggestion.storyArcBeatID
+                storyArcBeatID: suggestion.storyArcBeatID,
+                recipeRequirementIDs: suggestion.recipeRequirementIDs
             )
         }
         let requestBody = AcceptOutlineSectionsRequest(
