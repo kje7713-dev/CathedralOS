@@ -229,6 +229,7 @@ interface ExistingSectionBlob {
   pov?: string;
   terminalBeat?: string;
   storyArcBeatID?: string; // null for manual/free-form sections
+  recipeRequirementIDs?: string[]; // server-assigned obligations already covered
 }
 
 interface SuggestionLLMResult {
@@ -566,6 +567,20 @@ export function calculateRepairAllocation(
 }
 
 
+export function adjustAllocationForExistingSections(
+  allocation: Map<string, Allocation>,
+  existingSections: ExistingSectionBlob[] = [],
+): Map<string, Allocation> {
+  const counts = new Map<string, number>();
+  for (const section of existingSections) {
+    if (section.storyArcBeatID) counts.set(section.storyArcBeatID, (counts.get(section.storyArcBeatID) ?? 0) + 1);
+  }
+  return new Map(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, {
+    minSections: Math.max(0, plan.minSections - (counts.get(beatID) ?? 0)),
+    rationale: plan.rationale,
+  }]));
+}
+
 export function buildPrompt(
   req: OutlineFromRecipeRequest,
   allocation: Map<string, Allocation>,
@@ -615,7 +630,7 @@ ${
           req.existingSections.map((s) =>
             `- "${s.title ?? "(untitled)"}" (${s.container ?? "scene"}, ${
               s.pov ?? "thirdPersonLimited"
-            }): ${s.summary ?? ""}`
+            }): ${s.summary ?? ""} [recipeRequirementIDs: ${(s.recipeRequirementIDs ?? []).join(", ") || "none"}]`
           ).join("\n")
         }\n\n`
         : ""
@@ -1104,7 +1119,7 @@ async function repairRecipeObligations(
   obligations: RecipeObligation[],
   billableCall: SuggestionLLMCall,
 ): Promise<Suggestion[]> {
-  const missing = obligationCoverage(current, obligations).missingRequired;
+  const missing = obligationCoverage([...(body.existingSections ?? []), ...current], obligations).missingRequired;
   if (missing.length === 0) return current;
   const projectedTokens = projectedExpectedTokens(current);
   const prompt = buildExpansionPrompt(body, current, {
@@ -1214,11 +1229,12 @@ async function runSuggestionJob(
 
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
     const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
-    const allocation = await planSectionAllocation(
+    const plannedAllocation = await planSectionAllocation(
       body,
       openaiKey,
       billableCall,
     );
+    const allocation = adjustAllocationForExistingSections(plannedAllocation, body.existingSections);
     const allocationCountsByBeat = Object.fromEntries(
       Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections]),
     );
@@ -1265,7 +1281,7 @@ async function runSuggestionJob(
       }
     }
 
-    let coverage = obligationCoverage(result.suggestions, recipeObligations);
+    let coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
     diagnostics = {
       ...diagnostics,
       recipeObligationCoverage: coverage.covered,
@@ -1276,7 +1292,7 @@ async function runSuggestionJob(
         ...result,
         suggestions: await repairRecipeObligations(body, result.suggestions, beatIds, recipeObligations, billableCall),
       };
-      coverage = obligationCoverage(result.suggestions, recipeObligations);
+      coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
       diagnostics = {
         ...diagnostics,
         recipeObligationCoverageAfterRepair: coverage.covered,
@@ -1327,7 +1343,7 @@ async function runSuggestionJob(
       result = { suggestions: expanded.suggestions, warnings: [...result.warnings, ...expanded.warnings] };
       diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions) };
     }
-    coverage = obligationCoverage(result.suggestions, recipeObligations);
+    coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
     if (coverage.missingRequired.length > 0) {
       throw new RecipeObligationValidationError(
         `required recipe obligations remain uncovered: ${coverage.missingRequired.map((obligation) => obligation.id).join(", ")}`,

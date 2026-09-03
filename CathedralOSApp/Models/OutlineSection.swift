@@ -29,6 +29,8 @@ class OutlineSection: Identifiable {
     /// are allowed (free-form authoring). Resolved client-side by the picker
     /// in `OutlineSectionEditView` against the project's current arc beats.
     var storyArcBeatID: UUID?
+    /// Server-owned recipe obligations materially advanced by this section.
+    var recipeRequirementIDs: [String]
 
     @Relationship(inverse: \Outline.sections)
     var outline: Outline?
@@ -48,6 +50,7 @@ class OutlineSection: Identifiable {
         self.terminalBeat = nil
         self.status = "draft"
         self.storyArcBeatID = nil
+        self.recipeRequirementIDs = []
         self.children = []
     }
 }

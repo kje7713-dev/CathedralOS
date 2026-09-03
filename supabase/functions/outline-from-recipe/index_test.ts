@@ -19,6 +19,7 @@ import {
   buildPrompt,
   buildSuggestionResponseSchema,
   calculateRepairAllocation,
+  adjustAllocationForExistingSections,
   ExpansionValidationError,
   NovelScalePlanningError,
   MAX_EXPANSION_ROUNDS,
@@ -120,6 +121,36 @@ Deno.test("recipe obligations derive required plot signals and supporting-only t
     "supporting_theme", "supporting_motif",
   ]);
   assertEquals(obligations.every((item) => item.id.startsWith("R")), true);
+});
+
+Deno.test("existing accepted sections satisfy obligation coverage and reduce repair allocation", () => {
+  const obligations = deriveRecipeObligations({ ...sparseRequest.recipe, selectedStorySpark: { text: "R2" } } as any);
+  const existing = [{ storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] }];
+  const coverage = obligationCoverage([...existing, { recipeRequirementIDs: ["R2"] }], obligations);
+  assertEquals(coverage.covered, { R1: 1, R2: 1 });
+  assertEquals(coverage.missingRequired, []);
+  const adjusted = adjustAllocationForExistingSections(new Map([
+    ["beat-1", { minSections: 1, rationale: "covered" }],
+    ["beat-2", { minSections: 2, rationale: "new" }],
+  ]), existing);
+  assertEquals(adjusted.get("beat-1")?.minSections, 0);
+  assertEquals(adjusted.get("beat-2")?.minSections, 2);
+});
+
+Deno.test("missing existing obligation coverage remains repairable", () => {
+  const obligations = deriveRecipeObligations(sparseRequest.recipe as any);
+  const coverage = obligationCoverage([{ recipeRequirementIDs: [] }], obligations);
+  assertEquals(coverage.missingRequired.map((item) => item.id), ["R1"]);
+});
+
+Deno.test("character arc obligation includes canonical arc signals as one obligation", () => {
+  const obligations = deriveRecipeObligations({
+    ...sparseRequest.recipe,
+    selectedCharacters: [{ name: "Ada", arcStart: "guarded", arcEnd: "trusting", coreLie: "love is weakness", coreTruth: "trust enables courage", wounds: ["war loss"], selfDeceptions: ["I need no one"], moralLines: ["never abandon a child"] }],
+  } as any);
+  const character = obligations.filter((item) => item.classification === "character_arc");
+  assertEquals(character.length, 1);
+  for (const signal of ["arcStart", "arcEnd", "coreLie", "coreTruth", "wounds", "selfDeceptions", "moralLines"]) assertEquals(character[0].statement.includes(signal), true);
 });
 
 Deno.test("recipe obligation coverage reports missing required items without promoting support", () => {

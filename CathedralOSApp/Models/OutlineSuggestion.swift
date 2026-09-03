@@ -54,6 +54,7 @@ struct ExistingSectionBlob: Codable {
     let terminalBeat: String?
     /// nil for manual/free-form sections (no story arc beat linkage).
     let storyArcBeatID: String?
+    let recipeRequirementIDs: [String]?
 }
 
 struct OutlineSuggestionResponse: Codable {

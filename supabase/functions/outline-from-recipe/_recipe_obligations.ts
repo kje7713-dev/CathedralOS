@@ -52,7 +52,19 @@ export function deriveRecipeObligations(recipe: Record<string, unknown>): Recipe
     if (!character || typeof character !== "object") continue;
     const c = character as Record<string, unknown>;
     const name = compact(c.name, 160) || compact(c.id, 160) || "selected character";
-    const signals = ["description", "backstory", "goals", "fears", "roles", "traits", "wants", "needs"]
+    // Keep one coherent obligation per selected character, but include the
+    // populated canonical arc vocabulary rather than only the first few fields.
+    // Cosmetic/context fields (preferences, resources, speech style, notes,
+    // instructions) remain prompt context without becoming hard obligations.
+    const characterArcKeys = [
+      "description", "backstory", "goals", "fears", "needs", "roles",
+      "wounds", "secrets", "contradictions", "selfDeceptions",
+      "identityConflicts", "moralLines", "breakingPoints", "arcStart",
+      "arcEnd", "coreLie", "coreTruth", "wants", "traits", "flaws",
+      "obsessions", "attachments", "virtues", "publicMask", "privateLogic",
+      "reputation", "status",
+    ];
+    const signals = characterArcKeys
       .map((key) => meaningful(c[key]) ? `${key}: ${compact(c[key], 500)}` : "")
       .filter(Boolean).join("; ");
     if (signals) add("character_arc", `Give ${name} a materially relevant arc grounded in the supplied character facts (${signals}).`, `selectedCharacters.${name}`, true);

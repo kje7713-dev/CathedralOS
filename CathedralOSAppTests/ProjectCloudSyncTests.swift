@@ -1174,6 +1174,23 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertTrue(tombstoneService.recordedTombstones.isEmpty)
     }
 
+    func testOutlineSectionRecipeRequirementIDsRoundTripAndLegacyDecode() throws {
+        let section = ProjectImportExportPayload.OutlineSectionPayload(
+            id: UUID().uuidString, position: 0, title: "Accepted", summary: "A section",
+            container: "scene", pov: "thirdPersonLimited", terminalBeat: "Done", status: "accepted",
+            parentID: nil, storyArcBeatID: nil, recipeRequirementIDs: ["R1", "R4"]
+        )
+        let encoded = try JSONEncoder().encode(section)
+        let decoded = try JSONDecoder().decode(ProjectImportExportPayload.OutlineSectionPayload.self, from: encoded)
+        XCTAssertEqual(decoded.recipeRequirementIDs, ["R1", "R4"])
+        let legacy = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        var withoutField = legacy
+        withoutField.removeValue(forKey: "recipeRequirementIDs")
+        let legacyData = try JSONSerialization.data(withJSONObject: withoutField)
+        let restoredLegacy = try JSONDecoder().decode(ProjectImportExportPayload.OutlineSectionPayload.self, from: legacyData)
+        XCTAssertEqual(restoredLegacy.recipeRequirementIDs, [])
+    }
+
     func testRestoreAllProjectsSummaryMessageShowsRestoredUpdatedCounts() async throws {
         let session = makeSession()
         let authService = MockProjectCloudSyncAuthService(
@@ -1185,6 +1202,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let outline = Outline(name: "Outline")
         let section = OutlineSection(position: 0, title: "Accepted section", summary: "Cloud section")
         section.status = "accepted"
+        section.recipeRequirementIDs = ["R1", "R4"]
         outline.sections = [section]
         outline.project = project
         project.outlines = [outline]
@@ -1228,6 +1246,9 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(restoredSection.status, "accepted")
         XCTAssertEqual(restoredSection.title, "Accepted section")
         XCTAssertEqual(restoredSection.summary, "Cloud section")
+        XCTAssertEqual(restoredSection.recipeRequirementIDs, ["R1", "R4"])
+        let reserialized = ProjectSchemaTemplateBuilder.build(project: restoredProject)
+        XCTAssertEqual(reserialized.outlines.first?.sections.first?.recipeRequirementIDs, ["R1", "R4"])
 
         let updateReport = try await service.restoreAllProjects(into: contextB)
         XCTAssertTrue(updateReport.summaryMessage.contains("Projects restored: 0"), updateReport.summaryMessage)
