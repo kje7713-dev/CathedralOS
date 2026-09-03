@@ -1,8 +1,6 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { acceptRunTerminalOutcome } from "./_outcome.ts";
-import { processSectionMemory } from "../_shared/section-embedding.ts";
 import { canonicalUUID } from "../_shared/uuid.ts";
-import { SupabaseCreditStore } from "../generate-story/_credits.ts";
 export { canonicalUUID };
 
 // Durable Accept All worker. The iOS client submits the complete suggestion
@@ -264,9 +262,6 @@ async function runJob(runID: string, authHeader: string, userID: string) {
   );
   if (claimError || !claimed?.[0]) return;
   const request = claimed[0].request_json as RequestBody;
-  const openaiKey = Deno.env.get("OPENAI_API_KEY") ?? "";
-  if (!openaiKey) throw new Error("OPENAI_API_KEY missing");
-  const creditStore = new SupabaseCreditStore(db);
   try {
     const normalizedSections = (await normalizeStoryArcBeatIDs(
       db,
@@ -303,99 +298,26 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     if (insertError) {
       throw new Error(`Could not create sections: ${insertError.message}`);
     }
-    const { data: existingEmbeddings, error: embeddingError } = await db
-      .from("section_embeddings")
-      .select("outline_section_id")
-      .in(
-        "outline_section_id",
-        normalizedSections.map((section) => canonicalUUID(section.id)),
-      );
-    if (embeddingError) {
-      throw new Error(
-        `Could not read existing embeddings: ${embeddingError.message}`,
-      );
+    // Accept All stores outline planning metadata only. Outline suggestions
+    // are not generated prose and must not create RAG embeddings or provider
+    // charges; generated prose is embedded later by generate-story.
+    const { error: acceptedError } = await db.from("outline_sections")
+      .update({ status: "accepted" })
+      .eq("outline_id", normalizedRequest.outline_id)
+      .in("id", normalizedSections.map((section) => section.id));
+    if (acceptedError) {
+      throw new Error(`Could not accept sections: ${acceptedError.message}`);
     }
-    const completedIDs = new Set(
-      (existingEmbeddings ?? []).map((row) => canonicalUUID(String(row.outline_section_id))),
-    );
-    let done = completedIDs.size;
-    let failed = 0;
-    const failureDetails: Array<{ id: string; title: string; error: string }> =
-      [];
+    const done = normalizedSections.length;
+    const failed = 0;
     await db.from("outline_accept_runs").update({
       sections_done: done,
-      sections_failed: 0,
+      sections_failed: failed,
     }).eq("id", runID);
-    const pendingSections = normalizedSections.filter((section) =>
-      !completedIDs.has(canonicalUUID(section.id))
-    );
-    for (let i = 0; i < pendingSections.length; i += 2) {
-      // Keep internal embed-section fan-out below the Edge Runtime burst limit.
-      const batch = pendingSections.slice(i, i + 2);
-      const results = await Promise.all(batch.map(async (section) => {
-        try {
-          await processSectionMemory(
-            {
-              outline_section_id: section.id,
-              outline_id: normalizedRequest.outline_id,
-              project_id: normalizedRequest.project_id,
-              position: section.position,
-              title: section.title,
-              summary: section.summary,
-              container: section.container ?? null,
-              pov: section.pov ?? null,
-              terminal_beat: section.terminalBeat ?? null,
-              story_arc_beat_id: section.storyArcBeatID ?? null,
-              raw_text: [
-                `Title: ${section.title}`,
-                `Summary: ${section.summary}`,
-                section.terminalBeat
-                  ? `Terminal Beat: ${section.terminalBeat}`
-                  : "",
-              ].filter(Boolean).join("\n\n"),
-            },
-            db,
-            openaiKey,
-            {
-              userID,
-              action: "accept-outline-sections",
-              outputID: null,
-              projectID: normalizedRequest.project_id,
-              outlineSectionID: section.id,
-              adminClient: db,
-              creditStore,
-            },
-          );
-          await db.from("outline_sections").update({ status: "accepted" }).eq(
-            "id",
-            section.id,
-          ).eq("outline_id", normalizedRequest.outline_id);
-          return true;
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          failureDetails.push({
-            id: section.id,
-            title: section.title,
-            error: message.slice(0, 700),
-          });
-          console.error(
-            `[accept-outline-sections] section ${section.id} failed`,
-            err,
-          );
-          return false;
-        }
-      }));
-      done += results.filter(Boolean).length;
-      failed += results.filter((ok) => !ok).length;
-      await db.from("outline_accept_runs").update({
-        sections_done: done,
-        sections_failed: failed,
-      }).eq("id", runID);
-    }
     // The project snapshot is the source restored by iOS. Keep it in sync
     // with the relational rows before reporting the job as terminal; otherwise
     // a successful Accept All is immediately erased by the next cloud restore.
-    // A merge error must remain a failed job even when every section embedded.
+    // A merge error must remain a failed job even after all sections persist.
     let snapshotError: string | null = null;
     try {
       await mergeSectionsIntoSnapshot(db, normalizedRequest, userID);
@@ -403,15 +325,10 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       snapshotError = err instanceof Error ? err.message : String(err);
       console.error("[accept-outline-sections] snapshot merge failed", err);
     }
-    const sectionError = failureDetails.length
-      ? failureDetails.map((failure) =>
-        `${failure.title} (${failure.id}): ${failure.error}`
-      ).join("; ")
-      : null;
     const outcome = acceptRunTerminalOutcome(
       failed,
       snapshotError,
-      sectionError,
+      null,
     );
     await db.from("outline_accept_runs").update({
       status: outcome.status,
