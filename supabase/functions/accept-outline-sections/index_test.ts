@@ -36,11 +36,14 @@ Deno.test("Accept All preserves partial section failure details", () => {
   });
 });
 
-Deno.test("Accept All uses the shared service without nested embed-section HTTP", async () => {
+Deno.test("Accept All indexes summaries without scene-memory extraction or billing", async () => {
   const source = await Deno.readTextFile(
     new URL("./index.ts", import.meta.url),
   );
   assertEquals(source.includes("processSectionMemory"), true);
+  assertEquals(source.includes("extractMemory: false"), true);
+  assertEquals(source.includes("SupabaseCreditStore"), false);
+  assertEquals(source.includes('action: "accept-outline-sections"'), false);
   assertEquals(source.includes("functions/v1/embed-section"), false);
   assertEquals(source.includes("embedSectionWithRetry"), false);
 });

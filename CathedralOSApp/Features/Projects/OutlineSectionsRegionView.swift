@@ -339,6 +339,17 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         } message: {
             Text(embedError ?? "An unknown error occurred.")
         }
+        // Accept All runs outside this view, so its terminal error must also
+        // be rendered here. The review sheet can disappear during reconciliation;
+        // without this fallback the shared coordinator's error is silent.
+        .alert("Accept All Failed", isPresented: Binding(
+            get: { durabilityCoordinator.activeAcceptRun == nil && durabilityCoordinator.acceptRunError != nil },
+            set: { if !$0 { durabilityCoordinator.dismissAcceptRunError() } }
+        )) {
+            Button("OK", role: .cancel) { durabilityCoordinator.dismissAcceptRunError() }
+        } message: {
+            Text(durabilityCoordinator.acceptRunError ?? "Accept All failed.")
+        }
         .alert("Delete Error", isPresented: Binding(
             get: { deleteError != nil },
             set: { if !$0 { deleteError = nil } }

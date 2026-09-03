@@ -2,7 +2,6 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { acceptRunTerminalOutcome } from "./_outcome.ts";
 import { processSectionMemory } from "../_shared/section-embedding.ts";
 import { canonicalUUID } from "../_shared/uuid.ts";
-import { SupabaseCreditStore } from "../generate-story/_credits.ts";
 export { canonicalUUID };
 
 // Durable Accept All worker. The iOS client submits the complete suggestion
@@ -266,7 +265,6 @@ async function runJob(runID: string, authHeader: string, userID: string) {
   const request = claimed[0].request_json as RequestBody;
   const openaiKey = Deno.env.get("OPENAI_API_KEY") ?? "";
   if (!openaiKey) throw new Error("OPENAI_API_KEY missing");
-  const creditStore = new SupabaseCreditStore(db);
   try {
     const normalizedSections = (await normalizeStoryArcBeatIDs(
       db,
@@ -356,15 +354,10 @@ async function runJob(runID: string, authHeader: string, userID: string) {
             },
             db,
             openaiKey,
-            {
-              userID,
-              action: "accept-outline-sections",
-              outputID: null,
-              projectID: normalizedRequest.project_id,
-              outlineSectionID: section.id,
-              adminClient: db,
-              creditStore,
-            },
+            // Accept All indexes the suggestion summary only. It is not prose,
+            // so do not run scene-memory extraction or charge the user.
+            undefined,
+            { extractMemory: false },
           );
           await db.from("outline_sections").update({ status: "accepted" }).eq(
             "id",
