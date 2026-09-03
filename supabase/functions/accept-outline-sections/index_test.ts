@@ -36,14 +36,14 @@ Deno.test("Accept All preserves partial section failure details", () => {
   });
 });
 
-Deno.test("Accept All indexes summaries without scene-memory extraction or billing", async () => {
+Deno.test("Accept All persists outline sections without extraction or embeddings", async () => {
   const source = await Deno.readTextFile(
     new URL("./index.ts", import.meta.url),
   );
-  assertEquals(source.includes("processSectionMemory"), true);
-  assertEquals(source.includes("extractMemory: false"), true);
+  assertEquals(source.includes("processSectionMemory"), false);
   assertEquals(source.includes("SupabaseCreditStore"), false);
-  assertEquals(source.includes('action: "accept-outline-sections"'), false);
+  assertEquals(source.includes("section_embeddings"), false);
+  assertEquals(source.includes("OPENAI_API_KEY"), false);
   assertEquals(source.includes("functions/v1/embed-section"), false);
   assertEquals(source.includes("embedSectionWithRetry"), false);
 });
@@ -155,10 +155,8 @@ Deno.test("arc linkage is persisted for single and bulk section acceptance", asy
   assertEquals(restore.includes("section.storyArcBeatID = storyArcBeatID"), true);
 });
 
-Deno.test("Accept All canonicalizes section identity for embeddings and snapshot merge", async () => {
+Deno.test("Accept All canonicalizes section identity for snapshot merge", async () => {
   const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
-  assertEquals(source.includes("canonicalUUID(String(row.outline_section_id))"), true);
-  assertEquals(source.includes("!completedIDs.has(canonicalUUID(section.id))"), true);
   assertEquals(source.includes("canonicalUUID(String(section.id))"), true);
   assertEquals(source.includes("canonicalUUID(String(row.story_arc_beat_id))"), true);
 });
