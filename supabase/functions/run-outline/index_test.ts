@@ -90,6 +90,38 @@ Deno.test("maps a snapshot and section to generate-story's canonical request", (
   assertEquals((payload.selectedCharacters as unknown[]).length, 1);
 });
 
+Deno.test("Run All request uses frozen recipe provenance instead of a mutable snapshot", () => {
+  const frozen = {
+    schema: "cathedralos.prompt_pack_export",
+    version: 1,
+    project: { id: "frozen-project", name: "Frozen" },
+    promptPack: { id: "frozen-pack", name: "Frozen Recipe" },
+  };
+  const request = buildGenerateStoryRequest({
+    snapshot: { project: { id: "mutable-project" }, promptPacks: [] },
+    frozenRecipe: frozen,
+    frozenRecipeHash: "abc123",
+    recipeObligations: [{ id: "R1", label: "Save the world" }],
+    assignedRecipeRequirementIDs: ["R1"],
+    section: {
+      id: "section-1",
+      title: "Now",
+      summary: "Act.",
+      container: "scene",
+      pov: "firstPerson",
+      terminal_beat: "Pressure.",
+    },
+    projectId: "frozen-project",
+    lengthMode: "long",
+  });
+  assertEquals(
+    (request.sourcePayloadJSON as Record<string, unknown>).project,
+    frozen.project,
+  );
+  assertEquals(request.frozenRecipeHash, "abc123");
+  assertEquals(request.assignedRecipeRequirementIDs, ["R1"]);
+});
+
 Deno.test("uses cloudGenerationOutputID as the output handoff", () => {
   assertEquals(
     generationOutputId({ cloudGenerationOutputID: "output-1" }),

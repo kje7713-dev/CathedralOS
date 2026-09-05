@@ -91,6 +91,11 @@ export function buildSourcePayloadJSON(
 
 export function buildGenerateStoryRequest(args: {
   snapshot: JSONObject;
+  /** Immutable recipe captured when the outline was planned. */
+  frozenRecipe?: JSONObject;
+  frozenRecipeHash?: string | null;
+  recipeObligations?: unknown;
+  assignedRecipeRequirementIDs?: unknown;
   // `id` is the outline_sections.id (mirrors the chapter_run.start_parent_section_id
   // the run loop passes in). Added in the PR-#327 backend fix-forward so generate-story
   // can persist `outline_section_id` on the generation_outputs row it inserts, which is
@@ -118,16 +123,18 @@ export function buildGenerateStoryRequest(args: {
   // The section type also no longer carries story_arc_beat_id (backend
   // fetches it from outline_sections).
 }): JSONObject {
-  const project = args.snapshot.project as JSONObject | undefined;
-  // PR-360-Z: buildSourcePayloadJSON no longer takes the section (section
-  // context is now explicit top-level fields on the generate-story request,
-  // not embedded in promptPack.notes).
-  const payload = buildSourcePayloadJSON(args.snapshot);
+  const payload = args.frozenRecipe ?? buildSourcePayloadJSON(args.snapshot);
+  const project = payload.project as JSONObject | undefined;
   const promptPack = payload.promptPack as JSONObject;
   return {
     generationAction: "generate",
     generationLengthMode: args.lengthMode,
     sourcePayloadJSON: payload,
+    // Frozen provenance makes every Run All request auditable and prevents
+    // later project edits from changing canon for an active outline.
+    frozenRecipeHash: args.frozenRecipeHash ?? undefined,
+    recipeObligations: args.recipeObligations,
+    assignedRecipeRequirementIDs: args.assignedRecipeRequirementIDs,
     // PR-360-Z: outputBudget removed. The container (section.container) now
     // owns the output cap via CONTAINER_HARD_CAPS in generate-story. The
     // length-mode budget is no longer sent.
