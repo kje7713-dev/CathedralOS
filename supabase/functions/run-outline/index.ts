@@ -78,6 +78,83 @@ interface RunOutlineRequest {
   scope?: string;
 }
 
+export type ReadinessOutline = {
+  source_recipe_json?: unknown;
+  source_recipe_hash?: unknown;
+  target_word_count_min?: unknown;
+  projected_word_count?: unknown;
+};
+
+export type ReadinessSection = {
+  id?: unknown;
+  title?: unknown;
+  summary?: unknown;
+  container?: unknown;
+  pov?: unknown;
+  terminal_beat?: unknown;
+  story_arc_beat_id?: unknown;
+  target_words?: unknown;
+  target_words_min?: unknown;
+  target_words_max?: unknown;
+  recipe_requirement_ids?: unknown;
+};
+
+export function generationReadinessFailures(
+  outline: ReadinessOutline,
+  sections: ReadinessSection[],
+): string[] {
+  const failures: string[] = [];
+  if (!outline.source_recipe_json) failures.push("missing_frozen_recipe");
+  if (!outline.source_recipe_hash) failures.push("missing_recipe_hash");
+  const minimum = Number(outline.target_word_count_min ?? 0);
+  const projected = Number(outline.projected_word_count ?? 0);
+  if (!minimum || projected < minimum) {
+    failures.push("projected_length_below_minimum");
+  }
+  const budgetTotal = sections.reduce(
+    (sum, section) => sum + Number(section.target_words ?? 0),
+    0,
+  );
+  if (!budgetTotal || budgetTotal < minimum) {
+    failures.push("section_budgets_below_minimum");
+  }
+  const missingSections = sections.some((section) =>
+    !String(section.id ?? "") || !String(section.title ?? "").trim() ||
+    !String(section.summary ?? "").trim() || !String(section.container ?? "") ||
+    !String(section.pov ?? "") || !String(section.terminal_beat ?? "").trim()
+  );
+  if (missingSections) failures.push("section_contract_incomplete");
+  if (sections.some((section) => section.story_arc_beat_id == null)) {
+    failures.push("section_missing_story_arc_beat");
+  }
+  const contracts = sections.map((section) =>
+    `${String(section.title ?? "").trim().toLowerCase()}\n${
+      String(section.summary ?? "").trim().toLowerCase()
+    }`
+  );
+  if (new Set(contracts).size !== contracts.length) {
+    failures.push("duplicate_section_contract");
+  }
+  if (outline.source_recipe_json && sections.length > 0) {
+    const obligations = deriveRecipeObligations(
+      outline.source_recipe_json as Record<string, unknown>,
+    );
+    const assigned = new Set(
+      sections.flatMap((section) =>
+        Array.isArray(section.recipe_requirement_ids)
+          ? section.recipe_requirement_ids.map(String)
+          : []
+      ),
+    );
+    for (const obligation of obligations.filter((item) => item.required)) {
+      if (!assigned.has(obligation.id)) {
+        failures.push(`missing_recipe_obligation:${obligation.id}`);
+      }
+    }
+  }
+  return failures;
+}
+
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
 
@@ -136,6 +213,52 @@ async function handleKickoff(req: Request): Promise<Response> {
   const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   });
+  const { data: readinessOutline, error: readinessOutlineError } =
+    await adminClient
+      .from("outlines")
+      .select(
+        "source_recipe_json, source_recipe_hash, target_word_count_min, projected_word_count",
+      )
+      .eq("id", body.outline_id).single();
+  if (readinessOutlineError || !readinessOutline) {
+    return errorResponse(
+      "outline_not_generation_ready",
+      "outline not found",
+      422,
+    );
+  }
+  const { data: readinessSections, error: readinessSectionError } =
+    await adminClient
+      .from("outline_sections")
+      .select(
+        "id, title, summary, container, pov, terminal_beat, story_arc_beat_id, target_words, target_words_min, target_words_max, recipe_requirement_ids",
+      )
+      .eq("outline_id", body.outline_id);
+  if (readinessSectionError) {
+    return errorResponse(
+      "outline_not_generation_ready",
+      "could not inspect outline readiness",
+      422,
+    );
+  }
+  const readinessFailures = generationReadinessFailures(
+    readinessOutline,
+    readinessSections ?? [],
+  );
+  if (readinessFailures.length > 0) {
+    return corsResponse(
+      JSON.stringify({
+        errorCode: "outline_not_generation_ready",
+        message: "Outline is not ready for generation",
+        failures: readinessFailures,
+      }),
+      { status: 422 },
+    );
+  }
+  await adminClient.from("outlines").update({
+    planning_status: "generation_ready",
+  })
+    .eq("id", body.outline_id);
   const idempotencyKey =
     `${userId}:${body.outline_id}:${body.start_parent_section_id}`;
 
