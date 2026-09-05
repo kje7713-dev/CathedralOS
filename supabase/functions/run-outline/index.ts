@@ -37,6 +37,7 @@ import {
   projectSnapshotLookupFilter,
 } from "./_generation_request.ts";
 import { prepareCreditReservation } from "./_credit_preflight.ts";
+import { deriveRecipeObligations } from "../outline-from-recipe/_recipe_obligations.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -545,7 +546,7 @@ async function runOutline(
   if (sectionIds.length > 0) {
     const { data: outlineSections } = await adminClient.from("outline_sections")
       .select(
-        "id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id, target_words, target_words_min, target_words_max",
+        "id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id, target_words, target_words_min, target_words_max, recipe_requirement_ids",
       )
       .in("id", sectionIds);
     const byId = new Map((outlineSections ?? []).map((s) => [s.id, s]));
@@ -567,21 +568,22 @@ async function runOutline(
     return;
   }
 
-  const { data: outlineRow } = await adminClient.from("outlines")
-    .select("local_project_id, lineage_id").eq("id", run.outline_id).single();
-  const projectId = outlineRow?.local_project_id;
-  if (!projectId) throw new Error("outline.local_project_id missing");
-
-  const { data: snapshotRow, error: snapshotError } = await adminClient
-    .from("project_snapshots").select("snapshot_json").eq(
-      "user_id",
-      run.user_id,
-    )
-    .or(projectSnapshotLookupFilter(projectId, outlineRow.lineage_id))
-    .order("updated_at", { ascending: false }).limit(1).maybeSingle();
-  if (snapshotError || !snapshotRow?.snapshot_json) {
-    throw new Error("project snapshot / prompt-pack data missing");
+  const { data: outlineRow, error: outlineError } = await adminClient.from(
+    "outlines",
+  )
+    .select("local_project_id, source_recipe_json, source_recipe_hash")
+    .eq("id", run.outline_id).single();
+  if (outlineError || !outlineRow?.local_project_id) {
+    throw new Error("outline.local_project_id missing");
   }
+  if (!outlineRow.source_recipe_json || !outlineRow.source_recipe_hash) {
+    throw new Error(
+      "outline recipe provenance missing; re-plan this outline before Run All",
+    );
+  }
+  const projectId = outlineRow.local_project_id;
+  const frozenRecipe = outlineRow.source_recipe_json as Record<string, unknown>;
+  const recipeObligations = deriveRecipeObligations(frozenRecipe);
 
   // Keep each invocation bounded. Continuations are independent invocations,
   // so a platform lifetime limit cannot orphan the entire Run All operation.
@@ -612,7 +614,11 @@ async function runOutline(
         continue;
       }
       const generationRequest = buildGenerateStoryRequest({
-        snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
+        snapshot: {},
+        frozenRecipe,
+        frozenRecipeHash: String(outlineRow.source_recipe_hash),
+        recipeObligations,
+        assignedRecipeRequirementIDs: section.recipe_requirement_ids,
         section,
         projectId,
         runId: run.id,
@@ -834,28 +840,30 @@ async function estimateRunCost(
   selectedModelId?: string,
 ): Promise<number> {
   const { data: outline, error: outlineError } = await adminClient
-    .from("outlines").select("local_project_id, lineage_id").eq("id", outlineId)
-    .single();
+    .from("outlines")
+    .select("local_project_id, source_recipe_json, source_recipe_hash")
+    .eq("id", outlineId).single();
   if (outlineError || !outline?.local_project_id) {
     throw new Error("outline.local_project_id missing");
   }
-
-  const { data: snapshotRow, error: snapshotError } = await adminClient
-    .from("project_snapshots").select("snapshot_json").eq("user_id", userId)
-    .or(projectSnapshotLookupFilter(
-      String(outline.local_project_id),
-      outline.lineage_id,
-    )).order("updated_at", { ascending: false }).limit(1).maybeSingle();
-  if (snapshotError || !snapshotRow?.snapshot_json) {
-    throw new Error("project snapshot / prompt-pack data missing");
+  if (!outline.source_recipe_json || !outline.source_recipe_hash) {
+    throw new Error(
+      "outline recipe provenance missing; re-plan this outline before Run All",
+    );
   }
+  const frozenRecipe = outline.source_recipe_json as Record<string, unknown>;
+  const recipeObligations = deriveRecipeObligations(frozenRecipe);
   if (sections.length === 0) return 0;
 
   const endpoint = `${SUPABASE_URL}/functions/v1/generate-story`;
   const firstSection = sections[0];
   const request = {
     ...buildGenerateStoryRequest({
-      snapshot: snapshotRow.snapshot_json as Record<string, unknown>,
+      snapshot: {},
+      frozenRecipe,
+      frozenRecipeHash: String(outline.source_recipe_hash),
+      recipeObligations,
+      assignedRecipeRequirementIDs: firstSection.recipe_requirement_ids,
       section: firstSection as {
         id: string;
         title: string;
@@ -884,6 +892,9 @@ async function estimateRunCost(
       terminalBeat: section.terminal_beat == null
         ? undefined
         : String(section.terminal_beat),
+      recipeRequirementIDs: Array.isArray(section.recipe_requirement_ids)
+        ? section.recipe_requirement_ids
+        : undefined,
     })),
   };
 
