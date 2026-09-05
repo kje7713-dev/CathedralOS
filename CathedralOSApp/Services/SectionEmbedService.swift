@@ -274,6 +274,7 @@ struct AcceptOutlineSectionsRequest: Codable {
     let outline_id: String
     let project_id: String
     let idempotency_key: String
+    let source_recipe_json: PromptPackExportPayload
     let sections: [AcceptOutlineSection]
 }
 
@@ -312,7 +313,8 @@ extension SectionEmbedService {
         projectID: UUID,
         suggestions: [OutlineSuggestion],
         startingPosition: Int,
-        idempotencyKey: String
+        idempotencyKey: String,
+        sourceRecipe: PromptPackExportPayload
     ) async throws -> AcceptOutlineSectionsResult {
         let userAccessToken = try await validAccessToken()
         let client: SupabaseBackendClient
@@ -336,6 +338,7 @@ extension SectionEmbedService {
             outline_id: outlineID.uuidString,
             project_id: projectID.uuidString,
             idempotency_key: idempotencyKey,
+            source_recipe_json: sourceRecipe,
             sections: sections
         )
         let url = edgeFunctionURL
@@ -365,7 +368,8 @@ extension SectionEmbedService {
         projectID: UUID,
         suggestions: [OutlineSuggestion],
         startingPosition: Int,
-        idempotencyKey: String
+        idempotencyKey: String,
+        sourceRecipe: PromptPackExportPayload
     ) async throws -> AcceptOutlineSectionsResult {
         let queued = try await startAcceptAll(
             edgeFunctionURL: edgeFunctionURL,
@@ -373,7 +377,8 @@ extension SectionEmbedService {
             projectID: projectID,
             suggestions: suggestions,
             startingPosition: startingPosition,
-            idempotencyKey: idempotencyKey
+            idempotencyKey: idempotencyKey,
+            sourceRecipe: sourceRecipe
         )
         return try await pollAcceptAll(runID: queued.runID)
     }

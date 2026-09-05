@@ -69,4 +69,7 @@ struct OutlineSuggestionResult {
     let warnings: [String]
     let creditCostCharged: Double?
     let remainingCredits: Double?
+    /// Exact canonical recipe sent to the planner; carried into Accept All so
+    /// the outline can freeze immutable provenance instead of rereading project state.
+    let sourceRecipe: PromptPackExportPayload
 }

@@ -19,6 +19,7 @@ struct OutlineSuggestionsReviewView: View {
 
     let outline: Outline
     let suggestions: [OutlineSuggestion]
+    let sourceRecipe: PromptPackExportPayload
     let project: StoryProject
     let modelContext: ModelContext
 
@@ -187,6 +188,7 @@ struct OutlineSuggestionsReviewView: View {
             suggestions: suggestions,
             startingPosition: (outline.sections.map { $0.position }.max() ?? -1) + 1,
             idempotencyKey: acceptanceIdempotencyKey,
+            sourceRecipe: sourceRecipe,
             context: modelContext
         )
     }

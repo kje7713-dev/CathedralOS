@@ -85,8 +85,9 @@ struct OutlineSuggestionService {
             ? nil
             : buildExistingSectionBlobs(existingSections)
 
+        let sourceRecipe = buildRecipeBlob(recipe: recipe, project: project)
         let request = OutlineSuggestionRequest(
-            recipe: buildRecipeBlob(recipe: recipe, project: project),
+            recipe: sourceRecipe,
             arcTemplate: buildArcTemplateBlob(arc: arc, template: arcTemplate),
             hint: hint,
             existingSections: existingSectionBlobs
@@ -129,7 +130,7 @@ struct OutlineSuggestionService {
         switch httpResponse.statusCode {
         case 202:
             let queued = try decodeJob(data)
-            return try await poll(runID: queued.run_id, client: client)
+            return try await poll(runID: queued.run_id, client: client, sourceRecipe: sourceRecipe)
         case 200...299:
             // Backwards-compatible with an older deployed function.
             let result = try decodeResult(data)
@@ -137,7 +138,8 @@ struct OutlineSuggestionService {
                 suggestions: result.suggestions,
                 warnings: result.warnings ?? [],
                 creditCostCharged: result.creditCostCharged,
-                remainingCredits: result.remainingCredits
+                remainingCredits: result.remainingCredits,
+                sourceRecipe: sourceRecipe
             )
         case 401: throw OutlineSuggestionError.notAuthenticated
         case 429: throw OutlineSuggestionError.rateLimited
@@ -170,7 +172,8 @@ struct OutlineSuggestionService {
 
     private func poll(
         runID: String,
-        client: SupabaseBackendClient
+        client: SupabaseBackendClient,
+        sourceRecipe: PromptPackExportPayload
     ) async throws -> OutlineSuggestionResult {
         while !Task.isCancelled {
             try await Task.sleep(nanoseconds: 3_000_000_000)
@@ -199,7 +202,8 @@ struct OutlineSuggestionService {
                 if job.status == "completed" {
                     return OutlineSuggestionResult(
                         suggestions: job.suggestions ?? [], warnings: job.warnings ?? [],
-                        creditCostCharged: job.creditCostCharged, remainingCredits: job.remainingCredits
+                        creditCostCharged: job.creditCostCharged, remainingCredits: job.remainingCredits,
+                        sourceRecipe: sourceRecipe
                     )
                 }
                 if job.status == "failed" {

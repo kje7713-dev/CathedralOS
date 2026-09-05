@@ -173,6 +173,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     private let runOutlineService = RunOutlineService()
     @State private var showingSuggestionSheet = false
     @State private var suggestions: [OutlineSuggestion] = []
+    @State private var suggestionSourceRecipe: PromptPackExportPayload?
     @State private var suggestionsLoading = false
     @State private var suggestionsError: String?
     @State private var suggestionsFeedback: String?
@@ -365,10 +366,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             Text("This will permanently delete all \(sectionsOrder.count) section\(sectionsOrder.count == 1 ? "" : "s") from the server. This cannot be undone.")
         }
         .sheet(isPresented: $showingSuggestionSheet) {
-            if let outline = currentOutline {
+            if let outline = currentOutline, let sourceRecipe = suggestionSourceRecipe {
                 OutlineSuggestionsReviewView(
                     outline: outline,
                     suggestions: suggestions,
+                    sourceRecipe: sourceRecipe,
                     project: project,
                     modelContext: modelContext
                 )
@@ -453,6 +455,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 existingSections: currentOutline?.sections ?? []
             )
             suggestions = result.suggestions
+            suggestionSourceRecipe = result.sourceRecipe
             var feedback = "Suggestions generated. Charged \(String(format: "%.2f", result.creditCostCharged ?? 0)) credits."
             if let remaining = result.remainingCredits {
                 feedback += " Remaining balance: \(String(format: "%.2f", remaining)) credits."

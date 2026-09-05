@@ -1,8 +1,9 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import { acceptRunTerminalOutcome } from "./_outcome.ts";
 import {
-  canonicalUUID,
   buildLengthContract,
+  canonicalUUID,
+  hashCanonicalRecipe,
   mergeSectionsByCanonicalID,
   normalizeStoryArcBeatIDs,
   sectionRow,
@@ -46,6 +47,8 @@ Deno.test("Accept All persists outline sections without extraction or embeddings
   assertEquals(source.includes("section_embeddings"), false);
   assertEquals(source.includes("OPENAI_API_KEY"), false);
   assertEquals(source.includes("functions/v1/embed-section"), false);
+  assertEquals(source.includes("freezeOutlineRecipe"), true);
+  assertEquals(source.includes("source_recipe_hash"), true);
   assertEquals(source.includes("embedSectionWithRetry"), false);
 });
 
@@ -70,7 +73,6 @@ Deno.test("embed-section adapter maps typed shared results and errors", async ()
   assertEquals(source.includes("errorResponse(err.code, err.message"), true);
 });
 
-
 const BEAT_A = "cca975fc-e13a-4ade-8344-2470a8c2b3a0";
 const BEAT_B = "11111111-1111-4111-8111-111111111111";
 const BEAT_C = "22222222-2222-4222-8222-222222222222";
@@ -78,19 +80,29 @@ const BEAT_C = "22222222-2222-4222-8222-222222222222";
 function beatLookup(rows: string[]) {
   const query: any = {
     select: () => query,
-    in: (_column: string, _ids: string[]) => Promise.resolve({
-      data: rows.map((id) => ({ id })),
-      error: null,
-    }),
+    in: (_column: string, _ids: string[]) =>
+      Promise.resolve({
+        data: rows.map((id) => ({ id })),
+        error: null,
+      }),
   };
   return { from: (_table: string) => query } as any;
 }
 
-function validRequest(sectionCount: number, storyArcBeatID: string | null = null): any {
+function validRequest(
+  sectionCount: number,
+  storyArcBeatID: string | null = null,
+): any {
   return {
     outline_id: "11111111-1111-4111-8111-111111111111",
     project_id: "project-1",
     idempotency_key: "key-1",
+    source_recipe_json: {
+      schema: "cathedralos.prompt_pack_export",
+      version: 1,
+      project: { id: "project-1" },
+      promptPack: { id: "pack-1", name: "Canonical Recipe" },
+    },
     sections: Array.from({ length: sectionCount }, (_, index) => ({
       id: `${String(index + 1).padStart(8, "0")}-1111-4111-8111-111111111111`,
       position: index,
@@ -100,7 +112,6 @@ function validRequest(sectionCount: number, storyArcBeatID: string | null = null
     })),
   };
 }
-
 
 Deno.test("length contract persists novel target and container-derived section ranges", () => {
   const contract = buildLengthContract([
@@ -147,7 +158,10 @@ Deno.test("arc linkage accepts lowercase and mixed-casing beat IDs", async () =>
 Deno.test("arc linkage fails closed for an actually missing UUID", async () => {
   let message = "";
   try {
-    await normalizeStoryArcBeatIDs(beatLookup([BEAT_A]), [{ storyArcBeatID: BEAT_B }] as any);
+    await normalizeStoryArcBeatIDs(
+      beatLookup([BEAT_A]),
+      [{ storyArcBeatID: BEAT_B }] as any,
+    );
   } catch (error) {
     message = error instanceof Error ? error.message : String(error);
   }
@@ -155,42 +169,103 @@ Deno.test("arc linkage fails closed for an actually missing UUID", async () => {
 });
 
 Deno.test("Accept All rejects malformed non-null story arc beat IDs", () => {
-  assertEquals(validate(validRequest(1, "not-a-uuid")), "invalid story arc beat ID");
+  assertEquals(
+    validate(validRequest(1, "not-a-uuid")),
+    "invalid story arc beat ID",
+  );
 });
 
 Deno.test("Accept All validation allows 1 through 200 sections and rejects 201", () => {
   for (const count of [1, 100, 101, 200]) {
     assertEquals(validate(validRequest(count)), null);
   }
-  assertEquals(validate(validRequest(201)), "sections must contain 1-200 items");
+  assertEquals(
+    validate(validRequest(201)),
+    "sections must contain 1-200 items",
+  );
 });
 
 Deno.test("recipe obligation assignments persist with accepted sections", () => {
-  const row = sectionRow({
-    id: "section-1", position: 0, title: "The Premise", summary: "The monsters attack.",
-    recipeRequirementIDs: ["R1", "R4"],
-  }, "outline-1", 2);
+  const row = sectionRow(
+    {
+      id: "section-1",
+      position: 0,
+      title: "The Premise",
+      summary: "The monsters attack.",
+      recipeRequirementIDs: ["R1", "R4"],
+    },
+    "outline-1",
+    2,
+  );
   assertEquals(row.recipe_requirement_ids, ["R1", "R4"]);
-  assertEquals(validate({ ...validRequest(1), sections: [{ ...validRequest(1).sections[0], recipeRequirementIDs: ["R1"] }] }), null);
-  assertEquals(validate({ ...validRequest(1), sections: [{ ...validRequest(1).sections[0], recipeRequirementIDs: ["R".repeat(101)] }] }), "invalid recipe requirement IDs");
+  assertEquals(
+    validate({
+      ...validRequest(1),
+      sections: [{
+        ...validRequest(1).sections[0],
+        recipeRequirementIDs: ["R1"],
+      }],
+    }),
+    null,
+  );
+  assertEquals(
+    validate({
+      ...validRequest(1),
+      sections: [{
+        ...validRequest(1).sections[0],
+        recipeRequirementIDs: ["R".repeat(101)],
+      }],
+    }),
+    "invalid recipe requirement IDs",
+  );
 });
 
 Deno.test("arc linkage is persisted for single and bulk section acceptance", async () => {
-  const source = await Deno.readTextFile("./supabase/functions/accept-outline-sections/index.ts");
-  assertEquals(source.includes("story_arc_beat_id: section.storyArcBeatID ?? null"), true);
+  const source = await Deno.readTextFile(
+    "./supabase/functions/accept-outline-sections/index.ts",
+  );
+  assertEquals(
+    source.includes("story_arc_beat_id: section.storyArcBeatID ?? null"),
+    true,
+  );
   assertEquals(source.includes("storyArcBeatID: row.story_arc_beat_id"), true);
-  const row = sectionRow({ id: "section-1", position: 0, title: "One", summary: "Event", storyArcBeatID: "beat-1" }, "outline-1", 4);
+  const row = sectionRow(
+    {
+      id: "section-1",
+      position: 0,
+      title: "One",
+      summary: "Event",
+      storyArcBeatID: "beat-1",
+    },
+    "outline-1",
+    4,
+  );
   assertEquals(row.story_arc_beat_id, "beat-1");
-  const service = await Deno.readTextFile("./CathedralOSApp/Services/SectionEmbedService.swift");
-  const restore = await Deno.readTextFile("./CathedralOSApp/Services/ProjectCloudSyncService.swift");
-  assertEquals(service.includes("storyArcBeatID: suggestion.storyArcBeatID"), true);
-  assertEquals(restore.includes("section.storyArcBeatID = storyArcBeatID"), true);
+  const service = await Deno.readTextFile(
+    "./CathedralOSApp/Services/SectionEmbedService.swift",
+  );
+  const restore = await Deno.readTextFile(
+    "./CathedralOSApp/Services/ProjectCloudSyncService.swift",
+  );
+  assertEquals(
+    service.includes("storyArcBeatID: suggestion.storyArcBeatID"),
+    true,
+  );
+  assertEquals(
+    restore.includes("section.storyArcBeatID = storyArcBeatID"),
+    true,
+  );
 });
 
 Deno.test("Accept All canonicalizes section identity for snapshot merge", async () => {
-  const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  const source = await Deno.readTextFile(
+    new URL("./index.ts", import.meta.url),
+  );
   assertEquals(source.includes("canonicalUUID(String(section.id))"), true);
-  assertEquals(source.includes("canonicalUUID(String(row.story_arc_beat_id))"), true);
+  assertEquals(
+    source.includes("canonicalUUID(String(row.story_arc_beat_id))"),
+    true,
+  );
 });
 
 Deno.test("shared embedding canonicalizes Story Arc FK lookup and persistence", async () => {
@@ -206,5 +281,24 @@ Deno.test("snapshot merge replaces uppercase section identity without duplicatio
     [{ id: "CCA975FC-E13A-4ADE-8344-2470A8C2B3A0", title: "old" }],
     [{ id: "cca975fc-e13a-4ade-8344-2470a8c2b3a0", title: "new" }],
   );
-  assertEquals(merged, [{ id: "cca975fc-e13a-4ade-8344-2470a8c2b3a0", title: "new" }]);
+  assertEquals(merged, [{
+    id: "cca975fc-e13a-4ade-8344-2470a8c2b3a0",
+    title: "new",
+  }]);
+});
+
+Deno.test("recipe provenance hash is deterministic across object key order", async () => {
+  const a = {
+    schema: "cathedralos.prompt_pack_export",
+    version: 1,
+    project: { id: "p", summary: "x" },
+    promptPack: { id: "pack", name: "Recipe" },
+  };
+  const b = {
+    promptPack: { name: "Recipe", id: "pack" },
+    project: { summary: "x", id: "p" },
+    version: 1,
+    schema: "cathedralos.prompt_pack_export",
+  };
+  assertEquals(await hashCanonicalRecipe(a), await hashCanonicalRecipe(b));
 });
