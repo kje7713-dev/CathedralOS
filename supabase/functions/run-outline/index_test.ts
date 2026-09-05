@@ -3,6 +3,7 @@ import {
   assertExists,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { prepareCreditReservation } from "./_credit_preflight.ts";
+import { generationReadinessFailures } from "./index.ts";
 import {
   buildGenerateStoryRequest,
   generationOutputId,
@@ -120,6 +121,30 @@ Deno.test("Run All request uses frozen recipe provenance instead of a mutable sn
   );
   assertEquals(request.frozenRecipeHash, "abc123");
   assertEquals(request.assignedRecipeRequirementIDs, ["R1"]);
+});
+
+Deno.test("generation readiness rejects incomplete or undersized outlines", () => {
+  const failures = generationReadinessFailures(
+    {
+      source_recipe_json: {},
+      source_recipe_hash: "hash",
+      target_word_count_min: 70000,
+      projected_word_count: 29000,
+    },
+    [{
+      id: "s1",
+      title: "One",
+      summary: "Same",
+      container: "scene",
+      pov: "firstPerson",
+      terminal_beat: "End",
+      target_words: 1000,
+      story_arc_beat_id: "beat",
+      recipe_requirement_ids: [],
+    }],
+  );
+  assertEquals(failures.includes("projected_length_below_minimum"), true);
+  assertEquals(failures.includes("section_budgets_below_minimum"), true);
 });
 
 Deno.test("uses cloudGenerationOutputID as the output handoff", () => {
