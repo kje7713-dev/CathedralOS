@@ -300,6 +300,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         suggestions: [OutlineSuggestion],
         startingPosition: Int,
         idempotencyKey: String,
+        sourceRecipe: PromptPackExportPayload,
         context: ModelContext,
         service: SectionEmbedService = SectionEmbedService()
     ) {
@@ -314,7 +315,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                     projectID: projectID,
                     suggestions: suggestions,
                     startingPosition: startingPosition,
-                    idempotencyKey: idempotencyKey
+                    idempotencyKey: idempotencyKey,
+                    sourceRecipe: sourceRecipe
                 )
                 var metadata = AcceptRunMetadata(
                     runID: queued.runID,

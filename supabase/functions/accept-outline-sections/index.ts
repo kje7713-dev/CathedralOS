@@ -35,10 +35,17 @@ const NOVEL_LENGTH_CONTRACT = {
   target_word_count_max: 90000,
 } as const;
 const CONTAINER_WORD_RANGES: Record<string, [number, number]> = {
-  beat: [58, 192], moment: [154, 385], vignette: [231, 692],
-  microScene: [308, 692], scene: [615, 1385], developedScene: [1154, 2308],
-  setPiece: [1538, 3846], sceneSequence: [2308, 5385], shortStory: [1923, 6154],
-  chapter: [2308, 6154], episode: [3846, 11538],
+  beat: [58, 192],
+  moment: [154, 385],
+  vignette: [231, 692],
+  microScene: [308, 692],
+  scene: [615, 1385],
+  developedScene: [1154, 2308],
+  setPiece: [1538, 3846],
+  sceneSequence: [2308, 5385],
+  shortStory: [1923, 6154],
+  chapter: [2308, 6154],
+  episode: [3846, 11538],
 };
 
 const ALLOWED_POVS = new Set([
@@ -62,10 +69,12 @@ type Section = {
   targetWordsMax?: number | null;
   recipeRequirementIDs?: string[] | null;
 };
+type CanonicalRecipe = Record<string, unknown>;
 type RequestBody = {
   outline_id: string;
   project_id: string;
   idempotency_key: string;
+  source_recipe_json: CanonicalRecipe;
   sections: Section[];
 };
 
@@ -86,6 +95,79 @@ function admin() {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     { auth: { persistSession: false } },
   );
+}
+
+function isCanonicalRecipe(value: unknown): value is CanonicalRecipe {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const recipe = value as CanonicalRecipe;
+  const pack = recipe.promptPack;
+  return recipe.schema === "cathedralos.prompt_pack_export" &&
+    typeof recipe.version === "number" &&
+    !!recipe.project && typeof recipe.project === "object" &&
+    !!pack && typeof pack === "object" &&
+    typeof (pack as Record<string, unknown>).id === "string" &&
+    typeof (pack as Record<string, unknown>).name === "string";
+}
+
+function canonicalizeJSON(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeJSON);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, child]) => [key, canonicalizeJSON(child)]),
+    );
+  }
+  return value;
+}
+
+export async function hashCanonicalRecipe(
+  recipe: CanonicalRecipe,
+): Promise<string> {
+  const bytes = new TextEncoder().encode(
+    JSON.stringify(canonicalizeJSON(recipe)),
+  );
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+async function freezeOutlineRecipe(
+  db: ReturnType<typeof admin>,
+  outlineID: string,
+  recipe: CanonicalRecipe,
+): Promise<void> {
+  const hash = await hashCanonicalRecipe(recipe);
+  const { data: outline, error: readError } = await db.from("outlines")
+    .select("source_recipe_hash").eq("id", outlineID).single();
+  if (readError || !outline) {
+    throw new Error(
+      `Could not read outline provenance: ${
+        readError?.message ?? "outline not found"
+      }`,
+    );
+  }
+  if (outline.source_recipe_hash && outline.source_recipe_hash !== hash) {
+    throw new Error(
+      "outline already has immutable recipe provenance with a different hash",
+    );
+  }
+  if (outline.source_recipe_hash) return;
+  const pack = recipe.promptPack as Record<string, unknown>;
+  const { error } = await db.from("outlines").update({
+    source_recipe_json: recipe,
+    source_recipe_hash: hash,
+    source_recipe_version: recipe.version,
+    source_prompt_pack_id: pack.id,
+    source_prompt_pack_name: pack.name,
+  }).eq("id", outlineID).is("source_recipe_hash", null);
+  if (error) {
+    throw new Error(
+      `Could not freeze outline recipe provenance: ${error.message}`,
+    );
+  }
 }
 async function authenticate(req: Request) {
   const auth = req.headers.get("Authorization");
@@ -110,6 +192,9 @@ export function validate(body: RequestBody): string | null {
     typeof body.idempotency_key !== "string" ||
     body.idempotency_key.length < 1 || body.idempotency_key.length > 1000
   ) return "idempotency_key is required";
+  if (!isCanonicalRecipe(body.source_recipe_json)) {
+    return "source_recipe_json must be a canonical recipe payload";
+  }
   if (
     !Array.isArray(body.sections) || body.sections.length < 1 ||
     body.sections.length > MAX_ACCEPTED_SECTIONS
@@ -129,15 +214,23 @@ export function validate(body: RequestBody): string | null {
     if (section.storyArcBeatID != null && !isUUID(section.storyArcBeatID)) {
       return "invalid story arc beat ID";
     }
-    if (section.recipeRequirementIDs != null && (
-      !Array.isArray(section.recipeRequirementIDs) ||
-      section.recipeRequirementIDs.length > 50 ||
-      section.recipeRequirementIDs.some((id) => typeof id !== "string" || id.length < 1 || id.length > 100)
-    )) return "invalid recipe requirement IDs";
+    if (
+      section.recipeRequirementIDs != null && (
+        !Array.isArray(section.recipeRequirementIDs) ||
+        section.recipeRequirementIDs.length > 50 ||
+        section.recipeRequirementIDs.some((id) =>
+          typeof id !== "string" || id.length < 1 || id.length > 100
+        )
+      )
+    ) return "invalid recipe requirement IDs";
   }
   return null;
 }
-export function sectionRow(section: Section, outlineID: string, position: number) {
+export function sectionRow(
+  section: Section,
+  outlineID: string,
+  position: number,
+) {
   return {
     id: section.id,
     outline_id: outlineID,
@@ -167,12 +260,20 @@ export interface LengthContract {
 
 export function buildLengthContract(
   sections: Array<{ container?: string | null }>,
-): { outline: LengthContract; sections: Array<{ targetWords: number; targetWordsMin: number; targetWordsMax: number }> } {
+): {
+  outline: LengthContract;
+  sections: Array<
+    { targetWords: number; targetWordsMin: number; targetWordsMax: number }
+  >;
+} {
   const targets = sections.map((section) => {
-    const [min, max] = CONTAINER_WORD_RANGES[section.container ?? ""] ?? [615, 1385];
+    const [min, max] = CONTAINER_WORD_RANGES[section.container ?? ""] ??
+      [615, 1385];
     return { min, max, target: (min + max) / 2 };
   });
-  const projected = Math.round(targets.reduce((sum, value) => sum + value.target, 0));
+  const projected = Math.round(
+    targets.reduce((sum, value) => sum + value.target, 0),
+  );
   return {
     outline: { ...NOVEL_LENGTH_CONTRACT, projected_word_count: projected },
     sections: targets.map(({ min, max, target }) => ({
@@ -212,7 +313,9 @@ export async function normalizeStoryArcBeatIDs(
     // Never silently erase the macro-to-section contract. The caller must
     // sync the owning arc first; accepting with NULL would make generation
     // lose Story Arc Context while reporting a successful outline.
-    throw new Error(`Story arc beat linkage is unavailable: ${missing.join(", ")}`);
+    throw new Error(
+      `Story arc beat linkage is unavailable: ${missing.join(", ")}`,
+    );
   }
   return sections;
 }
@@ -290,15 +393,20 @@ async function mergeSectionsIntoSnapshot(
     terminalBeat: row.terminal_beat,
     status: row.status,
     parentID: row.parent_id,
-    storyArcBeatID: row.story_arc_beat_id == null ? null : canonicalUUID(String(row.story_arc_beat_id)),
+    storyArcBeatID: row.story_arc_beat_id == null
+      ? null
+      : canonicalUUID(String(row.story_arc_beat_id)),
     targetWords: row.target_words,
     targetWordsMin: row.target_words_min,
     targetWordsMax: row.target_words_max,
-    recipeRequirementIDs: Array.isArray(row.recipe_requirement_ids) ? row.recipe_requirement_ids : [],
+    recipeRequirementIDs: Array.isArray(row.recipe_requirement_ids)
+      ? row.recipe_requirement_ids
+      : [],
   }));
-  outline.sections = mergeSectionsByCanonicalID(existing, replacements).sort((a, b) =>
-    Number(a.position ?? 0) - Number(b.position ?? 0)
-  );
+  outline.sections = mergeSectionsByCanonicalID(existing, replacements).sort((
+    a,
+    b,
+  ) => Number(a.position ?? 0) - Number(b.position ?? 0));
   const { error: updateError } = await db.from("project_snapshots").update({
     snapshot_json: payload,
   }).eq("id", snapshot.id);
@@ -326,6 +434,11 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       id: canonicalUUID(section.id),
     }));
     const normalizedRequest = { ...request, sections: normalizedSections };
+    await freezeOutlineRecipe(
+      db,
+      normalizedRequest.outline_id,
+      normalizedRequest.source_recipe_json,
+    );
     const sectionIDs = normalizedSections.map((s) => s.id);
     await db.from("outline_accept_runs").update({
       sections_total: normalizedSections.length,
@@ -347,7 +460,11 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     const lengthContract = buildLengthContract(normalizedSections);
     const { error: insertError } = await db.from("outline_sections").upsert(
       normalizedSections.map((s, index) =>
-        sectionRow({ ...s, ...lengthContract.sections[index] }, normalizedRequest.outline_id, basePosition + index)
+        sectionRow(
+          { ...s, ...lengthContract.sections[index] },
+          normalizedRequest.outline_id,
+          basePosition + index,
+        )
       ),
       { onConflict: "id" },
     );
@@ -358,7 +475,9 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       .update(lengthContract.outline)
       .eq("id", normalizedRequest.outline_id);
     if (outlineContractError) {
-      throw new Error(`Could not persist outline length contract: ${outlineContractError.message}`);
+      throw new Error(
+        `Could not persist outline length contract: ${outlineContractError.message}`,
+      );
     }
     // Accept All stores outline planning metadata only. Outline suggestions
     // are not generated prose and must not create RAG embeddings or provider
