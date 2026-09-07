@@ -1818,7 +1818,12 @@ enum ProjectDeletionError: Error, LocalizedError {
 }
 
 protocol ProjectDeletionServiceProtocol {
+    /// SwiftData ModelContext access must remain serialized with SwiftUI @Query reads.
+    @MainActor
     func deleteLocal(project: StoryProject, context: ModelContext) async throws
+
+    /// Cloud deletion may suspend, but the subsequent local mutation resumes on MainActor.
+    @MainActor
     func deleteEverywhere(project: StoryProject, context: ModelContext) async throws
 }
 
@@ -1847,7 +1852,10 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
         self.backupDeletionService = backupDeletionService
     }
 
+    @MainActor
     func deleteLocal(project: StoryProject, context: ModelContext) async throws {
+        MainActor.preconditionIsolated()
+
         let projectID = project.id.uuidString
         context.delete(project)
         do {
@@ -1877,6 +1885,7 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
         }
     }
 
+    @MainActor
     func deleteEverywhere(project: StoryProject, context: ModelContext) async throws {
         let projectID = project.id.uuidString
 
@@ -1889,6 +1898,10 @@ final class ProjectDeletionService: ProjectDeletionServiceProtocol {
             throw ProjectDeletionError.syncError(error)
         }
 
+        // Keep delete + save on the same actor as the SwiftUI @Query observing
+        // this context. SwiftData's FutureCache is not safe to mutate from a
+        // concurrent executor while ProjectsListView is fetching projects.
+        MainActor.preconditionIsolated()
         context.delete(project)
         do {
             try context.save()
