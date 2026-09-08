@@ -408,6 +408,7 @@ export async function progressivelyExpandOutline(
   let suggestions = [...initial];
   const diagnostics: ExpansionRoundDiagnostic[] = [];
   const warnings: string[] = [];
+  let stoppedAfterInvalidExpansion = false;
   for (let round = 1; round <= MAX_EXPANSION_ROUNDS && needsNovelExpansion(suggestions); round++) {
     const projectedTokensBefore = projectedExpectedTokens(suggestions);
     const before: ExpansionPromptContext = {
@@ -452,13 +453,12 @@ export async function progressivelyExpandOutline(
       };
       diagnostics.push(diagnostic);
       await onRound?.(diagnostic, diagnostics);
-      throw new NovelScalePlanningError(
-        "failed_expansion",
-        `Novel expansion failed validation: ${error.message.slice(0, 500)}`,
-      );
+      stoppedAfterInvalidExpansion = true;
+      warnings.push("Novel expansion stopped after an invalid expansion response; the previously valid outline was preserved.");
+      break;
     }
   }
-  if (needsNovelExpansion(suggestions)) {
+  if (needsNovelExpansion(suggestions) && !stoppedAfterInvalidExpansion) {
     throw new NovelScalePlanningError(
       "failed_under_target",
       `Novel outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
