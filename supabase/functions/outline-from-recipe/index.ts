@@ -526,6 +526,19 @@ export function validateExpansionAdditions(
   return additions;
 }
 
+export function parseExpansionResponse(
+  content: string,
+  beatIds: Set<string>,
+  original: Suggestion[],
+  obligations: RecipeObligation[] = [],
+): ExpansionAddition[] {
+  try {
+    return validateExpansionAdditions(JSON.parse(content), beatIds, original, obligations);
+  } catch (error) {
+    throw new ExpansionValidationError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 export function mergeExpansionAdditions(original: Suggestion[], additions: ExpansionAddition[]): Suggestion[] {
   const result: Suggestion[] = [...original];
   for (const addition of additions) {
@@ -1321,19 +1334,17 @@ async function runSuggestionJob(
             { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: EXPANSION_SCHEMA } },
             `outline-expansion-${context.round}`,
             (content) => {
-              try {
-                const additions = validateExpansionAdditions(JSON.parse(content), beatIds, current, recipeObligations);
-                const merged = mergeExpansionAdditions(current, additions);
-                if (merged.length > MAX_PLANNED_SECTIONS) {
-                  throw new Error(`outline expansion exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
-                }
-                return additions;
-              } catch (error) {
-                throw new ExpansionValidationError(error instanceof Error ? error.message : String(error));
+              const additions = parseExpansionResponse(content, beatIds, current, recipeObligations);
+              const merged = mergeExpansionAdditions(current, additions);
+              if (merged.length > MAX_PLANNED_SECTIONS) {
+                throw new ExpansionValidationError(
+                  `outline expansion exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`,
+                );
               }
+              return additions;
             },
           );
-          return validateExpansionAdditions(JSON.parse(expandedRaw.content), beatIds, current, recipeObligations);
+          return parseExpansionResponse(expandedRaw.content, beatIds, current, recipeObligations);
         },
         async (roundDiagnostic, allDiagnostics) => {
           diagnostics = { ...diagnostics, expansionRounds: allDiagnostics };

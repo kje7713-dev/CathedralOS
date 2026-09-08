@@ -24,6 +24,7 @@ import {
   NovelScalePlanningError,
   MAX_EXPANSION_ROUNDS,
   progressivelyExpandOutline,
+  parseExpansionResponse,
   validateExpansionAdditions,
   mergeRepairedSuggestions,
   mergeExpansionAdditions,
@@ -667,6 +668,18 @@ Deno.test("Test3-shaped undersized outline fails closed after bounded expansion"
   assertEquals(calls, MAX_EXPANSION_ROUNDS);
   assertEquals((failure as NovelScalePlanningError).code, "failed_under_target");
   assertEquals((failure as NovelScalePlanningError).message.includes("70,000-word minimum"), true);
+});
+
+Deno.test("invalid expansion responses remain typed at the billable boundary", () => {
+  const initial = sceneOutline(22);
+  let failure: unknown;
+  try {
+    parseExpansionResponse(JSON.stringify({ suggestions: [{ title: "Bad", summary: "Bad", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Ends", storyArcBeatID: "unknown", insertAfterTitle: null }] }), new Set(["beat-1"]), initial as any);
+  } catch (error) {
+    failure = error;
+  }
+  assertEquals(failure instanceof ExpansionValidationError, true);
+  assertEquals((failure as Error).message.includes("expansion returned an invalid addition"), true);
 });
 
 Deno.test("invalid expansion placement fails closed with diagnostics", async () => {
