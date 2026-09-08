@@ -84,7 +84,7 @@ private final class SpyProjectCloudSyncService: ProjectCloudSyncServiceProtocol 
     private(set) var deletedLocalProjectIDs: [String] = []
     private(set) var deletedLineages: [(lineageID: String, localProjectID: String)] = []
 
-    func syncProject(_ project: StoryProject) async throws {}
+    func syncProject(_ project: StoryProject, modelContext: ModelContext) async throws {}
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {}
     func syncAllProjects(in context: ModelContext) async throws {}
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {
@@ -547,7 +547,9 @@ final class ProjectCloudSyncTests: XCTestCase {
 
         XCTAssertEqual(deleteRequestCount, 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
-        XCTAssertTrue(tombstoneService.recordedTombstones.isEmpty)
+        let recordedIdentities = Set(tombstoneService.recordedTombstones.map(\.localEntityID))
+        XCTAssertTrue(recordedIdentities.contains(projectID.uuidString.lowercased()))
+        XCTAssertTrue(tombstoneService.recordedTombstones.allSatisfy { $0.deletionScope == .everywhere })
         XCTAssertEqual(backupDeletionService.deletedProjectIDs, [projectID.uuidString])
 
         tombstoneService.projectTombstones = SyncTombstoneSet(records: [

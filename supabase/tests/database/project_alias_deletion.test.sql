@@ -1,6 +1,6 @@
 begin;
 
-select plan(20);
+select plan(28);
 
 insert into auth.users (id, aud, role, email)
 values (
@@ -8,6 +8,14 @@ values (
   'authenticated',
   'authenticated',
   'project-alias-test@example.invalid'
+);
+
+insert into auth.users (id, aud, role, email)
+values (
+  '33333333-3333-4333-8333-333333333333',
+  'authenticated',
+  'authenticated',
+  'project-alias-other-user@example.invalid'
 );
 
 select set_config(
@@ -44,8 +52,21 @@ from (
     '99999999-9999-4999-8999-000000000001'::uuid
 ) seeded_identity_keys;
 
--- A confirmed tombstone from before alias evidence existed must not produce a
--- false zero-row success while unrelated snapshots may still survive.
+-- A lineage with no snapshots and no prior confirmation retains the not-found
+-- contract. The pre-migration tombstone below is intentionally a separate
+-- idempotent retry case.
+select throws_ok(
+  $$select * from public.delete_project_lineage(
+      '44444444-4444-4444-8444-444444444444',
+      '44444444-4444-4444-8444-444444444444'
+    )$$,
+  'P0002',
+  'no owned project snapshots found for lineage',
+  'an unconfirmed absent lineage remains not-found'
+);
+
+-- A confirmed tombstone from before alias evidence existed is an idempotent
+-- retry even when no snapshot remains.
 insert into public.sync_tombstones (
   user_id, entity_type, local_entity_id, lineage_id, deletion_scope,
   deletion_confirmed_at
@@ -58,14 +79,14 @@ insert into public.sync_tombstones (
   now()
 );
 
-select throws_ok(
-  $$select * from public.delete_project_lineage(
+select results_eq(
+  $$select deleted_count, deletion_confirmed
+    from public.delete_project_lineage(
       '55555555-5555-4555-8555-555555555555',
       '55555555-5555-4555-8555-555555555555'
     )$$,
-  'P0002',
-  'no owned project snapshots found for lineage',
-  'pre-migration confirmation without alias evidence fails closed'
+  $$values (0::bigint, true)$$,
+  'a confirmed pre-migration tombstone remains idempotent'
 );
 
 -- Production-shaped alias family: five historical local IDs and five proposed
@@ -160,6 +181,25 @@ select is(
    where user_id = '11111111-1111-4111-8111-111111111111'),
   8::bigint,
   'the production-shaped five-row and three-row alias families exist before deletion'
+);
+
+-- Ownership boundary fixture: the same lineage-shaped values under another
+-- authenticated user are never part of the caller's target set.
+insert into public.project_snapshots (
+  user_id, local_project_id, lineage_id, snapshot_json, source
+) values (
+  '33333333-3333-4333-8333-333333333333',
+  'aaaaaaaa-aaaa-4aaa-8aaa-000000000005',
+  'aaaaaaaa-aaaa-4aaa-8aaa-000000000005',
+  '{"project":{"id":"aaaaaaaa-aaaa-4aaa-8aaa-000000000005","lineageID":"aaaaaaaa-aaaa-4aaa-8aaa-000000000005","name":"Other user"},"characters":[]}'::jsonb,
+  'sync'
+);
+insert into public.generation_outputs (
+  user_id, project_local_id, source_payload_json
+) values (
+  '33333333-3333-4333-8333-333333333333',
+  'aaaaaaaa-aaaa-4aaa-8aaa-000000000005',
+  '{}'::jsonb
 );
 
 select is(
@@ -348,6 +388,94 @@ select is(
   'explicit payload lineage overrides a drifted top-level lineage column'
 );
 
+-- A target snapshot may have a drifted local/top-level identity while its
+-- generated output still points at snapshot_json.project.id. The output must be
+-- removed from the same target-derived identity set.
+insert into public.project_snapshots (
+  user_id, local_project_id, lineage_id, snapshot_json, source
+) values (
+  '11111111-1111-4111-8111-111111111111',
+  '14141414-1414-4141-8141-141414141414',
+  '15151515-1515-4151-8151-151515151515',
+  '{"project":{"id":"16161616-1616-4161-8161-161616161616","name":"Output drift fixture"},"characters":[]}'::jsonb,
+  'sync'
+);
+insert into public.generation_outputs (
+  user_id, project_local_id, source_payload_json
+) values
+(
+  '11111111-1111-4111-8111-111111111111',
+  '16161616-1616-4161-8161-161616161616',
+  '{}'::jsonb
+),
+(
+  '11111111-1111-4111-8111-111111111111',
+  '17171717-1717-4171-8171-171717171717',
+  '{}'::jsonb
+);
+
+select results_eq(
+  $$select deleted_count, deletion_confirmed
+    from public.delete_project_lineage(
+      '15151515-1515-4151-8151-151515151515',
+      '14141414-1414-4141-8141-141414141414'
+    )$$,
+  $$values (1::bigint, true)$$,
+  'target-set deletion removes output keyed by the drifted nested project ID'
+);
+
+select is(
+  (select count(*) from public.generation_outputs
+   where user_id = '11111111-1111-4111-8111-111111111111'
+     and project_local_id = '16161616-1616-4161-8161-161616161616'),
+  0::bigint,
+  'drifted nested-project output is removed'
+);
+select is(
+  (select count(*) from public.generation_outputs
+   where user_id = '11111111-1111-4111-8111-111111111111'
+     and project_local_id = '17171717-1717-4171-8171-171717171717'),
+  1::bigint,
+  'unrelated output remains after target-set deletion'
+);
+
+-- Two different lineages deliberately share project.id. Deleting one lineage
+-- must not widen the target set to the other row.
+insert into public.project_snapshots (
+  user_id, local_project_id, lineage_id, snapshot_json, source
+) values
+(
+  '11111111-1111-4111-8111-111111111111',
+  '18181818-1818-4181-8181-181818181818',
+  '19191919-1919-4191-8191-191919191919',
+  '{"project":{"id":"20202020-2020-4202-8202-202020202020","lineageID":"19191919-1919-4191-8191-191919191919","name":"Shared payload target"},"characters":[]}'::jsonb,
+  'sync'
+),
+(
+  '11111111-1111-4111-8111-111111111111',
+  '21212121-2121-4212-8212-212121212121',
+  '22222222-2222-4222-8222-222222222222',
+  '{"project":{"id":"20202020-2020-4202-8202-202020202020","lineageID":"22222222-2222-4222-8222-222222222222","name":"Shared payload unrelated"},"characters":[]}'::jsonb,
+  'sync'
+);
+
+select results_eq(
+  $$select deleted_count, deletion_confirmed
+    from public.delete_project_lineage(
+      '19191919-1919-4191-8191-191919191919',
+      '18181818-1818-4181-8181-181818181818'
+    )$$,
+  $$values (1::bigint, true)$$,
+  'shared nested payload identity does not broaden deletion across lineages'
+);
+select is(
+  (select count(*) from public.project_snapshots
+   where user_id = '11111111-1111-4111-8111-111111111111'
+     and lineage_id = '22222222-2222-4222-8222-222222222222'),
+  1::bigint,
+  'different-lineage shared-payload snapshot remains'
+);
+
 select results_eq(
   $$select deleted_count, deletion_confirmed
     from public.delete_project_lineage(
@@ -396,6 +524,19 @@ select is(
    where local_project_id = '019abcde-0000-7000-8000-000000000001'),
   '019abcde-0000-7000-8000-000000000001'::uuid,
   'valid UUIDv7 explicit lineage is not misclassified as legacy'
+);
+
+select is(
+  (select count(*) from public.project_snapshots
+   where user_id = '33333333-3333-4333-8333-333333333333'),
+  1::bigint,
+  'another user snapshot remains untouched'
+);
+select is(
+  (select count(*) from public.generation_outputs
+   where user_id = '33333333-3333-4333-8333-333333333333'),
+  1::bigint,
+  'another user output remains untouched'
 );
 
 select * from finish();
