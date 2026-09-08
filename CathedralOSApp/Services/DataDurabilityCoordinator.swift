@@ -126,12 +126,34 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var activeRunProjectLineageID: UUID?
     @Published private(set) var storeMode: StoreMode = .normal
     @Published private(set) var storePath: String?
+    @Published private(set) var recoveryState: RecoveryState = .none
 
     // MARK: - Types
 
     enum StoreMode: String {
         case normal
         case recovery
+    }
+
+    enum RecoveryState: Equatable {
+        case none
+        case pending
+        case restoring
+        case ready
+        case failed(message: String)
+
+        var requiresAuthoritativeRestore: Bool {
+            switch self {
+            case .pending, .restoring, .failed:
+                return true
+            case .none, .ready:
+                return false
+            }
+        }
+
+        var allowsCloudUploads: Bool {
+            self == .none || self == .ready
+        }
     }
 
     // MARK: - Dependencies
@@ -141,7 +163,9 @@ final class DataDurabilityCoordinator: ObservableObject {
     private let outputSyncService: any GenerationOutputSyncServiceProtocol
     private let logger = Logger(subsystem: "CathedralOS", category: "DataDurability")
     private var activeOperation: Task<SyncOperationResult, Never>?
-    private let runStatusDefaults = UserDefaults.standard
+    private var authoritativeRecoveryTask: Task<SyncOperationResult, Never>?
+    private let runStatusDefaults: UserDefaults
+    private let acceptRunDefaults: UserDefaults
 
     private static func runStatusKey(for projectLineageID: UUID) -> String {
         "cathedralos.runOutline.status.\(projectLineageID.uuidString)"
@@ -152,11 +176,14 @@ final class DataDurabilityCoordinator: ObservableObject {
     init(
         authService: any AuthService = BackendAuthService.shared,
         projectSyncService: any ProjectCloudSyncServiceProtocol = ProjectCloudSyncService.shared,
-        outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
+        outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
+        defaults: UserDefaults = .standard
     ) {
         self.authService = authService
         self.projectSyncService = projectSyncService
         self.outputSyncService = outputSyncService
+        self.runStatusDefaults = defaults
+        self.acceptRunDefaults = defaults
     }
 
     // MARK: - Lifecycle entry-points
@@ -174,6 +201,11 @@ final class DataDurabilityCoordinator: ObservableObject {
 
         storeMode = recoveryContext != nil ? .recovery : .normal
         storePath = context.container.configurations.first?.url.path
+        if recoveryContext != nil {
+            recoveryState = .pending
+        } else {
+            recoveryState = .none
+        }
         if case .unknown = authService.authState {
             await authService.checkSession()
         }
@@ -189,19 +221,29 @@ final class DataDurabilityCoordinator: ObservableObject {
             return SyncOperationResult(kind: .appLaunch, message: nil, errorMessage: nil, joinedExistingOperation: false)
         }
 
-        if recoveryContext != nil {
-            logger.log("App launch in recovery mode — pulling cloud data to recovery store.")
+        if let recoveryResult = await performAuthoritativeRecoveryRestoreIfNeeded(context: context) {
+            guard recoveryResult.succeeded else {
+                return retag(recoveryResult, as: .appLaunch)
+            }
         }
 
         // A persisted Accept All job owns the project's snapshot until its
-        // terminal reconciliation finishes. Do not upload the older local
-        // snapshot during launch; the replacement-semantics trigger could
-        // delete accepted relational sections before the worker is restored.
+        // terminal reconciliation finishes. It is safe to sync only after any
+        // pending recovery has completed successfully.
         if hasPersistedAcceptRun {
             return await runOperation(kind: .appLaunch) {
                 try await self.outputSyncService.syncAll(in: context)
                 return "Cloud output sync complete; Accept All reconciliation is in progress."
             }
+        }
+
+        if recoveryContext != nil {
+            return SyncOperationResult(
+                kind: .appLaunch,
+                message: "Recovery cloud restore complete.",
+                errorMessage: nil,
+                joinedExistingOperation: false
+            )
         }
 
         return await runOperation(kind: .appLaunch) {
@@ -210,9 +252,84 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
     }
 
+    /// Runs the single restore-first operation required before any upload from
+    /// a recovery store. The task is shared by app launch, first sign-in,
+    /// manual sync, output sync, and project-save paths.
+    @discardableResult
+    private func performAuthoritativeRecoveryRestoreIfNeeded(
+        context: ModelContext
+    ) async -> SyncOperationResult? {
+        guard recoveryState.requiresAuthoritativeRestore else { return nil }
+        if let authoritativeRecoveryTask {
+            return await authoritativeRecoveryTask.value
+        }
+        guard authService.authState.isSignedIn else {
+            return SyncOperationResult(
+                kind: .restoreAll,
+                message: nil,
+                errorMessage: "Recovery is pending. Sign in before cloud synchronization.",
+                joinedExistingOperation: false
+            )
+        }
+
+        recoveryState = .restoring
+        let task = Task { @MainActor in
+            await self.runOperation(kind: .restoreAll) {
+                let removedCount = try self.clearRecoveryStoreBeforeCloudRestore(context: context)
+                let report = try await self.projectSyncService.restoreAllProjects(
+                    into: context,
+                    includeTombstoned: false
+                )
+                try await self.outputSyncService.pullOutputs(into: context)
+                self.logger.log(
+                    "Recovery cloud restore complete: removed_local=\(removedCount, privacy: .public) cloud_rows=\(report.cloudProjectCountBefore, privacy: .public) inserted=\(report.insertedCount, privacy: .public) skipped_tombstoned=\(report.skippedTombstonedCount, privacy: .public)"
+                )
+                return "Recovery cloud restore complete."
+            }
+        }
+        authoritativeRecoveryTask = task
+        let result = await task.value
+        authoritativeRecoveryTask = nil
+        recoveryState = result.succeeded
+            ? .ready
+            : .failed(message: result.errorMessage ?? "Recovery restore failed.")
+        return result
+    }
+
+    var isRecoveryReadyForUploads: Bool { recoveryState.allowsCloudUploads }
+
+    /// Recovery stores are untrusted remnants of the failed primary store.
+    /// Never upload their rows before cloud restore: a stale row with drifted
+    /// local/lineage IDs can recreate a project that was already deleted.
+    /// The original store artifacts and JSON backups remain available through
+    /// the recovery UI if a local-only project needs manual recovery.
+    @discardableResult
+    private func clearRecoveryStoreBeforeCloudRestore(context: ModelContext) throws -> Int {
+        let projects = try context.fetch(FetchDescriptor<StoryProject>())
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        guard !projects.isEmpty || !outputs.isEmpty else { return 0 }
+
+        for project in projects {
+            context.delete(project)
+        }
+        for output in outputs {
+            context.delete(output)
+        }
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+        return projects.count
+    }
+
     /// Call after a successful sign-in.
     func performSignInSync(context: ModelContext) async -> SyncOperationResult {
         logger.log("Sign-in sync: pulling and pushing data.")
+        if let recoveryResult = await performAuthoritativeRecoveryRestoreIfNeeded(context: context) {
+            guard recoveryResult.succeeded else { return retag(recoveryResult, as: .signIn) }
+        }
         return await runOperation(kind: .signIn) {
             try await self.syncAllData(in: context)
             return "Cloud sync complete."
@@ -229,20 +346,32 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     /// Call on explicit "Sync Everything" user action.
     func performManualSyncAll(context: ModelContext) async -> SyncOperationResult {
-        await runOperation(kind: .syncAll) {
+        if let recoveryResult = await performAuthoritativeRecoveryRestoreIfNeeded(context: context) {
+            guard recoveryResult.succeeded else { return retag(recoveryResult, as: .syncAll) }
+        }
+        return await runOperation(kind: .syncAll) {
             try await self.syncAllData(in: context)
             return "Cloud sync complete. Server-side project reconciliation finished."
         }
     }
 
     func performOutputSync(context: ModelContext) async -> SyncOperationResult {
-        await runOperation(kind: .syncOutputs) {
+        if let recoveryResult = await performAuthoritativeRecoveryRestoreIfNeeded(context: context) {
+            guard recoveryResult.succeeded else { return retag(recoveryResult, as: .syncOutputs) }
+        }
+        return await runOperation(kind: .syncOutputs) {
             try await self.outputSyncService.syncAll(in: context)
             return "Generated outputs synced."
         }
     }
 
     func performCloudRestore(context: ModelContext, includeDeletedProjects: Bool = false) async -> SyncOperationResult {
+        if let recoveryResult = await performAuthoritativeRecoveryRestoreIfNeeded(context: context) {
+            guard recoveryResult.succeeded else {
+                let kind: SyncOperationKind = includeDeletedProjects ? .restoreDeletedProjects : .restoreAll
+                return retag(recoveryResult, as: kind)
+            }
+        }
         let kind: SyncOperationKind = includeDeletedProjects ? .restoreDeletedProjects : .restoreAll
         return await runOperation(kind: kind) {
             let report = try await self.projectSyncService.restoreAllProjects(
@@ -286,7 +415,6 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var acceptRunError: String?
     @Published private(set) var acceptRunRevision: UInt = 0
     private var acceptPollingTask: Task<Void, Never>?
-    private let acceptRunDefaults = UserDefaults.standard
     private static let acceptRunKey = "cathedralos.acceptOutline.activeRun"
 
     /// Starts the server-owned Accept All job. The task and all completion work
@@ -305,6 +433,11 @@ final class DataDurabilityCoordinator: ObservableObject {
         service: SectionEmbedService = SectionEmbedService()
     ) {
         guard acceptPollingTask == nil, activeAcceptRun == nil else { return }
+        guard isRecoveryReadyForUploads else {
+            acceptRunError = "Recovery must finish before Accept All can sync."
+            acceptRunRevision &+= 1
+            return
+        }
         acceptRunError = nil
         acceptPollingTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -344,6 +477,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// Reattaches the live coordinator to a persisted job after app launch or
     /// project navigation. Terminal completed jobs are reconciled immediately.
     func resumeAcceptAllIfNeeded(context: ModelContext, service: SectionEmbedService = SectionEmbedService()) {
+        guard isRecoveryReadyForUploads else { return }
         guard acceptPollingTask == nil else { return }
         guard let data = acceptRunDefaults.data(forKey: Self.acceptRunKey),
               let metadata = try? JSONDecoder().decode(AcceptRunMetadata.self, from: data)
@@ -614,6 +748,15 @@ final class DataDurabilityCoordinator: ObservableObject {
         runStatusDefaults.set(data, forKey: Self.runStatusKey(for: projectLineageID))
     }
 
+    private func retag(_ result: SyncOperationResult, as kind: SyncOperationKind) -> SyncOperationResult {
+        SyncOperationResult(
+            kind: kind,
+            message: result.message,
+            errorMessage: result.errorMessage,
+            joinedExistingOperation: result.joinedExistingOperation
+        )
+    }
+
     private func runOperation(
         kind: SyncOperationKind,
         operation: @escaping @MainActor () async throws -> String
@@ -756,7 +899,17 @@ final class DataDurabilityCoordinator: ObservableObject {
             return .localOnly(reason: "Cloud sync is not configured.")
         }
 
-        // 4. Attempt cloud sync.
+        // 4. Recovery must complete before this project can upload. If recovery
+        // is pending/failed, preserve the local backup and never fall through to
+        // a cloud push.
+        if let recoveryResult = await performAuthoritativeRecoveryRestoreIfNeeded(context: context),
+           !recoveryResult.succeeded {
+            let message = recoveryResult.errorMessage ?? "Authoritative recovery is not complete."
+            LocalProjectBackupService.shared.backup(project: project, context: context)
+            return .localFallback(errorMessage: message)
+        }
+
+        // 5. Attempt cloud sync.
         do {
             // Root-fetch beats via modelContext — arc.beats can retain deleted SwiftData objects and resurrect them.
             try await projectSyncService.syncProject(project, modelContext: context)

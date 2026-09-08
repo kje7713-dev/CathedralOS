@@ -78,22 +78,30 @@ private struct AppRootView: View {
         // Mid-session expiry is still handled by
         // AuthSessionResolver.retryOnceAfterExpiredJWT.
         _ = try? await AuthSessionResolver.shared.refreshSessionIfNeeded()
-        // Reattach Accept All before the normal launch sync. If the worker
-        // completed while the app was gone, its reconciliation must not be
-        // preceded by a stale local snapshot upload.
-        DataDurabilityCoordinator.shared.resumeAcceptAllIfNeeded(context: modelContext)
-        _ = await DataDurabilityCoordinator.shared.performAppLaunch(
+        let launchResult = await DataDurabilityCoordinator.shared.performAppLaunch(
             context: modelContext,
             isFirstLaunchAfterUpdate: firstLaunchAfterUpdate,
             recoveryContext: recoveryContext
         )
 
+        // Reattach Accept All only after app launch has completed its
+        // restore-first gate. A persisted job must never make output/project
+        // uploads race ahead of authoritative recovery.
+        if launchResult.succeeded {
+            DataDurabilityCoordinator.shared.resumeAcceptAllIfNeeded(context: modelContext)
+        }
+
         // PR #286: sync-on-launch hook (follow-up to PR #285). Catches arcs
         // that were created before the sync fix wired up — beats stayed local-only
         // in iOS SwiftData, and any accept against those arcs hit the FK violation
         // server-side. Sync runs once per launch; future enhancements (foreground
-        // hook, scenePhase observer) can be follow-ups if needed.
-        await syncUnsyncedArcs()
+        // hook, scenePhase observer) can be follow-ups if needed. Recovery must
+        // be ready first because StoryArcSyncService is upload-capable too.
+        if launchResult.succeeded,
+           BackendAuthService.shared.authState.isSignedIn,
+           DataDurabilityCoordinator.shared.isRecoveryReadyForUploads {
+            await syncUnsyncedArcs()
+        }
     }
 
     /// Sync any StoryArc whose beats never reached the server (lastSyncedAt == nil).

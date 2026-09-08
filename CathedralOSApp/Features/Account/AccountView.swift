@@ -715,7 +715,12 @@ struct AccountView: View {
             try await authService.signInWithApple()
             authState = authService.authState
             await attemptProfileBootstrap()
-            _ = await durabilityCoordinator.performSignInSync(context: modelContext)
+            let syncResult = await durabilityCoordinator.performSignInSync(context: modelContext)
+            if syncResult.succeeded {
+                // A persisted Accept All job may have been held while the
+                // fallback store was untrusted and recovery was signed out.
+                durabilityCoordinator.resumeAcceptAllIfNeeded(context: modelContext)
+            }
             // Fetch backend-authoritative credit balance after sign-in.
             await refreshBackendCreditState()
         } catch AuthServiceError.cancelled {

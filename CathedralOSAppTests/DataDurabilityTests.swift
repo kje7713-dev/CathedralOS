@@ -63,12 +63,17 @@ private final class StubAuthUnknownTransitioning: AuthService {
     func refreshSession() async throws {}
 }
 
+private final class SyncEventLog {
+    var events: [String] = []
+}
+
 private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     var syncAllCalled = false
     var syncAllError: Error?
     var restoreCalled = false
     var restoreCallCount = 0
     var restoreDelayNanoseconds: UInt64 = 0
+    var restoreError: Error?
     var restoreResult = ProjectRestoreReport(
         projects: [],
         localProjectCountBefore: 0,
@@ -79,11 +84,21 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
         duplicateWarnings: []
     )
     var saveCalledAfterRestore = false
+    let eventLog: SyncEventLog?
 
-    func syncProject(_ project: StoryProject) async throws {}
-    func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {}
+    init(eventLog: SyncEventLog? = nil) {
+        self.eventLog = eventLog
+    }
+
+    func syncProject(_ project: StoryProject, modelContext: ModelContext) async throws {
+        eventLog?.events.append("project.save")
+    }
+    func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {
+        eventLog?.events.append("project.snapshot")
+    }
     func syncAllProjects(in context: ModelContext) async throws {
         syncAllCalled = true
+        eventLog?.events.append("project.push")
         if let syncAllError { throw syncAllError }
     }
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {}
@@ -93,9 +108,11 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
         restoreCalled = true
         restoreCallCount += 1
+        eventLog?.events.append("project.restore")
         if restoreDelayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: restoreDelayNanoseconds)
         }
+        if let restoreError { throw restoreError }
         return restoreResult
     }
 }
@@ -103,10 +120,23 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
 private final class SpyOutputSyncService: GenerationOutputSyncServiceProtocol {
     var pullCalled = false
     var syncAllCalled = false
+    let eventLog: SyncEventLog?
 
-    func pushOutput(_ output: GenerationOutput) async throws {}
-    func pullOutputs(into context: ModelContext) async throws { pullCalled = true }
-    func syncAll(in context: ModelContext) async throws { syncAllCalled = true }
+    init(eventLog: SyncEventLog? = nil) {
+        self.eventLog = eventLog
+    }
+
+    func pushOutput(_ output: GenerationOutput) async throws {
+        eventLog?.events.append("output.push")
+    }
+    func pullOutputs(into context: ModelContext) async throws {
+        pullCalled = true
+        eventLog?.events.append("output.pull")
+    }
+    func syncAll(in context: ModelContext) async throws {
+        syncAllCalled = true
+        eventLog?.events.append("output.sync")
+    }
     func fetchCloudOutputCount() async throws -> Int { return 0 }
 }
 
@@ -526,6 +556,39 @@ final class DataDurabilityTests: XCTestCase {
 
     // MARK: StoreMode
 
+    func testRecoveryLaunchTreatsCloudAsAuthoritativeAndDoesNotUploadStaleLocalProjects() async throws {
+        let context = try makeInMemoryContext()
+        let staleRecoveryProject = StoryProject(name: "Stale recovery copy")
+        context.insert(staleRecoveryProject)
+        try context.save()
+
+        let projectSync = SpyProjectSyncService()
+        let outputSync = SpyOutputSyncService()
+        let recoveryContext = PersistenceRecoveryContext(
+            primaryStoreURL: URL(fileURLWithPath: "/tmp/CathedralOS.sqlite"),
+            recoveryStoreURL: URL(fileURLWithPath: "/tmp/CathedralOS-Recovery.sqlite"),
+            preservedArtifactDirectory: nil,
+            storeLoadErrorMessage: "Test forced failure"
+        )
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSync,
+            outputSyncService: outputSync
+        )
+
+        let result = await coordinator.performAppLaunch(
+            context: context,
+            isFirstLaunchAfterUpdate: false,
+            recoveryContext: recoveryContext
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertTrue(projectSync.restoreCalled)
+        XCTAssertFalse(projectSync.syncAllCalled, "Recovery launch must not upload stale local rows.")
+        XCTAssertTrue(outputSync.pullCalled)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
+    }
+
     func testAppLaunchSetsRecoveryModeWhenRecoveryContextPresent() async throws {
         let context = try makeInMemoryContext()
         let recoveryContext = PersistenceRecoveryContext(
@@ -556,6 +619,115 @@ final class DataDurabilityTests: XCTestCase {
 
         await coordinator.performAppLaunch(context: context, isFirstLaunchAfterUpdate: false, recoveryContext: nil)
         XCTAssertEqual(coordinator.storeMode, .normal)
+    }
+
+    func testRecoveryRestoreCompletesBeforeAnyUpload() async throws {
+        let context = try makeInMemoryContext()
+        let staleProject = StoryProject(name: "Untrusted recovery project")
+        context.insert(staleProject)
+        let staleOutput = GenerationOutput()
+        staleOutput.outputText = "Untrusted recovery output"
+        context.insert(staleOutput)
+        try context.save()
+
+        let eventLog = SyncEventLog()
+        let projectSpy = SpyProjectSyncService(eventLog: eventLog)
+        let outputSpy = SpyOutputSyncService(eventLog: eventLog)
+        let recoveryContext = PersistenceRecoveryContext(
+            primaryStoreURL: URL(fileURLWithPath: "/tmp/CathedralOS.sqlite"),
+            recoveryStoreURL: URL(fileURLWithPath: "/tmp/CathedralOS-Recovery.sqlite"),
+            preservedArtifactDirectory: nil,
+            storeLoadErrorMessage: "Test forced failure"
+        )
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSpy,
+            outputSyncService: outputSpy
+        )
+
+        let result = await coordinator.performAppLaunch(
+            context: context,
+            isFirstLaunchAfterUpdate: false,
+            recoveryContext: recoveryContext
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertEqual(eventLog.events, ["project.restore", "output.pull"],
+                       "Recovery must restore and pull before any upload-capable operation.")
+        XCTAssertFalse(projectSpy.syncAllCalled)
+        XCTAssertFalse(outputSpy.syncAllCalled)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<GenerationOutput>()), 0)
+        XCTAssertEqual(coordinator.recoveryState, .ready)
+    }
+
+    func testRecoveryRestoreFailureBlocksAllUploadsAndRemainsRetryable() async throws {
+        let context = try makeInMemoryContext()
+        context.insert(StoryProject(name: "Untrusted recovery project"))
+        try context.save()
+
+        let projectSpy = SpyProjectSyncService()
+        projectSpy.restoreError = NSError(domain: "RecoveryTest", code: 7)
+        let outputSpy = SpyOutputSyncService()
+        let recoveryContext = PersistenceRecoveryContext(
+            primaryStoreURL: URL(fileURLWithPath: "/tmp/CathedralOS.sqlite"),
+            recoveryStoreURL: URL(fileURLWithPath: "/tmp/CathedralOS-Recovery.sqlite"),
+            preservedArtifactDirectory: nil,
+            storeLoadErrorMessage: "Test forced failure"
+        )
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSpy,
+            outputSyncService: outputSpy
+        )
+
+        let result = await coordinator.performAppLaunch(
+            context: context,
+            isFirstLaunchAfterUpdate: false,
+            recoveryContext: recoveryContext
+        )
+
+        XCTAssertFalse(result.succeeded)
+        XCTAssertFalse(projectSpy.syncAllCalled)
+        XCTAssertFalse(outputSpy.syncAllCalled)
+        XCTAssertFalse(outputSpy.pullCalled)
+        if case .failed = coordinator.recoveryState {
+            // Expected: a later sign-in/manual sync can retry authoritative restore.
+        } else {
+            XCTFail("Recovery failure must remain retryable instead of falling through to sync.")
+        }
+    }
+
+    func testNormalLaunchClearsPriorRecoveryGate() async throws {
+        let context = try makeInMemoryContext()
+        let recoveryContext = PersistenceRecoveryContext(
+            primaryStoreURL: URL(fileURLWithPath: "/tmp/CathedralOS.sqlite"),
+            recoveryStoreURL: URL(fileURLWithPath: "/tmp/CathedralOS-Recovery.sqlite"),
+            preservedArtifactDirectory: nil,
+            storeLoadErrorMessage: "Test forced failure"
+        )
+        let projectSpy = SpyProjectSyncService()
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSpy,
+            outputSyncService: SpyOutputSyncService()
+        )
+
+        _ = await coordinator.performAppLaunch(
+            context: context,
+            isFirstLaunchAfterUpdate: false,
+            recoveryContext: recoveryContext
+        )
+        XCTAssertEqual(coordinator.recoveryState, .ready)
+
+        _ = await coordinator.performAppLaunch(
+            context: context,
+            isFirstLaunchAfterUpdate: false,
+            recoveryContext: nil
+        )
+        XCTAssertEqual(coordinator.recoveryState, .none)
+        XCTAssertTrue(coordinator.isRecoveryReadyForUploads)
+        XCTAssertTrue(projectSpy.syncAllCalled)
     }
 }
 

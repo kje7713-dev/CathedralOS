@@ -84,7 +84,7 @@ private final class SpyProjectCloudSyncService: ProjectCloudSyncServiceProtocol 
     private(set) var deletedLocalProjectIDs: [String] = []
     private(set) var deletedLineages: [(lineageID: String, localProjectID: String)] = []
 
-    func syncProject(_ project: StoryProject) async throws {}
+    func syncProject(_ project: StoryProject, modelContext: ModelContext) async throws {}
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {}
     func syncAllProjects(in context: ModelContext) async throws {}
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {
@@ -521,6 +521,19 @@ final class ProjectCloudSyncTests: XCTestCase {
                 httpVersion: nil,
                 headerFields: nil
             )!
+            let queryItems = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let select = queryItems.first(where: { $0.name == "select" })?.value ?? ""
+            if select.contains("user_id") && select.contains("snapshot_json") {
+                let identityRow: [String: Any] = [
+                    "id": UUID().uuidString,
+                    "user_id": userID,
+                    "local_project_id": projectID.uuidString,
+                    "snapshot_json": try JSONSerialization.jsonObject(
+                        with: JSONEncoder().encode(stalePayload)
+                    )
+                ]
+                return (response, try JSONSerialization.data(withJSONObject: [identityRow]))
+            }
             return (response, try self.makeRestoreResponse(localProjectID: projectID, payload: stalePayload))
         }
 
@@ -534,7 +547,9 @@ final class ProjectCloudSyncTests: XCTestCase {
 
         XCTAssertEqual(deleteRequestCount, 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
-        XCTAssertTrue(tombstoneService.recordedTombstones.isEmpty)
+        let recordedIdentities = Set(tombstoneService.recordedTombstones.map(\.localEntityID))
+        XCTAssertTrue(recordedIdentities.contains(projectID.uuidString.lowercased()))
+        XCTAssertTrue(tombstoneService.recordedTombstones.allSatisfy { $0.deletionScope == .everywhere })
         XCTAssertEqual(backupDeletionService.deletedProjectIDs, [projectID.uuidString])
 
         tombstoneService.projectTombstones = SyncTombstoneSet(records: [
@@ -578,7 +593,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let syncResult = await coordinator.performManualSyncAll(context: context)
         XCTAssertTrue(syncResult.succeeded)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
-        XCTAssertEqual(restoreRequestCount, 2)
+        XCTAssertEqual(restoreRequestCount, 3)
     }
 
     func testSyncAllProjectsDoesNotReuploadTombstonedProject() async throws {
