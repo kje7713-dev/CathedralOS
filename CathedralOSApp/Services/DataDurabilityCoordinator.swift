@@ -190,7 +190,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
 
         if recoveryContext != nil {
-            logger.log("App launch in recovery mode — pulling cloud data to recovery store.")
+            logger.log("App launch in recovery mode — using cloud as the authoritative source.")
         }
 
         // A persisted Accept All job owns the project's snapshot until its
@@ -204,10 +204,47 @@ final class DataDurabilityCoordinator: ObservableObject {
             }
         }
 
+        if recoveryContext != nil {
+            return await runOperation(kind: .appLaunch) {
+                let removedCount = try self.clearRecoveryStoreBeforeCloudRestore(context: context)
+                let report = try await self.projectSyncService.restoreAllProjects(
+                    into: context,
+                    includeTombstoned: false
+                )
+                try await self.outputSyncService.pullOutputs(into: context)
+                self.logger.log(
+                    "Recovery cloud restore complete: removed_local=\(removedCount, privacy: .public) cloud_rows=\(report.cloudProjectCountBefore, privacy: .public) inserted=\(report.insertedCount, privacy: .public) skipped_tombstoned=\(report.skippedTombstonedCount, privacy: .public)"
+                )
+                return "Recovery cloud restore complete."
+            }
+        }
+
         return await runOperation(kind: .appLaunch) {
             try await self.syncAllData(in: context)
             return "Cloud sync complete."
         }
+    }
+
+    /// Recovery stores are untrusted remnants of the failed primary store.
+    /// Never upload their rows before cloud restore: a stale row with drifted
+    /// local/lineage IDs can recreate a project that was already deleted.
+    /// The original store artifacts and JSON backups remain available through
+    /// the recovery UI if a local-only project needs manual recovery.
+    @discardableResult
+    private func clearRecoveryStoreBeforeCloudRestore(context: ModelContext) throws -> Int {
+        let projects = try context.fetch(FetchDescriptor<StoryProject>())
+        guard !projects.isEmpty else { return 0 }
+
+        for project in projects {
+            context.delete(project)
+        }
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+        return projects.count
     }
 
     /// Call after a successful sign-in.

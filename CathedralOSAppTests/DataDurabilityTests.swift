@@ -526,6 +526,39 @@ final class DataDurabilityTests: XCTestCase {
 
     // MARK: StoreMode
 
+    func testRecoveryLaunchTreatsCloudAsAuthoritativeAndDoesNotUploadStaleLocalProjects() async throws {
+        let context = try makeInMemoryContext()
+        let staleRecoveryProject = StoryProject(name: "Stale recovery copy")
+        context.insert(staleRecoveryProject)
+        try context.save()
+
+        let projectSync = SpyProjectSyncService()
+        let outputSync = SpyOutputSyncService()
+        let recoveryContext = PersistenceRecoveryContext(
+            primaryStoreURL: URL(fileURLWithPath: "/tmp/CathedralOS.sqlite"),
+            recoveryStoreURL: URL(fileURLWithPath: "/tmp/CathedralOS-Recovery.sqlite"),
+            preservedArtifactDirectory: nil,
+            storeLoadErrorMessage: "Test forced failure"
+        )
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSync,
+            outputSyncService: outputSync
+        )
+
+        let result = await coordinator.performAppLaunch(
+            context: context,
+            isFirstLaunchAfterUpdate: false,
+            recoveryContext: recoveryContext
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertTrue(projectSync.restoreCalled)
+        XCTAssertFalse(projectSync.syncAllCalled, "Recovery launch must not upload stale local rows.")
+        XCTAssertTrue(outputSync.pullCalled)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
+    }
+
     func testAppLaunchSetsRecoveryModeWhenRecoveryContextPresent() async throws {
         let context = try makeInMemoryContext()
         let recoveryContext = PersistenceRecoveryContext(

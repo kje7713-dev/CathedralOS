@@ -344,7 +344,43 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     /// owned historical snapshot in that lineage on the server.
     func deleteProjectLineage(lineageID: String, localProjectID: String) async throws {
         try await mutationGate.run {
-            let (client, _, accessToken) = try await validatedClientAndSession()
+            let (client, user, accessToken) = try await validatedClientAndSession()
+
+            // The RPC deletes by server lineage, but older rows can carry a
+            // different snapshot_json.project.id than local_project_id. Record
+            // every identity claimed by the matched row before invoking the
+            // lineage delete so recovery cannot upload that drifted identity
+            // after the canonical row is removed.
+            var lookupComponents = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
+            lookupComponents?.queryItems = [
+                URLQueryItem(name: "user_id", value: "eq.\(user.id)"),
+                URLQueryItem(name: "select", value: "id,user_id,local_project_id,snapshot_json")
+            ]
+            if let lookupURL = lookupComponents?.url {
+                var lookupRequest = client.authorizedRequest(for: lookupURL, userAccessToken: accessToken)
+                lookupRequest.httpMethod = "GET"
+                let ownedRows = try await fetch([ProjectSnapshotIdentityRow].self, request: lookupRequest)
+                guard ownedRows.allSatisfy({ $0.userID == user.id }) else {
+                    throw ProjectCloudSyncError.decodingError(ProjectSnapshotDeleteVerificationError.unverified)
+                }
+                let requestedIdentity = canonicalProjectIdentity(localProjectID)
+                for row in ownedRows where row.claimedIdentities.contains(requestedIdentity) {
+                    for identity in row.claimedIdentities {
+                        await tombstoneService.record(
+                            SyncTombstone(
+                                userID: user.id,
+                                entityType: .project,
+                                localEntityID: identity,
+                                cloudEntityID: row.id,
+                                deletionScope: .everywhere,
+                                reason: nil,
+                                projectName: row.snapshotJSON.projectName
+                            )
+                        )
+                    }
+                }
+            }
+
             let url = restURL(client: client, path: "rpc/delete_project_lineage")
             var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
             request.httpMethod = "POST"

@@ -521,6 +521,19 @@ final class ProjectCloudSyncTests: XCTestCase {
                 httpVersion: nil,
                 headerFields: nil
             )!
+            let queryItems = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let select = queryItems.first(where: { $0.name == "select" })?.value ?? ""
+            if select.contains("user_id") && select.contains("snapshot_json") {
+                let identityRow: [String: Any] = [
+                    "id": UUID().uuidString,
+                    "user_id": userID,
+                    "local_project_id": projectID.uuidString,
+                    "snapshot_json": try JSONSerialization.jsonObject(
+                        with: JSONEncoder().encode(stalePayload)
+                    )
+                ]
+                return (response, try JSONSerialization.data(withJSONObject: [identityRow]))
+            }
             return (response, try self.makeRestoreResponse(localProjectID: projectID, payload: stalePayload))
         }
 
@@ -578,7 +591,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let syncResult = await coordinator.performManualSyncAll(context: context)
         XCTAssertTrue(syncResult.succeeded)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
-        XCTAssertEqual(restoreRequestCount, 2)
+        XCTAssertEqual(restoreRequestCount, 3)
     }
 
     func testSyncAllProjectsDoesNotReuploadTombstonedProject() async throws {
