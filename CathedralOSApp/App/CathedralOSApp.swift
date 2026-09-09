@@ -84,6 +84,17 @@ private struct AppRootView: View {
             recoveryContext: recoveryContext
         )
 
+        // A successful authoritative restore has made the fallback store the
+        // repaired local source. Persist that store as the next launch target;
+        // otherwise bootstrap retries the damaged primary SQLite file forever
+        // and sends the user back into Recovery DB on every app open.
+        if launchResult.succeeded,
+           recoveryContext != nil,
+           DataDurabilityCoordinator.shared.recoveryState == .ready,
+           let recoveryStoreURL = recoveryContext?.recoveryStoreURL {
+            PersistenceBootstrap.promoteRecoveredStore(recoveryStoreURL)
+        }
+
         // Reattach Accept All only after app launch has completed its
         // restore-first gate. A persisted job must never make output/project
         // uploads race ahead of authoritative recovery.
@@ -220,6 +231,7 @@ struct PersistenceBootstrapResult {
 enum PersistenceBootstrap {
     private static let logger = Logger(subsystem: "CathedralOS", category: "Persistence")
     private static let lastSeenBuildDefaultsKey = "cathedralos.last_seen_app_build"
+    private static let activeStoreURLDefaultsKey = "cathedralos.active_store_url"
     private static let recoveryFolderName = "SwiftDataRecovery"
 
     static func bootstrap() -> PersistenceBootstrapResult {
@@ -231,7 +243,8 @@ enum PersistenceBootstrap {
         let firstLaunchAfterUpdate = previousBuild != nil && previousBuild != appBuild
         defaults.set(appBuild, forKey: lastSeenBuildDefaultsKey)
 
-        let storeURL = defaultStoreURL()
+        let primaryStoreURL = defaultStoreURL()
+        let storeURL = selectedStoreURL(defaultStoreURL: primaryStoreURL)
         let schema = Schema([
             Role.self, Domain.self, Goal.self, Constraint.self,
             CathedralProfile.self, Secret.self,
@@ -314,6 +327,37 @@ enum PersistenceBootstrap {
                 generationCount: nil
             )
         }
+    }
+
+    /// Makes a successfully restored fallback store the next normal launch
+    /// target. The damaged primary remains preserved under SwiftDataRecovery
+    /// for diagnostics/manual extraction; it is never overwritten in place.
+    static func promoteRecoveredStore(
+        _ recoveryStoreURL: URL,
+        defaults: UserDefaults = .standard
+    ) {
+        guard FileManager.default.fileExists(atPath: recoveryStoreURL.path) else {
+            logger.error("Cannot promote missing recovery store at \(recoveryStoreURL.path, privacy: .public)")
+            return
+        }
+        defaults.set(recoveryStoreURL.path, forKey: activeStoreURLDefaultsKey)
+        logger.log("Promoted recovered SwiftData store for next launch: \(recoveryStoreURL.path, privacy: .public)")
+    }
+
+    static func selectedStoreURL(
+        defaultStoreURL: URL,
+        defaults: UserDefaults = .standard
+    ) -> URL {
+        guard let activePath = defaults.string(forKey: activeStoreURLDefaultsKey),
+              !activePath.isEmpty else {
+            return defaultStoreURL
+        }
+        let activeURL = URL(fileURLWithPath: activePath)
+        guard FileManager.default.fileExists(atPath: activeURL.path) else {
+            defaults.removeObject(forKey: activeStoreURLDefaultsKey)
+            return defaultStoreURL
+        }
+        return activeURL
     }
 
     private static func defaultStoreURL() -> URL {

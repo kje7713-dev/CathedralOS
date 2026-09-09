@@ -731,6 +731,47 @@ final class DataDurabilityTests: XCTestCase {
         XCTAssertTrue(coordinator.isRecoveryReadyForUploads)
         XCTAssertTrue(projectSpy.syncAllCalled)
     }
+
+    func testRecoveredStoreIsSelectedOnNextLaunch() throws {
+        let suiteName = "CathedralOS.RecoveryPromotion.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let defaultURL = URL(fileURLWithPath: "/tmp/CathedralOS.sqlite")
+        let recoveredURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CathedralOS-Recovery-\(UUID().uuidString).sqlite")
+        FileManager.default.createFile(atPath: recoveredURL.path, contents: Data())
+        defer { try? FileManager.default.removeItem(at: recoveredURL) }
+
+        XCTAssertEqual(
+            PersistenceBootstrap.selectedStoreURL(defaultStoreURL: defaultURL, defaults: defaults),
+            defaultURL
+        )
+
+        PersistenceBootstrap.promoteRecoveredStore(recoveredURL, defaults: defaults)
+
+        XCTAssertEqual(
+            PersistenceBootstrap.selectedStoreURL(defaultStoreURL: defaultURL, defaults: defaults),
+            recoveredURL
+        )
+    }
+
+    func testMissingRecoveredStoreDoesNotPoisonNextLaunchSelection() throws {
+        let suiteName = "CathedralOS.RecoveryPromotion.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let defaultURL = URL(fileURLWithPath: "/tmp/CathedralOS.sqlite")
+        let missingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-recovery-\(UUID().uuidString).sqlite")
+
+        PersistenceBootstrap.promoteRecoveredStore(missingURL, defaults: defaults)
+
+        XCTAssertEqual(
+            PersistenceBootstrap.selectedStoreURL(defaultStoreURL: defaultURL, defaults: defaults),
+            defaultURL
+        )
+    }
 }
 
 // MARK: - URL protocol helpers
