@@ -4389,16 +4389,16 @@ Deno.test({
 // ----------------------------------------------------------------------------
 
 // Source-level assertion: generate-story calls embed-section with raw_text =
-// llmResult.content (the ACTUAL generated prose), NOT a contract-derived text.
+// the parsed generated prose, not the structured JSON envelope or a contract-derived text.
 // This is the core architectural fix Kevin mandated — the previous Option A
 // approach used iOS's SectionEmbedService.buildRawText(for:) which builds
 // from OutlineSection.title + summary + terminalBeat (the contract), storing
 // "what was supposed to happen" as Project State instead of "what actually
 // happened". The fire-and-forget embed-section call inside generate-story must
-// pass raw_text from llmResult.content directly.
+// pass the parsed prose directly.
 Deno.test({
   name:
-    "PR-360-Z regression A: generate-story calls embed-section with raw_text = llmResult.content (the actual prose)",
+    "PR-360-Z regression A: generate-story calls embed-section with raw_text = parsed generated prose",
   fn: async () => {
     const fs = await import("node:fs");
     const text = fs.readFileSync(
@@ -4406,13 +4406,17 @@ Deno.test({
       "utf8",
     );
 
-    // The fire-and-forget call site MUST pass llmResult.content as raw_text.
-    // This is the architectural fix — SectionEmbedService.buildRawText(for:)
-    // is rejected because it builds from contract, not prose.
+    // The fire-and-forget call site MUST pass the parsed generated prose as
+    // raw_text and forward the same-run structured memory.
     assertStringIncludes(
       text,
-      "raw_text: llmResult.content",
-      "generate-story must pass raw_text = llmResult.content to embed-section (NOT section contract)",
+      "raw_text: generatedText",
+      "generate-story must pass parsed generated prose to embed-section",
+    );
+    assertStringIncludes(
+      text,
+      "scene_memory: sceneMemory",
+      "generate-story must forward same-run scene memory",
     );
 
     // The fetch-site MUST be inside the if (outlineSectionCtx.section && llmResult?.content)

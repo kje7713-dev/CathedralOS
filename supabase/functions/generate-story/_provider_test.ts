@@ -110,8 +110,14 @@ Deno.test("OpenAIProvider: responseFormat present routes to chat/completions + S
     );
     const response = await provider.complete(
       [
-        { role: "system", content: "system prompt" },
-        { role: "user", content: "user prompt" },
+        {
+          role: "system",
+          content: [{ type: "input_text", text: "system prompt" }],
+        },
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "user prompt" }],
+        },
       ],
       1500,
       "gpt-4o-mini",
@@ -132,9 +138,11 @@ Deno.test("OpenAIProvider: responseFormat present routes to chat/completions + S
     assertEquals(lastRequest.body.temperature, 0.2);
     assertEquals(lastRequest.body.max_completion_tokens, 1500);
     // Messages MUST be in the chat/completions array shape.
-    assertExists(
-      Array.isArray((lastRequest.body as Record<string, unknown>).messages),
-    );
+    const messages = (lastRequest.body as Record<string, unknown>)
+      .messages as Array<Record<string, unknown>>;
+    assertEquals(Array.isArray(messages), true);
+    assertEquals(messages[0].content, [{ type: "text", text: "system prompt" }]);
+    assertEquals(messages[1].content, [{ type: "text", text: "user prompt" }]);
     assertEquals(response.content, "ok");
     assertEquals(response.modelName, "gpt-4o-mini");
     assertEquals(response.inputTokens, 100);

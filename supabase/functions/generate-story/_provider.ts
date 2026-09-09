@@ -460,9 +460,19 @@ export class OpenAIProvider implements LLMProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
+    // Generate-story normally uses the Responses API content-block shape
+    // (`input_text`). Structured Outputs use chat/completions, whose content
+    // blocks must be `text`. Normalize here so section generation can request
+    // prose + scene memory without sending an invalid mixed API payload.
+    const chatMessages = messages.map((message) => ({
+      ...message,
+      content: Array.isArray(message.content)
+        ? message.content.map((block) => ({ type: "text", text: block.text }))
+        : message.content,
+    }));
     const body: Record<string, unknown> = {
       model: resolvedModel,
-      messages,
+      messages: chatMessages,
       max_completion_tokens: maxTokens,
     };
     if (options.responseFormat) {

@@ -81,6 +81,11 @@ import {
   type BillableProviderResult,
   runBillableLLM,
 } from "../_shared/billable-llm.ts";
+import {
+  normalizeSceneMemory,
+  SCENE_MEMORY_RESPONSE_FORMAT,
+  type SceneMemory,
+} from "../_shared/scene-memory.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -113,6 +118,56 @@ type GenerationAction = typeof ALLOWED_ACTIONS[number];
 
 /** Estimate-only action — returns a cost estimate without calling the LLM. */
 const ESTIMATE_ACTION = "estimate" as const;
+
+// Section generation returns prose and the semantic scene-memory payload in
+// one structured provider response. The embedding API still runs afterward,
+// but the expensive second LLM extraction pass is no longer needed.
+const GENERATE_WITH_MEMORY_RESPONSE_FORMAT = {
+  type: "json_schema",
+  json_schema: {
+    name: "generated_scene_with_memory",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["scene", "scene_memory"],
+      properties: {
+        scene: { type: "string" },
+        scene_memory: (SCENE_MEMORY_RESPONSE_FORMAT as {
+          json_schema: { schema: unknown };
+        }).json_schema.schema,
+      },
+    },
+  },
+};
+
+interface GeneratedSceneWithMemory {
+  scene: string;
+  scene_memory: Partial<SceneMemory>;
+}
+
+function parseGeneratedScene(
+  content: string,
+  expectsMemory: boolean,
+): { scene: string; sceneMemory?: SceneMemory } {
+  if (!expectsMemory) return { scene: content.trim() };
+  try {
+    const parsed = JSON.parse(content) as Partial<GeneratedSceneWithMemory>;
+    if (typeof parsed.scene !== "string" || !parsed.scene.trim()) {
+      throw new Error("structured generation did not return scene text");
+    }
+    return {
+      scene: parsed.scene.trim(),
+      sceneMemory: normalizeSceneMemory(parsed.scene_memory),
+    };
+  } catch (error) {
+    throw new Error(
+      `structured scene response was invalid: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
 const BULK_ESTIMATE_ACTION = "estimate_bulk" as const;
 
 const MAX_BUDGET: Record<LengthMode, number> = {
@@ -1397,8 +1452,8 @@ async function fetchPriorContextForEmbedSection(
 // ---- callEmbedSectionForGeneratedOutput (Kevin 2026-08-21 17:47 EDT architecture spec) ----
 //
 // Fire-and-forget HTTP call to the embed-section edge function. generate-story
-// OWNS post-generation extraction — this is the single source of truth for both
-// iOS direct-gen and run-outline paths. The call uses raw_text = llmResult.content
+// OWNS post-generation indexing — this is the single source of truth for both
+// iOS direct-gen and run-outline paths. The call uses the parsed generated prose
 // (the ACTUAL generated prose), NOT section contract title/summary/terminalBeat
 // (that would be SectionEmbedService.buildRawText(for:) which Kevin explicitly
 // rejected because it stores the intended contract instead of what happened).
@@ -1421,6 +1476,7 @@ async function callEmbedSectionForGeneratedOutput(
     terminal_beat: string | null;
     story_arc_beat_id: string | null;
     raw_text: string;
+    scene_memory?: Partial<SceneMemory>;
     output_id: string;
     prior_context: string;
   },
@@ -2996,6 +3052,7 @@ async function handler(
   type GenerateFeatureResult = {
     outputRow: { id: string };
     generatedText: string;
+    sceneMemory?: SceneMemory;
     title: string;
     wasTruncated: boolean;
   };
@@ -3046,6 +3103,9 @@ async function handler(
         providerOptions: {
           cacheMode: selectedModel.cacheMode,
           promptCacheKey,
+          responseFormat: body.outline_section_id
+            ? GENERATE_WITH_MEMORY_RESPONSE_FORMAT
+            : undefined,
         },
         // PR-372: SHA-256 of the serialized stable prefix. Diagnostics
         // only — persisted to generation_usage_events.stable_prefix_hash.
@@ -3061,7 +3121,12 @@ async function handler(
         recordProviderFailureUsage: false,
         onProviderSuccess: async (providerResult: BillableProviderResult) => {
           const llmDurationMs = Date.now() - providerStartMs;
-          const generatedText = providerResult.content.trim();
+          const parsedScene = parseGeneratedScene(
+            providerResult.content,
+            Boolean(body.outline_section_id),
+          );
+          const generatedText = parsedScene.scene;
+          const sceneMemory = parsedScene.sceneMemory;
           const wasTruncated = providerResult.finishReason === "length";
           const outputStatus: GenerationOutputInsert["status"] = wasTruncated
             ? "draft"
@@ -3179,7 +3244,8 @@ async function handler(
                 pov: (sectionForEmbed.pov ?? null) as string | null,
                 terminal_beat: (sectionForEmbed.terminal_beat ?? null) as string | null,
                 story_arc_beat_id: (sectionForEmbed.story_arc_beat_id ?? null) as string | null,
-                raw_text: providerResult.content,
+                raw_text: generatedText,
+                scene_memory: sceneMemory,
                 output_id: outputId,
                 prior_context: priorContext,
               };
@@ -3246,7 +3312,7 @@ async function handler(
             }
           }
 
-          return { outputRow, generatedText, title, wasTruncated };
+          return { outputRow, generatedText, sceneMemory, title, wasTruncated };
         },
       },
       {
