@@ -244,8 +244,8 @@ export async function processSectionMemory(
                 "`extracted_summary` (200-500 token distillation of what happened), " +
                 "`character_deltas` (array of {character_name, location?, knowledge_delta?, relationship_delta?, injuries?, goals?, possessions?, emotional_stance?}), " +
                 "`plot_thread_deltas` (array of {thread_name, status in [introduced, advanced, resolved], description}), " +
-                "`continuity_facts` (array of concrete fact strings future scenes must not contradict), " +
-                "`open_loops` (array of {type in [promise, mystery, question, threat, pending_action], description}), " +
+                "`continuity_facts` (array of {operation: establish|preserve|supersede, fact, prior_fact_reference: string|null}), " +
+                "`open_loops` (array of {type, reference, status: open|resolved, description}), " +
                 "`scene_ending_state` ({character_positions: [{character, location, immediate_state}], immediate_pressure: string}). " +
                 "Output ONLY valid JSON. Empty arrays/objects are fine when a layer has nothing.",
             },
@@ -502,10 +502,11 @@ export async function ensureMemoryPipelineVersion(
   currentSectionId: string,
   openaiKey: string,
   billing: DirectBillingContext,
-): Promise<{ normalized: number; legacy: number }> {
+  maxSections = 1,
+): Promise<{ normalized: number; legacy: number; remaining: number }> {
   const { data: current } = await adminClient.from("outline_sections")
     .select("id, outline_id, position").eq("id", currentSectionId).maybeSingle();
-  if (!current) return { normalized: 0, legacy: 0 };
+  if (!current) throw new Error("current section not found");
   const { data: memories, error } = await adminClient.from("section_embeddings")
     .select("outline_section_id, generation_output_id, raw_text, memory_pipeline_version")
     .eq("project_id", projectId);
@@ -514,12 +515,13 @@ export async function ensureMemoryPipelineVersion(
     row.outline_section_id !== currentSectionId &&
     !isCurrentMemoryPipelineVersion(row.memory_pipeline_version)
   );
-  if (!prior.length) return { normalized: 0, legacy: 0 };
+  if (!prior.length) return { normalized: 0, legacy: 0, remaining: 0 };
 
   const ids = prior.map((row: any) => row.outline_section_id).filter(Boolean);
-  const { data: sections } = await adminClient.from("outline_sections")
+  const { data: sections, error: sectionError } = await adminClient.from("outline_sections")
     .select("id, outline_id, position, title, summary, container, pov, terminal_beat, story_arc_beat_id")
     .in("id", ids);
+  if (sectionError) throw new Error(`memory normalization section query failed: ${sectionError.message}`);
   const byId = new Map<string, Record<string, any>>(
     (sections ?? []).map((row: any) => [String(row.id), row as Record<string, any>]),
   );
@@ -529,7 +531,7 @@ export async function ensureMemoryPipelineVersion(
   }).sort((a: any, b: any) => Number(byId.get(String(a.outline_section_id))?.position ?? 0) - Number(byId.get(String(b.outline_section_id))?.position ?? 0));
 
   let normalized = 0;
-  for (const row of ordered) {
+  for (const row of ordered.slice(0, Math.max(1, maxSections))) {
     const section = byId.get(String(row.outline_section_id));
     if (!section) continue;
     let rawText = typeof row.raw_text === "string" ? row.raw_text : "";
@@ -557,7 +559,37 @@ export async function ensureMemoryPipelineVersion(
     normalized++;
   }
   console.log(`[embed-section] memory normalization complete project=${projectId} current=${currentSectionId} normalized=${normalized} legacy=${ordered.length} version=${memoryPipelineVersion(CURRENT_MEMORY_PIPELINE_VERSION)}`);
-  return { normalized, legacy: ordered.length };
+  return { normalized, legacy: ordered.length, remaining: Math.max(0, ordered.length - normalized) };
+}
+
+export async function ensureOutputMemory(
+  body: EmbedSectionRequest,
+  outputId: string,
+  userID: string,
+  adminClient: any,
+  openaiKey: string,
+): Promise<void> {
+  const { data: existing, error } = await adminClient.from("section_embeddings")
+    .select("generation_output_id, memory_pipeline_version")
+    .eq("outline_section_id", body.outline_section_id).maybeSingle();
+  if (error) throw new Error(`memory barrier query failed: ${error.message}`);
+  if (existing?.generation_output_id === outputId && isCurrentMemoryPipelineVersion(existing.memory_pipeline_version)) return;
+  let rawText = body.raw_text ?? "";
+  if (!rawText) {
+    const { data: output, error: outputError } = await adminClient.from("generation_outputs")
+      .select("output_text").eq("id", outputId).single();
+    if (outputError || !output?.output_text) throw new Error(`persisted output unavailable for memory repair: ${outputError?.message ?? "missing prose"}`);
+    rawText = String(output.output_text);
+  }
+  await processSectionMemory({ ...body, raw_text: rawText, output_id: outputId, scene_memory: undefined, forceExtract: true }, adminClient, openaiKey, {
+    userID, action: "run-outline-recovery", outputID: outputId, projectID: body.project_id,
+    outlineSectionID: body.outline_section_id, adminClient, creditStore: new SupabaseCreditStore(adminClient),
+  });
+  const { data: repaired, error: verifyError } = await adminClient.from("section_embeddings")
+    .select("generation_output_id, memory_pipeline_version").eq("outline_section_id", body.outline_section_id).maybeSingle();
+  if (verifyError || repaired?.generation_output_id !== outputId || !isCurrentMemoryPipelineVersion(repaired.memory_pipeline_version)) {
+    throw new Error(`memory barrier failed for output ${outputId}`);
+  }
 }
 
 export async function processEmbedSection(

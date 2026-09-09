@@ -40,6 +40,8 @@ import { prepareCreditReservation } from "./_credit_preflight.ts";
 import { deriveRecipeObligations } from "../outline-from-recipe/_recipe_obligations.ts";
 import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
 import { formatCanonicalProjectState } from "../_shared/memory-state.ts";
+import { ensureMemoryPipelineVersion, ensureOutputMemory } from "../_shared/section-embedding.ts";
+import { SupabaseCreditStore } from "../generate-story/_credits.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -731,12 +733,40 @@ async function runOutline(
       // If the platform killed the worker after generate-story persisted its
       // output but before this row was updated, reuse that output. This makes
       // recovery safe and avoids charging the same section twice.
+      const normalize = await ensureMemoryPipelineVersion(
+        adminClient,
+        String(projectId),
+        String(section.id),
+        Deno.env.get("OPENAI_API_KEY") ?? "",
+        {
+          userID: String(run.user_id), action: "memory-normalization",
+          projectID: String(projectId), outlineSectionID: String(section.id),
+          adminClient, creditStore: new SupabaseCreditStore(adminClient),
+        },
+        1,
+      );
+      if (normalize.remaining > 0) {
+        await updateSectionStatus(adminClient, runId, { ...section, status: "pending" });
+        await releaseRunLease(adminClient, runId);
+        await queueContinuation(runId, authHeader);
+        return;
+      }
       const existingOutput = await findRunOutput(
         adminClient,
         String(section.id),
         String(run.created_at),
       );
       if (existingOutput) {
+        await ensureOutputMemory({
+          outline_section_id: String(section.id), outline_id: String(run.outline_id),
+          project_id: String(projectId), position: Number(section.position ?? 0),
+          title: String(section.title ?? ""), summary: String(section.summary ?? ""),
+          container: (section.container ?? null) as string | null,
+          pov: (section.pov ?? null) as string | null,
+          terminal_beat: (section.terminal_beat ?? null) as string | null,
+          story_arc_beat_id: (section.story_arc_beat_id ?? null) as string | null,
+          output_id: existingOutput,
+        }, existingOutput, String(run.user_id), adminClient, Deno.env.get("OPENAI_API_KEY") ?? "");
         await updateSectionStatus(adminClient, runId, {
           ...section,
           status: "completed",

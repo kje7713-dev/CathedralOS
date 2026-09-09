@@ -5,7 +5,7 @@
 export const SCENE_MEMORY_GENERATION_INSTRUCTIONS =
   `Scene memory is a factual record of what happened in the returned scene.
 Derive every memory field only from the prose in the \`scene\` field that you write in this response. Do not copy or promote facts from the Section Contract, recipe, Project State, story arc, outline summary, or planned events unless the returned prose actually establishes them. Do not record an intended action as completed unless it occurs on the page.
-The extracted_summary must be a concise factual distillation of this scene. character_deltas and plot_thread_deltas describe changes caused or established by this scene. continuity_facts are concrete facts future scenes must preserve. open_loops are unresolved promises, mysteries, threats, questions, or pending actions left by this scene. scene_ending_state describes the characters and immediate pressure at the end of this scene. If the prose does not establish something, leave that array empty or that field null. Never invent canon to satisfy the schema.`;
+The extracted_summary must be a concise factual distillation of this scene. character_deltas and plot_thread_deltas describe changes caused or established by this scene. continuity_facts are semantic operations: establish, preserve, or supersede durable facts. open_loops are semantic operations with status open or resolved. Use references only to identify the prior semantic entity; never emit database IDs. scene_ending_state describes the characters and immediate pressure at the end of this scene. If the prose does not establish something, leave that array empty or that field null. Never invent canon to satisfy the schema.`;
 
 export const SCENE_MEMORY_RESPONSE_FORMAT = {
   type: "json_schema",
@@ -68,24 +68,32 @@ export const SCENE_MEMORY_RESPONSE_FORMAT = {
             },
           },
         },
-        continuity_facts: { type: "array", items: { type: "string" } },
+        continuity_facts: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["operation", "fact", "prior_fact_reference"],
+            properties: {
+              operation: { type: "string", enum: ["establish", "preserve", "supersede"] },
+              fact: { type: "string" },
+              prior_fact_reference: { type: ["string", "null"] },
+            },
+          },
+        },
         open_loops: {
           type: "array",
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["type", "description"],
+            required: ["type", "reference", "status", "description"],
             properties: {
               type: {
                 type: "string",
-                enum: [
-                  "promise",
-                  "mystery",
-                  "question",
-                  "threat",
-                  "pending_action",
-                ],
+                enum: ["promise", "mystery", "question", "threat", "pending_action"],
               },
+              reference: { type: "string" },
+              status: { type: "string", enum: ["open", "resolved"] },
               description: { type: "string" },
             },
           },
@@ -133,8 +141,12 @@ export interface SceneMemory {
   plot_thread_deltas: Array<
     { thread_name?: string; status?: string; description?: string }
   >;
-  continuity_facts: string[];
-  open_loops: Array<{ type?: string; description?: string }>;
+  continuity_facts: Array<{
+    operation?: "establish" | "preserve" | "supersede";
+    fact?: string;
+    prior_fact_reference?: string | null;
+  }>;
+  open_loops: Array<{ type?: string; reference?: string; status?: "open" | "resolved"; description?: string }>;
   scene_ending_state: {
     character_positions?: Array<
       { character?: string; location?: string; immediate_state?: string }
@@ -158,7 +170,7 @@ export function normalizeSceneMemory(input: unknown): SceneMemory {
       ? parsed.plot_thread_deltas
       : [],
     continuity_facts: Array.isArray(parsed.continuity_facts)
-      ? parsed.continuity_facts
+      ? parsed.continuity_facts.map((fact) => typeof fact === "string" ? { operation: "establish" as const, fact, prior_fact_reference: null } : fact).filter((fact) => fact && typeof fact === "object")
       : [],
     open_loops: Array.isArray(parsed.open_loops) ? parsed.open_loops : [],
     scene_ending_state: parsed.scene_ending_state &&

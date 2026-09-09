@@ -38,29 +38,11 @@ function priorItems(rows: MemoryRow[], field: keyof MemoryRow): AnyRecord[] {
   return items;
 }
 
-function mergeCharacterDeltas(rows: MemoryRow[], current: unknown): unknown[] {
-  const merged = new Map<string, AnyRecord>();
-  for (const item of priorItems(rows, "character_deltas")) {
-    const name = text(item.character_name);
-    if (name) merged.set(key(name), { ...item });
-  }
-  if (Array.isArray(current)) {
-    for (const item of current) {
-      if (!item || typeof item !== "object") continue;
-      const next = item as AnyRecord;
-      const name = text(next.character_name);
-      if (!name) continue;
-      const previous = merged.get(key(name)) ?? {};
-      const combined = { ...previous };
-      for (const [field, value] of Object.entries(next)) {
-        if (value !== null && value !== undefined && text(String(value)) !== "") {
-          combined[field] = value;
-        }
-      }
-      merged.set(key(name), combined);
-    }
-  }
-  return Array.from(merged.values());
+function mergeCharacterDeltas(_rows: MemoryRow[], current: unknown): unknown[] {
+  // Persist only this scene's changes. Cumulative merging belongs to the
+  // canonical Project State formatter, not section_embeddings rows.
+  if (!Array.isArray(current)) return [];
+  return current.filter((item) => item && typeof item === "object").map((item) => ({ ...item as AnyRecord }));
 }
 
 function reconcileThreads(rows: MemoryRow[], current: unknown[], source: string, now: string): AnyRecord[] {
@@ -94,18 +76,20 @@ function reconcileLoops(rows: MemoryRow[], current: unknown[], source: string, n
     const description = text(item.description);
     if (!description) return [];
     const type = text(item.type) || "question";
+    const reference = text(item.reference);
     const match = existing
       .filter((candidate) => text(candidate.type) === type)
       .sort((a, b) => similarity(description, text(b.description)) - similarity(description, text(a.description)))[0];
-    const same = match && similarity(description, text(match.description)) >= 0.45;
-    const status = text(item.status) === "resolved" || text(item.status) === "closed" ? "resolved" : "open";
+    const same = match && (reference && text(match.reference) === reference || similarity(description, text(match.description)) >= 0.45);
+    const status = text(item.status) === "resolved" ? "resolved" : "open";
     const id = same && text(match?.id) ? text(match.id) : uuid();
     return [{
       id,
       source_section_id: source,
       type,
-      description,
+      reference: reference || text(match?.reference) || description,
       status,
+      description,
       created_at: same ? (text(match?.created_at) || now) : now,
       resolved_at: status === "resolved" ? (text(match?.resolved_at) || now) : null,
     }];
@@ -121,7 +105,7 @@ function reconcileFacts(rows: MemoryRow[], current: unknown[], source: string, n
     if (!fact) continue;
     const match = existing.find((candidate) => key(text(candidate.fact)) === key(fact));
     const id = text(match?.id) || uuid();
-    const replacement = text(item.supersedes_id) || text(item.supersedes_fact);
+    const replacement = text(item.prior_fact_reference);
     if (replacement) {
       const old = existing.find((candidate) => text(candidate.id) === replacement || key(text(candidate.fact)) === key(replacement));
       if (old?.id) out.push({ ...old, active: false, superseded_by: id });
@@ -129,6 +113,7 @@ function reconcileFacts(rows: MemoryRow[], current: unknown[], source: string, n
     out.push({
       id,
       source_section_id: source,
+      operation: text(item.operation) || (replacement ? "supersede" : (match ? "preserve" : "establish")),
       fact,
       active: true,
       superseded_by: null,
@@ -153,9 +138,23 @@ export function reconcileSceneMemory(
 }
 
 export async function loadPriorMemoryRows(adminClient: any, projectId: string, currentSectionId?: string): Promise<MemoryRow[]> {
-  if (!projectId) return [];
-  const { data } = await adminClient.from("section_embeddings").select(
+  if (!projectId || !currentSectionId) return [];
+  const { data: current, error: currentError } = await adminClient.from("outline_sections")
+    .select("id, outline_id, position").eq("id", currentSectionId).maybeSingle();
+  if (currentError) throw new Error(`current section query failed: ${currentError.message}`);
+  if (!current) throw new Error("current section not found");
+  const { data: rows, error: rowError } = await adminClient.from("section_embeddings").select(
     "outline_section_id, character_deltas, plot_thread_deltas, continuity_facts, open_loops",
   ).eq("project_id", projectId);
-  return (data ?? []).filter((row: AnyRecord) => row.outline_section_id !== currentSectionId) as MemoryRow[];
+  if (rowError) throw new Error(`prior memory query failed: ${rowError.message}`);
+  const ids = (rows ?? []).map((row: AnyRecord) => row.outline_section_id).filter(Boolean);
+  if (!ids.length) return [];
+  const { data: sections, error: sectionError } = await adminClient.from("outline_sections")
+    .select("id, outline_id, position").in("id", ids);
+  if (sectionError) throw new Error(`prior section query failed: ${sectionError.message}`);
+  const meta = new Map<string, AnyRecord>((sections ?? []).map((row: AnyRecord) => [String(row.id), row]));
+  return (rows ?? []).filter((row: AnyRecord) => {
+    const section = meta.get(String(row.outline_section_id));
+    return section && section.outline_id === current.outline_id && Number(section.position) < Number(current.position);
+  }).sort((a: AnyRecord, b: AnyRecord) => Number(meta.get(String(a.outline_section_id))?.position ?? 0) - Number(meta.get(String(b.outline_section_id))?.position ?? 0)) as MemoryRow[];
 }

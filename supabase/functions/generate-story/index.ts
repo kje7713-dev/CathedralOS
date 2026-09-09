@@ -90,7 +90,6 @@ import {
 } from "../_shared/billable-llm.ts";
 import { normalizeSceneMemory, type SceneMemory } from "../_shared/scene-memory.ts";
 import type { EmbedSectionRequest } from "../_shared/section-embedding.ts";
-import { ensureMemoryPipelineVersion } from "../_shared/section-embedding.ts";
 import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
 import { formatCanonicalProjectState } from "../_shared/memory-state.ts";
 
@@ -2911,39 +2910,6 @@ async function handler(
       Object.keys(outlineSectionCtx.storyArc).length > 0 ? "found" : "empty"
     }`,
   );
-
-  // A continuation must never write prose against a mixed-version canon. The
-  // upgrade reads persisted raw_text and re-runs only the dedicated extractor;
-  // it never regenerates prose. Current-version rows are skipped, making
-  // recovery/retry idempotent.
-  if (adminClient && projectID && body.outline_section_id && !isEstimate) {
-    try {
-      const normalization = await ensureMemoryPipelineVersion(
-        adminClient,
-        projectID,
-        String(body.outline_section_id),
-        Deno.env.get("OPENAI_API_KEY") ?? "",
-        {
-          userID: userId,
-          action: "memory-normalization",
-          projectID,
-          outlineSectionID: String(body.outline_section_id),
-          adminClient,
-          creditStore: store,
-        },
-      );
-      console.log(
-        `[generate-story] memory pipeline version=${CURRENT_MEMORY_PIPELINE_VERSION} normalized=${normalization.normalized} legacy=${normalization.legacy}`,
-      );
-    } catch (error) {
-      console.error(`[generate-story] incompatible memory normalization blocked continuation: ${String(error)}`);
-      return corsResponse(JSON.stringify({
-        status: "failed",
-        errorCode: "memory_pipeline_upgrade_required",
-        errorMessage: "Prior scene memory must be upgraded before continuation.",
-      }), { status: 409 });
-    }
-  }
 
   // -------------------------------------------------------------------------
   // Shared billable-runner preflight input. The runner performs the authoritative
