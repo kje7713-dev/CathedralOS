@@ -134,8 +134,11 @@ Deno.serve(async (req: Request) => {
   const adminClient = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
+    // `scene_memory` is an internal producer handoff only. Never trust a
+    // client-supplied canonical memory payload at this public JWT boundary.
+    const publicBody = { ...body, scene_memory: undefined };
     const result = await processEmbedSection(
-      body,
+      publicBody,
       user.id,
       adminClient,
       openaiKey,

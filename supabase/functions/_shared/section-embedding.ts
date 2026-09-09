@@ -4,7 +4,8 @@
 // Called from iOS on OutlineSection Accept. On-demand pipeline:
 //   1. UPSERT outline (id = client-provided outline_id, project_id)
 //   2. UPSERT outline_section (id = client-provided outline_section_id)
-//   3. LLM extraction pass — semantic content only (per Rule 1-3: no IDs,
+//   3. Accept producer-supplied scene memory, or run the legacy LLM extraction
+//      pass when called independently (per Rule 1-3: no IDs,
 //      no source_section_id, no status fields from the LLM; the function
 //      adds these server-side)
 //   4. Embed the summary (text-embedding-3-small, 1536-dim)
@@ -40,6 +41,11 @@ import {
   settleDirectUsage,
 } from "./direct-billing.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
+import {
+  normalizeSceneMemory,
+  type SceneMemory,
+  SCENE_MEMORY_RESPONSE_FORMAT,
+} from "./scene-memory.ts";
 
 const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
   "gpt-4o-mini";
@@ -48,115 +54,6 @@ const OPENAI_EMBED_MODEL = "text-embedding-3-small";
 // Keep extraction constrained to the shape consumed below. JSON mode can still
 // return a truncated object when the completion budget is exhausted; Structured
 // Outputs prevents syntactically invalid output and makes missing layers explicit.
-const SCENE_MEMORY_RESPONSE_FORMAT = {
-  type: "json_schema",
-  json_schema: {
-    name: "scene_memory",
-    strict: true,
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      required: [
-        "extracted_summary",
-        "character_deltas",
-        "plot_thread_deltas",
-        "continuity_facts",
-        "open_loops",
-        "scene_ending_state",
-      ],
-      properties: {
-        extracted_summary: { type: "string" },
-        character_deltas: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: [
-              "character_name",
-              "location",
-              "knowledge_delta",
-              "relationship_delta",
-              "injuries",
-              "goals",
-              "possessions",
-              "emotional_stance",
-            ],
-            properties: {
-              character_name: { type: "string" },
-              location: { type: ["string", "null"] },
-              knowledge_delta: { type: ["string", "null"] },
-              relationship_delta: { type: ["string", "null"] },
-              injuries: { type: ["string", "null"] },
-              goals: { type: ["string", "null"] },
-              possessions: { type: ["string", "null"] },
-              emotional_stance: { type: ["string", "null"] },
-            },
-          },
-        },
-        plot_thread_deltas: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["thread_name", "status", "description"],
-            properties: {
-              thread_name: { type: "string" },
-              status: {
-                type: "string",
-                enum: ["introduced", "advanced", "resolved"],
-              },
-              description: { type: "string" },
-            },
-          },
-        },
-        continuity_facts: { type: "array", items: { type: "string" } },
-        open_loops: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["type", "description"],
-            properties: {
-              type: {
-                type: "string",
-                enum: [
-                  "promise",
-                  "mystery",
-                  "question",
-                  "threat",
-                  "pending_action",
-                ],
-              },
-              description: { type: "string" },
-            },
-          },
-        },
-        scene_ending_state: {
-          type: "object",
-          additionalProperties: false,
-          required: ["character_positions", "immediate_pressure"],
-          properties: {
-            character_positions: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: ["character", "location", "immediate_state"],
-                properties: {
-                  character: { type: "string" },
-                  location: { type: "string" },
-                  immediate_state: { type: "string" },
-                },
-              },
-            },
-            immediate_pressure: { type: "string" },
-          },
-        },
-      },
-    },
-  },
-};
-
 export interface EmbedSectionRequest {
   outline_section_id?: string;
   outline_id?: string;
@@ -169,6 +66,9 @@ export interface EmbedSectionRequest {
   terminal_beat?: string | null;
   story_arc_beat_id?: string | null;
   raw_text?: string;
+  // When generation already returned structured memory, reuse it and skip the
+  // second billable extraction pass.
+  scene_memory?: Partial<SceneMemory>;
   // Optional: tag every llm_prompts row this call writes with this
   // generation output's id so the iOS debug box can show the prompt + response
   // for the output that triggered the embedding. PR-XXX-H.
@@ -183,33 +83,6 @@ export interface EmbedSectionRequest {
 
 // LLM returns semantic content only. The function adds IDs, source_section_id,
 // status, timestamps, and provenance metadata server-side per the locked rules.
-interface SceneMemory {
-  extracted_summary: string;
-  character_deltas: Array<
-    {
-      character_name?: string;
-      location?: string;
-      knowledge_delta?: string;
-      relationship_delta?: string;
-      injuries?: string;
-      goals?: string;
-      possessions?: string;
-      emotional_stance?: string;
-    }
-  >;
-  plot_thread_deltas: Array<
-    { thread_name?: string; status?: string; description?: string }
-  >;
-  continuity_facts: string[];
-  open_loops: Array<{ type?: string; description?: string }>;
-  scene_ending_state: {
-    character_positions?: Array<
-      { character?: string; location?: string; immediate_state?: string }
-    >;
-    immediate_pressure?: string;
-  };
-}
-
 // Stable UUIDs for plot_thread_deltas, open_loops, continuity_facts.
 const newUuid = (): string => crypto.randomUUID();
 
@@ -326,173 +199,118 @@ export async function processSectionMemory(
   // Uses OpenAI Structured Outputs so a successful, complete response always
   // conforms to the scene-memory JSON schema.
   let sceneMemory: SceneMemory;
-  // PR-XXX-A: track LLM call duration for llm_prompts log
-  const extractStartMs = Date.now();
-  const extractionInput = body.prior_context
-    ? `${body.prior_context}\n${body.raw_text ?? ""}`
-    : (body.raw_text ?? "");
-  if (billing) {
-    await preflightDirectUsage(
-      billing,
-      OPENAI_MODEL_DEFAULT,
-      Math.ceil(extractionInput.length / 4),
-      8192,
+  if (body.scene_memory) {
+    sceneMemory = normalizeSceneMemory(body.scene_memory);
+    console.log(
+      `[embed-section] using producer-supplied scene memory summary_len=${sceneMemory.extracted_summary.length}`,
     );
-  }
-  try {
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), 120_000);
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${openaiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL_DEFAULT,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a fiction scene-memory extractor. Given a scene, output JSON with these 6 keys: " +
-              "`extracted_summary` (200-500 token distillation of what happened), " +
-              "`character_deltas` (array of {character_name, location?, knowledge_delta?, relationship_delta?, injuries?, goals?, possessions?, emotional_stance?}), " +
-              "`plot_thread_deltas` (array of {thread_name, status in [introduced, advanced, resolved], description}), " +
-              "`continuity_facts` (array of concrete fact strings future scenes must not contradict), " +
-              "`open_loops` (array of {type in [promise, mystery, question, threat, pending_action], description}), " +
-              "`scene_ending_state` ({character_positions: [{character, location, immediate_state}], immediate_pressure: string}). " +
-              "Output ONLY valid JSON. Empty arrays/objects are fine when a layer has nothing.",
-          },
-          {
-            role: "user",
-            content: body.prior_context
-              ? `Prior context (what the model already knows about prior sections — use this to inform what to add/update/supersede in the structured state):
-${body.prior_context}
-
-Now, from the current section's raw_text below, extract structured state:
-${body.raw_text}`
-              : body.raw_text,
-          },
-        ],
-        // Reasoning models consume part of this budget before emitting JSON.
-        // 1500 could truncate the object and surface as "invalid JSON".
-        max_completion_tokens: 8192,
-        temperature: 0.2,
-        response_format: SCENE_MEMORY_RESPONSE_FORMAT,
-      }),
-      signal: ac.signal,
-    });
-    clearTimeout(t);
-    if (!r.ok) {
-      const errText = await r.text();
-      console.error(
-        `[embed-section] OpenAI extract ${r.status}: ${errText.slice(0, 500)}`,
-      );
-      throw new SectionEmbeddingError(
-        "provider_error",
-        `OpenAI extract ${r.status}: ${errText.slice(0, 500)}`,
-      );
-    }
-    const data = await r.json();
+  } else {
+    // PR-XXX-A: track LLM call duration for llm_prompts log
+    const extractStartMs = Date.now();
+    const extractionInput = body.prior_context
+      ? `${body.prior_context}\n${body.raw_text ?? ""}`
+      : (body.raw_text ?? "");
     if (billing) {
-      await settleDirectUsage(
+      await preflightDirectUsage(
         billing,
-        "scene-memory-extraction",
         OPENAI_MODEL_DEFAULT,
-        data.usage?.prompt_tokens ?? Math.ceil(extractionInput.length / 4),
-        data.usage?.completion_tokens ?? 0,
+        Math.ceil(extractionInput.length / 4),
+        8192,
       );
     }
-    const finishReason = data.choices?.[0]?.finish_reason;
-    if (finishReason === "length") {
-      console.error(
-        `[embed-section] LLM extraction exhausted completion budget`,
-      );
-      throw new SectionEmbeddingError(
-        "provider_error",
-        "LLM extraction exceeded its completion budget",
-      );
-    }
-    const raw = (data.choices?.[0]?.message?.content ?? "").trim();
-    if (!raw) {
-      console.error(`[embed-section] LLM extraction returned empty content`);
-      throw new SectionEmbeddingError(
-        "provider_error",
-        "LLM extraction returned empty content",
-      );
-    }
-
-    // PR-XXX-A: log the extraction prompt + response to llm_prompts (best-effort)
-    const extractDurationMs = Date.now() - extractStartMs;
     try {
-      await adminClient.from("llm_prompts").insert({
-        call_type: "embed-section-extract",
-        output_id: body.output_id ?? null,
-        project_id: body.project_id ?? null,
-        outline_section_id: body.outline_section_id ?? null,
-        model: OPENAI_MODEL_DEFAULT,
-        prompt: JSON.stringify({
-          input: body.raw_text,
-          prior_context: body.prior_context ?? null,
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 120_000);
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${openaiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: OPENAI_MODEL_DEFAULT,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a fiction scene-memory extractor. Given a scene, output JSON with these 6 keys: " +
+                "`extracted_summary` (200-500 token distillation of what happened), " +
+                "`character_deltas` (array of {character_name, location?, knowledge_delta?, relationship_delta?, injuries?, goals?, possessions?, emotional_stance?}), " +
+                "`plot_thread_deltas` (array of {thread_name, status in [introduced, advanced, resolved], description}), " +
+                "`continuity_facts` (array of concrete fact strings future scenes must not contradict), " +
+                "`open_loops` (array of {type in [promise, mystery, question, threat, pending_action], description}), " +
+                "`scene_ending_state` ({character_positions: [{character, location, immediate_state}], immediate_pressure: string}). " +
+                "Output ONLY valid JSON. Empty arrays/objects are fine when a layer has nothing.",
+            },
+            {
+              role: "user",
+              content: body.prior_context
+                ? `Prior context (what the model already knows about prior sections — use this to inform what to add/update/supersede in the structured state):\n${body.prior_context}\n\nNow, from the current section's raw_text below, extract structured state:\n${body.raw_text}`
+                : body.raw_text,
+            },
+          ],
+          max_completion_tokens: 8192,
+          temperature: 0.2,
+          response_format: SCENE_MEMORY_RESPONSE_FORMAT,
         }),
-        response: raw,
-        prompt_tokens: data.usage?.prompt_tokens ?? null,
-        completion_tokens: data.usage?.completion_tokens ?? null,
-        total_tokens: data.usage?.total_tokens ?? null,
-        duration_ms: extractDurationMs,
+        signal: ac.signal,
       });
-    } catch (logErr) {
-      console.error(
-        `[embed-section] llm_prompts insert failed: ${
-          (logErr as Error).message
-        }`,
-      );
+      clearTimeout(t);
+      if (!r.ok) {
+        const errText = await r.text();
+        throw new SectionEmbeddingError(
+          "provider_error",
+          `OpenAI extract ${r.status}: ${errText.slice(0, 500)}`,
+        );
+      }
+      const data = await r.json();
+      if (billing) {
+        await settleDirectUsage(
+          billing,
+          "scene-memory-extraction",
+          OPENAI_MODEL_DEFAULT,
+          data.usage?.prompt_tokens ?? Math.ceil(extractionInput.length / 4),
+          data.usage?.completion_tokens ?? 0,
+        );
+      }
+      if (data.choices?.[0]?.finish_reason === "length") {
+        throw new SectionEmbeddingError(
+          "provider_error",
+          "LLM extraction exceeded its completion budget",
+        );
+      }
+      const raw = (data.choices?.[0]?.message?.content ?? "").trim();
+      if (!raw) throw new SectionEmbeddingError("provider_error", "LLM extraction returned empty content");
+      try {
+        sceneMemory = normalizeSceneMemory(JSON.parse(raw));
+      } catch {
+        throw new SectionEmbeddingError("provider_error", "LLM extraction returned invalid JSON");
+      }
+      try {
+        await adminClient.from("llm_prompts").insert({
+          call_type: "embed-section-extract",
+          output_id: body.output_id ?? null,
+          project_id: body.project_id ?? null,
+          outline_section_id: body.outline_section_id ?? null,
+          model: OPENAI_MODEL_DEFAULT,
+          prompt: JSON.stringify({ input: body.raw_text, prior_context: body.prior_context ?? null }),
+          response: raw,
+          prompt_tokens: data.usage?.prompt_tokens ?? null,
+          completion_tokens: data.usage?.completion_tokens ?? null,
+          total_tokens: data.usage?.total_tokens ?? null,
+          duration_ms: Date.now() - extractStartMs,
+        });
+      } catch (logErr) {
+        console.error(`[embed-section] llm_prompts insert failed: ${(logErr as Error).message}`);
+      }
+    } catch (err) {
+      console.error(`[embed-section] LLM extract threw: ${String(err)}`);
+      if (err instanceof SectionEmbeddingError) throw err;
+      throw new SectionEmbeddingError("provider_error", String(err));
     }
-
-    let parsed: Partial<SceneMemory>;
-    try {
-      parsed = JSON.parse(raw) as Partial<SceneMemory>;
-    } catch (parseErr) {
-      console.error(
-        `[embed-section] LLM extraction returned invalid JSON: ${
-          String(parseErr)
-        } raw=${raw.slice(0, 300)}`,
-      );
-      throw new SectionEmbeddingError(
-        "provider_error",
-        "LLM extraction returned invalid JSON",
-      );
-    }
-    // Defaults: empty arrays/objects so the schema is forgiving if a layer is missing.
-    sceneMemory = {
-      extracted_summary: typeof parsed.extracted_summary === "string"
-        ? parsed.extracted_summary
-        : "",
-      character_deltas: Array.isArray(parsed.character_deltas)
-        ? parsed.character_deltas
-        : [],
-      plot_thread_deltas: Array.isArray(parsed.plot_thread_deltas)
-        ? parsed.plot_thread_deltas
-        : [],
-      continuity_facts: Array.isArray(parsed.continuity_facts)
-        ? parsed.continuity_facts
-        : [],
-      open_loops: Array.isArray(parsed.open_loops) ? parsed.open_loops : [],
-      scene_ending_state: parsed.scene_ending_state &&
-          typeof parsed.scene_ending_state === "object"
-        ? parsed.scene_ending_state
-        : {},
-    };
-    if (!sceneMemory.extracted_summary) {
-      console.error(`[embed-section] LLM extraction returned empty summary`);
-      throw new SectionEmbeddingError(
-        "provider_error",
-        "LLM extraction returned empty summary",
-      );
-    }
-  } catch (err) {
-    console.error(`[embed-section] LLM extract threw: ${String(err)}`);
-    throw new SectionEmbeddingError("provider_error", String(err));
+  }
+  if (!sceneMemory.extracted_summary) {
+    throw new SectionEmbeddingError("provider_error", "scene memory returned empty summary");
   }
   console.log(
     `[embed-section] extract OK summary_len=${sceneMemory.extracted_summary.length} layers=6`,

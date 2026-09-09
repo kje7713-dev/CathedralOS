@@ -257,8 +257,10 @@ export interface LLMResponse {
  *                                 support it (per PR-372 Kevin correction #2).
  */
 export interface LLMProviderOptions {
-  /** OpenAI Structured Outputs json_schema payload. */
+  /** OpenAI Structured Outputs schema in Chat/Responses-compatible shape. */
   responseFormat?: unknown;
+  /** Which OpenAI API should receive responseFormat. Defaults to chat. */
+  responseFormatTarget?: "chat" | "responses";
   /** Sampling temperature (0-2). Only forwarded by the chat/completions path. */
   temperature?: number;
   /** PR-372: cache capability for this request. */
@@ -304,10 +306,12 @@ export class OpenAIProvider implements LLMProvider {
     options?: LLMProviderOptions,
   ): Promise<LLMResponse> {
     const resolvedModel = providerModel ?? this.model;
-    // Route on options.responseFormat: if set, use chat/completions with
-    // Structured Outputs (coherence-check path). Otherwise use the Responses
-    // API (generate-story path; preserves prior behavior).
-    if (options?.responseFormat) {
+    // Coherence-check retains its Chat Completions contract. Generate-story
+    // explicitly targets Responses so structured output does not disable the
+    // stable/volatile prompt cache boundary.
+    if (
+      options?.responseFormat && options.responseFormatTarget !== "responses"
+    ) {
       return await this.callChatCompletions(
         messages,
         maxTokens,
@@ -343,6 +347,27 @@ export class OpenAIProvider implements LLMProvider {
       max_output_tokens: maxTokens,
       store: false,
     };
+    if (options?.responseFormat) {
+      const format = options.responseFormat as {
+        type?: string;
+        json_schema?: {
+          name?: string;
+          strict?: boolean;
+          schema?: unknown;
+        };
+      };
+      const jsonSchema = format.json_schema;
+      body.text = {
+        format: jsonSchema
+          ? {
+            type: "json_schema",
+            name: jsonSchema.name,
+            strict: jsonSchema.strict,
+            schema: jsonSchema.schema,
+          }
+          : options.responseFormat,
+      };
+    }
     if (options?.promptCacheKey) {
       body.prompt_cache_key = options.promptCacheKey;
     }
@@ -460,9 +485,19 @@ export class OpenAIProvider implements LLMProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
+    // Generate-story normally uses the Responses API content-block shape
+    // (`input_text`). Structured Outputs use chat/completions, whose content
+    // blocks must be `text`. Normalize here so section generation can request
+    // prose + scene memory without sending an invalid mixed API payload.
+    const chatMessages = messages.map((message) => ({
+      ...message,
+      content: Array.isArray(message.content)
+        ? message.content.map((block) => ({ type: "text", text: block.text }))
+        : message.content,
+    }));
     const body: Record<string, unknown> = {
       model: resolvedModel,
-      messages,
+      messages: chatMessages,
       max_completion_tokens: maxTokens,
     };
     if (options.responseFormat) {
