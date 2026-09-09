@@ -46,6 +46,7 @@ import {
   type SceneMemory,
   SCENE_MEMORY_RESPONSE_FORMAT,
 } from "./scene-memory.ts";
+import { loadPriorMemoryRows, reconcileSceneMemory } from "./memory-lifecycle.ts";
 
 const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
   "gpt-4o-mini";
@@ -83,8 +84,6 @@ export interface EmbedSectionRequest {
 
 // LLM returns semantic content only. The function adds IDs, source_section_id,
 // status, timestamps, and provenance metadata server-side per the locked rules.
-// Stable UUIDs for plot_thread_deltas, open_loops, continuity_facts.
-const newUuid = (): string => crypto.randomUUID();
 
 export class SectionEmbeddingError extends Error {
   constructor(readonly code: string, message: string) {
@@ -323,44 +322,27 @@ export async function processSectionMemory(
   // - created_at timestamp for all metadata-added items
   const nowIso = new Date().toISOString();
   const sourceSectionId = body.outline_section_id;
-  const enrichedPlotThreads = sceneMemory.plot_thread_deltas
-    .filter((t) => t && typeof t === "object" && t.thread_name)
-    .map((t) => ({
-      id: newUuid(),
-      source_section_id: sourceSectionId,
-      thread_name: t.thread_name,
-      status: t.status ?? "introduced",
-      description: t.description ?? "",
-      created_at: nowIso,
-      resolved_at: null,
-    }));
-  const enrichedOpenLoops = sceneMemory.open_loops
-    .filter((l) => l && typeof l === "object" && l.type)
-    .map((l) => ({
-      id: newUuid(),
-      source_section_id: sourceSectionId,
-      type: l.type,
-      description: l.description ?? "",
-      created_at: nowIso,
-      resolved_at: null,
-    }));
-  const enrichedContinuityFacts = sceneMemory.continuity_facts
-    .filter((f) => typeof f === "string" && f.length > 0)
-    .map((f) => ({
-      id: newUuid(),
-      source_section_id: sourceSectionId,
-      fact: f,
-      active: true,
-      superseded_by: null,
-      created_at: nowIso,
-    }));
+  const priorRows = await loadPriorMemoryRows(
+    adminClient,
+    body.project_id ?? "",
+    sourceSectionId,
+  );
+  const reconciled = reconcileSceneMemory(
+    priorRows,
+    sceneMemory as unknown as Record<string, unknown>,
+    sourceSectionId ?? "",
+    nowIso,
+  );
+  const enrichedPlotThreads = reconciled.plot_thread_deltas;
+  const enrichedOpenLoops = reconciled.open_loops;
+  const enrichedContinuityFacts = reconciled.continuity_facts;
 
   // Step 4: embed the compressed scene memory string.
   // The vector encodes the structured state (per Locked Rule 9: raw_text is NOT
   // injected by default — only the compressed summary + structured fields).
   const compressedMemory = JSON.stringify({
     summary: sceneMemory.extracted_summary,
-    character_deltas: sceneMemory.character_deltas,
+    character_deltas: reconciled.character_deltas,
     plot_thread_deltas: enrichedPlotThreads,
     open_loops: enrichedOpenLoops,
     ending_pressure: sceneMemory.scene_ending_state?.immediate_pressure ?? "",
@@ -474,7 +456,7 @@ export async function processSectionMemory(
       raw_text: body.raw_text,
       container: body.container ?? null,
       pov: body.pov ?? null,
-      character_deltas: sceneMemory.character_deltas,
+      character_deltas: reconciled.character_deltas,
       plot_thread_deltas: enrichedPlotThreads,
       continuity_facts: enrichedContinuityFacts,
       open_loops: enrichedOpenLoops,
