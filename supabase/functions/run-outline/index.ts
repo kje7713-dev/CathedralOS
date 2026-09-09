@@ -38,10 +38,21 @@ import {
 } from "./_generation_request.ts";
 import { prepareCreditReservation } from "./_credit_preflight.ts";
 import { deriveRecipeObligations } from "../outline-from-recipe/_recipe_obligations.ts";
-import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
+import {
+  CURRENT_MEMORY_PIPELINE_VERSION,
+  isCurrentMemoryPipelineVersion,
+} from "../_shared/memory-pipeline.ts";
 import { formatCanonicalProjectState } from "../_shared/memory-state.ts";
-import { ensureMemoryPipelineVersion, ensureOutputMemory } from "../_shared/section-embedding.ts";
+import {
+  ensureMemoryPipelineVersion,
+  ensureOutputMemory,
+} from "../_shared/section-embedding.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
+import {
+  computeMaxChargeCredits,
+  getEnabledModelByProviderModel,
+  snapshotPricing,
+} from "../generate-story/_generation_models.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -443,7 +454,7 @@ async function prepareRun(
 ): Promise<void> {
   const { data: claimed, error: claimError } = await adminClient.rpc(
     "claim_chapter_run",
-    { p_run_id: runId, p_lease_seconds: 150 },
+    { p_run_id: runId, p_lease_seconds: 420 },
   );
   if (claimError) {
     throw new Error(`could not claim preparation: ${claimError.message}`);
@@ -640,7 +651,7 @@ async function runOutline(
 ): Promise<void> {
   const { data: claimed, error: claimError } = await adminClient.rpc(
     "claim_chapter_run",
-    { p_run_id: runId, p_lease_seconds: 150 },
+    { p_run_id: runId, p_lease_seconds: 420 },
   );
   if (claimError) throw new Error(`could not claim run: ${claimError.message}`);
   const ownsLease = claimed === true ||
@@ -649,7 +660,7 @@ async function runOutline(
 
   const { data: run, error: runError } = await adminClient.from("chapter_runs")
     .select(
-      "id, outline_id, user_id, model, credits_reserved, created_at, sections, next_retry_at, status, memory_pipeline_version",
+      "id, outline_id, user_id, model, credits_reserved, created_at, sections, next_retry_at, status, memory_pipeline_version, worker_attempt",
     )
     .eq("id", runId).single();
   if (runError || !run) throw new Error("run disappeared after claim");
@@ -666,14 +677,20 @@ async function runOutline(
     return;
   }
 
+  const workerAttempt = Number(
+    (run as Record<string, unknown>).worker_attempt ?? 0,
+  );
   const sections = Array.isArray(run.sections)
     ? run.sections as Array<Record<string, unknown>>
     : [];
+  for (const section of sections) section.worker_attempt = workerAttempt;
   if (run.memory_pipeline_version !== CURRENT_MEMORY_PIPELINE_VERSION) {
     await adminClient.from("chapter_runs").update({
       memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
     }).eq("id", runId);
-    console.log(`[run-outline] run_id=${runId} upgraded memory pipeline metadata to ${CURRENT_MEMORY_PIPELINE_VERSION}`);
+    console.log(
+      `[run-outline] run_id=${runId} upgraded memory pipeline metadata to ${CURRENT_MEMORY_PIPELINE_VERSION}`,
+    );
   }
   // Older runs stored only display fields in sections. Hydrate missing inputs
   // from the authoritative outline so those runs are resumable too.
@@ -724,8 +741,10 @@ async function runOutline(
   // so a platform lifetime limit cannot orphan the entire Run All operation.
   const batch = pending.slice(0, 1);
   for (const section of batch) {
+    await renewRunLease(adminClient, runId, workerAttempt);
     await updateSectionStatus(adminClient, runId, {
       ...section,
+      worker_attempt: workerAttempt,
       status: "running",
       started_at: new Date().toISOString(),
     });
@@ -739,34 +758,53 @@ async function runOutline(
         String(section.id),
         Deno.env.get("OPENAI_API_KEY") ?? "",
         {
-          userID: String(run.user_id), action: "memory-normalization",
-          projectID: String(projectId), outlineSectionID: String(section.id),
-          adminClient, creditStore: new SupabaseCreditStore(adminClient),
+          userID: String(run.user_id),
+          action: "memory-normalization",
+          projectID: String(projectId),
+          outlineSectionID: String(section.id),
+          adminClient,
+          creditStore: new SupabaseCreditStore(adminClient),
         },
         1,
       );
       if (normalize.remaining > 0) {
-        await updateSectionStatus(adminClient, runId, { ...section, status: "pending" });
+        await updateSectionStatus(adminClient, runId, {
+          ...section,
+          status: "pending",
+        });
         await releaseRunLease(adminClient, runId);
         await queueContinuation(runId, authHeader);
         return;
       }
       const existingOutput = await findRunOutput(
         adminClient,
+        String(run.id),
         String(section.id),
-        String(run.created_at),
+        String(run.user_id),
+        String(projectId),
       );
       if (existingOutput) {
-        await ensureOutputMemory({
-          outline_section_id: String(section.id), outline_id: String(run.outline_id),
-          project_id: String(projectId), position: Number(section.position ?? 0),
-          title: String(section.title ?? ""), summary: String(section.summary ?? ""),
-          container: (section.container ?? null) as string | null,
-          pov: (section.pov ?? null) as string | null,
-          terminal_beat: (section.terminal_beat ?? null) as string | null,
-          story_arc_beat_id: (section.story_arc_beat_id ?? null) as string | null,
-          output_id: existingOutput,
-        }, existingOutput, String(run.user_id), adminClient, Deno.env.get("OPENAI_API_KEY") ?? "");
+        await ensureOutputMemory(
+          {
+            outline_section_id: String(section.id),
+            outline_id: String(run.outline_id),
+            project_id: String(projectId),
+            position: Number(section.position ?? 0),
+            title: String(section.title ?? ""),
+            summary: String(section.summary ?? ""),
+            container: (section.container ?? null) as string | null,
+            pov: (section.pov ?? null) as string | null,
+            terminal_beat: (section.terminal_beat ?? null) as string | null,
+            story_arc_beat_id: (section.story_arc_beat_id ?? null) as
+              | string
+              | null,
+            output_id: existingOutput,
+          },
+          existingOutput,
+          String(run.user_id),
+          adminClient,
+          Deno.env.get("OPENAI_API_KEY") ?? "",
+        );
         await updateSectionStatus(adminClient, runId, {
           ...section,
           status: "completed",
@@ -798,7 +836,37 @@ async function runOutline(
           run.id,
           String(section.id),
         );
+      await renewRunLease(adminClient, runId, workerAttempt);
       const result = await callGenerateStory(generationRequest, authHeader);
+      await renewRunLease(adminClient, runId, workerAttempt);
+      if (result.status !== "complete" || result.wasTruncated) {
+        throw new Error(
+          `durable generation incomplete for section ${section.id}`,
+        );
+      }
+      // Durable completion is unconditional on the exact persisted output's
+      // memory lineage, even when generate-story returned 200.
+      await ensureOutputMemory(
+        {
+          outline_section_id: String(section.id),
+          outline_id: String(run.outline_id),
+          project_id: String(projectId),
+          position: Number(section.position ?? 0),
+          title: String(section.title ?? ""),
+          summary: String(section.summary ?? ""),
+          container: (section.container ?? null) as string | null,
+          pov: (section.pov ?? null) as string | null,
+          terminal_beat: (section.terminal_beat ?? null) as string | null,
+          story_arc_beat_id: (section.story_arc_beat_id ?? null) as
+            | string
+            | null,
+          output_id: result.output_id,
+        },
+        result.output_id,
+        String(run.user_id),
+        adminClient,
+        Deno.env.get("OPENAI_API_KEY") ?? "",
+      );
       await updateSectionStatus(adminClient, runId, {
         ...section,
         status: "completed",
@@ -953,8 +1021,7 @@ async function finalizeRun(
     );
     return;
   }
-  const actual = sections.filter((s) => s.status === "completed")
-    .reduce((sum, s) => sum + Number(s.cost ?? 0), 0);
+  const actual = await loadActualCredits(adminClient, sections);
   await adminClient.from("chapter_runs").update({
     status: "completed",
     credits_actual: actual,
@@ -1108,7 +1175,108 @@ async function estimateRunCost(
       "generation cost estimate failed: invalid section estimate",
     );
   }
-  return costs.reduce((sum, cost) => sum + cost, 0);
+
+  // A continuation can normalize one legacy section before each generated
+  // section. Reserve those auxiliary stages too, using bounded raw-text and
+  // canonical-context sizes rather than the old fixed container cost.
+  const maxPosition = Math.max(
+    ...sections.map((section) => Number(section.position ?? 0)),
+  );
+  const { data: priorSections, error: priorSectionError } = await adminClient
+    .from("outline_sections")
+    .select("id, position")
+    .eq("outline_id", outlineId)
+    .lt("position", maxPosition);
+  if (priorSectionError) {
+    throw new Error(
+      `legacy memory section estimate failed: ${priorSectionError.message}`,
+    );
+  }
+  const priorSectionIds = (priorSections ?? []).map((
+    section: Record<string, unknown>,
+  ) => String(section.id));
+  const { data: legacyRows, error: legacyError } = priorSectionIds.length
+    ? await adminClient
+      .from("section_embeddings")
+      .select(
+        "outline_section_id, generation_output_id, raw_text, memory_pipeline_version",
+      )
+      .eq("project_id", String(outline.local_project_id))
+      .in("outline_section_id", priorSectionIds)
+    : { data: [], error: null };
+  if (legacyError) {
+    throw new Error(`legacy memory estimate failed: ${legacyError.message}`);
+  }
+  const positionById = new Map(
+    (priorSections ?? []).map((section: Record<string, unknown>) => [
+      String(section.id),
+      Number(section.position ?? 0),
+    ]),
+  );
+  const legacy = (legacyRows ?? []).filter((row: Record<string, unknown>) =>
+    row.generation_output_id &&
+    !isCurrentMemoryPipelineVersion(row.memory_pipeline_version)
+  ).sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
+    (positionById.get(String(a.outline_section_id)) ?? 0) -
+    (positionById.get(String(b.outline_section_id)) ?? 0)
+  );
+  let legacyCost = 0;
+  if (legacy.length) {
+    const outputIds = legacy.map((row) => String(row.generation_output_id));
+    const { data: events, error: eventError } = await adminClient
+      .from("generation_usage_events")
+      .select("generation_output_id, idempotency_key, status")
+      .eq("purpose", "embed-section")
+      .eq("status", "complete")
+      .in("generation_output_id", outputIds);
+    if (eventError) {
+      throw new Error(`legacy billing estimate failed: ${eventError.message}`);
+    }
+    const settled = new Set(
+      (events ?? []).map((event: Record<string, unknown>) =>
+        String(event.idempotency_key ?? "")
+      ),
+    );
+    const extractor = await getEnabledModelByProviderModel(
+      adminClient,
+      Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini",
+    );
+    const embedder = await getEnabledModelByProviderModel(
+      adminClient,
+      "text-embedding-3-small",
+    );
+    if (!extractor || !embedder) {
+      throw new Error("legacy memory pricing unavailable");
+    }
+    const extractorPricing = snapshotPricing(extractor);
+    const embedderPricing = snapshotPricing(embedder);
+    for (const row of legacy.slice(0, sections.length)) {
+      const outputId = String(row.generation_output_id);
+      const rawTokens = Math.min(
+        8_192,
+        Math.max(1, Math.ceil(String(row.raw_text ?? "").length / 4)),
+      );
+      if (!settled.has(`${outputId}:scene-memory-extraction`)) {
+        legacyCost += computeMaxChargeCredits({
+          uncachedInputTokens: rawTokens + 6_000,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: 8_192,
+          toolCostUsd: 0,
+        }, extractorPricing);
+      }
+      if (!settled.has(`${outputId}:scene-memory-embedding`)) {
+        legacyCost += computeMaxChargeCredits({
+          uncachedInputTokens: 1_500,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: 0,
+          toolCostUsd: 0,
+        }, embedderPricing);
+      }
+    }
+  }
+  return costs.reduce((sum, cost) => sum + cost, 0) + legacyCost;
 }
 
 async function collectSectionsToGenerate(
@@ -1341,14 +1509,21 @@ function aggregateProjectState(
 
 async function findRunOutput(
   adminClient: ReturnType<typeof createClient>,
+  runId: string,
   sectionId: string,
-  runCreatedAt: string,
+  userId: string,
+  projectId: string,
 ): Promise<string | null> {
   const { data, error } = await adminClient.from("generation_outputs")
-    .select("id").eq("outline_section_id", sectionId)
-    .gte("created_at", runCreatedAt)
-    .order("created_at", { ascending: false }).limit(1).maybeSingle();
-  if (error || !data?.id) return null;
+    .select("id, status, was_truncated")
+    .eq("run_id", runId)
+    .eq("run_section_id", sectionId)
+    .eq("outline_section_id", sectionId)
+    .eq("user_id", userId)
+    .eq("project_local_id", projectId)
+    .eq("status", "complete")
+    .maybeSingle();
+  if (error || !data?.id || data.was_truncated === true) return null;
   return String(data.id);
 }
 
@@ -1365,7 +1540,14 @@ class RetryableGenerationError extends Error {
 async function callGenerateStory(
   payload: Record<string, unknown>,
   authHeader: string,
-): Promise<{ output_id: string }> {
+): Promise<
+  {
+    output_id: string;
+    status: string;
+    wasTruncated: boolean;
+    finishReason: string | null;
+  }
+> {
   const url = `${SUPABASE_URL}/functions/v1/generate-story`;
   const response = await fetch(url, {
     method: "POST",
@@ -1402,12 +1584,19 @@ async function callGenerateStory(
       `generate-story returned ${response.status}: ${errBody.slice(0, 200)}`,
     );
   }
-  const result = await response.json();
+  const result = await response.json() as Record<string, unknown>;
   const outputId = generationOutputId(result);
   if (!outputId) {
     throw new Error("generate-story response missing cloudGenerationOutputID");
   }
-  return { output_id: outputId };
+  return {
+    output_id: outputId,
+    status: String(result.status ?? ""),
+    wasTruncated: result.wasTruncated === true,
+    finishReason: result.finishReason == null
+      ? null
+      : String(result.finishReason),
+  };
 }
 
 // Fetch raw_text from generation_outputs given the output_id returned by
@@ -1506,10 +1695,50 @@ async function updateSectionStatus(
   if (idx >= 0) sections[idx] = { ...sections[idx], ...sectionStatus };
   else sections.push(sectionStatus);
   const { error } = await adminClient.from("chapter_runs").update({ sections })
-    .eq("id", runId);
+    .eq("id", runId)
+    .eq("status", "running")
+    .eq("worker_attempt", Number(sectionStatus.worker_attempt ?? -1));
   if (error) {
     throw new Error(`could not persist section progress: ${error.message}`);
   }
+}
+
+async function renewRunLease(
+  adminClient: ReturnType<typeof createClient>,
+  runId: string,
+  workerAttempt: number,
+): Promise<void> {
+  const { data, error } = await (adminClient as any).rpc(
+    "renew_chapter_run_lease",
+    {
+      p_run_id: runId,
+      p_worker_attempt: workerAttempt,
+      p_lease_seconds: 420,
+    },
+  );
+  if (error || !(data === true || (Array.isArray(data) && data.length > 0))) {
+    throw new Error(
+      `run lease is no longer owned: ${error?.message ?? "expired"}`,
+    );
+  }
+}
+
+async function loadActualCredits(
+  adminClient: ReturnType<typeof createClient>,
+  sections: Array<Record<string, unknown>>,
+): Promise<number> {
+  const outputIds = sections.map((section) => String(section.output_id ?? ""))
+    .filter(Boolean);
+  if (!outputIds.length) return 0;
+  const { data, error } = await adminClient.from("user_credit_ledger")
+    .select("delta").in("related_generation_output_id", outputIds);
+  if (error) {
+    throw new Error(`could not load actual billing ledger: ${error.message}`);
+  }
+  return (data ?? []).reduce((sum: number, row: Record<string, unknown>) => {
+    const delta = Number(row.delta ?? 0);
+    return sum + (delta < 0 ? -delta : 0);
+  }, 0);
 }
 
 async function markRunFailed(
@@ -1522,8 +1751,7 @@ async function markRunFailed(
   const sections = Array.isArray(run?.sections)
     ? run.sections as Array<Record<string, unknown>>
     : [];
-  const actual = sections.filter((s) => s.status === "completed")
-    .reduce((sum, s) => sum + Number(s.cost ?? 0), 0);
+  const actual = await loadActualCredits(adminClient, sections);
   // generate-story owns the real debit. The orchestrator reports successful
   // section charges and clears its estimate on failure (no failed-call charge).
   await adminClient.from("chapter_runs").update({

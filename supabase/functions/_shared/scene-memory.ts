@@ -57,9 +57,10 @@ export const SCENE_MEMORY_RESPONSE_FORMAT = {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["thread_name", "status", "description"],
+            required: ["thread_name", "reference", "status", "description"],
             properties: {
               thread_name: { type: "string" },
+              reference: { type: "string" },
               status: {
                 type: "string",
                 enum: ["introduced", "advanced", "resolved"],
@@ -73,10 +74,19 @@ export const SCENE_MEMORY_RESPONSE_FORMAT = {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["operation", "fact", "prior_fact_reference"],
+            required: [
+              "operation",
+              "fact",
+              "reference",
+              "prior_fact_reference",
+            ],
             properties: {
-              operation: { type: "string", enum: ["establish", "preserve", "supersede"] },
+              operation: {
+                type: "string",
+                enum: ["establish", "preserve", "supersede"],
+              },
               fact: { type: "string" },
+              reference: { type: "string" },
               prior_fact_reference: { type: ["string", "null"] },
             },
           },
@@ -90,7 +100,13 @@ export const SCENE_MEMORY_RESPONSE_FORMAT = {
             properties: {
               type: {
                 type: "string",
-                enum: ["promise", "mystery", "question", "threat", "pending_action"],
+                enum: [
+                  "promise",
+                  "mystery",
+                  "question",
+                  "threat",
+                  "pending_action",
+                ],
               },
               reference: { type: "string" },
               status: { type: "string", enum: ["open", "resolved"] },
@@ -139,14 +155,27 @@ export interface SceneMemory {
     }
   >;
   plot_thread_deltas: Array<
-    { thread_name?: string; status?: string; description?: string }
+    {
+      thread_name?: string;
+      reference?: string;
+      status?: string;
+      description?: string;
+    }
   >;
   continuity_facts: Array<{
     operation?: "establish" | "preserve" | "supersede";
     fact?: string;
+    reference?: string;
     prior_fact_reference?: string | null;
   }>;
-  open_loops: Array<{ type?: string; reference?: string; status?: "open" | "resolved"; description?: string }>;
+  open_loops: Array<
+    {
+      type?: string;
+      reference?: string;
+      status?: "open" | "resolved";
+      description?: string;
+    }
+  >;
   scene_ending_state: {
     character_positions?: Array<
       { character?: string; location?: string; immediate_state?: string }
@@ -170,7 +199,15 @@ export function normalizeSceneMemory(input: unknown): SceneMemory {
       ? parsed.plot_thread_deltas
       : [],
     continuity_facts: Array.isArray(parsed.continuity_facts)
-      ? parsed.continuity_facts.map((fact) => typeof fact === "string" ? { operation: "establish" as const, fact, prior_fact_reference: null } : fact).filter((fact) => fact && typeof fact === "object")
+      ? parsed.continuity_facts.map((fact) =>
+        typeof fact === "string"
+          ? {
+            operation: "establish" as const,
+            fact,
+            prior_fact_reference: null,
+          }
+          : fact
+      ).filter((fact) => fact && typeof fact === "object")
       : [],
     open_loops: Array.isArray(parsed.open_loops) ? parsed.open_loops : [],
     scene_ending_state: parsed.scene_ending_state &&

@@ -37,16 +37,22 @@
 import { canonicalUUID } from "./uuid.ts";
 import {
   type DirectBillingContext,
+  hasCompletedDirectStage,
   preflightDirectUsage,
   settleDirectUsage,
 } from "./direct-billing.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
 import {
   normalizeSceneMemory,
-  type SceneMemory,
+  SCENE_MEMORY_GENERATION_INSTRUCTIONS,
   SCENE_MEMORY_RESPONSE_FORMAT,
+  type SceneMemory,
 } from "./scene-memory.ts";
-import { loadPriorMemoryRows, reconcileSceneMemory } from "./memory-lifecycle.ts";
+import {
+  loadPriorMemoryRows,
+  reconcileSceneMemory,
+} from "./memory-lifecycle.ts";
+import { formatCanonicalProjectState } from "./memory-state.ts";
 import {
   CURRENT_MEMORY_PIPELINE_VERSION,
   isCurrentMemoryPipelineVersion,
@@ -205,8 +211,65 @@ export async function processSectionMemory(
   //
   // Uses OpenAI Structured Outputs so a successful, complete response always
   // conforms to the scene-memory JSON schema.
-  let sceneMemory: SceneMemory;
-  if (body.scene_memory && !body.forceExtract) {
+  let sceneMemory: SceneMemory | undefined;
+  let extractionInputTokens = 0;
+  let extractionOutputTokens = 0;
+  let embeddingInputTokens = 0;
+  let existingEmbedding: number[] | null = null;
+  let extractionAlreadySettled = false;
+  let embeddingAlreadySettled = false;
+  if (billing?.outputID) {
+    const { data: existingMemory, error: existingMemoryError } =
+      await adminClient
+        .from("section_embeddings")
+        .select(
+          "generation_output_id, memory_pipeline_version, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state, embedding",
+        )
+        .eq("outline_section_id", body.outline_section_id)
+        .maybeSingle();
+    if (existingMemoryError) {
+      throw new SectionEmbeddingError(
+        "database_error",
+        existingMemoryError.message,
+      );
+    }
+    if (
+      existingMemory?.generation_output_id === billing.outputID &&
+      isCurrentMemoryPipelineVersion(existingMemory.memory_pipeline_version) &&
+      Array.isArray(existingMemory.embedding)
+    ) {
+      return {
+        outlineSectionID: String(body.outline_section_id),
+        extractedSummary: String(existingMemory.extracted_summary ?? ""),
+        embeddingDim: existingMemory.embedding.length,
+      };
+    }
+    // Sequential retries must not call a provider merely to discover that a
+    // stage was already durably settled. A concurrent attempt is still
+    // resolved by the unique stage identity in the settlement RPC.
+    extractionAlreadySettled = await hasCompletedDirectStage(
+      billing,
+      "scene-memory-extraction",
+    );
+    embeddingAlreadySettled = await hasCompletedDirectStage(
+      billing,
+      "scene-memory-embedding",
+    );
+    if (extractionAlreadySettled && existingMemory?.extracted_summary) {
+      sceneMemory = normalizeSceneMemory(
+        existingMemory as Partial<SceneMemory>,
+      );
+    }
+    if (
+      embeddingAlreadySettled && Array.isArray(existingMemory?.embedding) &&
+      existingMemory.embedding.length === 1536
+    ) {
+      existingEmbedding = existingMemory.embedding as number[];
+    }
+  }
+  if (sceneMemory) {
+    console.log(`[embed-section] reusing durably extracted scene memory`);
+  } else if (body.scene_memory && !body.forceExtract) {
     sceneMemory = normalizeSceneMemory(body.scene_memory);
     console.log(
       `[embed-section] using producer-supplied scene memory summary_len=${sceneMemory.extracted_summary.length}`,
@@ -239,15 +302,7 @@ export async function processSectionMemory(
           messages: [
             {
               role: "system",
-              content:
-                "You are a fiction scene-memory extractor. Given a scene, output JSON with these 6 keys: " +
-                "`extracted_summary` (200-500 token distillation of what happened), " +
-                "`character_deltas` (array of {character_name, location?, knowledge_delta?, relationship_delta?, injuries?, goals?, possessions?, emotional_stance?}), " +
-                "`plot_thread_deltas` (array of {thread_name, status in [introduced, advanced, resolved], description}), " +
-                "`continuity_facts` (array of {operation: establish|preserve|supersede, fact, prior_fact_reference: string|null}), " +
-                "`open_loops` (array of {type, reference, status: open|resolved, description}), " +
-                "`scene_ending_state` ({character_positions: [{character, location, immediate_state}], immediate_pressure: string}). " +
-                "Output ONLY valid JSON. Empty arrays/objects are fine when a layer has nothing.",
+              content: SCENE_MEMORY_GENERATION_INSTRUCTIONS,
             },
             {
               role: "user",
@@ -271,15 +326,9 @@ export async function processSectionMemory(
         );
       }
       const data = await r.json();
-      if (billing) {
-        await settleDirectUsage(
-          billing,
-          "scene-memory-extraction",
-          OPENAI_MODEL_DEFAULT,
-          data.usage?.prompt_tokens ?? Math.ceil(extractionInput.length / 4),
-          data.usage?.completion_tokens ?? 0,
-        );
-      }
+      extractionInputTokens = data.usage?.prompt_tokens ??
+        Math.ceil(extractionInput.length / 4);
+      extractionOutputTokens = data.usage?.completion_tokens ?? 0;
       if (data.choices?.[0]?.finish_reason === "length") {
         throw new SectionEmbeddingError(
           "provider_error",
@@ -287,11 +336,19 @@ export async function processSectionMemory(
         );
       }
       const raw = (data.choices?.[0]?.message?.content ?? "").trim();
-      if (!raw) throw new SectionEmbeddingError("provider_error", "LLM extraction returned empty content");
+      if (!raw) {
+        throw new SectionEmbeddingError(
+          "provider_error",
+          "LLM extraction returned empty content",
+        );
+      }
       try {
         sceneMemory = normalizeSceneMemory(JSON.parse(raw));
       } catch {
-        throw new SectionEmbeddingError("provider_error", "LLM extraction returned invalid JSON");
+        throw new SectionEmbeddingError(
+          "provider_error",
+          "LLM extraction returned invalid JSON",
+        );
       }
       try {
         await adminClient.from("llm_prompts").insert({
@@ -300,7 +357,10 @@ export async function processSectionMemory(
           project_id: body.project_id ?? null,
           outline_section_id: body.outline_section_id ?? null,
           model: OPENAI_MODEL_DEFAULT,
-          prompt: JSON.stringify({ input: body.raw_text, prior_context: body.prior_context ?? null }),
+          prompt: JSON.stringify({
+            input: body.raw_text,
+            prior_context: body.prior_context ?? null,
+          }),
           response: raw,
           prompt_tokens: data.usage?.prompt_tokens ?? null,
           completion_tokens: data.usage?.completion_tokens ?? null,
@@ -308,7 +368,11 @@ export async function processSectionMemory(
           duration_ms: Date.now() - extractStartMs,
         });
       } catch (logErr) {
-        console.error(`[embed-section] llm_prompts insert failed: ${(logErr as Error).message}`);
+        console.error(
+          `[embed-section] llm_prompts insert failed: ${
+            (logErr as Error).message
+          }`,
+        );
       }
     } catch (err) {
       console.error(`[embed-section] LLM extract threw: ${String(err)}`);
@@ -316,8 +380,11 @@ export async function processSectionMemory(
       throw new SectionEmbeddingError("provider_error", String(err));
     }
   }
-  if (!sceneMemory.extracted_summary) {
-    throw new SectionEmbeddingError("provider_error", "scene memory returned empty summary");
+  if (!sceneMemory || !sceneMemory.extracted_summary) {
+    throw new SectionEmbeddingError(
+      "provider_error",
+      "scene memory returned empty summary",
+    );
   }
   console.log(
     `[embed-section] extract OK summary_len=${sceneMemory.extracted_summary.length} layers=6`,
@@ -359,7 +426,9 @@ export async function processSectionMemory(
   let embedding: number[] = [];
   // PR-XXX-A: track embedding call duration
   const embedStartMs = Date.now();
-  if (billing) {
+  if (existingEmbedding) {
+    embedding = existingEmbedding;
+  } else if (billing) {
     await preflightDirectUsage(
       billing,
       OPENAI_EMBED_MODEL,
@@ -367,80 +436,80 @@ export async function processSectionMemory(
       0,
     );
   }
-  try {
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), 60_000);
-    const r = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${openaiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: OPENAI_EMBED_MODEL,
-        input: compressedMemory,
-      }),
-      signal: ac.signal,
-    });
-    clearTimeout(t);
-    if (!r.ok) {
-      const errText = await r.text();
-      console.error(
-        `[embed-section] OpenAI embed ${r.status}: ${errText.slice(0, 500)}`,
-      );
-      throw new SectionEmbeddingError(
-        "provider_error",
-        `OpenAI embed ${r.status}: ${errText.slice(0, 500)}`,
-      );
-    }
-    const data = await r.json();
-    if (billing) {
-      await settleDirectUsage(
-        billing,
-        "scene-memory-embedding",
-        OPENAI_EMBED_MODEL,
-        data.usage?.prompt_tokens ?? Math.ceil(compressedMemory.length / 4),
-        0,
-      );
-    }
-    const vec = data.data?.[0]?.embedding;
-    if (!Array.isArray(vec)) {
-      console.error(`[embed-section] Embedding API returned invalid data`);
-      throw new SectionEmbeddingError(
-        "provider_error",
-        "Embedding API returned invalid data",
-      );
-    }
-    embedding = vec;
-
-    // PR-XXX-A: log the embedding call to llm_prompts (best-effort)
-    const embedDurationMs = Date.now() - embedStartMs;
+  if (!existingEmbedding) {
     try {
-      await adminClient.from("llm_prompts").insert({
-        call_type: "embed-section-vectorize",
-        output_id: body.output_id ?? null,
-        project_id: body.project_id ?? null,
-        outline_section_id: body.outline_section_id ?? null,
-        model: OPENAI_EMBED_MODEL,
-        prompt: JSON.stringify({
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 60_000);
+      const r = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${openaiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: OPENAI_EMBED_MODEL,
           input: compressedMemory,
         }),
-        response: `embedding_dim=${vec.length}`,
-        prompt_tokens: data.usage?.prompt_tokens ?? null,
-        completion_tokens: null,
-        total_tokens: data.usage?.total_tokens ?? null,
-        duration_ms: embedDurationMs,
+        signal: ac.signal,
       });
-    } catch (logErr) {
-      console.error(
-        `[embed-section] embeddings llm_prompts insert failed: ${
-          (logErr as Error).message
-        }`,
-      );
+      clearTimeout(t);
+      if (!r.ok) {
+        const errText = await r.text();
+        console.error(
+          `[embed-section] OpenAI embed ${r.status}: ${errText.slice(0, 500)}`,
+        );
+        throw new SectionEmbeddingError(
+          "provider_error",
+          `OpenAI embed ${r.status}: ${errText.slice(0, 500)}`,
+        );
+      }
+      const data = await r.json();
+      embeddingInputTokens = data.usage?.prompt_tokens ??
+        Math.ceil(compressedMemory.length / 4);
+      const vec = data.data?.[0]?.embedding;
+      if (
+        !Array.isArray(vec) || vec.length !== 1536 ||
+        vec.some((value: unknown) =>
+          typeof value !== "number" || !Number.isFinite(value)
+        )
+      ) {
+        console.error(`[embed-section] Embedding API returned invalid data`);
+        throw new SectionEmbeddingError(
+          "provider_error",
+          "Embedding API returned invalid data",
+        );
+      }
+      embedding = vec;
+
+      // PR-XXX-A: log the embedding call to llm_prompts (best-effort)
+      const embedDurationMs = Date.now() - embedStartMs;
+      try {
+        await adminClient.from("llm_prompts").insert({
+          call_type: "embed-section-vectorize",
+          output_id: body.output_id ?? null,
+          project_id: body.project_id ?? null,
+          outline_section_id: body.outline_section_id ?? null,
+          model: OPENAI_EMBED_MODEL,
+          prompt: JSON.stringify({
+            input: compressedMemory,
+          }),
+          response: `embedding_dim=${vec.length}`,
+          prompt_tokens: data.usage?.prompt_tokens ?? null,
+          completion_tokens: null,
+          total_tokens: data.usage?.total_tokens ?? null,
+          duration_ms: embedDurationMs,
+        });
+      } catch (logErr) {
+        console.error(
+          `[embed-section] embeddings llm_prompts insert failed: ${
+            (logErr as Error).message
+          }`,
+        );
+      }
+    } catch (err) {
+      console.error(`[embed-section] embed threw: ${String(err)}`);
+      throw new SectionEmbeddingError("provider_error", String(err));
     }
-  } catch (err) {
-    console.error(`[embed-section] embed threw: ${String(err)}`);
-    throw new SectionEmbeddingError("provider_error", String(err));
   }
   console.log(`[embed-section] embed OK dim=${embedding.length}`);
 
@@ -479,8 +548,31 @@ export async function processSectionMemory(
     );
     throw new SectionEmbeddingError("database_error", upsertErr.message);
   }
+  // Only settle after valid extraction, valid embedding, and canonical
+  // persistence. Malformed/truncated output, invalid vectors, or a failed
+  // upsert therefore cannot become successful billing stages.
+  if (billing && !extractionAlreadySettled) {
+    await settleDirectUsage(
+      billing,
+      "scene-memory-extraction",
+      OPENAI_MODEL_DEFAULT,
+      extractionInputTokens,
+      extractionOutputTokens,
+    );
+  }
+  if (billing && !embeddingAlreadySettled) {
+    await settleDirectUsage(
+      billing,
+      "scene-memory-embedding",
+      OPENAI_EMBED_MODEL,
+      embeddingInputTokens,
+      0,
+    );
+  }
   console.log(
-    `[embed-section] memory persisted section=${body.outline_section_id} output=${body.output_id ?? "none"} version=${CURRENT_MEMORY_PIPELINE_VERSION} extractor=${OPENAI_MODEL_DEFAULT} summary_len=${sceneMemory.extracted_summary.length} characters=${reconciled.character_deltas.length} threads=${enrichedPlotThreads.length} facts=${enrichedContinuityFacts.length} loops=${enrichedOpenLoops.length}`,
+    `[embed-section] memory persisted section=${body.outline_section_id} output=${
+      body.output_id ?? "none"
+    } version=${CURRENT_MEMORY_PIPELINE_VERSION} extractor=${OPENAI_MODEL_DEFAULT} summary_len=${sceneMemory.extracted_summary.length} characters=${reconciled.character_deltas.length} threads=${enrichedPlotThreads.length} facts=${enrichedContinuityFacts.length} loops=${enrichedOpenLoops.length}`,
   );
 
   return {
@@ -504,31 +596,54 @@ export async function ensureMemoryPipelineVersion(
   billing: DirectBillingContext,
   maxSections = 1,
 ): Promise<{ normalized: number; legacy: number; remaining: number }> {
-  const { data: current } = await adminClient.from("outline_sections")
-    .select("id, outline_id, position").eq("id", currentSectionId).maybeSingle();
+  const { data: current, error: currentError } = await adminClient.from(
+    "outline_sections",
+  )
+    .select("id, outline_id, position").eq("id", currentSectionId)
+    .maybeSingle();
+  if (currentError) {
+    throw new Error(`current section query failed: ${currentError.message}`);
+  }
   if (!current) throw new Error("current section not found");
+  const { data: priorSections, error: priorSectionError } = await adminClient
+    .from("outline_sections")
+    .select(
+      "id, outline_id, position, title, summary, container, pov, terminal_beat, story_arc_beat_id",
+    )
+    .eq("outline_id", current.outline_id)
+    .lt("position", Number(current.position));
+  if (priorSectionError) {
+    throw new Error(
+      `memory version section query failed: ${priorSectionError.message}`,
+    );
+  }
+  const ids = (priorSections ?? []).map((row: any) => row.id).filter(Boolean);
+  if (!ids.length) return { normalized: 0, legacy: 0, remaining: 0 };
   const { data: memories, error } = await adminClient.from("section_embeddings")
-    .select("outline_section_id, generation_output_id, raw_text, memory_pipeline_version")
-    .eq("project_id", projectId);
+    .select(
+      "outline_section_id, generation_output_id, raw_text, memory_pipeline_version",
+    )
+    .eq("project_id", projectId)
+    .in("outline_section_id", ids);
   if (error) throw new Error(`memory version query failed: ${error.message}`);
   const prior = (memories ?? []).filter((row: any) =>
-    row.outline_section_id !== currentSectionId &&
     !isCurrentMemoryPipelineVersion(row.memory_pipeline_version)
   );
   if (!prior.length) return { normalized: 0, legacy: 0, remaining: 0 };
-
-  const ids = prior.map((row: any) => row.outline_section_id).filter(Boolean);
-  const { data: sections, error: sectionError } = await adminClient.from("outline_sections")
-    .select("id, outline_id, position, title, summary, container, pov, terminal_beat, story_arc_beat_id")
-    .in("id", ids);
-  if (sectionError) throw new Error(`memory normalization section query failed: ${sectionError.message}`);
+  const sections = priorSections ?? [];
   const byId = new Map<string, Record<string, any>>(
-    (sections ?? []).map((row: any) => [String(row.id), row as Record<string, any>]),
+    (sections ?? []).map((
+      row: any,
+    ) => [String(row.id), row as Record<string, any>]),
   );
   const ordered = prior.filter((row: any) => {
     const section = byId.get(String(row.outline_section_id));
-    return section && section.outline_id === current.outline_id && Number(section.position ?? 0) < Number(current.position ?? 0);
-  }).sort((a: any, b: any) => Number(byId.get(String(a.outline_section_id))?.position ?? 0) - Number(byId.get(String(b.outline_section_id))?.position ?? 0));
+    return section && section.outline_id === current.outline_id &&
+      Number(section.position ?? 0) < Number(current.position ?? 0);
+  }).sort((a: any, b: any) =>
+    Number(byId.get(String(a.outline_section_id))?.position ?? 0) -
+    Number(byId.get(String(b.outline_section_id))?.position ?? 0)
+  );
 
   let normalized = 0;
   for (const row of ordered.slice(0, Math.max(1, maxSections))) {
@@ -540,26 +655,57 @@ export async function ensureMemoryPipelineVersion(
         .select("output_text").eq("id", row.generation_output_id).maybeSingle();
       rawText = String(output?.output_text ?? "");
     }
-    if (!rawText) throw new Error(`memory normalization missing raw_text for section ${row.outline_section_id}`);
-    await processSectionMemory({
-      outline_section_id: String(section.id),
-      outline_id: String(section.outline_id),
-      project_id: projectId,
-      position: Number(section.position ?? 0),
-      title: String(section.title ?? ""),
-      summary: String(section.summary ?? ""),
-      container: section.container ?? null,
-      pov: section.pov ?? null,
-      terminal_beat: section.terminal_beat ?? null,
-      story_arc_beat_id: section.story_arc_beat_id ?? null,
-      raw_text: rawText,
-      output_id: row.generation_output_id ?? undefined,
-      forceExtract: true,
-    }, adminClient, openaiKey, { ...billing, outputID: row.generation_output_id ?? null, outlineSectionID: String(section.id) });
+    if (!row.generation_output_id) {
+      throw new Error(
+        `memory normalization missing generation output for section ${row.outline_section_id}`,
+      );
+    }
+    if (!rawText) {
+      throw new Error(
+        `memory normalization missing raw_text for section ${row.outline_section_id}`,
+      );
+    }
+    await processSectionMemory(
+      {
+        outline_section_id: String(section.id),
+        outline_id: String(section.outline_id),
+        project_id: projectId,
+        position: Number(section.position ?? 0),
+        title: String(section.title ?? ""),
+        summary: String(section.summary ?? ""),
+        container: section.container ?? null,
+        pov: section.pov ?? null,
+        terminal_beat: section.terminal_beat ?? null,
+        story_arc_beat_id: section.story_arc_beat_id ?? null,
+        raw_text: rawText,
+        output_id: row.generation_output_id ?? undefined,
+        prior_context: formatCanonicalProjectState(
+          ordered.slice(0, ordered.indexOf(row)).map((prior: any) =>
+            prior as Record<string, unknown>
+          ),
+        ),
+        forceExtract: true,
+      },
+      adminClient,
+      openaiKey,
+      {
+        ...billing,
+        outputID: row.generation_output_id ?? null,
+        outlineSectionID: String(section.id),
+      },
+    );
     normalized++;
   }
-  console.log(`[embed-section] memory normalization complete project=${projectId} current=${currentSectionId} normalized=${normalized} legacy=${ordered.length} version=${memoryPipelineVersion(CURRENT_MEMORY_PIPELINE_VERSION)}`);
-  return { normalized, legacy: ordered.length, remaining: Math.max(0, ordered.length - normalized) };
+  console.log(
+    `[embed-section] memory normalization complete project=${projectId} current=${currentSectionId} normalized=${normalized} legacy=${ordered.length} version=${
+      memoryPipelineVersion(CURRENT_MEMORY_PIPELINE_VERSION)
+    }`,
+  );
+  return {
+    normalized,
+    legacy: ordered.length,
+    remaining: Math.max(0, ordered.length - normalized),
+  };
 }
 
 export async function ensureOutputMemory(
@@ -573,21 +719,56 @@ export async function ensureOutputMemory(
     .select("generation_output_id, memory_pipeline_version")
     .eq("outline_section_id", body.outline_section_id).maybeSingle();
   if (error) throw new Error(`memory barrier query failed: ${error.message}`);
-  if (existing?.generation_output_id === outputId && isCurrentMemoryPipelineVersion(existing.memory_pipeline_version)) return;
+  if (
+    existing?.generation_output_id === outputId &&
+    isCurrentMemoryPipelineVersion(existing.memory_pipeline_version)
+  ) return;
   let rawText = body.raw_text ?? "";
   if (!rawText) {
-    const { data: output, error: outputError } = await adminClient.from("generation_outputs")
+    const { data: output, error: outputError } = await adminClient.from(
+      "generation_outputs",
+    )
       .select("output_text").eq("id", outputId).single();
-    if (outputError || !output?.output_text) throw new Error(`persisted output unavailable for memory repair: ${outputError?.message ?? "missing prose"}`);
+    if (outputError || !output?.output_text) {
+      throw new Error(
+        `persisted output unavailable for memory repair: ${
+          outputError?.message ?? "missing prose"
+        }`,
+      );
+    }
     rawText = String(output.output_text);
   }
-  await processSectionMemory({ ...body, raw_text: rawText, output_id: outputId, scene_memory: undefined, forceExtract: true }, adminClient, openaiKey, {
-    userID, action: "run-outline-recovery", outputID: outputId, projectID: body.project_id,
-    outlineSectionID: body.outline_section_id, adminClient, creditStore: new SupabaseCreditStore(adminClient),
-  });
-  const { data: repaired, error: verifyError } = await adminClient.from("section_embeddings")
-    .select("generation_output_id, memory_pipeline_version").eq("outline_section_id", body.outline_section_id).maybeSingle();
-  if (verifyError || repaired?.generation_output_id !== outputId || !isCurrentMemoryPipelineVersion(repaired.memory_pipeline_version)) {
+  await processSectionMemory(
+    {
+      ...body,
+      raw_text: rawText,
+      output_id: outputId,
+      scene_memory: undefined,
+      forceExtract: true,
+    },
+    adminClient,
+    openaiKey,
+    {
+      userID,
+      action: "run-outline-recovery",
+      outputID: outputId,
+      projectID: body.project_id,
+      outlineSectionID: body.outline_section_id,
+      adminClient,
+      creditStore: new SupabaseCreditStore(adminClient),
+    },
+  );
+  const { data: repaired, error: verifyError } = await adminClient.from(
+    "section_embeddings",
+  )
+    .select("generation_output_id, memory_pipeline_version").eq(
+      "outline_section_id",
+      body.outline_section_id,
+    ).maybeSingle();
+  if (
+    verifyError || repaired?.generation_output_id !== outputId ||
+    !isCurrentMemoryPipelineVersion(repaired.memory_pipeline_version)
+  ) {
     throw new Error(`memory barrier failed for output ${outputId}`);
   }
 }

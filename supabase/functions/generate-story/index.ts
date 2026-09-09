@@ -71,8 +71,8 @@ import {
 import {
   computeMaxChargeCredits,
   estimateTokensFromText,
-  getEnabledModelByProviderModel,
   type GenerationModelStore,
+  getEnabledModelByProviderModel,
   normalizedModelId,
   snapshotPricing,
   SupabaseGenerationModelStore,
@@ -88,7 +88,10 @@ import {
   type BillableProviderResult,
   runBillableLLM,
 } from "../_shared/billable-llm.ts";
-import { normalizeSceneMemory, type SceneMemory } from "../_shared/scene-memory.ts";
+import {
+  normalizeSceneMemory,
+  type SceneMemory,
+} from "../_shared/scene-memory.ts";
 import type { EmbedSectionRequest } from "../_shared/section-embedding.ts";
 import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
 import { formatCanonicalProjectState } from "../_shared/memory-state.ts";
@@ -114,7 +117,8 @@ export async function sha256Hex(text: string): Promise<string> {
     .join("");
 }
 
-const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini";
+const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
+  "gpt-4o-mini";
 
 const ALLOWED_ACTIONS = [
   "generate",
@@ -440,6 +444,10 @@ interface GenerationOutputInsert {
   // generation_outputs.id share the same UUID (the iOS debug box queries
   // llm_prompts by output_id).
   id?: string;
+  // Durable Run All lineage is authenticated by the run-outline HMAC before
+  // reaching this handler. Interactive generations leave these null.
+  run_id?: string | null;
+  run_section_id?: string | null;
 }
 
 interface GenerationUsageEventInsert {
@@ -1140,12 +1148,18 @@ async function fetchProjectStateContext(
       .eq("project_id", projectId)
       .neq("outline_section_id", current.id);
     if (memoryError) {
-      console.error(`[generate-story] fetchProjectStateContext query error: ${memoryError.message ?? JSON.stringify(memoryError)}`);
+      console.error(
+        `[generate-story] fetchProjectStateContext query error: ${
+          memoryError.message ?? JSON.stringify(memoryError)
+        }`,
+      );
       return "";
     }
     if (!memories?.length) return "";
 
-    const ids = memories.map((row: any) => row.outline_section_id).filter(Boolean);
+    const ids = memories.map((row: any) => row.outline_section_id).filter(
+      Boolean,
+    );
     const { data: sections, error: sectionError } = await adminClient
       .from("outline_sections")
       .select("id, outline_id, position")
@@ -1161,7 +1175,8 @@ async function fetchProjectStateContext(
     const priorScenes = memories
       .filter((row: any) => order.has(String(row.outline_section_id)))
       .filter((row: any) =>
-        (order.get(String(row.outline_section_id)) ?? 0) < Number(current.position ?? 0)
+        (order.get(String(row.outline_section_id)) ?? 0) <
+          Number(current.position ?? 0)
       )
       .sort((a: any, b: any) =>
         (order.get(String(a.outline_section_id)) ?? 0) -
@@ -1169,7 +1184,10 @@ async function fetchProjectStateContext(
       );
     if (!priorScenes.length) return "";
 
-    return aggregateProjectStateForGeneration(priorScenes, priorScenes[priorScenes.length - 1]);
+    return aggregateProjectStateForGeneration(
+      priorScenes,
+      priorScenes[priorScenes.length - 1],
+    );
   } catch (error) {
     console.error(`[generate-story] fetchProjectStateContext failed: ${error}`);
     return "";
@@ -1183,7 +1201,10 @@ function aggregateProjectStateForGeneration(
   return formatCanonicalProjectState(scenes, previousScene);
 }
 
-export function resolveWithinBeatPosition(positions: number[], currentPosition: number): { position: number; total: number } | null {
+export function resolveWithinBeatPosition(
+  positions: number[],
+  currentPosition: number,
+): { position: number; total: number } | null {
   const ordered = [...positions].sort((a, b) => a - b);
   const index = ordered.indexOf(currentPosition);
   return index < 0 ? null : { position: index, total: ordered.length };
@@ -1912,10 +1933,15 @@ Structural limits:
     if (req.storyArcBeatPurpose) {
       contextLines.push(`Beat purpose: ${req.storyArcBeatPurpose}`);
     }
-    if (typeof req.storyArcWithinBeatPosition === "number" && typeof req.storyArcWithinBeatTotal === "number") {
+    if (
+      typeof req.storyArcWithinBeatPosition === "number" &&
+      typeof req.storyArcWithinBeatTotal === "number"
+    ) {
       contextLines.push(
         `This movement contains ${req.storyArcWithinBeatTotal} planned sections.`,
-        `Current section: ${req.storyArcWithinBeatPosition + 1} of ${req.storyArcWithinBeatTotal}.`,
+        `Current section: ${
+          req.storyArcWithinBeatPosition + 1
+        } of ${req.storyArcWithinBeatTotal}.`,
       );
     }
     if (
@@ -1924,7 +1950,9 @@ Structural limits:
     ) {
       contextLines.push(
         `This movement contains ${req.storyArcWithinBeatTotal} planned sections.`,
-        `Current section: ${req.storyArcWithinBeatPosition + 1} of ${req.storyArcWithinBeatTotal}.`,
+        `Current section: ${
+          req.storyArcWithinBeatPosition + 1
+        } of ${req.storyArcWithinBeatTotal}.`,
       );
     }
     if (
@@ -2754,7 +2782,8 @@ async function handler(
         },
         estimatePricing,
       );
-      const estimatedCredits = generationCredits + extractionCredits + embeddingCredits;
+      const estimatedCredits = generationCredits + extractionCredits +
+        embeddingCredits;
       return {
         sectionId: section.id,
         estimatedInputTokens,
@@ -3155,6 +3184,10 @@ async function handler(
                 visibility: "private",
                 outline_section_id: body.outline_section_id ?? null,
                 rendered_container: body.container ?? null,
+                run_id: durableRunId || null,
+                run_section_id: durableRunId
+                  ? (body.outline_section_id ?? null)
+                  : null,
               });
 
           if (outputInsertError || !outputRow?.id) {
@@ -3231,8 +3264,11 @@ async function handler(
                 summary: String(sectionForEmbed.summary ?? ""),
                 container: (sectionForEmbed.container ?? null) as string | null,
                 pov: (sectionForEmbed.pov ?? null) as string | null,
-                terminal_beat: (sectionForEmbed.terminal_beat ?? null) as string | null,
-                story_arc_beat_id: (sectionForEmbed.story_arc_beat_id ?? null) as string | null,
+                terminal_beat: (sectionForEmbed.terminal_beat ?? null) as
+                  | string
+                  | null,
+                story_arc_beat_id:
+                  (sectionForEmbed.story_arc_beat_id ?? null) as string | null,
                 raw_text: generatedText,
                 output_id: outputId,
                 prior_context: priorContext,
@@ -3265,7 +3301,9 @@ async function handler(
                   } catch (error) {
                     extractionError = error;
                     console.error(
-                      `[generate-story] Run All memory extraction attempt ${attempt}/2 failed: ${String(error)}`,
+                      `[generate-story] Run All memory extraction attempt ${attempt}/2 failed: ${
+                        String(error)
+                      }`,
                     );
                   }
                 }
