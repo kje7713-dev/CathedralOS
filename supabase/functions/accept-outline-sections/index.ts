@@ -101,7 +101,8 @@ function isCanonicalRecipe(value: unknown): value is CanonicalRecipe {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const recipe = value as CanonicalRecipe;
   const pack = recipe.promptPack;
-  return recipe.schema === "cathedralos.prompt_pack_export" &&
+  return (recipe.schema === "cathedralos.prompt_pack_export" ||
+    recipe.schema === "cathedralos.story_packet") &&
     typeof recipe.version === "number" &&
     !!recipe.project && typeof recipe.project === "object" &&
     !!pack && typeof pack === "object" &&
