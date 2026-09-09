@@ -113,6 +113,12 @@ function validRequest(
   };
 }
 
+Deno.test("request validation accepts the story packet produced by outline suggestions", () => {
+  const body = validRequest(1);
+  body.source_recipe_json.schema = "cathedralos.story_packet";
+  assertEquals(validate(body), null);
+});
+
 Deno.test("length contract persists novel target and container-derived section ranges", () => {
   const contract = buildLengthContract([
     { container: "scene" },

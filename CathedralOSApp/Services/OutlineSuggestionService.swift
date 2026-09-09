@@ -156,6 +156,7 @@ struct OutlineSuggestionService {
         let warnings: [String]?
         let error: String?
         let errorCode: String?
+        let sourceRecipe: PromptPackExportPayload?
         let creditCostCharged: Double?
         let remainingCredits: Double?
     }
@@ -168,6 +169,61 @@ struct OutlineSuggestionService {
     private func decodeResult(_ data: Data) throws -> OutlineSuggestionResponse {
         do { return try JSONDecoder().decode(OutlineSuggestionResponse.self, from: data) }
         catch { throw OutlineSuggestionError.invalidResponse("Could not decode: \(error.localizedDescription)") }
+    }
+
+    /// Recover the latest completed run for this project without starting or
+    /// charging a new AI request. The server scopes the query to the user and
+    /// matches the project ID captured in the durable request payload.
+    func latestCompletedRun(projectID: UUID) async throws -> OutlineSuggestionResult? {
+        let client: SupabaseBackendClient
+        do {
+            client = try SupabaseBackendClient()
+        } catch {
+            throw OutlineSuggestionError.notConfigured(reason: String(describing: error))
+        }
+        var components = URLComponents(
+            url: client.edgeFunctionURL(path: "outline-from-recipe"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "project_id", value: projectID.uuidString)]
+        guard let url = components?.url else {
+            throw OutlineSuggestionError.invalidResponse("Could not build suggestion recovery URL")
+        }
+        var request = client.authorizedRequest(
+            for: url,
+            userAccessToken: try await validAccessToken()
+        )
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        do {
+            let (data, response) = try await performRequest(request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw OutlineSuggestionError.networkError("Non-HTTP response")
+            }
+            if httpResponse.statusCode == 404 { return nil }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                if httpResponse.statusCode == 401 { throw OutlineSuggestionError.notAuthenticated }
+                throw OutlineSuggestionError.serverError(
+                    statusCode: httpResponse.statusCode,
+                    body: String(data: data, encoding: .utf8)
+                )
+            }
+            let job = try decodeJob(data)
+            guard job.status == "completed", let sourceRecipe = job.sourceRecipe else {
+                return nil
+            }
+            return OutlineSuggestionResult(
+                suggestions: job.suggestions ?? [],
+                warnings: job.warnings ?? [],
+                creditCostCharged: job.creditCostCharged,
+                remainingCredits: job.remainingCredits,
+                sourceRecipe: sourceRecipe
+            )
+        } catch let error as OutlineSuggestionError {
+            throw error
+        } catch {
+            throw OutlineSuggestionError.networkError(error.localizedDescription)
+        }
     }
 
     private func poll(

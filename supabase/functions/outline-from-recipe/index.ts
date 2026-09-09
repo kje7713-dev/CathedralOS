@@ -1414,19 +1414,38 @@ Deno.serve(async (req: Request) => {
   }
 
   if (req.method === "GET") {
-    const runId = new URL(req.url).searchParams.get("run_id");
-    if (!runId) {
-      return errorResponse("missing_param", "run_id query param required", 400);
+    const searchParams = new URL(req.url).searchParams;
+    const runId = searchParams.get("run_id");
+    const projectId = searchParams.get("project_id");
+    const runColumns =
+      "id, status, suggestions, warnings, error_code, error, diagnostics, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json";
+
+    let run: any = null;
+    let error: any = null;
+    if (runId) {
+      ({ data: run, error } = await userClient.from(
+        "outline_suggestion_runs",
+      ).select(runColumns).eq("id", runId).single());
+    } else if (projectId) {
+      const result = await userClient.from("outline_suggestion_runs")
+        .select(runColumns)
+        .eq("status", "completed")
+        .order("created_at", { ascending: false })
+        .limit(20);
+      error = result.error;
+      run = (result.data ?? []).find((candidate: any) =>
+        typeof candidate.request_json?.recipe?.project?.id === "string" &&
+        candidate.request_json.recipe.project.id.toLowerCase() === projectId.toLowerCase()
+      ) ?? null;
+    } else {
+      return errorResponse(
+        "missing_param",
+        "run_id or project_id query param required",
+        400,
+      );
     }
-    const { data: run, error } = await userClient.from(
-      "outline_suggestion_runs",
-    )
-      .select(
-        "id, status, suggestions, warnings, error_code, error, diagnostics, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits",
-      )
-      .eq("id", runId).single();
     if (error) {
-      console.error("[outline-from-recipe] polling query failed", error);
+      console.error("[outline-from-recipe] suggestion run query failed", error);
       return errorResponse("db_error", "Could not read suggestion run", 500);
     }
     if (!run) return errorResponse("not_found", "run not found", 404);
@@ -1444,6 +1463,7 @@ Deno.serve(async (req: Request) => {
         completed_at: run.completed_at,
         creditCostCharged: run.credit_cost_charged,
         remainingCredits: run.remaining_credits,
+        sourceRecipe: run.request_json?.recipe ?? null,
       }),
       { status: 200 },
     );

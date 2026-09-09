@@ -175,6 +175,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestions: [OutlineSuggestion] = []
     @State private var suggestionSourceRecipe: PromptPackExportPayload?
     @State private var suggestionsLoading = false
+    @State private var recoverableSuggestions: OutlineSuggestionResult?
     @State private var suggestionsError: String?
     @State private var suggestionsFeedback: String?
     @State private var showingSuggestionChargeWarning = false
@@ -242,6 +243,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             syncSectionsOrder()
             refreshAllOutputs()
             consumeGenerationLaunch()
+            await loadRecoverableSuggestions()
         }
         .onChange(of: generationLaunch?.id) { _, _ in
             consumeGenerationLaunch()
@@ -427,6 +429,32 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         return StoryArcTemplate.allTemplates.contains { $0.id == arc.templateID }
     }
 
+    private func loadRecoverableSuggestions() async {
+        guard let recipe = project.promptPacks.first,
+              let projectID = recipe.project?.id else { return }
+        do {
+            let result = try await OutlineSuggestionService().latestCompletedRun(projectID: projectID)
+            guard let result,
+                  result.sourceRecipe.project.id == projectID,
+                  result.sourceRecipe.promptPack.id == recipe.id,
+                  !result.suggestions.isEmpty else {
+                recoverableSuggestions = nil
+                return
+            }
+            recoverableSuggestions = result
+        } catch {
+            // Recovery is best-effort and must not block the normal Suggest flow.
+            recoverableSuggestions = nil
+        }
+    }
+
+    private func openRecoverableSuggestions() {
+        guard let result = recoverableSuggestions else { return }
+        suggestions = result.suggestions
+        suggestionSourceRecipe = result.sourceRecipe
+        showingSuggestionSheet = true
+    }
+
     private func loadSuggestions() async {
         guard !suggestionsLoading else { return }
         guard let recipe = project.promptPacks.first,
@@ -456,6 +484,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             )
             suggestions = result.suggestions
             suggestionSourceRecipe = result.sourceRecipe
+            recoverableSuggestions = result
             var feedback = "Suggestions generated. Charged \(String(format: "%.2f", result.creditCostCharged ?? 0)) credits."
             if let remaining = result.remainingCredits {
                 feedback += " Remaining balance: \(String(format: "%.2f", remaining)) credits."
@@ -485,6 +514,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
                 .disabled(sectionsOrder.isEmpty)
+                if recoverableSuggestions != nil {
+                    Button {
+                        openRecoverableSuggestions()
+                    } label: {
+                        Label("Resume Suggestions", systemImage: "arrow.uturn.backward.circle")
+                            .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    }
+                }
                 Button {
                     showingSuggestionChargeWarning = true
                 } label: {
