@@ -84,6 +84,7 @@ struct ProjectDetailView: View {
     @State private var isRunAllStarting = false
     @State private var outputFilter: OutputListFilter = .all
     @State private var readLatestOutputID: UUID?
+    @State private var outputDeletionError: String?
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
@@ -128,6 +129,7 @@ struct ProjectDetailView: View {
     let authService: any AuthService
     let creditStateService: any CreditStateServiceProtocol
     let outputSyncService: any GenerationOutputSyncServiceProtocol
+    let outputDeletionService: any GenerationOutputDeletionServiceProtocol
     let estimateService: any GenerationCostEstimateServiceProtocol
 
     init(
@@ -138,6 +140,7 @@ struct ProjectDetailView: View {
         authService: any AuthService = BackendAuthService.shared,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
         outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared,
+        outputDeletionService: any GenerationOutputDeletionServiceProtocol = GenerationOutputDeletionService.shared,
         estimateService: (any GenerationCostEstimateServiceProtocol)? = nil
     ) {
         self.project = project
@@ -151,6 +154,7 @@ struct ProjectDetailView: View {
         self.authService = authService
         self.creditStateService = creditStateService
         self.outputSyncService = outputSyncService
+        self.outputDeletionService = outputDeletionService
         self.estimateService = estimateService ?? SupabaseGenerationService()
     }
 
@@ -337,6 +341,14 @@ struct ProjectDetailView: View {
             }
         } message: {
             Text("Chapters are long. Make sure your credit balance can cover the generation.")
+        }
+        .alert("Output Deletion Failed", isPresented: Binding(
+            get: { outputDeletionError != nil },
+            set: { if !$0 { outputDeletionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { outputDeletionError = nil }
+        } message: {
+            Text(outputDeletionError ?? "The output could not be deleted.")
         }
         .task {
             await loadGenerationModels()
@@ -1098,7 +1110,15 @@ struct ProjectDetailView: View {
                 .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
-                        modelContext.delete(gen)
+                        let input = GenerationOutputDeletionInput(output: gen)
+                        let scope: SyncTombstone.DeletionScope = input.cloudGenerationOutputID.isEmpty ? .localOnly : .everywhere
+                        Task { @MainActor in
+                            do {
+                                try await outputDeletionService.delete(input: input, scope: scope, context: modelContext)
+                            } catch {
+                                outputDeletionError = GenerationOutputDeletionError.displayMessage(from: error)
+                            }
+                        }
                     } label: {
                         Label("Delete", systemImage: "trash")
                     }
