@@ -1,0 +1,47 @@
+name: PR-521 Deno CI
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/functions/_shared/**'
+      - 'supabase/functions/generate-story/**'
+      - 'supabase/functions/embed-section/**'
+      - '.github/workflows/pr-521-ci.yml'
+
+jobs:
+  deno-check-and-tests:
+    name: Deno check + PR-521 scene-memory tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+      - name: Type check production sources
+        run: >-
+          deno check
+          supabase/functions/_shared/billable-llm.ts
+          supabase/functions/_shared/scene-memory.ts
+          supabase/functions/embed-section/index.ts
+          supabase/functions/generate-story/_provider.ts
+          supabase/functions/generate-story/index.ts
+      - name: Test Responses structured output and cache preservation
+        run: >-
+          deno test --no-check -A
+          supabase/functions/generate-story/_provider_test.ts
+          --filter="Responses structured output preserves cache boundary"
+      - name: Test parser, truncation, semantic contract, and indexing regressions
+        run: >-
+          deno test --no-check -A
+          supabase/functions/generate-story/index_test.ts
+          --filter="single-pass scene response parser"
+      - name: Test semantic scene-memory contract and public trust boundary
+        run: >-
+          deno test --no-check -A
+          supabase/functions/generate-story/index_test.ts
+          --filter="scene-memory contract"
+      - name: Test generated-section indexing wiring
+        run: >-
+          deno test --no-check -A
+          supabase/functions/generate-story/index_test.ts
+          --filter="PR-360-Z regression A"

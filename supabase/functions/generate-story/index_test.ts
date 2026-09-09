@@ -4244,6 +4244,16 @@ Deno.test("single-pass scene response parser recovers a draft on truncation", ()
   assertEquals(parsed.sceneMemory, undefined);
 });
 
+Deno.test("single-pass scene response parser recovers prose truncated inside scene", () => {
+  const parsed = parseGeneratedScene(
+    String.raw`{"scene":"The character walked toward the`,
+    true,
+    "length",
+  );
+  assertEquals(parsed.scene, "The character walked toward the");
+  assertEquals(parsed.sceneMemory, undefined);
+});
+
 Deno.test("scene-memory contract is semantic and public adapter strips producer payload", async () => {
   const fs = await import("node:fs");
   const contract = fs.readFileSync(
@@ -4479,6 +4489,11 @@ Deno.test({
     // The fire-and-forget MUST NOT fail the main generation call.
     assertStringIncludes(
       handlerArea,
+      "EdgeRuntime.waitUntil(",
+      "Post-generation indexing must be registered with EdgeRuntime.waitUntil",
+    );
+    assertStringIncludes(
+      handlerArea,
       ".catch(",
       "Post-generation embed-section call must be fire-and-forget (catch + log on failure, never throw)",
     );
@@ -4487,8 +4502,8 @@ Deno.test({
     // needed by the shared embedding service.
     assertStringIncludes(
       handlerArea,
-      "void indexGeneratedSection(\n",
-      "internal generated-section indexing call must exist",
+      "EdgeRuntime.waitUntil(\n",
+      "internal generated-section indexing call must be registered with EdgeRuntime",
     );
     for (
       const field of [

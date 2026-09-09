@@ -76,6 +76,12 @@ import {
   snapshotPricing,
   SupabaseGenerationModelStore,
 } from "./_generation_models.ts";
+// Supabase provides EdgeRuntime in production; declare the narrow surface
+// here so the function also type-checks in a standalone Deno checkout.
+declare const EdgeRuntime: {
+  waitUntil(promise: Promise<unknown>): void;
+};
+
 import {
   BillableLLMError,
   type BillableProviderResult,
@@ -148,6 +154,52 @@ interface GeneratedSceneWithMemory {
   scene_memory: Partial<SceneMemory>;
 }
 
+function decodePartialJSONString(raw: string): string {
+  let decoded = "";
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+    if (char !== "\\") {
+      decoded += char;
+      continue;
+    }
+    if (i + 1 >= raw.length) break;
+    const escaped = raw[++i];
+    switch (escaped) {
+      case '"':
+      case "\\":
+      case "/":
+        decoded += escaped;
+        break;
+      case "b":
+        decoded += "\b";
+        break;
+      case "f":
+        decoded += "\f";
+        break;
+      case "n":
+        decoded += "\n";
+        break;
+      case "r":
+        decoded += "\r";
+        break;
+      case "t":
+        decoded += "\t";
+        break;
+      case "u": {
+        const hex = raw.slice(i + 1, i + 5);
+        if (!/^[0-9a-fA-F]{4}$/.test(hex)) return decoded;
+        decoded += String.fromCharCode(parseInt(hex, 16));
+        i += 4;
+        break;
+      }
+      default:
+        decoded += escaped;
+        break;
+    }
+  }
+  return decoded;
+}
+
 function recoverTruncatedScene(content: string): string | null {
   const key = content.indexOf('"scene"');
   if (key < 0) return null;
@@ -167,15 +219,14 @@ function recoverTruncatedScene(content: string): string | null {
       continue;
     }
     if (char === '"') {
-      try {
-        const value = JSON.parse(content.slice(openingQuote, i + 1));
-        return typeof value === "string" && value.trim() ? value.trim() : null;
-      } catch {
-        return null;
-      }
+      const value = decodePartialJSONString(
+        content.slice(openingQuote + 1, i),
+      );
+      return value.trim() ? value.trim() : null;
     }
   }
-  return null;
+  const value = decodePartialJSONString(content.slice(openingQuote + 1));
+  return value.trim() ? value.trim() : null;
 }
 
 export function parseGeneratedScene(
@@ -2982,11 +3033,11 @@ async function handler(
     storyArcWithinBeatPosition: outlineSectionCtx.storyArc.withinBeatPosition,
     storyArcWithinBeatTotal: outlineSectionCtx.storyArc.withinBeatTotal,
   });
-  const stablePrompt = stableBlocks.join("\n").trim();
-  const volatilePrompt = [
-    ...volatileBlocks,
-    ...(body.outline_section_id ? [SCENE_MEMORY_GENERATION_INSTRUCTIONS] : []),
-  ].join("\n").trim();
+  const effectiveStableBlocks = body.outline_section_id
+    ? [...stableBlocks, SCENE_MEMORY_GENERATION_INSTRUCTIONS]
+    : stableBlocks;
+  const stablePrompt = effectiveStableBlocks.join("\n").trim();
+  const volatilePrompt = volatileBlocks.join("\n").trim();
   // PR-372: SHA-256 of the serialized stable prefix. Diagnostics only —
   // persisted to generation_usage_events.stable_prefix_hash.
   const stablePrefixHash = await sha256Hex(stablePrompt);
@@ -3065,7 +3116,7 @@ async function handler(
     // - promptCacheKey: stable per-project so OpenAI cache entries are
     //   reachable across Nth-of-project generations within the cache
     //   TTL window.
-    const stableContentBlocks: LLMContentBlock[] = stableBlocks.map(
+    const stableContentBlocks: LLMContentBlock[] = effectiveStableBlocks.map(
       (text, i) => ({
         type: "input_text" as const,
         text,
@@ -3075,10 +3126,7 @@ async function handler(
           : {}),
       }),
     );
-    const effectiveVolatileBlocks = body.outline_section_id
-      ? [...volatileBlocks, SCENE_MEMORY_GENERATION_INSTRUCTIONS]
-      : volatileBlocks;
-    const volatileContentBlocks: LLMContentBlock[] = effectiveVolatileBlocks.map(
+    const volatileContentBlocks: LLMContentBlock[] = volatileBlocks.map(
       (text) => ({
         type: "input_text" as const,
         text,
@@ -3300,17 +3348,19 @@ async function handler(
                   );
                 }
               } else {
-                void indexGeneratedSection(
-                  userId,
-                  adminClient,
-                  embedPayload,
-                ).catch((e) => {
-                  console.error(
-                    `[generate-story] post-generation embed-section failed: ${
-                      (e as Error)?.message ?? String(e)
-                    }`,
-                  );
-                });
+                EdgeRuntime.waitUntil(
+                  indexGeneratedSection(
+                    userId,
+                    adminClient,
+                    embedPayload,
+                  ).catch((e) => {
+                    console.error(
+                      `[generate-story] post-generation embed-section failed: ${
+                        (e as Error)?.message ?? String(e)
+                      }`,
+                    );
+                  }),
+                );
               }
             }
           }
