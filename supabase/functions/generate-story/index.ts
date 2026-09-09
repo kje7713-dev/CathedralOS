@@ -83,9 +83,11 @@ import {
 } from "../_shared/billable-llm.ts";
 import {
   normalizeSceneMemory,
+  SCENE_MEMORY_GENERATION_INSTRUCTIONS,
   SCENE_MEMORY_RESPONSE_FORMAT,
   type SceneMemory,
 } from "../_shared/scene-memory.ts";
+import type { EmbedSectionRequest } from "../_shared/section-embedding.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -146,9 +148,40 @@ interface GeneratedSceneWithMemory {
   scene_memory: Partial<SceneMemory>;
 }
 
-function parseGeneratedScene(
+function recoverTruncatedScene(content: string): string | null {
+  const key = content.indexOf('"scene"');
+  if (key < 0) return null;
+  const colon = content.indexOf(":", key + 7);
+  if (colon < 0) return null;
+  const openingQuote = content.indexOf('"', colon + 1);
+  if (openingQuote < 0) return null;
+  let escaped = false;
+  for (let i = openingQuote + 1; i < content.length; i++) {
+    const char = content[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      try {
+        const value = JSON.parse(content.slice(openingQuote, i + 1));
+        return typeof value === "string" && value.trim() ? value.trim() : null;
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+export function parseGeneratedScene(
   content: string,
   expectsMemory: boolean,
+  finishReason?: string,
 ): { scene: string; sceneMemory?: SceneMemory } {
   if (!expectsMemory) return { scene: content.trim() };
   try {
@@ -161,6 +194,10 @@ function parseGeneratedScene(
       sceneMemory: normalizeSceneMemory(parsed.scene_memory),
     };
   } catch (error) {
+    if (finishReason === "length") {
+      const recoveredScene = recoverTruncatedScene(content);
+      if (recoveredScene) return { scene: recoveredScene };
+    }
     throw new Error(
       `structured scene response was invalid: ${
         error instanceof Error ? error.message : String(error)
@@ -168,6 +205,7 @@ function parseGeneratedScene(
     );
   }
 }
+
 const BULK_ESTIMATE_ACTION = "estimate_bulk" as const;
 
 const MAX_BUDGET: Record<LengthMode, number> = {
@@ -1449,66 +1487,28 @@ async function fetchPriorContextForEmbedSection(
   }
 }
 
-// ---- callEmbedSectionForGeneratedOutput (Kevin 2026-08-21 17:47 EDT architecture spec) ----
+// ---- indexGeneratedSection -------------------------------------------------
 //
-// Fire-and-forget HTTP call to the embed-section edge function. generate-story
-// OWNS post-generation indexing — this is the single source of truth for both
-// iOS direct-gen and run-outline paths. The call uses the parsed generated prose
-// (the ACTUAL generated prose), NOT section contract title/summary/terminalBeat
-// (that would be SectionEmbedService.buildRawText(for:) which Kevin explicitly
-// rejected because it stores the intended contract instead of what happened).
+// Generated-section indexing is an internal producer path. It calls the shared
+// service directly rather than POSTing the producer-owned scene memory to the
+// public JWT adapter, so clients cannot forge canonical Project State.
 //
 // Failure here MUST NOT fail the main generation call. Errors are logged and
 // the function returns normally.
-async function callEmbedSectionForGeneratedOutput(
+async function indexGeneratedSection(
+  userID: string,
   adminClient: any,
-  _adminClient: any,
-  authHeader: string,
-  payload: {
-    outline_section_id: string;
-    outline_id: string;
-    project_id: string;
-    position: number;
-    title: string;
-    summary: string;
-    container: string | null;
-    pov: string | null;
-    terminal_beat: string | null;
-    story_arc_beat_id: string | null;
-    raw_text: string;
-    scene_memory?: Partial<SceneMemory>;
-    output_id: string;
-    prior_context: string;
-  },
+  payload: EmbedSectionRequest,
 ): Promise<void> {
-  const url = `${
-    Deno.env.get("SUPABASE_URL") ?? ""
-  }/functions/v1/embed-section`;
-  if (!url || url === "/functions/v1/embed-section") {
-    console.error(
-      "[generate-story] callEmbedSectionForGeneratedOutput: SUPABASE_URL not set, skipping embed-section call",
-    );
-    return;
-  }
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      // Pass the user's JWT through — embed-section validates the JWT the same
-      // way generate-story does, and rejects the service role key with 401
-      // (Codex cascade fix from commit c436959). Same auth pattern run-outline uses.
-      "Authorization": authHeader,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const errBody = await response.text().catch(() => "<unreadable>");
-    console.error(
-      `[generate-story] embed-section HTTP ${response.status}: ${
-        errBody.slice(0, 500)
-      }`,
-    );
-  }
+  const { processEmbedSection } = await import(
+    "../_shared/section-embedding.ts"
+  );
+  await processEmbedSection(
+    payload,
+    userID,
+    adminClient,
+    Deno.env.get("OPENAI_API_KEY") ?? "",
+  );
 }
 
 export function buildPrompt(req: {
@@ -2309,13 +2309,6 @@ async function handler(
     persistenceStore: injectedPersistenceStore,
   } = deps;
 
-  // Auth header is needed both for the auth-check below AND for fire-and-forget
-  // calls later in the handler (e.g., callEmbedSectionForGeneratedOutput).
-  // When deps.authenticatedUserId is provided (e.g., run-outline internal call),
-  // the `if (!userId)` block is skipped and the inner `authHeader` is never
-  // declared — this top-level declaration ensures it's always available.
-  const authHeader = req.headers.get("Authorization") ?? "";
-
   // Preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -2990,7 +2983,10 @@ async function handler(
     storyArcWithinBeatTotal: outlineSectionCtx.storyArc.withinBeatTotal,
   });
   const stablePrompt = stableBlocks.join("\n").trim();
-  const volatilePrompt = volatileBlocks.join("\n").trim();
+  const volatilePrompt = [
+    ...volatileBlocks,
+    ...(body.outline_section_id ? [SCENE_MEMORY_GENERATION_INSTRUCTIONS] : []),
+  ].join("\n").trim();
   // PR-372: SHA-256 of the serialized stable prefix. Diagnostics only —
   // persisted to generation_usage_events.stable_prefix_hash.
   const stablePrefixHash = await sha256Hex(stablePrompt);
@@ -3079,7 +3075,10 @@ async function handler(
           : {}),
       }),
     );
-    const volatileContentBlocks: LLMContentBlock[] = volatileBlocks.map(
+    const effectiveVolatileBlocks = body.outline_section_id
+      ? [...volatileBlocks, SCENE_MEMORY_GENERATION_INSTRUCTIONS]
+      : volatileBlocks;
+    const volatileContentBlocks: LLMContentBlock[] = effectiveVolatileBlocks.map(
       (text) => ({
         type: "input_text" as const,
         text,
@@ -3106,6 +3105,9 @@ async function handler(
           responseFormat: body.outline_section_id
             ? GENERATE_WITH_MEMORY_RESPONSE_FORMAT
             : undefined,
+          responseFormatTarget: body.outline_section_id
+            ? "responses"
+            : undefined,
         },
         // PR-372: SHA-256 of the serialized stable prefix. Diagnostics
         // only — persisted to generation_usage_events.stable_prefix_hash.
@@ -3124,6 +3126,7 @@ async function handler(
           const parsedScene = parseGeneratedScene(
             providerResult.content,
             Boolean(body.outline_section_id),
+            providerResult.finishReason,
           );
           const generatedText = parsedScene.scene;
           const sceneMemory = parsedScene.sceneMemory;
@@ -3203,7 +3206,8 @@ async function handler(
           }
 
           if (
-            adminClient && body.outline_section_id && providerResult.content
+            adminClient && body.outline_section_id && providerResult.content &&
+            !wasTruncated
           ) {
             const { data: sectionForEmbed, error: sectionEmbedErr } =
               await adminClient
@@ -3296,10 +3300,9 @@ async function handler(
                   );
                 }
               } else {
-                void callEmbedSectionForGeneratedOutput(
+                void indexGeneratedSection(
+                  userId,
                   adminClient,
-                  adminClient,
-                  authHeader,
                   embedPayload,
                 ).catch((e) => {
                   console.error(

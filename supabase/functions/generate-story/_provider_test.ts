@@ -141,12 +141,76 @@ Deno.test("OpenAIProvider: responseFormat present routes to chat/completions + S
     const messages = (lastRequest.body as Record<string, unknown>)
       .messages as Array<Record<string, unknown>>;
     assertEquals(Array.isArray(messages), true);
-    assertEquals(messages[0].content, [{ type: "text", text: "system prompt" }]);
+    assertEquals(messages[0].content, [{
+      type: "text",
+      text: "system prompt",
+    }]);
     assertEquals(messages[1].content, [{ type: "text", text: "user prompt" }]);
     assertEquals(response.content, "ok");
     assertEquals(response.modelName, "gpt-4o-mini");
     assertEquals(response.inputTokens, 100);
     assertEquals(response.outputTokens, 50);
+  } finally {
+    uninstallFetchStub();
+  }
+});
+
+Deno.test("OpenAIProvider: Responses structured output preserves cache boundary", async () => {
+  installFetchStub(responsesApiResponse('{"scene":"ok"}'));
+  try {
+    const provider = new OpenAIProvider(
+      "test-key",
+      "gpt-5.6-luna",
+      PROVIDER_TIMEOUT_MS,
+    );
+    await provider.complete(
+      [
+        {
+          role: "developer",
+          content: [{
+            type: "input_text",
+            text: "stable prompt",
+            prompt_cache_breakpoint: { mode: "explicit" },
+          }],
+        },
+        { role: "user", content: [{ type: "input_text", text: "task" }] },
+      ],
+      4500,
+      "gpt-5.6-luna",
+      {
+        responseFormatTarget: "responses",
+        responseFormat: {
+          type: "json_schema",
+          json_schema: {
+            name: "scene",
+            strict: true,
+            schema: { type: "object" },
+          },
+        },
+        cacheMode: "explicit",
+        promptCacheKey: "cath:test:v1",
+      },
+    );
+    assertExists(lastRequest);
+    assertStringIncludes(lastRequest.url, "/v1/responses");
+    assertEquals(lastRequest.body.text, {
+      format: {
+        type: "json_schema",
+        name: "scene",
+        strict: true,
+        schema: { type: "object" },
+      },
+    });
+    assertEquals(lastRequest.body.prompt_cache_options, { mode: "explicit" });
+    assertEquals(lastRequest.body.prompt_cache_key, "cath:test:v1");
+    assertEquals(
+      (lastRequest.body.input as Array<Record<string, unknown>>)[0].content,
+      [{
+        type: "input_text",
+        text: "stable prompt",
+        prompt_cache_breakpoint: { mode: "explicit" },
+      }],
+    );
   } finally {
     uninstallFetchStub();
   }

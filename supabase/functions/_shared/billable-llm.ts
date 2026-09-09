@@ -73,6 +73,7 @@ export interface BillableUsageContext {
  * content block; this interface just threads the metadata through. */
 export interface BillableProviderOptions {
   responseFormat?: unknown;
+  responseFormatTarget?: "chat" | "responses";
   temperature?: number;
   /** PR-372: cache capability for this request. */
   cacheMode?: "none" | "implicit" | "explicit";

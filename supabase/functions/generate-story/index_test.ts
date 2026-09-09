@@ -39,7 +39,7 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { handler } from "./index.ts";
+import { handler, parseGeneratedScene } from "./index.ts";
 import {
   checkCredits,
   computeCharge,
@@ -4221,6 +4221,53 @@ Deno.test({
   },
 });
 
+Deno.test("single-pass scene response parser preserves prose and memory", () => {
+  const parsed = parseGeneratedScene(
+    JSON.stringify({
+      scene: "Only what happened on the page.",
+      scene_memory: { extracted_summary: "Factual scene summary." },
+    }),
+    true,
+  );
+  assertEquals(parsed.scene, "Only what happened on the page.");
+  assertEquals(parsed.sceneMemory?.extracted_summary, "Factual scene summary.");
+});
+
+Deno.test("single-pass scene response parser recovers a draft on truncation", () => {
+  const parsed = parseGeneratedScene(
+    String
+      .raw`{"scene":"A completed scene with \"quoted\" dialogue","scene_memory":{"extracted_summary":"`,
+    true,
+    "length",
+  );
+  assertEquals(parsed.scene, 'A completed scene with "quoted" dialogue');
+  assertEquals(parsed.sceneMemory, undefined);
+});
+
+Deno.test("scene-memory contract is semantic and public adapter strips producer payload", async () => {
+  const fs = await import("node:fs");
+  const contract = fs.readFileSync(
+    "supabase/functions/_shared/scene-memory.ts",
+    "utf8",
+  );
+  const adapter = fs.readFileSync(
+    "supabase/functions/embed-section/index.ts",
+    "utf8",
+  );
+  assertStringIncludes(
+    contract,
+    "only from the prose in the \\`scene\\` field",
+  );
+  assertStringIncludes(
+    contract,
+    "Do not copy or promote facts from the Section Contract",
+  );
+  assertStringIncludes(
+    adapter,
+    "const publicBody = { ...body, scene_memory: undefined }",
+  );
+});
+
 // ----------------------------------------------------------------------------
 // Source-level: generate-story request body type + buildPrompt params + forwarding.
 // ----------------------------------------------------------------------------
@@ -4419,16 +4466,14 @@ Deno.test({
       "generate-story must forward same-run scene memory",
     );
 
-    // The fetch-site MUST be inside the if (outlineSectionCtx.section && llmResult?.content)
-    // guard — only fire when both outline_section_id resolved AND we have prose.
-    const handlerArea = text.slice(
-      text.indexOf("function handler("),
-      text.indexOf("function fetchOutlineSectionContext("),
-    );
+    // The fetch-site MUST be guarded by the resolved outline section, returned
+    // provider content, and a complete response — only then index canonical memory.
+    const handlerStart = text.indexOf("async function handler(");
+    const handlerArea = text.slice(handlerStart);
     assertStringIncludes(
       handlerArea,
-      "outlineSectionCtx.section && llmResult?.content",
-      "Post-generation embed-section call must be guarded by both outlineSectionCtx.section AND llmResult.content",
+      "adminClient && body.outline_section_id && providerResult.content",
+      "Post-generation indexing must require the resolved outline section and provider content",
     );
 
     // The fire-and-forget MUST NOT fail the main generation call.
@@ -4438,16 +4483,12 @@ Deno.test({
       "Post-generation embed-section call must be fire-and-forget (catch + log on failure, never throw)",
     );
 
-    // The embed-section call payload MUST include all the section metadata the
-    // embed-section edge function expects (title, summary, container, pov,
-    // terminal_beat, story_arc_beat_id, position, outline_id).
-    const callSiteMatch = handlerArea.match(
-      /callEmbedSectionForGeneratedOutput\([\s\S]+?\}\)/,
-    );
-    assertNotEquals(
-      callSiteMatch,
-      null,
-      "callEmbedSectionForGeneratedOutput call site must exist",
+    // The internal indexing payload MUST include all the section metadata
+    // needed by the shared embedding service.
+    assertStringIncludes(
+      handlerArea,
+      "void indexGeneratedSection(\n",
+      "internal generated-section indexing call must exist",
     );
     for (
       const field of [
@@ -4462,14 +4503,15 @@ Deno.test({
         "terminal_beat",
         "story_arc_beat_id",
         "raw_text",
+        "scene_memory",
         "output_id",
         "prior_context",
       ]
     ) {
       assertStringIncludes(
-        callSiteMatch![0],
-        field,
-        `callEmbedSectionForGeneratedOutput payload must include '${field}'`,
+        handlerArea,
+        `${field}:`,
+        `generated-section payload must include '${field}'`,
       );
     }
   },
@@ -5257,17 +5299,31 @@ Deno.test("buildPrompt: Terminal Function block says Structural purpose follows 
   );
 });
 
-
 Deno.test("Story Arc Context resolves within-beat position by canonical order", async () => {
-  const source = (await import("node:fs")).readFileSync("supabase/functions/generate-story/index.ts", "utf8");
-  assertStringIncludes(source, 'eq("story_arc_beat_id", section!.story_arc_beat_id)');
+  const source = (await import("node:fs")).readFileSync(
+    "supabase/functions/generate-story/index.ts",
+    "utf8",
+  );
+  assertStringIncludes(
+    source,
+    'eq("story_arc_beat_id", section!.story_arc_beat_id)',
+  );
   assertStringIncludes(source, 'order("position", { ascending: true })');
   assertStringIncludes(source, "This movement contains");
   assertStringIncludes(source, "Current section:");
   const { resolveWithinBeatPosition } = await import("./index.ts");
-  assertEquals(resolveWithinBeatPosition([10, 20, 30, 40, 50], 10), { position: 0, total: 5 });
-  assertEquals(resolveWithinBeatPosition([10, 20, 30, 40, 50], 30), { position: 2, total: 5 });
-  assertEquals(resolveWithinBeatPosition([10, 20, 30, 40, 50], 50), { position: 4, total: 5 });
+  assertEquals(resolveWithinBeatPosition([10, 20, 30, 40, 50], 10), {
+    position: 0,
+    total: 5,
+  });
+  assertEquals(resolveWithinBeatPosition([10, 20, 30, 40, 50], 30), {
+    position: 2,
+    total: 5,
+  });
+  assertEquals(resolveWithinBeatPosition([10, 20, 30, 40, 50], 50), {
+    position: 4,
+    total: 5,
+  });
 });
 
 // PR A fix-forward: canonical chronology and durable Run All memory barriers.
@@ -5283,7 +5339,7 @@ Deno.test("RAG continuity uses outline chronology and separates immediate handof
   assertStringIncludes(body, "< Number(current.position");
   assertStringIncludes(body, "## Previous Canonical Section");
   assertStringIncludes(body, "## Cumulative Story State");
-  assertEquals(body.includes("order(\"created_at\""), false);
+  assertEquals(body.includes('order("created_at"'), false);
   assertEquals(body.includes("created_at >"), false);
 });
 
@@ -5294,8 +5350,11 @@ Deno.test("RAG continuity decodes active fact objects and preserves the output l
   );
   assertStringIncludes(source, "item.active !== true");
   assertStringIncludes(source, "item.superseded_by");
-  assertStringIncludes(source, "String(item.fact ?? \"\")");
+  assertStringIncludes(source, 'String(item.fact ?? "")');
   assertStringIncludes(source, "generation_output_id");
   assertStringIncludes(source, "section memory was not durably linked");
-  assertStringIncludes(source, "for (let attempt = 1; attempt <= 2; attempt++)");
+  assertStringIncludes(
+    source,
+    "for (let attempt = 1; attempt <= 2; attempt++)",
+  );
 });
