@@ -90,12 +90,14 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
         self.eventLog = eventLog
     }
 
+    @MainActor
     func syncProject(_ project: StoryProject, modelContext: ModelContext) async throws {
         eventLog?.events.append("project.save")
     }
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {
         eventLog?.events.append("project.snapshot")
     }
+    @MainActor
     func syncAllProjects(in context: ModelContext) async throws {
         syncAllCalled = true
         eventLog?.events.append("project.push")

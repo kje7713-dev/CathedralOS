@@ -84,8 +84,10 @@ private final class SpyProjectCloudSyncService: ProjectCloudSyncServiceProtocol 
     private(set) var deletedLocalProjectIDs: [String] = []
     private(set) var deletedLineages: [(lineageID: String, localProjectID: String)] = []
 
+    @MainActor
     func syncProject(_ project: StoryProject, modelContext: ModelContext) async throws {}
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {}
+    @MainActor
     func syncAllProjects(in context: ModelContext) async throws {}
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws {
         deletedLocalProjectIDs.append(localProjectID)

@@ -76,8 +76,13 @@ enum CloudSnapshotPresence {
 }
 
 protocol ProjectCloudSyncServiceProtocol {
+    /// SwiftData access is MainActor-isolated. ModelContext shares SwiftData's
+    /// FutureCache with SwiftUI @Query, so it must not be touched after an
+    /// async network boundary from a cooperative executor.
+    @MainActor
     func syncProject(_ project: StoryProject, modelContext: ModelContext) async throws
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws
+    @MainActor
     func syncAllProjects(in context: ModelContext) async throws
     func deleteSnapshot(forLocalProjectID localProjectID: String) async throws
     func deleteSnapshot(
@@ -99,6 +104,7 @@ protocol ProjectCloudSyncServiceProtocol {
     /// their local JSON backups are removed, and the context is saved. Returns a
     /// report describing what was deleted. Throws on context save failure so the
     /// caller can fail closed before any upload.
+    @MainActor
     func reconcileLocalProjectsAgainstTombstones(
         tombstones: SyncTombstoneSet,
         backupDeletionService: any ProjectBackupDeletionServiceProtocol,
@@ -110,6 +116,7 @@ protocol ProjectCloudSyncServiceProtocol {
     /// caller can skip the upload rather than risk resurrecting a
     /// deleted project. Backup-deletion failures are non-fatal and
     /// surfaced in the report.
+    @MainActor
     func reconcileProjectTombstonesBeforeUpload(
         backupDeletionService: any ProjectBackupDeletionServiceProtocol,
         in context: ModelContext
@@ -136,6 +143,7 @@ extension ProjectCloudSyncServiceProtocol {
     /// Default no-op reconciliation. Concrete services should override this to
     /// actually delete tombstoned local projects. Tests that need to verify
     /// deletion behaviour inject a service that overrides this implementation.
+    @MainActor
     func reconcileLocalProjectsAgainstTombstones(
         tombstones: SyncTombstoneSet,
         backupDeletionService: any ProjectBackupDeletionServiceProtocol,
@@ -281,6 +289,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         self.tombstoneService = tombstoneService
     }
 
+    @MainActor
     func syncProject(_ project: StoryProject, modelContext: ModelContext) async throws {
         let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: modelContext)
         try await syncProjectSnapshot(localProjectID: project.id.uuidString, payload: payload)
@@ -306,6 +315,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         }
     }
 
+    @MainActor
     func syncAllProjects(in context: ModelContext) async throws {
         let descriptor = FetchDescriptor<StoryProject>()
         let projects = try context.fetch(descriptor)
@@ -530,6 +540,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     /// Throws on context save failure so the caller can fail closed before
     /// any upload. Backup-deletion failures are non-fatal — the local deletion
     /// still happens, but those project ids are surfaced in the report.
+    @MainActor
     func reconcileLocalProjectsAgainstTombstones(
         tombstones: SyncTombstoneSet,
         backupDeletionService: any ProjectBackupDeletionServiceProtocol,
@@ -547,6 +558,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     /// reconciles the local SwiftData store against them. The fetch is
     /// serialized with other mutations via `mutationGate` so that an
     /// upload cannot start while reconciliation is in progress.
+    @MainActor
     func reconcileProjectTombstonesBeforeUpload(
         backupDeletionService: any ProjectBackupDeletionServiceProtocol,
         in context: ModelContext
