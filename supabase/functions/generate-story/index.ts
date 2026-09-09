@@ -72,6 +72,7 @@ import {
   computeMaxChargeCredits,
   estimateTokensFromText,
   type GenerationModelStore,
+  getEnabledModelByProviderModel,
   normalizedModelId,
   snapshotPricing,
   SupabaseGenerationModelStore,
@@ -89,11 +90,11 @@ import {
 } from "../_shared/billable-llm.ts";
 import {
   normalizeSceneMemory,
-  SCENE_MEMORY_GENERATION_INSTRUCTIONS,
-  SCENE_MEMORY_RESPONSE_FORMAT,
   type SceneMemory,
 } from "../_shared/scene-memory.ts";
 import type { EmbedSectionRequest } from "../_shared/section-embedding.ts";
+import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
+import { formatCanonicalProjectState } from "../_shared/memory-state.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -116,6 +117,9 @@ export async function sha256Hex(text: string): Promise<string> {
     .join("");
 }
 
+const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
+  "gpt-4o-mini";
+
 const ALLOWED_ACTIONS = [
   "generate",
   "regenerate",
@@ -126,28 +130,6 @@ type GenerationAction = typeof ALLOWED_ACTIONS[number];
 
 /** Estimate-only action — returns a cost estimate without calling the LLM. */
 const ESTIMATE_ACTION = "estimate" as const;
-
-// Section generation returns prose and the semantic scene-memory payload in
-// one structured provider response. The embedding API still runs afterward,
-// but the expensive second LLM extraction pass is no longer needed.
-const GENERATE_WITH_MEMORY_RESPONSE_FORMAT = {
-  type: "json_schema",
-  json_schema: {
-    name: "generated_scene_with_memory",
-    strict: true,
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["scene", "scene_memory"],
-      properties: {
-        scene: { type: "string" },
-        scene_memory: (SCENE_MEMORY_RESPONSE_FORMAT as {
-          json_schema: { schema: unknown };
-        }).json_schema.schema,
-      },
-    },
-  },
-};
 
 interface GeneratedSceneWithMemory {
   scene: string;
@@ -462,6 +444,10 @@ interface GenerationOutputInsert {
   // generation_outputs.id share the same UUID (the iOS debug box queries
   // llm_prompts by output_id).
   id?: string;
+  // Durable Run All lineage is authenticated by the run-outline HMAC before
+  // reaching this handler. Interactive generations leave these null.
+  run_id?: string | null;
+  run_section_id?: string | null;
 }
 
 interface GenerationUsageEventInsert {
@@ -1162,12 +1148,18 @@ async function fetchProjectStateContext(
       .eq("project_id", projectId)
       .neq("outline_section_id", current.id);
     if (memoryError) {
-      console.error(`[generate-story] fetchProjectStateContext query error: ${memoryError.message ?? JSON.stringify(memoryError)}`);
+      console.error(
+        `[generate-story] fetchProjectStateContext query error: ${
+          memoryError.message ?? JSON.stringify(memoryError)
+        }`,
+      );
       return "";
     }
     if (!memories?.length) return "";
 
-    const ids = memories.map((row: any) => row.outline_section_id).filter(Boolean);
+    const ids = memories.map((row: any) => row.outline_section_id).filter(
+      Boolean,
+    );
     const { data: sections, error: sectionError } = await adminClient
       .from("outline_sections")
       .select("id, outline_id, position")
@@ -1183,7 +1175,8 @@ async function fetchProjectStateContext(
     const priorScenes = memories
       .filter((row: any) => order.has(String(row.outline_section_id)))
       .filter((row: any) =>
-        (order.get(String(row.outline_section_id)) ?? 0) < Number(current.position ?? 0)
+        (order.get(String(row.outline_section_id)) ?? 0) <
+          Number(current.position ?? 0)
       )
       .sort((a: any, b: any) =>
         (order.get(String(a.outline_section_id)) ?? 0) -
@@ -1191,7 +1184,10 @@ async function fetchProjectStateContext(
       );
     if (!priorScenes.length) return "";
 
-    return aggregateProjectStateForGeneration(priorScenes, priorScenes[priorScenes.length - 1]);
+    return aggregateProjectStateForGeneration(
+      priorScenes,
+      priorScenes[priorScenes.length - 1],
+    );
   } catch (error) {
     console.error(`[generate-story] fetchProjectStateContext failed: ${error}`);
     return "";
@@ -1202,81 +1198,13 @@ function aggregateProjectStateForGeneration(
   scenes: Array<Record<string, unknown>>,
   previousScene: Record<string, unknown>,
 ): string {
-  const characters = new Map<string, Record<string, unknown>>();
-  const threads = new Map<string, Record<string, unknown>>();
-  const facts = new Map<string, Record<string, unknown>>();
-  const loops = new Map<string, Record<string, unknown>>();
-  const lines = ["## Project State", ""];
-
-  lines.push("## Previous Canonical Section", "");
-  if (typeof previousScene.extracted_summary === "string" && previousScene.extracted_summary) {
-    lines.push(`Summary: ${previousScene.extracted_summary}`, "");
-  }
-  if (previousScene.scene_ending_state && typeof previousScene.scene_ending_state === "object") {
-    lines.push("Ending state:", "```json", JSON.stringify(previousScene.scene_ending_state, null, 2), "```", "");
-  }
-  const previousFacts = Array.isArray(previousScene.continuity_facts) ? previousScene.continuity_facts : [];
-  const factText = previousFacts.map((fact: any) => typeof fact === "string" ? fact : fact?.fact).filter(Boolean);
-  if (factText.length) lines.push("Concrete continuity facts:", ...factText.map((fact) => `- ${fact}`), "");
-
-  for (const scene of scenes) {
-    for (const delta of Array.isArray(scene.character_deltas) ? scene.character_deltas : []) {
-      if (delta && typeof delta === "object" && typeof (delta as any).character_name === "string") {
-        const item = delta as Record<string, unknown>;
-        const name = String(item.character_name);
-        const prior = characters.get(name) ?? {};
-        const merged = { ...prior };
-        for (const [key, value] of Object.entries(item)) {
-          if (value !== null && value !== undefined && value !== "") merged[key] = value;
-        }
-        characters.set(name, merged);
-      }
-    }
-    for (const thread of Array.isArray(scene.plot_thread_deltas) ? scene.plot_thread_deltas : []) {
-      if (thread && typeof thread === "object") {
-        const item = thread as any;
-        const key = String(item.thread_name ?? item.id ?? "");
-        if (key) threads.set(key, item);
-      }
-    }
-    for (const fact of Array.isArray(scene.continuity_facts) ? scene.continuity_facts : []) {
-      if (fact && typeof fact === "object") {
-        const item = fact as any;
-        const key = String(item.id ?? item.fact ?? "");
-        if (!key || item.active !== true) {
-          if (key) facts.delete(key);
-        } else if (item.superseded_by) {
-          facts.delete(String(item.superseded_by));
-          facts.delete(key);
-        } else {
-          facts.set(key, item);
-        }
-      } else if (typeof fact === "string" && fact) {
-        facts.set(fact, { fact });
-      }
-    }
-    for (const loop of Array.isArray(scene.open_loops) ? scene.open_loops : []) {
-      if (loop && typeof loop === "object") {
-        const item = loop as any;
-        const key = String(item.id ?? item.description ?? "");
-        if (key) loops.set(key, item);
-      }
-    }
-  }
-
-  lines.push("## Cumulative Story State", "");
-  if (characters.size) {
-    lines.push("Characters:", ...Array.from(characters.values()).map((item) => `- **${item.character_name}**: ${JSON.stringify(item)}`), "");
-  }
-  if (threads.size) {
-    lines.push("Plot threads:", ...Array.from(threads.values()).map((item) => `- **${item.thread_name}** [${item.status}]: ${item.description ?? ""}`), "");
-  }
-  if (facts.size) lines.push("Continuity Facts:", ...Array.from(facts.values()).map((item) => `- ${String(item.fact ?? "")}`), "");
-  if (loops.size) lines.push("Open loops:", ...Array.from(loops.values()).map((item) => `- [${item.type ?? "unknown"}] ${item.description ?? ""}`), "");
-  return lines.join("\n");
+  return formatCanonicalProjectState(scenes, previousScene);
 }
 
-export function resolveWithinBeatPosition(positions: number[], currentPosition: number): { position: number; total: number } | null {
+export function resolveWithinBeatPosition(
+  positions: number[],
+  currentPosition: number,
+): { position: number; total: number } | null {
   const ordered = [...positions].sort((a, b) => a - b);
   const index = ordered.indexOf(currentPosition);
   return index < 0 ? null : { position: index, total: ordered.length };
@@ -2005,10 +1933,15 @@ Structural limits:
     if (req.storyArcBeatPurpose) {
       contextLines.push(`Beat purpose: ${req.storyArcBeatPurpose}`);
     }
-    if (typeof req.storyArcWithinBeatPosition === "number" && typeof req.storyArcWithinBeatTotal === "number") {
+    if (
+      typeof req.storyArcWithinBeatPosition === "number" &&
+      typeof req.storyArcWithinBeatTotal === "number"
+    ) {
       contextLines.push(
         `This movement contains ${req.storyArcWithinBeatTotal} planned sections.`,
-        `Current section: ${req.storyArcWithinBeatPosition + 1} of ${req.storyArcWithinBeatTotal}.`,
+        `Current section: ${
+          req.storyArcWithinBeatPosition + 1
+        } of ${req.storyArcWithinBeatTotal}.`,
       );
     }
     if (
@@ -2017,7 +1950,9 @@ Structural limits:
     ) {
       contextLines.push(
         `This movement contains ${req.storyArcWithinBeatTotal} planned sections.`,
-        `Current section: ${req.storyArcWithinBeatPosition + 1} of ${req.storyArcWithinBeatTotal}.`,
+        `Current section: ${
+          req.storyArcWithinBeatPosition + 1
+        } of ${req.storyArcWithinBeatTotal}.`,
       );
     }
     if (
@@ -2766,6 +2701,36 @@ async function handler(
     // action, but do all sections in one Edge Function invocation. This
     // avoids creating a gateway request burst for large Run All queues.
     const estimatePricing = snapshotPricing(selectedModel);
+    // Run All performs two additional billable calls after prose: dedicated
+    // scene-memory extraction and the text-embedding vectorization. Reserve
+    // both here so the second pass cannot discover that the user is out of
+    // credits after prose has already been persisted.
+    const extractorModel = await getEnabledModelByProviderModel(
+      adminClient,
+      OPENAI_MODEL_DEFAULT,
+    );
+    const embeddingModel = await getEnabledModelByProviderModel(
+      adminClient,
+      "text-embedding-3-small",
+    );
+    const extractionCredits = extractorModel
+      ? computeMaxChargeCredits({
+        uncachedInputTokens: 6000,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 8192,
+        toolCostUsd: 0,
+      }, snapshotPricing(extractorModel))
+      : 0;
+    const embeddingCredits = embeddingModel
+      ? computeMaxChargeCredits({
+        uncachedInputTokens: 1500,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 0,
+        toolCostUsd: 0,
+      }, snapshotPricing(embeddingModel))
+      : 0;
     const estimates = body.estimateSections!.map((section) => {
       const sectionContainer: Container = validContainers.includes(
           section.container as Container,
@@ -2807,7 +2772,7 @@ async function handler(
       const estimatedInputTokens = estimateTokensFromText(
         stableBlocks.join("\n"),
       ) + estimateTokensFromText(volatileBlocks.join("\n"));
-      const estimatedCredits = computeMaxChargeCredits(
+      const generationCredits = computeMaxChargeCredits(
         {
           uncachedInputTokens: estimatedInputTokens,
           cachedInputTokens: 0,
@@ -2817,10 +2782,15 @@ async function handler(
         },
         estimatePricing,
       );
+      const estimatedCredits = generationCredits + extractionCredits +
+        embeddingCredits;
       return {
         sectionId: section.id,
         estimatedInputTokens,
         estimatedOutputTokens: sectionMaxCompletionTokens,
+        generationCredits,
+        sceneMemoryExtractionCredits: extractionCredits,
+        embeddingCredits,
         estimatedCredits,
       };
     });
@@ -3033,9 +3003,9 @@ async function handler(
     storyArcWithinBeatPosition: outlineSectionCtx.storyArc.withinBeatPosition,
     storyArcWithinBeatTotal: outlineSectionCtx.storyArc.withinBeatTotal,
   });
-  const effectiveStableBlocks = body.outline_section_id
-    ? [...stableBlocks, SCENE_MEMORY_GENERATION_INSTRUCTIONS]
-    : stableBlocks;
+  // Prose generation is intentionally prose-only. Scene memory is extracted
+  // from persisted raw_text by section-embedding after this output commits.
+  const effectiveStableBlocks = stableBlocks;
   const stablePrompt = effectiveStableBlocks.join("\n").trim();
   const volatilePrompt = volatileBlocks.join("\n").trim();
   // PR-372: SHA-256 of the serialized stable prefix. Diagnostics only —
@@ -3150,12 +3120,8 @@ async function handler(
         providerOptions: {
           cacheMode: selectedModel.cacheMode,
           promptCacheKey,
-          responseFormat: body.outline_section_id
-            ? GENERATE_WITH_MEMORY_RESPONSE_FORMAT
-            : undefined,
-          responseFormatTarget: body.outline_section_id
-            ? "responses"
-            : undefined,
+          responseFormat: undefined,
+          responseFormatTarget: undefined,
         },
         // PR-372: SHA-256 of the serialized stable prefix. Diagnostics
         // only — persisted to generation_usage_events.stable_prefix_hash.
@@ -3173,7 +3139,7 @@ async function handler(
           const llmDurationMs = Date.now() - providerStartMs;
           const parsedScene = parseGeneratedScene(
             providerResult.content,
-            Boolean(body.outline_section_id),
+            false,
             providerResult.finishReason,
           );
           const generatedText = parsedScene.scene;
@@ -3218,6 +3184,10 @@ async function handler(
                 visibility: "private",
                 outline_section_id: body.outline_section_id ?? null,
                 rendered_container: body.container ?? null,
+                run_id: durableRunId || null,
+                run_section_id: durableRunId
+                  ? (body.outline_section_id ?? null)
+                  : null,
               });
 
           if (outputInsertError || !outputRow?.id) {
@@ -3294,10 +3264,12 @@ async function handler(
                 summary: String(sectionForEmbed.summary ?? ""),
                 container: (sectionForEmbed.container ?? null) as string | null,
                 pov: (sectionForEmbed.pov ?? null) as string | null,
-                terminal_beat: (sectionForEmbed.terminal_beat ?? null) as string | null,
-                story_arc_beat_id: (sectionForEmbed.story_arc_beat_id ?? null) as string | null,
+                terminal_beat: (sectionForEmbed.terminal_beat ?? null) as
+                  | string
+                  | null,
+                story_arc_beat_id:
+                  (sectionForEmbed.story_arc_beat_id ?? null) as string | null,
                 raw_text: generatedText,
-                scene_memory: sceneMemory,
                 output_id: outputId,
                 prior_context: priorContext,
               };
@@ -3329,7 +3301,9 @@ async function handler(
                   } catch (error) {
                     extractionError = error;
                     console.error(
-                      `[generate-story] Run All memory extraction attempt ${attempt}/2 failed: ${String(error)}`,
+                      `[generate-story] Run All memory extraction attempt ${attempt}/2 failed: ${
+                        String(error)
+                      }`,
                     );
                   }
                 }

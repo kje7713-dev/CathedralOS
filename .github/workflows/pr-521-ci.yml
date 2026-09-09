@@ -6,6 +6,9 @@ on:
       - 'supabase/functions/_shared/**'
       - 'supabase/functions/generate-story/**'
       - 'supabase/functions/embed-section/**'
+      - 'supabase/functions/run-outline/**'
+      - 'supabase/migrations/20260909215722_scene_memory_stage_ledger_and_run_lineage.sql'
+      - 'supabase/tests/database/scene_memory_stage_ledger.test.sql'
       - '.github/workflows/pr-521-ci.yml'
 
 jobs:
@@ -22,6 +25,10 @@ jobs:
           deno check
           supabase/functions/_shared/billable-llm.ts
           supabase/functions/_shared/scene-memory.ts
+          supabase/functions/_shared/memory-lifecycle.ts
+          supabase/functions/_shared/memory-pipeline.ts
+          supabase/functions/_shared/memory-state.ts
+          supabase/functions/_shared/section-embedding.ts
           supabase/functions/embed-section/index.ts
           supabase/functions/generate-story/_provider.ts
           supabase/functions/generate-story/index.ts
@@ -45,3 +52,10 @@ jobs:
           deno test --no-check -A
           supabase/functions/generate-story/index_test.ts
           --filter="PR-360-Z regression A"
+
+      - name: Test lifecycle, pipeline, and Run All behavioral regressions
+        run: >-
+          deno test --no-check -A
+          supabase/functions/_shared/memory-lifecycle_test.ts
+          supabase/functions/_shared/memory-pipeline_test.ts
+          supabase/functions/run-outline/index_test.ts

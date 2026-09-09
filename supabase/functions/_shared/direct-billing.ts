@@ -11,6 +11,7 @@ import {
   availableCredits,
   type CreditStore,
 } from "../generate-story/_credits.ts";
+import { CURRENT_MEMORY_PIPELINE_VERSION } from "./memory-pipeline.ts";
 
 export interface DirectBillingContext {
   userID: string;
@@ -52,6 +53,45 @@ export async function preflightDirectUsage(
   }
 }
 
+export async function hasCompletedDirectStage(
+  context: DirectBillingContext,
+  stage: string,
+): Promise<boolean> {
+  if (!context.outputID) return false;
+  const stageIdentity =
+    `${context.outputID}:${CURRENT_MEMORY_PIPELINE_VERSION}:${stage}`;
+  const { data, error } = await context.adminClient.from(
+    "generation_usage_events",
+  )
+    .select("stage_identity, stage_version, stage_status, status")
+    .eq("user_id", context.userID)
+    .eq("stage_identity", stageIdentity)
+    .maybeSingle();
+  if (error) throw new Error(`stage lookup failed: ${error.message}`);
+  if (
+    data?.stage_identity === stageIdentity &&
+    data?.stage_version === CURRENT_MEMORY_PIPELINE_VERSION &&
+    data?.stage_status === "complete" && data?.status === "complete"
+  ) return true;
+  // PR #521 used output_id:stage as idempotency_key. Treat a completed legacy
+  // event as the same semantic stage, but never use it to match a different
+  // output or stage.
+  const { data: legacy, error: legacyError } = await context.adminClient.from(
+    "generation_usage_events",
+  )
+    .select("id, status")
+    .eq("user_id", context.userID)
+    .eq("idempotency_key", `${context.outputID}:${stage}`)
+    .eq("generation_output_id", context.outputID)
+    .eq("purpose", "embed-section")
+    .eq("status", "complete")
+    .maybeSingle();
+  if (legacyError) {
+    throw new Error(`legacy stage lookup failed: ${legacyError.message}`);
+  }
+  return Boolean(legacy?.id);
+}
+
 export async function settleDirectUsage(
   context: DirectBillingContext,
   stage: string,
@@ -59,6 +99,9 @@ export async function settleDirectUsage(
   inputTokens: number,
   outputTokens: number,
 ): Promise<number> {
+  if (!context.outputID) {
+    throw new Error(`stable output identity required for ${stage}`);
+  }
   const model = await getEnabledModelByProviderModel(
     context.adminClient,
     modelName,
@@ -75,37 +118,33 @@ export async function settleDirectUsage(
   const charge = computeActualChargeCredits(usage, pricing);
   const cogs = computeProviderCogsCents(usage, pricing);
   const margin = computeMarginCents(charge, pricing, cogs.providerCogsCents);
-  const { data, error } = await context.adminClient.from(
-    "generation_usage_events",
-  ).insert({
-    user_id: context.userID,
-    generation_output_id: context.outputID ?? null,
-    action: context.action,
-    purpose: "embed-section",
-    model_name: modelName,
-    input_tokens: inputTokens,
-    output_tokens: outputTokens,
-    generation_length_mode: "section-memory",
-    output_budget: outputTokens,
-    status: "complete",
-    credit_revenue_usd: charge * pricing.creditValueUsd,
-    idempotency_key: context.outputID ? `${context.outputID}:${stage}` : null,
-    uncached_input_tokens: inputTokens,
-    cached_input_tokens: 0,
-    cache_write_input_tokens: 0,
-    provider_cogs_cents: cogs.providerCogsCents,
-    customer_revenue_cents: margin.customerRevenueCents,
-    margin_cents: margin.marginCents,
-  }).select("id").maybeSingle();
-  if (error || !data?.id) {
-    throw new Error(`usage event insert failed: ${error?.message ?? "no row"}`);
-  }
-  const entitlement = await context.creditStore.loadOrDefault(context.userID);
-  await context.creditStore.charge(
-    context.userID,
-    charge,
-    entitlement,
-    context.outputID ?? null,
+  const stageIdentity =
+    `${context.outputID}:${CURRENT_MEMORY_PIPELINE_VERSION}:${stage}`;
+  // The SQL RPC locks the entitlement and writes the usage event + ledger debit
+  // in one transaction. Integer credit storage is legacy, so charge the
+  // conservative whole-credit amount while retaining the real provider tokens.
+  const chargeCredits = Math.max(0, Math.ceil(charge));
+  const { data, error } = await context.adminClient.rpc(
+    "settle_scene_memory_stage",
+    {
+      p_user_id: context.userID,
+      p_stage_identity: stageIdentity,
+      p_stage_version: CURRENT_MEMORY_PIPELINE_VERSION,
+      p_stage: stage,
+      p_output_id: context.outputID,
+      p_model_name: modelName,
+      p_input_tokens: Math.max(0, Math.round(inputTokens)),
+      p_output_tokens: Math.max(0, Math.round(outputTokens)),
+      p_charge: chargeCredits,
+      p_provider_cogs_cents: cogs.providerCogsCents,
+      p_customer_revenue_cents: margin.customerRevenueCents,
+      p_margin_cents: margin.marginCents,
+    },
   );
-  return charge;
+  if (error || !Array.isArray(data) || !data[0]) {
+    throw new Error(
+      `atomic stage settlement failed: ${error?.message ?? "no row"}`,
+    );
+  }
+  return chargeCredits;
 }

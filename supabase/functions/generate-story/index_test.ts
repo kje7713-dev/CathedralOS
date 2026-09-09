@@ -4221,16 +4221,13 @@ Deno.test({
   },
 });
 
-Deno.test("single-pass scene response parser preserves prose and memory", () => {
+Deno.test("generated outline scene parser accepts prose-only responses", () => {
   const parsed = parseGeneratedScene(
-    JSON.stringify({
-      scene: "Only what happened on the page.",
-      scene_memory: { extracted_summary: "Factual scene summary." },
-    }),
-    true,
+    "Only what happened on the page.",
+    false,
   );
   assertEquals(parsed.scene, "Only what happened on the page.");
-  assertEquals(parsed.sceneMemory?.extracted_summary, "Factual scene summary.");
+  assertEquals(parsed.sceneMemory, undefined);
 });
 
 Deno.test("single-pass scene response parser recovers a draft on truncation", () => {
@@ -4463,17 +4460,18 @@ Deno.test({
       "utf8",
     );
 
-    // The fire-and-forget call site MUST pass the parsed generated prose as
-    // raw_text and forward the same-run structured memory.
+    // The post-generation call site MUST pass the persisted generated prose
+    // as raw_text. It must not forward producer-supplied scene memory: the
+    // dedicated extractor owns authoritative memory for generated sections.
     assertStringIncludes(
       text,
       "raw_text: generatedText",
       "generate-story must pass parsed generated prose to embed-section",
     );
-    assertStringIncludes(
-      text,
-      "scene_memory: sceneMemory",
-      "generate-story must forward same-run scene memory",
+    assertEquals(
+      text.includes("scene_memory: sceneMemory"),
+      false,
+      "generated outline indexing must not trust producer-supplied scene memory",
     );
 
     // The fetch-site MUST be guarded by the resolved outline section, returned
@@ -4518,7 +4516,6 @@ Deno.test({
         "terminal_beat",
         "story_arc_beat_id",
         "raw_text",
-        "scene_memory",
         "output_id",
         "prior_context",
       ]
@@ -4530,6 +4527,19 @@ Deno.test({
       );
     }
   },
+});
+
+Deno.test("generated outline path is prose-only and waits for durable memory in Run All", async () => {
+  const fs = await import("node:fs");
+  const text = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+  assertStringIncludes(text, "const effectiveStableBlocks = stableBlocks;");
+  assertStringIncludes(text, "responseFormat: undefined");
+  const persist = text.indexOf("persistence.insertOutput({");
+  const process = text.indexOf("await processSectionMemory(");
+  const lineage = text.indexOf('section_embeddings\n                    .select("generation_output_id")');
+  assertEquals(persist >= 0, true);
+  assertEquals(process > persist, true, "memory extraction follows output persistence");
+  assertEquals(lineage > process, true, "Run All verifies memory lineage before proceeding");
 });
 
 // Source-level assertion: handler forwards body.outline_outline_section_id to
