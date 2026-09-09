@@ -47,6 +47,11 @@ import {
   SCENE_MEMORY_RESPONSE_FORMAT,
 } from "./scene-memory.ts";
 import { loadPriorMemoryRows, reconcileSceneMemory } from "./memory-lifecycle.ts";
+import {
+  CURRENT_MEMORY_PIPELINE_VERSION,
+  isCurrentMemoryPipelineVersion,
+  memoryPipelineVersion,
+} from "./memory-pipeline.ts";
 
 const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
   "gpt-4o-mini";
@@ -80,6 +85,9 @@ export interface EmbedSectionRequest {
   // in the new structured state. The LLM is the source of truth for
   // what to store; the prior context is its working memory.
   prior_context?: string;
+  // Internal continuation-only flag. It forces re-extraction from persisted
+  // raw_text and never permits old producer memory to become authoritative.
+  forceExtract?: boolean;
 }
 
 // LLM returns semantic content only. The function adds IDs, source_section_id,
@@ -198,7 +206,7 @@ export async function processSectionMemory(
   // Uses OpenAI Structured Outputs so a successful, complete response always
   // conforms to the scene-memory JSON schema.
   let sceneMemory: SceneMemory;
-  if (body.scene_memory) {
+  if (body.scene_memory && !body.forceExtract) {
     sceneMemory = normalizeSceneMemory(body.scene_memory);
     console.log(
       `[embed-section] using producer-supplied scene memory summary_len=${sceneMemory.extracted_summary.length}`,
@@ -458,6 +466,9 @@ export async function processSectionMemory(
       pov: body.pov ?? null,
       character_deltas: reconciled.character_deltas,
       plot_thread_deltas: enrichedPlotThreads,
+      memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
+      memory_extractor_model: OPENAI_MODEL_DEFAULT,
+      memory_normalized_at: new Date().toISOString(),
       continuity_facts: enrichedContinuityFacts,
       open_loops: enrichedOpenLoops,
       scene_ending_state: sceneMemory.scene_ending_state,
@@ -469,7 +480,7 @@ export async function processSectionMemory(
     throw new SectionEmbeddingError("database_error", upsertErr.message);
   }
   console.log(
-    `[embed-section] section_embeddings upserted section=${body.outline_section_id} threads=${enrichedPlotThreads.length} loops=${enrichedOpenLoops.length} facts=${enrichedContinuityFacts.length}`,
+    `[embed-section] memory persisted section=${body.outline_section_id} output=${body.output_id ?? "none"} version=${CURRENT_MEMORY_PIPELINE_VERSION} extractor=${OPENAI_MODEL_DEFAULT} summary_len=${sceneMemory.extracted_summary.length} characters=${reconciled.character_deltas.length} threads=${enrichedPlotThreads.length} facts=${enrichedContinuityFacts.length} loops=${enrichedOpenLoops.length}`,
   );
 
   return {
@@ -477,6 +488,76 @@ export async function processSectionMemory(
     extractedSummary: sceneMemory.extracted_summary,
     embeddingDim: embedding.length,
   };
+}
+
+/**
+ * Lazily upgrades only the canonical memories needed by the current story.
+ * It reuses persisted prose and generation-output lineage; it never calls the
+ * prose generator. Re-running is idempotent because current-version rows are
+ * skipped and each upsert targets the existing outline section.
+ */
+export async function ensureMemoryPipelineVersion(
+  adminClient: any,
+  projectId: string,
+  currentSectionId: string,
+  openaiKey: string,
+  billing: DirectBillingContext,
+): Promise<{ normalized: number; legacy: number }> {
+  const { data: current } = await adminClient.from("outline_sections")
+    .select("id, outline_id, position").eq("id", currentSectionId).maybeSingle();
+  if (!current) return { normalized: 0, legacy: 0 };
+  const { data: memories, error } = await adminClient.from("section_embeddings")
+    .select("outline_section_id, generation_output_id, raw_text, memory_pipeline_version")
+    .eq("project_id", projectId);
+  if (error) throw new Error(`memory version query failed: ${error.message}`);
+  const prior = (memories ?? []).filter((row: any) =>
+    row.outline_section_id !== currentSectionId &&
+    !isCurrentMemoryPipelineVersion(row.memory_pipeline_version)
+  );
+  if (!prior.length) return { normalized: 0, legacy: 0 };
+
+  const ids = prior.map((row: any) => row.outline_section_id).filter(Boolean);
+  const { data: sections } = await adminClient.from("outline_sections")
+    .select("id, outline_id, position, title, summary, container, pov, terminal_beat, story_arc_beat_id")
+    .in("id", ids);
+  const byId = new Map<string, Record<string, any>>(
+    (sections ?? []).map((row: any) => [String(row.id), row as Record<string, any>]),
+  );
+  const ordered = prior.filter((row: any) => {
+    const section = byId.get(String(row.outline_section_id));
+    return section && section.outline_id === current.outline_id && Number(section.position ?? 0) < Number(current.position ?? 0);
+  }).sort((a: any, b: any) => Number(byId.get(String(a.outline_section_id))?.position ?? 0) - Number(byId.get(String(b.outline_section_id))?.position ?? 0));
+
+  let normalized = 0;
+  for (const row of ordered) {
+    const section = byId.get(String(row.outline_section_id));
+    if (!section) continue;
+    let rawText = typeof row.raw_text === "string" ? row.raw_text : "";
+    if (!rawText && row.generation_output_id) {
+      const { data: output } = await adminClient.from("generation_outputs")
+        .select("output_text").eq("id", row.generation_output_id).maybeSingle();
+      rawText = String(output?.output_text ?? "");
+    }
+    if (!rawText) throw new Error(`memory normalization missing raw_text for section ${row.outline_section_id}`);
+    await processSectionMemory({
+      outline_section_id: String(section.id),
+      outline_id: String(section.outline_id),
+      project_id: projectId,
+      position: Number(section.position ?? 0),
+      title: String(section.title ?? ""),
+      summary: String(section.summary ?? ""),
+      container: section.container ?? null,
+      pov: section.pov ?? null,
+      terminal_beat: section.terminal_beat ?? null,
+      story_arc_beat_id: section.story_arc_beat_id ?? null,
+      raw_text: rawText,
+      output_id: row.generation_output_id ?? undefined,
+      forceExtract: true,
+    }, adminClient, openaiKey, { ...billing, outputID: row.generation_output_id ?? null, outlineSectionID: String(section.id) });
+    normalized++;
+  }
+  console.log(`[embed-section] memory normalization complete project=${projectId} current=${currentSectionId} normalized=${normalized} legacy=${ordered.length} version=${memoryPipelineVersion(CURRENT_MEMORY_PIPELINE_VERSION)}`);
+  return { normalized, legacy: ordered.length };
 }
 
 export async function processEmbedSection(

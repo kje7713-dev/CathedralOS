@@ -71,6 +71,7 @@ import {
 import {
   computeMaxChargeCredits,
   estimateTokensFromText,
+  getEnabledModelByProviderModel,
   type GenerationModelStore,
   normalizedModelId,
   snapshotPricing,
@@ -89,6 +90,9 @@ import {
 } from "../_shared/billable-llm.ts";
 import { normalizeSceneMemory, type SceneMemory } from "../_shared/scene-memory.ts";
 import type { EmbedSectionRequest } from "../_shared/section-embedding.ts";
+import { ensureMemoryPipelineVersion } from "../_shared/section-embedding.ts";
+import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
+import { formatCanonicalProjectState } from "../_shared/memory-state.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -111,6 +115,8 @@ export async function sha256Hex(text: string): Promise<string> {
     .join("");
 }
 
+const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini";
+
 const ALLOWED_ACTIONS = [
   "generate",
   "regenerate",
@@ -121,28 +127,6 @@ type GenerationAction = typeof ALLOWED_ACTIONS[number];
 
 /** Estimate-only action — returns a cost estimate without calling the LLM. */
 const ESTIMATE_ACTION = "estimate" as const;
-
-// Legacy parser compatibility for older direct callers/tests. Generated outline
-// sections no longer request or trust producer-supplied scene memory; the
-// authoritative extractor runs after generation_outputs persistence.
-const GENERATE_WITH_MEMORY_RESPONSE_FORMAT = {
-  type: "json_schema",
-  json_schema: {
-    name: "generated_scene_with_memory",
-    strict: true,
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["scene", "scene_memory"],
-      properties: {
-        scene: { type: "string" },
-        scene_memory: (SCENE_MEMORY_RESPONSE_FORMAT as {
-          json_schema: { schema: unknown };
-        }).json_schema.schema,
-      },
-    },
-  },
-};
 
 interface GeneratedSceneWithMemory {
   scene: string;
@@ -1197,78 +1181,7 @@ function aggregateProjectStateForGeneration(
   scenes: Array<Record<string, unknown>>,
   previousScene: Record<string, unknown>,
 ): string {
-  const characters = new Map<string, Record<string, unknown>>();
-  const threads = new Map<string, Record<string, unknown>>();
-  const facts = new Map<string, Record<string, unknown>>();
-  const loops = new Map<string, Record<string, unknown>>();
-  const lines = ["## Project State", ""];
-
-  lines.push("## Previous Canonical Section", "");
-  if (typeof previousScene.extracted_summary === "string" && previousScene.extracted_summary) {
-    lines.push(`Summary: ${previousScene.extracted_summary}`, "");
-  }
-  if (previousScene.scene_ending_state && typeof previousScene.scene_ending_state === "object") {
-    lines.push("Ending state:", "```json", JSON.stringify(previousScene.scene_ending_state, null, 2), "```", "");
-  }
-  const previousFacts = Array.isArray(previousScene.continuity_facts) ? previousScene.continuity_facts : [];
-  const factText = previousFacts.map((fact: any) => typeof fact === "string" ? fact : fact?.fact).filter(Boolean);
-  if (factText.length) lines.push("Concrete continuity facts:", ...factText.map((fact) => `- ${fact}`), "");
-
-  for (const scene of scenes) {
-    for (const delta of Array.isArray(scene.character_deltas) ? scene.character_deltas : []) {
-      if (delta && typeof delta === "object" && typeof (delta as any).character_name === "string") {
-        const item = delta as Record<string, unknown>;
-        const name = String(item.character_name);
-        const prior = characters.get(name) ?? {};
-        const merged = { ...prior };
-        for (const [key, value] of Object.entries(item)) {
-          if (value !== null && value !== undefined && value !== "") merged[key] = value;
-        }
-        characters.set(name, merged);
-      }
-    }
-    for (const thread of Array.isArray(scene.plot_thread_deltas) ? scene.plot_thread_deltas : []) {
-      if (thread && typeof thread === "object") {
-        const item = thread as any;
-        const key = String(item.thread_name ?? item.id ?? "");
-        if (key) threads.set(key, item);
-      }
-    }
-    for (const fact of Array.isArray(scene.continuity_facts) ? scene.continuity_facts : []) {
-      if (fact && typeof fact === "object") {
-        const item = fact as any;
-        const key = String(item.id ?? item.fact ?? "");
-        if (!key || item.active !== true) {
-          if (key) facts.delete(key);
-        } else if (item.superseded_by) {
-          facts.delete(String(item.superseded_by));
-          facts.delete(key);
-        } else {
-          facts.set(key, item);
-        }
-      } else if (typeof fact === "string" && fact) {
-        facts.set(fact, { fact });
-      }
-    }
-    for (const loop of Array.isArray(scene.open_loops) ? scene.open_loops : []) {
-      if (loop && typeof loop === "object") {
-        const item = loop as any;
-        const key = String(item.id ?? item.description ?? "");
-        if (key) loops.set(key, item);
-      }
-    }
-  }
-
-  lines.push("## Cumulative Story State", "");
-  if (characters.size) {
-    lines.push("Characters:", ...Array.from(characters.values()).map((item) => `- **${item.character_name}**: ${JSON.stringify(item)}`), "");
-  }
-  if (threads.size) {
-    lines.push("Plot threads:", ...Array.from(threads.values()).map((item) => `- **${item.thread_name}** [${item.status}]: ${item.description ?? ""}`), "");
-  }
-  if (facts.size) lines.push("Continuity Facts:", ...Array.from(facts.values()).map((item) => `- ${String(item.fact ?? "")}`), "");
-  if (loops.size) lines.push("Open loops:", ...Array.from(loops.values()).map((item) => `- [${item.type ?? "unknown"}] ${item.description ?? ""}`), "");
-  return lines.join("\n");
+  return formatCanonicalProjectState(scenes, previousScene);
 }
 
 export function resolveWithinBeatPosition(positions: number[], currentPosition: number): { position: number; total: number } | null {
@@ -2998,6 +2911,39 @@ async function handler(
       Object.keys(outlineSectionCtx.storyArc).length > 0 ? "found" : "empty"
     }`,
   );
+
+  // A continuation must never write prose against a mixed-version canon. The
+  // upgrade reads persisted raw_text and re-runs only the dedicated extractor;
+  // it never regenerates prose. Current-version rows are skipped, making
+  // recovery/retry idempotent.
+  if (adminClient && projectID && body.outline_section_id && !isEstimate) {
+    try {
+      const normalization = await ensureMemoryPipelineVersion(
+        adminClient,
+        projectID,
+        String(body.outline_section_id),
+        Deno.env.get("OPENAI_API_KEY") ?? "",
+        {
+          userID: userId,
+          action: "memory-normalization",
+          projectID,
+          outlineSectionID: String(body.outline_section_id),
+          adminClient,
+          creditStore: store,
+        },
+      );
+      console.log(
+        `[generate-story] memory pipeline version=${CURRENT_MEMORY_PIPELINE_VERSION} normalized=${normalization.normalized} legacy=${normalization.legacy}`,
+      );
+    } catch (error) {
+      console.error(`[generate-story] incompatible memory normalization blocked continuation: ${String(error)}`);
+      return corsResponse(JSON.stringify({
+        status: "failed",
+        errorCode: "memory_pipeline_upgrade_required",
+        errorMessage: "Prior scene memory must be upgraded before continuation.",
+      }), { status: 409 });
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Shared billable-runner preflight input. The runner performs the authoritative

@@ -38,6 +38,8 @@ import {
 } from "./_generation_request.ts";
 import { prepareCreditReservation } from "./_credit_preflight.ts";
 import { deriveRecipeObligations } from "../outline-from-recipe/_recipe_obligations.ts";
+import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
+import { formatCanonicalProjectState } from "../_shared/memory-state.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -317,6 +319,7 @@ async function handleKickoff(req: Request): Promise<Response> {
       status: "queued",
       sections: [],
       credits_reserved: 0,
+      memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
     })
     .select()
     .single();
@@ -385,6 +388,7 @@ async function handleKickoff(req: Request): Promise<Response> {
     sections: initialSections,
     model: body.model ?? null,
     user_id: userId,
+    memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
   }).eq("id", run.id);
   if (initError) {
     await markRunFailed(
@@ -643,7 +647,7 @@ async function runOutline(
 
   const { data: run, error: runError } = await adminClient.from("chapter_runs")
     .select(
-      "id, outline_id, user_id, model, credits_reserved, created_at, sections, next_retry_at, status",
+      "id, outline_id, user_id, model, credits_reserved, created_at, sections, next_retry_at, status, memory_pipeline_version",
     )
     .eq("id", runId).single();
   if (runError || !run) throw new Error("run disappeared after claim");
@@ -663,6 +667,12 @@ async function runOutline(
   const sections = Array.isArray(run.sections)
     ? run.sections as Array<Record<string, unknown>>
     : [];
+  if (run.memory_pipeline_version !== CURRENT_MEMORY_PIPELINE_VERSION) {
+    await adminClient.from("chapter_runs").update({
+      memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
+    }).eq("id", runId);
+    console.log(`[run-outline] run_id=${runId} upgraded memory pipeline metadata to ${CURRENT_MEMORY_PIPELINE_VERSION}`);
+  }
   // Older runs stored only display fields in sections. Hydrate missing inputs
   // from the authoritative outline so those runs are resumable too.
   const sectionIds = sections.map((s) => String(s.id)).filter(Boolean);
@@ -1294,151 +1304,7 @@ function aggregateProjectState(
   scenes: Array<Record<string, unknown>>,
   previousScene?: Record<string, unknown>,
 ): string {
-  const charactersByName = new Map<string, Record<string, unknown>>();
-  const threadsById = new Map<string, Record<string, unknown>>();
-  const activeFactsById = new Map<string, Record<string, unknown>>();
-  const openLoopsById = new Map<string, Record<string, unknown>>();
-  const lines: string[] = [
-    "## Project state (cumulative across all accepted scenes)",
-  ];
-  lines.push("");
-
-  // 1. ALWAYS emit the immediately previous section's summary + ending_state FIRST (Rule 5).
-  if (previousScene) {
-    lines.push("### Immediately previous section (always injected)");
-    lines.push("");
-    if (
-      typeof previousScene.extracted_summary === "string" &&
-      previousScene.extracted_summary
-    ) {
-      lines.push(`**Summary:** ${previousScene.extracted_summary}`);
-      lines.push("");
-    }
-    if (
-      previousScene.scene_ending_state &&
-      typeof previousScene.scene_ending_state === "object"
-    ) {
-      lines.push("**Ending state:**");
-      lines.push("```json");
-      lines.push(JSON.stringify(previousScene.scene_ending_state, null, 2));
-      lines.push("```");
-      lines.push("");
-    }
-  }
-
-  // 2. Process all scenes for the aggregate.
-  for (const scene of scenes) {
-    // Rule 2: character_deltas merge fields per character_name (not latest-overwrites).
-    if (Array.isArray(scene.character_deltas)) {
-      for (const delta of scene.character_deltas) {
-        if (
-          delta && typeof delta === "object" &&
-          typeof (delta as { character_name?: unknown }).character_name ===
-            "string"
-        ) {
-          const name = (delta as { character_name: string }).character_name;
-          const existing = charactersByName.get(name) ?? {};
-          // Merge: existing fields preserved, new fields override (latest wins per field).
-          charactersByName.set(name, {
-            ...existing,
-            ...(delta as Record<string, unknown>),
-          });
-        }
-      }
-    }
-    // Rule 3: plot_thread_deltas use stable IDs. Latest wins by thread_id.
-    if (Array.isArray(scene.plot_thread_deltas)) {
-      for (const thread of scene.plot_thread_deltas) {
-        if (
-          thread && typeof thread === "object" &&
-          typeof (thread as { id?: unknown }).id === "string"
-        ) {
-          const id = (thread as { id: string }).id;
-          threadsById.set(id, thread as Record<string, unknown>);
-        }
-      }
-    }
-    // Rule 4: continuity_facts filter by active/superseded. active=false
-    // means this fact was superseded by a later one; remove it from the set.
-    if (Array.isArray(scene.continuity_facts)) {
-      for (const fact of scene.continuity_facts) {
-        if (
-          fact && typeof fact === "object" &&
-          typeof (fact as { id?: unknown }).id === "string"
-        ) {
-          const id = (fact as { id: string }).id;
-          if ((fact as { active?: boolean }).active === true) {
-            activeFactsById.set(id, fact as Record<string, unknown>);
-          } else {
-            activeFactsById.delete(id);
-          }
-        }
-      }
-    }
-    // Rule 3: open_loops use stable IDs. Latest wins by loop_id.
-    if (Array.isArray(scene.open_loops)) {
-      for (const loop of scene.open_loops) {
-        if (
-          loop && typeof loop === "object" &&
-          typeof (loop as { id?: unknown }).id === "string"
-        ) {
-          const id = (loop as { id: string }).id;
-          openLoopsById.set(id, loop as Record<string, unknown>);
-        }
-      }
-    }
-  }
-
-  // 3. Emit the aggregate.
-  if (charactersByName.size > 0) {
-    lines.push("### Characters (merged across scenes — Rule 2)");
-    for (const delta of charactersByName.values()) {
-      const name = String(
-        (delta as { character_name?: string }).character_name ?? "(unnamed)",
-      );
-      lines.push(`- **${name}**: ${JSON.stringify(delta)}`);
-    }
-    lines.push("");
-  }
-  if (threadsById.size > 0) {
-    lines.push("### Plot threads (latest status by thread_id — Rule 3)");
-    for (const thread of threadsById.values()) {
-      const name = String(
-        (thread as { thread_name?: string }).thread_name ?? "(unnamed)",
-      );
-      const status = String(
-        (thread as { status?: string }).status ?? "unknown",
-      );
-      const id = String((thread as { id: string }).id).slice(0, 8);
-      const desc = String(
-        (thread as { description?: string }).description ?? "",
-      );
-      lines.push(`- **${name}** [${status}] (id=${id}): ${desc}`);
-    }
-    lines.push("");
-  }
-  if (activeFactsById.size > 0) {
-    lines.push(
-      "### Active continuity facts (must not be contradicted — Rule 4)",
-    );
-    for (const fact of activeFactsById.values()) {
-      const text = String(
-        (fact as { fact?: string }).fact ?? JSON.stringify(fact),
-      );
-      lines.push(`- ${text}`);
-    }
-    lines.push("");
-  }
-  if (openLoopsById.size > 0) {
-    lines.push("### Open loops (unresolved — Rule 3)");
-    for (const loop of openLoopsById.values()) {
-      const type = String((loop as { type?: string }).type ?? "unknown");
-      const desc = String((loop as { description?: string }).description ?? "");
-      lines.push(`- [${type}] ${desc}`);
-    }
-    lines.push("");
-  }
-  return lines.join("\n");
+  return formatCanonicalProjectState(scenes, previousScene);
 }
 
 // ---- Rule 8: pipeline order (generate → persist → extract → next) ------
