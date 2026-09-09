@@ -87,12 +87,7 @@ import {
   type BillableProviderResult,
   runBillableLLM,
 } from "../_shared/billable-llm.ts";
-import {
-  normalizeSceneMemory,
-  SCENE_MEMORY_GENERATION_INSTRUCTIONS,
-  SCENE_MEMORY_RESPONSE_FORMAT,
-  type SceneMemory,
-} from "../_shared/scene-memory.ts";
+import { normalizeSceneMemory, type SceneMemory } from "../_shared/scene-memory.ts";
 import type { EmbedSectionRequest } from "../_shared/section-embedding.ts";
 
 // ---------------------------------------------------------------------------
@@ -127,9 +122,9 @@ type GenerationAction = typeof ALLOWED_ACTIONS[number];
 /** Estimate-only action — returns a cost estimate without calling the LLM. */
 const ESTIMATE_ACTION = "estimate" as const;
 
-// Section generation returns prose and the semantic scene-memory payload in
-// one structured provider response. The embedding API still runs afterward,
-// but the expensive second LLM extraction pass is no longer needed.
+// Legacy parser compatibility for older direct callers/tests. Generated outline
+// sections no longer request or trust producer-supplied scene memory; the
+// authoritative extractor runs after generation_outputs persistence.
 const GENERATE_WITH_MEMORY_RESPONSE_FORMAT = {
   type: "json_schema",
   json_schema: {
@@ -2766,6 +2761,36 @@ async function handler(
     // action, but do all sections in one Edge Function invocation. This
     // avoids creating a gateway request burst for large Run All queues.
     const estimatePricing = snapshotPricing(selectedModel);
+    // Run All performs two additional billable calls after prose: dedicated
+    // scene-memory extraction and the text-embedding vectorization. Reserve
+    // both here so the second pass cannot discover that the user is out of
+    // credits after prose has already been persisted.
+    const extractorModel = await getEnabledModelByProviderModel(
+      adminClient,
+      OPENAI_MODEL_DEFAULT,
+    );
+    const embeddingModel = await getEnabledModelByProviderModel(
+      adminClient,
+      "text-embedding-3-small",
+    );
+    const extractionCredits = extractorModel
+      ? computeMaxChargeCredits({
+        uncachedInputTokens: 6000,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 8192,
+        toolCostUsd: 0,
+      }, snapshotPricing(extractorModel))
+      : 0;
+    const embeddingCredits = embeddingModel
+      ? computeMaxChargeCredits({
+        uncachedInputTokens: 1500,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 0,
+        toolCostUsd: 0,
+      }, snapshotPricing(embeddingModel))
+      : 0;
     const estimates = body.estimateSections!.map((section) => {
       const sectionContainer: Container = validContainers.includes(
           section.container as Container,
@@ -2807,7 +2832,7 @@ async function handler(
       const estimatedInputTokens = estimateTokensFromText(
         stableBlocks.join("\n"),
       ) + estimateTokensFromText(volatileBlocks.join("\n"));
-      const estimatedCredits = computeMaxChargeCredits(
+      const generationCredits = computeMaxChargeCredits(
         {
           uncachedInputTokens: estimatedInputTokens,
           cachedInputTokens: 0,
@@ -2817,10 +2842,14 @@ async function handler(
         },
         estimatePricing,
       );
+      const estimatedCredits = generationCredits + extractionCredits + embeddingCredits;
       return {
         sectionId: section.id,
         estimatedInputTokens,
         estimatedOutputTokens: sectionMaxCompletionTokens,
+        generationCredits,
+        sceneMemoryExtractionCredits: extractionCredits,
+        embeddingCredits,
         estimatedCredits,
       };
     });
@@ -3033,9 +3062,9 @@ async function handler(
     storyArcWithinBeatPosition: outlineSectionCtx.storyArc.withinBeatPosition,
     storyArcWithinBeatTotal: outlineSectionCtx.storyArc.withinBeatTotal,
   });
-  const effectiveStableBlocks = body.outline_section_id
-    ? [...stableBlocks, SCENE_MEMORY_GENERATION_INSTRUCTIONS]
-    : stableBlocks;
+  // Prose generation is intentionally prose-only. Scene memory is extracted
+  // from persisted raw_text by section-embedding after this output commits.
+  const effectiveStableBlocks = stableBlocks;
   const stablePrompt = effectiveStableBlocks.join("\n").trim();
   const volatilePrompt = volatileBlocks.join("\n").trim();
   // PR-372: SHA-256 of the serialized stable prefix. Diagnostics only —
@@ -3150,12 +3179,8 @@ async function handler(
         providerOptions: {
           cacheMode: selectedModel.cacheMode,
           promptCacheKey,
-          responseFormat: body.outline_section_id
-            ? GENERATE_WITH_MEMORY_RESPONSE_FORMAT
-            : undefined,
-          responseFormatTarget: body.outline_section_id
-            ? "responses"
-            : undefined,
+          responseFormat: undefined,
+          responseFormatTarget: undefined,
         },
         // PR-372: SHA-256 of the serialized stable prefix. Diagnostics
         // only — persisted to generation_usage_events.stable_prefix_hash.
@@ -3173,7 +3198,7 @@ async function handler(
           const llmDurationMs = Date.now() - providerStartMs;
           const parsedScene = parseGeneratedScene(
             providerResult.content,
-            Boolean(body.outline_section_id),
+            false,
             providerResult.finishReason,
           );
           const generatedText = parsedScene.scene;
@@ -3297,7 +3322,6 @@ async function handler(
                 terminal_beat: (sectionForEmbed.terminal_beat ?? null) as string | null,
                 story_arc_beat_id: (sectionForEmbed.story_arc_beat_id ?? null) as string | null,
                 raw_text: generatedText,
-                scene_memory: sceneMemory,
                 output_id: outputId,
                 prior_context: priorContext,
               };
