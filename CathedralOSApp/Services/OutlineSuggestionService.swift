@@ -335,6 +335,10 @@ struct OutlineSuggestionService {
                 container: section.container,
                 pov: section.pov,
                 terminalBeat: section.terminalBeat,
+                entryState: section.entryState,
+                dramaticEvent: section.dramaticEvent,
+                resultingChange: section.resultingChange,
+                terminalState: section.terminalState,
                 storyArcBeatID: section.storyArcBeatID?.uuidString,
                 recipeRequirementIDs: section.recipeRequirementIDs
             )
