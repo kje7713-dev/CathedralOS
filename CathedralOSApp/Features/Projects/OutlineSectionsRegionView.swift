@@ -177,6 +177,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestionsLoading = false
     @State private var recoverableSuggestions: OutlineSuggestionResult?
     @State private var suggestionsError: String?
+    @State private var suggestionsNotice: String?
     @State private var suggestionsFeedback: String?
     @State private var showingSuggestionChargeWarning = false
     @State private var acceptingSectionID: UUID?
@@ -334,6 +335,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             Button("OK", role: .cancel) { suggestionsError = nil }
         } message: {
             Text(suggestionsError ?? "An unknown error occurred.")
+        }
+        .alert("Suggestions Running", isPresented: Binding(
+            get: { suggestionsNotice != nil },
+            set: { if !$0 { suggestionsNotice = nil } }
+        )) {
+            Button("OK", role: .cancel) { suggestionsNotice = nil }
+        } message: {
+            Text(suggestionsNotice ?? "The suggestion run continues on the server.")
         }
         .alert("Could Not Accept Section", isPresented: Binding(
             get: { embedError != nil },
@@ -495,7 +504,16 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             }
             suggestionsFeedback = feedback
         } catch let error as OutlineSuggestionError {
-            suggestionsError = error.localizedDescription
+            if case .cancelled = error {
+                // The server-side run is durable; only this view's polling task
+                // was cancelled. Do not mislabel that lifecycle event as a
+                // network failure.
+                suggestionsNotice = error.localizedDescription
+            } else {
+                suggestionsError = error.localizedDescription
+            }
+        } catch is CancellationError {
+            suggestionsNotice = "The suggestion run continues on the server. You can leave this screen and resume it later."
         } catch {
             suggestionsError = error.localizedDescription
         }

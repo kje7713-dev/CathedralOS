@@ -19,6 +19,7 @@ enum OutlineSuggestionError: Error, LocalizedError {
     case invalidResponse(String)
     case serverError(statusCode: Int, body: String? = nil)
     case networkError(String)
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -34,6 +35,7 @@ enum OutlineSuggestionError: Error, LocalizedError {
             if let body, !body.isEmpty { return "Server error \(c).\n\n\(body)" }
             return "Server error \(c)."
         case .networkError(let m):   return "Network error: \(m)"
+        case .cancelled:              return "The suggestion run continues on the server. You can leave this screen and resume it later."
         }
     }
 }
@@ -271,7 +273,10 @@ struct OutlineSuggestionService {
                 // Keep polling through transient network interruptions.
             }
         }
-        throw OutlineSuggestionError.networkError("Suggestion run was cancelled")
+        // The durable server job is independent of this polling task. A view
+        // disappearing or the app entering the background must not surface a
+        // false network failure to the user.
+        throw OutlineSuggestionError.cancelled
     }
 
     static func errorForFailedJob(errorCode: String?, message: String?) -> OutlineSuggestionError {
