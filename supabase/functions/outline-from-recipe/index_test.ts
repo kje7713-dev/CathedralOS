@@ -42,6 +42,9 @@ import {
   recipeProvenance,
   attachRecipeProvenance,
   isCompatibleStoryMaterialEnrichment,
+  findDramaticDistinctnessIssues,
+  findCausalScaleIssues,
+  validateOutlinePlanningQuality,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -873,4 +876,46 @@ Deno.test("format is request-derived rather than hardcoded in enrichment prompt"
   const prompt = buildEnrichmentPrompt({ ...sparseRequest, requestedFormat: "shortStory" } as any);
   assertEquals(prompt.user.includes('"requestedFormat": "shortStory"'), true);
   assertEquals(prompt.system.includes("shortStory"), true);
+});
+
+
+Deno.test("PR2 section schema exposes an additive generation-ready contract", () => {
+  const allocation = new Map([[
+    "beat-1",
+    { minSections: 1, rationale: "opening movement" },
+  ]]);
+  const schema = buildSuggestionResponseSchema([{ id: "beat-1" }], allocation) as any;
+  const required = schema.properties.beats.properties["beat-1"].items.required;
+  for (const field of ["entryState", "dramaticEvent", "resultingChange", "terminalState"]) {
+    assertEquals(required.includes(field), true);
+  }
+});
+
+Deno.test("PR2 distinctness gate identifies repeated dramatic work without deleting sections", () => {
+  const repeated: any[] = [
+    { title: "Cut the route", summary: "Brody cuts the route through the town.", dramaticEvent: "Brody cuts the route through the town.", resultingChange: "The town loses access.", terminalState: "The town loses access.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Access is lost.", storyArcBeatID: "beat-1" },
+    { title: "Cut the route again", summary: "Brody cuts the route through the town again.", dramaticEvent: "Brody cuts the route through the town.", resultingChange: "The town loses access.", terminalState: "The town loses access.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Access is lost again.", storyArcBeatID: "beat-1" },
+  ];
+  assertEquals(findDramaticDistinctnessIssues(repeated).length, 1);
+  const distinct = [{ ...repeated[1], dramaticEvent: "An emergency coordinator cuts power to three neighborhoods.", resultingChange: "Brody abandons centralized control." }];
+  assertEquals(findDramaticDistinctnessIssues([repeated[0], ...distinct]).length, 0);
+});
+
+Deno.test("PR3 causal-scale gate is general and records material-backed diagnostics", () => {
+  const material = enrichmentFixture();
+  material.escalationLadder = [
+    { id: "e1", source: "planner", sourceReference: null, label: "local", description: "A local disruption." },
+    { id: "e2", source: "planner", sourceReference: null, label: "regional", description: "A regional response." },
+    { id: "e3", source: "planner", sourceReference: null, label: "global", description: "A global consequence." },
+  ];
+  const suggestions: any[] = [
+    { title: "Local breach", summary: "A local route fails.", dramaticEvent: "A local route fails.", resultingChange: "The town mobilizes.", terminalState: "A regional response begins.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Response begins.", storyArcBeatID: "beat-1" },
+    { title: "Regional response", summary: "A regional network counters the invasion.", dramaticEvent: "A regional network counters the invasion.", resultingChange: "The opposition learns the route.", terminalState: "Global attention follows.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Attention follows.", storyArcBeatID: "beat-1" },
+    { title: "Global consequence", summary: "The global consequence changes the balance.", dramaticEvent: "The global consequence changes the balance.", resultingChange: "The world order shifts.", terminalState: "The new order must be negotiated.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "The order shifts.", storyArcBeatID: "beat-1" },
+  ];
+  assertEquals(findCausalScaleIssues(suggestions, material, "novel"), []);
+  const diagnostics = validateOutlinePlanningQuality(suggestions, material, "novel");
+  assertEquals(diagnostics.distinctnessIssues, []);
+  assertEquals(diagnostics.causalScaleIssues, []);
+  assertEquals(diagnostics.unusedStoryMaterialItems >= 0, true);
 });
