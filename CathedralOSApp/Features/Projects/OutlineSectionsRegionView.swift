@@ -328,21 +328,13 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         } message: {
             Text(suggestionsFeedback ?? "Suggestions are ready.")
         }
-        .alert("Suggest Sections Failed", isPresented: Binding(
-            get: { suggestionsError != nil },
-            set: { if !$0 { suggestionsError = nil } }
-        )) {
-            Button("OK", role: .cancel) { suggestionsError = nil }
+        .alert(suggestionsAlertTitle, isPresented: suggestionsAlertPresented) {
+            Button("OK", role: .cancel) {
+                suggestionsError = nil
+                suggestionsNotice = nil
+            }
         } message: {
-            Text(suggestionsError ?? "An unknown error occurred.")
-        }
-        .alert("Suggestions Running", isPresented: Binding(
-            get: { suggestionsNotice != nil },
-            set: { if !$0 { suggestionsNotice = nil } }
-        )) {
-            Button("OK", role: .cancel) { suggestionsNotice = nil }
-        } message: {
-            Text(suggestionsNotice ?? "The suggestion run continues on the server.")
+            Text(suggestionsAlertMessage)
         }
         .alert("Could Not Accept Section", isPresented: Binding(
             get: { embedError != nil },
@@ -430,6 +422,26 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         modelContext.insert(outline)
         outline.project = project
         try? modelContext.save()
+    }
+
+    private var suggestionsAlertTitle: String {
+        suggestionsError == nil ? "Suggestions Running" : "Suggest Sections Failed"
+    }
+
+    private var suggestionsAlertMessage: String {
+        suggestionsError ?? suggestionsNotice ?? "An unknown error occurred."
+    }
+
+    private var suggestionsAlertPresented: Binding<Bool> {
+        Binding(
+            get: { suggestionsError != nil || suggestionsNotice != nil },
+            set: { isPresented in
+                if !isPresented {
+                    suggestionsError = nil
+                    suggestionsNotice = nil
+                }
+            }
+        )
     }
 
     private var suggestionsReady: Bool {
