@@ -10,6 +10,10 @@ struct OutlineSuggestion: Codable, Identifiable, Equatable {
     let container: String
     let pov: String
     let terminalBeat: String
+    let entryState: String?
+    let dramaticEvent: String?
+    let resultingChange: String?
+    let terminalState: String?
     let storyArcBeatID: String
     /// Server-derived recipe obligations materially advanced by this section.
     /// Optional for compatibility with older suggestion responses.
@@ -52,6 +56,10 @@ struct ExistingSectionBlob: Codable {
     let container: String?
     let pov: String?
     let terminalBeat: String?
+    let entryState: String?
+    let dramaticEvent: String?
+    let resultingChange: String?
+    let terminalState: String?
     /// nil for manual/free-form sections (no story arc beat linkage).
     let storyArcBeatID: String?
     let recipeRequirementIDs: [String]?

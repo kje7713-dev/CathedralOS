@@ -68,14 +68,8 @@ const SECTION_SCHEMA = {
     dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
     resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
     terminalState: { type: "string", minLength: 1, maxLength: 1200 },
-    plannedWordRange: {
-      type: "object",
-      properties: { minWords: { type: "integer", minimum: 1 }, maxWords: { type: "integer", minimum: 1 } },
-      required: ["minWords", "maxWords"],
-      additionalProperties: false,
-    },
   },
-  required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "plannedWordRange"],
+  required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState"],
   additionalProperties: false,
 } as const;
 
@@ -232,6 +226,7 @@ interface OutlineFromRecipeRequest {
   existingSections?: ExistingSectionBlob[]; // iOS-side outline state at request time
   storyMaterialEnrichment?: StoryMaterialEnrichment; // candidate reuse from a prior planning pass
   requestedFormat?: StoryMaterialFormat;
+  outline_id?: string;
 }
 
 interface ExistingSectionBlob {
@@ -310,11 +305,9 @@ export const STORY_MATERIAL_ENRICHMENT_SCHEMA = {
     schema: { type: "string", enum: ["cathedralos.story_material_enrichment"] },
     version: { type: "integer", enum: [2] },
     format: { type: "string", enum: ["novel", "shortStory", "other"] },
-    // These are server-owned after validation; the model may omit them.
-    sourceRecipeHash: { type: "string", minLength: 1, maxLength: 128 },
-    sourceRecipeVersion: { type: "integer" },
-    sourcePromptPackID: { type: "string", minLength: 1, maxLength: 200 },
-    sourcePromptPackName: { type: "string", minLength: 1, maxLength: 200 },
+    // Server-owned provenance is attached after the model response. It is
+    // intentionally absent from this strict provider schema; OpenAI requires
+    // every declared property to appear in `required`.
     rationale: { type: "string", minLength: 1, maxLength: 2000 },
     ...Object.fromEntries(STORY_MATERIAL_CATEGORIES.map((category) => [category, { type: "array", maxItems: 50, items: STORY_MATERIAL_ITEM_SCHEMA }])),
   },
@@ -562,17 +555,11 @@ const EXPANSION_SCHEMA = {
           dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
           resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
           terminalState: { type: "string", minLength: 1, maxLength: 1200 },
-          plannedWordRange: {
-            type: "object",
-            properties: { minWords: { type: "integer", minimum: 1 }, maxWords: { type: "integer", minimum: 1 } },
-            required: ["minWords", "maxWords"],
-            additionalProperties: false,
-          },
           storyArcBeatID: { type: "string" },
           insertAfterTitle: { type: ["string", "null"] },
-          recipeRequirementIDs: { type: "array", minItems: 1, maxItems: 50, items: { type: "string", minLength: 1 } },
+          recipeRequirementIDs: { type: "array", minItems: 0, maxItems: 50, items: { type: "string", minLength: 1 } },
         },
-        required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "plannedWordRange", "storyArcBeatID", "insertAfterTitle", "recipeRequirementIDs"],
+        required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "storyArcBeatID", "insertAfterTitle", "recipeRequirementIDs"],
       },
     },
   },
@@ -735,7 +722,7 @@ export function buildExpansionPrompt(
   const round = context?.round ?? 1;
   const unusedStoryMaterial = findUnusedStoryMaterial(current, req.storyMaterialEnrichment);
   return {
-    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign every addition one or more applicable recipeRequirementIDs from the supplied obligation list. Return JSON matching the expansion schema.
+    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 ${renderRecipeObligations(obligations)}`,
@@ -869,7 +856,7 @@ The expected ranges are literary targets; runtime/provider headroom is not a des
 
 ## Recipe obligations
 
-The following obligations were derived from populated canonical recipe fields. Required obligations must be materially advanced by one or more sections. Supporting items are optional texture and must not be promoted into mandatory plot events. Each section must include one or more applicable recipeRequirementIDs.
+The following obligations were derived from populated canonical recipe fields. Required obligations must be materially advanced by one or more sections. Supporting items are optional texture and must not be promoted into mandatory plot events. Each section may include zero or more applicable recipeRequirementIDs; attach only obligations materially advanced by that section.
 ${renderRecipeObligations(obligations)}
 
 ## Story material enrichment
@@ -885,7 +872,7 @@ For each beat, generate at least the stated minimum number of distinct sections.
 Write each section title as a concise, specific, evocative working title suitable for a ${requestedStoryMaterialFormat(req)} outline or ${requestedStoryMaterialFormat(req)}-ready table of contents. The title should name the concrete dramatic event, decision, reversal, discovery, confrontation, or consequence that this section actually dramatizes. Do not restate or lightly rephrase the premise, Story Arc beat label, terminal beat, or section summary. Avoid generic placeholders such as "Setup," "Conflict," "Events," or "Scene"; each title must distinguish its section from the others in the same beat.
 
 ## Generation-ready section contract
-For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields. Include plannedWordRange for each section as a soft literary planning range derived from its container; it never overrides the Section Contract, container, or natural stopping point.
+For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields. Do not provide plannedWordRange; the server derives it deterministically from container; it never overrides the Section Contract, container, or natural stopping point.
 
 ${allocationLines}
 
@@ -1320,7 +1307,7 @@ export function validateSuggestions(
       continue;
     }
     const requirementIDs = s.recipeRequirementIDs;
-    if (obligations.length > 0 && (!Array.isArray(requirementIDs) || requirementIDs.length === 0)) {
+    if (obligations.length > 0 && !Array.isArray(requirementIDs)) {
       throw new Error(`section ${String(s.title).slice(0, 120)} is missing recipeRequirementIDs`);
     }
     const validRequirementIDs = Array.isArray(requirementIDs)
@@ -1341,9 +1328,7 @@ export function validateSuggestions(
       ...(typeof s.dramaticEvent === "string" ? { dramaticEvent: s.dramaticEvent.slice(0, 2000) } : {}),
       ...(typeof s.resultingChange === "string" ? { resultingChange: s.resultingChange.slice(0, 1200) } : {}),
       ...(typeof s.terminalState === "string" ? { terminalState: s.terminalState.slice(0, 1200) } : {}),
-      ...(s.plannedWordRange && Number.isInteger(s.plannedWordRange.minWords) && Number.isInteger(s.plannedWordRange.maxWords)
-        ? { plannedWordRange: { minWords: Math.max(1, s.plannedWordRange.minWords), maxWords: Math.max(s.plannedWordRange.minWords, s.plannedWordRange.maxWords) } }
-        : {}),
+      plannedWordRange: plannedWordRangeForContainer(s.container),
       storyArcBeatID: s.storyArcBeatID,
       ...(validRequirementIDs.length > 0 ? { recipeRequirementIDs: validRequirementIDs } : {}),
     });
@@ -1536,6 +1521,17 @@ class StoryMaterialSufficiencyError extends Error {
   }
 }
 
+async function persistEnrichmentProvenance(db: any, body: OutlineFromRecipeRequest, runId: string, material: StoryMaterialEnrichment, provenance: StoryMaterialProvenance): Promise<void> {
+  if (!body.outline_id) return;
+  const { error } = await db.from("outlines").update({
+    enrichment_schema_version: material.version,
+    enrichment_source_recipe_hash: provenance.sourceRecipeHash,
+    enrichment_run_id: runId,
+    enrichment_planner_version: "story-material-v2",
+  }).eq("id", body.outline_id);
+  if (error) throw new Error(`Could not persist outline enrichment provenance: ${error.message}`);
+}
+
 async function runSuggestionJob(
   runId: string,
   body: OutlineFromRecipeRequest,
@@ -1667,6 +1663,7 @@ async function runSuggestionJob(
       story_material: storyMaterial,
       diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" },
     }).eq("id", runId);
+    await persistEnrichmentProvenance(db, body, runId, storyMaterial, provenance);
     body = { ...body, storyMaterialEnrichment: storyMaterial };
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
     const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);

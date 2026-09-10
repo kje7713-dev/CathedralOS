@@ -111,6 +111,10 @@ export type ReadinessSection = {
   container?: unknown;
   pov?: unknown;
   terminal_beat?: unknown;
+  entry_state?: unknown;
+  dramatic_event?: unknown;
+  resulting_change?: unknown;
+  terminal_state?: unknown;
   story_arc_beat_id?: unknown;
   target_words?: unknown;
   target_words_min?: unknown;
@@ -352,7 +356,7 @@ async function handleKickoff(req: Request): Promise<Response> {
     await adminClient
       .from("outline_sections")
       .select(
-        "id, title, summary, container, pov, terminal_beat, story_arc_beat_id, target_words, target_words_min, target_words_max, recipe_requirement_ids",
+        "id, title, summary, container, pov, terminal_beat, entry_state, dramatic_event, resulting_change, terminal_state, story_arc_beat_id, target_words, target_words_min, target_words_max, recipe_requirement_ids",
       )
       .eq("outline_id", body.outline_id);
   if (readinessSectionError) {
@@ -468,6 +472,10 @@ async function handleKickoff(req: Request): Promise<Response> {
     container: string | null;
     pov: string | null;
     terminal_beat: string | null;
+    entry_state: string | null;
+    dramatic_event: string | null;
+    resulting_change: string | null;
+    terminal_state: string | null;
     story_arc_beat_id: string | null;
   }>;
   try {
@@ -512,6 +520,10 @@ async function handleKickoff(req: Request): Promise<Response> {
     container: s.container,
     pov: s.pov,
     terminal_beat: s.terminal_beat,
+    entry_state: s.entry_state ?? null,
+    dramatic_event: s.dramatic_event ?? null,
+    resulting_change: s.resulting_change ?? null,
+    terminal_state: s.terminal_state ?? null,
     story_arc_beat_id: s.story_arc_beat_id,
     status: "pending",
   }));
@@ -899,7 +911,7 @@ async function runOutline(
   if (sectionIds.length > 0) {
     const { data: outlineSections } = await adminClient.from("outline_sections")
       .select(
-        "id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id, target_words, target_words_min, target_words_max, recipe_requirement_ids",
+        "id, title, position, summary, container, pov, terminal_beat, entry_state, dramatic_event, resulting_change, terminal_state, story_arc_beat_id, target_words, target_words_min, target_words_max, recipe_requirement_ids",
       )
       .in("id", sectionIds);
     const byId = new Map((outlineSections ?? []).map((s) => [s.id, s]));
@@ -1571,6 +1583,10 @@ async function collectSectionsToGenerate(
     container: string | null;
     pov: string | null;
     terminal_beat: string | null;
+    entry_state: string | null;
+    dramatic_event: string | null;
+    resulting_change: string | null;
+    terminal_state: string | null;
     story_arc_beat_id: string | null;
     target_words: number | null;
     target_words_min: number | null;
@@ -1594,7 +1610,7 @@ async function collectSectionsToGenerate(
     const { data: leaf, error: leafErr } = await adminClient
       .from("outline_sections")
       .select(
-        "id, title, position, summary, container, pov, terminal_beat, story_arc_beat_id, target_words, target_words_min, target_words_max",
+        "id, title, position, summary, container, pov, terminal_beat, entry_state, dramatic_event, resulting_change, terminal_state, story_arc_beat_id, target_words, target_words_min, target_words_max",
       )
       .eq("id", startParentSectionId)
       .single();
@@ -1620,7 +1636,7 @@ async function collectSectionsToGenerate(
   const { data: allSections, error: allErr } = await adminClient
     .from("outline_sections")
     .select(
-      "id, parent_id, position, title, summary, container, pov, terminal_beat, story_arc_beat_id, target_words, target_words_min, target_words_max",
+      "id, parent_id, position, title, summary, container, pov, terminal_beat, entry_state, dramatic_event, resulting_change, terminal_state, story_arc_beat_id, target_words, target_words_min, target_words_max",
     )
     .eq("outline_id", outlineId)
     .order("position", { ascending: true });
@@ -1938,6 +1954,10 @@ async function callEmbedSection(
     container: string | null;
     pov: string | null;
     terminal_beat: string | null;
+    entry_state: string | null;
+    dramatic_event: string | null;
+    resulting_change: string | null;
+    terminal_state: string | null;
     story_arc_beat_id: string | null;
     raw_text: string;
     // Kevin 2026-08-21 12:00 EDT fix: lineage from section memory to the

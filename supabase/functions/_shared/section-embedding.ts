@@ -76,6 +76,13 @@ export interface EmbedSectionRequest {
   container?: string | null;
   pov?: string | null;
   terminal_beat?: string | null;
+  entry_state?: string | null;
+  dramatic_event?: string | null;
+  resulting_change?: string | null;
+  terminal_state?: string | null;
+  target_words?: number | null;
+  target_words_min?: number | null;
+  target_words_max?: number | null;
   story_arc_beat_id?: string | null;
   raw_text?: string;
   // When generation already returned structured memory, reuse it and skip the
@@ -161,32 +168,30 @@ export async function ensureOutlineAndSection(
     }
   }
 
-  // Step 2: UPSERT outline_section (id = client-provided, all fields).
-  // status stays "draft" here — the iOS app flips it to "accepted" locally
-  // on 200 response.
+  // Persist the canonical outline section in the adapter stage. The memory
+  // extraction stage below never performs this write or changes ownership.
+  const sectionPayload = {
+    id: body.outline_section_id,
+    outline_id: body.outline_id,
+    position: body.position ?? 0,
+    title: body.title,
+    summary: body.summary ?? "",
+    container: body.container ?? null,
+    pov: body.pov ?? null,
+    terminal_beat: body.terminal_beat ?? null,
+    story_arc_beat_id: validatedBeatID,
+    status: "draft",
+    ...(body.entry_state !== undefined ? { entry_state: body.entry_state } : {}),
+    ...(body.dramatic_event !== undefined ? { dramatic_event: body.dramatic_event } : {}),
+    ...(body.resulting_change !== undefined ? { resulting_change: body.resulting_change } : {}),
+    ...(body.terminal_state !== undefined ? { terminal_state: body.terminal_state } : {}),
+    ...(body.target_words !== undefined ? { target_words: body.target_words } : {}),
+    ...(body.target_words_min !== undefined ? { target_words_min: body.target_words_min } : {}),
+    ...(body.target_words_max !== undefined ? { target_words_max: body.target_words_max } : {}),
+  };
   const { error: sectionErr } = await adminClient.from("outline_sections")
-    .upsert({
-      id: body.outline_section_id,
-      outline_id: body.outline_id,
-      position: body.position ?? 0,
-      title: body.title,
-      summary: body.summary ?? "",
-      container: body.container ?? null,
-      pov: body.pov ?? null,
-      terminal_beat: body.terminal_beat ?? null,
-      story_arc_beat_id: validatedBeatID,
-      status: "draft",
-    }, { onConflict: "id" });
-  if (sectionErr) {
-    console.error(
-      `[embed-section] section upsert failed: ${sectionErr.message}`,
-    );
-    throw new SectionEmbeddingError(
-      "database_error",
-      `outline_section upsert failed: ${sectionErr.message}`,
-    );
-  }
-  console.log(`[embed-section] section upserted id=${body.outline_section_id}`);
+    .upsert(sectionPayload, { onConflict: "id" });
+  if (sectionErr) throw new SectionEmbeddingError("database_error", `outline_section upsert failed: ${sectionErr.message}`);
 }
 
 export async function processSectionMemory(

@@ -22,6 +22,15 @@ class OutlineSection: Identifiable {
     /// Raw value of `POV`. Nil = not yet picked.
     var pov: String?
     var terminalBeat: String?
+    /// Concrete Section Contract fields. Optional for legacy outlines.
+    var entryState: String?
+    var dramaticEvent: String?
+    var resultingChange: String?
+    var terminalState: String?
+    /// Server-derived deterministic length contract.
+    var targetWords: Int?
+    var targetWordsMin: Int?
+    var targetWordsMax: Int?
     /// One of: "draft", "queued", "generated", "accepted".
     var status: String
     /// UUID of the `StoryArcBeat` this section is tagged with (e.g. "this is
@@ -48,6 +57,13 @@ class OutlineSection: Identifiable {
         self.container = nil
         self.pov = nil
         self.terminalBeat = nil
+        self.entryState = nil
+        self.dramaticEvent = nil
+        self.resultingChange = nil
+        self.terminalState = nil
+        self.targetWords = nil
+        self.targetWordsMin = nil
+        self.targetWordsMax = nil
         self.status = "draft"
         self.storyArcBeatID = nil
         self.recipeRequirementIDs = []

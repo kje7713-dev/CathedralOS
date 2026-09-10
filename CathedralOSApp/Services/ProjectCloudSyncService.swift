@@ -1722,6 +1722,13 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             section.container = payload.container
             section.pov = payload.pov
             section.terminalBeat = payload.terminalBeat
+            section.entryState = payload.entryState
+            section.dramaticEvent = payload.dramaticEvent
+            section.resultingChange = payload.resultingChange
+            section.terminalState = payload.terminalState
+            section.targetWords = payload.targetWords
+            section.targetWordsMin = payload.targetWordsMin
+            section.targetWordsMax = payload.targetWordsMax
             section.status = payload.status
             if let storyArcBeatIDString = payload.storyArcBeatID,
                let storyArcBeatID = UUID(uuidString: storyArcBeatIDString) {

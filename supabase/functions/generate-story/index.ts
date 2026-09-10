@@ -403,6 +403,10 @@ interface GenerateStoryRequest {
   // Contract block in the prompt.
   sectionTitle?: string;
   sectionSummary?: string;
+  sectionEntryState?: string;
+  sectionDramaticEvent?: string;
+  sectionResultingChange?: string;
+  sectionTerminalState?: string;
   // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): the 5 Story Arc
   // Context fields were REMOVED from the request body. iOS and run-outline
   // no longer pass them — generate-story now resolves story arc context
@@ -1523,6 +1527,10 @@ export function buildPrompt(req: {
   // Contract block — callers that lack section context simply omit it.
   sectionTitle?: string;
   sectionSummary?: string;
+  sectionEntryState?: string;
+  sectionDramaticEvent?: string;
+  sectionResultingChange?: string;
+  sectionTerminalState?: string;
   // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
   // Optional — when any field is set, the buildPrompt renders a
   // "## Story Arc Context" block between Project State and Section Contract.
@@ -1987,8 +1995,12 @@ Structural limits:
           ? req.sectionSummary!
           : "(no summary provided)"
       }`,
+      ...(nonEmpty(req.sectionEntryState) ? [`Entry state: ${req.sectionEntryState}`] : []),
+      ...(nonEmpty(req.sectionDramaticEvent) ? [`Dramatic event: ${req.sectionDramaticEvent}`] : []),
+      ...(nonEmpty(req.sectionResultingChange) ? [`Resulting change: ${req.sectionResultingChange}`] : []),
+      ...(nonEmpty(req.sectionTerminalState) ? [`Required terminal state: ${req.sectionTerminalState}`] : []),
       "",
-      "The premise describes what must happen in the current section. Begin advancing it immediately. Do not postpone it in order to continue prior plot threads.",
+      "The premise and explicit contract fields describe what must happen in the current section. Begin advancing it immediately. Do not postpone it in order to continue prior plot threads.",
       "",
       `POV: ${povInstruction(req.pov)}`,
       "",
@@ -2853,6 +2865,10 @@ async function handler(
       // isn't part of the token estimate.
       sectionTitle: body.sectionTitle,
       sectionSummary: body.sectionSummary,
+    sectionEntryState: body.sectionEntryState,
+    sectionDramaticEvent: body.sectionDramaticEvent,
+    sectionResultingChange: body.sectionResultingChange,
+    sectionTerminalState: body.sectionTerminalState,
     });
     // PR-372: concat blocks for token estimation. Hash not computed in the
     // estimate path (no billable call → no telemetry row).

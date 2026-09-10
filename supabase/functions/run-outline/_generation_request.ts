@@ -107,6 +107,10 @@ export function buildGenerateStoryRequest(args: {
     container: string | null;
     pov: string | null;
     terminal_beat: string | null;
+    entry_state?: string | null;
+    dramatic_event?: string | null;
+    resulting_change?: string | null;
+    terminal_state?: string | null;
     target_words?: number | null;
     target_words_min?: number | null;
     target_words_max?: number | null;
@@ -142,6 +146,10 @@ export function buildGenerateStoryRequest(args: {
     container: args.section.container ?? "scene",
     pov: args.section.pov ?? "thirdPersonLimited",
     terminalBeat: args.section.terminal_beat ?? undefined,
+    sectionEntryState: args.section.entry_state ?? undefined,
+    sectionDramaticEvent: args.section.dramatic_event ?? undefined,
+    sectionResultingChange: args.section.resulting_change ?? undefined,
+    sectionTerminalState: args.section.terminal_state ?? undefined,
     projectID: args.projectId,
     // PR-360-Z Bug A: send BOTH `projectID` (camelCase, what iOS reads)
     // AND `project_id` (snake_case, what run-outline used to send and what
