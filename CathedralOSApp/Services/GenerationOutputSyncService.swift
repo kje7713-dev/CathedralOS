@@ -850,18 +850,11 @@ struct GenerationOutputDeletionInput {
     }
 }
 
-struct GenerationOutputBulkDeletionResult {
-    let deletedOutputCount: Int
-    let deletedTombstoneCount: Int
-    let deletedSharedOutputCount: Int
-}
 
 protocol GenerationOutputDeletionServiceProtocol {
     @MainActor
     func delete(input: GenerationOutputDeletionInput, scope: SyncTombstone.DeletionScope, context: ModelContext) async throws
 
-    @MainActor
-    func deleteAll(project: StoryProject, scope: SyncTombstone.DeletionScope, context: ModelContext) async throws -> GenerationOutputBulkDeletionResult
     /// 19:16 EDT Kevin: synchronous, MainActor-only. Performs fetch-by-ID →
     /// delete → save as one non-suspending MainActor block. The caller is
     /// responsible for writing the tombstone and performing the remote
@@ -1196,81 +1189,6 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         try await delete(input: input, scope: .everywhere, context: context)
     }
 
-    @MainActor
-    func deleteAll(project: StoryProject, scope: SyncTombstone.DeletionScope, context: ModelContext) async throws -> GenerationOutputBulkDeletionResult {
-        // Capture every scalar before the RPC. No SwiftData object or context
-        // is retained across the network await.
-        let inputs = project.generations.map(GenerationOutputDeletionInput.init(output:))
-        if scope == .everywhere {
-            for input in inputs where input.cloudGenerationOutputID.isEmpty {
-                await writeTombstone(input: input, scope: .everywhere)
-            }
-            let result = try await deleteAllCloud(
-                projectLineageID: project.stableLineageID.uuidString,
-                localProjectID: project.id.uuidString
-            )
-            try deleteLocalBatch(inputs: inputs, context: context)
-            return result
-        }
-        for input in inputs { await writeTombstone(input: input, scope: scope) }
-        try deleteLocalBatch(inputs: inputs, context: context)
-        return GenerationOutputBulkDeletionResult(
-            deletedOutputCount: inputs.count,
-            deletedTombstoneCount: inputs.count,
-            deletedSharedOutputCount: 0
-        )
-    }
-
-    private func deleteAllCloud(projectLineageID: String, localProjectID: String) async throws -> GenerationOutputBulkDeletionResult {
-        try await mutationGate.run {
-            try await deleteAllCloudWhileSerialized(projectLineageID: projectLineageID, localProjectID: localProjectID)
-        }
-    }
-
-    private func deleteAllCloudWhileSerialized(projectLineageID: String, localProjectID: String) async throws -> GenerationOutputBulkDeletionResult {
-        let accessToken: String
-        do {
-            _ = try await sessionProvider.ensureSignedInUser()
-            accessToken = try await sessionProvider.validAccessToken(forceRefresh: false)
-        } catch let error as SupabaseSessionProviderError {
-            switch error {
-            case .notSignedIn: throw GenerationOutputDeletionError.notSignedIn
-            case .sessionExpired: throw GenerationOutputDeletionError.sessionExpired
-            }
-        }
-        let client: SupabaseBackendClient
-        do { client = try clientFactory() } catch { throw GenerationOutputDeletionError.notConfigured }
-        let url = client.configuration.projectURL
-            .appendingPathComponent("rest").appendingPathComponent("v1")
-            .appendingPathComponent("rpc/delete_project_generation_outputs_everywhere")
-        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(GenerationOutputBulkDeletionRequest(
-            projectLineageID: projectLineageID, localProjectID: localProjectID
-        ))
-        do {
-            let (data, response) = try await sessionProvider.retryOnceAfterExpiredJWT(request: request, session: session)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                throw GenerationOutputDeletionError.serverError(statusCode: http.statusCode, message: String(data: data, encoding: .utf8))
-            }
-            guard let row = try JSONDecoder().decode([GenerationOutputBulkDeletionResponse].self, from: data).first else {
-                throw GenerationOutputDeletionError.serverError(statusCode: 500, message: "Bulk deletion returned no result.")
-            }
-            return GenerationOutputBulkDeletionResult(
-                deletedOutputCount: row.deletedOutputCount,
-                deletedTombstoneCount: row.deletedTombstoneCount,
-                deletedSharedOutputCount: row.deletedSharedOutputCount
-            )
-        } catch let error as GenerationOutputDeletionError { throw error }
-        catch let error as SupabaseSessionProviderError {
-            switch error {
-            case .notSignedIn: throw GenerationOutputDeletionError.notSignedIn
-            case .sessionExpired: throw GenerationOutputDeletionError.sessionExpired
-            }
-        } catch { throw GenerationOutputDeletionError.networkError(error) }
-    }
-
     private func resolveLegacyOwnership(input: GenerationOutputDeletionInput, cloudID: String) async throws {
         guard UUID(uuidString: cloudID) != nil else {
             throw GenerationOutputDeletionError.invalidCloudGenerationOutputID
@@ -1299,26 +1217,6 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             accessToken: accessToken,
             client: client
         )
-    }
-}
-
-private struct GenerationOutputBulkDeletionRequest: Encodable {
-    let projectLineageID: String
-    let localProjectID: String
-    enum CodingKeys: String, CodingKey {
-        case projectLineageID = "p_lineage_id"
-        case localProjectID = "p_local_project_id"
-    }
-}
-
-private struct GenerationOutputBulkDeletionResponse: Decodable {
-    let deletedOutputCount: Int
-    let deletedTombstoneCount: Int
-    let deletedSharedOutputCount: Int
-    enum CodingKeys: String, CodingKey {
-        case deletedOutputCount = "deleted_output_count"
-        case deletedTombstoneCount = "deleted_tombstone_count"
-        case deletedSharedOutputCount = "deleted_shared_output_count"
     }
 }
 

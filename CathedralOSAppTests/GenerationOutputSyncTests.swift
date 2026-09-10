@@ -867,53 +867,7 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         XCTAssertEqual(sharing.lastUnpublishedID, sharedOutputID)
     }
 
-    func testBulkDeleteUsesOneProjectRPCAndCleansCapturedLocalRows() async throws {
-        let userID = "11111111-1111-1111-1111-111111111111"
-        let lineageID = UUID()
-        let auth = MockSyncAuthService(
-            authState: .signedIn(AuthUser(id: userID, email: nil)),
-            accessToken: fixtureSessionValue
-        )
-        let config = ValidatedSupabaseConfiguration.makeForTesting(projectURL: URL(string: "https://example.supabase.co")!)
-        var rpcCallCount = 0
-        GenerationOutputSyncURLProtocol.requestHandler = { request in
-            rpcCallCount += 1
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertTrue(request.url?.absoluteString.contains("rpc/delete_project_generation_outputs_everywhere") == true)
-            let body = try XCTUnwrap(request.httpBody)
-            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
-            XCTAssertEqual(json["p_lineage_id"], lineageID.uuidString)
-            XCTAssertEqual(json["p_local_project_id"], "local-project")
-            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (response, Data(#"[{"deleted_output_count":2,"deleted_tombstone_count":2,"deleted_shared_output_count":1}]"#.utf8))
-        }
-
-        let project = StoryProject(name: "Bulk delete")
-        project.lineageID = lineageID
-        let first = GenerationOutput(title: "One")
-        let second = GenerationOutput(title: "Two")
-        project.generations = [first, second]
-        let context = ModelContext(container)
-        context.insert(project)
-        try context.save()
-
-        let service = GenerationOutputDeletionService(
-            authService: auth,
-            sharingService: MockDeletionSharingService(),
-            backupService: LocalGenerationOutputBackupService(baseDirectory: tempDirectory),
-            session: makeSession(),
-            clientFactory: { SupabaseBackendClient(configuration: config) }
-        )
-        let result = try await service.deleteAll(project: project, scope: .everywhere, context: context)
-
-        XCTAssertEqual(rpcCallCount, 1)
-        XCTAssertEqual(result.deletedOutputCount, 2)
-        XCTAssertEqual(result.deletedTombstoneCount, 2)
-        XCTAssertEqual(result.deletedSharedOutputCount, 1)
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<GenerationOutput>()), 0)
-    }
-
-    func testUnverifiedZeroRowDeleteRetainsLocalOutputAndBackupForRetry() async throws {
+    func testZeroRowDeleteIsIdempotentAfterPersistedOwnershipWasEstablished() async throws {
         let cloudID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         let auth = MockSyncAuthService(
             authState: .signedIn(AuthUser(id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", email: nil)),
@@ -945,13 +899,59 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
             clientFactory: { SupabaseBackendClient(configuration: config) }
         )
 
-        // Empty DELETE representation is an idempotent success: RLS may hide
-        // an already-removed row, but the authenticated ownership was already
-        // established from the persisted owner identity.
+        // Empty DELETE representation is an idempotent success only after the
+        // persisted owner identity has already matched the authenticated user.
+        // Legacy rows without that persisted owner take the RLS-scoped GET path
+        // below and must establish ownership before DELETE is attempted.
         try await service.deleteEverywhere(input: GenerationOutputDeletionInput(output: output), context: context)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<GenerationOutput>()), 0)
         XCTAssertEqual(backupService.backupCount(), 0)
         XCTAssertEqual(tombstones.recorded.first?.deletionScope, .everywhere)
+    }
+
+    func testLegacyUnknownOwnerWithMissingCloudRowCannotDeleteLocalCopy() async throws {
+        let cloudID = "99999999-9999-4999-8999-999999999999"
+        let auth = MockSyncAuthService(
+            authState: .signedIn(AuthUser(id: "88888888-8888-4888-8888-888888888888", email: nil)),
+            accessToken: fixtureSessionValue
+        )
+        let backupService = LocalGenerationOutputBackupService(baseDirectory: tempDirectory)
+        let tombstones = MockOutputTombstoneService()
+        let config = ValidatedSupabaseConfiguration.makeForTesting(
+            projectURL: URL(string: "https://example.supabase.co")!
+        )
+        var methods: [String] = []
+        GenerationOutputSyncURLProtocol.requestHandler = { request in
+            methods.append(request.httpMethod ?? "")
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            if request.httpMethod == "GET" { return (response, Data("[]".utf8)) }
+            XCTFail("DELETE must not run without RLS-confirmed legacy ownership")
+            return (response, Data())
+        }
+
+        let context = ModelContext(container)
+        let output = GenerationOutput(title: "Legacy missing cloud row")
+        output.cloudGenerationOutputID = cloudID
+        context.insert(output)
+        try context.save()
+        XCTAssertNotNil(backupService.backup(output: output))
+
+        let service = GenerationOutputDeletionService(
+            authService: auth, sharingService: MockDeletionSharingService(), backupService: backupService,
+            tombstoneService: tombstones, session: makeSession(),
+            clientFactory: { SupabaseBackendClient(configuration: config) }
+        )
+
+        do {
+            try await service.deleteEverywhere(input: GenerationOutputDeletionInput(output: output), context: context)
+            XCTFail("Expected ownership verification failure")
+        } catch let error as GenerationOutputDeletionError {
+            guard case .cloudOwnershipNotVerified = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+        XCTAssertEqual(methods, ["GET"])
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<GenerationOutput>()), 1)
+        XCTAssertEqual(backupService.backupCount(), 1)
+        XCTAssertTrue(tombstones.recorded.isEmpty)
     }
 
     func testAccountSwitchCannotTreatRLSHiddenOwnerRowAsDeleted() async throws {
