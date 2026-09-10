@@ -35,6 +35,9 @@ import {
   flattenSuggestionResponse,
   validateRequest,
   validateSuggestions,
+  buildEnrichmentPrompt,
+  countStoryMaterialItems,
+  validateStoryMaterialEnrichment,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -718,4 +721,46 @@ Deno.test("expansion prompt includes round projection, broad range, and remainin
   assertEquals(prompt.user.includes("remainingDeficitTokens"), true);
   assertEquals(prompt.system.includes("22,700"), true);
   assertEquals(prompt.system.includes("never return, rewrite, reorder, or omit existing sections"), true);
+});
+
+
+function enrichmentFixture(): any {
+  return {
+    schema: "cathedralos.story_material_enrichment",
+    version: 1,
+    format: "novel",
+    rationale: "The sparse premise needs concrete opposition and escalation.",
+    characters: [{ id: "character-brody", source: "recipe", sourceReference: "selectedCharacters[0]", label: "Brody", description: "The protagonist who uses bugs and lizards to pursue world domination." }],
+    antagonisticForces: [{ id: "force-emergency-network", source: "planner", sourceReference: null, label: "Emergency network", description: "A coordinated response learns to sever Brody's creature routes." }],
+    locations: [{ id: "location-terrarium", source: "recipe", sourceReference: "project.summary", label: "Terrarium room", description: "Brody's controlled starting environment." }],
+    institutionsAndGroups: [], conflictSources: [], escalationLadder: [{ id: "escalation-town", source: "planner", sourceReference: null, label: "Townwide disruption", description: "A local experiment becomes visible to the town." }],
+    reversals: [], consequences: [], relationships: [], discoveries: [], unresolvedQuestions: [], thematicPressures: [],
+  };
+}
+
+Deno.test("story material enrichment validates provenance and remains inspectable for reuse", () => {
+  const material = validateStoryMaterialEnrichment(enrichmentFixture());
+  assertEquals(material.characters[0].source, "recipe");
+  assertEquals(material.antagonisticForces[0].source, "planner");
+  assertEquals(countStoryMaterialItems(material), 4);
+  const reused = validateStoryMaterialEnrichment(JSON.parse(JSON.stringify(material)));
+  assertEquals(reused, material);
+  let duplicate = "";
+  try {
+    validateStoryMaterialEnrichment({ ...enrichmentFixture(), locations: [{ ...enrichmentFixture().locations[0], id: "character-brody" }] });
+  } catch (error) { duplicate = String(error); }
+  assertEquals(duplicate.includes("duplicate"), true);
+});
+
+Deno.test("enrichment prompt preserves sparse recipe facts and separates planner invention", () => {
+  const prompt = buildEnrichmentPrompt(sparseRequest as any);
+  assertEquals(prompt.system.includes("Preserve every authored recipe fact"), true);
+  assertEquals(prompt.system.includes("source=recipe"), true);
+  assertEquals(prompt.system.includes("source=planner"), true);
+  assertEquals(prompt.user.includes("Monsters kill humans"), true);
+  assertEquals(prompt.user.includes("Douche"), true);
+});
+
+Deno.test("request validation accepts a previously persisted enrichment package", () => {
+  assertEquals(validateRequest({ ...sparseRequest, storyMaterialEnrichment: enrichmentFixture() }), null);
 });

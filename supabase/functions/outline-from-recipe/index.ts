@@ -220,6 +220,7 @@ interface OutlineFromRecipeRequest {
   arcTemplate: ArcTemplateBlob;
   hint?: string;
   existingSections?: ExistingSectionBlob[]; // iOS-side outline state at request time
+  storyMaterialEnrichment?: StoryMaterialEnrichment; // durable reuse from a prior planning pass
 }
 
 interface ExistingSectionBlob {
@@ -230,6 +231,98 @@ interface ExistingSectionBlob {
   terminalBeat?: string;
   storyArcBeatID?: string; // null for manual/free-form sections
   recipeRequirementIDs?: string[]; // server-assigned obligations already covered
+}
+
+export type StoryMaterialSource = "recipe" | "planner";
+
+export interface StoryMaterialItem {
+  id: string;
+  source: StoryMaterialSource;
+  sourceReference: string | null;
+  label: string;
+  description: string;
+}
+
+export interface StoryMaterialEnrichment {
+  schema: "cathedralos.story_material_enrichment";
+  version: 1;
+  format: "novel" | "shortStory" | "other";
+  rationale: string;
+  characters: StoryMaterialItem[];
+  antagonisticForces: StoryMaterialItem[];
+  locations: StoryMaterialItem[];
+  institutionsAndGroups: StoryMaterialItem[];
+  conflictSources: StoryMaterialItem[];
+  escalationLadder: StoryMaterialItem[];
+  reversals: StoryMaterialItem[];
+  consequences: StoryMaterialItem[];
+  relationships: StoryMaterialItem[];
+  discoveries: StoryMaterialItem[];
+  unresolvedQuestions: StoryMaterialItem[];
+  thematicPressures: StoryMaterialItem[];
+}
+
+export const STORY_MATERIAL_CATEGORIES = [
+  "characters", "antagonisticForces", "locations", "institutionsAndGroups",
+  "conflictSources", "escalationLadder", "reversals", "consequences",
+  "relationships", "discoveries", "unresolvedQuestions", "thematicPressures",
+] as const;
+
+const STORY_MATERIAL_ITEM_SCHEMA = {
+  type: "object",
+  properties: {
+    id: { type: "string", minLength: 1, maxLength: 120 },
+    source: { type: "string", enum: ["recipe", "planner"] },
+    sourceReference: { type: ["string", "null"], maxLength: 500 },
+    label: { type: "string", minLength: 1, maxLength: 160 },
+    description: { type: "string", minLength: 1, maxLength: 2000 },
+  },
+  required: ["id", "source", "sourceReference", "label", "description"],
+  additionalProperties: false,
+} as const;
+
+export const STORY_MATERIAL_ENRICHMENT_SCHEMA = {
+  type: "object",
+  properties: {
+    schema: { type: "string", enum: ["cathedralos.story_material_enrichment"] },
+    version: { type: "integer", enum: [1] },
+    format: { type: "string", enum: ["novel", "shortStory", "other"] },
+    rationale: { type: "string", minLength: 1, maxLength: 2000 },
+    ...Object.fromEntries(STORY_MATERIAL_CATEGORIES.map((category) => [category, { type: "array", maxItems: 50, items: STORY_MATERIAL_ITEM_SCHEMA }])),
+  },
+  required: ["schema", "version", "format", "rationale", ...STORY_MATERIAL_CATEGORIES],
+  additionalProperties: false,
+} as const;
+
+export function validateStoryMaterialEnrichment(value: unknown): StoryMaterialEnrichment {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("story material enrichment must be an object");
+  const candidate = value as Record<string, unknown>;
+  if (candidate.schema !== "cathedralos.story_material_enrichment" || candidate.version !== 1) throw new Error("story material enrichment has an unsupported schema or version");
+  if (!["novel", "shortStory", "other"].includes(String(candidate.format))) throw new Error("story material enrichment has an invalid format");
+  if (typeof candidate.rationale !== "string" || candidate.rationale.trim() === "") throw new Error("story material enrichment requires a rationale");
+  const ids = new Set<string>();
+  for (const category of STORY_MATERIAL_CATEGORIES) {
+    const items = candidate[category];
+    if (!Array.isArray(items)) throw new Error(`story material enrichment category ${category} must be an array`);
+    for (const item of items) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`story material enrichment category ${category} contains an invalid item`);
+      const row = item as Record<string, unknown>;
+      if (typeof row.id !== "string" || row.id.trim() === "" || ids.has(row.id)) throw new Error("story material enrichment contains a duplicate or missing item id");
+      if (row.source !== "recipe" && row.source !== "planner") throw new Error(`story material enrichment item ${row.id} has an invalid source`);
+      if (row.source === "recipe" && (typeof row.sourceReference !== "string" || row.sourceReference.trim() === "")) throw new Error(`recipe story material item ${row.id} requires a source reference`);
+      if (row.sourceReference !== null && typeof row.sourceReference !== "string") throw new Error(`story material enrichment item ${row.id} has an invalid source reference`);
+      if (typeof row.label !== "string" || row.label.trim() === "" || typeof row.description !== "string" || row.description.trim() === "") throw new Error(`story material enrichment item ${row.id} is missing label or description`);
+      ids.add(row.id);
+    }
+  }
+  return value as StoryMaterialEnrichment;
+}
+
+export function buildEnrichmentPrompt(req: OutlineFromRecipeRequest): { system: string; user: string } {
+  return {
+    system: `You are the story-material enrichment planner for CathedralOS. Create a canonical, provenance-aware package of ingredients that can sustain the requested format before sections are outlined. This is planning, not prose and not a final outline. Preserve every authored recipe fact; never replace, silently edit, or write invented material into the recipe. Use source=recipe for supplied material and source=planner for connective or newly invented material. Every item needs a stable id, a useful sourceReference when it comes from the recipe, and concrete label and description. A sparse premise requires proportionally more supporting characters, opposition, institutions, locations, intermediate objectives, failures, discoveries, relationships, consequences, and escalation. A detailed recipe should primarily develop and connect its supplied material. Do not fill categories mechanically when they are not useful, but provide enough concrete material for the requested format. Return only JSON matching the enrichment schema.`,
+    user: JSON.stringify({ recipe: req.recipe, arcTemplate: req.arcTemplate, hint: req.hint ?? null, requestedFormat: "novel" }, null, 2),
+  };
 }
 
 interface SuggestionLLMResult {
@@ -306,6 +399,13 @@ export function validateRequest(req: unknown): string | null {
     r.arcTemplate.beats.length === 0
   ) {
     return "arcTemplate.id and non-empty arcTemplate.beats required";
+  }
+  if (r.storyMaterialEnrichment) {
+    try {
+      validateStoryMaterialEnrichment(r.storyMaterialEnrichment);
+    } catch (error) {
+      return error instanceof Error ? error.message : "invalid story material enrichment";
+    }
   }
   if (
     r.arcTemplate.beats.some((beat) =>
@@ -494,7 +594,7 @@ export function buildExpansionPrompt(
 
 ## Recipe obligations
 ${renderRecipeObligations(obligations)}`,
-    user: JSON.stringify({ recipe: req.recipe, arcTemplate: req.arcTemplate, recipeObligations: obligations, existingSections: req.existingSections ?? [], currentSuggestions: current, expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens } }, null, 2),
+    user: JSON.stringify({ recipe: req.recipe, storyMaterialEnrichment: req.storyMaterialEnrichment ?? null, arcTemplate: req.arcTemplate, recipeObligations: obligations, existingSections: req.existingSections ?? [], currentSuggestions: current, expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens } }, null, 2),
   };
 }
 
@@ -598,6 +698,7 @@ export function buildPrompt(
   req: OutlineFromRecipeRequest,
   allocation: Map<string, Allocation>,
   obligations: RecipeObligation[] = [],
+  storyMaterial?: StoryMaterialEnrichment,
 ): { system: string; user: string } {
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
@@ -626,6 +727,10 @@ The expected ranges are literary targets; runtime/provider headroom is not a des
 The following obligations were derived from populated canonical recipe fields. Required obligations must be materially advanced by one or more sections. Supporting items are optional texture and must not be promoted into mandatory plot events. Each section must include one or more applicable recipeRequirementIDs.
 ${renderRecipeObligations(obligations)}
 
+## Story material enrichment
+${storyMaterial ? JSON.stringify(storyMaterial, null, 2) : "No enrichment package was supplied; preserve the complete recipe while planning."}
+Use this package to develop concrete events. Do not treat planner-invented material as authored recipe fact.
+
 ## Use the minimum-only allocation
 
 For each beat, generate at least the stated minimum number of distinct sections. The minimum is a floor for dramatic coverage, not a target or maximum: generate additional sections whenever the material supports distinct events, consequences, decisions, or revelations. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.
@@ -653,6 +758,7 @@ ${
       recipe: req.recipe,
       arcTemplate: req.arcTemplate,
       recipeObligations: obligations,
+      storyMaterialEnrichment: storyMaterial ?? null,
       hint: req.hint ?? null,
     },
     null,
@@ -819,6 +925,7 @@ Output JSON only. No commentary, no prose.`;
   const user = JSON.stringify(
     {
       recipe: req.recipe,
+      storyMaterialEnrichment: req.storyMaterialEnrichment ?? null,
       arcTemplate: {
         id: req.arcTemplate.id,
         name: req.arcTemplate.name,
@@ -1013,6 +1120,10 @@ async function callOpenAI(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export function countStoryMaterialItems(material: StoryMaterialEnrichment): number {
+  return STORY_MATERIAL_CATEGORIES.reduce((total, category) => total + material[category].length, 0);
 }
 
 export function countSuggestionsByBeat(suggestions: Suggestion[]): Record<string, number> {
@@ -1240,6 +1351,25 @@ async function runSuggestionJob(
       };
     };
 
+    let storyMaterial: StoryMaterialEnrichment;
+    if (body.storyMaterialEnrichment) {
+      storyMaterial = validateStoryMaterialEnrichment(body.storyMaterialEnrichment);
+      diagnostics = { ...diagnostics, stage: "story_material_reused", storyMaterialItemCount: countStoryMaterialItems(storyMaterial) };
+    } else {
+      const enrichmentPrompt = buildEnrichmentPrompt(body);
+      const enrichmentResult = await billableCall(
+        enrichmentPrompt.system,
+        enrichmentPrompt.user,
+        12000,
+        { type: "json_schema", json_schema: { name: "story_material_enrichment", strict: true, schema: STORY_MATERIAL_ENRICHMENT_SCHEMA } },
+        "story-material-enrichment",
+        (content) => validateStoryMaterialEnrichment(JSON.parse(content)),
+      );
+      storyMaterial = validateStoryMaterialEnrichment(JSON.parse(enrichmentResult.content));
+      diagnostics = { ...diagnostics, stage: "story_material_complete", storyMaterialItemCount: countStoryMaterialItems(storyMaterial) };
+      await db.from("outline_suggestion_runs").update({ story_material: storyMaterial, diagnostics }).eq("id", runId);
+    }
+    body = { ...body, storyMaterialEnrichment: storyMaterial };
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
     const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
     const plannedAllocation = await planSectionAllocation(
@@ -1257,7 +1387,7 @@ async function runSuggestionJob(
       plannerAllocationValidatedCountsByBeat: allocationCountsByBeat,
       recipeObligations,
     };
-    const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations);
+    const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial);
     const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations);
     const responseFormat = {
       type: "json_schema",
@@ -1418,7 +1548,7 @@ Deno.serve(async (req: Request) => {
     const runId = searchParams.get("run_id");
     const projectId = searchParams.get("project_id");
     const runColumns =
-      "id, status, suggestions, warnings, error_code, error, diagnostics, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json";
+      "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json";
 
     let run: any = null;
     let error: any = null;
@@ -1458,6 +1588,7 @@ Deno.serve(async (req: Request) => {
         errorCode: run.error_code,
         error: run.error,
         diagnostics: run.diagnostics,
+        storyMaterialEnrichment: run.story_material,
         created_at: run.created_at,
         updated_at: run.updated_at,
         completed_at: run.completed_at,
