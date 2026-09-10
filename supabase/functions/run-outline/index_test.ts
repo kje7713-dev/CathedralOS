@@ -3,7 +3,12 @@ import {
   assertExists,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { prepareCreditReservation } from "./_credit_preflight.ts";
-import { generationReadinessFailures } from "./index.ts";
+import {
+  generationReadinessFailures,
+  loadRunOutline,
+  requireRunOutlineRecipe,
+  RunOutlineOutlineError,
+} from "./index.ts";
 import {
   buildGenerateStoryRequest,
   generationOutputId,
@@ -31,6 +36,108 @@ const snapshot = {
     selectedMotifIDs: [],
   }],
 };
+
+function mockOutlineClient(result: { data: unknown; error: unknown }) {
+  return {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => result,
+        }),
+      }),
+    }),
+  } as never;
+}
+
+Deno.test("outline loader accepts a valid authoritative outline", async () => {
+  const outline = await loadRunOutline(
+    mockOutlineClient({
+      data: {
+        id: "outline-1",
+        user_id: "user-1",
+        local_project_id: "PROJECT-1",
+        source_recipe_json: { schema: "recipe" },
+        source_recipe_hash: "hash-1",
+      },
+      error: null,
+    }),
+    "outline-1",
+  );
+  assertEquals(outline.local_project_id, "PROJECT-1");
+  assertEquals(requireRunOutlineRecipe(outline).hash, "hash-1");
+});
+
+Deno.test("outline query failures preserve the database diagnostic and remain retryable", async () => {
+  try {
+    await loadRunOutline(
+      mockOutlineClient({
+        data: null,
+        error: {
+          code: "57014",
+          message: "statement timeout",
+          details: "canceling statement due to user request",
+          hint: "retry the query",
+        },
+      }),
+      "outline-1",
+    );
+    throw new Error("expected lookup failure");
+  } catch (error) {
+    assertEquals(error instanceof RunOutlineOutlineError, true);
+    const typed = error as RunOutlineOutlineError;
+    assertEquals(typed.kind, "query");
+    assertEquals(typed.retryable, true);
+    assertEquals(typed.dbError?.code, "57014");
+    assertEquals(
+      typed.message,
+      "outline_lookup_failed: 57014: statement timeout",
+    );
+    assertEquals(typed.message.includes("local_project_id missing"), false);
+  }
+});
+
+Deno.test("missing recipe provenance is a distinct terminal Run All invariant", () => {
+  try {
+    requireRunOutlineRecipe({
+      id: "outline-1",
+      local_project_id: "PROJECT-1",
+      source_recipe_json: null,
+      source_recipe_hash: null,
+    });
+    throw new Error("expected recipe provenance failure");
+  } catch (error) {
+    assertEquals(
+      (error as Error).message,
+      "outline_recipe_provenance_missing: re-plan this outline before Run All",
+    );
+  }
+});
+
+Deno.test("missing outline and missing project identity are distinct terminal invariants", async () => {
+  for (
+    const [data, expectedKind, expectedMessage] of [
+      [null, "not_found", "outline_not_found: outline-1"],
+      [
+        { id: "outline-1", local_project_id: "   " },
+        "missing_project_id",
+        "outline_incomplete: local_project_id missing",
+      ],
+    ] as const
+  ) {
+    try {
+      await loadRunOutline(
+        mockOutlineClient({ data, error: null }),
+        "outline-1",
+      );
+      throw new Error("expected lookup failure");
+    } catch (error) {
+      const typed = error as RunOutlineOutlineError;
+      assertEquals(typed.kind, expectedKind);
+      assertEquals(typed.retryable, false);
+      assertEquals(typed.message, expectedMessage);
+    }
+  }
+});
 
 const entitlement = {
   user_id: "user-1",
@@ -193,6 +300,11 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   assertEquals(source.includes("estimateRunCost("), true);
   assertEquals(source.includes("estimate_only"), true);
   assertEquals(source.includes("handleEstimate("), true);
+  assertEquals(source.includes("loadRunOutline("), true);
+  assertEquals(source.includes("outline_lookup_failed:"), true);
+  assertEquals(source.includes("scheduleTransientOutlineLookupRetry"), true);
+  assertEquals(source.includes("MAX_TRANSIENT_OUTLINE_LOOKUP_ATTEMPTS"), true);
+  assertEquals(source.includes("outline.local_project_id missing"), false);
   assertEquals(source.includes("estimated_credits: reservedCredits"), true);
   assertEquals(source.includes("estimateSections: sections.map"), true);
   assertEquals(source.includes('generationAction: "estimate_bulk"'), true);
@@ -241,6 +353,21 @@ Deno.test("run status endpoint exposes an exact idempotent replacement lookup", 
   assertEquals(source.includes('.eq("user_id", userData.user.id)'), true);
   assertEquals(
     source.includes("causing a false 404"),
+    true,
+  );
+});
+
+Deno.test("initial Run All estimate is not duplicated by model state initialization", async () => {
+  const source = await Deno.readTextFile(
+    "./CathedralOSApp/Features/Projects/OutlineSectionsRegionView.swift",
+  );
+  assertEquals(
+    source.includes("@State private var hasLoadedModels = false"),
+    true,
+  );
+  assertEquals(source.includes("guard hasLoadedModels else { return }"), true);
+  assertEquals(
+    source.includes("await refreshEstimate()\n        hasLoadedModels = true"),
     true,
   );
 });

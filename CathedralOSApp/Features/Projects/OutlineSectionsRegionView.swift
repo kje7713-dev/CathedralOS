@@ -1160,6 +1160,7 @@ struct KickoffConfirmationSheet: View {
     @State private var isEstimating = false
     @State private var selectedScope: String
     @State private var estimateError: String?
+    @State private var hasLoadedModels = false
 
     // Coherence v2 (2026-08-20): pre-gen coherence check REMOVED.
     // The check is now user-initiated via the "Check for inconsistencies"
@@ -1269,9 +1270,11 @@ struct KickoffConfirmationSheet: View {
             await loadModelsAndEstimate()
         }
         .onChange(of: selectedModelId) { _, _ in
+            guard hasLoadedModels else { return }
             Task { await refreshEstimate() }
         }
         .onChange(of: selectedScope) { _, _ in
+            guard hasLoadedModels else { return }
             Task { await refreshEstimate() }
         }
     }
@@ -1411,7 +1414,10 @@ struct KickoffConfirmationSheet: View {
             // Models failed to load -- continue with empty list; user can still attempt kickoff
             // and the run-outline endpoint will use its own default model.
         }
+        // Guard the initial state assignment above from triggering a second
+        // estimate through selectedModelId's onChange handler.
         await refreshEstimate()
+        hasLoadedModels = true
     }
 
     @MainActor
