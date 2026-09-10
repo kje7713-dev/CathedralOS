@@ -191,6 +191,9 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   assertEquals(source.includes("next_retry_at"), true);
   assertEquals(source.includes("queueContinuationAfterDelay"), true);
   assertEquals(source.includes("estimateRunCost("), true);
+  assertEquals(source.includes("estimate_only"), true);
+  assertEquals(source.includes("handleEstimate("), true);
+  assertEquals(source.includes("estimated_credits: reservedCredits"), true);
   assertEquals(source.includes("estimateSections: sections.map"), true);
   assertEquals(source.includes('generationAction: "estimate_bulk"'), true);
   assertEquals(source.includes('status: "queued"'), true);

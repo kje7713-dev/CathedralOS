@@ -54,6 +54,22 @@ enum RunOutlineError: Error, LocalizedError {
 
 /// Response from POST /functions/v1/run-outline (kickoff).
 /// The function queues the run and returns immediately with its durable ID.
+struct RunOutlineCostEstimate: Codable {
+    let estimatedCredits: Int
+    let availableCredits: Int
+    let allowed: Bool
+    let sectionCount: Int
+    let model: String?
+
+    enum CodingKeys: String, CodingKey {
+        case estimatedCredits = "estimated_credits"
+        case availableCredits = "available_credits"
+        case allowed
+        case sectionCount = "section_count"
+        case model
+    }
+}
+
 struct RunOutlineKickoffResponse: Codable {
     let run_id: String
     let status: String
@@ -145,6 +161,36 @@ struct RunOutlineService {
         let (data, response) = try await performRequest(urlRequest)
         try checkStatus(response: response, data: data)
         return try decode(RunOutlineKickoffResponse.self, from: data)
+    }
+
+    /// Request the server-authoritative estimate used by Run All preflight.
+    /// This is non-billable and deliberately shares run-outline's pricing path
+    /// with the durable reservation worker.
+    func estimate(
+        outlineID: String,
+        startParentSectionID: String,
+        model: String? = nil,
+        scope: String? = nil
+    ) async throws -> RunOutlineCostEstimate {
+        let client = try requireClient()
+        let token = try await validAccessToken()
+        let url = client.edgeFunctionURL(path: "run-outline")
+        var request = client.authorizedRequest(for: url, userAccessToken: token)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = [
+            "outline_id": outlineID,
+            "start_parent_section_id": startParentSectionID,
+            "estimate_only": true
+        ]
+        if let model, !model.isEmpty { body["model"] = model }
+        if let scope, !scope.isEmpty { body["scope"] = scope }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+
+        let (data, response) = try await performRequest(request)
+        try checkStatus(response: response, data: data)
+        return try decode(RunOutlineCostEstimate.self, from: data)
     }
 
     /// Find the current attempt for an idempotent outline/section pair. This

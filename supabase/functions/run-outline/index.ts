@@ -91,6 +91,7 @@ interface RunOutlineRequest {
    *   "from_here" -- start + all subsequent sections in outline order (by position)
    */
   scope?: string;
+  estimate_only?: boolean;
 }
 
 export type ReadinessOutline = {
@@ -274,6 +275,18 @@ async function handleKickoff(req: Request): Promise<Response> {
     planning_status: "generation_ready",
   })
     .eq("id", body.outline_id);
+
+  // Estimate-only requests use the exact same server-side pricing path as the
+  // durable preparation worker, without inserting a chapter_runs row.
+  if (body.estimate_only) {
+    return await handleEstimate(
+      adminClient,
+      userId,
+      authHeader,
+      body,
+    );
+  }
+
   const idempotencyKey =
     `${userId}:${body.outline_id}:${body.start_parent_section_id}`;
 
@@ -443,6 +456,76 @@ async function handleKickoff(req: Request): Promise<Response> {
       completed_at: null,
     }),
     { status: 202 },
+  );
+}
+
+// ---- authoritative estimate endpoint -------------------------------------
+async function handleEstimate(
+  adminClient: ReturnType<typeof createClient>,
+  userId: string,
+  authHeader: string,
+  body: RunOutlineRequest,
+): Promise<Response> {
+  let sections: Array<Record<string, unknown>>;
+  try {
+    sections = await collectSectionsToGenerate(
+      adminClient,
+      body.outline_id,
+      body.start_parent_section_id,
+      body.scope || "single",
+    ) as Array<Record<string, unknown>>;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return errorResponse("estimate_failed", message, 422);
+  }
+  if (sections.length === 0) {
+    return errorResponse("estimate_failed", "no sections to estimate", 422);
+  }
+
+  let estimatedCost: number;
+  try {
+    estimatedCost = await estimateRunCost(
+      adminClient,
+      userId,
+      authHeader,
+      body.outline_id,
+      sections,
+      body.model,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return errorResponse("estimate_failed", message, 422);
+  }
+
+  const { data: entitlement, error: entitlementError } = await adminClient
+    .from("user_entitlements")
+    .select(
+      "user_id, plan_name, is_pro, monthly_credit_allowance, purchased_credit_balance, current_period_start, current_period_end, entitlement_source, updated_at",
+    )
+    .eq("user_id", userId)
+    .single();
+  if (entitlementError || !entitlement) {
+    return errorResponse(
+      "estimate_failed",
+      "could not load user entitlement",
+      500,
+    );
+  }
+
+  const { reservedCredits, check } = prepareCreditReservation(
+    estimatedCost,
+    entitlement as UserEntitlement,
+  );
+  return corsResponse(
+    JSON.stringify({
+      status: "ok",
+      estimated_credits: reservedCredits,
+      available_credits: check.availableCredits,
+      allowed: check.allowed,
+      section_count: sections.length,
+      model: body.model ?? null,
+    }),
+    { status: 200 },
   );
 }
 

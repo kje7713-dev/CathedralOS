@@ -291,6 +291,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             KickoffConfirmationSheet(
                 project: project,
                 section: target.section,
+                outlineID: target.outlineID,
                 initialScope: target.initialScope,
                 modelID: target.modelID,
                 isStarting: isKickingOff,
@@ -1142,6 +1143,7 @@ struct OutlineSectionRow: View {
 struct KickoffConfirmationSheet: View {
     let project: StoryProject
     let section: OutlineSection
+    let outlineID: UUID
     let initialScope: String?
     let modelID: String?
     let isStarting: Bool
@@ -1150,11 +1152,11 @@ struct KickoffConfirmationSheet: View {
     let onCancel: () -> Void
 
     private let generationModelService: any GenerationModelServiceProtocol = BackendGenerationModelService()
-    private let estimateService: any GenerationCostEstimateServiceProtocol = SupabaseGenerationService()
+    private let runOutlineService = RunOutlineService()
 
     @State private var generationModels: [GenerationModelOption] = []
     @State private var selectedModelId: String?
-    @State private var costEstimate: GenerationCostEstimate?
+    @State private var runEstimate: RunOutlineCostEstimate?
     @State private var isEstimating = false
     @State private var selectedScope: String
     @State private var estimateError: String?
@@ -1162,10 +1164,6 @@ struct KickoffConfirmationSheet: View {
     // Coherence v2 (2026-08-20): pre-gen coherence check REMOVED.
     // The check is now user-initiated via the "Check for inconsistencies"
     // button on the section output detail view (see CoherenceCheckService).
-
-    private var firstPack: PromptPack? {
-        project.promptPacks.sorted(by: { $0.name < $1.name }).first
-    }
 
     /// Beat picker source — current arc's beats (empty if no arc picked yet).
     /// Mirror of OutlineSectionsRegionView.availableBeats. Defined locally
@@ -1180,16 +1178,6 @@ struct KickoffConfirmationSheet: View {
 
     private var selectedModel: GenerationModelOption? {
         generationModels.first(where: { $0.id == selectedModelId })
-    }
-
-    /// Mirrors `estimateLengthModeFromContainer` in supabase/functions/run-outline/index.ts.
-    /// chapter / episode / novella → .chapter; shortStory → .short; else → .long.
-    private func lengthMode(for section: OutlineSection) -> GenerationLengthMode {
-        switch section.container {
-        case "chapter", "episode", "novella": return .chapter
-        case "shortStory": return .short
-        default: return .long
-        }
     }
 
     /// Mirrors run-outline's section walker so the confirmation sheet estimates
@@ -1224,7 +1212,7 @@ struct KickoffConfirmationSheet: View {
 
     private var canStart: Bool {
         guard !isStarting else { return false }
-        if let est = costEstimate { return est.allowed }
+        if let est = runEstimate { return est.allowed }
         return true // optimistic until estimate arrives
     }
 
@@ -1338,22 +1326,20 @@ struct KickoffConfirmationSheet: View {
                     .foregroundStyle(CathedralTheme.Colors.destructive)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-        } else if let estimate = costEstimate {
+        } else if let estimate = runEstimate {
             HStack(spacing: CathedralTheme.Spacing.xs) {
                 Image(systemName: "bolt.circle")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(estimate.allowed
                         ? CathedralTheme.Colors.secondaryText
                         : CathedralTheme.Colors.destructive)
-                if estimate.allowed {
-                    Text("Up to: \(estimate.estimatedCredits) \(estimate.estimatedCredits <= 1 ? "credit" : "credits")\(sectionsForSelectedScope.count > 1 ? " total" : "") · \(estimate.availableCredits) remaining")
-                        .font(CathedralTheme.Typography.label(11, weight: .regular))
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                } else {
-                    Text("Need \(estimate.estimatedCredits) \(estimate.estimatedCredits <= 1 ? "credit" : "credits") total, you have \(estimate.availableCredits)")
-                        .font(CathedralTheme.Typography.label(11, weight: .regular))
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                }
+                Text(estimate.allowed
+                    ? "Up to: \(estimate.estimatedCredits) credits\(estimate.sectionCount > 1 ? " total" : "") · \(estimate.availableCredits) remaining"
+                    : "Need \(estimate.estimatedCredits) credits total, you have \(estimate.availableCredits)")
+                    .font(CathedralTheme.Typography.label(11, weight: .regular))
+                    .foregroundStyle(estimate.allowed
+                        ? CathedralTheme.Colors.secondaryText
+                        : CathedralTheme.Colors.destructive)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -1362,6 +1348,7 @@ struct KickoffConfirmationSheet: View {
     init(
         project: StoryProject,
         section: OutlineSection,
+        outlineID: UUID,
         initialScope: String? = nil,
         modelID: String? = nil,
         isStarting: Bool,
@@ -1371,6 +1358,7 @@ struct KickoffConfirmationSheet: View {
     ) {
         self.project = project
         self.section = section
+        self.outlineID = outlineID
         self.initialScope = initialScope
         self.modelID = modelID
         self.isStarting = isStarting
@@ -1379,7 +1367,7 @@ struct KickoffConfirmationSheet: View {
         self.onCancel = onCancel
         self._generationModels = State(initialValue: [])
         self._selectedModelId = State(initialValue: modelID)
-        self._costEstimate = State(initialValue: nil)
+        self._runEstimate = State(initialValue: nil)
         self._isEstimating = State(initialValue: false)
         self._estimateError = State(initialValue: nil)
         // Default scope: chapter rows start at "chapter" (multi-section), sub-sections at "single" (current behavior).
@@ -1428,49 +1416,25 @@ struct KickoffConfirmationSheet: View {
 
     @MainActor
     private func refreshEstimate() async {
-        guard let pack = firstPack else {
-            // No prompt pack on the project -- nothing to estimate against.
-            return
-        }
         isEstimating = true
         estimateError = nil
+        runEstimate = nil
+        defer { isEstimating = false }
+
         do {
-            var estimates: [GenerationCostEstimate] = []
-            for candidate in sectionsForSelectedScope {
-                let estimate = try await estimateService.estimateGenerationCost(
-                    project: project,
-                    pack: pack,
-                    lengthMode: lengthMode(for: candidate),
-                    selectedContainer: candidate.container.flatMap(Container.init(rawValue:)),
-                    selectedPOV: candidate.pov.flatMap(POV.init(rawValue:)),
-                    terminalBeat: candidate.terminalBeat,
-                    selectedModelId: selectedModelId
-                )
-                estimates.append(estimate)
-            }
-            guard let first = estimates.first else {
-                costEstimate = nil
-                estimateError = "No sections are available to estimate."
-                isEstimating = false
-                return
-            }
-            costEstimate = GenerationCostEstimate(
-                status: first.status,
-                selectedModelId: first.selectedModelId,
-                modelDisplayName: first.modelDisplayName,
-                storyGoal: first.storyGoal,
-                estimatedInputTokens: estimates.reduce(0) { $0 + $1.estimatedInputTokens },
-                estimatedOutputTokens: estimates.reduce(0) { $0 + $1.estimatedOutputTokens },
-                estimatedCredits: estimates.reduce(0) { $0 + $1.estimatedCredits },
-                availableCredits: first.availableCredits,
-                allowed: estimates.reduce(0) { $0 + $1.estimatedCredits } <= Double(first.availableCredits),
-                minimumChargeCredits: estimates.reduce(0) { $0 + $1.minimumChargeCredits }
+            // The server walks the same scope and runs the same combined
+            // estimate used by durable Run All credit reservation. Do not
+            // reconstruct generation, extraction, embedding, or retry pricing
+            // in Swift.
+            runEstimate = try await runOutlineService.estimate(
+                outlineID: outlineID.uuidString,
+                startParentSectionID: section.id.uuidString,
+                model: selectedModelId,
+                scope: selectedScope
             )
         } catch {
             estimateError = error.localizedDescription
-            costEstimate = nil
         }
-        isEstimating = false
     }
 
 }
