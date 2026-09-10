@@ -2280,6 +2280,23 @@ function sanitizeTitleForLLM(title: string | undefined | null): string {
 // Main handler
 // ---------------------------------------------------------------------------
 
+async function hasPersistedGenerationOutput(
+  adminClient: any | null,
+  outputId: string,
+): Promise<boolean> {
+  if (!adminClient || !outputId) return false;
+  try {
+    const { data, error } = await adminClient.from("generation_outputs")
+      .select("id").eq("id", outputId).maybeSingle();
+    return !error && data?.id === outputId;
+  } catch (error) {
+    console.error(
+      `[generate-story] persisted-output check failed: ${String(error)}`,
+    );
+    return false;
+  }
+}
+
 async function handler(
   req: Request,
   deps: HandlerDependencies = {},
@@ -3417,12 +3434,20 @@ async function handler(
       );
     }
 
+    const outputPersisted = !isBillableError &&
+      await hasPersistedGenerationOutput(adminClient, outputId);
     const errorCode = isBillableError && err.code === "credit_charge_failed"
       ? "billing_charge_failed"
       : isBillableError && err.code === "usage_event_insert_failed"
       ? "billing_persistence_failed"
+      : outputPersisted
+      ? "memory_failed"
       : "persistence_failed";
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorMessage = outputPersisted
+      ? `Generated output ${outputId} persisted; scene memory processing failed and can be retried: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+      : err instanceof Error ? err.message : String(err);
     await limiter.recordRequest(userId, {
       requestId,
       action: generationAction,
@@ -3443,6 +3468,8 @@ async function handler(
         errorCode,
         errorMessage: errorCode === "billing_charge_failed"
           ? "Generation completed but billing could not be finalized."
+          : errorCode === "memory_failed"
+          ? "Generated output was saved, but scene memory needs recovery."
           : "Failed to save generated output.",
       }),
       { status: 500 },

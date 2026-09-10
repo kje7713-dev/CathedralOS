@@ -946,30 +946,9 @@ async function runOutline(
       // If the platform killed the worker after generate-story persisted its
       // output but before this row was updated, reuse that output. This makes
       // recovery safe and avoids charging the same section twice.
-      const normalize = await ensureMemoryPipelineVersion(
-        adminClient,
-        String(projectId),
-        String(section.id),
-        Deno.env.get("OPENAI_API_KEY") ?? "",
-        {
-          userID: String(run.user_id),
-          action: "memory-normalization",
-          projectID: String(projectId),
-          outlineSectionID: String(section.id),
-          adminClient,
-          creditStore: new SupabaseCreditStore(adminClient),
-        },
-        1,
-      );
-      if (normalize.remaining > 0) {
-        await updateSectionStatus(adminClient, runId, {
-          ...section,
-          status: "pending",
-        });
-        await releaseRunLease(adminClient, runId);
-        await queueContinuation(runId, authHeader);
-        return;
-      }
+      // Always inspect the exact durable lineage first. A prior complete
+      // output means prose generation and its primary billing must not run a
+      // second time, even if the previous worker died during memory repair.
       const existingOutput = await findRunOutput(
         adminClient,
         String(run.id),
@@ -1007,6 +986,30 @@ async function runOutline(
           completed_at: new Date().toISOString(),
         });
         continue;
+      }
+      const normalize = await ensureMemoryPipelineVersion(
+        adminClient,
+        String(projectId),
+        String(section.id),
+        Deno.env.get("OPENAI_API_KEY") ?? "",
+        {
+          userID: String(run.user_id),
+          action: "memory-normalization",
+          projectID: String(projectId),
+          outlineSectionID: String(section.id),
+          adminClient,
+          creditStore: new SupabaseCreditStore(adminClient),
+        },
+        1,
+      );
+      if (normalize.remaining > 0) {
+        await updateSectionStatus(adminClient, runId, {
+          ...section,
+          status: "pending",
+        });
+        await releaseRunLease(adminClient, runId);
+        await queueContinuation(runId, authHeader);
+        return;
       }
       const generationRequest = buildGenerateStoryRequest({
         snapshot: {},
@@ -1082,6 +1085,16 @@ async function runOutline(
           authHeader,
           err,
         );
+        return;
+      }
+      if (err instanceof RetryableMemoryError) {
+        await updateSectionStatus(adminClient, runId, {
+          ...section,
+          status: "pending",
+          error: msg,
+        });
+        await releaseRunLease(adminClient, runId);
+        await queueContinuation(runId, authHeader);
         return;
       }
       if (err instanceof RetryableGenerationError) {
@@ -1790,6 +1803,13 @@ async function findRunOutput(
   return String(data.id);
 }
 
+class RetryableMemoryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RetryableMemoryError";
+  }
+}
+
 class RetryableGenerationError extends Error {
   readonly retryAfterSeconds: number;
 
@@ -1824,6 +1844,19 @@ async function callGenerateStory(
   });
   if (!response.ok) {
     const errBody = await response.text();
+    let parsedError: Record<string, unknown> | null = null;
+    try {
+      parsedError = JSON.parse(errBody) as Record<string, unknown>;
+    } catch {
+      // Preserve the existing diagnostic for non-JSON provider/HTTP failures.
+    }
+    if (parsedError?.errorCode === "memory_failed") {
+      throw new RetryableMemoryError(
+        `generate-story memory repair pending: ${String(
+          parsedError.errorMessage ?? parsedError.message ?? errBody.slice(0, 200),
+        )}`,
+      );
+    }
     if (response.status === 429) {
       let retryAfterSeconds = Number(response.headers.get("Retry-After"));
       try {

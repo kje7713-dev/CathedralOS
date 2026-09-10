@@ -1,6 +1,7 @@
 import {
   assertEquals,
   assertExists,
+  assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { prepareCreditReservation } from "./_credit_preflight.ts";
 import {
@@ -369,5 +370,51 @@ Deno.test("initial Run All estimate is not duplicated by model state initializat
   assertEquals(
     source.includes("await refreshEstimate()\n        hasLoadedModels = true"),
     true,
+  );
+});
+
+
+Deno.test("Run All recovery reuses exact persisted output before generation or normalization", async () => {
+  const source = await Deno.readTextFile("supabase/functions/run-outline/index.ts");
+  const existing = source.indexOf("const existingOutput = await findRunOutput(");
+  const normalize = source.indexOf("const normalize = await ensureMemoryPipelineVersion(");
+  const generate = source.indexOf("const result = await callGenerateStory(");
+  const repair = source.indexOf("await ensureOutputMemory(", existing);
+  const advance = source.indexOf('status: "completed"', repair);
+  assertEquals(existing >= 0, true);
+  assertEquals(existing < normalize, true);
+  assertEquals(normalize < generate, true);
+  assertEquals(existing < repair && repair < advance, true);
+  assertStringIncludes(
+    source.slice(existing, normalize),
+    "run.id",
+    "recovery lookup must be scoped by the durable run id",
+  );
+  assertStringIncludes(
+    source.slice(existing, normalize),
+    "section.id",
+    "recovery lookup must be scoped by the exact run section id",
+  );
+  assertStringIncludes(
+    source,
+    "RetryableMemoryError",
+    "memory failure after prose persistence must schedule recovery rather than fail the run",
+  );
+});
+
+Deno.test("Run All preserves memory lineage and avoids duplicate prose billing on recovery", async () => {
+  const [runOutline, embedding] = await Promise.all([
+    Deno.readTextFile("supabase/functions/run-outline/index.ts"),
+    Deno.readTextFile("supabase/functions/_shared/section-embedding.ts"),
+  ]);
+  assertStringIncludes(runOutline, '.eq("run_id", runId)');
+  assertStringIncludes(runOutline, '.eq("run_section_id", sectionId)');
+  assertStringIncludes(runOutline, '.eq("status", "complete")');
+  assertStringIncludes(runOutline, "output_id: existingOutput");
+  assertStringIncludes(embedding, "repaired?.generation_output_id !== outputId");
+  assertStringIncludes(
+    runOutline,
+    "await ensureOutputMemory(",
+    "existing prose must repair memory before the section advances",
   );
 });
