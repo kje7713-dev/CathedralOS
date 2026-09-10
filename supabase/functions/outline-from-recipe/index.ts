@@ -413,10 +413,13 @@ export function isCompatibleStoryMaterialEnrichment(material: StoryMaterialEnric
   return material.sourceRecipeHash === provenance.sourceRecipeHash && material.sourceRecipeVersion === provenance.sourceRecipeVersion && material.sourcePromptPackID === provenance.sourcePromptPackID && material.sourcePromptPackName === provenance.sourcePromptPackName && material.format === format;
 }
 
-export function buildEnrichmentPrompt(req: OutlineFromRecipeRequest, candidate?: StoryMaterialEnrichment): { system: string; user: string } {
+export function buildEnrichmentPrompt(req: OutlineFromRecipeRequest, candidate?: StoryMaterialEnrichment, repairReason?: string): { system: string; user: string } {
   const format = requestedStoryMaterialFormat(req);
+  const repairInstruction = repairReason
+    ? `\n\nThe previous enrichment response was rejected: ${repairReason}. Repair it by using source=recipe only with an exact handle from recipeMaterialHandles. Never copy an item id into sourceReference, invent a handle, or use a human-readable label as a handle. Use source=planner with sourceReference null for anything that cannot be tied to an exact handle.`
+    : "";
   return {
-    system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Use source=recipe only with one of the server-provided recipe handles; use source=planner for all connective or newly invented material and use null sourceReference. The server, not you, owns recipe provenance. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.`,
+    system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Use source=recipe only with one of the server-provided recipe handles; use source=planner for all connective or newly invented material and use null sourceReference. The server, not you, owns recipe provenance. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
     user: JSON.stringify({ recipe: req.recipe, recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)), priorEnrichment: candidate ?? null, arcTemplate: req.arcTemplate, hint: req.hint ?? null, requestedFormat: format }, null, 2),
   };
 }
@@ -1521,6 +1524,13 @@ class StoryMaterialSufficiencyError extends Error {
   }
 }
 
+class StoryMaterialValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StoryMaterialValidationError";
+  }
+}
+
 async function persistEnrichmentProvenance(db: any, body: OutlineFromRecipeRequest, runId: string, material: StoryMaterialEnrichment, provenance: StoryMaterialProvenance): Promise<void> {
   if (!body.outline_id) return;
   const { error } = await db.from("outlines").update({
@@ -1626,8 +1636,8 @@ async function runSuggestionJob(
       }
     }
     if (!storyMaterial) {
-      const generateEnrichment = async (action: string, prior?: StoryMaterialEnrichment) => {
-        const enrichmentPrompt = buildEnrichmentPrompt(body, prior);
+      const generateEnrichment = async (action: string, prior?: StoryMaterialEnrichment, repairReason?: string) => {
+        const enrichmentPrompt = buildEnrichmentPrompt(body, prior, repairReason);
         let parsedMaterial: StoryMaterialEnrichment | null = null;
         const enrichmentResult = await billableCall(
           enrichmentPrompt.system,
@@ -1636,7 +1646,11 @@ async function runSuggestionJob(
           { type: "json_schema", json_schema: { name: "story_material_enrichment", strict: true, schema: STORY_MATERIAL_ENRICHMENT_SCHEMA } },
           action,
           (content) => {
-            parsedMaterial = validateStoryMaterialEnrichment(JSON.parse(content), { allowMissingProvenance: true, recipe: body.recipe });
+            try {
+              parsedMaterial = validateStoryMaterialEnrichment(JSON.parse(content), { allowMissingProvenance: true, recipe: body.recipe });
+            } catch (error) {
+              throw new StoryMaterialValidationError(error instanceof Error ? error.message : String(error));
+            }
             const sufficiency = storyMaterialSufficiency(parsedMaterial, body.recipe, requestedStoryMaterialFormat(body));
             if (!sufficiency.sufficient) throw new StoryMaterialSufficiencyError(sufficiency.reasons);
             return parsedMaterial;
@@ -1649,9 +1663,15 @@ async function runSuggestionJob(
       try {
         generated = await generateEnrichment("story-material-enrichment");
       } catch (error) {
-        if (!(error instanceof StoryMaterialSufficiencyError)) throw error;
-        enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassSufficiencyReasons: error.reasons };
-        generated = await generateEnrichment("story-material-enrichment-repair");
+        if (error instanceof StoryMaterialSufficiencyError) {
+          enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassSufficiencyReasons: error.reasons };
+          generated = await generateEnrichment("story-material-enrichment-repair");
+        } else if (error instanceof StoryMaterialValidationError) {
+          enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassValidationError: error.message };
+          generated = await generateEnrichment("story-material-enrichment-repair", undefined, error.message);
+        } else {
+          throw error;
+        }
       }
       storyMaterial = generated.material;
       const sufficiency = storyMaterialSufficiency(storyMaterial, body.recipe, requestedStoryMaterialFormat(body));
