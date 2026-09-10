@@ -5383,3 +5383,18 @@ Deno.test("RAG continuity decodes active fact objects and preserves the output l
     "for (let attempt = 1; attempt <= 2; attempt++)",
   );
 });
+
+
+Deno.test("persisted prose memory failure is not mislabeled as output persistence failure", async () => {
+  const source = await Deno.readTextFile("supabase/functions/generate-story/index.ts");
+  assertStringIncludes(source, "hasPersistedGenerationOutput");
+  assertStringIncludes(source, ' ? "memory_failed"');
+  assertStringIncludes(
+    source,
+    "Generated output was saved, but scene memory needs recovery.",
+  );
+  assertStringIncludes(
+    source,
+    "Generated output ${outputId} persisted; scene memory processing failed",
+  );
+});

@@ -255,7 +255,7 @@ Deno.test("reworded loop resolution uses the repeated semantic reference", () =>
   assertEquals(second.open_loops[0].status, "resolved");
 });
 
-Deno.test("missing or ambiguous semantic references fail closed", () => {
+Deno.test("missing semantic history normalizes, while ambiguity fails closed", () => {
   const first = reconcileSceneMemory([], {
     continuity_facts: [{
       operation: "establish",
@@ -263,16 +263,18 @@ Deno.test("missing or ambiguous semantic references fail closed", () => {
       fact: "The door is locked.",
     }],
   }, "s1");
-  assertThrows(() =>
-    reconcileSceneMemory([first], {
-      continuity_facts: [{
-        operation: "supersede",
-        reference: "fact-b",
-        fact: "The door is open.",
-        prior_fact_reference: "database-id",
-      }],
-    }, "s2")
-  );
+  const recovered = reconcileSceneMemory([first], {
+    continuity_facts: [{
+      operation: "supersede",
+      reference: "fact-b",
+      fact: "The door is open.",
+      prior_fact_reference: "database-id",
+    }],
+  }, "s2");
+  assertEquals(recovered.continuity_facts.length, 1);
+  assertEquals(recovered.continuity_facts[0].operation, "establish");
+  assertEquals(recovered.continuity_facts[0].active, true);
+
   assertThrows(() =>
     reconcileSceneMemory([first, {
       ...first,
@@ -286,6 +288,56 @@ Deno.test("missing or ambiguous semantic references fail closed", () => {
       }],
     }, "s3")
   );
+  assertThrows(() =>
+    reconcileSceneMemory([{
+      plot_thread_deltas: [{
+        id: "thread-a",
+        reference: "thread:signal",
+        thread_name: "signal",
+        status: "introduced",
+      }],
+    }, {
+      plot_thread_deltas: [{
+        id: "thread-b",
+        reference: "thread:signal",
+        thread_name: "signal",
+        status: "introduced",
+      }],
+    }], {
+      plot_thread_deltas: [{
+        reference: "thread:signal",
+        thread_name: "signal",
+        status: "advanced",
+      }],
+    }, "s4")
+  );
+});
+
+Deno.test("first lifecycle hints establish safe canonical identities", () => {
+  const result = reconcileSceneMemory([], {
+    plot_thread_deltas: [{
+      reference: "thread:new-thread",
+      thread_name: "new thread",
+      status: "advanced",
+    }, {
+      reference: "thread:resolved-thread",
+      thread_name: "resolved thread",
+      status: "resolved",
+    }],
+    open_loops: [{
+      reference: "loop-mystery:missing-history",
+      type: "mystery",
+      description: "What happened before the scene?",
+      status: "resolved",
+    }],
+  }, "s1");
+  assertEquals(result.plot_thread_deltas.map((item) => item.status), [
+    "introduced",
+    "introduced",
+  ]);
+  assertEquals(result.open_loops[0].status, "open");
+  assertEquals(typeof result.plot_thread_deltas[0].id, "string");
+  assertEquals(typeof result.open_loops[0].id, "string");
 });
 
 Deno.test("legacy random IDs do not override semantic matching", () => {

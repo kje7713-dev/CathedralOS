@@ -68,13 +68,14 @@ function reconcileThreads(
       throw new Error(`ambiguous thread reference: ${reference}`);
     }
     const match = matches[matches.length - 1];
-    const status =
+    const requestedStatus =
       ["introduced", "advanced", "resolved"].includes(text(item.status))
         ? text(item.status)
         : (match?.status === "resolved" ? "resolved" : "introduced");
-    if ((status === "advanced" || status === "resolved") && !match) {
-      throw new Error(`missing thread reference: ${reference}`);
-    }
+    // Lifecycle/status values are extractor hints, not database commands. A
+    // first appearance cannot advance or resolve an entity that has no prior
+    // canonical identity; establish it safely instead of failing the scene.
+    const status = match ? requestedStatus : "introduced";
     const id = text(match?.id) || uuid();
     return [{
       id,
@@ -106,9 +107,6 @@ function reconcileLoops(
     const type = text(item.type) || "question";
     const status = text(item.status) === "resolved" ? "resolved" : "open";
     const suppliedReference = text(item.reference);
-    if (status === "resolved" && !suppliedReference) {
-      throw new Error("resolved loop requires a semantic reference");
-    }
     const reference = suppliedReference ||
       semanticReference(`loop-${type}`, description);
     const matches = existing.filter((candidate) =>
@@ -128,19 +126,20 @@ function reconcileLoops(
       throw new Error(`ambiguous loop reference: ${reference}`);
     }
     const match = matches[matches.length - 1];
-    if (status === "resolved" && !match) {
-      throw new Error(`missing loop reference: ${reference}`);
-    }
+    // A resolved loop with no prior identity is a new loop-shaped hint, not a
+    // valid resolution command. Keep it open until a later scene resolves the
+    // canonical ID that this scene establishes.
+    const normalizedStatus = match ? status : "open";
     const id = text(match?.id) || uuid();
     return [{
       id,
       reference,
       source_section_id: source,
       type,
-      status,
+      status: normalizedStatus,
       description,
       created_at: match ? (text(match.created_at) || now) : now,
-      resolved_at: status === "resolved"
+      resolved_at: normalizedStatus === "resolved"
         ? (text(match?.resolved_at) || now)
         : null,
     }];
@@ -176,38 +175,43 @@ function reconcileFacts(
     }
     const match = matches[matches.length - 1];
     const replacement = text(item.prior_fact_reference);
+    let supersedesPrior = false;
     if (text(item.operation) === "supersede") {
-      if (!replacement) {
-        throw new Error(
-          "fact supersession requires a semantic prior_fact_reference",
-        );
-      }
-      const priorMatches = existing.filter((candidate) =>
-        (text(candidate.reference) ||
-            semanticReference("fact", text(candidate.fact))) === replacement &&
-        candidate.active !== false
-      );
+      const priorMatches = replacement
+        ? existing.filter((candidate) =>
+          (text(candidate.reference) ||
+              semanticReference("fact", text(candidate.fact))) === replacement &&
+          candidate.active !== false
+        )
+        : [];
       const priorIds = new Set(
         priorMatches.map((candidate) =>
           text(candidate.id) || JSON.stringify(candidate)
         ),
       );
-      if (priorMatches.length === 0 || priorIds.size > 1) {
-        throw new Error(`missing or ambiguous fact reference: ${replacement}`);
+      // Missing history is recoverable: establish the new fact and let a
+      // future scene supply a valid prior identity. Ambiguous history remains
+      // fail-closed because choosing one canonical fact would corrupt state.
+      if (priorIds.size > 1) {
+        throw new Error(`ambiguous fact reference: ${replacement}`);
       }
-      out.push({
-        ...priorMatches[priorMatches.length - 1],
-        active: false,
-        superseded_by: reference,
-      });
+      if (priorMatches.length > 0) {
+        supersedesPrior = true;
+        out.push({
+          ...priorMatches[priorMatches.length - 1],
+          active: false,
+          superseded_by: reference,
+        });
+      }
     }
     const id = text(match?.id) || uuid();
     out.push({
       id,
       reference,
       source_section_id: source,
-      operation: text(item.operation) ||
-        (replacement ? "supersede" : (match ? "preserve" : "establish")),
+      operation: supersedesPrior
+        ? "supersede"
+        : (match ? "preserve" : "establish"),
       fact,
       active: true,
       superseded_by: null,
