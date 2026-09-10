@@ -45,6 +45,8 @@ import {
   findDramaticDistinctnessIssues,
   findCausalScaleIssues,
   validateOutlinePlanningQuality,
+  plannedWordRangeForContainer,
+  findUnusedStoryMaterial,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -918,4 +920,25 @@ Deno.test("PR3 causal-scale gate is general and records material-backed diagnost
   assertEquals(diagnostics.distinctnessIssues, []);
   assertEquals(diagnostics.causalScaleIssues, []);
   assertEquals(diagnostics.unusedStoryMaterialItems >= 0, true);
+});
+
+
+Deno.test("PR3 expansion prioritizes unused enrichment and exposes soft word ranges", () => {
+  const material = enrichmentFixture();
+  const current: any[] = [{
+    title: "Townwide disruption",
+    summary: "The townwide disruption spreads.",
+    dramaticEvent: "The townwide disruption spreads.",
+    resultingChange: "The town responds.",
+    terminalState: "The response escalates.",
+    container: "scene", pov: "thirdPersonLimited", terminalBeat: "The response escalates.", storyArcBeatID: "beat-1",
+  }];
+  const unused = findUnusedStoryMaterial(current, material);
+  assertEquals(unused.some((item) => item.id === "force-emergency-network"), true);
+  assertEquals(plannedWordRangeForContainer("scene"), { minWords: 615, maxWords: 1385 });
+  const prompt = buildExpansionPrompt({ ...sparseRequest, storyMaterialEnrichment: material } as any, current as any);
+  assertEquals(prompt.user.includes("unusedStoryMaterial"), true);
+  assertEquals(prompt.user.includes("force-emergency-network"), true);
+  assertEquals(prompt.system.includes("unused or underdeveloped enrichment items"), true);
+  assertEquals(prompt.system.includes("soft literary planning range"), false);
 });
