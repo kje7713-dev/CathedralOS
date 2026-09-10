@@ -35,6 +35,7 @@ import {
   parseAndValidateAllocation,
   flattenSuggestionResponse,
   validateRequest,
+  logicalSuggestionIdentity,
   validateSuggestions,
   buildEnrichmentPrompt,
   countStoryMaterialItems,
@@ -98,6 +99,38 @@ const sparseRequest = {
     ],
   },
 };
+
+Deno.test("malformed selected recipe entities fail before any billable call", () => {
+  assertEquals(
+    validateRequest({ ...sparseRequest, recipe: { ...sparseRequest.recipe, selectedCharacters: [null] } }),
+    "recipe.selectedCharacters contains a missing or invalid selected entity",
+  );
+  assertEquals(
+    validateRequest({ ...sparseRequest, recipe: { ...sparseRequest.recipe, selectedMotifs: undefined } }),
+    "recipe.selectedMotifs must be an array",
+  );
+});
+
+Deno.test("logical suggestion identity is stable and changes with request material", async () => {
+  const first = await logicalSuggestionIdentity({ ...sparseRequest, idempotencyKey: undefined });
+  const same = await logicalSuggestionIdentity({ ...sparseRequest, idempotencyKey: undefined });
+  const changed = await logicalSuggestionIdentity({
+    ...sparseRequest,
+    idempotencyKey: undefined,
+    hint: "make the ending quieter",
+  });
+  assertEquals(first.key, same.key);
+  assertEquals(first.fingerprint, same.fingerprint);
+  assertEquals(first.key !== changed.key, true);
+  assertEquals(first.fingerprint !== changed.fingerprint, true);
+});
+
+Deno.test("durable run source keeps lease and terminal ownership guards", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes('eq("lease_owner", workerToken)'), true);
+  assertEquals(source.includes('attempt_count: priorAttemptCount + 1'), true);
+  assertEquals(source.includes('status: "pending"'), true);
+});
 
 Deno.test("canonical recipe payload passes request validation", () => {
   assertEquals(validateRequest(sparseRequest), null);

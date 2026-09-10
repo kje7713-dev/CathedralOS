@@ -100,6 +100,7 @@ private struct AppRootView: View {
         // uploads race ahead of authoritative recovery.
         if launchResult.succeeded {
             DataDurabilityCoordinator.shared.resumeAcceptAllIfNeeded(context: modelContext)
+            DataDurabilityCoordinator.shared.resumeAllSuggestionRuns()
         }
 
         // PR #286: sync-on-launch hook (follow-up to PR #285). Catches arcs

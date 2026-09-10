@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // MARK: - OutlineSuggestionService
 // Client for the `outline-from-recipe` Supabase Edge Function (Phase 2 of
@@ -59,118 +60,122 @@ struct OutlineSuggestionService {
         self.session = session
     }
 
-    /// Request 5-15 suggested sections based on the project's current recipe + arc.
-    /// - Parameters:
-    ///   - recipe: the PromptPack to use as the basis for suggestions
-    ///   - arc: the project's StoryArc (must have beats)
-    ///   - arcTemplate: the matched StoryArcTemplate (must have id/name/description)
-    ///   - hint: optional user-provided guidance
-    ///   - existingSections: outline's current sections (manual + AI-accepted).
-    ///     Passed to the AI as context so it doesn't duplicate or contradict
-    ///     what's already there. Defaults to empty.
-    func requestSuggestions(
-        edgeFunctionURL: URL,
+    func makeRequest(
         recipe: PromptPack,
         arc: StoryArc,
         arcTemplate: StoryArcTemplate,
         hint: String? = nil,
         existingSections: [OutlineSection] = []
-    ) async throws -> OutlineSuggestionResult {
+    ) throws -> OutlineSuggestionRequest {
         guard let project = recipe.project else {
             throw OutlineSuggestionError.invalidResponse("Recipe has no project")
         }
         guard let templateID = arc.templateID, templateID == arcTemplate.id else {
             throw OutlineSuggestionError.invalidResponse("Arc template mismatch")
         }
-
-        let existingSectionBlobs: [ExistingSectionBlob]? = existingSections.isEmpty
-            ? nil
-            : buildExistingSectionBlobs(existingSections)
-
         let sourceRecipe = buildRecipeBlob(recipe: recipe, project: project)
-        let request = OutlineSuggestionRequest(
-            recipe: sourceRecipe,
-            arcTemplate: buildArcTemplateBlob(arc: arc, template: arcTemplate),
-            hint: hint,
-            existingSections: existingSectionBlobs
+        let arcBlob = buildArcTemplateBlob(arc: arc, template: arcTemplate)
+        let existing = existingSections.isEmpty ? nil : buildExistingSectionBlobs(existingSections)
+        let identityRequest = OutlineSuggestionRequest(
+            recipe: sourceRecipe, arcTemplate: arcBlob, hint: hint,
+            existingSections: existing, idempotencyKey: ""
         )
+        return OutlineSuggestionRequest(
+            recipe: sourceRecipe, arcTemplate: arcBlob, hint: hint,
+            existingSections: existing, idempotencyKey: Self.idempotencyKey(for: identityRequest)
+        )
+    }
 
+    /// Queues the server-owned run and returns before any polling begins. The
+    /// caller must persist the returned runID before attaching a poller.
+    func startSuggestions(request: OutlineSuggestionRequest) async throws -> OutlineSuggestionJob {
         let client: SupabaseBackendClient
-        do {
-            client = try SupabaseBackendClient()
-        } catch {
-            let reason: String
-            if let backendError = error as? BackendClientError, case .notConfigured(let r) = backendError {
-                reason = r
-            } else {
-                reason = String(describing: error)
-            }
-            throw OutlineSuggestionError.notConfigured(reason: reason)
-        }
-
-        let url = client.edgeFunctionURL(path: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath)
+        do { client = try SupabaseBackendClient() }
+        catch { throw OutlineSuggestionError.notConfigured(reason: String(describing: error)) }
         let userAccessToken = try await validAccessToken()
-
-        var urlRequest = client.authorizedRequest(for: url, userAccessToken: userAccessToken)
+        var urlRequest = client.authorizedRequest(
+            for: client.edgeFunctionURL(path: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath),
+            userAccessToken: userAccessToken
+        )
         urlRequest.httpMethod = "POST"
         urlRequest.timeoutInterval = 30
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.httpBody = try JSONEncoder().encode(request)
-
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await performRequest(urlRequest)
-        } catch let error as OutlineSuggestionError {
-            throw error
-        } catch {
-            throw OutlineSuggestionError.networkError(error.localizedDescription)
-        }
+        let (data, response) = try await performRequest(urlRequest)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OutlineSuggestionError.networkError("Non-HTTP response")
         }
         switch httpResponse.statusCode {
-        case 202:
-            let queued = try decodeJob(data)
-            return try await poll(runID: queued.run_id, client: client, sourceRecipe: sourceRecipe)
         case 200...299:
-            // Backwards-compatible with an older deployed function.
-            let result = try decodeResult(data)
-            return OutlineSuggestionResult(
-                suggestions: result.suggestions,
-                warnings: result.warnings ?? [],
-                creditCostCharged: result.creditCostCharged,
-                remainingCredits: result.remainingCredits,
-                sourceRecipe: sourceRecipe
-            )
+            return try decodeJob(data)
         case 401: throw OutlineSuggestionError.notAuthenticated
         case 429: throw OutlineSuggestionError.rateLimited
-        case 500: throw OutlineSuggestionError.notConfigured(reason: "Server returned 500")
+        case 500: throw OutlineSuggestionError.serverError(statusCode: 500, body: String(data: data, encoding: .utf8))
         case 502: throw OutlineSuggestionError.providerError
         default: throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode, body: String(data: data, encoding: .utf8))
         }
     }
 
-    private struct JobResponse: Codable {
-        let run_id: String
-        let status: String
-        let suggestions: [OutlineSuggestion]?
-        let warnings: [String]?
-        let error: String?
-        let errorCode: String?
-        let sourceRecipe: PromptPackExportPayload?
-        let creditCostCharged: Double?
-        let remainingCredits: Double?
+    func suggestionStatus(runID: String) async throws -> OutlineSuggestionJob {
+        let client: SupabaseBackendClient
+        do { client = try SupabaseBackendClient() }
+        catch { throw OutlineSuggestionError.notConfigured(reason: String(describing: error)) }
+        var components = URLComponents(url: client.edgeFunctionURL(path: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "run_id", value: runID)]
+        guard let url = components?.url else { throw OutlineSuggestionError.invalidResponse("Could not build suggestion status URL") }
+        var request = client.authorizedRequest(for: url, userAccessToken: try await validAccessToken())
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        let (data, response) = try await performRequest(request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw OutlineSuggestionError.networkError("Non-HTTP response") }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if httpResponse.statusCode == 401 { throw OutlineSuggestionError.notAuthenticated }
+            if httpResponse.statusCode == 429 { throw OutlineSuggestionError.rateLimited }
+            throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode, body: String(data: data, encoding: .utf8))
+        }
+        return try decodeJob(data)
     }
 
-    private func decodeJob(_ data: Data) throws -> JobResponse {
-        do { return try JSONDecoder().decode(JobResponse.self, from: data) }
+    func findRun(projectID: UUID, idempotencyKey: String) async throws -> OutlineSuggestionJob? {
+        let client: SupabaseBackendClient
+        do { client = try SupabaseBackendClient() }
+        catch { throw OutlineSuggestionError.notConfigured(reason: String(describing: error)) }
+        var components = URLComponents(url: client.edgeFunctionURL(path: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath), resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "project_id", value: projectID.uuidString),
+            URLQueryItem(name: "idempotency_key", value: idempotencyKey)
+        ]
+        guard let url = components?.url else { throw OutlineSuggestionError.invalidResponse("Could not build suggestion recovery URL") }
+        var request = client.authorizedRequest(for: url, userAccessToken: try await validAccessToken())
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        let (data, response) = try await performRequest(request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw OutlineSuggestionError.networkError("Non-HTTP response") }
+        if httpResponse.statusCode == 404 { return nil }
+        guard (200...299).contains(httpResponse.statusCode) else { throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode, body: String(data: data, encoding: .utf8)) }
+        return try decodeJob(data)
+    }
+
+    static func idempotencyKey(for request: OutlineSuggestionRequest) -> String {
+        var encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = (try? encoder.encode(request)) ?? Data()
+        let digest = SHA256.hash(data: data)
+        return "suggestion-" + digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func decodeJob(_ data: Data) throws -> OutlineSuggestionJob {
+        do { return try JSONDecoder().decode(OutlineSuggestionJob.self, from: data) }
         catch { throw OutlineSuggestionError.invalidResponse("Could not decode job: \(error.localizedDescription)") }
     }
 
-    private func decodeResult(_ data: Data) throws -> OutlineSuggestionResponse {
-        do { return try JSONDecoder().decode(OutlineSuggestionResponse.self, from: data) }
-        catch { throw OutlineSuggestionError.invalidResponse("Could not decode: \(error.localizedDescription)") }
+    private func result(from job: OutlineSuggestionJob, fallbackRecipe: PromptPackExportPayload) throws -> OutlineSuggestionResult {
+        let sourceRecipe = job.sourceRecipe ?? fallbackRecipe
+        return OutlineSuggestionResult(
+            suggestions: job.suggestions ?? [], warnings: job.warnings ?? [],
+            creditCostCharged: job.creditCostCharged, remainingCredits: job.remainingCredits,
+            sourceRecipe: sourceRecipe
+        )
     }
 
     /// Recover the latest completed run for this project without starting or
@@ -178,105 +183,35 @@ struct OutlineSuggestionService {
     /// matches the project ID captured in the durable request payload.
     func latestCompletedRun(projectID: UUID) async throws -> OutlineSuggestionResult? {
         let client: SupabaseBackendClient
-        do {
-            client = try SupabaseBackendClient()
-        } catch {
-            throw OutlineSuggestionError.notConfigured(reason: String(describing: error))
-        }
-        var components = URLComponents(
-            url: client.edgeFunctionURL(path: "outline-from-recipe"),
-            resolvingAgainstBaseURL: false
-        )
-        components?.queryItems = [URLQueryItem(name: "project_id", value: projectID.uuidString)]
-        guard let url = components?.url else {
-            throw OutlineSuggestionError.invalidResponse("Could not build suggestion recovery URL")
-        }
-        var request = client.authorizedRequest(
-            for: url,
-            userAccessToken: try await validAccessToken()
-        )
+        do { client = try SupabaseBackendClient() }
+        catch { throw OutlineSuggestionError.notConfigured(reason: String(describing: error)) }
+        var components = URLComponents(url: client.edgeFunctionURL(path: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath), resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "project_id", value: projectID.uuidString),
+            URLQueryItem(name: "completed_only", value: "true")
+        ]
+        guard let url = components?.url else { throw OutlineSuggestionError.invalidResponse("Could not build suggestion recovery URL") }
+        var request = client.authorizedRequest(for: url, userAccessToken: try await validAccessToken())
         request.httpMethod = "GET"
         request.timeoutInterval = 30
-        do {
-            let (data, response) = try await performRequest(request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw OutlineSuggestionError.networkError("Non-HTTP response")
-            }
-            if httpResponse.statusCode == 404 { return nil }
-            guard (200...299).contains(httpResponse.statusCode) else {
-                if httpResponse.statusCode == 401 { throw OutlineSuggestionError.notAuthenticated }
-                throw OutlineSuggestionError.serverError(
-                    statusCode: httpResponse.statusCode,
-                    body: String(data: data, encoding: .utf8)
-                )
-            }
-            let job = try decodeJob(data)
-            guard job.status == "completed", let sourceRecipe = job.sourceRecipe else {
-                return nil
-            }
-            return OutlineSuggestionResult(
-                suggestions: job.suggestions ?? [],
-                warnings: job.warnings ?? [],
-                creditCostCharged: job.creditCostCharged,
-                remainingCredits: job.remainingCredits,
-                sourceRecipe: sourceRecipe
-            )
-        } catch let error as OutlineSuggestionError {
-            throw error
-        } catch {
-            throw OutlineSuggestionError.networkError(error.localizedDescription)
-        }
+        let (data, response) = try await performRequest(request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw OutlineSuggestionError.networkError("Non-HTTP response") }
+        if httpResponse.statusCode == 404 { return nil }
+        guard (200...299).contains(httpResponse.statusCode) else { throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode, body: String(data: data, encoding: .utf8)) }
+        let job = try decodeJob(data)
+        guard job.status == "completed", let sourceRecipe = job.sourceRecipe else { return nil }
+        return try result(from: job, fallbackRecipe: sourceRecipe)
     }
 
-    private func poll(
-        runID: String,
-        client: SupabaseBackendClient,
-        sourceRecipe: PromptPackExportPayload
-    ) async throws -> OutlineSuggestionResult {
-        while !Task.isCancelled {
-            try await Task.sleep(nanoseconds: 3_000_000_000)
-            var statusComponents = URLComponents(
-                url: client.edgeFunctionURL(path: "outline-from-recipe"),
-                resolvingAgainstBaseURL: false
-            )
-            statusComponents?.queryItems = [URLQueryItem(name: "run_id", value: runID)]
-            guard let statusURL = statusComponents?.url else {
-                throw OutlineSuggestionError.invalidResponse("Could not build suggestion status URL")
-            }
-            var request = client.authorizedRequest(for: statusURL, userAccessToken: try await validAccessToken())
-            request.httpMethod = "GET"
-            request.timeoutInterval = 30
-            do {
-                let (data, response) = try await performRequest(request)
-                guard let httpResponse = response as? HTTPURLResponse else {
-                    throw OutlineSuggestionError.networkError("Non-HTTP response")
-                }
-                guard (200...299).contains(httpResponse.statusCode) else {
-                    if httpResponse.statusCode == 401 { throw OutlineSuggestionError.notAuthenticated }
-                    if httpResponse.statusCode == 429 { throw OutlineSuggestionError.rateLimited }
-                    throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode, body: String(data: data, encoding: .utf8))
-                }
-                let job = try decodeJob(data)
-                if job.status == "completed" {
-                    return OutlineSuggestionResult(
-                        suggestions: job.suggestions ?? [], warnings: job.warnings ?? [],
-                        creditCostCharged: job.creditCostCharged, remainingCredits: job.remainingCredits,
-                        sourceRecipe: sourceRecipe
-                    )
-                }
-                if job.status == "failed" {
-                    throw Self.errorForFailedJob(errorCode: job.errorCode, message: job.error)
-                }
-            } catch let error as OutlineSuggestionError {
-                throw error
-            } catch {
-                // Keep polling through transient network interruptions.
-            }
+    static func isReconnectable(_ error: OutlineSuggestionError) -> Bool {
+        switch error {
+        case .cancelled, .networkError, .rateLimited, .notAuthenticated:
+            return true
+        case .serverError(let statusCode, _):
+            return statusCode == 408 || statusCode == 425 || statusCode == 429 || (500...599).contains(statusCode)
+        case .notConfigured, .providerError, .insufficientCredits, .invalidResponse:
+            return false
         }
-        // The durable server job is independent of this polling task. A view
-        // disappearing or the app entering the background must not surface a
-        // false network failure to the user.
-        throw OutlineSuggestionError.cancelled
     }
 
     static func errorForFailedJob(errorCode: String?, message: String?) -> OutlineSuggestionError {
@@ -298,6 +233,8 @@ struct OutlineSuggestionService {
 
     private func performRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
         do { return try await sessionProvider.retryOnceAfterExpiredJWT(request: request, session: session) }
+        catch is CancellationError { throw OutlineSuggestionError.cancelled }
+        catch let error as URLError where error.code == .cancelled { throw OutlineSuggestionError.cancelled }
         catch let error as SupabaseSessionProviderError {
             switch error { case .notSignedIn, .sessionExpired: throw OutlineSuggestionError.notAuthenticated }
         } catch { throw OutlineSuggestionError.networkError(error.localizedDescription) }

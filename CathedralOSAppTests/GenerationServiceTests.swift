@@ -542,6 +542,22 @@ final class GenerationServiceTests: XCTestCase {
 }
 
 
+final class OutlineSuggestionTransportContractTests: XCTestCase {
+    func testCancellationAndTransientTransportErrorsReconnect() {
+        XCTAssertTrue(OutlineSuggestionService.isReconnectable(.cancelled))
+        XCTAssertTrue(OutlineSuggestionService.isReconnectable(.networkError("offline")))
+        XCTAssertTrue(OutlineSuggestionService.isReconnectable(.serverError(statusCode: 503)))
+        XCTAssertTrue(OutlineSuggestionService.isReconnectable(.rateLimited))
+    }
+
+    func testAuthoritativeFailuresDoNotReconnectForever() {
+        XCTAssertFalse(OutlineSuggestionService.isReconnectable(.providerError))
+        XCTAssertFalse(OutlineSuggestionService.isReconnectable(.invalidResponse("bad payload")))
+        XCTAssertFalse(OutlineSuggestionService.isReconnectable(.serverError(statusCode: 400)))
+        XCTAssertFalse(OutlineSuggestionService.isReconnectable(.insufficientCredits(needed: 4, available: 2, message: "no")))
+    }
+}
+
 final class OutlineSuggestionErrorContractTests: XCTestCase {
     func testInsufficientCreditsIsDistinctFromProviderFailure() {
         let error = OutlineSuggestionService.errorForFailedJob(

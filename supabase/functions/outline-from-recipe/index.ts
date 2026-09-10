@@ -227,6 +227,7 @@ interface OutlineFromRecipeRequest {
   storyMaterialEnrichment?: StoryMaterialEnrichment; // candidate reuse from a prior planning pass
   requestedFormat?: StoryMaterialFormat;
   outline_id?: string;
+  idempotencyKey?: string;
 }
 
 interface ExistingSectionBlob {
@@ -505,7 +506,20 @@ export function validateRequest(req: unknown): string | null {
   ) {
     return "arcTemplate.id and non-empty arcTemplate.beats required";
   }
+  for (const field of [
+    "selectedCharacters",
+    "selectedRelationships",
+    "selectedThemeQuestions",
+    "selectedMotifs",
+  ] as const) {
+    const values = recipe[field];
+    if (!Array.isArray(values)) return `recipe.${field} must be an array`;
+    if (values.some((value) => !value || typeof value !== "object" || Array.isArray(value))) {
+      return `recipe.${field} contains a missing or invalid selected entity`;
+    }
+  }
   if (r.requestedFormat !== undefined && !["novel", "shortStory", "other"].includes(r.requestedFormat)) return "requestedFormat must be novel, shortStory, or other";
+  if (r.idempotencyKey !== undefined && (typeof r.idempotencyKey !== "string" || r.idempotencyKey.trim() === "" || r.idempotencyKey.length > 512)) return "idempotencyKey must be a non-empty string of at most 512 characters";
   if (r.storyMaterialEnrichment) {
     try {
       validateStoryMaterialEnrichment(r.storyMaterialEnrichment, { allowMissingProvenance: true });
@@ -1457,6 +1471,23 @@ export function validateOutlinePlanningQuality(
   };
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function logicalSuggestionIdentity(body: OutlineFromRecipeRequest): Promise<{ key: string; fingerprint: string }> {
+  const { idempotencyKey: _ignored, ...withoutKey } = body;
+  const fingerprint = await sha256Hex(stableJson(withoutKey));
+  return { key: body.idempotencyKey?.trim() || `legacy:${fingerprint}`, fingerprint };
+}
+
+const SUGGESTION_LEASE_MS = 15 * 60 * 1000;
+
+function leaseExpiry(): string {
+  return new Date(Date.now() + SUGGESTION_LEASE_MS).toISOString();
+}
+
 function makeSupabase(url: string, anonKey: string, authHeader: string) {
   return createClient(url, anonKey, {
     global: { headers: { Authorization: authHeader } },
@@ -1547,12 +1578,26 @@ async function runSuggestionJob(
   body: OutlineFromRecipeRequest,
   userId: string,
   openaiKey: string,
+  priorAttemptCount = 0,
 ): Promise<void> {
   const db = admin();
-  await db.from("outline_suggestion_runs").update({ status: "running" }).eq(
-    "id",
-    runId,
-  );
+  const workerToken = crypto.randomUUID();
+  const claim = await db.from("outline_suggestion_runs").update({
+    status: "running",
+    lease_owner: workerToken,
+    lease_expires_at: leaseExpiry(),
+    attempt_count: priorAttemptCount + 1,
+  }).eq("id", runId).eq("status", "pending")
+    .select("id, credit_cost_charged, remaining_credits, story_material")
+    .maybeSingle();
+  if (claim.error || !claim.data) return;
+  const claimedRun: any = claim.data;
+  const touchLease = async () => {
+    await db.from("outline_suggestion_runs").update({ lease_expires_at: leaseExpiry() }).eq("id", runId).eq("lease_owner", workerToken);
+  };
+  const updateRun = async (patch: Record<string, unknown>) => {
+    return await db.from("outline_suggestion_runs").update(patch).eq("id", runId).eq("lease_owner", workerToken);
+  };
   let plannedMinimumSections: number | null = null;
   let diagnostics: Record<string, unknown> = { stage: "starting" };
   try {
@@ -1563,8 +1608,11 @@ async function runSuggestionJob(
     }
     const creditStore = new SupabaseCreditStore(db);
     const provider = new OpenAIProvider(openaiKey, OPENAI_MODEL);
-    let creditCostCharged = 0;
-    let remainingCredits: number | null = null;
+    // Reclaimed workers resume from persisted billing/material state. The
+    // usage-event idempotency key is the final no-double-charge guard, while
+    // reusing persisted enrichment avoids repeating a settled paid stage.
+    let creditCostCharged = Number(claimedRun.credit_cost_charged ?? 0);
+    let remainingCredits: number | null = claimedRun.remaining_credits ?? null;
     const persistBilling = async (
       result: {
         actualCharge: number;
@@ -1574,10 +1622,11 @@ async function runSuggestionJob(
     ) => {
       if (result.charged) creditCostCharged += result.actualCharge;
       remainingCredits = result.remainingCredits;
-      await db.from("outline_suggestion_runs").update({
+      await updateRun({
         credit_cost_charged: creditCostCharged,
         remaining_credits: remainingCredits,
-      }).eq("id", runId);
+        lease_expires_at: leaseExpiry(),
+      });
     };
     const billableCall: SuggestionLLMCall = async (
       system,
@@ -1591,6 +1640,7 @@ async function runSuggestionJob(
         { role: "system", content: system },
         { role: "user", content: user },
       ];
+      await touchLease();
       const result = await runBillableLLM({
         userID: userId,
         purpose: "outline-suggestion",
@@ -1618,6 +1668,9 @@ async function runSuggestionJob(
     };
 
     const provenance = await recipeProvenance(body.recipe);
+    if (!body.storyMaterialEnrichment && claimedRun.story_material) {
+      body = { ...body, storyMaterialEnrichment: claimedRun.story_material as StoryMaterialEnrichment };
+    }
     let storyMaterial: StoryMaterialEnrichment | null = null;
     let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: OPENAI_MODEL, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
     if (body.storyMaterialEnrichment) {
@@ -1676,13 +1729,13 @@ async function runSuggestionJob(
       storyMaterial = generated.material;
       const sufficiency = storyMaterialSufficiency(storyMaterial, body.recipe, requestedStoryMaterialFormat(body));
       enrichmentDiagnostics = { ...enrichmentDiagnostics, generatedOrReused: "generated", enrichmentCreditCostCharged: generated.result.creditCostCharged, schemaVersion: storyMaterial.version, sufficiency: sufficiency.sufficient ? "sufficient" : "insufficient", sufficiencyReasons: sufficiency.reasons, itemCountsByCategory: sufficiency.counts, recipeDerivedItemCount: sufficiency.recipeDerivedItemCount, plannerInventedItemCount: sufficiency.plannerInventedItemCount };
-      await db.from("outline_suggestion_runs").update({ story_material: storyMaterial, diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" } }).eq("id", runId);
+      await updateRun({ story_material: storyMaterial, diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" } });
     }
     if (!storyMaterial) throw new Error("story material enrichment was not produced");
-    await db.from("outline_suggestion_runs").update({
+    await updateRun({
       story_material: storyMaterial,
       diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" },
-    }).eq("id", runId);
+    });
     await persistEnrichmentProvenance(db, body, runId, storyMaterial, provenance);
     body = { ...body, storyMaterialEnrichment: storyMaterial };
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
@@ -1807,7 +1860,7 @@ async function runSuggestionJob(
         },
         async (roundDiagnostic, allDiagnostics) => {
           diagnostics = { ...diagnostics, expansionRounds: allDiagnostics };
-          await db.from("outline_suggestion_runs").update({ diagnostics }).eq("id", runId);
+          await updateRun({ diagnostics });
         },
       );
       result = { suggestions: expanded.suggestions, warnings: [...result.warnings, ...expanded.warnings] };
@@ -1823,7 +1876,7 @@ async function runSuggestionJob(
         `required recipe obligations remain uncovered: ${coverage.missingRequired.map((obligation) => obligation.id).join(", ")}`,
       );
     }
-    await db.from("outline_suggestion_runs").update({
+    await updateRun({
       status: "completed",
       suggestions: result.suggestions,
       warnings: result.warnings,
@@ -1831,7 +1884,9 @@ async function runSuggestionJob(
       remaining_credits: remainingCredits,
       completed_at: new Date().toISOString(),
       diagnostics: { ...diagnostics, stage: "completed", finalSectionCounts: countSuggestionsByBeat(result.suggestions) },
-    }).eq("id", runId);
+      lease_owner: null,
+      lease_expires_at: null,
+    });
   } catch (err) {
     const errorCode = err instanceof StoryMaterialSufficiencyError
       ? "insufficient_story_material"
@@ -1844,13 +1899,15 @@ async function runSuggestionJob(
           ? "provider_error"
           : "server_error"));
     const message = err instanceof Error ? err.message : String(err);
-    await db.from("outline_suggestion_runs").update({
+    await updateRun({
       status: "failed",
       error_code: errorCode,
       error: message.slice(0, 2000),
       diagnostics: { ...diagnostics, stage: "failed", plannedMinimumSections, error: message.slice(0, 500) },
       completed_at: new Date().toISOString(),
-    }).eq("id", runId);
+      lease_owner: null,
+      lease_expires_at: null,
+    });
   }
 }
 
@@ -1883,7 +1940,7 @@ Deno.serve(async (req: Request) => {
     const runId = searchParams.get("run_id");
     const projectId = searchParams.get("project_id");
     const runColumns =
-      "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json";
+      "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
 
     let run: any = null;
     let error: any = null;
@@ -1892,16 +1949,17 @@ Deno.serve(async (req: Request) => {
         "outline_suggestion_runs",
       ).select(runColumns).eq("id", runId).single());
     } else if (projectId) {
-      const result = await userClient.from("outline_suggestion_runs")
+      const idempotencyKey = searchParams.get("idempotency_key");
+      let query = userClient.from("outline_suggestion_runs")
         .select(runColumns)
-        .eq("status", "completed")
+        .eq("project_id", projectId)
         .order("created_at", { ascending: false })
-        .limit(20);
+        .limit(1);
+      if (searchParams.get("completed_only") === "true") query = query.eq("status", "completed");
+      if (idempotencyKey) query = query.eq("idempotency_key", idempotencyKey);
+      const result = await query;
       error = result.error;
-      run = (result.data ?? []).find((candidate: any) =>
-        typeof candidate.request_json?.recipe?.project?.id === "string" &&
-        candidate.request_json.recipe.project.id.toLowerCase() === projectId.toLowerCase()
-      ) ?? null;
+      run = result.data?.[0] ?? null;
     } else {
       return errorResponse(
         "missing_param",
@@ -1963,24 +2021,54 @@ Deno.serve(async (req: Request) => {
     );
   }
   const db = admin();
-  const { data: run, error } = await db.from("outline_suggestion_runs").insert({
+  const identity = await logicalSuggestionIdentity(body);
+  const insert = await db.from("outline_suggestion_runs").insert({
     user_id: user.id,
+    project_id: body.recipe.project.id,
+    idempotency_key: identity.key,
+    request_fingerprint: identity.fingerprint,
     request_json: body,
     status: "pending",
-  }).select("id, created_at, updated_at").single();
-  if (error || !run) {
-    return errorResponse(
-      "db_error",
-      error?.message ?? "Could not create suggestion run",
-      500,
-    );
+  }).select("id, status, created_at, updated_at, suggestions, warnings, error_code, error, credit_cost_charged, remaining_credits, request_json").maybeSingle();
+
+  let run: any = insert.data;
+  if (insert.error) {
+    if (insert.error.code !== "23505") {
+      return errorResponse("db_error", insert.error.message ?? "Could not create suggestion run", 500);
+    }
+    const existing = await db.from("outline_suggestion_runs")
+      .select("id, status, created_at, updated_at, suggestions, warnings, error_code, error, credit_cost_charged, remaining_credits, request_json, lease_expires_at, attempt_count, request_fingerprint")
+      .eq("user_id", user.id).eq("idempotency_key", identity.key).single();
+    if (existing.error || !existing.data) return errorResponse("db_error", existing.error?.message ?? "Could not resolve suggestion run", 500);
+    run = existing.data;
+    if (run.request_fingerprint && run.request_fingerprint !== identity.fingerprint) {
+      return errorResponse("idempotency_conflict", "The idempotency key is already bound to a different suggestion request", 409);
+    }
+    const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
+    if (stale) {
+      const reclaimed = await db.from("outline_suggestion_runs").update({ status: "pending", lease_owner: null, lease_expires_at: null, attempt_count: (run.attempt_count ?? 0) + 1 }).eq("id", run.id).eq("status", "running").eq("lease_expires_at", run.lease_expires_at);
+      if (!reclaimed.error) run.status = "pending";
+    }
   }
-  // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-  EdgeRuntime.waitUntil(runSuggestionJob(run.id, body, user.id, openaiKey));
+  if (!run) {
+    return errorResponse("db_error", "Could not create or resolve suggestion run", 500);
+  }
+  // A pending duplicate may be the only way to restart a worker lost during
+  // suspension. The pending claim inside runSuggestionJob makes this race-safe.
+  if (run.status === "pending") {
+    // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+    EdgeRuntime.waitUntil(runSuggestionJob(run.id, body, user.id, openaiKey, run.attempt_count ?? 0));
+  }
   return corsResponse(
     JSON.stringify({
       run_id: run.id,
-      status: "pending",
+      status: run.status,
+      suggestions: run.suggestions,
+      warnings: run.warnings,
+      errorCode: run.error_code,
+      error: run.error,
+      creditCostCharged: run.credit_cost_charged,
+      remainingCredits: run.remaining_credits,
       created_at: run.created_at,
       updated_at: run.updated_at,
     }),

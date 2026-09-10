@@ -34,6 +34,9 @@ struct OutlineSuggestionRequest: Codable {
     /// the AI doesn't duplicate or contradict them. Optional — nil/empty for
     /// fresh outlines.
     let existingSections: [ExistingSectionBlob]?
+    /// Deterministic logical request identity. The server enforces uniqueness
+    /// per authenticated user before any billable work begins.
+    let idempotencyKey: String
 }
 
 struct ArcTemplateBlob: Codable {
@@ -63,6 +66,24 @@ struct ExistingSectionBlob: Codable {
     /// nil for manual/free-form sections (no story arc beat linkage).
     let storyArcBeatID: String?
     let recipeRequirementIDs: [String]?
+}
+
+struct OutlineSuggestionJob: Codable {
+    let runID: String
+    let status: String
+    let suggestions: [OutlineSuggestion]?
+    let warnings: [String]?
+    let error: String?
+    let errorCode: String?
+    let sourceRecipe: PromptPackExportPayload?
+    let creditCostCharged: Double?
+    let remainingCredits: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case runID = "run_id"
+        case status, suggestions, warnings, error, sourceRecipe, creditCostCharged, remainingCredits
+        case errorCode
+    }
 }
 
 struct OutlineSuggestionResponse: Codable {
