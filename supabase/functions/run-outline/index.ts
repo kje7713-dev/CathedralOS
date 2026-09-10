@@ -58,6 +58,9 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+const MAX_TRANSIENT_OUTLINE_LOOKUP_ATTEMPTS = 3;
+const TRANSIENT_OUTLINE_LOOKUP_RETRY_SECONDS = 30;
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -114,6 +117,108 @@ export type ReadinessSection = {
   target_words_max?: unknown;
   recipe_requirement_ids?: unknown;
 };
+
+export type RunOutlineRecord = {
+  id?: unknown;
+  user_id?: unknown;
+  local_project_id: string;
+  source_recipe_json?: unknown;
+  source_recipe_hash?: unknown;
+  target_word_count_min?: unknown;
+  projected_word_count?: unknown;
+};
+
+type OutlineLookupKind = "query" | "not_found" | "missing_project_id";
+
+type SupabaseQueryError = {
+  code?: string | null;
+  message?: string | null;
+  details?: string | null;
+  hint?: string | null;
+};
+
+export class RunOutlineOutlineError extends Error {
+  readonly kind: OutlineLookupKind;
+  readonly retryable: boolean;
+  readonly dbError?: SupabaseQueryError;
+
+  constructor(
+    kind: OutlineLookupKind,
+    message: string,
+    retryable: boolean,
+    dbError?: SupabaseQueryError,
+  ) {
+    super(message);
+    this.name = "RunOutlineOutlineError";
+    this.kind = kind;
+    this.retryable = retryable;
+    this.dbError = dbError;
+  }
+}
+
+export function isRetryableOutlineLookupError(
+  error: unknown,
+): error is RunOutlineOutlineError {
+  return error instanceof RunOutlineOutlineError && error.retryable;
+}
+
+export async function loadRunOutline(
+  adminClient: any,
+  outlineId: string,
+): Promise<RunOutlineRecord> {
+  const { data, error } = await (adminClient as any).from("outlines")
+    .select(
+      "id, user_id, local_project_id, source_recipe_json, source_recipe_hash, target_word_count_min, projected_word_count",
+    )
+    .eq("id", outlineId).maybeSingle();
+  if (error) {
+    const dbError = error as SupabaseQueryError;
+    const code = String(dbError.code ?? "unknown");
+    const message = String(dbError.message ?? "database lookup failed");
+    console.error(
+      `[run-outline] outline lookup failed id=${outlineId} code=${code} message=${message}` +
+        `${dbError.details ? ` details=${dbError.details}` : ""}` +
+        `${dbError.hint ? ` hint=${dbError.hint}` : ""}`,
+    );
+    throw new RunOutlineOutlineError(
+      "query",
+      `outline_lookup_failed: ${code}: ${message}`,
+      true,
+      dbError,
+    );
+  }
+  if (!data) {
+    throw new RunOutlineOutlineError(
+      "not_found",
+      `outline_not_found: ${outlineId}`,
+      false,
+    );
+  }
+  const row = data as Record<string, unknown>;
+  const projectId = String(row.local_project_id ?? "").trim();
+  if (!projectId) {
+    throw new RunOutlineOutlineError(
+      "missing_project_id",
+      "outline_incomplete: local_project_id missing",
+      false,
+    );
+  }
+  return { ...row, local_project_id: projectId } as RunOutlineRecord;
+}
+
+export function requireRunOutlineRecipe(
+  outline: RunOutlineRecord,
+): { recipe: Record<string, unknown>; hash: string } {
+  if (!outline.source_recipe_json || !outline.source_recipe_hash) {
+    throw new Error(
+      "outline_recipe_provenance_missing: re-plan this outline before Run All",
+    );
+  }
+  return {
+    recipe: outline.source_recipe_json as Record<string, unknown>,
+    hash: String(outline.source_recipe_hash),
+  };
+}
 
 export function generationReadinessFailures(
   outline: ReadinessOutline,
@@ -229,19 +334,19 @@ async function handleKickoff(req: Request): Promise<Response> {
   const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   });
-  const { data: readinessOutline, error: readinessOutlineError } =
-    await adminClient
-      .from("outlines")
-      .select(
-        "source_recipe_json, source_recipe_hash, target_word_count_min, projected_word_count",
-      )
-      .eq("id", body.outline_id).single();
-  if (readinessOutlineError || !readinessOutline) {
-    return errorResponse(
-      "outline_not_generation_ready",
-      "outline not found",
-      422,
-    );
+  let readinessOutline: ReadinessOutline;
+  try {
+    const outline = await loadRunOutline(adminClient, body.outline_id);
+    readinessOutline = outline;
+  } catch (error) {
+    if (error instanceof RunOutlineOutlineError) {
+      return errorResponse(
+        error.kind === "query" ? "outline_lookup_failed" : error.kind,
+        error.message,
+        error.retryable ? 503 : 422,
+      );
+    }
+    throw error;
   }
   const { data: readinessSections, error: readinessSectionError } =
     await adminClient
@@ -547,7 +652,7 @@ async function prepareRun(
   if (!ownsLease) return;
 
   const { data: run, error: runError } = await adminClient.from("chapter_runs")
-    .select("id, outline_id, user_id, model, sections, status")
+    .select("id, outline_id, user_id, model, sections, status, error")
     .eq("id", runId).single();
   if (runError || !run) throw new Error("run disappeared during preparation");
   if (run.status !== "queued") {
@@ -571,8 +676,20 @@ async function prepareRun(
       (run.model as string | null) ?? undefined,
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    await markRunFailed(adminClient, runId, msg);
+    if (isRetryableOutlineLookupError(err)) {
+      await scheduleTransientOutlineLookupRetry(
+        adminClient,
+        runId,
+        authHeader,
+        err,
+      );
+    } else {
+      await markRunFailed(
+        adminClient,
+        runId,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
     return;
   }
 
@@ -607,6 +724,8 @@ async function prepareRun(
     status: "running",
     credits_reserved: reservedCredits,
     worker_lease_until: null,
+    next_retry_at: null,
+    error: null,
   }).eq("id", runId).eq("status", "queued");
   if (startError) {
     throw new Error(`could not start prepared run: ${startError.message}`);
@@ -759,7 +878,6 @@ async function runOutline(
     await releaseRunLease(adminClient, runId);
     return;
   }
-
   const workerAttempt = Number(
     (run as Record<string, unknown>).worker_attempt ?? 0,
   );
@@ -803,21 +921,14 @@ async function runOutline(
     return;
   }
 
-  const { data: outlineRow, error: outlineError } = await adminClient.from(
-    "outlines",
-  )
-    .select("local_project_id, source_recipe_json, source_recipe_hash")
-    .eq("id", run.outline_id).single();
-  if (outlineError || !outlineRow?.local_project_id) {
-    throw new Error("outline.local_project_id missing");
-  }
-  if (!outlineRow.source_recipe_json || !outlineRow.source_recipe_hash) {
-    throw new Error(
-      "outline recipe provenance missing; re-plan this outline before Run All",
-    );
-  }
+  const outlineRow = await loadRunOutline(adminClient, String(run.outline_id));
+  const { recipe: frozenRecipe, hash: frozenRecipeHash } =
+    requireRunOutlineRecipe(outlineRow);
+  await adminClient.from("chapter_runs").update({
+    next_retry_at: null,
+    error: null,
+  }).eq("id", runId).eq("status", "running");
   const projectId = outlineRow.local_project_id;
-  const frozenRecipe = outlineRow.source_recipe_json as Record<string, unknown>;
   const recipeObligations = deriveRecipeObligations(frozenRecipe);
 
   // Keep each invocation bounded. Continuations are independent invocations,
@@ -900,7 +1011,7 @@ async function runOutline(
       const generationRequest = buildGenerateStoryRequest({
         snapshot: {},
         frozenRecipe,
-        frozenRecipeHash: String(outlineRow.source_recipe_hash),
+        frozenRecipeHash,
         recipeObligations,
         assignedRecipeRequirementIDs: section.recipe_requirement_ids,
         section,
@@ -959,6 +1070,20 @@ async function runOutline(
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (isRetryableOutlineLookupError(err)) {
+        await updateSectionStatus(adminClient, runId, {
+          ...section,
+          status: "pending",
+          error: msg,
+        });
+        await scheduleTransientOutlineLookupRetry(
+          adminClient,
+          runId,
+          authHeader,
+          err,
+        );
+        return;
+      }
       if (err instanceof RetryableGenerationError) {
         const retryAt = new Date(
           Date.now() + err.retryAfterSeconds * 1000,
@@ -1027,13 +1152,9 @@ async function handleResume(
   authHeader: string,
 ): Promise<Response> {
   const { data: run } = await adminClient.from("chapter_runs")
-    .select("id, outline_id, status").eq("id", runId).maybeSingle();
+    .select("id, outline_id, status").eq("id", runId)
+    .eq("user_id", userId).maybeSingle();
   if (!run) return errorResponse("not_found", "run not found", 404);
-  const { data: outline } = await adminClient.from("outlines")
-    .select("user_id").eq("id", run.outline_id).single();
-  if (outline?.user_id !== userId) {
-    return errorResponse("not_found", "run not found", 404);
-  }
   if (run.status !== "queued" && run.status !== "running") {
     return corsResponse(JSON.stringify({ run_id: runId, status: run.status }), {
       status: 200,
@@ -1044,11 +1165,20 @@ async function handleResume(
     (run.status === "queued"
       ? prepareRun(runId, adminClient, authHeader)
       : runOutline(runId, adminClient, authHeader)).catch(async (err) => {
-        await markRunFailed(
-          adminClient,
-          runId,
-          err instanceof Error ? err.message : String(err),
-        );
+        if (isRetryableOutlineLookupError(err)) {
+          await scheduleTransientOutlineLookupRetry(
+            adminClient,
+            runId,
+            authHeader,
+            err,
+          );
+        } else {
+          await markRunFailed(
+            adminClient,
+            runId,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
       }),
   );
   return corsResponse(JSON.stringify({ run_id: runId, status: run.status }), {
@@ -1071,6 +1201,68 @@ async function queueContinuationAfterDelay(
 ): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1000));
   await queueContinuation(runId, authHeader);
+}
+
+async function scheduleTransientOutlineLookupRetry(
+  adminClient: ReturnType<typeof createClient>,
+  runId: string,
+  authHeader: string,
+  error: RunOutlineOutlineError,
+): Promise<void> {
+  const { data: run, error: runError } = await adminClient.from("chapter_runs")
+    .select("status, error")
+    .eq("id", runId).maybeSingle();
+  if (runError || !run) {
+    await markRunFailed(
+      adminClient,
+      runId,
+      `run_retry_schedule_failed: ${runError?.message ?? "run not found"}`,
+    );
+    return;
+  }
+
+  const previousRetry = String(run.error ?? "").match(
+    /\[outline_lookup_retry=(\d+)\]$/,
+  );
+  const attempt = previousRetry ? Number(previousRetry[1]) : 0;
+  if (attempt >= MAX_TRANSIENT_OUTLINE_LOOKUP_ATTEMPTS) {
+    await markRunFailed(
+      adminClient,
+      runId,
+      `${error.message}; retry_exhausted_after_${attempt}_attempts`,
+    );
+    return;
+  }
+  const nextAttempt = attempt + 1;
+  const retryAt = new Date(
+    Date.now() + TRANSIENT_OUTLINE_LOOKUP_RETRY_SECONDS * 1000,
+  ).toISOString();
+  const { error: updateError } = await adminClient.from("chapter_runs").update({
+    error: `${error.message} [outline_lookup_retry=${nextAttempt}]`,
+    next_retry_at: retryAt,
+    worker_lease_until: null,
+  }).eq("id", runId).in("status", ["queued", "running"]);
+  if (updateError) {
+    await markRunFailed(
+      adminClient,
+      runId,
+      `run_retry_schedule_failed: ${updateError.message}`,
+    );
+    return;
+  }
+
+  // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
+  EdgeRuntime.waitUntil(
+    queueContinuationAfterDelay(
+      runId,
+      authHeader,
+      TRANSIENT_OUTLINE_LOOKUP_RETRY_SECONDS,
+    ).catch((queueError) => {
+      console.error(
+        `[run-outline] transient outline retry queue failed for ${runId}: ${queueError}`,
+      );
+    }),
+  );
 }
 
 async function queueContinuation(
@@ -1152,19 +1344,9 @@ async function estimateRunCost(
   sections: Array<Record<string, unknown>>,
   selectedModelId?: string,
 ): Promise<number> {
-  const { data: outline, error: outlineError } = await adminClient
-    .from("outlines")
-    .select("local_project_id, source_recipe_json, source_recipe_hash")
-    .eq("id", outlineId).single();
-  if (outlineError || !outline?.local_project_id) {
-    throw new Error("outline.local_project_id missing");
-  }
-  if (!outline.source_recipe_json || !outline.source_recipe_hash) {
-    throw new Error(
-      "outline recipe provenance missing; re-plan this outline before Run All",
-    );
-  }
-  const frozenRecipe = outline.source_recipe_json as Record<string, unknown>;
+  const outline = await loadRunOutline(adminClient, outlineId);
+  const { recipe: frozenRecipe, hash: frozenRecipeHash } =
+    requireRunOutlineRecipe(outline);
   const recipeObligations = deriveRecipeObligations(frozenRecipe);
   if (sections.length === 0) return 0;
 
@@ -1174,7 +1356,7 @@ async function estimateRunCost(
     ...buildGenerateStoryRequest({
       snapshot: {},
       frozenRecipe,
-      frozenRecipeHash: String(outline.source_recipe_hash),
+      frozenRecipeHash,
       recipeObligations,
       assignedRecipeRequirementIDs: firstSection.recipe_requirement_ids,
       section: firstSection as {
@@ -1521,14 +1703,12 @@ async function fetchPriorContext(
   if (!section) return "";
   const currentPosition: number = (section.position as number) ?? 0;
 
-  // 2. Get project_id.
-  const { data: outlineRow } = await adminClient
-    .from("outlines")
-    .select("local_project_id")
-    .eq("id", outlineId)
-    .single();
-  const projectId = outlineRow?.local_project_id;
-  if (!projectId) return "";
+  // 2. Get project_id from the same authoritative outline contract used by
+  //    preflight and the durable worker. Query failures must remain visible so
+  //    the worker can classify them as retryable instead of silently returning
+  //    an empty RAG context.
+  const outline = await loadRunOutline(adminClient, outlineId);
+  const projectId = outline.local_project_id;
 
   // 3. Fetch all scenes for the project. We use a separate fetch + JS join
   //    (vs a Postgres RPC) for v1; same design, just less performant.
@@ -1844,5 +2024,6 @@ async function markRunFailed(
     credits_actual: actual,
     completed_at: new Date().toISOString(),
     worker_lease_until: null,
+    next_retry_at: null,
   }).eq("id", runId);
 }
