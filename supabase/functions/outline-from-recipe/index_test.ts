@@ -35,6 +35,13 @@ import {
   flattenSuggestionResponse,
   validateRequest,
   validateSuggestions,
+  buildEnrichmentPrompt,
+  countStoryMaterialItems,
+  validateStoryMaterialEnrichment,
+  storyMaterialSufficiency,
+  recipeProvenance,
+  attachRecipeProvenance,
+  isCompatibleStoryMaterialEnrichment,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -529,7 +536,7 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
   assertEquals(source.includes("maxItems: MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
-  assertEquals(source.includes("if (needsNovelExpansion(result.suggestions))"), true);
+  assertEquals(source.includes("requestedStoryMaterialFormat(body) === \"novel\" && needsNovelExpansion(result.suggestions)"), true);
   assertEquals(source.includes("failed_under_target"), true);
   assertEquals(source.includes("failed_expansion"), true);
   assertEquals(source.includes("outline-expansion-"), true);
@@ -619,7 +626,7 @@ Deno.test("dynamic response contract removes model-owned beat IDs and target/max
   assertEquals(source.includes("firstPassParsedCounts"), true);
   assertEquals(source.includes("firstPassValidatedCounts"), true);
   assertEquals(source.includes("if (validateResponse) await validateResponse"), true);
-  assertEquals(source.includes("if (needsNovelExpansion(result.suggestions))"), true);
+  assertEquals(source.includes("requestedStoryMaterialFormat(body) === \"novel\" && needsNovelExpansion(result.suggestions)"), true);
 });
 
 
@@ -718,4 +725,152 @@ Deno.test("expansion prompt includes round projection, broad range, and remainin
   assertEquals(prompt.user.includes("remainingDeficitTokens"), true);
   assertEquals(prompt.system.includes("22,700"), true);
   assertEquals(prompt.system.includes("never return, rewrite, reorder, or omit existing sections"), true);
+});
+
+
+function enrichmentFixture(): any {
+  return {
+    schema: "cathedralos.story_material_enrichment",
+    version: 2,
+    format: "novel",
+    sourceRecipeHash: "fixture-hash", sourceRecipeVersion: 1, sourcePromptPackID: "pack-1", sourcePromptPackName: "Sparse recipe",
+    rationale: "The sparse premise needs concrete opposition and escalation.",
+    characters: [{ id: "character-brody", source: "recipe", sourceReference: "character:character-1", label: "Brody", description: "The protagonist who uses bugs and lizards to pursue world domination." }],
+    antagonisticForces: [{ id: "force-emergency-network", source: "planner", sourceReference: null, label: "Emergency network", description: "A coordinated response learns to sever Brody's creature routes." }],
+    locations: [{ id: "location-terrarium", source: "recipe", sourceReference: "project.summary", label: "Terrarium room", description: "Brody's controlled starting environment." }],
+    institutionsAndGroups: [], conflictSources: [], escalationLadder: [{ id: "escalation-town", source: "planner", sourceReference: null, label: "Townwide disruption", description: "A local experiment becomes visible to the town." }],
+    reversals: [], consequences: [], relationships: [], discoveries: [], unresolvedQuestions: [], thematicPressures: [],
+  };
+}
+
+Deno.test("story material enrichment validates provenance and remains inspectable for reuse", () => {
+  const material = validateStoryMaterialEnrichment(enrichmentFixture());
+  assertEquals(material.characters[0].source, "recipe");
+  assertEquals(material.antagonisticForces[0].source, "planner");
+  assertEquals(countStoryMaterialItems(material), 4);
+  const reused = validateStoryMaterialEnrichment(JSON.parse(JSON.stringify(material)));
+  assertEquals(reused, material);
+  let duplicate = "";
+  try {
+    validateStoryMaterialEnrichment({ ...enrichmentFixture(), locations: [{ ...enrichmentFixture().locations[0], id: "character-brody" }] });
+  } catch (error) { duplicate = String(error); }
+  assertEquals(duplicate.includes("duplicate"), true);
+});
+
+Deno.test("enrichment prompt preserves sparse recipe facts and separates planner invention", () => {
+  const prompt = buildEnrichmentPrompt(sparseRequest as any);
+  assertEquals(prompt.system.includes("preserve, connect, and deepen supplied material"), true);
+  assertEquals(prompt.system.includes("source=recipe"), true);
+  assertEquals(prompt.system.includes("source=planner"), true);
+  assertEquals(prompt.user.includes("Monsters kill humans"), true);
+  assertEquals(prompt.user.includes("Douche"), true);
+});
+
+Deno.test("request validation accepts a previously persisted enrichment package", () => {
+  assertEquals(validateRequest({ ...sparseRequest, storyMaterialEnrichment: enrichmentFixture() }), null);
+});
+
+
+function materialItem(id: string, source: "recipe" | "planner", sourceReference: string | null = null): any {
+  return { id, source, sourceReference, label: id.replaceAll("-", " "), description: `${id} creates a concrete pressure, choice, and consequence.` };
+}
+
+function fixtureMaterial(recipe: any, sparse: boolean): any {
+  const material: any = {
+    schema: "cathedralos.story_material_enrichment", version: 2, format: "novel",
+    sourceRecipeHash: "pending", sourceRecipeVersion: 1, sourcePromptPackID: "pack-1", sourcePromptPackName: "Sparse recipe",
+    rationale: "Concrete material for novel-scale planning.",
+  };
+  for (const category of ["characters", "antagonisticForces", "locations", "institutionsAndGroups", "conflictSources", "escalationLadder", "reversals", "consequences", "relationships", "discoveries", "unresolvedQuestions", "thematicPressures"]) material[category] = [];
+  material.characters.push(materialItem("brody", "recipe", "character:character-1"));
+  material.characters.push(materialItem("bug-a-saur", "recipe", "character:character-2"));
+  if (!sparse) {
+    material.characters.push(materialItem("mentor", "recipe", "character:character-3"));
+    material.relationships.push(materialItem("brody-bug", "recipe", "relationship:relationship-1"));
+    material.thematicPressures.push(materialItem("moral-question", "recipe", "theme:theme-1"));
+    material.locations.push(materialItem("city", "recipe", "location:location-1"));
+    material.conflictSources.push(materialItem("rival", "recipe", "conflict:conflict-1"));
+    material.escalationLadder.push(materialItem("public-crisis", "recipe", "event:event-1"));
+  }
+  const planner = {
+    antagonisticForces: 2, locations: 3, institutionsAndGroups: 2, conflictSources: sparse ? 3 : 1,
+    escalationLadder: sparse ? 4 : 2, reversals: 2, consequences: 2, relationships: sparse ? 2 : 1,
+    discoveries: 2, unresolvedQuestions: 2, thematicPressures: 1,
+  };
+  for (const [category, count] of Object.entries(planner)) for (let i = 0; i < count; i++) material[category].push(materialItem(`${category}-${i + 1}`, "planner"));
+  return material;
+}
+
+const brodyRecipe: any = {
+  ...sparseRequest.recipe,
+  project: { id: "brody", summary: "Brody takes over the world using bugs and lizards" },
+  selectedCharacters: [{ id: "character-1", name: "Brody" }, { id: "character-2", name: "Bug a saur" }],
+  selectedThemeQuestions: [{ id: "theme-1", question: "bugs are morally better than humans" }],
+  promptPack: { id: "pack-1", name: "Sparse recipe" },
+};
+
+Deno.test("recipe provenance handles are server-verifiable and forged recipe claims fail", async () => {
+  const material = fixtureMaterial(brodyRecipe, true);
+  material.antagonisticForces[0] = materialItem("forged", "recipe", "character:does-not-exist");
+  let error = "";
+  try { validateStoryMaterialEnrichment(material, { recipe: brodyRecipe }); } catch (caught) { error = String(caught); }
+  assertEquals(error.includes("unverified source reference"), true);
+  material.antagonisticForces[0] = materialItem("valid", "recipe", "character:character-1");
+  material.antagonisticForces[0].label = "character:character-1";
+  error = "";
+  try { validateStoryMaterialEnrichment(material, { recipe: brodyRecipe }); } catch (caught) { error = String(caught); }
+  assertEquals(error.includes("no authored description"), true);
+  material.antagonisticForces[0] = materialItem("unrelated", "recipe", "character:character-1");
+  error = "";
+  try { validateStoryMaterialEnrichment(material, { recipe: brodyRecipe }); } catch (caught) { error = String(caught); }
+  assertEquals(error.includes("does not correspond"), true);
+  material.antagonisticForces[0] = materialItem("planner", "planner", null);
+  assertEquals(validateStoryMaterialEnrichment(material, { recipe: brodyRecipe }).antagonisticForces[0].source, "planner");
+});
+
+Deno.test("sparse Brody enrichment is sufficient and structurally rich", () => {
+  const material = fixtureMaterial(brodyRecipe, true);
+  const result = storyMaterialSufficiency(material, brodyRecipe, "novel");
+  assertEquals(result.sufficient, true);
+  assertEquals(result.counts.escalationLadder >= 3, true);
+  assertEquals(result.counts.antagonisticForces >= 1, true);
+  assertEquals(result.plannerInventedItemCount > result.recipeDerivedItemCount, true);
+});
+
+Deno.test("rich recipe preserves authored material and needs less planner invention", () => {
+  const richRecipe = {
+    ...brodyRecipe,
+    promptPack: { id: "rich-pack", name: "Rich recipe" },
+    selectedCharacters: [...brodyRecipe.selectedCharacters, { id: "character-3", name: "Mentor" }],
+    selectedRelationships: [{ id: "relationship-1", from: "Brody", to: "Mentor" }],
+    selectedThemeQuestions: [{ id: "theme-1", question: "Power has a cost" }],
+  };
+  const sparse = fixtureMaterial(brodyRecipe, true);
+  const rich = fixtureMaterial(richRecipe, false);
+  rich.sourcePromptPackID = "rich-pack"; rich.sourcePromptPackName = "Rich recipe";
+  const sparseResult = storyMaterialSufficiency(sparse, brodyRecipe, "novel");
+  const richResult = storyMaterialSufficiency(rich, richRecipe, "novel");
+  assertEquals(richResult.sufficient, true);
+  assertEquals(rich.characters.some((item: any) => item.source === "recipe" && item.sourceReference === "character:character-3"), true);
+  assertEquals(rich.relationships.some((item: any) => item.source === "recipe" && item.sourceReference === "relationship:relationship-1"), true);
+  assertEquals(richResult.plannerInventedItemCount < sparseResult.plannerInventedItemCount, true);
+});
+
+Deno.test("recipe hash mismatch and missing legacy provenance cannot reuse", async () => {
+  const provenance = await recipeProvenance(brodyRecipe);
+  const material = attachRecipeProvenance(fixtureMaterial(brodyRecipe, true), provenance);
+  assertEquals(isCompatibleStoryMaterialEnrichment(material, provenance, "novel"), true);
+  const changed = { ...brodyRecipe, project: { ...brodyRecipe.project, summary: "Brody becomes a local mayor" } };
+  const changedProvenance = await recipeProvenance(changed);
+  assertEquals(isCompatibleStoryMaterialEnrichment(material, changedProvenance, "novel"), false);
+  const legacy = { ...material, sourceRecipeHash: undefined, sourceRecipeVersion: undefined, sourcePromptPackID: undefined, sourcePromptPackName: undefined };
+  let error = "";
+  try { validateStoryMaterialEnrichment(legacy, { recipe: brodyRecipe }); } catch (caught) { error = String(caught); }
+  assertEquals(error.includes("missing server-owned recipe provenance"), true);
+});
+
+Deno.test("format is request-derived rather than hardcoded in enrichment prompt", () => {
+  const prompt = buildEnrichmentPrompt({ ...sparseRequest, requestedFormat: "shortStory" } as any);
+  assertEquals(prompt.user.includes('"requestedFormat": "shortStory"'), true);
+  assertEquals(prompt.system.includes("shortStory"), true);
 });
