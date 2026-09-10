@@ -213,7 +213,7 @@ final class DataDurabilityTests: XCTestCase {
             tombstoneService: spy
         )
 
-        try await sut.deleteLocal(output: output, context: context)
+        try await sut.delete(input: GenerationOutputDeletionInput(output: output), scope: .localOnly, context: context)
 
         XCTAssertEqual(spy.recordedTombstones.count, 1)
         XCTAssertEqual(spy.recordedTombstones.first?.deletionScope, .localOnly)
@@ -236,7 +236,7 @@ final class DataDurabilityTests: XCTestCase {
             tombstoneService: spy
         )
 
-        try await sut.deleteLocal(output: output, context: context)
+        try await sut.delete(input: GenerationOutputDeletionInput(output: output), scope: .localOnly, context: context)
 
         XCTAssertEqual(spy.recordedTombstones.first?.deletionScope, .localOnly,
                        "deleteLocal must write localOnly scope, not everywhere.")
@@ -261,7 +261,7 @@ final class DataDurabilityTests: XCTestCase {
             tombstoneService: spy
         )
 
-        try await sut.deleteEverywhere(output: output, context: context)
+        try await sut.delete(input: GenerationOutputDeletionInput(output: output), scope: .everywhere, context: context)
 
         let everywhereTombstone = spy.recordedTombstones.first { $0.deletionScope == .everywhere }
         XCTAssertNotNil(everywhereTombstone, "deleteEverywhere must write an everywhere tombstone.")
@@ -287,7 +287,7 @@ final class DataDurabilityTests: XCTestCase {
             tombstoneService: spy
         )
 
-        try await sut.deleteLocal(output: output, context: context)
+        try await sut.delete(input: GenerationOutputDeletionInput(output: output), scope: .localOnly, context: context)
 
         XCTAssertEqual(spy.recordedTombstones.count, 1,
                        "deleteLocal must write a tombstone even when auth state is .unknown at call time.")
@@ -315,7 +315,7 @@ final class DataDurabilityTests: XCTestCase {
             tombstoneService: spy
         )
 
-        try await sut.deleteEverywhere(output: output, context: context)
+        try await sut.delete(input: GenerationOutputDeletionInput(output: output), scope: .everywhere, context: context)
 
         let everywhereTombstone = spy.recordedTombstones.first { $0.deletionScope == .everywhere }
         XCTAssertNotNil(everywhereTombstone,

@@ -1287,12 +1287,7 @@ struct GenerationOutputDetailView: View {
         do {
             // Tombstone first (scalar-only network write). Best-effort;
             // network failure here still leaves the local row deletable.
-            await outputDeletionService.writeTombstone(input: input, scope: .localOnly)
-
-            // Synchronous MainActor fetch → delete → save. One
-            // non-suspending block; the model context is touched only
-            // inside this block on @MainActor.
-            try outputDeletionService.deleteLocal(input: input, context: modelContext)
+            try await outputDeletionService.delete(input: input, scope: .localOnly, context: modelContext)
 
             // Save succeeded — dismiss the view.
             dismiss()
@@ -1330,30 +1325,9 @@ struct GenerationOutputDetailView: View {
         let input = captureDeletionInput()
 
         do {
-            // Stage 1 — tombstone first. Scalar-only network write; if it
-            // succeeds the .everywhere scope guarantees any later failure
-            // (or app crash, or reinstall) cannot resurrect the row via
-            // sync-pull. The tombstone itself is best-effort — a failure
-            // here doesn't abort the deletion; we just lose the safety net.
-            await outputDeletionService.writeTombstone(input: input, scope: .everywhere)
-
-            // Stage 2 — remote DELETE on `generation_outputs`. Network call
-            // passing only scalar IDs. Internally hops to the
-            // `mutationGate` actor for serialization; throws
-            // `cloudOwnershipNotVerified` / `networkError` /
-            // `notSignedIn` / `sessionExpired` as appropriate. ModelContext
-            // is NOT touched during this await.
-            try await outputDeletionService.deleteCloud(input: input)
-
-            // Stage 3 — synchronous MainActor fetch-by-ID → delete → save.
-            // THIS is the only block that touches `modelContext`. It holds
-            // @MainActor continuously: no awaits, no Task, no detached,
-            // no ModelContext access across any boundary. The SwiftUI
-            // render queued by `isDeletingOutput = true` above does a
-            // @Query read on the same context; @MainActor isolation +
-            // SwiftData's `performAndWait` serialization queue it behind
-            // any in-flight save here.
-            try outputDeletionService.deleteLocal(input: input, context: modelContext)
+            // The coordinator owns tombstone ordering, cloud deletion, local
+            // SwiftData persistence, backup cleanup, and notifications.
+            try await outputDeletionService.delete(input: input, scope: .everywhere, context: modelContext)
 
             // Stage 4 — save() succeeded. Per Kevin: mutate completion
             // state and dismiss only after save() succeeds.
@@ -1374,21 +1348,7 @@ struct GenerationOutputDetailView: View {
     /// the deleted model object again.
     @MainActor
     private func captureDeletionInput() -> GenerationOutputDeletionInput {
-        // 19:18 EDT Kevin: only scalar SwiftData properties here.
-        // `output.project` is a `@Relationship` traversal that can fault
-        // under concurrent ModelContext access (the very thing PR
-        // #401/#402's crash exposed). `projectID` was also unused by
-        // every consumer of `GenerationOutputDeletionInput` so dropping
-        // it removes the only relationship access on this hot path.
-        let cloudID = output.cloudGenerationOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cloudOwner = output.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sharedOutputID = output.sharedOutputID.trimmingCharacters(in: .whitespacesAndNewlines)
-        return GenerationOutputDeletionInput(
-            localOutputID: output.id,
-            cloudGenerationOutputID: cloudID,
-            cloudOwnerUserID: cloudOwner,
-            sharedOutputID: sharedOutputID
-        )
+        GenerationOutputDeletionInput(output: output)
     }
 
     private var pendingOutputCoverImage: PendingOutputCoverImage? {
