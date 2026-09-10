@@ -220,7 +220,8 @@ interface OutlineFromRecipeRequest {
   arcTemplate: ArcTemplateBlob;
   hint?: string;
   existingSections?: ExistingSectionBlob[]; // iOS-side outline state at request time
-  storyMaterialEnrichment?: StoryMaterialEnrichment; // durable reuse from a prior planning pass
+  storyMaterialEnrichment?: StoryMaterialEnrichment; // candidate reuse from a prior planning pass
+  requestedFormat?: StoryMaterialFormat;
 }
 
 interface ExistingSectionBlob {
@@ -234,6 +235,14 @@ interface ExistingSectionBlob {
 }
 
 export type StoryMaterialSource = "recipe" | "planner";
+export type StoryMaterialFormat = "novel" | "shortStory" | "other";
+
+interface StoryMaterialProvenance {
+  sourceRecipeHash: string;
+  sourceRecipeVersion: number;
+  sourcePromptPackID: string;
+  sourcePromptPackName: string;
+}
 
 export interface StoryMaterialItem {
   id: string;
@@ -245,8 +254,12 @@ export interface StoryMaterialItem {
 
 export interface StoryMaterialEnrichment {
   schema: "cathedralos.story_material_enrichment";
-  version: 1;
-  format: "novel" | "shortStory" | "other";
+  version: 2;
+  format: StoryMaterialFormat;
+  sourceRecipeHash: string;
+  sourceRecipeVersion: number;
+  sourcePromptPackID: string;
+  sourcePromptPackName: string;
   rationale: string;
   characters: StoryMaterialItem[];
   antagonisticForces: StoryMaterialItem[];
@@ -285,8 +298,13 @@ export const STORY_MATERIAL_ENRICHMENT_SCHEMA = {
   type: "object",
   properties: {
     schema: { type: "string", enum: ["cathedralos.story_material_enrichment"] },
-    version: { type: "integer", enum: [1] },
+    version: { type: "integer", enum: [2] },
     format: { type: "string", enum: ["novel", "shortStory", "other"] },
+    // These are server-owned after validation; the model may omit them.
+    sourceRecipeHash: { type: "string", minLength: 1, maxLength: 128 },
+    sourceRecipeVersion: { type: "integer" },
+    sourcePromptPackID: { type: "string", minLength: 1, maxLength: 200 },
+    sourcePromptPackName: { type: "string", minLength: 1, maxLength: 200 },
     rationale: { type: "string", minLength: 1, maxLength: 2000 },
     ...Object.fromEntries(STORY_MATERIAL_CATEGORIES.map((category) => [category, { type: "array", maxItems: 50, items: STORY_MATERIAL_ITEM_SCHEMA }])),
   },
@@ -294,12 +312,50 @@ export const STORY_MATERIAL_ENRICHMENT_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-export function validateStoryMaterialEnrichment(value: unknown): StoryMaterialEnrichment {
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
+}
+
+export async function recipeProvenance(recipe: CanonicalRecipeEnvelope): Promise<StoryMaterialProvenance> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(stableJson(recipe)));
+  const sourceRecipeHash = Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return { sourceRecipeHash, sourceRecipeVersion: recipe.version, sourcePromptPackID: recipe.promptPack.id, sourcePromptPackName: recipe.promptPack.name };
+}
+
+function recipeMaterialHandles(recipe: CanonicalRecipeEnvelope): Map<string, string> {
+  const handles = new Map<string, string>();
+  if (typeof recipe.project.summary === "string" && recipe.project.summary.trim()) handles.set("project.summary", recipe.project.summary);
+  const add = (prefix: string, values: unknown[], fallback: string) => values.forEach((value, index) => {
+    if (!value || typeof value !== "object") return;
+    const row = value as Record<string, unknown>;
+    const id = typeof row.id === "string" && row.id.trim() ? row.id : `${fallback}-${index + 1}`;
+    const handle = `${prefix}:${id}`;
+    handles.set(handle, typeof row.name === "string" ? row.name : typeof row.label === "string" ? row.label : JSON.stringify(row));
+  });
+  add("character", recipe.selectedCharacters, "character");
+  add("relationship", recipe.selectedRelationships, "relationship");
+  add("theme", recipe.selectedThemeQuestions, "theme");
+  add("motif", recipe.selectedMotifs, "motif");
+  if (recipe.selectedStorySpark) handles.set("storySpark", JSON.stringify(recipe.selectedStorySpark));
+  if (recipe.selectedAftertaste) handles.set("aftertaste", JSON.stringify(recipe.selectedAftertaste));
+  return handles;
+}
+
+export function requestedStoryMaterialFormat(req: Pick<OutlineFromRecipeRequest, "requestedFormat">): StoryMaterialFormat {
+  return req.requestedFormat ?? "novel";
+}
+
+export function validateStoryMaterialEnrichment(value: unknown, options: { allowMissingProvenance?: boolean; recipe?: CanonicalRecipeEnvelope } = {}): StoryMaterialEnrichment {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("story material enrichment must be an object");
   const candidate = value as Record<string, unknown>;
-  if (candidate.schema !== "cathedralos.story_material_enrichment" || candidate.version !== 1) throw new Error("story material enrichment has an unsupported schema or version");
+  if (candidate.schema !== "cathedralos.story_material_enrichment" || candidate.version !== 2) throw new Error("story material enrichment has an unsupported schema or version");
   if (!["novel", "shortStory", "other"].includes(String(candidate.format))) throw new Error("story material enrichment has an invalid format");
   if (typeof candidate.rationale !== "string" || candidate.rationale.trim() === "") throw new Error("story material enrichment requires a rationale");
+  const provenanceFields = ["sourceRecipeHash", "sourceRecipeVersion", "sourcePromptPackID", "sourcePromptPackName"];
+  if (!options.allowMissingProvenance && provenanceFields.some((field) => typeof candidate[field] !== "string" && field !== "sourceRecipeVersion" || field === "sourceRecipeVersion" && !Number.isInteger(candidate[field]))) throw new Error("story material enrichment is missing server-owned recipe provenance");
+  const handles = options.recipe ? recipeMaterialHandles(options.recipe) : null;
   const ids = new Set<string>();
   for (const category of STORY_MATERIAL_CATEGORIES) {
     const items = candidate[category];
@@ -309,7 +365,17 @@ export function validateStoryMaterialEnrichment(value: unknown): StoryMaterialEn
       const row = item as Record<string, unknown>;
       if (typeof row.id !== "string" || row.id.trim() === "" || ids.has(row.id)) throw new Error("story material enrichment contains a duplicate or missing item id");
       if (row.source !== "recipe" && row.source !== "planner") throw new Error(`story material enrichment item ${row.id} has an invalid source`);
-      if (row.source === "recipe" && (typeof row.sourceReference !== "string" || row.sourceReference.trim() === "")) throw new Error(`recipe story material item ${row.id} requires a source reference`);
+      if (row.source === "recipe") {
+        if (typeof row.sourceReference !== "string" || row.sourceReference.trim() === "") throw new Error(`recipe story material item ${row.id} requires a source reference`);
+        const referencedMaterial = handles?.get(row.sourceReference);
+        if (handles && !referencedMaterial) throw new Error(`recipe story material item ${row.id} has an unverified source reference`);
+        if (row.label === row.sourceReference || row.description === row.sourceReference) throw new Error(`recipe story material item ${row.id} has no authored description`);
+        if (referencedMaterial) {
+          const sourceTokens = referencedMaterial.toLowerCase().match(/[a-z0-9]{4,}/g) ?? [];
+          const itemText = `${String(row.label)} ${String(row.description)}`.toLowerCase();
+          if (sourceTokens.length > 0 && !sourceTokens.some((token) => itemText.includes(token))) throw new Error(`recipe story material item ${row.id} does not correspond to referenced recipe material`);
+        }
+      } else if (row.sourceReference !== null) throw new Error(`planner story material item ${row.id} must not claim a recipe reference`);
       if (row.sourceReference !== null && typeof row.sourceReference !== "string") throw new Error(`story material enrichment item ${row.id} has an invalid source reference`);
       if (typeof row.label !== "string" || row.label.trim() === "" || typeof row.description !== "string" || row.description.trim() === "") throw new Error(`story material enrichment item ${row.id} is missing label or description`);
       ids.add(row.id);
@@ -318,10 +384,37 @@ export function validateStoryMaterialEnrichment(value: unknown): StoryMaterialEn
   return value as StoryMaterialEnrichment;
 }
 
-export function buildEnrichmentPrompt(req: OutlineFromRecipeRequest): { system: string; user: string } {
+export function storyMaterialSufficiency(material: StoryMaterialEnrichment, recipe: CanonicalRecipeEnvelope, format: StoryMaterialFormat = "novel") {
+  const counts = Object.fromEntries(STORY_MATERIAL_CATEGORIES.map((category) => [category, material[category].length])) as Record<string, number>;
+  const recipeCount = STORY_MATERIAL_CATEGORIES.reduce((n, category) => n + material[category].filter((item) => item.source === "recipe").length, 0);
+  const supporting = counts.locations + counts.institutionsAndGroups + counts.relationships + counts.discoveries + counts.unresolvedQuestions;
+  const change = counts.reversals + counts.consequences;
+  const reasons: string[] = [];
+  if (format === "novel") {
+    if (!recipe.project.summary && counts.characters === 0) reasons.push("no protagonist or core supplied material represented");
+    if (counts.antagonisticForces === 0 && counts.conflictSources === 0) reasons.push("no meaningful opposition or conflict source");
+    if (counts.escalationLadder < 3) reasons.push("escalation ladder is too thin for novel-scale development");
+    if (change < 2) reasons.push("not enough reversals or consequences");
+    if (supporting < 2) reasons.push("insufficient supporting concrete material");
+    if (counts.characters + counts.conflictSources + counts.escalationLadder + change < 6) reasons.push("package remains too abstract to support extended dramatic development");
+    if (recipeCount === 0) reasons.push("no canonical recipe material was preserved");
+  } else if (counts.characters + counts.conflictSources + counts.escalationLadder === 0) reasons.push("package contains no concrete dramatic material");
+  return { sufficient: reasons.length === 0, reasons, counts, recipeDerivedItemCount: recipeCount, plannerInventedItemCount: countStoryMaterialItems(material) - recipeCount };
+}
+
+export function attachRecipeProvenance(material: StoryMaterialEnrichment, provenance: StoryMaterialProvenance): StoryMaterialEnrichment {
+  return { ...material, ...provenance, version: 2 };
+}
+
+export function isCompatibleStoryMaterialEnrichment(material: StoryMaterialEnrichment, provenance: StoryMaterialProvenance, format: StoryMaterialFormat): boolean {
+  return material.sourceRecipeHash === provenance.sourceRecipeHash && material.sourceRecipeVersion === provenance.sourceRecipeVersion && material.sourcePromptPackID === provenance.sourcePromptPackID && material.sourcePromptPackName === provenance.sourcePromptPackName && material.format === format;
+}
+
+export function buildEnrichmentPrompt(req: OutlineFromRecipeRequest, candidate?: StoryMaterialEnrichment): { system: string; user: string } {
+  const format = requestedStoryMaterialFormat(req);
   return {
-    system: `You are the story-material enrichment planner for CathedralOS. Create a canonical, provenance-aware package of ingredients that can sustain the requested format before sections are outlined. This is planning, not prose and not a final outline. Preserve every authored recipe fact; never replace, silently edit, or write invented material into the recipe. Use source=recipe for supplied material and source=planner for connective or newly invented material. Every item needs a stable id, a useful sourceReference when it comes from the recipe, and concrete label and description. A sparse premise requires proportionally more supporting characters, opposition, institutions, locations, intermediate objectives, failures, discoveries, relationships, consequences, and escalation. A detailed recipe should primarily develop and connect its supplied material. Do not fill categories mechanically when they are not useful, but provide enough concrete material for the requested format. Return only JSON matching the enrichment schema.`,
-    user: JSON.stringify({ recipe: req.recipe, arcTemplate: req.arcTemplate, hint: req.hint ?? null, requestedFormat: "novel" }, null, 2),
+    system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Use source=recipe only with one of the server-provided recipe handles; use source=planner for all connective or newly invented material and use null sourceReference. The server, not you, owns recipe provenance. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.`,
+    user: JSON.stringify({ recipe: req.recipe, recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)), priorEnrichment: candidate ?? null, arcTemplate: req.arcTemplate, hint: req.hint ?? null, requestedFormat: format }, null, 2),
   };
 }
 
@@ -400,9 +493,10 @@ export function validateRequest(req: unknown): string | null {
   ) {
     return "arcTemplate.id and non-empty arcTemplate.beats required";
   }
+  if (r.requestedFormat !== undefined && !["novel", "shortStory", "other"].includes(r.requestedFormat)) return "requestedFormat must be novel, shortStory, or other";
   if (r.storyMaterialEnrichment) {
     try {
-      validateStoryMaterialEnrichment(r.storyMaterialEnrichment);
+      validateStoryMaterialEnrichment(r.storyMaterialEnrichment, { allowMissingProvenance: true });
     } catch (error) {
       return error instanceof Error ? error.message : "invalid story material enrichment";
     }
@@ -590,7 +684,7 @@ export function buildExpansionPrompt(
   );
   const round = context?.round ?? 1;
   return {
-    system: `The current outline is compressed for a novel. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad novel range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign every addition one or more applicable recipeRequirementIDs from the supplied obligation list. Return JSON matching the expansion schema.
+    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign every addition one or more applicable recipeRequirementIDs from the supplied obligation list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 ${renderRecipeObligations(obligations)}`,
@@ -710,7 +804,7 @@ export function buildPrompt(
     .join("\n");
 
   const system =
-    `You are an expert novel outliner. Use the complete canonical recipe/project payload below, including its premise, selected characters and their populated fields, selected relationships, themes, motifs, story spark, aftertaste, recipe instructions, and included setting. Treat supplied facts as authoritative; do not infer personality traits from a character name alone. Given the story arc and per-beat allocation plan, produce the section-by-section outline.
+    `You are an expert ${requestedStoryMaterialFormat(req)} outliner. Use the complete canonical recipe/project payload below, including its premise, selected characters and their populated fields, selected relationships, themes, motifs, story spark, aftertaste, recipe instructions, and included setting. Treat supplied facts as authoritative; do not infer personality traits from a character name alone. Given the story arc and per-beat allocation plan, produce the section-by-section outline.
 
 ## Container semantics for planning
 
@@ -737,7 +831,7 @@ For each beat, generate at least the stated minimum number of distinct sections.
 
 ## Novel-ready section titles
 
-Write each section title as a concise, specific, evocative working title suitable for a novel outline or novel-ready table of contents. The title should name the concrete dramatic event, decision, reversal, discovery, confrontation, or consequence that this section actually dramatizes. Do not restate or lightly rephrase the premise, Story Arc beat label, terminal beat, or section summary. Avoid generic placeholders such as "Setup," "Conflict," "Events," or "Scene"; each title must distinguish its section from the others in the same beat.
+Write each section title as a concise, specific, evocative working title suitable for a ${requestedStoryMaterialFormat(req)} outline or ${requestedStoryMaterialFormat(req)}-ready table of contents. The title should name the concrete dramatic event, decision, reversal, discovery, confrontation, or consequence that this section actually dramatizes. Do not restate or lightly rephrase the premise, Story Arc beat label, terminal beat, or section summary. Avoid generic placeholders such as "Setup," "Conflict," "Events," or "Scene"; each title must distinguish its section from the others in the same beat.
 
 ${allocationLines}
 
@@ -914,9 +1008,9 @@ export function buildAllocationPrompt(
   req: OutlineFromRecipeRequest,
 ): { system: string; user: string } {
   const system =
-    `You are an expert novel outliner. Given a complete canonical recipe/project payload and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular novel.
+    `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a novel. Plan enough distinct dramatic material for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections. Use the supplied premise, characters, and arc to decide where density belongs.
+This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections. Use the supplied premise, characters, and arc to decide where density belongs.
 
 For every Story Arc beat, determine the minimum number of distinct dramatic sections required to adequately realize that movement in a novel. Output exactly one JSON object with beatID matching the supplied UUID exactly, minSections as an integer from 0 through 10, and a concise rationale. Include every beat exactly once. This number is a floor, not a target or maximum. Major movements should generally require more minimum coverage than transitions, but the later outline generator may create additional sections whenever the material supports them. A beat sufficiently covered by existing sections may use minSections 0. Do not output any other root key.
 
@@ -924,6 +1018,7 @@ Output JSON only. No commentary, no prose.`;
 
   const user = JSON.stringify(
     {
+      requestedFormat: requestedStoryMaterialFormat(req),
       recipe: req.recipe,
       storyMaterialEnrichment: req.storyMaterialEnrichment ?? null,
       arcTemplate: {
@@ -1276,6 +1371,13 @@ async function repairRecipeObligations(
   ).suggestions;
 }
 
+class StoryMaterialSufficiencyError extends Error {
+  constructor(public readonly reasons: string[]) {
+    super(`story material enrichment is insufficient: ${reasons.join("; ")}`);
+    this.name = "StoryMaterialSufficiencyError";
+  }
+}
+
 async function runSuggestionJob(
   runId: string,
   body: OutlineFromRecipeRequest,
@@ -1351,24 +1453,62 @@ async function runSuggestionJob(
       };
     };
 
-    let storyMaterial: StoryMaterialEnrichment;
+    const provenance = await recipeProvenance(body.recipe);
+    let storyMaterial: StoryMaterialEnrichment | null = null;
+    let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: OPENAI_MODEL, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
     if (body.storyMaterialEnrichment) {
-      storyMaterial = validateStoryMaterialEnrichment(body.storyMaterialEnrichment);
-      diagnostics = { ...diagnostics, stage: "story_material_reused", storyMaterialItemCount: countStoryMaterialItems(storyMaterial) };
-    } else {
-      const enrichmentPrompt = buildEnrichmentPrompt(body);
-      const enrichmentResult = await billableCall(
-        enrichmentPrompt.system,
-        enrichmentPrompt.user,
-        12000,
-        { type: "json_schema", json_schema: { name: "story_material_enrichment", strict: true, schema: STORY_MATERIAL_ENRICHMENT_SCHEMA } },
-        "story-material-enrichment",
-        (content) => validateStoryMaterialEnrichment(JSON.parse(content)),
-      );
-      storyMaterial = validateStoryMaterialEnrichment(JSON.parse(enrichmentResult.content));
-      diagnostics = { ...diagnostics, stage: "story_material_complete", storyMaterialItemCount: countStoryMaterialItems(storyMaterial) };
-      await db.from("outline_suggestion_runs").update({ story_material: storyMaterial, diagnostics }).eq("id", runId);
+      try {
+        const candidate = validateStoryMaterialEnrichment(body.storyMaterialEnrichment, { recipe: body.recipe });
+        const compatible = isCompatibleStoryMaterialEnrichment(candidate, provenance, requestedStoryMaterialFormat(body));
+        const sufficiency = storyMaterialSufficiency(candidate, body.recipe, requestedStoryMaterialFormat(body));
+        if (compatible && sufficiency.sufficient) {
+          storyMaterial = candidate;
+          enrichmentDiagnostics = { ...enrichmentDiagnostics, generatedOrReused: "reused", enrichmentCreditCostCharged: 0, sufficiency: sufficiency.sufficient ? "sufficient" : "insufficient", sufficiencyReasons: sufficiency.reasons, itemCountsByCategory: sufficiency.counts, recipeDerivedItemCount: sufficiency.recipeDerivedItemCount, plannerInventedItemCount: sufficiency.plannerInventedItemCount };
+        } else {
+          enrichmentDiagnostics = { ...enrichmentDiagnostics, reuseRejected: compatible ? "insufficient" : "recipe_provenance_mismatch", priorSourceRecipeHash: candidate.sourceRecipeHash, priorSourceRecipeVersion: candidate.sourceRecipeVersion };
+        }
+      } catch (error) {
+        enrichmentDiagnostics = { ...enrichmentDiagnostics, reuseRejected: error instanceof Error ? error.message : "incompatible_enrichment" };
+      }
     }
+    if (!storyMaterial) {
+      const generateEnrichment = async (action: string, prior?: StoryMaterialEnrichment) => {
+        const enrichmentPrompt = buildEnrichmentPrompt(body, prior);
+        let parsedMaterial: StoryMaterialEnrichment | null = null;
+        const enrichmentResult = await billableCall(
+          enrichmentPrompt.system,
+          enrichmentPrompt.user,
+          12000,
+          { type: "json_schema", json_schema: { name: "story_material_enrichment", strict: true, schema: STORY_MATERIAL_ENRICHMENT_SCHEMA } },
+          action,
+          (content) => {
+            parsedMaterial = validateStoryMaterialEnrichment(JSON.parse(content), { allowMissingProvenance: true, recipe: body.recipe });
+            const sufficiency = storyMaterialSufficiency(parsedMaterial, body.recipe, requestedStoryMaterialFormat(body));
+            if (!sufficiency.sufficient) throw new StoryMaterialSufficiencyError(sufficiency.reasons);
+            return parsedMaterial;
+          },
+        );
+        const material = parsedMaterial ?? validateStoryMaterialEnrichment(JSON.parse(enrichmentResult.content), { allowMissingProvenance: true, recipe: body.recipe });
+        return { material: attachRecipeProvenance(material, provenance), result: enrichmentResult };
+      };
+      let generated: { material: StoryMaterialEnrichment; result: SuggestionLLMResult };
+      try {
+        generated = await generateEnrichment("story-material-enrichment");
+      } catch (error) {
+        if (!(error instanceof StoryMaterialSufficiencyError)) throw error;
+        enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassSufficiencyReasons: error.reasons };
+        generated = await generateEnrichment("story-material-enrichment-repair");
+      }
+      storyMaterial = generated.material;
+      const sufficiency = storyMaterialSufficiency(storyMaterial, body.recipe, requestedStoryMaterialFormat(body));
+      enrichmentDiagnostics = { ...enrichmentDiagnostics, generatedOrReused: "generated", enrichmentCreditCostCharged: generated.result.creditCostCharged, schemaVersion: storyMaterial.version, sufficiency: sufficiency.sufficient ? "sufficient" : "insufficient", sufficiencyReasons: sufficiency.reasons, itemCountsByCategory: sufficiency.counts, recipeDerivedItemCount: sufficiency.recipeDerivedItemCount, plannerInventedItemCount: sufficiency.plannerInventedItemCount };
+      await db.from("outline_suggestion_runs").update({ story_material: storyMaterial, diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" } }).eq("id", runId);
+    }
+    if (!storyMaterial) throw new Error("story material enrichment was not produced");
+    await db.from("outline_suggestion_runs").update({
+      story_material: storyMaterial,
+      diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" },
+    }).eq("id", runId);
     body = { ...body, storyMaterialEnrichment: storyMaterial };
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
     const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
@@ -1382,6 +1522,8 @@ async function runSuggestionJob(
       Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections]),
     );
     diagnostics = {
+      ...diagnostics,
+      ...enrichmentDiagnostics,
       stage: "planner_complete",
       plannerAllocationFirstPassCountsByBeat: allocationCountsByBeat,
       plannerAllocationValidatedCountsByBeat: allocationCountsByBeat,
@@ -1450,7 +1592,7 @@ async function runSuggestionJob(
 
     // Expand progressively in bounded rounds. Every round is additive and starts
     // from the complete valid outline produced so far.
-    if (needsNovelExpansion(result.suggestions)) {
+    if (requestedStoryMaterialFormat(body) === "novel" && needsNovelExpansion(result.suggestions)) {
       diagnostics = { ...diagnostics, stage: "expansion_generation", expansionRounds: [] };
       const expanded = await progressivelyExpandOutline(
         result.suggestions,
@@ -1500,7 +1642,9 @@ async function runSuggestionJob(
       diagnostics: { ...diagnostics, stage: "completed", finalSectionCounts: countSuggestionsByBeat(result.suggestions) },
     }).eq("id", runId);
   } catch (err) {
-    const errorCode = err && typeof err === "object" && "code" in err
+    const errorCode = err instanceof StoryMaterialSufficiencyError
+      ? "insufficient_story_material"
+      : err && typeof err === "object" && "code" in err
       ? String((err as { code?: unknown }).code)
       : (err instanceof Error &&
           /insufficient credits|requires ~|you have/i.test(err.message)
