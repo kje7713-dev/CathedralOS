@@ -1697,6 +1697,10 @@ struct ProjectDetailView: View {
                 // Section Contract block in the prompt).
                 sectionTitle: nil,
                 sectionSummary: nil,
+                sectionEntryState: nil,
+                sectionDramaticEvent: nil,
+                sectionResultingChange: nil,
+                sectionTerminalState: nil,
                 // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline
                 // section identity. Project-level direct-gen has no specific
                 // OutlineSection in scope — pass nil per spec ("Keep nil for

@@ -51,6 +51,10 @@ protocol GenerationService {
         // extension below forwards them when present.
         sectionTitle: String?,
         sectionSummary: String?,
+        sectionEntryState: String?,
+        sectionDramaticEvent: String?,
+        sectionResultingChange: String?,
+        sectionTerminalState: String?,
         // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
         // identity. UUID string of the OutlineSection that originated this
         // generation. Required for backend-owned post-generation extraction
@@ -99,6 +103,10 @@ extension GenerationService {
         // PR-360-Z: canonical section context fields (defaults to nil).
         sectionTitle: String? = nil,
         sectionSummary: String? = nil,
+        sectionEntryState: String? = nil,
+        sectionDramaticEvent: String? = nil,
+        sectionResultingChange: String? = nil,
+        sectionTerminalState: String? = nil,
         // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
         // identity forwarded to the underlying generate() implementation.
         outlineSectionID: String? = nil
@@ -115,6 +123,10 @@ extension GenerationService {
             pov: pov,
             sectionTitle: sectionTitle,
             sectionSummary: sectionSummary,
+            sectionEntryState: sectionEntryState,
+            sectionDramaticEvent: sectionDramaticEvent,
+            sectionResultingChange: sectionResultingChange,
+            sectionTerminalState: sectionTerminalState,
             outlineSectionID: outlineSectionID
         )
     }
@@ -174,6 +186,10 @@ final class StoryGenerationService: GenerationService {
         pov: String? = nil,
         sectionTitle: String? = nil,
         sectionSummary: String? = nil,
+        sectionEntryState: String? = nil,
+        sectionDramaticEvent: String? = nil,
+        sectionResultingChange: String? = nil,
+        sectionTerminalState: String? = nil,
         // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
         // identity. UUID string of the OutlineSection that originated this
         // generation. StoryGenerationService is the legacy non-Supabase
@@ -206,6 +222,10 @@ final class StoryGenerationService: GenerationService {
             selectedModelId: selectedModelId,
             sectionTitle: sectionTitle,
             sectionSummary: sectionSummary,
+            sectionEntryState: sectionEntryState,
+            sectionDramaticEvent: sectionDramaticEvent,
+            sectionResultingChange: sectionResultingChange,
+            sectionTerminalState: sectionTerminalState,
             // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): forward
             // outline section identity for backend-owned extraction.
             outlineSectionID: outlineSectionID
