@@ -29,6 +29,7 @@ import {
   validateExpansionAdditions,
   mergeRepairedSuggestions,
   mergeExpansionAdditions,
+  evaluateNovelScale,
   needsNovelExpansion,
   projectedExpectedTokens,
   projectedTokenRange,
@@ -591,6 +592,8 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
     { container: "scene" }, { container: "developedScene" },
   ]), [2300, 4800]);
   assertEquals(projectedExpectedTokens([{ container: "scene" }]), 1300);
+  assertEquals(evaluateNovelScale([{ container: "scene" }]).meetsMinimum, false);
+  assertEquals(evaluateNovelScale([{ container: "scene" }]).minimumWords, 70000);
   assertEquals(projectedExpectedTokens([{ container: "sceneSequence" }]), 5000);
   assertEquals(projectedExpectedTokens([{ container: "scene" }, { container: "scene" }]), 2600);
   assertEquals(needsNovelExpansion([{ container: "sceneSequence" }]), true);
@@ -728,7 +731,7 @@ Deno.test("invalid expansion responses remain typed at the billable boundary", (
   assertEquals((failure as Error).message.includes("expansion returned an invalid addition"), true);
 });
 
-Deno.test("invalid expansion placement preserves the prior outline with a warning", async () => {
+Deno.test("invalid expansion is a terminal failed_expansion, never a completed under-target outline", async () => {
   const initial = sceneOutline(22);
   const duplicate = expansionSection("New", "scene", "beat-1");
   let rejected = false;
@@ -736,13 +739,16 @@ Deno.test("invalid expansion placement preserves the prior outline with a warnin
     validateExpansionAdditions({ suggestions: [duplicate, duplicate] }, new Set(["beat-1"]), initial as any);
   } catch { rejected = true; }
   assertEquals(rejected, true);
-  const result = await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => {
-    throw new ExpansionValidationError("expansion placement crosses arc beats");
-  });
-  assertEquals(result.suggestions, initial);
-  assertEquals(result.diagnostics[0].status, "invalid");
-  assertEquals(result.diagnostics[0].error, "expansion placement crosses arc beats");
-  assertEquals(result.warnings.includes("Novel expansion stopped after an invalid expansion response; the previously valid outline was preserved."), true);
+  let failure: unknown;
+  try {
+    await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => {
+      throw new ExpansionValidationError("expansion placement crosses arc beats");
+    });
+  } catch (error) {
+    failure = error;
+  }
+  assertEquals((failure as NovelScalePlanningError).code, "failed_expansion");
+  assertEquals((failure as Error).message.includes("round 1"), true);
 });
 
 Deno.test("existing sections survive progressive expansion and global cap fails closed below target", async () => {

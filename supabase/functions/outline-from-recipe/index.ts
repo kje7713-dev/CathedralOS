@@ -551,8 +551,32 @@ export function projectedExpectedTokens(suggestions: Array<{ container: string }
   }, 0);
 }
 
+export interface NovelScaleEvaluation {
+  projectedTokens: number;
+  projectedWords: number;
+  minimumWords: number;
+  deficitTokens: number;
+  meetsMinimum: boolean;
+}
+
+/**
+ * The single authoritative novel-scale evaluator. Every planning and terminal
+ * completion decision must use this result rather than section-count guesses.
+ */
+export function evaluateNovelScale(suggestions: Array<{ container: string }>): NovelScaleEvaluation {
+  const projectedTokens = projectedExpectedTokens(suggestions);
+  const deficitTokens = Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - projectedTokens);
+  return {
+    projectedTokens,
+    projectedWords: projectedTokens / TOKENS_PER_WORD,
+    minimumWords: NOVEL_TARGET_WORDS[0],
+    deficitTokens,
+    meetsMinimum: deficitTokens === 0,
+  };
+}
+
 export function needsNovelExpansion(suggestions: Array<{ container: string }>): boolean {
-  return projectedExpectedTokens(suggestions) < NOVEL_MIN_PROJECTED_TOKENS;
+  return !evaluateNovelScale(suggestions).meetsMinimum;
 }
 
 const EXPANSION_SCHEMA = {
@@ -632,7 +656,6 @@ export async function progressivelyExpandOutline(
   let suggestions = [...initial];
   const diagnostics: ExpansionRoundDiagnostic[] = [];
   const warnings: string[] = [];
-  let stoppedAfterInvalidExpansion = false;
   for (let round = 1; round <= MAX_EXPANSION_ROUNDS && needsNovelExpansion(suggestions); round++) {
     const projectedTokensBefore = projectedExpectedTokens(suggestions);
     const before: ExpansionPromptContext = {
@@ -677,12 +700,14 @@ export async function progressivelyExpandOutline(
       };
       diagnostics.push(diagnostic);
       await onRound?.(diagnostic, diagnostics);
-      stoppedAfterInvalidExpansion = true;
-      warnings.push("Novel expansion stopped after an invalid expansion response; the previously valid outline was preserved.");
-      break;
+      throw new NovelScalePlanningError(
+        "failed_expansion",
+        `Novel expansion failed validation in round ${round}; the outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum.`,
+      );
     }
   }
-  if (needsNovelExpansion(suggestions) && !stoppedAfterInvalidExpansion) {
+  const finalScale = evaluateNovelScale(suggestions);
+  if (!finalScale.meetsMinimum) {
     throw new NovelScalePlanningError(
       "failed_under_target",
       `Novel outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
@@ -1875,6 +1900,19 @@ async function runSuggestionJob(
       throw new RecipeObligationValidationError(
         `required recipe obligations remain uncovered: ${coverage.missingRequired.map((obligation) => obligation.id).join(", ")}`,
       );
+    }
+    if (requestedStoryMaterialFormat(body) === "novel") {
+      const finalScale = evaluateNovelScale(result.suggestions);
+      diagnostics = {
+        ...diagnostics,
+        novelScale: finalScale,
+      };
+      if (!finalScale.meetsMinimum) {
+        throw new NovelScalePlanningError(
+          "failed_under_target",
+          `Novel outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum at completion.`,
+        );
+      }
     }
     await updateRun({
       status: "completed",
