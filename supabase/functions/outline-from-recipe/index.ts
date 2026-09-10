@@ -64,8 +64,12 @@ const SECTION_SCHEMA = {
     container: { type: "string", enum: ["beat", "moment", "vignette", "microScene", "scene", "developedScene", "setPiece", "sceneSequence", "shortStory", "chapter", "episode"] },
     pov: { type: "string", enum: ["firstPerson", "secondPerson", "thirdPersonLimited", "thirdPersonOmniscient"] },
     terminalBeat: { type: "string", minLength: 1, maxLength: 500 },
+    entryState: { type: "string", minLength: 1, maxLength: 1200 },
+    dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
+    resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
+    terminalState: { type: "string", minLength: 1, maxLength: 1200 },
   },
-  required: ["title", "summary", "container", "pov", "terminalBeat"],
+  required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState"],
   additionalProperties: false,
 } as const;
 
@@ -439,6 +443,11 @@ interface Suggestion {
   container: string;
   pov: string;
   terminalBeat: string;
+  /** Additive planning contract; legacy callers are normalized from summary/terminalBeat. */
+  entryState?: string;
+  dramaticEvent?: string;
+  resultingChange?: string;
+  terminalState?: string;
   storyArcBeatID: string;
   recipeRequirementIDs?: string[];
 }
@@ -542,11 +551,15 @@ const EXPANSION_SCHEMA = {
           container: { type: "string", enum: ["beat", "moment", "vignette", "microScene", "scene", "developedScene", "setPiece", "sceneSequence", "shortStory", "chapter", "episode"] },
           pov: { type: "string", enum: ["firstPerson", "secondPerson", "thirdPersonLimited", "thirdPersonOmniscient"] },
           terminalBeat: { type: "string", minLength: 1, maxLength: 500 },
+          entryState: { type: "string", minLength: 1, maxLength: 1200 },
+          dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
+          resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
+          terminalState: { type: "string", minLength: 1, maxLength: 1200 },
           storyArcBeatID: { type: "string" },
           insertAfterTitle: { type: ["string", "null"] },
           recipeRequirementIDs: { type: "array", minItems: 1, maxItems: 50, items: { type: "string", minLength: 1 } },
         },
-        required: ["title", "summary", "container", "pov", "terminalBeat", "storyArcBeatID", "insertAfterTitle", "recipeRequirementIDs"],
+        required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "storyArcBeatID", "insertAfterTitle", "recipeRequirementIDs"],
       },
     },
   },
@@ -684,7 +697,7 @@ export function buildExpansionPrompt(
   );
   const round = context?.round ?? 1;
   return {
-    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign every addition one or more applicable recipeRequirementIDs from the supplied obligation list. Return JSON matching the expansion schema.
+    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, and terminalState, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign every addition one or more applicable recipeRequirementIDs from the supplied obligation list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 ${renderRecipeObligations(obligations)}`,
@@ -832,6 +845,9 @@ For each beat, generate at least the stated minimum number of distinct sections.
 ## Novel-ready section titles
 
 Write each section title as a concise, specific, evocative working title suitable for a ${requestedStoryMaterialFormat(req)} outline or ${requestedStoryMaterialFormat(req)}-ready table of contents. The title should name the concrete dramatic event, decision, reversal, discovery, confrontation, or consequence that this section actually dramatizes. Do not restate or lightly rephrase the premise, Story Arc beat label, terminal beat, or section summary. Avoid generic placeholders such as "Setup," "Conflict," "Events," or "Scene"; each title must distinguish its section from the others in the same beat.
+
+## Generation-ready section contract
+For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields.
 
 ${allocationLines}
 
@@ -1281,6 +1297,12 @@ export function validateSuggestions(
       container: s.container,
       pov: s.pov,
       terminalBeat: String(s.terminalBeat).slice(0, 1000),
+      // Preserve legacy payload shape when older callers omit the additive
+      // contract; new structured responses retain all four explicit fields.
+      ...(typeof s.entryState === "string" ? { entryState: s.entryState.slice(0, 1200) } : {}),
+      ...(typeof s.dramaticEvent === "string" ? { dramaticEvent: s.dramaticEvent.slice(0, 2000) } : {}),
+      ...(typeof s.resultingChange === "string" ? { resultingChange: s.resultingChange.slice(0, 1200) } : {}),
+      ...(typeof s.terminalState === "string" ? { terminalState: s.terminalState.slice(0, 1200) } : {}),
       storyArcBeatID: s.storyArcBeatID,
       ...(validRequirementIDs.length > 0 ? { recipeRequirementIDs: validRequirementIDs } : {}),
     });
@@ -1309,6 +1331,101 @@ export function validateSuggestions(
     }
   }
   return { suggestions: valid, warnings };
+}
+
+
+export interface OutlineQualityDiagnostic {
+  distinctnessIssues: string[];
+  causalScaleIssues: string[];
+  supportingEntities: string[];
+  unusedStoryMaterialItems: number;
+}
+
+function contractText(suggestion: Suggestion): string {
+  return [
+    suggestion.entryState ?? suggestion.summary,
+    suggestion.dramaticEvent ?? suggestion.summary,
+    suggestion.resultingChange ?? suggestion.terminalBeat,
+    suggestion.terminalState ?? suggestion.terminalBeat,
+  ].join(" ").toLowerCase();
+}
+
+function contentTokens(value: string): Set<string> {
+  return new Set((value.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []).filter((token) => !["that", "with", "from", "into", "this", "then", "they", "their", "will", "must"].includes(token)));
+}
+
+function tokenSimilarity(left: string, right: string): number {
+  const a = contentTokens(left);
+  const b = contentTokens(right);
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) if (b.has(token)) intersection++;
+  return intersection / (a.size + b.size - intersection);
+}
+
+/** Detects repeated dramatic work without deleting sections. The caller can
+ * request a bounded repair; the editor's job is differentiation first. */
+export function findDramaticDistinctnessIssues(suggestions: Suggestion[]): string[] {
+  const issues: string[] = [];
+  for (let index = 0; index < suggestions.length; index++) {
+    const current = suggestions[index];
+    for (let otherIndex = Math.max(0, index - 1); otherIndex < index; otherIndex++) {
+      const other = suggestions[otherIndex];
+      if (other.storyArcBeatID !== current.storyArcBeatID) continue;
+      const eventSimilarity = tokenSimilarity(
+        current.dramaticEvent ?? current.summary,
+        other.dramaticEvent ?? other.summary,
+      );
+      const changeSimilarity = tokenSimilarity(
+        current.resultingChange ?? current.terminalBeat,
+        other.resultingChange ?? other.terminalBeat,
+      );
+      if (eventSimilarity >= 0.92 && changeSimilarity >= 0.75) {
+        issues.push(`sections "${other.title}" and "${current.title}" perform substantially the same dramatic job; differentiate event, opponent, location, objective, consequence, relationship, or information`);
+      }
+    }
+  }
+  return issues;
+}
+
+/** General causal-scale gate. It intentionally reports a planning defect rather
+ * than enforcing a Brody-specific vocabulary or deleting sections. */
+export function findCausalScaleIssues(
+  suggestions: Suggestion[],
+  storyMaterial?: StoryMaterialEnrichment,
+  format: StoryMaterialFormat = "novel",
+): string[] {
+  if (format !== "novel" || suggestions.length === 0) return [];
+  const issues: string[] = [];
+  const escalationCount = storyMaterial?.escalationLadder.length ?? 0;
+  const eventText = suggestions.map(contractText).join(" ");
+  const globalClaim = /\b(world|global|nation|empire|entire|everyone|civilization|planetary|political)\b/i.test(eventText);
+  const intermediateSignals = /\b(local|neighborhood|town|city|regional|district|network|institution|alliance|route|supply|countermeasure|aftermath|consequence|reversal|discovery)\b/i.test(eventText);
+  if (globalClaim && escalationCount < 3) issues.push("large-scale outcome lacks a three-step enrichment escalation ladder");
+  if (globalClaim && !intermediateSignals) issues.push("large-scale outcome lacks concrete intermediate consequences");
+  return issues;
+}
+
+export function validateOutlinePlanningQuality(
+  suggestions: Suggestion[],
+  storyMaterial?: StoryMaterialEnrichment,
+  format: StoryMaterialFormat = "novel",
+): OutlineQualityDiagnostic {
+  const distinctnessIssues = findDramaticDistinctnessIssues(suggestions);
+  const causalScaleIssues = findCausalScaleIssues(suggestions, storyMaterial, format);
+  const usedText = suggestions.map(contractText).join(" ");
+  const supportingEntities = storyMaterial
+    ? STORY_MATERIAL_CATEGORIES.flatMap((category) => storyMaterial[category])
+      .filter((item) => !usedText.includes(`${item.label} ${item.description}`.toLowerCase().split(/\s+/)[0]))
+      .map((item) => item.id)
+      .slice(0, 50)
+    : [];
+  return {
+    distinctnessIssues,
+    causalScaleIssues,
+    supportingEntities,
+    unusedStoryMaterialItems: supportingEntities.length,
+  };
 }
 
 function makeSupabase(url: string, anonKey: string, authHeader: string) {
@@ -1566,6 +1683,18 @@ async function runSuggestionJob(
       }
     }
 
+    const initialQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body));
+    diagnostics = {
+      ...diagnostics,
+      sectionContractValidated: true,
+      dramaticDistinctnessIssues: initialQuality.distinctnessIssues,
+      causalScaleIssues: initialQuality.causalScaleIssues,
+      unusedStoryMaterialItems: initialQuality.unusedStoryMaterialItems,
+    };
+    if (initialQuality.distinctnessIssues.length > 0) {
+      throw new Error(`outline failed dramatic distinctness validation: ${initialQuality.distinctnessIssues[0]}`);
+    }
+
     let coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
     diagnostics = {
       ...diagnostics,
@@ -1624,7 +1753,11 @@ async function runSuggestionJob(
         },
       );
       result = { suggestions: expanded.suggestions, warnings: [...result.warnings, ...expanded.warnings] };
-      diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions) };
+      const expandedQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body));
+      diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions), dramaticDistinctnessIssues: expandedQuality.distinctnessIssues, causalScaleIssues: expandedQuality.causalScaleIssues, unusedStoryMaterialItems: expandedQuality.unusedStoryMaterialItems };
+      if (expandedQuality.distinctnessIssues.length > 0) {
+        throw new Error(`expanded outline failed dramatic distinctness validation: ${expandedQuality.distinctnessIssues[0]}`);
+      }
     }
     coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
     if (coverage.missingRequired.length > 0) {
