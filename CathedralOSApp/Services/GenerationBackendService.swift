@@ -246,6 +246,10 @@ protocol GenerationBackendServiceProtocol {
         // body as top-level fields on the request payload.
         sectionTitle: String?,
         sectionSummary: String?,
+        sectionEntryState: String?,
+        sectionDramaticEvent: String?,
+        sectionResultingChange: String?,
+        sectionTerminalState: String?,
         // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
         // identity. UUID string of the OutlineSection that originated this
         // generation. Required for backend-owned post-generation extraction
@@ -330,6 +334,10 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         // degrades gracefully (no Section Contract block in the prompt).
         sectionTitle: String? = nil,
         sectionSummary: String? = nil,
+        sectionEntryState: String? = nil,
+        sectionDramaticEvent: String? = nil,
+        sectionResultingChange: String? = nil,
+        sectionTerminalState: String? = nil,
         // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
         // identity. UUID string of the OutlineSection that originated this
         // generation. Required for backend-owned post-generation extraction
@@ -372,6 +380,10 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             selectedModelId: selectedModelId,
             sectionTitle: sectionTitle,
             sectionSummary: sectionSummary,
+            sectionEntryState: sectionEntryState,
+            sectionDramaticEvent: sectionDramaticEvent,
+            sectionResultingChange: sectionResultingChange,
+            sectionTerminalState: sectionTerminalState,
             // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): forward
             // outline section identity so backend can resolve section +
             // story arc metadata server-side and own post-generation
@@ -492,7 +504,11 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
         // info from the parent output's outline_section_id (via project
         // lookup). nil values degrade gracefully.
         sectionTitle: String? = nil,
-        sectionSummary: String? = nil
+        sectionSummary: String? = nil,
+        sectionEntryState: String? = nil,
+        sectionDramaticEvent: String? = nil,
+        sectionResultingChange: String? = nil,
+        sectionTerminalState: String? = nil
     ) async throws -> GenerationResponse {
         do {
             try await validateConfigAndAuth()
@@ -536,7 +552,11 @@ final class SupabaseGenerationService: GenerationBackendServiceProtocol, Generat
             parentGenerationID: parentGenerationID?.uuidString,
             previousOutputText: previousOutputText,
             sectionTitle: sectionTitle,
-            sectionSummary: sectionSummary
+            sectionSummary: sectionSummary,
+            sectionEntryState: sectionEntryState,
+            sectionDramaticEvent: sectionDramaticEvent,
+            sectionResultingChange: sectionResultingChange,
+            sectionTerminalState: sectionTerminalState
         )
 
         return try await post(requestBody)
@@ -814,6 +834,10 @@ final class StubGenerationBackendService: GenerationBackendServiceProtocol, Gene
         // must match GenerationBackendServiceProtocol.
         sectionTitle: String? = nil,
         sectionSummary: String? = nil,
+        sectionEntryState: String? = nil,
+        sectionDramaticEvent: String? = nil,
+        sectionResultingChange: String? = nil,
+        sectionTerminalState: String? = nil,
         // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
         // identity. Stub never reaches the network but signature must match
         // GenerationBackendServiceProtocol for protocol conformance.

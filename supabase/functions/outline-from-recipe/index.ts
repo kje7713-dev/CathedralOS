@@ -68,14 +68,8 @@ const SECTION_SCHEMA = {
     dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
     resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
     terminalState: { type: "string", minLength: 1, maxLength: 1200 },
-    plannedWordRange: {
-      type: "object",
-      properties: { minWords: { type: "integer", minimum: 1 }, maxWords: { type: "integer", minimum: 1 } },
-      required: ["minWords", "maxWords"],
-      additionalProperties: false,
-    },
   },
-  required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "plannedWordRange"],
+  required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState"],
   additionalProperties: false,
 } as const;
 
@@ -232,6 +226,8 @@ interface OutlineFromRecipeRequest {
   existingSections?: ExistingSectionBlob[]; // iOS-side outline state at request time
   storyMaterialEnrichment?: StoryMaterialEnrichment; // candidate reuse from a prior planning pass
   requestedFormat?: StoryMaterialFormat;
+  outline_id?: string;
+  idempotencyKey?: string;
 }
 
 interface ExistingSectionBlob {
@@ -310,11 +306,9 @@ export const STORY_MATERIAL_ENRICHMENT_SCHEMA = {
     schema: { type: "string", enum: ["cathedralos.story_material_enrichment"] },
     version: { type: "integer", enum: [2] },
     format: { type: "string", enum: ["novel", "shortStory", "other"] },
-    // These are server-owned after validation; the model may omit them.
-    sourceRecipeHash: { type: "string", minLength: 1, maxLength: 128 },
-    sourceRecipeVersion: { type: "integer" },
-    sourcePromptPackID: { type: "string", minLength: 1, maxLength: 200 },
-    sourcePromptPackName: { type: "string", minLength: 1, maxLength: 200 },
+    // Server-owned provenance is attached after the model response. It is
+    // intentionally absent from this strict provider schema; OpenAI requires
+    // every declared property to appear in `required`.
     rationale: { type: "string", minLength: 1, maxLength: 2000 },
     ...Object.fromEntries(STORY_MATERIAL_CATEGORIES.map((category) => [category, { type: "array", maxItems: 50, items: STORY_MATERIAL_ITEM_SCHEMA }])),
   },
@@ -420,10 +414,13 @@ export function isCompatibleStoryMaterialEnrichment(material: StoryMaterialEnric
   return material.sourceRecipeHash === provenance.sourceRecipeHash && material.sourceRecipeVersion === provenance.sourceRecipeVersion && material.sourcePromptPackID === provenance.sourcePromptPackID && material.sourcePromptPackName === provenance.sourcePromptPackName && material.format === format;
 }
 
-export function buildEnrichmentPrompt(req: OutlineFromRecipeRequest, candidate?: StoryMaterialEnrichment): { system: string; user: string } {
+export function buildEnrichmentPrompt(req: OutlineFromRecipeRequest, candidate?: StoryMaterialEnrichment, repairReason?: string): { system: string; user: string } {
   const format = requestedStoryMaterialFormat(req);
+  const repairInstruction = repairReason
+    ? `\n\nThe previous enrichment response was rejected: ${repairReason}. Repair it by using source=recipe only with an exact handle from recipeMaterialHandles. Never copy an item id into sourceReference, invent a handle, or use a human-readable label as a handle. Use source=planner with sourceReference null for anything that cannot be tied to an exact handle.`
+    : "";
   return {
-    system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Use source=recipe only with one of the server-provided recipe handles; use source=planner for all connective or newly invented material and use null sourceReference. The server, not you, owns recipe provenance. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.`,
+    system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Use source=recipe only with one of the server-provided recipe handles; use source=planner for all connective or newly invented material and use null sourceReference. The server, not you, owns recipe provenance. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
     user: JSON.stringify({ recipe: req.recipe, recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)), priorEnrichment: candidate ?? null, arcTemplate: req.arcTemplate, hint: req.hint ?? null, requestedFormat: format }, null, 2),
   };
 }
@@ -509,7 +506,20 @@ export function validateRequest(req: unknown): string | null {
   ) {
     return "arcTemplate.id and non-empty arcTemplate.beats required";
   }
+  for (const field of [
+    "selectedCharacters",
+    "selectedRelationships",
+    "selectedThemeQuestions",
+    "selectedMotifs",
+  ] as const) {
+    const values = recipe[field];
+    if (!Array.isArray(values)) return `recipe.${field} must be an array`;
+    if (values.some((value) => !value || typeof value !== "object" || Array.isArray(value))) {
+      return `recipe.${field} contains a missing or invalid selected entity`;
+    }
+  }
   if (r.requestedFormat !== undefined && !["novel", "shortStory", "other"].includes(r.requestedFormat)) return "requestedFormat must be novel, shortStory, or other";
+  if (r.idempotencyKey !== undefined && (typeof r.idempotencyKey !== "string" || r.idempotencyKey.trim() === "" || r.idempotencyKey.length > 512)) return "idempotencyKey must be a non-empty string of at most 512 characters";
   if (r.storyMaterialEnrichment) {
     try {
       validateStoryMaterialEnrichment(r.storyMaterialEnrichment, { allowMissingProvenance: true });
@@ -562,17 +572,11 @@ const EXPANSION_SCHEMA = {
           dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
           resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
           terminalState: { type: "string", minLength: 1, maxLength: 1200 },
-          plannedWordRange: {
-            type: "object",
-            properties: { minWords: { type: "integer", minimum: 1 }, maxWords: { type: "integer", minimum: 1 } },
-            required: ["minWords", "maxWords"],
-            additionalProperties: false,
-          },
           storyArcBeatID: { type: "string" },
           insertAfterTitle: { type: ["string", "null"] },
-          recipeRequirementIDs: { type: "array", minItems: 1, maxItems: 50, items: { type: "string", minLength: 1 } },
+          recipeRequirementIDs: { type: "array", minItems: 0, maxItems: 50, items: { type: "string", minLength: 1 } },
         },
-        required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "plannedWordRange", "storyArcBeatID", "insertAfterTitle", "recipeRequirementIDs"],
+        required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "storyArcBeatID", "insertAfterTitle", "recipeRequirementIDs"],
       },
     },
   },
@@ -735,7 +739,7 @@ export function buildExpansionPrompt(
   const round = context?.round ?? 1;
   const unusedStoryMaterial = findUnusedStoryMaterial(current, req.storyMaterialEnrichment);
   return {
-    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign every addition one or more applicable recipeRequirementIDs from the supplied obligation list. Return JSON matching the expansion schema.
+    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 ${renderRecipeObligations(obligations)}`,
@@ -869,7 +873,7 @@ The expected ranges are literary targets; runtime/provider headroom is not a des
 
 ## Recipe obligations
 
-The following obligations were derived from populated canonical recipe fields. Required obligations must be materially advanced by one or more sections. Supporting items are optional texture and must not be promoted into mandatory plot events. Each section must include one or more applicable recipeRequirementIDs.
+The following obligations were derived from populated canonical recipe fields. Required obligations must be materially advanced by one or more sections. Supporting items are optional texture and must not be promoted into mandatory plot events. Each section may include zero or more applicable recipeRequirementIDs; attach only obligations materially advanced by that section.
 ${renderRecipeObligations(obligations)}
 
 ## Story material enrichment
@@ -885,7 +889,7 @@ For each beat, generate at least the stated minimum number of distinct sections.
 Write each section title as a concise, specific, evocative working title suitable for a ${requestedStoryMaterialFormat(req)} outline or ${requestedStoryMaterialFormat(req)}-ready table of contents. The title should name the concrete dramatic event, decision, reversal, discovery, confrontation, or consequence that this section actually dramatizes. Do not restate or lightly rephrase the premise, Story Arc beat label, terminal beat, or section summary. Avoid generic placeholders such as "Setup," "Conflict," "Events," or "Scene"; each title must distinguish its section from the others in the same beat.
 
 ## Generation-ready section contract
-For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields. Include plannedWordRange for each section as a soft literary planning range derived from its container; it never overrides the Section Contract, container, or natural stopping point.
+For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields. Do not provide plannedWordRange; the server derives it deterministically from container; it never overrides the Section Contract, container, or natural stopping point.
 
 ${allocationLines}
 
@@ -1320,7 +1324,7 @@ export function validateSuggestions(
       continue;
     }
     const requirementIDs = s.recipeRequirementIDs;
-    if (obligations.length > 0 && (!Array.isArray(requirementIDs) || requirementIDs.length === 0)) {
+    if (obligations.length > 0 && !Array.isArray(requirementIDs)) {
       throw new Error(`section ${String(s.title).slice(0, 120)} is missing recipeRequirementIDs`);
     }
     const validRequirementIDs = Array.isArray(requirementIDs)
@@ -1341,9 +1345,7 @@ export function validateSuggestions(
       ...(typeof s.dramaticEvent === "string" ? { dramaticEvent: s.dramaticEvent.slice(0, 2000) } : {}),
       ...(typeof s.resultingChange === "string" ? { resultingChange: s.resultingChange.slice(0, 1200) } : {}),
       ...(typeof s.terminalState === "string" ? { terminalState: s.terminalState.slice(0, 1200) } : {}),
-      ...(s.plannedWordRange && Number.isInteger(s.plannedWordRange.minWords) && Number.isInteger(s.plannedWordRange.maxWords)
-        ? { plannedWordRange: { minWords: Math.max(1, s.plannedWordRange.minWords), maxWords: Math.max(s.plannedWordRange.minWords, s.plannedWordRange.maxWords) } }
-        : {}),
+      plannedWordRange: plannedWordRangeForContainer(s.container),
       storyArcBeatID: s.storyArcBeatID,
       ...(validRequirementIDs.length > 0 ? { recipeRequirementIDs: validRequirementIDs } : {}),
     });
@@ -1469,6 +1471,23 @@ export function validateOutlinePlanningQuality(
   };
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function logicalSuggestionIdentity(body: OutlineFromRecipeRequest): Promise<{ key: string; fingerprint: string }> {
+  const { idempotencyKey: _ignored, ...withoutKey } = body;
+  const fingerprint = await sha256Hex(stableJson(withoutKey));
+  return { key: body.idempotencyKey?.trim() || `legacy:${fingerprint}`, fingerprint };
+}
+
+const SUGGESTION_LEASE_MS = 15 * 60 * 1000;
+
+function leaseExpiry(): string {
+  return new Date(Date.now() + SUGGESTION_LEASE_MS).toISOString();
+}
+
 function makeSupabase(url: string, anonKey: string, authHeader: string) {
   return createClient(url, anonKey, {
     global: { headers: { Authorization: authHeader } },
@@ -1536,17 +1555,49 @@ class StoryMaterialSufficiencyError extends Error {
   }
 }
 
+class StoryMaterialValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StoryMaterialValidationError";
+  }
+}
+
+async function persistEnrichmentProvenance(db: any, body: OutlineFromRecipeRequest, runId: string, material: StoryMaterialEnrichment, provenance: StoryMaterialProvenance): Promise<void> {
+  if (!body.outline_id) return;
+  const { error } = await db.from("outlines").update({
+    enrichment_schema_version: material.version,
+    enrichment_source_recipe_hash: provenance.sourceRecipeHash,
+    enrichment_run_id: runId,
+    enrichment_planner_version: "story-material-v2",
+  }).eq("id", body.outline_id);
+  if (error) throw new Error(`Could not persist outline enrichment provenance: ${error.message}`);
+}
+
 async function runSuggestionJob(
   runId: string,
   body: OutlineFromRecipeRequest,
   userId: string,
   openaiKey: string,
+  priorAttemptCount = 0,
 ): Promise<void> {
   const db = admin();
-  await db.from("outline_suggestion_runs").update({ status: "running" }).eq(
-    "id",
-    runId,
-  );
+  const workerToken = crypto.randomUUID();
+  const claim = await db.from("outline_suggestion_runs").update({
+    status: "running",
+    lease_owner: workerToken,
+    lease_expires_at: leaseExpiry(),
+    attempt_count: priorAttemptCount + 1,
+  }).eq("id", runId).eq("status", "pending")
+    .select("id, credit_cost_charged, remaining_credits, story_material")
+    .maybeSingle();
+  if (claim.error || !claim.data) return;
+  const claimedRun: any = claim.data;
+  const touchLease = async () => {
+    await db.from("outline_suggestion_runs").update({ lease_expires_at: leaseExpiry() }).eq("id", runId).eq("lease_owner", workerToken);
+  };
+  const updateRun = async (patch: Record<string, unknown>) => {
+    return await db.from("outline_suggestion_runs").update(patch).eq("id", runId).eq("lease_owner", workerToken);
+  };
   let plannedMinimumSections: number | null = null;
   let diagnostics: Record<string, unknown> = { stage: "starting" };
   try {
@@ -1557,8 +1608,11 @@ async function runSuggestionJob(
     }
     const creditStore = new SupabaseCreditStore(db);
     const provider = new OpenAIProvider(openaiKey, OPENAI_MODEL);
-    let creditCostCharged = 0;
-    let remainingCredits: number | null = null;
+    // Reclaimed workers resume from persisted billing/material state. The
+    // usage-event idempotency key is the final no-double-charge guard, while
+    // reusing persisted enrichment avoids repeating a settled paid stage.
+    let creditCostCharged = Number(claimedRun.credit_cost_charged ?? 0);
+    let remainingCredits: number | null = claimedRun.remaining_credits ?? null;
     const persistBilling = async (
       result: {
         actualCharge: number;
@@ -1568,10 +1622,11 @@ async function runSuggestionJob(
     ) => {
       if (result.charged) creditCostCharged += result.actualCharge;
       remainingCredits = result.remainingCredits;
-      await db.from("outline_suggestion_runs").update({
+      await updateRun({
         credit_cost_charged: creditCostCharged,
         remaining_credits: remainingCredits,
-      }).eq("id", runId);
+        lease_expires_at: leaseExpiry(),
+      });
     };
     const billableCall: SuggestionLLMCall = async (
       system,
@@ -1585,6 +1640,7 @@ async function runSuggestionJob(
         { role: "system", content: system },
         { role: "user", content: user },
       ];
+      await touchLease();
       const result = await runBillableLLM({
         userID: userId,
         purpose: "outline-suggestion",
@@ -1612,6 +1668,9 @@ async function runSuggestionJob(
     };
 
     const provenance = await recipeProvenance(body.recipe);
+    if (!body.storyMaterialEnrichment && claimedRun.story_material) {
+      body = { ...body, storyMaterialEnrichment: claimedRun.story_material as StoryMaterialEnrichment };
+    }
     let storyMaterial: StoryMaterialEnrichment | null = null;
     let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: OPENAI_MODEL, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
     if (body.storyMaterialEnrichment) {
@@ -1630,8 +1689,8 @@ async function runSuggestionJob(
       }
     }
     if (!storyMaterial) {
-      const generateEnrichment = async (action: string, prior?: StoryMaterialEnrichment) => {
-        const enrichmentPrompt = buildEnrichmentPrompt(body, prior);
+      const generateEnrichment = async (action: string, prior?: StoryMaterialEnrichment, repairReason?: string) => {
+        const enrichmentPrompt = buildEnrichmentPrompt(body, prior, repairReason);
         let parsedMaterial: StoryMaterialEnrichment | null = null;
         const enrichmentResult = await billableCall(
           enrichmentPrompt.system,
@@ -1640,7 +1699,11 @@ async function runSuggestionJob(
           { type: "json_schema", json_schema: { name: "story_material_enrichment", strict: true, schema: STORY_MATERIAL_ENRICHMENT_SCHEMA } },
           action,
           (content) => {
-            parsedMaterial = validateStoryMaterialEnrichment(JSON.parse(content), { allowMissingProvenance: true, recipe: body.recipe });
+            try {
+              parsedMaterial = validateStoryMaterialEnrichment(JSON.parse(content), { allowMissingProvenance: true, recipe: body.recipe });
+            } catch (error) {
+              throw new StoryMaterialValidationError(error instanceof Error ? error.message : String(error));
+            }
             const sufficiency = storyMaterialSufficiency(parsedMaterial, body.recipe, requestedStoryMaterialFormat(body));
             if (!sufficiency.sufficient) throw new StoryMaterialSufficiencyError(sufficiency.reasons);
             return parsedMaterial;
@@ -1653,20 +1716,27 @@ async function runSuggestionJob(
       try {
         generated = await generateEnrichment("story-material-enrichment");
       } catch (error) {
-        if (!(error instanceof StoryMaterialSufficiencyError)) throw error;
-        enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassSufficiencyReasons: error.reasons };
-        generated = await generateEnrichment("story-material-enrichment-repair");
+        if (error instanceof StoryMaterialSufficiencyError) {
+          enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassSufficiencyReasons: error.reasons };
+          generated = await generateEnrichment("story-material-enrichment-repair");
+        } else if (error instanceof StoryMaterialValidationError) {
+          enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassValidationError: error.message };
+          generated = await generateEnrichment("story-material-enrichment-repair", undefined, error.message);
+        } else {
+          throw error;
+        }
       }
       storyMaterial = generated.material;
       const sufficiency = storyMaterialSufficiency(storyMaterial, body.recipe, requestedStoryMaterialFormat(body));
       enrichmentDiagnostics = { ...enrichmentDiagnostics, generatedOrReused: "generated", enrichmentCreditCostCharged: generated.result.creditCostCharged, schemaVersion: storyMaterial.version, sufficiency: sufficiency.sufficient ? "sufficient" : "insufficient", sufficiencyReasons: sufficiency.reasons, itemCountsByCategory: sufficiency.counts, recipeDerivedItemCount: sufficiency.recipeDerivedItemCount, plannerInventedItemCount: sufficiency.plannerInventedItemCount };
-      await db.from("outline_suggestion_runs").update({ story_material: storyMaterial, diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" } }).eq("id", runId);
+      await updateRun({ story_material: storyMaterial, diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" } });
     }
     if (!storyMaterial) throw new Error("story material enrichment was not produced");
-    await db.from("outline_suggestion_runs").update({
+    await updateRun({
       story_material: storyMaterial,
       diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" },
-    }).eq("id", runId);
+    });
+    await persistEnrichmentProvenance(db, body, runId, storyMaterial, provenance);
     body = { ...body, storyMaterialEnrichment: storyMaterial };
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
     const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
@@ -1790,7 +1860,7 @@ async function runSuggestionJob(
         },
         async (roundDiagnostic, allDiagnostics) => {
           diagnostics = { ...diagnostics, expansionRounds: allDiagnostics };
-          await db.from("outline_suggestion_runs").update({ diagnostics }).eq("id", runId);
+          await updateRun({ diagnostics });
         },
       );
       result = { suggestions: expanded.suggestions, warnings: [...result.warnings, ...expanded.warnings] };
@@ -1806,7 +1876,7 @@ async function runSuggestionJob(
         `required recipe obligations remain uncovered: ${coverage.missingRequired.map((obligation) => obligation.id).join(", ")}`,
       );
     }
-    await db.from("outline_suggestion_runs").update({
+    await updateRun({
       status: "completed",
       suggestions: result.suggestions,
       warnings: result.warnings,
@@ -1814,7 +1884,9 @@ async function runSuggestionJob(
       remaining_credits: remainingCredits,
       completed_at: new Date().toISOString(),
       diagnostics: { ...diagnostics, stage: "completed", finalSectionCounts: countSuggestionsByBeat(result.suggestions) },
-    }).eq("id", runId);
+      lease_owner: null,
+      lease_expires_at: null,
+    });
   } catch (err) {
     const errorCode = err instanceof StoryMaterialSufficiencyError
       ? "insufficient_story_material"
@@ -1827,13 +1899,15 @@ async function runSuggestionJob(
           ? "provider_error"
           : "server_error"));
     const message = err instanceof Error ? err.message : String(err);
-    await db.from("outline_suggestion_runs").update({
+    await updateRun({
       status: "failed",
       error_code: errorCode,
       error: message.slice(0, 2000),
       diagnostics: { ...diagnostics, stage: "failed", plannedMinimumSections, error: message.slice(0, 500) },
       completed_at: new Date().toISOString(),
-    }).eq("id", runId);
+      lease_owner: null,
+      lease_expires_at: null,
+    });
   }
 }
 
@@ -1866,7 +1940,7 @@ Deno.serve(async (req: Request) => {
     const runId = searchParams.get("run_id");
     const projectId = searchParams.get("project_id");
     const runColumns =
-      "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json";
+      "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
 
     let run: any = null;
     let error: any = null;
@@ -1875,16 +1949,17 @@ Deno.serve(async (req: Request) => {
         "outline_suggestion_runs",
       ).select(runColumns).eq("id", runId).single());
     } else if (projectId) {
-      const result = await userClient.from("outline_suggestion_runs")
+      const idempotencyKey = searchParams.get("idempotency_key");
+      let query = userClient.from("outline_suggestion_runs")
         .select(runColumns)
-        .eq("status", "completed")
+        .eq("project_id", projectId)
         .order("created_at", { ascending: false })
-        .limit(20);
+        .limit(1);
+      if (searchParams.get("completed_only") === "true") query = query.eq("status", "completed");
+      if (idempotencyKey) query = query.eq("idempotency_key", idempotencyKey);
+      const result = await query;
       error = result.error;
-      run = (result.data ?? []).find((candidate: any) =>
-        typeof candidate.request_json?.recipe?.project?.id === "string" &&
-        candidate.request_json.recipe.project.id.toLowerCase() === projectId.toLowerCase()
-      ) ?? null;
+      run = result.data?.[0] ?? null;
     } else {
       return errorResponse(
         "missing_param",
@@ -1946,24 +2021,54 @@ Deno.serve(async (req: Request) => {
     );
   }
   const db = admin();
-  const { data: run, error } = await db.from("outline_suggestion_runs").insert({
+  const identity = await logicalSuggestionIdentity(body);
+  const insert = await db.from("outline_suggestion_runs").insert({
     user_id: user.id,
+    project_id: body.recipe.project.id,
+    idempotency_key: identity.key,
+    request_fingerprint: identity.fingerprint,
     request_json: body,
     status: "pending",
-  }).select("id, created_at, updated_at").single();
-  if (error || !run) {
-    return errorResponse(
-      "db_error",
-      error?.message ?? "Could not create suggestion run",
-      500,
-    );
+  }).select("id, status, created_at, updated_at, suggestions, warnings, error_code, error, credit_cost_charged, remaining_credits, request_json").maybeSingle();
+
+  let run: any = insert.data;
+  if (insert.error) {
+    if (insert.error.code !== "23505") {
+      return errorResponse("db_error", insert.error.message ?? "Could not create suggestion run", 500);
+    }
+    const existing = await db.from("outline_suggestion_runs")
+      .select("id, status, created_at, updated_at, suggestions, warnings, error_code, error, credit_cost_charged, remaining_credits, request_json, lease_expires_at, attempt_count, request_fingerprint")
+      .eq("user_id", user.id).eq("idempotency_key", identity.key).single();
+    if (existing.error || !existing.data) return errorResponse("db_error", existing.error?.message ?? "Could not resolve suggestion run", 500);
+    run = existing.data;
+    if (run.request_fingerprint && run.request_fingerprint !== identity.fingerprint) {
+      return errorResponse("idempotency_conflict", "The idempotency key is already bound to a different suggestion request", 409);
+    }
+    const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
+    if (stale) {
+      const reclaimed = await db.from("outline_suggestion_runs").update({ status: "pending", lease_owner: null, lease_expires_at: null, attempt_count: (run.attempt_count ?? 0) + 1 }).eq("id", run.id).eq("status", "running").eq("lease_expires_at", run.lease_expires_at);
+      if (!reclaimed.error) run.status = "pending";
+    }
   }
-  // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-  EdgeRuntime.waitUntil(runSuggestionJob(run.id, body, user.id, openaiKey));
+  if (!run) {
+    return errorResponse("db_error", "Could not create or resolve suggestion run", 500);
+  }
+  // A pending duplicate may be the only way to restart a worker lost during
+  // suspension. The pending claim inside runSuggestionJob makes this race-safe.
+  if (run.status === "pending") {
+    // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+    EdgeRuntime.waitUntil(runSuggestionJob(run.id, body, user.id, openaiKey, run.attempt_count ?? 0));
+  }
   return corsResponse(
     JSON.stringify({
       run_id: run.id,
-      status: "pending",
+      status: run.status,
+      suggestions: run.suggestions,
+      warnings: run.warnings,
+      errorCode: run.error_code,
+      error: run.error,
+      creditCostCharged: run.credit_cost_charged,
+      remainingCredits: run.remaining_credits,
       created_at: run.created_at,
       updated_at: run.updated_at,
     }),

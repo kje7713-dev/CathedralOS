@@ -177,6 +177,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestionsLoading = false
     @State private var recoverableSuggestions: OutlineSuggestionResult?
     @State private var suggestionsError: String?
+    @State private var suggestionsNotice: String?
     @State private var suggestionsFeedback: String?
     @State private var showingSuggestionChargeWarning = false
     @State private var acceptingSectionID: UUID?
@@ -243,7 +244,13 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             syncSectionsOrder()
             refreshAllOutputs()
             consumeGenerationLaunch()
+            durabilityCoordinator.resumeSuggestionRunIfNeeded(projectID: project.id)
+            suggestionsLoading = durabilityCoordinator.activeSuggestionRun(for: project.id)?.isActive == true
+            consumeSuggestionCoordinatorEvent()
             await loadRecoverableSuggestions()
+        }
+        .onChange(of: durabilityCoordinator.suggestionRunRevision) { _, _ in
+            consumeSuggestionCoordinatorEvent()
         }
         .onChange(of: generationLaunch?.id) { _, _ in
             consumeGenerationLaunch()
@@ -327,13 +334,13 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         } message: {
             Text(suggestionsFeedback ?? "Suggestions are ready.")
         }
-        .alert("Suggest Sections Failed", isPresented: Binding(
-            get: { suggestionsError != nil },
-            set: { if !$0 { suggestionsError = nil } }
-        )) {
-            Button("OK", role: .cancel) { suggestionsError = nil }
+        .alert(suggestionsAlertTitle, isPresented: suggestionsAlertPresented) {
+            Button("OK", role: .cancel) {
+                suggestionsError = nil
+                suggestionsNotice = nil
+            }
         } message: {
-            Text(suggestionsError ?? "An unknown error occurred.")
+            Text(suggestionsAlertMessage)
         }
         .alert("Could Not Accept Section", isPresented: Binding(
             get: { embedError != nil },
@@ -423,11 +430,56 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         try? modelContext.save()
     }
 
+    private var suggestionsAlertTitle: String {
+        suggestionsError == nil ? "Suggestions Running" : "Suggest Sections Failed"
+    }
+
+    private var suggestionsAlertMessage: String {
+        suggestionsError ?? suggestionsNotice ?? "An unknown error occurred."
+    }
+
+    private var suggestionsAlertPresented: Binding<Bool> {
+        Binding(
+            get: { suggestionsError != nil || suggestionsNotice != nil },
+            set: { isPresented in
+                if !isPresented {
+                    suggestionsError = nil
+                    suggestionsNotice = nil
+                }
+            }
+        )
+    }
+
     private var suggestionsReady: Bool {
         guard project.promptPacks.first != nil else { return false }
         guard let arc = project.storyArcs.first else { return false }
         guard arc.templateID != nil else { return false }
         return StoryArcTemplate.allTemplates.contains { $0.id == arc.templateID }
+    }
+
+    private var suggestionRunActive: Bool {
+        suggestionsLoading || durabilityCoordinator.activeSuggestionRun(for: project.id)?.isActive == true
+    }
+
+    private func consumeSuggestionCoordinatorEvent() {
+        if let result = durabilityCoordinator.consumeCompletedSuggestion(for: project.id) {
+            suggestionsLoading = false
+            suggestions = result.suggestions
+            suggestionSourceRecipe = result.sourceRecipe
+            recoverableSuggestions = result
+            var feedback = "Suggestions generated. Charged \(String(format: "%.2f", result.creditCostCharged ?? 0)) credits."
+            if let remaining = result.remainingCredits {
+                feedback += " Remaining balance: \(String(format: "%.2f", remaining)) credits."
+            }
+            if !result.warnings.isEmpty {
+                feedback += " \(result.warnings.count) suggestion warning\(result.warnings.count == 1 ? "" : "s") were reported."
+            }
+            suggestionsFeedback = feedback
+        }
+        if let message = durabilityCoordinator.consumeSuggestionFailure(for: project.id) {
+            suggestionsLoading = false
+            suggestionsError = message
+        }
     }
 
     private func loadRecoverableSuggestions() async {
@@ -457,7 +509,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private func loadSuggestions() async {
-        guard !suggestionsLoading else { return }
+        guard !suggestionRunActive else { return }
         guard let recipe = project.promptPacks.first,
               let arc = project.storyArcs.first,
               let templateID = arc.templateID,
@@ -465,35 +517,26 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             suggestionsError = "Need a Recipe and a Story Arc template first."
             return
         }
-        guard let baseURL = SupabaseConfiguration.projectURL else {
+        guard SupabaseConfiguration.projectURL != nil else {
             suggestionsError = "Backend not configured."
             return
         }
-        let outlineURL = baseURL
-            .appendingPathComponent("functions/v1")
-            .appendingPathComponent(SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath)
-        suggestionsLoading = true
-        defer { suggestionsLoading = false }
         do {
             let service = OutlineSuggestionService()
-            let result = try await service.requestSuggestions(
-                edgeFunctionURL: outlineURL,
+            let request = try service.makeRequest(
                 recipe: recipe,
                 arc: arc,
                 arcTemplate: template,
                 existingSections: currentOutline?.sections ?? []
             )
-            suggestions = result.suggestions
-            suggestionSourceRecipe = result.sourceRecipe
-            recoverableSuggestions = result
-            var feedback = "Suggestions generated. Charged \(String(format: "%.2f", result.creditCostCharged ?? 0)) credits."
-            if let remaining = result.remainingCredits {
-                feedback += " Remaining balance: \(String(format: "%.2f", remaining)) credits."
-            }
-            if !result.warnings.isEmpty {
-                feedback += " \(result.warnings.count) suggestion warning\(result.warnings.count == 1 ? "" : "s") were reported."
-            }
-            suggestionsFeedback = feedback
+            suggestionsError = nil
+            suggestionsNotice = nil
+            suggestionsLoading = true
+            durabilityCoordinator.beginSuggestionRun(
+                projectID: project.id,
+                request: request,
+                service: service
+            )
         } catch let error as OutlineSuggestionError {
             suggestionsError = error.localizedDescription
         } catch {
@@ -526,14 +569,19 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 Button {
                     showingSuggestionChargeWarning = true
                 } label: {
-                    if suggestionsLoading {
+                    if suggestionRunActive {
                         ProgressView()
                     } else {
                         Label("Suggest Sections", systemImage: "sparkles")
                             .font(CathedralTheme.Typography.body(13, weight: .semibold))
                     }
                 }
-                .disabled(suggestionsLoading || !suggestionsReady)
+                .disabled(suggestionRunActive || !suggestionsReady)
+            }
+            if let run = durabilityCoordinator.activeSuggestionRun(for: project.id), run.status == "reconnecting" {
+                Text("Reconnecting to the server…")
+                    .font(CathedralTheme.Typography.caption(12))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
             Text("Add sections, tag them with arc beats, generate one Container run per section (coming soon).")
                 .font(CathedralTheme.Typography.body(13))

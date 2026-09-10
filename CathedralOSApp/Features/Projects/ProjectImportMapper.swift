@@ -251,6 +251,13 @@ enum ProjectImportMapper {
                     section.container = sp.container
                     section.pov = sp.pov
                     section.terminalBeat = sp.terminalBeat
+                    section.entryState = sp.entryState
+                    section.dramaticEvent = sp.dramaticEvent
+                    section.resultingChange = sp.resultingChange
+                    section.terminalState = sp.terminalState
+                    section.targetWords = sp.targetWords
+                    section.targetWordsMin = sp.targetWordsMin
+                    section.targetWordsMax = sp.targetWordsMax
                     section.status = sp.status
                     if let storyArcBeatID = sp.storyArcBeatID.flatMap(UUID.init(uuidString:)) {
                         section.storyArcBeatID = storyArcBeatID

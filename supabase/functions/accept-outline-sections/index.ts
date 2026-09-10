@@ -63,6 +63,10 @@ type Section = {
   container?: string | null;
   pov?: string | null;
   terminalBeat?: string | null;
+  entryState?: string | null;
+  dramaticEvent?: string | null;
+  resultingChange?: string | null;
+  terminalState?: string | null;
   storyArcBeatID?: string | null;
   targetWords?: number | null;
   targetWordsMin?: number | null;
@@ -242,10 +246,14 @@ export function sectionRow(
     container: section.container ?? null,
     pov: section.pov ?? null,
     terminal_beat: section.terminalBeat ?? null,
+    entry_state: section.entryState ?? null,
+    dramatic_event: section.dramaticEvent ?? null,
+    resulting_change: section.resultingChange ?? null,
+    terminal_state: section.terminalState ?? null,
     story_arc_beat_id: section.storyArcBeatID ?? null,
-    target_words: section.targetWords ?? null,
-    target_words_min: section.targetWordsMin ?? null,
-    target_words_max: section.targetWordsMax ?? null,
+    target_words: section.targetWords ?? Math.round(((CONTAINER_WORD_RANGES[section.container ?? ""] ?? [615, 1385])[0] + (CONTAINER_WORD_RANGES[section.container ?? ""] ?? [615, 1385])[1]) / 2),
+    target_words_min: section.targetWordsMin ?? (CONTAINER_WORD_RANGES[section.container ?? ""] ?? [615, 1385])[0],
+    target_words_max: section.targetWordsMax ?? (CONTAINER_WORD_RANGES[section.container ?? ""] ?? [615, 1385])[1],
     recipe_requirement_ids: section.recipeRequirementIDs ?? [],
     status: "draft",
   };
@@ -360,7 +368,7 @@ async function mergeSectionsIntoSnapshot(
   }
   const { data: rows, error: rowsError } = await db.from("outline_sections")
     .select(
-      "id,position,title,summary,container,pov,terminal_beat,status,parent_id,story_arc_beat_id,target_words,target_words_min,target_words_max,recipe_requirement_ids",
+      "id,position,title,summary,container,pov,terminal_beat,entry_state,dramatic_event,resulting_change,terminal_state,status,parent_id,story_arc_beat_id,target_words,target_words_min,target_words_max,recipe_requirement_ids",
     )
     .in("id", request.sections.map((section) => section.id));
   if (rowsError) {

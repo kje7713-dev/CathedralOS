@@ -266,6 +266,13 @@ struct AcceptOutlineSection: Codable {
     let container: String?
     let pov: String?
     let terminalBeat: String?
+    let entryState: String?
+    let dramaticEvent: String?
+    let resultingChange: String?
+    let terminalState: String?
+    let targetWords: Int?
+    let targetWordsMin: Int?
+    let targetWordsMax: Int?
     let storyArcBeatID: String?
     let recipeRequirementIDs: [String]?
 }
@@ -330,6 +337,13 @@ extension SectionEmbedService {
                 container: suggestion.container,
                 pov: suggestion.pov,
                 terminalBeat: suggestion.terminalBeat,
+                entryState: suggestion.entryState,
+                dramaticEvent: suggestion.dramaticEvent,
+                resultingChange: suggestion.resultingChange,
+                terminalState: suggestion.terminalState,
+                targetWords: nil,
+                targetWordsMin: nil,
+                targetWordsMax: nil,
                 storyArcBeatID: suggestion.storyArcBeatID,
                 recipeRequirementIDs: suggestion.recipeRequirementIDs
             )

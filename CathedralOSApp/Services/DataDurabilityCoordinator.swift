@@ -47,6 +47,30 @@ enum AcceptRunStatus: String, Codable, Equatable {
     }
 }
 
+struct SuggestionRunMetadata: Codable {
+    let projectID: UUID
+    let request: OutlineSuggestionRequest
+    let idempotencyKey: String
+    var runID: String?
+    var status: String
+    var createdAt: Date
+    var updatedAt: Date
+
+    var isActive: Bool {
+        status == "starting" || status == "pending" || status == "running" || status == "reconnecting"
+    }
+}
+
+struct CompletedSuggestionRun {
+    let projectID: UUID
+    let result: OutlineSuggestionResult
+}
+
+struct SuggestionRunFailure: Equatable {
+    let projectID: UUID
+    let message: String
+}
+
 // MARK: - DataDurabilityCoordinator
 //
 // Central coordinator for cloud-first data lifecycle events.
@@ -166,6 +190,19 @@ final class DataDurabilityCoordinator: ObservableObject {
     private var authoritativeRecoveryTask: Task<SyncOperationResult, Never>?
     private let runStatusDefaults: UserDefaults
     private let acceptRunDefaults: UserDefaults
+    private let suggestionRunDefaults: UserDefaults
+    private var suggestionPollingTasks: [UUID: Task<Void, Never>] = [:]
+
+    @Published private(set) var activeSuggestionRuns: [UUID: SuggestionRunMetadata] = [:]
+    @Published private(set) var completedSuggestionRun: CompletedSuggestionRun?
+    @Published private(set) var suggestionRunFailure: SuggestionRunFailure?
+    @Published private(set) var suggestionRunRevision: UInt = 0
+
+    private static let suggestionRunPrefix = "cathedralos.outlineSuggestion.run."
+
+    private static func suggestionRunKey(for projectID: UUID) -> String {
+        "\(suggestionRunPrefix)\(projectID.uuidString)"
+    }
 
     private static func runStatusKey(for projectLineageID: UUID) -> String {
         "cathedralos.runOutline.status.\(projectLineageID.uuidString)"
@@ -184,6 +221,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         self.outputSyncService = outputSyncService
         self.runStatusDefaults = defaults
         self.acceptRunDefaults = defaults
+        self.suggestionRunDefaults = defaults
     }
 
     // MARK: - Lifecycle entry-points
@@ -562,6 +600,189 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func persistAcceptRun(_ metadata: AcceptRunMetadata) {
         guard let data = try? JSONEncoder().encode(metadata) else { return }
         acceptRunDefaults.set(data, forKey: Self.acceptRunKey)
+    }
+
+    // MARK: - Durable Suggest Sections polling
+
+    func activeSuggestionRun(for projectID: UUID) -> SuggestionRunMetadata? {
+        activeSuggestionRuns[projectID]
+    }
+
+    func beginSuggestionRun(
+        projectID: UUID,
+        request: OutlineSuggestionRequest,
+        service: OutlineSuggestionService = OutlineSuggestionService()
+    ) {
+        if let existing = activeSuggestionRuns[projectID], existing.isActive {
+            attachSuggestionTask(existing, service: service)
+            return
+        }
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID,
+            request: request,
+            idempotencyKey: request.idempotencyKey,
+            runID: nil,
+            status: "starting",
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        suggestionRunFailure = nil
+        activeSuggestionRuns[projectID] = metadata
+        persistSuggestionRun(metadata)
+        attachSuggestionTask(metadata, service: service)
+    }
+
+    func resumeSuggestionRunIfNeeded(
+        projectID: UUID,
+        service: OutlineSuggestionService = OutlineSuggestionService()
+    ) {
+        guard suggestionPollingTasks[projectID] == nil else { return }
+        if let active = activeSuggestionRuns[projectID] {
+            attachSuggestionTask(active, service: service)
+            return
+        }
+        guard let data = suggestionRunDefaults.data(forKey: Self.suggestionRunKey(for: projectID)),
+              let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else { return }
+        activeSuggestionRuns[projectID] = metadata
+        attachSuggestionTask(metadata, service: service)
+    }
+
+    func resumeAllSuggestionRuns(service: OutlineSuggestionService = OutlineSuggestionService()) {
+        for key in suggestionRunDefaults.dictionaryRepresentation().keys where key.hasPrefix(Self.suggestionRunPrefix) {
+            guard let data = suggestionRunDefaults.data(forKey: key),
+                  let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else { continue }
+            activeSuggestionRuns[metadata.projectID] = metadata
+            attachSuggestionTask(metadata, service: service)
+        }
+    }
+
+    func consumeCompletedSuggestion(for projectID: UUID) -> OutlineSuggestionResult? {
+        guard let event = completedSuggestionRun, event.projectID == projectID else { return nil }
+        completedSuggestionRun = nil
+        return event.result
+    }
+
+    func consumeSuggestionFailure(for projectID: UUID) -> String? {
+        guard let failure = suggestionRunFailure, failure.projectID == projectID else { return nil }
+        suggestionRunFailure = nil
+        return failure.message
+    }
+
+    private func attachSuggestionTask(_ metadata: SuggestionRunMetadata, service: OutlineSuggestionService) {
+        guard suggestionPollingTasks[metadata.projectID] == nil else { return }
+        suggestionPollingTasks[metadata.projectID] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runSuggestion(metadata, service: service)
+        }
+    }
+
+    private func runSuggestion(_ initial: SuggestionRunMetadata, service: OutlineSuggestionService) async {
+        var metadata = initial
+        while !Task.isCancelled {
+            do {
+                let job: OutlineSuggestionJob
+                if let runID = metadata.runID {
+                    job = try await service.suggestionStatus(runID: runID)
+                } else {
+                    do {
+                        job = try await service.startSuggestions(request: metadata.request)
+                    } catch let error as OutlineSuggestionError where OutlineSuggestionService.isReconnectable(error) {
+                        // A POST can be accepted by the server while the client
+                        // loses its response. Resolve the same logical request
+                        // before attempting another POST.
+                        let recovered: OutlineSuggestionJob?
+                        do { recovered = try await service.findRun(projectID: metadata.projectID, idempotencyKey: metadata.idempotencyKey) } catch { recovered = nil }
+                        if let recovered {
+                            job = recovered
+                        } else {
+                            metadata.status = "reconnecting"
+                            metadata.updatedAt = Date()
+                            activeSuggestionRuns[metadata.projectID] = metadata
+                            persistSuggestionRun(metadata)
+                            try? await Task.sleep(nanoseconds: 3_000_000_000)
+                            continue
+                        }
+                    }
+                }
+
+                metadata.status = job.status
+                metadata.updatedAt = Date()
+                if metadata.runID == nil { metadata.runID = job.runID }
+                activeSuggestionRuns[metadata.projectID] = metadata
+                persistSuggestionRun(metadata)
+
+                switch job.status {
+                case "completed":
+                    let result = OutlineSuggestionResult(
+                        suggestions: job.suggestions ?? [],
+                        warnings: job.warnings ?? [],
+                        creditCostCharged: job.creditCostCharged,
+                        remainingCredits: job.remainingCredits,
+                        sourceRecipe: job.sourceRecipe ?? metadata.request.recipe
+                    )
+                    clearSuggestionRun(for: metadata.projectID)
+                    completedSuggestionRun = CompletedSuggestionRun(projectID: metadata.projectID, result: result)
+                    suggestionRunRevision &+= 1
+                    suggestionPollingTasks[metadata.projectID] = nil
+                    return
+                case "failed":
+                    let failure = OutlineSuggestionService.errorForFailedJob(errorCode: job.errorCode, message: job.error)
+                    failSuggestionRun(metadata.projectID, message: failure.localizedDescription)
+                    suggestionPollingTasks[metadata.projectID] = nil
+                    return
+                default:
+                    if metadata.status == "pending" || metadata.status == "running" {
+                        metadata.status = "generating"
+                        activeSuggestionRuns[metadata.projectID] = metadata
+                        persistSuggestionRun(metadata)
+                    }
+                }
+            } catch is CancellationError {
+                break
+            } catch let error as OutlineSuggestionError {
+                guard OutlineSuggestionService.isReconnectable(error) else {
+                    failSuggestionRun(metadata.projectID, message: error.localizedDescription)
+                    suggestionPollingTasks[metadata.projectID] = nil
+                    return
+                }
+                // Authentication/network loss is not a server generation
+                // failure. Keep the durable identity so relaunch/sign-in can
+                // reconnect to the same run.
+                metadata.status = "reconnecting"
+                metadata.updatedAt = Date()
+                activeSuggestionRuns[metadata.projectID] = metadata
+                persistSuggestionRun(metadata)
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            } catch {
+                metadata.status = "reconnecting"
+                metadata.updatedAt = Date()
+                activeSuggestionRuns[metadata.projectID] = metadata
+                persistSuggestionRun(metadata)
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+        }
+        // Task cancellation is local lifecycle, never authoritative server
+        // failure. Leave the metadata on disk for the next foreground/relaunch.
+        metadata.updatedAt = Date()
+        activeSuggestionRuns[metadata.projectID] = metadata
+        persistSuggestionRun(metadata)
+        suggestionPollingTasks[metadata.projectID] = nil
+    }
+
+    private func persistSuggestionRun(_ metadata: SuggestionRunMetadata) {
+        guard let data = try? JSONEncoder().encode(metadata) else { return }
+        suggestionRunDefaults.set(data, forKey: Self.suggestionRunKey(for: metadata.projectID))
+    }
+
+    private func clearSuggestionRun(for projectID: UUID) {
+        activeSuggestionRuns[projectID] = nil
+        suggestionRunDefaults.removeObject(forKey: Self.suggestionRunKey(for: projectID))
+    }
+
+    private func failSuggestionRun(_ projectID: UUID, message: String) {
+        clearSuggestionRun(for: projectID)
+        suggestionRunFailure = SuggestionRunFailure(projectID: projectID, message: message)
+        suggestionRunRevision &+= 1
     }
 
     // MARK: - Run polling

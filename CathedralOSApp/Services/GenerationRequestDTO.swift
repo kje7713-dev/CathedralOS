@@ -85,6 +85,10 @@ struct GenerationRequest: Codable {
     // Contract block in the prompt.
     let sectionTitle: String?
     let sectionSummary: String?
+    let sectionEntryState: String?
+    let sectionDramaticEvent: String?
+    let sectionResultingChange: String?
+    let sectionTerminalState: String?
 
     // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
     // identity. UUID string of the OutlineSection that originated this
@@ -122,6 +126,10 @@ struct GenerationRequest: Codable {
         case localGenerationID
         case sectionTitle
         case sectionSummary
+        case sectionEntryState
+        case sectionDramaticEvent
+        case sectionResultingChange
+        case sectionTerminalState
         case outlineSectionID     = "outline_section_id"
     }
 
@@ -155,6 +163,10 @@ struct GenerationRequest: Codable {
         // (no Section Contract block, all other blocks render normally).
         sectionTitle: String? = nil,
         sectionSummary: String? = nil,
+        sectionEntryState: String? = nil,
+        sectionDramaticEvent: String? = nil,
+        sectionResultingChange: String? = nil,
+        sectionTerminalState: String? = nil,
         // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): outline section
         // identity. UUID string of the OutlineSection that originated this
         // generation. Default nil (no section context) — degraded gracefully
@@ -186,6 +198,10 @@ struct GenerationRequest: Codable {
         self.localGenerationID = localGenerationID
         self.sectionTitle = sectionTitle
         self.sectionSummary = sectionSummary
+        self.sectionEntryState = sectionEntryState
+        self.sectionDramaticEvent = sectionDramaticEvent
+        self.sectionResultingChange = sectionResultingChange
+        self.sectionTerminalState = sectionTerminalState
         self.outlineSectionID = outlineSectionID
     }
 }

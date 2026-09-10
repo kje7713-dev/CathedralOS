@@ -57,7 +57,7 @@ Deno.test("Accept All memory stage cannot rewrite outline section ownership", as
     new URL("../_shared/section-embedding.ts", import.meta.url),
   );
   const start = source.indexOf("export async function processSectionMemory");
-  const end = source.indexOf("export async function processEmbedSection");
+  const end = source.indexOf("export async function ensureMemoryPipelineVersion");
   const memoryStage = source.slice(start, end);
   assertEquals(memoryStage.includes('from("outline_sections")'), false);
   assertEquals(memoryStage.includes("position: body.position"), false);

@@ -356,6 +356,10 @@ struct QuickStoryView: View {
                 pov: selectedPOV.rawValue,
                 sectionTitle: nil,
                 sectionSummary: nil,
+                sectionEntryState: nil,
+                sectionDramaticEvent: nil,
+                sectionResultingChange: nil,
+                sectionTerminalState: nil,
                 outlineSectionID: nil
             )
             output.outputText = response.generatedText

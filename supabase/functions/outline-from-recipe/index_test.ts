@@ -18,6 +18,7 @@ import {
   buildExpansionPrompt,
   buildPrompt,
   buildSuggestionResponseSchema,
+  STORY_MATERIAL_ENRICHMENT_SCHEMA,
   calculateRepairAllocation,
   adjustAllocationForExistingSections,
   ExpansionValidationError,
@@ -34,6 +35,7 @@ import {
   parseAndValidateAllocation,
   flattenSuggestionResponse,
   validateRequest,
+  logicalSuggestionIdentity,
   validateSuggestions,
   buildEnrichmentPrompt,
   countStoryMaterialItems,
@@ -97,6 +99,38 @@ const sparseRequest = {
     ],
   },
 };
+
+Deno.test("malformed selected recipe entities fail before any billable call", () => {
+  assertEquals(
+    validateRequest({ ...sparseRequest, recipe: { ...sparseRequest.recipe, selectedCharacters: [null] } }),
+    "recipe.selectedCharacters contains a missing or invalid selected entity",
+  );
+  assertEquals(
+    validateRequest({ ...sparseRequest, recipe: { ...sparseRequest.recipe, selectedMotifs: undefined } }),
+    "recipe.selectedMotifs must be an array",
+  );
+});
+
+Deno.test("logical suggestion identity is stable and changes with request material", async () => {
+  const first = await logicalSuggestionIdentity({ ...sparseRequest, idempotencyKey: undefined });
+  const same = await logicalSuggestionIdentity({ ...sparseRequest, idempotencyKey: undefined });
+  const changed = await logicalSuggestionIdentity({
+    ...sparseRequest,
+    idempotencyKey: undefined,
+    hint: "make the ending quieter",
+  });
+  assertEquals(first.key, same.key);
+  assertEquals(first.fingerprint, same.fingerprint);
+  assertEquals(first.key !== changed.key, true);
+  assertEquals(first.fingerprint !== changed.fingerprint, true);
+});
+
+Deno.test("durable run source keeps lease and terminal ownership guards", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes('eq("lease_owner", workerToken)'), true);
+  assertEquals(source.includes('attempt_count: priorAttemptCount + 1'), true);
+  assertEquals(source.includes('status: "pending"'), true);
+});
 
 Deno.test("canonical recipe payload passes request validation", () => {
   assertEquals(validateRequest(sparseRequest), null);
@@ -465,11 +499,11 @@ Deno.test("valid partial plus repair preserves content and canonical order", () 
     repaired,
   );
   assertEquals(merged.length, 7);
-  assertEquals(merged[0], firstPass[0]);
-  assertEquals(merged[1], firstPass[1]);
-  assertEquals(merged[2], firstPass[2]);
-  assertEquals(merged[3], repaired[0]);
-  assertEquals(merged[4], repaired[1]);
+  assertEquals(merged[0], { ...firstPass[0], plannedWordRange: { minWords: 615, maxWords: 1385 } });
+  assertEquals(merged[1], { ...firstPass[1], plannedWordRange: { minWords: 615, maxWords: 1385 } });
+  assertEquals(merged[2], { ...firstPass[2], plannedWordRange: { minWords: 615, maxWords: 1385 } });
+  assertEquals(merged[3], { ...repaired[0], plannedWordRange: { minWords: 615, maxWords: 1385 } });
+  assertEquals(merged[4], { ...repaired[1], plannedWordRange: { minWords: 615, maxWords: 1385 } });
 });
 
 Deno.test("minimum-only validation accepts 2, 3, and 8 sections but repairs 1", () => {
@@ -941,4 +975,43 @@ Deno.test("PR3 expansion prioritizes unused enrichment and exposes soft word ran
   assertEquals(prompt.user.includes("force-emergency-network"), true);
   assertEquals(prompt.system.includes("unused or underdeveloped enrichment items"), true);
   assertEquals(prompt.system.includes("soft literary planning range"), false);
+});
+
+
+Deno.test("enrichment provider schema is strict-compatible and leaves server provenance to the server", () => {
+  const schema = STORY_MATERIAL_ENRICHMENT_SCHEMA as any;
+  const propertyNames = Object.keys(schema.properties).sort();
+  const required = [...schema.required].sort();
+  assertEquals(required, propertyNames);
+  assertEquals(propertyNames.includes("sourceRecipeHash"), false);
+  assertEquals(propertyNames.includes("sourcePromptPackID"), false);
+  assertEquals(required.includes("rationale"), true);
+});
+
+
+Deno.test("sparse Brody fixture preserves the complete planning handoff contract", async () => {
+  const provenance = await recipeProvenance(brodyRecipe);
+  const material = attachRecipeProvenance(fixtureMaterial(brodyRecipe, true), provenance);
+  const validated = validateStoryMaterialEnrichment(material, { recipe: brodyRecipe });
+  assertEquals(storyMaterialSufficiency(validated, brodyRecipe, "novel").sufficient, true);
+  const planned: any = {
+    title: "Brody cuts the town escape route", summary: "The lizard swarm traps the response.",
+    container: "scene", pov: "thirdPersonLimited", terminalBeat: "The route closes.",
+    entryState: "The response is mobilizing.", dramaticEvent: "Brody redirects the swarm.",
+    resultingChange: "The response loses its route.", terminalState: "The response escalates.",
+    storyArcBeatID: "beat-1", recipeRequirementIDs: [],
+  };
+  const final = validateSuggestions({ suggestions: [planned] }, new Set(["beat-1"])).suggestions[0];
+  assertEquals(final.plannedWordRange, { minWords: 615, maxWords: 1385 });
+  const [acceptSource, runSource, generationSource] = await Promise.all([
+    Deno.readTextFile("./supabase/functions/accept-outline-sections/index.ts"),
+    Deno.readTextFile("./supabase/functions/run-outline/_generation_request.ts"),
+    Deno.readTextFile("./supabase/functions/generate-story/index.ts"),
+  ]);
+  assertEquals(acceptSource.includes("entry_state: section.entryState"), true);
+  assertEquals(acceptSource.includes("target_words_min"), true);
+  assertEquals(runSource.includes("sectionEntryState"), true);
+  assertEquals(runSource.includes("sectionTerminalState"), true);
+  assertEquals(generationSource.includes("Entry state:"), true);
+  assertEquals(generationSource.includes("Required terminal state:"), true);
 });

@@ -307,13 +307,20 @@ struct ProjectImportExportPayload: Codable {
         let container: String?
         let pov: String?
         let terminalBeat: String?
+        let entryState: String?
+        let dramaticEvent: String?
+        let resultingChange: String?
+        let terminalState: String?
+        let targetWords: Int?
+        let targetWordsMin: Int?
+        let targetWordsMax: Int?
         let status: String
         let parentID: String?
         let storyArcBeatID: String?
         let recipeRequirementIDs: [String]
 
         enum CodingKeys: String, CodingKey {
-            case id, position, title, summary, container, pov, terminalBeat, status, parentID, storyArcBeatID, recipeRequirementIDs
+            case id, position, title, summary, container, pov, terminalBeat, entryState, dramaticEvent, resultingChange, terminalState, targetWords, targetWordsMin, targetWordsMax, status, parentID, storyArcBeatID, recipeRequirementIDs
         }
 
         init(from decoder: Decoder) throws {
@@ -325,13 +332,20 @@ struct ProjectImportExportPayload: Codable {
             container = try c.decodeIfPresent(String.self, forKey: .container)
             pov = try c.decodeIfPresent(String.self, forKey: .pov)
             terminalBeat = try c.decodeIfPresent(String.self, forKey: .terminalBeat)
+            entryState = try c.decodeIfPresent(String.self, forKey: .entryState)
+            dramaticEvent = try c.decodeIfPresent(String.self, forKey: .dramaticEvent)
+            resultingChange = try c.decodeIfPresent(String.self, forKey: .resultingChange)
+            terminalState = try c.decodeIfPresent(String.self, forKey: .terminalState)
+            targetWords = try c.decodeIfPresent(Int.self, forKey: .targetWords)
+            targetWordsMin = try c.decodeIfPresent(Int.self, forKey: .targetWordsMin)
+            targetWordsMax = try c.decodeIfPresent(Int.self, forKey: .targetWordsMax)
             status = try c.decode(String.self, forKey: .status)
             parentID = try c.decodeIfPresent(String.self, forKey: .parentID)
             storyArcBeatID = try c.decodeIfPresent(String.self, forKey: .storyArcBeatID)
             recipeRequirementIDs = try c.decodeIfPresent([String].self, forKey: .recipeRequirementIDs) ?? []
         }
 
-        init(id: String?, position: Int, title: String, summary: String, container: String?, pov: String?, terminalBeat: String?, status: String, parentID: String?, storyArcBeatID: String?, recipeRequirementIDs: [String] = []) {
+        init(id: String?, position: Int, title: String, summary: String, container: String?, pov: String?, terminalBeat: String?, entryState: String? = nil, dramaticEvent: String? = nil, resultingChange: String? = nil, terminalState: String? = nil, targetWords: Int? = nil, targetWordsMin: Int? = nil, targetWordsMax: Int? = nil, status: String, parentID: String?, storyArcBeatID: String?, recipeRequirementIDs: [String] = []) {
             self.id = id
             self.position = position
             self.title = title
@@ -339,6 +353,13 @@ struct ProjectImportExportPayload: Codable {
             self.container = container
             self.pov = pov
             self.terminalBeat = terminalBeat
+            self.entryState = entryState
+            self.dramaticEvent = dramaticEvent
+            self.resultingChange = resultingChange
+            self.terminalState = terminalState
+            self.targetWords = targetWords
+            self.targetWordsMin = targetWordsMin
+            self.targetWordsMax = targetWordsMax
             self.status = status
             self.parentID = parentID
             self.storyArcBeatID = storyArcBeatID
