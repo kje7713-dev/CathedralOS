@@ -263,6 +263,33 @@ Deno.test("arc linkage is persisted for single and bulk section acceptance", asy
   );
 });
 
+Deno.test("Accept All snapshot merge serializes the complete canonical Section Contract", async () => {
+  const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  for (const field of [
+    "entryState: row.entry_state",
+    "dramaticEvent: row.dramatic_event",
+    "resultingChange: row.resulting_change",
+    "terminalState: row.terminal_state",
+    "storyArcBeatID: row.story_arc_beat_id",
+    "targetWords: row.target_words",
+    "targetWordsMin: row.target_words_min",
+    "targetWordsMax: row.target_words_max",
+    "recipeRequirementIDs: Array.isArray(row.recipe_requirement_ids)",
+    "parentID: row.parent_id",
+    "container: row.container",
+    "pov: row.pov",
+    "terminalBeat: row.terminal_beat",
+  ]) {
+    assertEquals(source.includes(field), true, `missing snapshot field: ${field}`);
+  }
+});
+
+Deno.test("Accept All snapshot merge canonicalizes parent and beat UUIDs", async () => {
+  const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  assertEquals(source.includes("canonicalUUID(String(row.parent_id))"), true);
+  assertEquals(source.includes("canonicalUUID(String(row.story_arc_beat_id))"), true);
+});
+
 Deno.test("Accept All canonicalizes section identity for snapshot merge", async () => {
   const source = await Deno.readTextFile(
     new URL("./index.ts", import.meta.url),
