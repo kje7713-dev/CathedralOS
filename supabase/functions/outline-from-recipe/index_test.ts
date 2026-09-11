@@ -53,8 +53,11 @@ import {
   plannedWordRangeForContainer,
   findUnusedStoryMaterial,
   validateStoryArcSemantics,
+  validatePostRepairBeatCoverage,
+  validateRequiredStoryArcFunctions,
   repairStoryArcMacroStructure,
   arcRoleContract,
+  buildExpansionResponseSchema,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -1296,8 +1299,103 @@ Deno.test("PR3 Hero's Journey Resurrection remains a legal late climactic test",
 Deno.test("PR3 server repair reassigns a locally misallocated decisive section", () => {
   const result = repairStoryArcMacroStructure([
     semanticSection("den", "The Open Bid for Rule", "Brody launches a citywide takeover and seizes the government.", "resolution"),
+    semanticSection("den", "The Quiet Settlement", "The surviving relationships settle into a changed normal.", "resolution"),
   ] as any, freytagFixture);
   assertEquals(result.repaired.length, 1);
-  assertEquals(result.suggestions[0].storyArcBeatID, "climax");
+  assertEquals(result.suggestions.some((section) => section.storyArcBeatID === "climax"), true);
   assertEquals(result.unresolved, []);
+});
+
+
+Deno.test("PR3 repair cannot empty a required strong-closure beat", () => {
+  const result = repairStoryArcMacroStructure([
+    semanticSection("den", "The Only Settlement", "Brody launches a citywide takeover and seizes the government.", "resolution"),
+  ] as any, freytagFixture);
+  assertEquals(result.repaired, []);
+  assertEquals(result.unresolved, ["The Only Settlement"]);
+  assertEquals(validateStoryArcSemantics([] as any, freytagFixture).some((issue) => issue.includes("required strong closure")), true);
+});
+
+Deno.test("PR3 repair preserves allocation minima in the source beat", () => {
+  const allocation = new Map([...["exp", "rise", "climax", "fall", "den"].map((id) => [id, { minSections: id === "den" ? 2 : 0, rationale: "test" } as any] as const)]);
+  const result = repairStoryArcMacroStructure([
+    semanticSection("den", "The Open Bid", "Brody launches a citywide takeover and seizes the government.", "resolution"),
+    semanticSection("den", "The Quiet Settlement", "The surviving relationships settle into a changed normal.", "resolution"),
+  ] as any, freytagFixture, allocation);
+  assertEquals(result.repaired, []);
+  assertEquals(result.unresolved, ["The Open Bid"]);
+  assertEquals(result.diagnostics.some((item) => item.includes("minimum coverage")), true);
+});
+
+Deno.test("PR3 required dramatic functions are validated from final section functions", () => {
+  const climaxOnly = { name: "Three-Act", beats: [{ id: "c", role: "climax", label: "Climax" }] };
+  const missing = validateRequiredStoryArcFunctions([semanticSection("c", "Crisis", "The crisis turns.", "crisis")] as any, climaxOnly as any);
+  assertEquals(missing.some((issue) => issue.includes("Climax") && issue.includes("climax") && issue.includes("crisis")), true);
+  const resurrection = { name: "Hero's Journey", beats: [{ id: "r", role: "resurrection", label: "Resurrection" }] };
+  assertEquals(validateStoryArcSemantics([semanticSection("r", "The Test", "The hero transforms.", "transformation")] as any, resurrection as any).some((issue) => issue.includes("required dramatic function climax")), true);
+  assertEquals(validateStoryArcSemantics([semanticSection("r", "The Test", "The final confrontation turns.", "climax")] as any, resurrection as any), []);
+});
+
+Deno.test("PR3 expansion schema and parser enforce beat-local semantic functions", () => {
+  const template = { name: "Freytag's Pyramid", beats: [{ id: "fall", role: "falling_action", label: "Falling Action" }] };
+  const schema = buildExpansionResponseSchema(arcRoleContract(template.beats[0], template.name)) as any;
+  assertEquals(schema.properties.suggestions.items.properties.dramaticFunction.enum.includes("climax"), false);
+  const addition: any = semanticSection("fall", "Second Assault", "The antagonist launches a larger decisive assault on the city.", "consequence");
+  addition.insertAfterTitle = null;
+  let failed = false;
+  try { parseExpansionResponse(JSON.stringify({ suggestions: [addition] }), new Set(["fall"]), [], [], template as any); } catch (error) { failed = String(error).includes("primary conflict"); }
+  assertEquals(failed, true);
+  const denouement = { name: "Freytag's Pyramid", beats: [{ id: "den", role: "denouement", label: "Denouement" }] };
+  const denAddition: any = semanticSection("den", "Another Assault", "The antagonist launches another takeover.", "consequence");
+  denAddition.insertAfterTitle = null;
+  let denFailed = false;
+  try { parseExpansionResponse(JSON.stringify({ suggestions: [denAddition] }), new Set(["den"]), [], [], denouement as any); } catch (error) { denFailed = String(error).includes("primary conflict"); }
+  assertEquals(denFailed, true);
+});
+
+Deno.test("PR3 expansion prompt carries the complete target semantic contract", () => {
+  const template = { ...sparseRequest, arcTemplate: { name: "Freytag's Pyramid", id: "f", beats: freytagFixture.beats } } as any;
+  const prompt = buildExpansionPrompt(template, [], { round: 1, projectedTokens: 1, projectedWords: 1, desiredWords: [70000, 90000], remainingDeficitTokens: 100, beat: { beatID: "fall", beatLabel: "Falling Action", currentSections: [], projectedTokens: 0, projectedWords: 0 } } as any);
+  assertEquals(prompt.system.includes("allowedFunctions="), true);
+  assertEquals(prompt.system.includes("forbidsNewPrimaryConflict=true"), true);
+  assertEquals(prompt.system.includes("phaseDirection=resolve"), true);
+});
+
+Deno.test("PR3 repair chooses the nearest compatible beat and refuses unsafe long-distance movement", () => {
+  const localTemplate = { name: "Three-Act", beats: [
+    { id: "setup", role: "setup", label: "Setup" }, { id: "rise", role: "rising_action", label: "Rising" },
+    { id: "climax", role: "climax", label: "Climax" }, { id: "den", role: "resolution", label: "Resolution" },
+  ] };
+  const local = repairStoryArcMacroStructure([
+    semanticSection("den", "Bad Late Assault", "The antagonist launches a citywide takeover.", "resolution"),
+    semanticSection("den", "Quiet End", "The world settles into a new normal.", "resolution"),
+  ] as any, localTemplate as any);
+  assertEquals(local.suggestions.some((section) => section.storyArcBeatID === "climax"), true);
+  assertEquals(validateRequiredStoryArcFunctions(local.suggestions as any, localTemplate as any), []);
+  const farTemplate = { name: "Three-Act", beats: [
+    { id: "den", role: "resolution", label: "Resolution" }, { id: "one", role: "setup", label: "One" },
+    { id: "two", role: "rising_action", label: "Two" }, { id: "three", role: "rising_action", label: "Three" },
+    { id: "climax", role: "climax", label: "Climax" },
+  ] };
+  const far = repairStoryArcMacroStructure([
+    semanticSection("den", "Bad Late Assault", "The antagonist launches a citywide takeover.", "resolution"),
+    semanticSection("den", "Quiet End", "The world settles into a new normal.", "resolution"),
+  ] as any, farTemplate as any);
+  assertEquals(far.repaired, []);
+  assertEquals(far.unresolved, ["Bad Late Assault"]);
+});
+
+Deno.test("PR3 all seven built-in template families use explicit canonical role contracts", () => {
+  const cases: Array<[string, string, string]> = [
+    ["Three-Act", "first_plot_point", "commitment"], ["Hero's Journey", "meeting_mentor", "transformation"],
+    ["Mystery", "false_solution", "reversal"], ["Save the Cat!", "b_story", "transformation"],
+    ["Story Circle", "take", "crisis"], ["Freytag's Pyramid", "falling_action", "consequence"],
+    ["Kishōtenketsu", "sho", "complication"],
+  ];
+  for (const [name, role, fn] of cases) assertEquals(arcRoleContract({ role, label: role }, name).allowedFunctions.includes(fn as any), true);
+  const sho = arcRoleContract({ role: "sho", label: "Shō" }, "Kishōtenketsu");
+  assertEquals(sho.allowedFunctions.includes("reversal"), false);
+  assertEquals(arcRoleContract({ role: "ten", label: "Ten" }, "Kishōtenketsu").allowedFunctions.includes("reversal"), true);
+  const ketsu = { name: "Kishōtenketsu", beats: [{ id: "k", role: "ketsu", label: "Ketsu" }] };
+  assertEquals(validateStoryArcSemantics([semanticSection("k", "Unfinished", "The event continues.", "transformation")] as any, ketsu as any).some((issue) => issue.includes("required dramatic function resolution")), true);
 });
