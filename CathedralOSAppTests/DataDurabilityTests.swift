@@ -72,6 +72,7 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     var syncAllError: Error?
     var restoreCalled = false
     var restoreCallCount = 0
+    var targetedRestoreProjectIDs: [UUID] = []
     var restoreDelayNanoseconds: UInt64 = 0
     var restoreError: Error?
     var restoreResult = ProjectRestoreReport(
@@ -117,6 +118,14 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
         if let restoreError { throw restoreError }
         return restoreResult
     }
+
+    @MainActor
+    func restoreProject(localProjectID: UUID, into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
+        targetedRestoreProjectIDs.append(localProjectID)
+        eventLog?.events.append("project.restore.targeted")
+        if let restoreError { throw restoreError }
+        return restoreResult
+    }
 }
 
 private final class SpyOutputSyncService: GenerationOutputSyncServiceProtocol {
@@ -157,6 +166,44 @@ private func makeInMemoryContext() throws -> ModelContext {
 final class DataDurabilityTests: XCTestCase {
 
     // MARK: Sign-out preservation
+
+    func testCompletedAcceptRunRestoresOnlyItsProject() async throws {
+        let suiteName = "DataDurabilityTests.targeted-accept-restore.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let projectID = UUID()
+        let lineageID = UUID()
+        let run = DataDurabilityCoordinator.AcceptRunMetadata(
+            runID: UUID().uuidString,
+            projectID: projectID,
+            projectLineageID: lineageID,
+            outlineID: UUID(),
+            status: "completed",
+            sectionsTotal: 2,
+            sectionsDone: 2,
+            sectionsFailed: 0,
+            error: nil
+        )
+        defaults.set(try JSONEncoder().encode(run), forKey: "cathedralos.acceptOutline.activeRun")
+
+        let projectSpy = SpyProjectSyncService()
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSpy,
+            outputSyncService: SpyOutputSyncService(),
+            defaults: defaults
+        )
+        let context = try makeInMemoryContext()
+        coordinator.resumeAcceptAllIfNeeded(context: context)
+
+        for _ in 0..<100 where projectSpy.targetedRestoreProjectIDs.isEmpty {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(projectSpy.targetedRestoreProjectIDs, [projectID])
+        XCTAssertFalse(projectSpy.restoreCalled, "Accept All must not trigger a full-project restore.")
+    }
 
     func testSignOutDoesNotDeleteLocalProjects() async throws {
         let context = try makeInMemoryContext()

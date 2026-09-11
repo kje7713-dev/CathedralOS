@@ -568,9 +568,15 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     private func finishAcceptRun(_ metadata: AcceptRunMetadata, context: ModelContext) async {
         if metadata.typedStatus == .completed && metadata.sectionsFailed == 0 && metadata.error == nil {
-            let result = await performCloudRestore(context: context)
-            if let error = result.errorMessage {
-                acceptRunError = error
+            do {
+                let report = try await projectSyncService.restoreProject(
+                    localProjectID: metadata.projectID,
+                    into: context,
+                    includeTombstoned: false
+                )
+                logger.log("Accept All targeted restore complete: \(report.summaryMessage, privacy: .public)")
+            } catch {
+                acceptRunError = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
             }
         } else {
             acceptRunError = metadata.error ??

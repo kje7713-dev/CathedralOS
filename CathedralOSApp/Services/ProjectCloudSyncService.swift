@@ -99,6 +99,10 @@ protocol ProjectCloudSyncServiceProtocol {
     func fetchCloudProjectSnapshotCount() async throws -> Int
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport
+    /// Restore only one project snapshot. This is used by project-scoped flows
+    /// such as Accept All so completion cannot reconcile unrelated projects.
+    @MainActor
+    func restoreProject(localProjectID: UUID, into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport
     /// Reconcile local SwiftData projects against a tombstone set BEFORE upload.
     /// Matching projects (by local id OR lineage id) are deleted from the context,
     /// their local JSON backups are removed, and the context is saved. Returns a
@@ -697,7 +701,22 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     }
 
     @MainActor
-    private func restoreProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
+    func restoreProject(localProjectID: UUID, into context: ModelContext, includeTombstoned: Bool = false) async throws -> ProjectRestoreReport {
+        try await restoreOperationGate.run {
+            try await self.restoreProjects(
+                into: context,
+                includeTombstoned: includeTombstoned,
+                localProjectID: localProjectID
+            )
+        }
+    }
+
+    @MainActor
+    private func restoreProjects(
+        into context: ModelContext,
+        includeTombstoned: Bool,
+        localProjectID: UUID? = nil
+    ) async throws -> ProjectRestoreReport {
 
         // Phase A: fetch and decode cloud payloads into plain DTOs.
         let (client, _, accessToken) = try await validatedClientAndSession()
@@ -706,6 +725,11 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             URLQueryItem(name: "select", value: "local_project_id,lineage_id,snapshot_json,updated_at"),
             URLQueryItem(name: "order", value: "updated_at.desc")
         ]
+        if let localProjectID {
+            components?.queryItems?.append(
+                URLQueryItem(name: "local_project_id", value: "eq.\(localProjectID.uuidString)")
+            )
+        }
         guard let url = components?.url else {
             throw ProjectCloudSyncError.notConfigured
         }
@@ -721,7 +745,11 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             "Restore starting: local_before=\(localProjectCountBefore, privacy: .public) cloud_fetched=\(rows.count, privacy: .public)"
         )
 
-        let dedupeWarnings = try deduplicateLocalProjects(in: context)
+        // Targeted restores must not inspect or mutate unrelated local projects.
+        // The full restore path retains its existing duplicate repair behavior.
+        let dedupeWarnings = localProjectID == nil
+            ? try deduplicateLocalProjects(in: context)
+            : []
         let cloudWarnings = duplicateWarnings(in: rows)
         let duplicateWarnings = dedupeWarnings + cloudWarnings
 
