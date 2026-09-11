@@ -52,6 +52,9 @@ import {
   validateOutlinePlanningQuality,
   plannedWordRangeForContainer,
   findUnusedStoryMaterial,
+  validateStoryArcSemantics,
+  repairStoryArcMacroStructure,
+  arcRoleContract,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -1234,4 +1237,67 @@ Deno.test("sparse Brody fixture preserves the complete planning handoff contract
   assertEquals(runSource.includes("sectionTerminalState"), true);
   assertEquals(generationSource.includes("Entry state:"), true);
   assertEquals(generationSource.includes("Required terminal state:"), true);
+});
+
+
+const freytagFixture = {
+  name: "Freytag's Pyramid",
+  beats: [
+    { id: "exp", role: "exposition", label: "Exposition" },
+    { id: "rise", role: "rising_action", label: "Rising Action" },
+    { id: "climax", role: "climax", label: "Climax" },
+    { id: "fall", role: "falling_action", label: "Falling Action" },
+    { id: "den", role: "denouement", label: "Denouement" },
+  ],
+};
+
+const semanticSection = (beat: string, title: string, event: string, fn: any) => ({
+  title, summary: event, dramaticEvent: event, resultingChange: "The state changes materially.",
+  terminalState: "The consequences continue.", entryState: "The prior state holds.",
+  container: "scene", pov: "thirdPersonLimited", terminalBeat: "The next state begins.", storyArcBeatID: beat, dramaticFunction: fn,
+});
+
+Deno.test("PR3 Freytag semantic contract rejects a decisive takeover in denouement", () => {
+  const issues = validateStoryArcSemantics([
+    semanticSection("climax", "The Pressure Breaks", "The coalition confronts Brody and the central conflict turns.", "climax"),
+    semanticSection("den", "The Open Bid for Rule", "Brody launches a citywide takeover and seizes the government.", "resolution"),
+  ] as any, freytagFixture);
+  assertEquals(issues.length > 0, true);
+  assertEquals(issues.some((issue) => issue.includes("primary conflict") || issue.includes("decisive")), true);
+});
+
+Deno.test("PR3 falling action allows consequences but not a new primary conflict", () => {
+  const pass = validateStoryArcSemantics([
+    semanticSection("climax", "The Turning Choice", "Brody makes the irreversible choice that ends the central confrontation.", "climax"),
+    semanticSection("fall", "The Coalition Breaks", "The defeated coalition collapses and secondary alliances negotiate the consequences.", "consequence"),
+    semanticSection("den", "A New Balance", "The new order settles and the surviving relationships find a changed normal.", "resolution"),
+  ] as any, freytagFixture);
+  assertEquals(pass, []);
+  const fail = validateStoryArcSemantics([
+    semanticSection("climax", "The Turning Choice", "The central confrontation turns.", "climax"),
+    semanticSection("fall", "The Second Assault", "The antagonist launches a larger decisive assault on the city.", "consequence"),
+  ] as any, freytagFixture);
+  assertEquals(fail.length > 0, true);
+});
+
+Deno.test("PR3 Hero's Journey Resurrection remains a legal late climactic test", () => {
+  const template = { name: "Hero's Journey", beats: [
+    { id: "road", role: "road_back", label: "The Road Back" },
+    { id: "res", role: "resurrection", label: "Resurrection" },
+    { id: "return", role: "return_with_elixir", label: "Return with the Elixir" },
+  ] };
+  assertEquals(arcRoleContract(template.beats[1], template.name).allowedFunctions.includes("climax"), true);
+  assertEquals(validateStoryArcSemantics([
+    semanticSection("res", "The Final Test", "The hero faces the final climactic test and transforms.", "climax"),
+    semanticSection("return", "The Changed World", "The hero returns with the elixir and a new normal settles.", "resolution"),
+  ] as any, template), []);
+});
+
+Deno.test("PR3 server repair reassigns a locally misallocated decisive section", () => {
+  const result = repairStoryArcMacroStructure([
+    semanticSection("den", "The Open Bid for Rule", "Brody launches a citywide takeover and seizes the government.", "resolution"),
+  ] as any, freytagFixture);
+  assertEquals(result.repaired.length, 1);
+  assertEquals(result.suggestions[0].storyArcBeatID, "climax");
+  assertEquals(result.unresolved, []);
 });

@@ -54,6 +54,62 @@ import {
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-5.6-luna";
 
+export const DRAMATIC_FUNCTIONS = [
+  "setup", "incitement", "commitment", "escalation", "complication",
+  "reversal", "crisis", "climax", "consequence", "resolution",
+  "aftermath", "transformation",
+] as const;
+export type DramaticFunction = typeof DRAMATIC_FUNCTIONS[number];
+export type ArcPhaseDirection = "establish" | "escalate" | "turn" | "resolve" | "settle";
+export interface ArcRoleContract {
+  allowedFunctions: DramaticFunction[];
+  requiredFunctions?: DramaticFunction[];
+  forbidsNewPrimaryConflict: boolean;
+  allowsMajorEscalation: boolean;
+  closureExpectation: "none" | "partial" | "strong";
+  phaseDirection: ArcPhaseDirection;
+}
+
+const CONTRACTS: Record<string, ArcRoleContract> = {
+  setup: { allowedFunctions: ["setup"], forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "none", phaseDirection: "establish" },
+  incitement: { allowedFunctions: ["incitement", "setup"], forbidsNewPrimaryConflict: false, allowsMajorEscalation: true, closureExpectation: "none", phaseDirection: "escalate" },
+  commitment: { allowedFunctions: ["commitment", "incitement", "escalation"], forbidsNewPrimaryConflict: false, allowsMajorEscalation: true, closureExpectation: "none", phaseDirection: "escalate" },
+  escalation: { allowedFunctions: ["escalation", "complication", "reversal", "consequence"], forbidsNewPrimaryConflict: false, allowsMajorEscalation: true, closureExpectation: "none", phaseDirection: "escalate" },
+  reversal: { allowedFunctions: ["reversal", "escalation", "complication"], forbidsNewPrimaryConflict: false, allowsMajorEscalation: true, closureExpectation: "partial", phaseDirection: "turn" },
+  crisis: { allowedFunctions: ["crisis", "reversal", "consequence"], forbidsNewPrimaryConflict: false, allowsMajorEscalation: true, closureExpectation: "partial", phaseDirection: "turn" },
+  climax: { allowedFunctions: ["climax", "crisis", "transformation", "reversal"], requiredFunctions: ["climax"], forbidsNewPrimaryConflict: false, allowsMajorEscalation: true, closureExpectation: "partial", phaseDirection: "turn" },
+  consequence: { allowedFunctions: ["consequence", "resolution", "aftermath", "transformation"], forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "partial", phaseDirection: "resolve" },
+  resolution: { allowedFunctions: ["resolution", "aftermath", "transformation", "consequence"], forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "strong", phaseDirection: "settle" },
+};
+
+function roleFamily(role: string, label = ""): string {
+  const value = `${role} ${label}`.toLowerCase().replace(/[’']/g, "");
+  if (/exposition|ordinary_world|opening_image|setup|theme_stated|you$|^ki/.test(value)) return "setup";
+  if (/inciting|catalyst|call_to_adventure|need|crime|hook/.test(value)) return "incitement";
+  if (/first_plot|break_into_two|crossing_threshold|commitment|go$/.test(value)) return "commitment";
+  if (/rising|tests_allies|fun_and_games|bad_guys_close|investigation|search|development|sho/.test(value)) return "escalation";
+  if (/midpoint|reversal|revelation|false_solution|real_clue|find$|ten/.test(value)) return "reversal";
+  if (/crisis|ordeal|all_is_lost|dark_night|take$/.test(value)) return "crisis";
+  if (/climax|confrontation|finale|resurrection/.test(value)) return "climax";
+  if (/falling_action|road_back|return$|consequence/.test(value)) return "consequence";
+  if (/denouement|resolution|return_with_elixir|final_image|change$|ketsu/.test(value)) return "resolution";
+  return "escalation";
+}
+
+export function arcRoleContract(beat: { role?: string; label?: string }, templateName = ""): ArcRoleContract {
+  const family = roleFamily(beat.role ?? "", beat.label ?? "");
+  const base = CONTRACTS[family] ?? CONTRACTS.escalation;
+  // Resurrection is intentionally a late climactic test in Hero's Journey.
+  if (/heros journey|hero.?s journey/i.test(templateName) && /resurrection/i.test(`${beat.role} ${beat.label}`)) {
+    return { ...base, allowedFunctions: ["climax", "crisis", "transformation"], requiredFunctions: ["climax"], forbidsNewPrimaryConflict: false, allowsMajorEscalation: true, closureExpectation: "partial", phaseDirection: "turn" };
+  }
+  return base;
+}
+
+export function arcRoleContracts(template: Pick<ArcTemplateBlob, "beats" | "name">): Map<string, ArcRoleContract> {
+  return new Map(template.beats.map((beat) => [beat.id, arcRoleContract(beat, template.name)]));
+}
+
 // Base schema for one generated section. The response schema below wraps this
 // per Story Arc beat so minimum coverage is enforced by structured outputs.
 const SECTION_SCHEMA = {
@@ -68,15 +124,17 @@ const SECTION_SCHEMA = {
     dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
     resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
     terminalState: { type: "string", minLength: 1, maxLength: 1200 },
+    dramaticFunction: { type: "string", enum: DRAMATIC_FUNCTIONS },
   },
-  required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState"],
+  required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "dramaticFunction"],
   additionalProperties: false,
 } as const;
 
 export function buildSuggestionResponseSchema(
-  beats: Array<{ id: string }>,
+  beats: Array<{ id: string; role?: string; label?: string }>,
   allocation: Map<string, Allocation>,
   obligations: RecipeObligation[] = [],
+  templateName = "",
 ) {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
@@ -97,10 +155,18 @@ export function buildSuggestionResponseSchema(
     : SECTION_SCHEMA;
   for (const beat of beats) {
     const minimum = allocation.get(beat.id)?.minSections ?? 0;
+    const contract = arcRoleContract(beat, templateName);
+    const beatSectionSchema = {
+      ...sectionSchema,
+      properties: {
+        ...sectionSchema.properties,
+        dramaticFunction: { type: "string", enum: contract.allowedFunctions },
+      },
+    };
     properties[beat.id] = {
       type: "array",
       minItems: minimum,
-      items: sectionSchema,
+      items: beatSectionSchema,
     };
     required.push(beat.id);
   }
@@ -451,6 +517,7 @@ interface Suggestion {
   dramaticEvent?: string;
   resultingChange?: string;
   terminalState?: string;
+  dramaticFunction?: DramaticFunction;
   plannedWordRange?: { minWords: number; maxWords: number };
   storyArcBeatID: string;
   recipeRequirementIDs?: string[];
@@ -607,11 +674,12 @@ const EXPANSION_SCHEMA = {
           dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
           resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
           terminalState: { type: "string", minLength: 1, maxLength: 1200 },
+          dramaticFunction: { type: "string", enum: DRAMATIC_FUNCTIONS },
           storyArcBeatID: { type: "string" },
           insertAfterTitle: { type: ["string", "null"] },
           recipeRequirementIDs: { type: "array", minItems: 0, maxItems: 50, items: { type: "string", minLength: 1 } },
         },
-        required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "storyArcBeatID", "insertAfterTitle", "recipeRequirementIDs"],
+        required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "dramaticFunction", "storyArcBeatID", "insertAfterTitle", "recipeRequirementIDs"],
       },
     },
   },
@@ -1007,6 +1075,10 @@ export function buildPrompt(
       }: minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"} (${info.rationale})`;
     })
     .join("\n");
+  const contractLines = req.arcTemplate.beats.map((beat) => {
+    const contract = arcRoleContract(beat, req.arcTemplate.name);
+    return `- ${beat.label} (${beat.role}): allowed functions=${contract.allowedFunctions.join(", ")}; phase=${contract.phaseDirection}; ${contract.forbidsNewPrimaryConflict ? "do not introduce a new primary conflict" : "major escalation is allowed"}`;
+  }).join("\n");
 
   const system =
     `You are an expert ${requestedStoryMaterialFormat(req)} outliner. Use the complete canonical recipe/project payload below, including its premise, selected characters and their populated fields, selected relationships, themes, motifs, story spark, aftertaste, recipe instructions, and included setting. Treat supplied facts as authoritative; do not infer personality traits from a character name alone. Given the story arc and per-beat allocation plan, produce the section-by-section outline.
@@ -1039,9 +1111,12 @@ For each beat, generate at least the stated minimum number of distinct sections.
 Write each section title as a concise, specific, evocative working title suitable for a ${requestedStoryMaterialFormat(req)} outline or ${requestedStoryMaterialFormat(req)}-ready table of contents. The title should name the concrete dramatic event, decision, reversal, discovery, confrontation, or consequence that this section actually dramatizes. Do not restate or lightly rephrase the premise, Story Arc beat label, terminal beat, or section summary. Avoid generic placeholders such as "Setup," "Conflict," "Events," or "Scene"; each title must distinguish its section from the others in the same beat.
 
 ## Generation-ready section contract
-For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields. Do not provide plannedWordRange; the server derives it deterministically from container; it never overrides the Section Contract, container, or natural stopping point.
+For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. Also return exactly one server-validated dramaticFunction from the allowed functions for that beat; the function must agree with the event and resulting change, not merely repeat the beat label. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields. Do not provide plannedWordRange; the server derives it deterministically from container; it never overrides the Section Contract, container, or natural stopping point.
 
 ${allocationLines}
+
+## Semantic Story Arc contracts
+${contractLines}
 
 ${
       req.existingSections && req.existingSections.length > 0
@@ -1495,6 +1570,7 @@ export function validateSuggestions(
       ...(typeof s.dramaticEvent === "string" ? { dramaticEvent: s.dramaticEvent.slice(0, 2000) } : {}),
       ...(typeof s.resultingChange === "string" ? { resultingChange: s.resultingChange.slice(0, 1200) } : {}),
       ...(typeof s.terminalState === "string" ? { terminalState: s.terminalState.slice(0, 1200) } : {}),
+      ...(DRAMATIC_FUNCTIONS.includes(s.dramaticFunction) ? { dramaticFunction: s.dramaticFunction as DramaticFunction } : {}),
       plannedWordRange: plannedWordRangeForContainer(s.container),
       storyArcBeatID: s.storyArcBeatID,
       ...(validRequirementIDs.length > 0 ? { recipeRequirementIDs: validRequirementIDs } : {}),
@@ -1530,6 +1606,7 @@ export function validateSuggestions(
 export interface OutlineQualityDiagnostic {
   distinctnessIssues: string[];
   causalScaleIssues: string[];
+  semanticArcIssues: string[];
   supportingEntities: string[];
   unusedStoryMaterialItems: number;
 }
@@ -1599,13 +1676,115 @@ export function findCausalScaleIssues(
   return issues;
 }
 
+
+function semanticText(suggestion: Suggestion): string {
+  return [suggestion.title, suggestion.summary, suggestion.dramaticEvent, suggestion.resultingChange, suggestion.terminalState, suggestion.terminalBeat]
+    .filter(Boolean).join(" ").toLowerCase();
+}
+
+const PRIMARY_CONFLICT_SIGNALS = /\b(launch(?:es|ed)?|mount(?:s|ed)?|wage(?:s|d)?|invade(?:s|d)?|attack(?:s|ed)?|assault(?:s|ed)?|conquer(?:s|ed)?|take over|seize(?:s|d)?|overthrow(?:s|n)?|decisive assault|citywide takeover)\b/;
+const CLOSURE_SIGNALS = /\b(settle(?:s|d)?|stabiliz(?:e|es|ed)|new normal|aftermath|mourning|rebuild(?:s|ing)?|govern(?:s|ed|ance)|peace|accept(?:s|ed)?|remain(?:s|ing)?|legacy|closing image)\b/;
+
+function inferredFunction(suggestion: Suggestion): DramaticFunction | null {
+  const text = semanticText(suggestion);
+  if (/\b(resolve|resolution|settle|aftermath|new normal|closing image)\b/.test(text)) return "resolution";
+  if (PRIMARY_CONFLICT_SIGNALS.test(text)) return "climax";
+  if (/\b(reveal|discovers?|reversal|turns?|changes? the plan)\b/.test(text)) return "reversal";
+  if (/\b(crisis|lowest|defeat|dark night|sacrifice)\b/.test(text)) return "crisis";
+  if (/\b(consequence|falls apart|collapse|repercussion)\b/.test(text)) return "consequence";
+  return null;
+}
+
+/** Validate both the declared function and the sequence-level macro-structure.
+ * This is deliberately deterministic: UUID/role correctness alone is not
+ * sufficient, but Hero's Journey Resurrection remains a legal late climax. */
+export function validateStoryArcSemantics(
+  suggestions: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+): string[] {
+  const issues: string[] = [];
+  const contracts = arcRoleContracts(template);
+  const ordered = [...suggestions].sort((a, b) => {
+    const ai = template.beats.findIndex((beat) => beat.id === a.storyArcBeatID);
+    const bi = template.beats.findIndex((beat) => beat.id === b.storyArcBeatID);
+    return ai - bi;
+  });
+  for (const section of ordered) {
+    const contract = contracts.get(section.storyArcBeatID);
+    if (!contract) continue;
+    if (section.dramaticFunction && !contract.allowedFunctions.includes(section.dramaticFunction)) {
+      issues.push(`section "${section.title}" declares ${section.dramaticFunction}, not allowed in its Story Arc role`);
+    }
+    const inferred = inferredFunction(section);
+    if (inferred && section.dramaticFunction && inferred !== section.dramaticFunction && inferred === "climax" && contract.forbidsNewPrimaryConflict) {
+      issues.push(`section "${section.title}" introduces a decisive primary conflict in a ${contract.phaseDirection} phase`);
+    }
+    if (contract.forbidsNewPrimaryConflict && PRIMARY_CONFLICT_SIGNALS.test(semanticText(section))) {
+      issues.push(`section "${section.title}" introduces a new primary conflict after the decisive phase`);
+    }
+  }
+  const climaxIndex = ordered.reduce((last, section, index) => {
+    const contract = contracts.get(section.storyArcBeatID);
+    return section.dramaticFunction === "climax" || contract?.phaseDirection === "turn" && /climax|confrontation|finale/i.test(section.title) ? index : last;
+  }, -1);
+  if (climaxIndex >= 0) {
+    for (let index = climaxIndex + 1; index < ordered.length; index++) {
+      const section = ordered[index];
+      const contract = contracts.get(section.storyArcBeatID);
+      if (contract?.forbidsNewPrimaryConflict && PRIMARY_CONFLICT_SIGNALS.test(semanticText(section))) {
+        issues.push(`primary confrontation occurs after the declared climax in section "${section.title}"`);
+      }
+    }
+  }
+  // A strong closure phase should actually contain closure rather than reopen
+  // the core question in every section.
+  for (const beat of template.beats) {
+    const contract = contracts.get(beat.id);
+    if (contract?.closureExpectation !== "strong") continue;
+    const sections = ordered.filter((section) => section.storyArcBeatID === beat.id);
+    if (sections.length > 0 && !sections.some((section) => CLOSURE_SIGNALS.test(semanticText(section)))) {
+      issues.push(`Story Arc role "${beat.label}" has no observable closure or settled terminal state`);
+    }
+  }
+  return [...new Set(issues)];
+}
+
+/** Prefer a local server-owned reassignment before asking the model to rebuild
+ * the complete outline. Only the section's beat identity changes; contracts and
+ * content remain immutable. */
+export function repairStoryArcMacroStructure(
+  suggestions: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+): { suggestions: Suggestion[]; repaired: string[]; unresolved: string[] } {
+  const contracts = arcRoleContracts(template);
+  const repaired: string[] = [];
+  const unresolved: string[] = [];
+  const result = suggestions.map((section) => {
+    const contract = contracts.get(section.storyArcBeatID);
+    const inferred = inferredFunction(section);
+    if (!contract || !inferred || contract.allowedFunctions.includes(inferred)) return section;
+    const target = template.beats.find((beat) => contracts.get(beat.id)?.allowedFunctions.includes(inferred));
+    if (!target || target.id === section.storyArcBeatID) {
+      unresolved.push(section.title);
+      return section;
+    }
+    repaired.push(`${section.title}: ${section.storyArcBeatID} → ${target.id}`);
+    return { ...section, storyArcBeatID: target.id, dramaticFunction: inferred };
+  });
+  const order = new Map(template.beats.map((beat, index) => [beat.id, index]));
+  result.sort((a, b) => (order.get(a.storyArcBeatID) ?? 999) - (order.get(b.storyArcBeatID) ?? 999));
+  return { suggestions: result, repaired, unresolved };
+}
+
 export function validateOutlinePlanningQuality(
   suggestions: Suggestion[],
   storyMaterial?: StoryMaterialEnrichment,
   format: StoryMaterialFormat = "novel",
+  template?: Pick<ArcTemplateBlob, "name" | "beats">,
 ): OutlineQualityDiagnostic {
   const distinctnessIssues = findDramaticDistinctnessIssues(suggestions);
   const causalScaleIssues = findCausalScaleIssues(suggestions, storyMaterial, format);
+  const semanticArcIssues = template ? validateStoryArcSemantics(suggestions, template) : [];
   const usedText = suggestions.map(contractText).join(" ");
   const supportingEntities = storyMaterial
     ? STORY_MATERIAL_CATEGORIES.flatMap((category) => storyMaterial[category])
@@ -1616,6 +1795,7 @@ export function validateOutlinePlanningQuality(
   return {
     distinctnessIssues,
     causalScaleIssues,
+    semanticArcIssues,
     supportingEntities,
     unusedStoryMaterialItems: supportingEntities.length,
   };
@@ -1897,7 +2077,10 @@ async function runSuggestionJob(
       };
       const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
       const expanded = await expandNovel(resume.suggestions, recipeObligations, resume.startRound, resume.priorDiagnostics);
-      const expandedQuality = validateOutlinePlanningQuality(expanded.suggestions, resumedMaterial, requestedStoryMaterialFormat(body));
+      const expandedQuality = validateOutlinePlanningQuality(expanded.suggestions, resumedMaterial, requestedStoryMaterialFormat(body), body.arcTemplate);
+      if (expandedQuality.semanticArcIssues.length > 0) {
+        throw new Error(`expanded outline failed Story Arc semantic validation: ${expandedQuality.semanticArcIssues[0]}`);
+      }
       if (expandedQuality.distinctnessIssues.length > 0) {
         throw new Error(`expanded outline failed dramatic distinctness validation: ${expandedQuality.distinctnessIssues[0]}`);
       }
@@ -2022,7 +2205,7 @@ async function runSuggestionJob(
       recipeObligations,
     };
     const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial);
-    const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations);
+    const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations, body.arcTemplate.name);
     const responseFormat = {
       type: "json_schema",
       json_schema: { name: "outline_suggestions_by_beat", strict: true, schema: responseSchema },
@@ -2058,14 +2241,22 @@ async function runSuggestionJob(
       }
     }
 
-    const initialQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body));
+    const initialRepair = repairStoryArcMacroStructure(result.suggestions, body.arcTemplate);
+    result = { ...result, suggestions: initialRepair.suggestions };
+    const initialQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body), body.arcTemplate);
     diagnostics = {
       ...diagnostics,
       sectionContractValidated: true,
+      semanticArcRepairedSections: initialRepair.repaired,
+      semanticArcUnresolvedSections: initialRepair.unresolved,
       dramaticDistinctnessIssues: initialQuality.distinctnessIssues,
+      semanticArcIssues: initialQuality.semanticArcIssues,
       causalScaleIssues: initialQuality.causalScaleIssues,
       unusedStoryMaterialItems: initialQuality.unusedStoryMaterialItems,
     };
+    if (initialQuality.semanticArcIssues.length > 0 || initialRepair.unresolved.length > 0) {
+      throw new Error(`outline failed Story Arc semantic validation: ${(initialQuality.semanticArcIssues[0] ?? initialRepair.unresolved[0])}`);
+    }
     if (initialQuality.distinctnessIssues.length > 0) {
       throw new Error(`outline failed dramatic distinctness validation: ${initialQuality.distinctnessIssues[0]}`);
     }
@@ -2111,8 +2302,13 @@ async function runSuggestionJob(
       await updateRun({ suggestions: result.suggestions, diagnostics });
       const expanded = await expandNovel(result.suggestions, recipeObligations);
       result = { suggestions: expanded.suggestions, warnings: [...result.warnings, ...expanded.warnings] };
-      const expandedQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body));
-      diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions), dramaticDistinctnessIssues: expandedQuality.distinctnessIssues, causalScaleIssues: expandedQuality.causalScaleIssues, unusedStoryMaterialItems: expandedQuality.unusedStoryMaterialItems, novelScale: evaluateNovelScale(result.suggestions, body.existingSections ?? []) };
+      const expandedRepair = repairStoryArcMacroStructure(result.suggestions, body.arcTemplate);
+      result = { ...result, suggestions: expandedRepair.suggestions };
+      const expandedQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body), body.arcTemplate);
+      diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions), semanticArcRepairedSections: expandedRepair.repaired, semanticArcUnresolvedSections: expandedRepair.unresolved, dramaticDistinctnessIssues: expandedQuality.distinctnessIssues, semanticArcIssues: expandedQuality.semanticArcIssues, causalScaleIssues: expandedQuality.causalScaleIssues, unusedStoryMaterialItems: expandedQuality.unusedStoryMaterialItems, novelScale: evaluateNovelScale(result.suggestions, body.existingSections ?? []) };
+      if (expandedQuality.semanticArcIssues.length > 0 || expandedRepair.unresolved.length > 0) {
+        throw new Error(`expanded outline failed Story Arc semantic validation: ${(expandedQuality.semanticArcIssues[0] ?? expandedRepair.unresolved[0])}`);
+      }
       if (expandedQuality.distinctnessIssues.length > 0) {
         throw new Error(`expanded outline failed dramatic distinctness validation: ${expandedQuality.distinctnessIssues[0]}`);
       }
