@@ -54,6 +54,130 @@ import {
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-5.6-luna";
 
+export const DRAMATIC_FUNCTIONS = [
+  "setup", "incitement", "commitment", "escalation", "complication",
+  "reversal", "crisis", "climax", "consequence", "resolution",
+  "aftermath", "transformation",
+] as const;
+export type DramaticFunction = typeof DRAMATIC_FUNCTIONS[number];
+export type ArcPhaseDirection = "establish" | "escalate" | "turn" | "resolve" | "settle";
+export interface ArcRoleContract {
+  allowedFunctions: DramaticFunction[];
+  requiredFunctions: DramaticFunction[];
+  forbidsNewPrimaryConflict: boolean;
+  allowsMajorEscalation: boolean;
+  closureExpectation: "none" | "partial" | "strong";
+  phaseDirection: ArcPhaseDirection;
+}
+
+const contract = (
+  allowedFunctions: DramaticFunction[],
+  options: Partial<Omit<ArcRoleContract, "allowedFunctions">> = {},
+): ArcRoleContract => ({
+  allowedFunctions,
+  requiredFunctions: [],
+  forbidsNewPrimaryConflict: false,
+  allowsMajorEscalation: true,
+  closureExpectation: "none",
+  phaseDirection: "escalate",
+  ...options,
+});
+
+const CONTRACTS: Record<string, ArcRoleContract> = {
+  setup: contract(["setup"], { forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, phaseDirection: "establish" }),
+  incitement: contract(["incitement", "setup"], { phaseDirection: "escalate" }),
+  commitment: contract(["commitment", "incitement", "escalation"], { phaseDirection: "escalate" }),
+  escalation: contract(["escalation", "complication", "reversal", "consequence"], { phaseDirection: "escalate" }),
+  reversal: contract(["reversal", "escalation", "complication"], { closureExpectation: "partial", phaseDirection: "turn" }),
+  crisis: contract(["crisis", "reversal", "consequence"], { closureExpectation: "partial", phaseDirection: "turn" }),
+  climax: contract(["climax", "crisis", "transformation", "reversal"], { requiredFunctions: ["climax"], closureExpectation: "partial", phaseDirection: "turn" }),
+  consequence: contract(["consequence", "resolution", "aftermath", "transformation"], { forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "partial", phaseDirection: "resolve" }),
+  resolution: contract(["resolution", "aftermath", "transformation", "consequence"], { forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "strong", phaseDirection: "settle" }),
+};
+
+const BUILTIN_ROLE_CONTRACTS: Record<string, Record<string, ArcRoleContract>> = {
+  "three-act": {
+    setup: CONTRACTS.setup, inciting_incident: CONTRACTS.incitement, first_plot_point: CONTRACTS.commitment,
+    rising_action: CONTRACTS.escalation, midpoint: CONTRACTS.reversal, crisis: CONTRACTS.crisis,
+    climax: CONTRACTS.climax, resolution: CONTRACTS.resolution,
+  },
+  "heros-journey": {
+    ordinary_world: CONTRACTS.setup, call_to_adventure: CONTRACTS.incitement,
+    refusal_of_call: contract(["setup", "consequence"], { forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, phaseDirection: "establish" }),
+    meeting_mentor: contract(["setup", "transformation"], { forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, phaseDirection: "establish" }),
+    crossing_threshold: CONTRACTS.commitment, tests_allies_enemies: CONTRACTS.escalation,
+    approach_inmost_cave: contract(["escalation", "complication", "crisis"], { phaseDirection: "escalate" }),
+    ordeal: contract(["crisis", "climax", "transformation"], { phaseDirection: "turn" }),
+    reward: contract(["consequence", "transformation", "aftermath"], { forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, phaseDirection: "resolve" }),
+    road_back: contract(["consequence", "aftermath", "transformation"], { forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, phaseDirection: "resolve" }),
+    resurrection: contract(["climax", "crisis", "transformation"], { requiredFunctions: ["climax"], phaseDirection: "turn" }),
+    return_with_elixir: contract(["resolution", "aftermath", "transformation"], { requiredFunctions: ["resolution"], forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "strong", phaseDirection: "settle" }),
+  },
+  mystery: {
+    the_crime: contract(["setup", "incitement"], { phaseDirection: "establish" }), investigation_begins: contract(["commitment", "escalation"], { phaseDirection: "escalate" }),
+    first_suspect: contract(["complication", "reversal"], { phaseDirection: "turn" }), rising_tension: CONTRACTS.escalation,
+    key_revelation: contract(["reversal", "consequence"], { phaseDirection: "turn" }), false_solution: contract(["reversal", "complication"], { phaseDirection: "turn" }),
+    real_clue: contract(["reversal", "consequence"], { phaseDirection: "turn" }),
+    confrontation: contract(["climax", "crisis"], { requiredFunctions: ["climax"], phaseDirection: "turn" }),
+    resolution: contract(["resolution", "aftermath", "transformation"], { requiredFunctions: ["resolution"], forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "strong", phaseDirection: "settle" }),
+  },
+  "save-the-cat": {
+    opening_image: CONTRACTS.setup, theme_stated: CONTRACTS.setup, setup: CONTRACTS.setup, catalyst: CONTRACTS.incitement,
+    debate: contract(["crisis", "consequence", "setup"], { forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, phaseDirection: "turn" }),
+    break_into_two: CONTRACTS.commitment, b_story: contract(["setup", "transformation", "complication"], { phaseDirection: "establish" }),
+    fun_and_games: CONTRACTS.escalation, midpoint: CONTRACTS.reversal, bad_guys_close_in: CONTRACTS.escalation,
+    all_is_lost: CONTRACTS.crisis, dark_night_of_the_soul: CONTRACTS.crisis, break_into_three: CONTRACTS.commitment,
+    finale: contract(["climax", "consequence", "transformation"], { requiredFunctions: ["climax"], phaseDirection: "turn" }),
+    final_image: contract(["resolution", "aftermath", "transformation"], { requiredFunctions: ["resolution"], forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "strong", phaseDirection: "settle" }),
+  },
+  "story-circle": {
+    you: CONTRACTS.setup, need: CONTRACTS.incitement, go: CONTRACTS.commitment, search: CONTRACTS.escalation,
+    find: contract(["consequence", "reversal", "transformation"], { phaseDirection: "turn" }), take: contract(["crisis", "consequence"], { phaseDirection: "turn" }),
+    return: contract(["consequence", "aftermath", "transformation"], { forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, phaseDirection: "resolve" }),
+    change: contract(["transformation", "resolution", "aftermath"], { requiredFunctions: ["transformation"], forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "strong", phaseDirection: "settle" }),
+  },
+  "freytags-pyramid": {
+    exposition: CONTRACTS.setup, rising_action: CONTRACTS.escalation,
+    climax: CONTRACTS.climax,
+    falling_action: contract(["consequence", "aftermath", "transformation", "resolution"], { forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, phaseDirection: "resolve" }),
+    denouement: contract(["resolution", "aftermath", "transformation", "consequence"], { requiredFunctions: ["resolution"], forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "strong", phaseDirection: "settle" }),
+  },
+  "kishotenketsu": {
+    ki: contract(["setup", "incitement"], { phaseDirection: "establish" }),
+    sho: contract(["setup", "escalation", "complication", "consequence", "transformation"], { allowsMajorEscalation: false, phaseDirection: "escalate" }),
+    ten: contract(["reversal", "transformation", "consequence"], { phaseDirection: "turn" }),
+    ketsu: contract(["resolution", "aftermath", "transformation"], { requiredFunctions: ["resolution"], forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "strong", phaseDirection: "settle" }),
+  },
+};
+
+function normalizedTemplateName(name: string): string {
+  return name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[’']/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function fallbackRoleFamily(role: string): string {
+  const value = role.toLowerCase().replace(/[’']/g, "");
+  if (/exposition|ordinary_world|opening_image|setup|theme_stated/.test(value)) return "setup";
+  if (/inciting|catalyst|call_to_adventure|crime|hook/.test(value)) return "incitement";
+  if (/first_plot|break_into_two|crossing_threshold|commitment/.test(value)) return "commitment";
+  if (/rising|tests_allies|fun_and_games|bad_guys_close_in|investigation|development/.test(value)) return "escalation";
+  if (/midpoint|reversal|revelation|false_solution|real_clue|ten/.test(value)) return "reversal";
+  if (/crisis|ordeal|all_is_lost|dark_night/.test(value)) return "crisis";
+  if (/climax|confrontation|finale|resurrection/.test(value)) return "climax";
+  if (/falling_action|road_back|consequence/.test(value)) return "consequence";
+  if (/denouement|resolution|return_with_elixir|final_image|ketsu/.test(value)) return "resolution";
+  return "escalation";
+}
+
+export function arcRoleContract(beat: { role?: string; label?: string }, templateName = ""): ArcRoleContract {
+  const template = BUILTIN_ROLE_CONTRACTS[normalizedTemplateName(templateName)];
+  const role = beat.role ?? "";
+  return template?.[role] ?? CONTRACTS[fallbackRoleFamily(role)] ?? CONTRACTS.escalation;
+}
+
+export function arcRoleContracts(template: Pick<ArcTemplateBlob, "beats" | "name">): Map<string, ArcRoleContract> {
+  return new Map(template.beats.map((beat) => [beat.id, arcRoleContract(beat, template.name)]));
+}
+
 // Base schema for one generated section. The response schema below wraps this
 // per Story Arc beat so minimum coverage is enforced by structured outputs.
 const SECTION_SCHEMA = {
@@ -68,15 +192,17 @@ const SECTION_SCHEMA = {
     dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
     resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
     terminalState: { type: "string", minLength: 1, maxLength: 1200 },
+    dramaticFunction: { type: "string", enum: DRAMATIC_FUNCTIONS },
   },
-  required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState"],
+  required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "dramaticFunction"],
   additionalProperties: false,
 } as const;
 
 export function buildSuggestionResponseSchema(
-  beats: Array<{ id: string }>,
+  beats: Array<{ id: string; role?: string; label?: string }>,
   allocation: Map<string, Allocation>,
   obligations: RecipeObligation[] = [],
+  templateName = "",
 ) {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
@@ -97,10 +223,18 @@ export function buildSuggestionResponseSchema(
     : SECTION_SCHEMA;
   for (const beat of beats) {
     const minimum = allocation.get(beat.id)?.minSections ?? 0;
+    const contract = arcRoleContract(beat, templateName);
+    const beatSectionSchema = {
+      ...sectionSchema,
+      properties: {
+        ...sectionSchema.properties,
+        dramaticFunction: { type: "string", enum: contract.allowedFunctions },
+      },
+    };
     properties[beat.id] = {
       type: "array",
       minItems: minimum,
-      items: sectionSchema,
+      items: beatSectionSchema,
     };
     required.push(beat.id);
   }
@@ -451,6 +585,7 @@ interface Suggestion {
   dramaticEvent?: string;
   resultingChange?: string;
   terminalState?: string;
+  dramaticFunction?: DramaticFunction;
   plannedWordRange?: { minWords: number; maxWords: number };
   storyArcBeatID: string;
   recipeRequirementIDs?: string[];
@@ -607,16 +742,37 @@ const EXPANSION_SCHEMA = {
           dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
           resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
           terminalState: { type: "string", minLength: 1, maxLength: 1200 },
+          dramaticFunction: { type: "string", enum: DRAMATIC_FUNCTIONS },
           storyArcBeatID: { type: "string" },
           insertAfterTitle: { type: ["string", "null"] },
           recipeRequirementIDs: { type: "array", minItems: 0, maxItems: 50, items: { type: "string", minLength: 1 } },
         },
-        required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "storyArcBeatID", "insertAfterTitle", "recipeRequirementIDs"],
+        required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "dramaticFunction", "storyArcBeatID", "insertAfterTitle", "recipeRequirementIDs"],
       },
     },
   },
   required: ["suggestions"], additionalProperties: false,
 } as const;
+
+/** Beat-local expansion uses the same server-owned contract as first-pass generation. */
+export function buildExpansionResponseSchema(contract?: ArcRoleContract) {
+  const dramaticFunction = contract?.allowedFunctions ?? [...DRAMATIC_FUNCTIONS];
+  return {
+    ...EXPANSION_SCHEMA,
+    properties: {
+      suggestions: {
+        ...EXPANSION_SCHEMA.properties.suggestions,
+        items: {
+          ...EXPANSION_SCHEMA.properties.suggestions.items,
+          properties: {
+            ...EXPANSION_SCHEMA.properties.suggestions.items.properties,
+            dramaticFunction: { type: "string", enum: dramaticFunction },
+          },
+        },
+      },
+    },
+  };
+}
 
 export type ExpansionAddition = Suggestion & { insertAfterTitle: string | null };
 
@@ -885,8 +1041,14 @@ export function buildExpansionPrompt(
   const round = context?.round ?? 1;
   const unusedStoryMaterial = findUnusedStoryMaterial(current, req.storyMaterialEnrichment);
   const beatContext = context?.beat;
+  const targetBeat = beatContext ? req.arcTemplate.beats.find((beat) => beat.id === beatContext.beatID) : undefined;
+  const targetContract = targetBeat ? arcRoleContract(targetBeat, req.arcTemplate.name) : undefined;
+  const unsatisfiedRequiredFunctions = targetContract?.requiredFunctions.filter((required) => !beatContext?.currentSections.some((section) => section.dramaticFunction === required)) ?? [];
+  const semanticContract = targetContract
+    ? `Authoritative semantic contract for this beat: allowedFunctions=${targetContract.allowedFunctions.join(", ")}; requiredFunctionsStillUnsatisfied=${unsatisfiedRequiredFunctions.join(", ") || "none"}; forbidsNewPrimaryConflict=${targetContract.forbidsNewPrimaryConflict}; allowsMajorEscalation=${targetContract.allowsMajorEscalation}; closureExpectation=${targetContract.closureExpectation}; phaseDirection=${targetContract.phaseDirection}. The server is the source of truth.`
+    : "No beat-local semantic contract applies to this global repair call; preserve each existing section's contract.";
   const beatDirective = beatContext
-    ? `This is beat-local expansion for Story Arc beat ${beatContext.beatID}${beatContext.beatLabel ? ` (${beatContext.beatLabel})` : ""}. Develop only this beat; every returned section must use storyArcBeatID ${beatContext.beatID}. The beat currently contains approximately ${Math.round(beatContext.projectedWords).toLocaleString()} projected words. Its description is: ${beatContext.beatDescription ?? "(not supplied)"}.`
+    ? `This is beat-local expansion for Story Arc beat ${beatContext.beatID}${beatContext.beatLabel ? ` (${beatContext.beatLabel})` : ""}. Develop only this beat; every returned section must use storyArcBeatID ${beatContext.beatID}. The beat currently contains approximately ${Math.round(beatContext.projectedWords).toLocaleString()} projected words. Its description is: ${beatContext.beatDescription ?? "(not supplied)"}. ${semanticContract}`
     : "Expand across the supplied outline while preserving each section's Story Arc beat.";
   return {
     system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
@@ -902,6 +1064,7 @@ export function validateExpansionAdditions(
   beatIds: Set<string>,
   original: Suggestion[],
   obligations: RecipeObligation[] = [],
+  template?: Pick<ArcTemplateBlob, "name" | "beats">,
 ): ExpansionAddition[] {
   if (!parsed || !Array.isArray(parsed.suggestions)) throw new Error("expansion response missing suggestions array");
   const originalTitles = new Set(original.map((s) => s.title));
@@ -909,8 +1072,15 @@ export function validateExpansionAdditions(
   const fingerprints = new Set(original.map((s) => `${s.title}|${s.summary}|${s.storyArcBeatID}`));
   for (const raw of parsed.suggestions) {
     const { insertAfterTitle } = raw ?? {};
-    const validated = validateSuggestions({ suggestions: [raw] }, beatIds, undefined, obligations).suggestions[0];
+    const validated = validateSuggestions({ suggestions: [raw] }, beatIds, undefined, obligations, template).suggestions[0];
     if (!validated) throw new Error("expansion returned an invalid addition");
+    if (template) {
+      const beat = template.beats.find((candidate) => candidate.id === validated.storyArcBeatID);
+      const roleContract = beat ? arcRoleContract(beat, template.name) : undefined;
+      if (roleContract?.forbidsNewPrimaryConflict && PRIMARY_CONFLICT_SIGNALS.test(semanticText(validated))) {
+        throw new Error(`expansion introduced a new primary conflict in beat ${validated.storyArcBeatID}`);
+      }
+    }
     if (insertAfterTitle !== null && typeof insertAfterTitle !== "string") throw new Error("expansion placement must be a title or null");
     if (insertAfterTitle !== null && !originalTitles.has(insertAfterTitle)) throw new Error("expansion placement must reference an original section");
     if (insertAfterTitle !== null) {
@@ -930,9 +1100,10 @@ export function parseExpansionResponse(
   beatIds: Set<string>,
   original: Suggestion[],
   obligations: RecipeObligation[] = [],
+  template?: Pick<ArcTemplateBlob, "name" | "beats">,
 ): ExpansionAddition[] {
   try {
-    return validateExpansionAdditions(JSON.parse(content), beatIds, original, obligations);
+    return validateExpansionAdditions(JSON.parse(content), beatIds, original, obligations, template);
   } catch (error) {
     throw new ExpansionValidationError(error instanceof Error ? error.message : String(error));
   }
@@ -1007,6 +1178,10 @@ export function buildPrompt(
       }: minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"} (${info.rationale})`;
     })
     .join("\n");
+  const contractLines = req.arcTemplate.beats.map((beat) => {
+    const contract = arcRoleContract(beat, req.arcTemplate.name);
+    return `- ${beat.label} (${beat.role}): allowed functions=${contract.allowedFunctions.join(", ")}; phase=${contract.phaseDirection}; ${contract.forbidsNewPrimaryConflict ? "do not introduce a new primary conflict" : "major escalation is allowed"}`;
+  }).join("\n");
 
   const system =
     `You are an expert ${requestedStoryMaterialFormat(req)} outliner. Use the complete canonical recipe/project payload below, including its premise, selected characters and their populated fields, selected relationships, themes, motifs, story spark, aftertaste, recipe instructions, and included setting. Treat supplied facts as authoritative; do not infer personality traits from a character name alone. Given the story arc and per-beat allocation plan, produce the section-by-section outline.
@@ -1039,9 +1214,12 @@ For each beat, generate at least the stated minimum number of distinct sections.
 Write each section title as a concise, specific, evocative working title suitable for a ${requestedStoryMaterialFormat(req)} outline or ${requestedStoryMaterialFormat(req)}-ready table of contents. The title should name the concrete dramatic event, decision, reversal, discovery, confrontation, or consequence that this section actually dramatizes. Do not restate or lightly rephrase the premise, Story Arc beat label, terminal beat, or section summary. Avoid generic placeholders such as "Setup," "Conflict," "Events," or "Scene"; each title must distinguish its section from the others in the same beat.
 
 ## Generation-ready section contract
-For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields. Do not provide plannedWordRange; the server derives it deterministically from container; it never overrides the Section Contract, container, or natural stopping point.
+For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. Also return exactly one server-validated dramaticFunction from the allowed functions for that beat; the function must agree with the event and resulting change, not merely repeat the beat label. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields. Do not provide plannedWordRange; the server derives it deterministically from container; it never overrides the Section Contract, container, or natural stopping point.
 
 ${allocationLines}
+
+## Semantic Story Arc contracts
+${contractLines}
 
 ${
       req.existingSections && req.existingSections.length > 0
@@ -1441,6 +1619,7 @@ export function validateSuggestions(
   beatIds: Set<string>,
   allocation?: Map<string, Allocation>,
   obligations: RecipeObligation[] = [],
+  template?: Pick<ArcTemplateBlob, "name" | "beats">,
 ): { suggestions: Suggestion[]; warnings: string[] } {
   const warnings: string[] = [];
   if (!parsed || !Array.isArray(parsed.suggestions)) {
@@ -1473,6 +1652,16 @@ export function validateSuggestions(
       );
       continue;
     }
+    if (template) {
+      if (typeof s.dramaticFunction !== "string" || !DRAMATIC_FUNCTIONS.includes(s.dramaticFunction)) {
+        throw new Error(`section ${String(s.title).slice(0, 120)} is missing or has an invalid dramatic function`);
+      }
+      const beat = template.beats.find((candidate) => candidate.id === s.storyArcBeatID);
+      const roleContract = beat ? arcRoleContract(beat, template.name) : undefined;
+      if (roleContract && !roleContract.allowedFunctions.includes(s.dramaticFunction)) {
+        throw new Error(`section ${String(s.title).slice(0, 120)} declares ${s.dramaticFunction}, not allowed in beat ${s.storyArcBeatID}`);
+      }
+    }
     const requirementIDs = s.recipeRequirementIDs;
     if (obligations.length > 0 && !Array.isArray(requirementIDs)) {
       throw new Error(`section ${String(s.title).slice(0, 120)} is missing recipeRequirementIDs`);
@@ -1495,6 +1684,7 @@ export function validateSuggestions(
       ...(typeof s.dramaticEvent === "string" ? { dramaticEvent: s.dramaticEvent.slice(0, 2000) } : {}),
       ...(typeof s.resultingChange === "string" ? { resultingChange: s.resultingChange.slice(0, 1200) } : {}),
       ...(typeof s.terminalState === "string" ? { terminalState: s.terminalState.slice(0, 1200) } : {}),
+      ...(DRAMATIC_FUNCTIONS.includes(s.dramaticFunction) ? { dramaticFunction: s.dramaticFunction as DramaticFunction } : {}),
       plannedWordRange: plannedWordRangeForContainer(s.container),
       storyArcBeatID: s.storyArcBeatID,
       ...(validRequirementIDs.length > 0 ? { recipeRequirementIDs: validRequirementIDs } : {}),
@@ -1530,6 +1720,7 @@ export function validateSuggestions(
 export interface OutlineQualityDiagnostic {
   distinctnessIssues: string[];
   causalScaleIssues: string[];
+  semanticArcIssues: string[];
   supportingEntities: string[];
   unusedStoryMaterialItems: number;
 }
@@ -1599,13 +1790,219 @@ export function findCausalScaleIssues(
   return issues;
 }
 
+
+function semanticText(suggestion: Suggestion): string {
+  return [suggestion.title, suggestion.summary, suggestion.dramaticEvent, suggestion.resultingChange, suggestion.terminalState, suggestion.terminalBeat]
+    .filter(Boolean).join(" ").toLowerCase();
+}
+
+const PRIMARY_CONFLICT_SIGNALS = /\b(launch(?:es|ed)?|mount(?:s|ed)?|wage(?:s|d)?|invade(?:s|d)?|attack(?:s|ed)?|assault(?:s|ed)?|conquer(?:s|ed)?|take over|seize(?:s|d)?|overthrow(?:s|n)?|decisive assault|citywide takeover)\b/;
+const CLOSURE_SIGNALS = /\b(settle(?:s|d)?|stabiliz(?:e|es|ed)|new normal|aftermath|mourning|rebuild(?:s|ing)?|govern(?:s|ed|ance)|peace|accept(?:s|ed)?|remain(?:s|ing)?|legacy|closing image)\b/;
+
+function inferredFunction(suggestion: Suggestion): DramaticFunction | null {
+  const text = semanticText(suggestion);
+  if (/\b(resolve|resolution|settle|aftermath|new normal|closing image)\b/.test(text)) return "resolution";
+  if (PRIMARY_CONFLICT_SIGNALS.test(text)) return "climax";
+  if (/\b(reveal|discovers?|reversal|turns?|changes? the plan)\b/.test(text)) return "reversal";
+  if (/\b(crisis|lowest|defeat|dark night|sacrifice)\b/.test(text)) return "crisis";
+  if (/\b(consequence|falls apart|collapse|repercussion)\b/.test(text)) return "consequence";
+  return null;
+}
+
+/** Validate both the declared function and the sequence-level macro-structure.
+ * This is deliberately deterministic: UUID/role correctness alone is not
+ * sufficient, but Hero's Journey Resurrection remains a legal late climax. */
+export function validatePostRepairBeatCoverage(
+  suggestions: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+  allocation?: Map<string, Allocation>,
+): string[] {
+  const contracts = arcRoleContracts(template);
+  const counts = countSuggestionsByBeat(suggestions);
+  const issues: string[] = [];
+  for (const beat of template.beats) {
+    const roleContract = contracts.get(beat.id);
+    const minimum = Math.max(
+      allocation?.get(beat.id)?.minSections ?? 0,
+      roleContract?.requiredFunctions.length || roleContract?.closureExpectation === "strong" ? 1 : 0,
+    );
+    const actual = counts[beat.id] ?? 0;
+    if (actual < minimum) issues.push(`beat ${beat.label} (${beat.id}) has ${actual} section(s); required minimum is ${minimum}`);
+  }
+  return issues;
+}
+
+export function validateRequiredStoryArcFunctions(
+  suggestions: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+): string[] {
+  const contracts = arcRoleContracts(template);
+  const issues: string[] = [];
+  for (const beat of template.beats) {
+    const roleContract = contracts.get(beat.id);
+    if (!roleContract || roleContract.requiredFunctions.length === 0) continue;
+    const sections = suggestions.filter((section) => section.storyArcBeatID === beat.id);
+    const present = sections.map((section) => section.dramaticFunction ?? "(undeclared)").join(", ") || "(none)";
+    for (const required of roleContract.requiredFunctions) {
+      if (!sections.some((section) => section.dramaticFunction === required)) {
+        issues.push(`beat ${beat.label} (${beat.id}) is missing required dramatic function ${required}; present functions: ${present}`);
+      }
+    }
+  }
+  return issues;
+}
+
+/** Validate both the declared function and the sequence-level macro-structure. */
+export function validateStoryArcSemantics(
+  suggestions: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+  allocation?: Map<string, Allocation>,
+): string[] {
+  const issues: string[] = [
+    ...validatePostRepairBeatCoverage(suggestions, template, allocation),
+    ...validateRequiredStoryArcFunctions(suggestions, template),
+  ];
+  const contracts = arcRoleContracts(template);
+  const ordered = [...suggestions].sort((a, b) => {
+    const ai = template.beats.findIndex((beat) => beat.id === a.storyArcBeatID);
+    const bi = template.beats.findIndex((beat) => beat.id === b.storyArcBeatID);
+    return ai - bi;
+  });
+  for (const section of ordered) {
+    const roleContract = contracts.get(section.storyArcBeatID);
+    if (!roleContract) continue;
+    if (section.dramaticFunction && !roleContract.allowedFunctions.includes(section.dramaticFunction)) {
+      issues.push(`section "${section.title}" declares ${section.dramaticFunction}, not allowed in its Story Arc role`);
+    }
+    // Keyword inference is only a safety signal. Only an explicit decisive
+    // conflict or explicit closure signal is strong enough to affect repair.
+    if (roleContract.forbidsNewPrimaryConflict && PRIMARY_CONFLICT_SIGNALS.test(semanticText(section))) {
+      issues.push(`section "${section.title}" introduces a new primary conflict after the decisive phase`);
+    }
+  }
+  const climaxIndex = ordered.reduce((last, section, index) => section.dramaticFunction === "climax" ? index : last, -1);
+  if (climaxIndex >= 0) {
+    for (let index = climaxIndex + 1; index < ordered.length; index++) {
+      const section = ordered[index];
+      const roleContract = contracts.get(section.storyArcBeatID);
+      if (roleContract?.forbidsNewPrimaryConflict && PRIMARY_CONFLICT_SIGNALS.test(semanticText(section))) {
+        issues.push(`primary confrontation occurs after the declared climax in section "${section.title}"`);
+      }
+    }
+  }
+  for (const beat of template.beats) {
+    const roleContract = contracts.get(beat.id);
+    if (roleContract?.closureExpectation !== "strong") continue;
+    const sections = ordered.filter((section) => section.storyArcBeatID === beat.id);
+    if (sections.length === 0) {
+      issues.push(`Story Arc role "${beat.label}" has no sections for its required strong closure`);
+    } else if (!sections.some((section) => CLOSURE_SIGNALS.test(semanticText(section)))) {
+      issues.push(`Story Arc role "${beat.label}" has no observable closure or settled terminal state`);
+    }
+  }
+  return [...new Set(issues)];
+}
+
+const MAX_LOCAL_REPAIR_DISTANCE = 2;
+
+function requiredMinimumForBeat(
+  beatID: string,
+  contracts: Map<string, ArcRoleContract>,
+  allocation?: Map<string, Allocation>,
+): number {
+  const roleContract = contracts.get(beatID);
+  return Math.max(
+    allocation?.get(beatID)?.minSections ?? 0,
+    roleContract?.requiredFunctions.length || roleContract?.closureExpectation === "strong" ? 1 : 0,
+  );
+}
+
+function canReassignLocally(
+  section: Suggestion,
+  sourceID: string,
+  targetID: string,
+  result: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+  allocation?: Map<string, Allocation>,
+): { safe: boolean; reason: string } {
+  const contracts = arcRoleContracts(template);
+  const sourceContract = contracts.get(sourceID);
+  const targetContract = contracts.get(targetID);
+  if (!sourceContract || !targetContract || !section.dramaticFunction) return { safe: false, reason: "missing source, target, or declared function contract" };
+  const replacementFunction = inferredFunction(section) ?? section.dramaticFunction;
+  if (!replacementFunction || !targetContract.allowedFunctions.includes(replacementFunction)) return { safe: false, reason: `target does not allow ${replacementFunction ?? "unknown"}` };
+  const moved = result.map((candidate) => candidate === section ? { ...candidate, storyArcBeatID: targetID, dramaticFunction: inferredFunction(section) ?? candidate.dramaticFunction } : candidate);
+  const sourceCount = moved.filter((candidate) => candidate.storyArcBeatID === sourceID).length;
+  if (sourceCount < requiredMinimumForBeat(sourceID, contracts, allocation)) return { safe: false, reason: "source beat minimum coverage would be violated" };
+  const coverageIssues = validatePostRepairBeatCoverage(moved, template, allocation);
+  if (coverageIssues.some((issue) => issue.includes(`(${targetID})`) || issue.includes(`(${sourceID})`))) return { safe: false, reason: "source or destination beat minimum coverage would be violated" };
+  const functionIssues = validateRequiredStoryArcFunctions(moved, template);
+  if (functionIssues.some((issue) => issue.includes(`(${targetID})`) || issue.includes(`(${sourceID})`))) return { safe: false, reason: "source or destination required-function invariant would be violated" };
+  return { safe: true, reason: `nearest compatible beat at canonical distance ${Math.abs(template.beats.findIndex((beat) => beat.id === sourceID) - template.beats.findIndex((beat) => beat.id === targetID))}` };
+}
+
+/** Repair only strong deterministic contradictions, and only within nearby beats. */
+export function repairStoryArcMacroStructure(
+  suggestions: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+  allocation?: Map<string, Allocation>,
+): { suggestions: Suggestion[]; repaired: string[]; unresolved: string[]; diagnostics: string[] } {
+  const contracts = arcRoleContracts(template);
+  const repaired: string[] = [];
+  const unresolved: string[] = [];
+  const diagnostics: string[] = [];
+  const result = suggestions.map((section) => ({ ...section }));
+  const order = new Map(template.beats.map((beat, index) => [beat.id, index]));
+  for (const section of result) {
+    const sourceID = section.storyArcBeatID;
+    const sourceContract = contracts.get(sourceID);
+    const inferred = inferredFunction(section);
+    const strongContradiction = Boolean(sourceContract?.forbidsNewPrimaryConflict && inferred === "climax" && PRIMARY_CONFLICT_SIGNALS.test(semanticText(section)));
+    if (!sourceContract || !inferred || sourceContract.allowedFunctions.includes(inferred) || !strongContradiction) {
+      if (sourceContract && inferred && !sourceContract.allowedFunctions.includes(inferred)) diagnostics.push(`${section.title}: weak or ambiguous semantic hint left unresolved`);
+      continue;
+    }
+    const sourceIndex = order.get(sourceID) ?? -1;
+    const candidates = template.beats
+      .map((beat, index) => ({ beat, index, distance: Math.abs(index - sourceIndex) }))
+      .filter(({ beat, distance }) => beat.id !== sourceID && distance <= MAX_LOCAL_REPAIR_DISTANCE && contracts.get(beat.id)?.allowedFunctions.includes(inferred))
+      .sort((left, right) => left.distance - right.distance || left.index - right.index);
+    let chosen: { beat: typeof template.beats[number]; reason: string } | undefined;
+    const rejected: string[] = [];
+    for (const candidate of candidates) {
+      const safety = canReassignLocally(section, sourceID, candidate.beat.id, result, template, allocation);
+      if (safety.safe) { chosen = { beat: candidate.beat, reason: safety.reason }; break; }
+      rejected.push(`${candidate.beat.id}: ${safety.reason}`);
+    }
+    if (!chosen) {
+      const reason = candidates.length === 0 ? "no adjacent or nearest compatible beat within the local repair boundary" : rejected.join("; ");
+      unresolved.push(section.title);
+      diagnostics.push(`${section.title}: unresolved; ${reason}`);
+      continue;
+    }
+    section.storyArcBeatID = chosen.beat.id;
+    section.dramaticFunction = inferred;
+    repaired.push(`${section.title}: ${sourceID} → ${chosen.beat.id}`);
+    diagnostics.push(`${section.title}: reassigned safely to ${chosen.beat.id}; ${chosen.reason}`);
+  }
+  result.sort((a, b) => (order.get(a.storyArcBeatID) ?? 999) - (order.get(b.storyArcBeatID) ?? 999));
+  const postRepairIssues = validatePostRepairBeatCoverage(result, template, allocation);
+  if (postRepairIssues.length > 0) {
+    diagnostics.push(...postRepairIssues.map((issue) => `post-repair coverage: ${issue}`));
+  }
+  return { suggestions: result, repaired, unresolved, diagnostics };
+}
+
 export function validateOutlinePlanningQuality(
   suggestions: Suggestion[],
   storyMaterial?: StoryMaterialEnrichment,
   format: StoryMaterialFormat = "novel",
+  template?: Pick<ArcTemplateBlob, "name" | "beats">,
+  allocation?: Map<string, Allocation>,
 ): OutlineQualityDiagnostic {
   const distinctnessIssues = findDramaticDistinctnessIssues(suggestions);
   const causalScaleIssues = findCausalScaleIssues(suggestions, storyMaterial, format);
+  const semanticArcIssues = template ? validateStoryArcSemantics(suggestions, template, allocation) : [];
   const usedText = suggestions.map(contractText).join(" ");
   const supportingEntities = storyMaterial
     ? STORY_MATERIAL_CATEGORIES.flatMap((category) => storyMaterial[category])
@@ -1616,6 +2013,7 @@ export function validateOutlinePlanningQuality(
   return {
     distinctnessIssues,
     causalScaleIssues,
+    semanticArcIssues,
     supportingEntities,
     unusedStoryMaterialItems: supportingEntities.length,
   };
@@ -1841,10 +2239,10 @@ async function runSuggestionJob(
             expansion.system,
             expansion.user,
             16000,
-            { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: EXPANSION_SCHEMA } },
+            { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: buildExpansionResponseSchema(beat ? arcRoleContract(body.arcTemplate.beats.find((candidate) => candidate.id === beat.beatID)!, body.arcTemplate.name) : undefined) } },
             `outline-expansion-${context.round}-${beat?.beatID ?? "global"}`,
             (content) => {
-              const additions = parseExpansionResponse(content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations);
+              const additions = parseExpansionResponse(content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate);
               const merged = mergeExpansionAdditions(current, additions);
               if (merged.length > MAX_PLANNED_SECTIONS) {
                 throw new ExpansionValidationError(
@@ -1854,7 +2252,7 @@ async function runSuggestionJob(
               return additions;
             },
           );
-          return parseExpansionResponse(expandedRaw.content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations);
+          return parseExpansionResponse(expandedRaw.content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate);
         },
         async (_roundDiagnostic, allDiagnostics, current) => {
           latestValidSuggestions = current;
@@ -1897,7 +2295,10 @@ async function runSuggestionJob(
       };
       const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
       const expanded = await expandNovel(resume.suggestions, recipeObligations, resume.startRound, resume.priorDiagnostics);
-      const expandedQuality = validateOutlinePlanningQuality(expanded.suggestions, resumedMaterial, requestedStoryMaterialFormat(body));
+      const expandedQuality = validateOutlinePlanningQuality(expanded.suggestions, resumedMaterial, requestedStoryMaterialFormat(body), body.arcTemplate);
+      if (expandedQuality.semanticArcIssues.length > 0) {
+        throw new Error(`expanded outline failed Story Arc semantic validation: ${expandedQuality.semanticArcIssues[0]}`);
+      }
       if (expandedQuality.distinctnessIssues.length > 0) {
         throw new Error(`expanded outline failed dramatic distinctness validation: ${expandedQuality.distinctnessIssues[0]}`);
       }
@@ -2022,7 +2423,7 @@ async function runSuggestionJob(
       recipeObligations,
     };
     const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial);
-    const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations);
+    const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations, body.arcTemplate.name);
     const responseFormat = {
       type: "json_schema",
       json_schema: { name: "outline_suggestions_by_beat", strict: true, schema: responseSchema },
@@ -2041,7 +2442,7 @@ async function runSuggestionJob(
         (content) => {
           const flattened = flattenSuggestionResponse(JSON.parse(content), body.arcTemplate.beats);
           diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
-          const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations);
+          const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
           const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []);
           if (merged.length > MAX_PLANNED_SECTIONS) {
             throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
@@ -2050,7 +2451,7 @@ async function runSuggestionJob(
         },
       );
       const flattened = flattenSuggestionResponse(JSON.parse(rawResponse.content), body.arcTemplate.beats);
-      const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations);
+      const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []), warnings: validated.warnings };
       diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions) };
       if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
@@ -2058,14 +2459,22 @@ async function runSuggestionJob(
       }
     }
 
-    const initialQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body));
+    const initialRepair = repairStoryArcMacroStructure(result.suggestions, body.arcTemplate, allocation);
+    result = { ...result, suggestions: initialRepair.suggestions };
+    const initialQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body), body.arcTemplate, allocation);
     diagnostics = {
       ...diagnostics,
       sectionContractValidated: true,
+      semanticArcRepairedSections: initialRepair.repaired,
+      semanticArcUnresolvedSections: initialRepair.unresolved,
       dramaticDistinctnessIssues: initialQuality.distinctnessIssues,
+      semanticArcIssues: initialQuality.semanticArcIssues,
       causalScaleIssues: initialQuality.causalScaleIssues,
       unusedStoryMaterialItems: initialQuality.unusedStoryMaterialItems,
     };
+    if (initialQuality.semanticArcIssues.length > 0 || initialRepair.unresolved.length > 0) {
+      throw new Error(`outline failed Story Arc semantic validation: ${(initialQuality.semanticArcIssues[0] ?? initialRepair.unresolved[0])}`);
+    }
     if (initialQuality.distinctnessIssues.length > 0) {
       throw new Error(`outline failed dramatic distinctness validation: ${initialQuality.distinctnessIssues[0]}`);
     }
@@ -2111,8 +2520,13 @@ async function runSuggestionJob(
       await updateRun({ suggestions: result.suggestions, diagnostics });
       const expanded = await expandNovel(result.suggestions, recipeObligations);
       result = { suggestions: expanded.suggestions, warnings: [...result.warnings, ...expanded.warnings] };
-      const expandedQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body));
-      diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions), dramaticDistinctnessIssues: expandedQuality.distinctnessIssues, causalScaleIssues: expandedQuality.causalScaleIssues, unusedStoryMaterialItems: expandedQuality.unusedStoryMaterialItems, novelScale: evaluateNovelScale(result.suggestions, body.existingSections ?? []) };
+      const expandedRepair = repairStoryArcMacroStructure(result.suggestions, body.arcTemplate, allocation);
+      result = { ...result, suggestions: expandedRepair.suggestions };
+      const expandedQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body), body.arcTemplate, allocation);
+      diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions), semanticArcRepairedSections: expandedRepair.repaired, semanticArcUnresolvedSections: expandedRepair.unresolved, dramaticDistinctnessIssues: expandedQuality.distinctnessIssues, semanticArcIssues: expandedQuality.semanticArcIssues, causalScaleIssues: expandedQuality.causalScaleIssues, unusedStoryMaterialItems: expandedQuality.unusedStoryMaterialItems, novelScale: evaluateNovelScale(result.suggestions, body.existingSections ?? []) };
+      if (expandedQuality.semanticArcIssues.length > 0 || expandedRepair.unresolved.length > 0) {
+        throw new Error(`expanded outline failed Story Arc semantic validation: ${(expandedQuality.semanticArcIssues[0] ?? expandedRepair.unresolved[0])}`);
+      }
       if (expandedQuality.distinctnessIssues.length > 0) {
         throw new Error(`expanded outline failed dramatic distinctness validation: ${expandedQuality.distinctnessIssues[0]}`);
       }
