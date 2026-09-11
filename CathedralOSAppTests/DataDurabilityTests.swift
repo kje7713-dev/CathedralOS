@@ -72,6 +72,8 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     var syncAllError: Error?
     var restoreCalled = false
     var restoreCallCount = 0
+    var targetedRestoreProjectIDs: [UUID] = []
+    var targetedRestoreLineageIDs: [UUID] = []
     var restoreDelayNanoseconds: UInt64 = 0
     var restoreError: Error?
     var restoreResult = ProjectRestoreReport(
@@ -117,6 +119,20 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
         if let restoreError { throw restoreError }
         return restoreResult
     }
+
+    @MainActor
+    func restoreProject(
+        localProjectID: UUID,
+        projectLineageID: UUID,
+        into context: ModelContext,
+        includeTombstoned: Bool
+    ) async throws -> ProjectRestoreReport {
+        targetedRestoreProjectIDs.append(localProjectID)
+        targetedRestoreLineageIDs.append(projectLineageID)
+        eventLog?.events.append("project.restore.targeted")
+        if let restoreError { throw restoreError }
+        return restoreResult
+    }
 }
 
 private final class SpyOutputSyncService: GenerationOutputSyncServiceProtocol {
@@ -157,6 +173,109 @@ private func makeInMemoryContext() throws -> ModelContext {
 final class DataDurabilityTests: XCTestCase {
 
     // MARK: Sign-out preservation
+
+    func testCompletedAcceptRunRestoresOnlyItsProject() async throws {
+        let suiteName = "DataDurabilityTests.targeted-accept-restore.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let projectID = UUID()
+        let lineageID = UUID()
+        let run = DataDurabilityCoordinator.AcceptRunMetadata(
+            runID: UUID().uuidString,
+            projectID: projectID,
+            projectLineageID: lineageID,
+            outlineID: UUID(),
+            status: "completed",
+            sectionsTotal: 2,
+            sectionsDone: 2,
+            sectionsFailed: 0,
+            error: nil
+        )
+        defaults.set(try JSONEncoder().encode(run), forKey: "cathedralos.acceptOutline.activeRun")
+
+        let projectSpy = SpyProjectSyncService()
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSpy,
+            outputSyncService: SpyOutputSyncService(),
+            defaults: defaults
+        )
+        let context = try makeInMemoryContext()
+        coordinator.resumeAcceptAllIfNeeded(context: context)
+
+        for _ in 0..<100 where projectSpy.targetedRestoreProjectIDs.isEmpty {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(projectSpy.targetedRestoreProjectIDs, [projectID])
+        XCTAssertEqual(projectSpy.targetedRestoreLineageIDs, [lineageID], "Accept All must pass the canonical lineage id alongside the local project id so drifted identities still reconcile.")
+        XCTAssertFalse(projectSpy.restoreCalled, "Accept All must not trigger a full-project restore.")
+    }
+
+    func testCompletedAcceptRunRefreshFailureSurfacesAsErrorWithoutRelabelingServerJob() async throws {
+        // The Accept All server job succeeded; only the local refresh failed.
+        // The coordinator must preserve that UX distinction: the error message
+        // names the refresh as the failing step, not the server job itself,
+        // and the persisted metadata is cleared without changing the server-side
+        // outcome that was already reported as completed.
+        let suiteName = "DataDurabilityTests.refresh-failure.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let projectID = UUID()
+        let lineageID = UUID()
+        let run = DataDurabilityCoordinator.AcceptRunMetadata(
+            runID: UUID().uuidString,
+            projectID: projectID,
+            projectLineageID: lineageID,
+            outlineID: UUID(),
+            status: "completed",
+            sectionsTotal: 2,
+            sectionsDone: 2,
+            sectionsFailed: 0,
+            error: nil
+        )
+        defaults.set(try JSONEncoder().encode(run), forKey: "cathedralos.acceptOutline.activeRun")
+
+        let refreshFailure = ProjectCloudSyncError.targetedSnapshotNotFound(
+            localProjectID: projectID.uuidString.lowercased(),
+            lineageID: lineageID.uuidString.lowercased()
+        )
+        let projectSpy = SpyProjectSyncService()
+        projectSpy.restoreError = refreshFailure
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSpy,
+            outputSyncService: SpyOutputSyncService(),
+            defaults: defaults
+        )
+        let context = try makeInMemoryContext()
+        coordinator.resumeAcceptAllIfNeeded(context: context)
+
+        for _ in 0..<100 where projectSpy.targetedRestoreLineageIDs.isEmpty {
+            await Task.yield()
+        }
+        // Give the catch block a chance to set acceptRunError.
+        for _ in 0..<100 where coordinator.acceptRunError == nil {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(projectSpy.targetedRestoreProjectIDs, [projectID])
+        XCTAssertEqual(projectSpy.targetedRestoreLineageIDs, [lineageID])
+        XCTAssertFalse(projectSpy.restoreCalled, "A failing targeted restore must not fall back to a full restore.")
+        XCTAssertNotNil(coordinator.acceptRunError, "Refresh failure must surface as a user-visible error.")
+        XCTAssertTrue(
+            coordinator.acceptRunError?.contains("Accept All completed") == true,
+            "Refresh failure must preserve the UX distinction: the server job succeeded, only reconciliation failed. Got: \(coordinator.acceptRunError ?? "nil")"
+        )
+        XCTAssertTrue(
+            coordinator.acceptRunError?.contains("refreshing this project failed") == true,
+            "Refresh failure must name the refresh as the failing step. Got: \(coordinator.acceptRunError ?? "nil")"
+        )
+        XCTAssertNil(coordinator.activeAcceptRun, "Terminal cleanup removes the persisted metadata after reconciliation finishes.")
+        XCTAssertNil(defaults.data(forKey: "cathedralos.acceptOutline.activeRun"), "Persisted metadata must be cleared once terminal reconciliation finishes.")
+    }
 
     func testSignOutDoesNotDeleteLocalProjects() async throws {
         let context = try makeInMemoryContext()
