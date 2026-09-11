@@ -81,14 +81,20 @@ begin
   set snapshot_json = v_payload
   where id = v_snapshot_id;
 
-  -- Simulate restoring the older empty snapshot and prove the relational row
-  -- is deleted by the snapshot reconciliation trigger.
+  -- Simulate restoring the older empty snapshot. Snapshot omission is not
+  -- explicit deletion intent, so the accepted relational row must remain.
   v_payload := jsonb_set(v_payload, '{outlines,0,sections}', '[]'::jsonb);
   update public.project_snapshots
   set snapshot_json = v_payload
   where id = v_snapshot_id;
+  if not exists (select 1 from public.outline_sections where id = v_section_id) then
+    raise exception 'stale snapshot update deleted the accepted relational section';
+  end if;
+
+  -- Explicit deletion remains a direct relational DELETE, not snapshot absence.
+  delete from public.outline_sections where id = v_section_id;
   if exists (select 1 from public.outline_sections where id = v_section_id) then
-    raise exception 'stale snapshot update did not remove absent relational section';
+    raise exception 'explicit section deletion did not delete the relational row';
   end if;
 
   select identity_key into v_identity_key

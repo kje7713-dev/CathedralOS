@@ -400,8 +400,12 @@ async function mergeSectionsIntoSnapshot(
     container: row.container,
     pov: row.pov,
     terminalBeat: row.terminal_beat,
+    entryState: row.entry_state,
+    dramaticEvent: row.dramatic_event,
+    resultingChange: row.resulting_change,
+    terminalState: row.terminal_state,
     status: row.status,
-    parentID: row.parent_id,
+    parentID: row.parent_id == null ? null : canonicalUUID(String(row.parent_id)),
     storyArcBeatID: row.story_arc_beat_id == null
       ? null
       : canonicalUUID(String(row.story_arc_beat_id)),
