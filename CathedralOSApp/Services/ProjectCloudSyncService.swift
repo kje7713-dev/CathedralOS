@@ -817,7 +817,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             let canonicalLineage = targetedLineageID.uuidString.lowercased()
             if let mismatch = rows.first(where: { row in
                 let rowLineage = row.lineageID?.uuidString.lowercased()
-                let identities = claimedIdentities(for: row)
+                let identities = self.claimedIdentities(for: row)
                 let lineageMatches = rowLineage == canonicalLineage
                 let localMatches = identities.contains(canonicalLocal)
                 return !(lineageMatches || localMatches)
@@ -837,7 +837,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         // Phase C: reconcile DTOs into SwiftData.
         let localProjectCountBefore = try context.fetchCount(FetchDescriptor<StoryProject>())
         logger.log(
-            "Restore starting: scope=\(scopeDescription(scope), privacy: .public) local_before=\(localProjectCountBefore, privacy: .public) cloud_fetched=\(rows.count, privacy: .public)"
+            "Restore starting: scope=\(self.scopeDescription(scope), privacy: .public) local_before=\(localProjectCountBefore, privacy: .public) cloud_fetched=\(rows.count, privacy: .public)"
         )
 
         // Targeted restores must not inspect or mutate unrelated local projects.
