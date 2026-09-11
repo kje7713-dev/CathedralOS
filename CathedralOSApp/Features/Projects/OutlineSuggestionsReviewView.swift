@@ -127,9 +127,17 @@ struct OutlineSuggestionsReviewView: View {
     }
 
     private func acceptAll() {
-        guard !accepting,
-              let projectID = outline.project?.id,
-              let baseURL = SupabaseConfiguration.projectURL else { return }
+        guard !accepting else { return }
+        guard let baseURL = SupabaseConfiguration.projectURL else {
+            durabilityCoordinator.reportAcceptRunError(
+                "Accept All is unavailable because the backend is not configured."
+            )
+            return
+        }
+        // Use the project supplied to this view. The outline's inverse
+        // relationship may not be materialized after a cloud restore, and a
+        // missing relationship must not turn a tap into a silent no-op.
+        let projectID = project.id
         hasStartedAcceptance = true
 
         // Do not trust the relationship collection here: restored/legacy projects
