@@ -31,6 +31,8 @@ import {
   mergeExpansionAdditions,
   evaluateNovelScale,
   needsNovelExpansion,
+  buildExpansionCheckpoint,
+  expansionResumeState,
   projectedExpectedTokens,
   projectedTokenRange,
   parseAndValidateAllocation,
@@ -576,7 +578,7 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
   assertEquals(source.includes("maxItems: MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
-  assertEquals(source.includes("requestedStoryMaterialFormat(body) === \"novel\" && needsNovelExpansion(result.suggestions)"), true);
+  assertEquals(source.includes("needsNovelExpansion(result.suggestions, body.existingSections ?? [])"), true);
   assertEquals(source.includes("failed_under_target"), true);
   assertEquals(source.includes("failed_expansion"), true);
   assertEquals(source.includes("outline-expansion-"), true);
@@ -612,6 +614,34 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(merged[0], original[0]);
 });
 
+
+Deno.test("novel scale evaluates existing accepted sections together with the generated delta", () => {
+  const existing = sceneOutline(50);
+  const generated = sceneOutline(21);
+  const deltaOnly = evaluateNovelScale(generated);
+  const complete = evaluateNovelScale(generated, existing);
+  assertEquals(deltaOnly.meetsMinimum, false);
+  assertEquals(complete.meetsMinimum, true);
+  assertEquals(complete.projectedWords >= 70000, true);
+});
+
+Deno.test("existing accepted sections can prevent unnecessary expansion", async () => {
+  const existing = sceneOutline(70);
+  let calls = 0;
+  const result = await progressivelyExpandOutline(
+    [],
+    new Set(["beat-1"]),
+    async () => {
+      calls++;
+      return [expansionSection("Should not be generated")];
+    },
+    undefined,
+    { existingSections: existing },
+  );
+  assertEquals(calls, 0);
+  assertEquals(result.suggestions, []);
+  assertEquals(needsNovelExpansion([], existing), false);
+});
 
 Deno.test("obligation-aware response schema requires auditable section assignments", () => {
   const obligations = deriveRecipeObligations(sparseRequest.recipe as any);
@@ -668,7 +698,7 @@ Deno.test("dynamic response contract removes model-owned beat IDs and target/max
   assertEquals(source.includes("firstPassParsedCounts"), true);
   assertEquals(source.includes("firstPassValidatedCounts"), true);
   assertEquals(source.includes("if (validateResponse) await validateResponse"), true);
-  assertEquals(source.includes("requestedStoryMaterialFormat(body) === \"novel\" && needsNovelExpansion(result.suggestions)"), true);
+  assertEquals(source.includes("needsNovelExpansion(result.suggestions, body.existingSections ?? [])"), true);
 });
 
 
@@ -729,6 +759,118 @@ Deno.test("invalid expansion responses remain typed at the billable boundary", (
   }
   assertEquals(failure instanceof ExpansionValidationError, true);
   assertEquals((failure as Error).message.includes("expansion returned an invalid addition"), true);
+});
+
+Deno.test("failed expansion retains the first-pass suggestions in its checkpoint", async () => {
+  const firstPass = sceneOutline(22);
+  let checkpointSuggestions: any[] | null = null;
+  let failure: unknown;
+  try {
+    await progressivelyExpandOutline(
+      firstPass as any,
+      new Set(["beat-1"]),
+      async () => { throw new ExpansionValidationError("round 1 failed"); },
+      async (_diagnostic, rounds, current) => {
+        checkpointSuggestions = current;
+        assertEquals(buildExpansionCheckpoint(current, [], rounds).scale.meetsMinimum, false);
+      },
+    );
+  } catch (error) {
+    failure = error;
+  }
+  assertEquals((failure as NovelScalePlanningError).code, "failed_expansion");
+  assertEquals(checkpointSuggestions, firstPass);
+});
+
+Deno.test("successful round 1 plus failed round 2 retains the round-1 checkpoint", async () => {
+  const firstPass = sceneOutline(27);
+  let checkpoint: any = null;
+  let failure: unknown;
+  try {
+    await progressivelyExpandOutline(
+      firstPass as any,
+      new Set(["beat-1"]),
+      async (_current, context) => {
+        if (context.round === 1) return Array.from({ length: 10 }, (_, i) => expansionSection(`Round 1 checkpoint ${i + 1}`));
+        throw new ExpansionValidationError("round 2 failed");
+      },
+      async (_diagnostic, rounds, current) => {
+        checkpoint = buildExpansionCheckpoint(current, [], rounds);
+      },
+    );
+  } catch (error) {
+    failure = error;
+  }
+  assertEquals((failure as NovelScalePlanningError).code, "failed_expansion");
+  assertEquals(checkpoint.nextRound, 2);
+  assertEquals(checkpoint.expansionRounds.filter((round: any) => round.status === "completed").length, 1);
+  assertEquals(checkpoint.scale.projectedWords, evaluateNovelScale(Array.from({ length: 37 }, () => ({ container: "scene" }))).projectedWords);
+});
+
+Deno.test("retry resumes from the persisted expansion checkpoint without repeating first-pass work", async () => {
+  const checkpointSuggestions = sceneOutline(37);
+  const completedRound = {
+    round: 1,
+    sectionCountBefore: 27,
+    projectedTokensBefore: 35100,
+    projectedWordsBefore: 27000,
+    additionsReturned: 10,
+    sectionCountAfter: 37,
+    projectedTokensAfter: 48100,
+    projectedWordsAfter: 37000,
+    remainingEstimatedDeficitTokens: 42900,
+    status: "completed",
+  } as const;
+  const resumed = expansionResumeState({
+    suggestions: checkpointSuggestions,
+    diagnostics: {
+      expansionCheckpoint: {
+        stage: "expansion",
+        nextRound: 2,
+        scale: evaluateNovelScale(checkpointSuggestions),
+        expansionRounds: [completedRound],
+      },
+    },
+  });
+  assertEquals(resumed?.startRound, 2);
+  assertEquals(resumed?.suggestions, checkpointSuggestions);
+  assertEquals(resumed?.priorDiagnostics.length, 1);
+  const calls: number[] = [];
+  const result = await progressivelyExpandOutline(
+    resumed!.suggestions,
+    new Set(["beat-1"]),
+    async (_current, context) => {
+      calls.push(context.round);
+      return Array.from({ length: 20 }, (_, i) => expansionSection(`Retry round ${i + 1}`, "chapter"));
+    },
+    undefined,
+    { startRound: resumed!.startRound, priorDiagnostics: resumed!.priorDiagnostics },
+  );
+  assertEquals(calls, [2]);
+  assertEquals(result.suggestions.length, 57);
+});
+
+Deno.test("a production-shaped ~49,230-word outline remains non-completable when expansion fails", async () => {
+  const existing = [
+    ...sceneOutline(49),
+    ...sceneOutline(2).map((section) => ({ ...section, container: "beat" })),
+  ];
+  const scale = evaluateNovelScale([], existing);
+  assertEquals(Math.round(scale.projectedWords), 49250);
+  assertEquals(scale.meetsMinimum, false);
+  let failure: unknown;
+  try {
+    await progressivelyExpandOutline(
+      [],
+      new Set(["beat-1"]),
+      async () => { throw new ExpansionValidationError("required expansion failed"); },
+      undefined,
+      { existingSections: existing },
+    );
+  } catch (error) {
+    failure = error;
+  }
+  assertEquals((failure as NovelScalePlanningError).code, "failed_expansion");
 });
 
 Deno.test("invalid expansion is a terminal failed_expansion, never a completed under-target outline", async () => {

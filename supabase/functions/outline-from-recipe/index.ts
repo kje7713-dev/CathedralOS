@@ -544,9 +544,11 @@ export function projectedTokenRange(suggestions: Array<{ container: string }>): 
   }, [0, 0]);
 }
 
-export function projectedExpectedTokens(suggestions: Array<{ container: string }>): number {
+export type PlannedSectionLike = { container?: string | null };
+
+export function projectedExpectedTokens(suggestions: PlannedSectionLike[]): number {
   return suggestions.reduce((total, suggestion) => {
-    const [min, max] = CONTAINER_EXPECTED_RANGES[suggestion.container] ?? [800, 1800];
+    const [min, max] = CONTAINER_EXPECTED_RANGES[suggestion.container ?? ""] ?? [800, 1800];
     return total + (min + max) / 2;
   }, 0);
 }
@@ -560,11 +562,16 @@ export interface NovelScaleEvaluation {
 }
 
 /**
- * The single authoritative novel-scale evaluator. Every planning and terminal
- * completion decision must use this result rather than section-count guesses.
+ * The single authoritative novel-scale evaluator. It evaluates the complete
+ * planned outline: persisted/accepted sections plus newly generated delta.
+ * Every planning and terminal completion decision must use this result rather
+ * than section-count guesses.
  */
-export function evaluateNovelScale(suggestions: Array<{ container: string }>): NovelScaleEvaluation {
-  const projectedTokens = projectedExpectedTokens(suggestions);
+export function evaluateNovelScale(
+  suggestions: PlannedSectionLike[],
+  existingSections: PlannedSectionLike[] = [],
+): NovelScaleEvaluation {
+  const projectedTokens = projectedExpectedTokens([...existingSections, ...suggestions]);
   const deficitTokens = Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - projectedTokens);
   return {
     projectedTokens,
@@ -575,8 +582,11 @@ export function evaluateNovelScale(suggestions: Array<{ container: string }>): N
   };
 }
 
-export function needsNovelExpansion(suggestions: Array<{ container: string }>): boolean {
-  return !evaluateNovelScale(suggestions).meetsMinimum;
+export function needsNovelExpansion(
+  suggestions: PlannedSectionLike[],
+  existingSections: PlannedSectionLike[] = [],
+): boolean {
+  return !evaluateNovelScale(suggestions, existingSections).meetsMinimum;
 }
 
 const EXPANSION_SCHEMA = {
@@ -647,42 +657,108 @@ export interface ProgressiveExpansionResult {
   diagnostics: ExpansionRoundDiagnostic[];
 }
 
+export interface ProgressiveExpansionOptions {
+  existingSections?: PlannedSectionLike[];
+  startRound?: number;
+  priorDiagnostics?: ExpansionRoundDiagnostic[];
+}
+
+export interface ExpansionCheckpoint {
+  stage: "expansion";
+  nextRound: number;
+  scale: NovelScaleEvaluation;
+  expansionRounds: ExpansionRoundDiagnostic[];
+}
+
+export function buildExpansionCheckpoint(
+  suggestions: Suggestion[],
+  existingSections: PlannedSectionLike[],
+  expansionRounds: ExpansionRoundDiagnostic[],
+): ExpansionCheckpoint {
+  const completedRounds = expansionRounds
+    .filter((diagnostic) => diagnostic.status === "completed")
+    .map((diagnostic) => diagnostic.round);
+  const lastCompletedRound = completedRounds.length > 0
+    ? Math.max(...completedRounds)
+    : 0;
+  return {
+    stage: "expansion",
+    nextRound: Math.max(1, lastCompletedRound + 1),
+    scale: evaluateNovelScale(suggestions, existingSections),
+    expansionRounds,
+  };
+}
+
+export interface ExpansionResumeState {
+  suggestions: Suggestion[];
+  startRound: number;
+  priorDiagnostics: ExpansionRoundDiagnostic[];
+}
+
+export function expansionResumeState(run: {
+  suggestions?: unknown;
+  diagnostics?: unknown;
+}): ExpansionResumeState | null {
+  if (!Array.isArray(run.suggestions) || !run.diagnostics || typeof run.diagnostics !== "object") return null;
+  const checkpoint = (run.diagnostics as { expansionCheckpoint?: unknown }).expansionCheckpoint;
+  if (!checkpoint || typeof checkpoint !== "object" || (checkpoint as { stage?: unknown }).stage !== "expansion") return null;
+  const rawRounds = (checkpoint as { expansionRounds?: unknown }).expansionRounds;
+  const priorDiagnostics = Array.isArray(rawRounds)
+    ? rawRounds.filter((diagnostic): diagnostic is ExpansionRoundDiagnostic =>
+      Boolean(diagnostic) && typeof diagnostic === "object" &&
+      ["completed", "capped"].includes(String((diagnostic as { status?: unknown }).status))
+    )
+    : [];
+  const requestedStartRound = Number((checkpoint as { nextRound?: unknown }).nextRound);
+  const startRound = Number.isInteger(requestedStartRound) && requestedStartRound > 0
+    ? requestedStartRound
+    : Math.max(1, priorDiagnostics.reduce((max, diagnostic) => Math.max(max, diagnostic.round + 1), 1));
+  return {
+    suggestions: run.suggestions as Suggestion[],
+    startRound,
+    priorDiagnostics,
+  };
+}
+
 export async function progressivelyExpandOutline(
   initial: Suggestion[],
   beatIds: Set<string>,
   expand: (current: Suggestion[], context: ExpansionPromptContext) => Promise<ExpansionAddition[]>,
-  onRound?: (diagnostic: ExpansionRoundDiagnostic, all: ExpansionRoundDiagnostic[]) => Promise<void> | void,
+  onRound?: (diagnostic: ExpansionRoundDiagnostic, all: ExpansionRoundDiagnostic[], current: Suggestion[]) => Promise<void> | void,
+  options: ProgressiveExpansionOptions = {},
 ): Promise<ProgressiveExpansionResult> {
   let suggestions = [...initial];
-  const diagnostics: ExpansionRoundDiagnostic[] = [];
+  const existingSections = options.existingSections ?? [];
+  const diagnostics: ExpansionRoundDiagnostic[] = [...(options.priorDiagnostics ?? [])];
   const warnings: string[] = [];
-  for (let round = 1; round <= MAX_EXPANSION_ROUNDS && needsNovelExpansion(suggestions); round++) {
-    const projectedTokensBefore = projectedExpectedTokens(suggestions);
+  const startRound = Math.max(1, options.startRound ?? 1);
+  for (let round = startRound; round <= MAX_EXPANSION_ROUNDS && needsNovelExpansion(suggestions, existingSections); round++) {
+    const projectedTokensBefore = evaluateNovelScale(suggestions, existingSections).projectedTokens;
     const before: ExpansionPromptContext = {
       round,
       projectedTokens: projectedTokensBefore,
       projectedWords: projectedTokensBefore / TOKENS_PER_WORD,
       desiredWords: NOVEL_TARGET_WORDS,
-      remainingDeficitTokens: Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - projectedTokensBefore),
+      remainingDeficitTokens: evaluateNovelScale(suggestions, existingSections).deficitTokens,
     };
     try {
       const additions = await expand(suggestions, before);
       const merged = mergeExpansionAdditions(suggestions, additions);
       const overCap = merged.length > MAX_PLANNED_SECTIONS;
       const accepted = overCap ? suggestions : merged;
-      const projectedTokensAfter = projectedExpectedTokens(accepted);
+      const projectedTokensAfter = evaluateNovelScale(accepted, existingSections).projectedTokens;
       const diagnostic: ExpansionRoundDiagnostic = {
         round, sectionCountBefore: suggestions.length, projectedTokensBefore,
         projectedWordsBefore: projectedTokensBefore / TOKENS_PER_WORD,
         additionsReturned: overCap ? 0 : additions.length, sectionCountAfter: accepted.length,
         projectedTokensAfter, projectedWordsAfter: projectedTokensAfter / TOKENS_PER_WORD,
-        remainingEstimatedDeficitTokens: Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - projectedTokensAfter),
+        remainingEstimatedDeficitTokens: evaluateNovelScale(accepted, existingSections).deficitTokens,
         status: overCap || accepted.length >= MAX_PLANNED_SECTIONS ? "capped" : "completed",
         ...(overCap ? { error: `global ${MAX_PLANNED_SECTIONS}-section safety cap reached` } : {}),
       };
       suggestions = accepted;
       diagnostics.push(diagnostic);
-      await onRound?.(diagnostic, diagnostics);
+      await onRound?.(diagnostic, diagnostics, suggestions);
       if (overCap || merged.length >= MAX_PLANNED_SECTIONS) {
         warnings.push(`Outline expansion stopped at the global ${MAX_PLANNED_SECTIONS}-section safety cap.`);
         break;
@@ -695,18 +771,18 @@ export async function progressivelyExpandOutline(
         projectedWordsBefore: projectedTokensBefore / TOKENS_PER_WORD, additionsReturned: 0,
         sectionCountAfter: suggestions.length, projectedTokensAfter: projectedTokensBefore,
         projectedWordsAfter: projectedTokensBefore / TOKENS_PER_WORD,
-        remainingEstimatedDeficitTokens: Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - projectedTokensBefore),
+        remainingEstimatedDeficitTokens: evaluateNovelScale(suggestions, existingSections).deficitTokens,
         status: "invalid", error: error.message.slice(0, 500),
       };
       diagnostics.push(diagnostic);
-      await onRound?.(diagnostic, diagnostics);
+      await onRound?.(diagnostic, diagnostics, suggestions);
       throw new NovelScalePlanningError(
         "failed_expansion",
         `Novel expansion failed validation in round ${round}; the outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum.`,
       );
     }
   }
-  const finalScale = evaluateNovelScale(suggestions);
+  const finalScale = evaluateNovelScale(suggestions, existingSections);
   if (!finalScale.meetsMinimum) {
     throw new NovelScalePlanningError(
       "failed_under_target",
@@ -1613,7 +1689,7 @@ async function runSuggestionJob(
     lease_expires_at: leaseExpiry(),
     attempt_count: priorAttemptCount + 1,
   }).eq("id", runId).eq("status", "pending")
-    .select("id, credit_cost_charged, remaining_credits, story_material")
+    .select("id, credit_cost_charged, remaining_credits, story_material, suggestions, diagnostics")
     .maybeSingle();
   if (claim.error || !claim.data) return;
   const claimedRun: any = claim.data;
@@ -1625,6 +1701,9 @@ async function runSuggestionJob(
   };
   let plannedMinimumSections: number | null = null;
   let diagnostics: Record<string, unknown> = { stage: "starting" };
+  let latestValidSuggestions: Suggestion[] = Array.isArray(claimedRun.suggestions)
+    ? claimedRun.suggestions as Suggestion[]
+    : [];
   try {
     const modelStore = new SupabaseGenerationModelStore(db);
     const model = await modelStore.getEnabledModelById(OPENAI_MODEL);
@@ -1692,9 +1771,118 @@ async function runSuggestionJob(
       };
     };
 
+    const expandNovel = async (
+      initialSuggestions: Suggestion[],
+      recipeObligations: RecipeObligation[],
+      startRound = 1,
+      priorDiagnostics: ExpansionRoundDiagnostic[] = [],
+    ): Promise<ProgressiveExpansionResult> => {
+      diagnostics = {
+        ...diagnostics,
+        stage: "expansion_generation",
+        expansionRounds: priorDiagnostics,
+      };
+      return await progressivelyExpandOutline(
+        initialSuggestions,
+        new Set(body.arcTemplate.beats.map((beat) => beat.id)),
+        async (current, context) => {
+          const expansion = buildExpansionPrompt(body, current, context, recipeObligations);
+          const expandedRaw = await billableCall(
+            expansion.system,
+            expansion.user,
+            16000,
+            { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: EXPANSION_SCHEMA } },
+            `outline-expansion-${context.round}`,
+            (content) => {
+              const additions = parseExpansionResponse(content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations);
+              const merged = mergeExpansionAdditions(current, additions);
+              if (merged.length > MAX_PLANNED_SECTIONS) {
+                throw new ExpansionValidationError(
+                  `outline expansion exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`,
+                );
+              }
+              return additions;
+            },
+          );
+          return parseExpansionResponse(expandedRaw.content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations);
+        },
+        async (_roundDiagnostic, allDiagnostics, current) => {
+          latestValidSuggestions = current;
+          const checkpoint = buildExpansionCheckpoint(current, body.existingSections ?? [], allDiagnostics);
+          diagnostics = {
+            ...diagnostics,
+            stage: "expansion_checkpoint",
+            expansionRounds: allDiagnostics,
+            expansionCheckpoint: checkpoint,
+            novelScale: checkpoint.scale,
+          };
+          await updateRun({ suggestions: current, diagnostics });
+        },
+        {
+          existingSections: body.existingSections ?? [],
+          startRound,
+          priorDiagnostics,
+        },
+      );
+    };
+
     const provenance = await recipeProvenance(body.recipe);
     if (!body.storyMaterialEnrichment && claimedRun.story_material) {
       body = { ...body, storyMaterialEnrichment: claimedRun.story_material as StoryMaterialEnrichment };
+    }
+    const resume = expansionResumeState(claimedRun);
+    if (requestedStoryMaterialFormat(body) === "novel" && resume && claimedRun.story_material) {
+      const resumedMaterial = validateStoryMaterialEnrichment(claimedRun.story_material as StoryMaterialEnrichment, { recipe: body.recipe });
+      const sufficiency = storyMaterialSufficiency(resumedMaterial, body.recipe, requestedStoryMaterialFormat(body));
+      if (!isCompatibleStoryMaterialEnrichment(resumedMaterial, provenance, requestedStoryMaterialFormat(body)) || !sufficiency.sufficient) {
+        throw new Error("persisted expansion checkpoint has incompatible story material");
+      }
+      body = { ...body, storyMaterialEnrichment: resumedMaterial };
+      latestValidSuggestions = resume.suggestions;
+      diagnostics = {
+        ...(claimedRun.diagnostics && typeof claimedRun.diagnostics === "object" ? claimedRun.diagnostics : {}),
+        stage: "expansion_resume",
+        resumedFromRound: resume.startRound,
+      };
+      const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
+      const expanded = await expandNovel(resume.suggestions, recipeObligations, resume.startRound, resume.priorDiagnostics);
+      const expandedQuality = validateOutlinePlanningQuality(expanded.suggestions, resumedMaterial, requestedStoryMaterialFormat(body));
+      if (expandedQuality.distinctnessIssues.length > 0) {
+        throw new Error(`expanded outline failed dramatic distinctness validation: ${expandedQuality.distinctnessIssues[0]}`);
+      }
+      const coverage = obligationCoverage([...(body.existingSections ?? []), ...expanded.suggestions], recipeObligations);
+      if (coverage.missingRequired.length > 0) {
+        throw new RecipeObligationValidationError(
+          `required recipe obligations remain uncovered: ${coverage.missingRequired.map((obligation) => obligation.id).join(", ")}`,
+        );
+      }
+      const finalScale = evaluateNovelScale(expanded.suggestions, body.existingSections ?? []);
+      diagnostics = {
+        ...diagnostics,
+        stage: "completed",
+        expansionRounds: expanded.diagnostics,
+        expansionCheckpoint: buildExpansionCheckpoint(expanded.suggestions, body.existingSections ?? [], expanded.diagnostics),
+        novelScale: finalScale,
+        finalSectionCounts: countSuggestionsByBeat(expanded.suggestions),
+      };
+      if (!finalScale.meetsMinimum) {
+        throw new NovelScalePlanningError(
+          "failed_under_target",
+          `Novel outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum at completion.`,
+        );
+      }
+      await updateRun({
+        status: "completed",
+        suggestions: expanded.suggestions,
+        warnings: expanded.warnings,
+        credit_cost_charged: creditCostCharged,
+        remaining_credits: remainingCredits,
+        completed_at: new Date().toISOString(),
+        diagnostics,
+        lease_owner: null,
+        lease_expires_at: null,
+      });
+      return;
     }
     let storyMaterial: StoryMaterialEnrichment | null = null;
     let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: OPENAI_MODEL, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
@@ -1856,41 +2044,24 @@ async function runSuggestionJob(
     }
 
     // Expand progressively in bounded rounds. Every round is additive and starts
-    // from the complete valid outline produced so far.
-    if (requestedStoryMaterialFormat(body) === "novel" && needsNovelExpansion(result.suggestions)) {
-      diagnostics = { ...diagnostics, stage: "expansion_generation", expansionRounds: [] };
-      const expanded = await progressivelyExpandOutline(
-        result.suggestions,
-        beatIds,
-        async (current, context) => {
-          const expansion = buildExpansionPrompt(body, current, context, recipeObligations);
-          const expandedRaw = await billableCall(
-            expansion.system,
-            expansion.user,
-            16000,
-            { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: EXPANSION_SCHEMA } },
-            `outline-expansion-${context.round}`,
-            (content) => {
-              const additions = parseExpansionResponse(content, beatIds, current, recipeObligations);
-              const merged = mergeExpansionAdditions(current, additions);
-              if (merged.length > MAX_PLANNED_SECTIONS) {
-                throw new ExpansionValidationError(
-                  `outline expansion exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`,
-                );
-              }
-              return additions;
-            },
-          );
-          return parseExpansionResponse(expandedRaw.content, beatIds, current, recipeObligations);
-        },
-        async (roundDiagnostic, allDiagnostics) => {
-          diagnostics = { ...diagnostics, expansionRounds: allDiagnostics };
-          await updateRun({ diagnostics });
-        },
-      );
+    // from the complete valid outline produced so far. The checkpoint is written
+    // before the first expansion call and after every accepted round.
+    if (requestedStoryMaterialFormat(body) === "novel" && needsNovelExpansion(result.suggestions, body.existingSections ?? [])) {
+      latestValidSuggestions = result.suggestions;
+      const initialScale = evaluateNovelScale(result.suggestions, body.existingSections ?? []);
+      const initialCheckpoint = buildExpansionCheckpoint(result.suggestions, body.existingSections ?? [], []);
+      diagnostics = {
+        ...diagnostics,
+        stage: "expansion_checkpoint",
+        expansionRounds: [],
+        expansionCheckpoint: initialCheckpoint,
+        novelScale: initialScale,
+      };
+      await updateRun({ suggestions: result.suggestions, diagnostics });
+      const expanded = await expandNovel(result.suggestions, recipeObligations);
       result = { suggestions: expanded.suggestions, warnings: [...result.warnings, ...expanded.warnings] };
       const expandedQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body));
-      diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions), dramaticDistinctnessIssues: expandedQuality.distinctnessIssues, causalScaleIssues: expandedQuality.causalScaleIssues, unusedStoryMaterialItems: expandedQuality.unusedStoryMaterialItems };
+      diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions), dramaticDistinctnessIssues: expandedQuality.distinctnessIssues, causalScaleIssues: expandedQuality.causalScaleIssues, unusedStoryMaterialItems: expandedQuality.unusedStoryMaterialItems, novelScale: evaluateNovelScale(result.suggestions, body.existingSections ?? []) };
       if (expandedQuality.distinctnessIssues.length > 0) {
         throw new Error(`expanded outline failed dramatic distinctness validation: ${expandedQuality.distinctnessIssues[0]}`);
       }
@@ -1902,7 +2073,7 @@ async function runSuggestionJob(
       );
     }
     if (requestedStoryMaterialFormat(body) === "novel") {
-      const finalScale = evaluateNovelScale(result.suggestions);
+      const finalScale = evaluateNovelScale(result.suggestions, body.existingSections ?? []);
       diagnostics = {
         ...diagnostics,
         novelScale: finalScale,
@@ -1939,9 +2110,18 @@ async function runSuggestionJob(
     const message = err instanceof Error ? err.message : String(err);
     await updateRun({
       status: "failed",
+      suggestions: latestValidSuggestions,
       error_code: errorCode,
       error: message.slice(0, 2000),
-      diagnostics: { ...diagnostics, stage: "failed", plannedMinimumSections, error: message.slice(0, 500) },
+      diagnostics: {
+        ...diagnostics,
+        stage: "failed",
+        plannedMinimumSections,
+        error: message.slice(0, 500),
+        ...(requestedStoryMaterialFormat(body) === "novel"
+          ? { novelScale: evaluateNovelScale(latestValidSuggestions, body.existingSections ?? []) }
+          : {}),
+      },
       completed_at: new Date().toISOString(),
       lease_owner: null,
       lease_expires_at: null,
@@ -2075,7 +2255,7 @@ Deno.serve(async (req: Request) => {
       return errorResponse("db_error", insert.error.message ?? "Could not create suggestion run", 500);
     }
     const existing = await db.from("outline_suggestion_runs")
-      .select("id, status, created_at, updated_at, suggestions, warnings, error_code, error, credit_cost_charged, remaining_credits, request_json, lease_expires_at, attempt_count, request_fingerprint")
+      .select("id, status, created_at, updated_at, suggestions, warnings, error_code, error, diagnostics, story_material, credit_cost_charged, remaining_credits, request_json, lease_expires_at, attempt_count, request_fingerprint")
       .eq("user_id", user.id).eq("idempotency_key", identity.key).single();
     if (existing.error || !existing.data) return errorResponse("db_error", existing.error?.message ?? "Could not resolve suggestion run", 500);
     run = existing.data;
@@ -2083,8 +2263,20 @@ Deno.serve(async (req: Request) => {
       return errorResponse("idempotency_conflict", "The idempotency key is already bound to a different suggestion request", 409);
     }
     const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
-    if (stale) {
-      const reclaimed = await db.from("outline_suggestion_runs").update({ status: "pending", lease_owner: null, lease_expires_at: null, attempt_count: (run.attempt_count ?? 0) + 1 }).eq("id", run.id).eq("status", "running").eq("lease_expires_at", run.lease_expires_at);
+    const resumableExpansionFailure = run.status === "failed" && run.error_code === "failed_expansion" && expansionResumeState(run) !== null;
+    if (stale || resumableExpansionFailure) {
+      const reclaimQuery = db.from("outline_suggestion_runs").update({
+        status: "pending",
+        error_code: null,
+        error: null,
+        completed_at: null,
+        lease_owner: null,
+        lease_expires_at: null,
+        attempt_count: (run.attempt_count ?? 0) + 1,
+      }).eq("id", run.id).eq("status", run.status);
+      const reclaimed = stale
+        ? await reclaimQuery.eq("lease_expires_at", run.lease_expires_at)
+        : await reclaimQuery;
       if (!reclaimed.error) run.status = "pending";
     }
   }
