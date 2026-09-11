@@ -569,8 +569,15 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func finishAcceptRun(_ metadata: AcceptRunMetadata, context: ModelContext) async {
         if metadata.typedStatus == .completed && metadata.sectionsFailed == 0 && metadata.error == nil {
             do {
+                // Pass both the local project id and the canonical lineage id so
+                // the targeted restore can resolve a drifted/historical
+                // `local_project_id` for the same lineage instead of silently
+                // fetching zero rows. Identity-resolution failures surface here
+                // without relabeling the Accept All job as failed: the server
+                // job completed successfully, only this device's refresh failed.
                 let report = try await projectSyncService.restoreProject(
                     localProjectID: metadata.projectID,
+                    projectLineageID: metadata.projectLineageID,
                     into: context,
                     includeTombstoned: false
                 )

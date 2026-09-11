@@ -20,6 +20,11 @@ enum ProjectCloudSyncError: Error, LocalizedError {
     case ambiguousSnapshotIdentity(localProjectID: String)
     /// Supabase accepted the DELETE request but did not report the resolved row as deleted.
     case snapshotDeletionNotConfirmed(localProjectID: String)
+    /// A targeted restore could not find a cloud snapshot matching either the
+    /// supplied local project id or the canonical lineage id. This is distinct
+    /// from a full restore returning zero results — Accept All just completed,
+    /// so a missing snapshot means identity resolution actually failed.
+    case targetedSnapshotNotFound(localProjectID: String, lineageID: String)
 
     var errorDescription: String? {
         switch self {
@@ -51,6 +56,8 @@ enum ProjectCloudSyncError: Error, LocalizedError {
             return "Cloud deletion found multiple snapshots for project \(localProjectID). Sync or restore your projects, then try again. Your local project was kept."
         case .snapshotDeletionNotConfirmed:
             return "Cloud deletion could not be confirmed. Your local project was kept."
+        case .targetedSnapshotNotFound(let localProjectID, let lineageID):
+            return "Could not find the cloud snapshot for project \(localProjectID) (lineage \(lineageID)). The Accept All job completed, but this device could not refresh that project from the cloud."
         }
     }
 }
@@ -99,10 +106,22 @@ protocol ProjectCloudSyncServiceProtocol {
     func fetchCloudProjectSnapshotCount() async throws -> Int
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport
-    /// Restore only one project snapshot. This is used by project-scoped flows
-    /// such as Accept All so completion cannot reconcile unrelated projects.
+    /// Restore only one project snapshot, scoped to its canonical lineage. Used by
+    /// project-scoped flows such as Accept All so completion cannot reconcile
+    /// unrelated projects. The cloud snapshot is identified by EITHER the local
+    /// project id OR the canonical lineage id, so a drifted/historical
+    /// `local_project_id` for the same lineage still reconciles the correct
+    /// project. Returns `targetedSnapshotNotFound` if no row matches and
+    /// `ambiguousSnapshotIdentity` if any returned row belongs to a different
+    /// lineage; both failures are explicit so callers never see a successful
+    /// empty restore when the requested canonical project should exist.
     @MainActor
-    func restoreProject(localProjectID: UUID, into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport
+    func restoreProject(
+        localProjectID: UUID,
+        projectLineageID: UUID,
+        into context: ModelContext,
+        includeTombstoned: Bool
+    ) async throws -> ProjectRestoreReport
     /// Reconcile local SwiftData projects against a tombstone set BEFORE upload.
     /// Matching projects (by local id OR lineage id) are deleted from the context,
     /// their local JSON backups are removed, and the context is saved. Returns a
@@ -142,6 +161,24 @@ extension ProjectCloudSyncServiceProtocol {
     @MainActor
     func restoreAllProjects(into context: ModelContext) async throws -> ProjectRestoreReport {
         try await restoreAllProjects(into: context, includeTombstoned: false)
+    }
+
+    /// Default-lineage convenience for non-Accept-All callers that already
+    /// canonicalize via `localProjectID`. Prefer the explicit
+    /// `restoreProject(localProjectID:projectLineageID:...)` overload whenever
+    /// the caller has access to the canonical lineage id (e.g. Accept All).
+    @MainActor
+    func restoreProject(
+        localProjectID: UUID,
+        into context: ModelContext,
+        includeTombstoned: Bool = false
+    ) async throws -> ProjectRestoreReport {
+        try await restoreProject(
+            localProjectID: localProjectID,
+            projectLineageID: localProjectID,
+            into: context,
+            includeTombstoned: includeTombstoned
+        )
     }
 
     /// Default no-op reconciliation. Concrete services should override this to
@@ -207,27 +244,44 @@ struct ProjectReconciliationReport {
     }
 }
 
-/// Single-flight gate for project restores. Concurrent callers await the same task
-/// and receive the same report instead of treating overlap as a failure.
+/// Identifies the scope of a project restore. Distinct scopes must never coalesce:
+/// a full restore and a targeted restore run as independent operations, even if
+/// they reach the network concurrently. Two targeted restores for the SAME
+/// (localProjectID, lineageID) pair MAY coalesce so an Accept All completion and
+/// a concurrent explicit refresh do not double-fetch.
+enum ProjectRestoreScope: Hashable {
+    case allProjects
+    case project(localProjectID: UUID, lineageID: UUID)
+}
+
+/// Single-flight gate for project restores. Each distinct scope coalesces its
+/// own in-flight task; concurrent callers with identical scopes share one fetch
+/// and receive the same report, while callers with different scopes run
+/// independently and never piggyback on an unrelated operation. Different
+/// scopes that race are serialized through independent tasks rather than
+/// conflated — a full restore cannot satisfy a targeted restore and a
+/// targeted restore for project A cannot satisfy a targeted restore for
+/// project B.
 @MainActor
 final class ProjectRestoreOperationGate {
-    private var activeTask: Task<ProjectRestoreReport, Error>?
+    private var activeTasks: [ProjectRestoreScope: Task<ProjectRestoreReport, Error>] = [:]
 
     func run(
+        scope: ProjectRestoreScope,
         _ operation: @escaping @MainActor () async throws -> ProjectRestoreReport
     ) async throws -> ProjectRestoreReport {
-        if let activeTask {
+        if let activeTask = activeTasks[scope] {
             return try await activeTask.value
         }
 
         let task = Task { @MainActor in try await operation() }
-        activeTask = task
+        activeTasks[scope] = task
         do {
             let report = try await task.value
-            activeTask = nil
+            activeTasks[scope] = nil
             return report
         } catch {
-            activeTask = nil
+            activeTasks[scope] = nil
             throw error
         }
     }
@@ -695,18 +749,24 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
 
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
-        try await restoreOperationGate.run {
-            try await self.restoreProjects(into: context, includeTombstoned: includeTombstoned)
+        try await restoreOperationGate.run(scope: .allProjects) {
+            try await self.restoreProjects(into: context, includeTombstoned: includeTombstoned, scope: .allProjects)
         }
     }
 
     @MainActor
-    func restoreProject(localProjectID: UUID, into context: ModelContext, includeTombstoned: Bool = false) async throws -> ProjectRestoreReport {
-        try await restoreOperationGate.run {
+    func restoreProject(
+        localProjectID: UUID,
+        projectLineageID: UUID,
+        into context: ModelContext,
+        includeTombstoned: Bool
+    ) async throws -> ProjectRestoreReport {
+        let scope = ProjectRestoreScope.project(localProjectID: localProjectID, lineageID: projectLineageID)
+        return try await restoreOperationGate.run(scope: scope) {
             try await self.restoreProjects(
                 into: context,
                 includeTombstoned: includeTombstoned,
-                localProjectID: localProjectID
+                scope: scope
             )
         }
     }
@@ -715,7 +775,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     private func restoreProjects(
         into context: ModelContext,
         includeTombstoned: Bool,
-        localProjectID: UUID? = nil
+        scope: ProjectRestoreScope
     ) async throws -> ProjectRestoreReport {
 
         // Phase A: fetch and decode cloud payloads into plain DTOs.
@@ -725,10 +785,15 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             URLQueryItem(name: "select", value: "local_project_id,lineage_id,snapshot_json,updated_at"),
             URLQueryItem(name: "order", value: "updated_at.desc")
         ]
-        if let localProjectID {
-            components?.queryItems?.append(
-                URLQueryItem(name: "local_project_id", value: "eq.\(localProjectID.uuidString)")
-            )
+
+        // Targeted scopes fetch by canonical lineage OR the known local id/alias.
+        // The OR filter preserves the canonical-lineage semantics used elsewhere
+        // in project sync while still resolving a historical/drifted
+        // `local_project_id` for the same lineage. A single-column filter would
+        // silently fetch zero rows when only the lineage column matches.
+        if case let .project(localProjectID, lineageID) = scope {
+            let orValue = "(local_project_id.eq.\(localProjectID.uuidString),lineage_id.eq.\(lineageID.uuidString))"
+            components?.queryItems?.append(URLQueryItem(name: "or", value: orValue))
         }
         guard let url = components?.url else {
             throw ProjectCloudSyncError.notConfigured
@@ -739,17 +804,51 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
 
         let rows = try await fetch([ProjectSnapshotCloudRecord].self, request: request)
 
-        // Phase B: reconcile DTOs into SwiftData.
+        // Phase B: targeted identity pre-flight.
+        // Accept All completion means the canonical project should exist on the
+        // server; silently returning an empty report on a missing row would
+        // mislabel the refresh as successful. Verify every returned row belongs
+        // to the requested canonical lineage (either via `lineage_id`, the known
+        // local id, or a `snapshot_json.project.id` alias). Fail closed on
+        // mismatched rows so an ambiguous upstream read cannot leak a different
+        // project's snapshot into this project.
+        if case let .project(targetedLocalID, targetedLineageID) = scope {
+            let canonicalLocal = targetedLocalID.uuidString.lowercased()
+            let canonicalLineage = targetedLineageID.uuidString.lowercased()
+            if let mismatch = rows.first(where: { row in
+                let rowLineage = row.lineageID?.uuidString.lowercased()
+                let identities = claimedIdentities(for: row)
+                let lineageMatches = rowLineage == canonicalLineage
+                let localMatches = identities.contains(canonicalLocal)
+                return !(lineageMatches || localMatches)
+            }) {
+                throw ProjectCloudSyncError.ambiguousSnapshotIdentity(
+                    localProjectID: mismatch.localProjectID
+                )
+            }
+            if rows.isEmpty {
+                throw ProjectCloudSyncError.targetedSnapshotNotFound(
+                    localProjectID: canonicalLocal,
+                    lineageID: canonicalLineage
+                )
+            }
+        }
+
+        // Phase C: reconcile DTOs into SwiftData.
         let localProjectCountBefore = try context.fetchCount(FetchDescriptor<StoryProject>())
         logger.log(
-            "Restore starting: local_before=\(localProjectCountBefore, privacy: .public) cloud_fetched=\(rows.count, privacy: .public)"
+            "Restore starting: scope=\(scopeDescription(scope), privacy: .public) local_before=\(localProjectCountBefore, privacy: .public) cloud_fetched=\(rows.count, privacy: .public)"
         )
 
         // Targeted restores must not inspect or mutate unrelated local projects.
         // The full restore path retains its existing duplicate repair behavior.
-        let dedupeWarnings = localProjectID == nil
-            ? try deduplicateLocalProjects(in: context)
-            : []
+        let dedupeWarnings: [String]
+        switch scope {
+        case .allProjects:
+            dedupeWarnings = try deduplicateLocalProjects(in: context)
+        case .project:
+            dedupeWarnings = []
+        }
         let cloudWarnings = duplicateWarnings(in: rows)
         let duplicateWarnings = dedupeWarnings + cloudWarnings
 
@@ -971,6 +1070,35 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             predicate: #Predicate { $0.id == projectID }
         )
         return try? context.fetch(descriptor).first
+    }
+
+    /// Returns the set of canonical identities a cloud restore row claims:
+    /// its `local_project_id` plus the nested `snapshot_json.project.id`. Shared
+    /// shape with `ProjectSnapshotIdentityRow.claimedIdentities` so restore and
+    /// delete identity checks normalize UUIDs identically.
+    private func claimedIdentities(for row: ProjectSnapshotCloudRecord) -> Set<String> {
+        var identities = Set<String>()
+        let local = row.localProjectID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !local.isEmpty {
+            identities.insert(UUID(uuidString: local)?.uuidString.lowercased() ?? local.lowercased())
+        }
+        if let nested = row.snapshotJSON.project.id?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !nested.isEmpty {
+            identities.insert(UUID(uuidString: nested)?.uuidString.lowercased() ?? nested.lowercased())
+        }
+        return identities
+    }
+
+    /// Stable, log-safe description of a restore scope. Targeted scopes include
+    /// the local id and lineage id so the diagnostics line is unambiguous when
+    /// reviewing concurrent restore activity.
+    private func scopeDescription(_ scope: ProjectRestoreScope) -> String {
+        switch scope {
+        case .allProjects:
+            return "all"
+        case .project(let localProjectID, let lineageID):
+            return "project(local=\(localProjectID.uuidString),lineage=\(lineageID.uuidString))"
+        }
     }
 
     private func deduplicateLocalProjects(in context: ModelContext) throws -> [String] {
