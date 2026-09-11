@@ -1163,6 +1163,289 @@ final class ProjectCloudSyncTests: XCTestCase {
         _ = try await targetedTask.value
     }
 
+    // MARK: - Section Contract round-trip (Fix the Shit PR3)
+
+    /// A populated Section Contract must survive a complete
+    /// encode → restore → re-encode round trip without loss. Covers the
+    /// four state/change fields, the three length fields, the arc beat id,
+    /// and the recipe obligation ids — every canonical Section Contract
+    /// metadata surface that current `origin/main` already carries.
+    func testSectionContractRoundTripPreservesAllFields() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let lineageID = UUID()
+        let arcBeatID = UUID()
+        let recipeIDs = ["req-1", "req-2", "req-3"]
+        let project = StoryProject(name: "Round Trip Project")
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (localProjectID, lineageID, payload, "2026-09-11T19:00:00Z")
+        ])
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting(),
+            tombstoneService: MockProjectTombstoneService()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        // Restore from cloud → Swift model.
+        let report = try await service.restoreProject(
+            localProjectID: localProjectID,
+            projectLineageID: lineageID,
+            into: context,
+            includeTombstoned: false
+        )
+        XCTAssertEqual(report.insertedCount, 1)
+
+        // Read every Section Contract field off the restored Swift model.
+        let restored = try XCTUnwrap(
+            context.fetch(FetchDescriptor<StoryProject>()).first?.outlines.first?.sections.first
+        )
+        XCTAssertEqual(restored.entryState, "at the gate")
+        XCTAssertEqual(restored.dramaticEvent, "the messenger arrives")
+        XCTAssertEqual(restored.resultingChange, "the gate is opened")
+        XCTAssertEqual(restored.terminalState, "the hero steps through")
+        XCTAssertEqual(restored.targetWords, 1200)
+        XCTAssertEqual(restored.targetWordsMin, 900)
+        XCTAssertEqual(restored.targetWordsMax, 1500)
+        XCTAssertEqual(restored.storyArcBeatID, arcBeatID)
+        XCTAssertEqual(restored.recipeRequirementIDs, recipeIDs)
+
+        // Re-encode the Swift model → payload and verify every Section Contract
+        // field survives the second encode pass. This is the round trip.
+        let reEncoded = ProjectSchemaTemplateBuilder.build(project: restored.project!, modelContext: context)
+        let reSection = try XCTUnwrap(reEncoded.outlines.first?.sections.first)
+        XCTAssertEqual(reSection.entryState, restored.entryState)
+        XCTAssertEqual(reSection.dramaticEvent, restored.dramaticEvent)
+        XCTAssertEqual(reSection.resultingChange, restored.resultingChange)
+        XCTAssertEqual(reSection.terminalState, restored.terminalState)
+        XCTAssertEqual(reSection.targetWords, restored.targetWords)
+        XCTAssertEqual(reSection.targetWordsMin, restored.targetWordsMin)
+        XCTAssertEqual(reSection.targetWordsMax, restored.targetWordsMax)
+        XCTAssertEqual(reSection.storyArcBeatID, restored.storyArcBeatID?.uuidString)
+        XCTAssertEqual(reSection.recipeRequirementIDs, restored.recipeRequirementIDs)
+    }
+
+    /// Legacy outlines predate the Section Contract migration. All four
+    /// state/change fields and the three length fields are nil on those rows
+    /// and must restore cleanly without crashing the import mapper.
+    func testLegacyNullSectionContractRestores() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let lineageID = UUID()
+        let project = StoryProject(name: "Legacy Project")
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        // Force the payload's Section Contract fields to nil to simulate a
+        // legacy outline that pre-dates PR #528.
+        var legacy = payload
+        if legacy.outlines.count > 0 {
+            for oIdx in legacy.outlines.indices {
+                legacy.outlines[oIdx].sections = legacy.outlines[oIdx].sections.map { sec in
+                    ProjectImportExportPayload.OutlineSectionPayload(
+                        id: sec.id,
+                        position: sec.position,
+                        title: sec.title,
+                        summary: sec.summary,
+                        container: sec.container,
+                        pov: sec.pov,
+                        terminalBeat: sec.terminalBeat,
+                        entryState: nil,
+                        dramaticEvent: nil,
+                        resultingChange: nil,
+                        terminalState: nil,
+                        targetWords: nil,
+                        targetWordsMin: nil,
+                        targetWordsMax: nil,
+                        status: sec.status,
+                        parentID: sec.parentID,
+                        storyArcBeatID: nil,
+                        recipeRequirementIDs: []
+                    )
+                }
+            }
+        }
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (localProjectID, lineageID, legacy, "2026-09-11T19:00:00Z")
+        ])
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting(),
+            tombstoneService: MockProjectTombstoneService()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        let report = try await service.restoreProject(
+            localProjectID: localProjectID,
+            projectLineageID: lineageID,
+            into: context,
+            includeTombstoned: false
+        )
+        XCTAssertEqual(report.insertedCount, 1)
+
+        // Legacy sections restore as nil — the import mapper must not crash
+        // and the re-encoded payload must carry the same nil values.
+        let restored = try XCTUnwrap(
+            context.fetch(FetchDescriptor<StoryProject>()).first?.outlines.first?.sections.first
+        )
+        XCTAssertNil(restored.entryState)
+        XCTAssertNil(restored.dramaticEvent)
+        XCTAssertNil(restored.resultingChange)
+        XCTAssertNil(restored.terminalState)
+        XCTAssertNil(restored.targetWords)
+        XCTAssertNil(restored.targetWordsMin)
+        XCTAssertNil(restored.targetWordsMax)
+        XCTAssertNil(restored.storyArcBeatID)
+        XCTAssertEqual(restored.recipeRequirementIDs, [])
+    }
+
+    /// Child sections (parent != nil) must survive the same round trip as
+    /// top-level sections. PR3 closed the prior "grouping is a follow-up"
+    /// deferral; both the sync builder (serialize all sections) and the
+    /// import mapper (two-pass: create all, then set parents) now handle
+    /// grouped sub-sections. A child with its own populated Section Contract
+    /// must restore, retain its parent, and re-encode with the contract intact.
+    func testChildSectionRoundTripPreservesContract() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let lineageID = UUID()
+        let project = StoryProject(name: "Grouped Project")
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+
+        // Build a payload with one top-level section (chapter) and one child
+        // section (scene) that has its own populated Section Contract. The
+        // child must restore with the same contract and retain its parent
+        // pointer after import.
+        let parentID = UUID()
+        let childID = UUID()
+        guard let outline = payload.outlines.first else {
+            return XCTFail("payload missing outline")
+        }
+        let parentSection = ProjectImportExportPayload.OutlineSectionPayload(
+            id: parentID.uuidString,
+            position: 0,
+            title: "Chapter 1",
+            summary: "Opens the arc",
+            container: "sceneSequence",
+            pov: "thirdPersonLimited",
+            terminalBeat: "the gate opens",
+            entryState: "calm before the storm",
+            dramaticEvent: "the messenger arrives bearing news",
+            resultingChange: "the hero accepts the call",
+            terminalState: "the hero sets out",
+            targetWords: 6000,
+            targetWordsMin: 5000,
+            targetWordsMax: 7000,
+            status: "draft",
+            parentID: nil,
+            storyArcBeatID: nil,
+            recipeRequirementIDs: ["req-parent"]
+        )
+        let childSection = ProjectImportExportPayload.OutlineSectionPayload(
+            id: childID.uuidString,
+            position: 0,
+            title: "Chapter 1 - Scene 1",
+            summary: "The arrival",
+            container: "scene",
+            pov: "thirdPersonLimited",
+            terminalBeat: "the door closes",
+            entryState: "at the threshold",
+            dramaticEvent: "the messenger speaks",
+            resultingChange: "the hero understands the stakes",
+            terminalState: "the hero steps forward",
+            targetWords: 1200,
+            targetWordsMin: 900,
+            targetWordsMax: 1500,
+            status: "draft",
+            parentID: parentID.uuidString,
+            storyArcBeatID: UUID().uuidString,
+            recipeRequirementIDs: ["req-child-1", "req-child-2"]
+        )
+        var groupedPayload = payload
+        groupedPayload.outlines = [ProjectImportExportPayload.OutlinePayload(
+            id: outline.id,
+            localProjectID: outline.localProjectID,
+            lineageID: outline.lineageID,
+            storyArcID: outline.storyArcID,
+            name: outline.name,
+            sections: [parentSection, childSection]
+        )]
+
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (localProjectID, lineageID, groupedPayload, "2026-09-11T19:00:00Z")
+        ])
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting(),
+            tombstoneService: MockProjectTombstoneService()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        let report = try await service.restoreProject(
+            localProjectID: localProjectID,
+            projectLineageID: lineageID,
+            into: context,
+            includeTombstoned: false
+        )
+        XCTAssertEqual(report.insertedCount, 2, "Both parent and child must be restored.")
+
+        // Find the restored child by its original ID and verify every Section
+        // Contract field survived the round trip. The parent must be set so
+        // the child knows its group container.
+        let sections = context.fetch(FetchDescriptor<StoryProject>()).first?.outlines.first?.sections ?? []
+        let restoredChild = try XCTUnwrap(sections.first(where: { $0.id == childID }))
+        XCTAssertEqual(restoredChild.parent?.id, parentID, "Child must retain its parent pointer.")
+        XCTAssertEqual(restoredChild.entryState, "at the threshold")
+        XCTAssertEqual(restoredChild.dramaticEvent, "the messenger speaks")
+        XCTAssertEqual(restoredChild.resultingChange, "the hero understands the stakes")
+        XCTAssertEqual(restoredChild.terminalState, "the hero steps forward")
+        XCTAssertEqual(restoredChild.targetWords, 1200)
+        XCTAssertEqual(restoredChild.targetWordsMin, 900)
+        XCTAssertEqual(restoredChild.targetWordsMax, 1500)
+        XCTAssertEqual(restoredChild.recipeRequirementIDs, ["req-child-1", "req-child-2"])
+
+        // Re-encode and verify the child's Section Contract + parentID both
+        // survive the second encode pass.
+        let reEncoded = ProjectSchemaTemplateBuilder.build(
+            project: restoredChild.project!,
+            modelContext: context
+        )
+        let reChild = try XCTUnwrap(reEncoded.outlines.first?.sections.first(where: { $0.id == childID.uuidString }))
+        XCTAssertEqual(reChild.parentID, parentID.uuidString)
+        XCTAssertEqual(reChild.entryState, restoredChild.entryState)
+        XCTAssertEqual(reChild.dramaticEvent, restoredChild.dramaticEvent)
+        XCTAssertEqual(reChild.resultingChange, restoredChild.resultingChange)
+        XCTAssertEqual(reChild.terminalState, restoredChild.terminalState)
+        XCTAssertEqual(reChild.targetWords, restoredChild.targetWords)
+        XCTAssertEqual(reChild.recipeRequirementIDs, restoredChild.recipeRequirementIDs)
+    }
+
         func testRestoreAllProjectsReusesCloudLocalProjectIDAndProjectNotes() async throws {
         let session = makeSession()
         let userID = "11111111-1111-1111-1111-111111111111"

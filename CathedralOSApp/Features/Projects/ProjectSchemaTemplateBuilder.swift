@@ -800,14 +800,25 @@ enum ProjectSchemaTemplateBuilder {
             // a project to whichever section the relationship cache happens to
             // contain.
             let outlineID = outline.id
+            // Fetch ALL sections for this outline (including child sections) so the
+            // Section Contract fields on grouped sub-sections survive the cloud
+            // round-trip. PR #537 (fix the shit arc, PR3) closed the prior
+            // "grouping is a follow-up" deferral; grouping is now first-class.
             let descriptor = FetchDescriptor<OutlineSection>(
                 predicate: #Predicate<OutlineSection> { section in
-                    section.outline?.id == outlineID && section.parent == nil
-                },
-                sortBy: [SortDescriptor(\.position)]
+                    section.outline?.id == outlineID
+                }
             )
             let authoritativeSections = (try? modelContext.fetch(descriptor)) ?? []
-            let sectionPayloads: [ProjectImportExportPayload.OutlineSectionPayload] = authoritativeSections
+            // Parents must precede children in the payload so the import mapper
+            // can resolve `parentID` references when children are reconciled.
+            let sortedSections = authoritativeSections.sorted { lhs, rhs in
+                let lhsIsTopLevel = lhs.parent == nil
+                let rhsIsTopLevel = rhs.parent == nil
+                if lhsIsTopLevel != rhsIsTopLevel { return lhsIsTopLevel }
+                return lhs.position < rhs.position
+            }
+            let sectionPayloads: [ProjectImportExportPayload.OutlineSectionPayload] = sortedSections
                 .map { section in
                     ProjectImportExportPayload.OutlineSectionPayload(
                         id: section.id.uuidString,

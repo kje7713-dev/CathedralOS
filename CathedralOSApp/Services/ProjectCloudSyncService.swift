@@ -1852,11 +1852,19 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         for outline: Outline,
         in context: ModelContext
     ) {
-        // Top-level sections only (parent == nil). Grouped sections (parent_id != nil) deferred to a follow-up.
+        // Reconcile ALL sections (parents and children) so the Section Contract
+        // fields on grouped sub-sections survive the cloud round-trip. PR #537
+        // (fix the shit arc, PR3) closed the prior "grouping is a follow-up"
+        // deferral; grouping is now first-class.
         var existingByID = Dictionary(
-            outline.sections.filter { $0.parent == nil }.map { ($0.id, $0) },
+            outline.sections.map { ($0.id, $0) },
             uniquingKeysWith: { _, later in later }
         )
+        // First pass: create or update every section and collect parent
+        // references. The sync builder sorts parents before children, so the
+        // first pass is sufficient to guarantee every child's parent section
+        // already exists in `outline.sections` before the second pass runs.
+        var parentMappings: [(OutlineSection, UUID)] = []
         for payload in payloads {
             let parsedID = payload.id.flatMap(UUID.init(uuidString:))
             let section: OutlineSection
@@ -1893,10 +1901,21 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                 section.storyArcBeatID = nil
             }
             section.recipeRequirementIDs = payload.recipeRequirementIDs
-            // parentID deferred (grouping is a follow-up).
             section.outline = outline
             if !outline.sections.contains(where: { $0.id == section.id }) {
                 outline.sections.append(section)
+            }
+            if let parentIDString = payload.parentID,
+               let parentID = UUID(uuidString: parentIDString) {
+                parentMappings.append((section, parentID))
+            }
+        }
+        // Second pass: resolve parent references for child sections. A missing
+        // parent (deleted upstream) leaves the child orphaned rather than
+        // crashing the restore; the Section Contract fields are still intact.
+        for (section, parentID) in parentMappings {
+            if let parent = outline.sections.first(where: { $0.id == parentID }) {
+                section.parent = parent
             }
         }
     }
