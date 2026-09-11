@@ -615,6 +615,78 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
 });
 
 
+Deno.test("beat-local expansion visits canonical beats and isolates additions", async () => {
+  const initial = sceneOutline(55).map((section, index) => ({
+    ...section,
+    storyArcBeatID: index < 28 ? "beat-1" : "beat-2",
+  }));
+  const calls: Array<{ beatID: string; currentSections: number }> = [];
+  const result = await progressivelyExpandOutline(
+    initial as any,
+    new Set(["beat-1", "beat-2"]),
+    async (_current, _context, beat) => {
+      if (!beat) throw new Error("beat context missing");
+      calls.push({ beatID: beat.beatID, currentSections: beat.currentSections.length });
+      return [
+        expansionSection(`${beat.beatID} addition 1`, "chapter", beat.beatID),
+        expansionSection(`${beat.beatID} addition 2`, "chapter", beat.beatID),
+      ];
+    },
+    undefined,
+    {
+      beats: [
+        { id: "beat-1", label: "Opening" },
+        { id: "beat-2", label: "Escalation" },
+      ],
+    },
+  );
+  assertEquals(calls, [
+    { beatID: "beat-1", currentSections: 28 },
+    { beatID: "beat-2", currentSections: 27 },
+  ]);
+  assertEquals(result.suggestions.length, 59);
+  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-1").length, 30);
+  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-2").length, 29);
+});
+
+Deno.test("beat-local expansion rejects additions assigned to another beat", async () => {
+  let failure: unknown;
+  try {
+    await progressivelyExpandOutline(
+      sceneOutline(55) as any,
+      new Set(["beat-1", "beat-2"]),
+      async () => [expansionSection("Wrong beat", "chapter", "beat-2")],
+      undefined,
+      { beats: [{ id: "beat-1" }, { id: "beat-2" }] },
+    );
+  } catch (error) {
+    failure = error;
+  }
+  assertEquals((failure as NovelScalePlanningError).code, "failed_expansion");
+  assertEquals((failure as Error).message.includes("validation"), true);
+});
+
+Deno.test("beat-local expansion prompt carries the target beat contract", () => {
+  const prompt = buildExpansionPrompt(sparseRequest as any, sceneOutline(2) as any, {
+    round: 1,
+    projectedTokens: 2600,
+    projectedWords: 2000,
+    desiredWords: [70000, 90000],
+    remainingDeficitTokens: 88400,
+    beat: {
+      beatID: "beat-1",
+      beatLabel: "Opening",
+      beatDescription: "The ordinary world fractures.",
+      currentSections: sceneOutline(2) as any,
+      projectedTokens: 2600,
+      projectedWords: 2000,
+    },
+  });
+  assertEquals(prompt.system.includes("beat-local expansion"), true);
+  assertEquals(prompt.system.includes("storyArcBeatID beat-1"), true);
+  assertEquals(prompt.user.includes("beatLocalContext"), true);
+});
+
 Deno.test("novel scale evaluates existing accepted sections together with the generated delta", () => {
   const existing = sceneOutline(50);
   const generated = sceneOutline(21);

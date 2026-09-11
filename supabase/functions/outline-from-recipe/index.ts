@@ -593,7 +593,8 @@ const EXPANSION_SCHEMA = {
   type: "object",
   properties: {
     suggestions: {
-      type: "array", minItems: 1, maxItems: MAX_PLANNED_SECTIONS,
+      // Beat-local passes may legitimately have no distinct material to add.
+      type: "array", minItems: 0, maxItems: MAX_PLANNED_SECTIONS,
       items: {
         type: "object", additionalProperties: false,
         properties: {
@@ -657,10 +658,20 @@ export interface ProgressiveExpansionResult {
   diagnostics: ExpansionRoundDiagnostic[];
 }
 
+export interface ExpansionBeatContext {
+  beatID: string;
+  beatLabel?: string;
+  beatDescription?: string;
+  currentSections: Suggestion[];
+  projectedTokens: number;
+  projectedWords: number;
+}
+
 export interface ProgressiveExpansionOptions {
   existingSections?: PlannedSectionLike[];
   startRound?: number;
   priorDiagnostics?: ExpansionRoundDiagnostic[];
+  beats?: Array<{ id: string; label?: string; description?: string }>;
 }
 
 export interface ExpansionCheckpoint {
@@ -723,7 +734,7 @@ export function expansionResumeState(run: {
 export async function progressivelyExpandOutline(
   initial: Suggestion[],
   beatIds: Set<string>,
-  expand: (current: Suggestion[], context: ExpansionPromptContext) => Promise<ExpansionAddition[]>,
+  expand: (current: Suggestion[], context: ExpansionPromptContext, beat?: ExpansionBeatContext) => Promise<ExpansionAddition[]>,
   onRound?: (diagnostic: ExpansionRoundDiagnostic, all: ExpansionRoundDiagnostic[], current: Suggestion[]) => Promise<void> | void,
   options: ProgressiveExpansionOptions = {},
 ): Promise<ProgressiveExpansionResult> {
@@ -742,15 +753,48 @@ export async function progressivelyExpandOutline(
       remainingDeficitTokens: evaluateNovelScale(suggestions, existingSections).deficitTokens,
     };
     try {
-      const additions = await expand(suggestions, before);
-      const merged = mergeExpansionAdditions(suggestions, additions);
-      const overCap = merged.length > MAX_PLANNED_SECTIONS;
-      const accepted = overCap ? suggestions : merged;
+      const targetBeats = options.beats?.length
+        ? options.beats
+        : [undefined];
+      let roundSuggestions = suggestions;
+      let additionsReturned = 0;
+      let hitCap = false;
+      for (const beat of targetBeats) {
+        if (!needsNovelExpansion(roundSuggestions, existingSections)) break;
+        const beatContext = beat
+          ? {
+            beatID: beat.id,
+            beatLabel: beat.label,
+            beatDescription: beat.description,
+            currentSections: roundSuggestions.filter((section) => section.storyArcBeatID === beat.id),
+            projectedTokens: projectedExpectedTokens(roundSuggestions.filter((section) => section.storyArcBeatID === beat.id)),
+            projectedWords: projectedExpectedTokens(roundSuggestions.filter((section) => section.storyArcBeatID === beat.id)) / TOKENS_PER_WORD,
+          }
+          : undefined;
+        const additions = await expand(roundSuggestions, {
+          ...before,
+          projectedTokens: evaluateNovelScale(roundSuggestions, existingSections).projectedTokens,
+          projectedWords: evaluateNovelScale(roundSuggestions, existingSections).projectedWords,
+          remainingDeficitTokens: evaluateNovelScale(roundSuggestions, existingSections).deficitTokens,
+        }, beatContext);
+        if (beatContext && additions.some((addition) => addition.storyArcBeatID !== beatContext.beatID)) {
+          throw new ExpansionValidationError(`beat-local expansion returned a section for another beat; expected ${beatContext.beatID}`);
+        }
+        const merged = mergeExpansionAdditions(roundSuggestions, additions);
+        if (merged.length > MAX_PLANNED_SECTIONS) {
+          hitCap = true;
+          break;
+        }
+        roundSuggestions = merged;
+        additionsReturned += additions.length;
+      }
+      const overCap = hitCap || roundSuggestions.length > MAX_PLANNED_SECTIONS;
+      const accepted = overCap ? suggestions : roundSuggestions;
       const projectedTokensAfter = evaluateNovelScale(accepted, existingSections).projectedTokens;
       const diagnostic: ExpansionRoundDiagnostic = {
         round, sectionCountBefore: suggestions.length, projectedTokensBefore,
         projectedWordsBefore: projectedTokensBefore / TOKENS_PER_WORD,
-        additionsReturned: overCap ? 0 : additions.length, sectionCountAfter: accepted.length,
+        additionsReturned: overCap ? 0 : additionsReturned, sectionCountAfter: accepted.length,
         projectedTokensAfter, projectedWordsAfter: projectedTokensAfter / TOKENS_PER_WORD,
         remainingEstimatedDeficitTokens: evaluateNovelScale(accepted, existingSections).deficitTokens,
         status: overCap || accepted.length >= MAX_PLANNED_SECTIONS ? "capped" : "completed",
@@ -759,11 +803,11 @@ export async function progressivelyExpandOutline(
       suggestions = accepted;
       diagnostics.push(diagnostic);
       await onRound?.(diagnostic, diagnostics, suggestions);
-      if (overCap || merged.length >= MAX_PLANNED_SECTIONS) {
+      if (overCap || roundSuggestions.length >= MAX_PLANNED_SECTIONS) {
         warnings.push(`Outline expansion stopped at the global ${MAX_PLANNED_SECTIONS}-section safety cap.`);
         break;
       }
-      if (additions.length === 0) break;
+      if (additionsReturned === 0) break;
     } catch (error) {
       if (!(error instanceof ExpansionValidationError)) throw error;
       const diagnostic: ExpansionRoundDiagnostic = {
@@ -799,6 +843,7 @@ export interface ExpansionPromptContext {
   projectedWords: number;
   desiredWords: [number, number];
   remainingDeficitTokens: number;
+  beat?: ExpansionBeatContext;
 }
 
 
@@ -839,12 +884,16 @@ export function buildExpansionPrompt(
   );
   const round = context?.round ?? 1;
   const unusedStoryMaterial = findUnusedStoryMaterial(current, req.storyMaterialEnrichment);
+  const beatContext = context?.beat;
+  const beatDirective = beatContext
+    ? `This is beat-local expansion for Story Arc beat ${beatContext.beatID}${beatContext.beatLabel ? ` (${beatContext.beatLabel})` : ""}. Develop only this beat; every returned section must use storyArcBeatID ${beatContext.beatID}. The beat currently contains approximately ${Math.round(beatContext.projectedWords).toLocaleString()} projected words. Its description is: ${beatContext.beatDescription ?? "(not supplied)"}.`
+    : "Expand across the supplied outline while preserving each section's Story Arc beat.";
   return {
-    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
+    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 ${renderRecipeObligations(obligations)}`,
-    user: JSON.stringify({ recipe: req.recipe, storyMaterialEnrichment: req.storyMaterialEnrichment ?? null, arcTemplate: req.arcTemplate, recipeObligations: obligations, existingSections: req.existingSections ?? [], currentSuggestions: current, unusedStoryMaterial, expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens } }, null, 2),
+    user: JSON.stringify({ recipe: req.recipe, storyMaterialEnrichment: req.storyMaterialEnrichment ?? null, arcTemplate: req.arcTemplate, recipeObligations: obligations, existingSections: req.existingSections ?? [], currentSuggestions: current, beatLocalContext: beatContext ?? null, unusedStoryMaterial, expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens } }, null, 2),
   };
 }
 
@@ -1785,14 +1834,15 @@ async function runSuggestionJob(
       return await progressivelyExpandOutline(
         initialSuggestions,
         new Set(body.arcTemplate.beats.map((beat) => beat.id)),
-        async (current, context) => {
-          const expansion = buildExpansionPrompt(body, current, context, recipeObligations);
+        async (current, context, beat) => {
+          const expansionContext = beat ? { ...context, beat } : context;
+          const expansion = buildExpansionPrompt(body, current, expansionContext, recipeObligations);
           const expandedRaw = await billableCall(
             expansion.system,
             expansion.user,
             16000,
             { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: EXPANSION_SCHEMA } },
-            `outline-expansion-${context.round}`,
+            `outline-expansion-${context.round}-${beat?.beatID ?? "global"}`,
             (content) => {
               const additions = parseExpansionResponse(content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations);
               const merged = mergeExpansionAdditions(current, additions);
@@ -1822,6 +1872,7 @@ async function runSuggestionJob(
           existingSections: body.existingSections ?? [],
           startRound,
           priorDiagnostics,
+          beats: body.arcTemplate.beats,
         },
       );
     };
