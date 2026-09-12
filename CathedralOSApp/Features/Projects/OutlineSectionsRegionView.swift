@@ -346,10 +346,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         } message: {
             Text("Suggest Sections makes paid AI calls. Credits are charged from actual usage, and the final charge may vary.")
         }
-        .alert("Suggestions Ready", isPresented: Binding(
-            get: { suggestionsFeedback != nil },
-            set: { if !$0 { suggestionsFeedback = nil } }
-        )) {
+        .alert("Suggestions Ready", isPresented: suggestionsFeedbackPresented) {
             Button("Review Suggestions") {
                 suggestionsFeedback = nil
                 showingSuggestionSheet = true
@@ -366,10 +363,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         } message: {
             Text(suggestionsAlertMessage)
         }
-        .alert("Could Not Accept Section", isPresented: Binding(
-            get: { embedError != nil },
-            set: { if !$0 { embedError = nil } }
-        )) {
+        .alert("Could Not Accept Section", isPresented: embedErrorPresented) {
             Button("OK", role: .cancel) { embedError = nil }
         } message: {
             Text(embedError ?? "An unknown error occurred.")
@@ -377,18 +371,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // Accept All runs outside this view, so its terminal error must also
         // be rendered here. The review sheet can disappear during reconciliation;
         // without this fallback the shared coordinator's error is silent.
-        .alert("Accept All Failed", isPresented: Binding(
-            get: { durabilityCoordinator.activeAcceptRun == nil && durabilityCoordinator.acceptRunError != nil },
-            set: { if !$0 { durabilityCoordinator.dismissAcceptRunError() } }
-        )) {
+        .alert("Accept All Failed", isPresented: acceptAllFailurePresented) {
             Button("OK", role: .cancel) { durabilityCoordinator.dismissAcceptRunError() }
         } message: {
             Text(durabilityCoordinator.acceptRunError ?? "Accept All failed.")
         }
-        .alert("Delete Error", isPresented: Binding(
-            get: { deleteError != nil },
-            set: { if !$0 { deleteError = nil } }
-        )) {
+        .alert("Delete Error", isPresented: deleteErrorPresented) {
             Button("OK") { deleteError = nil }
         } message: {
             Text(deleteError ?? "")
@@ -430,6 +418,42 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         let stored = recipeSelectionService
             .storedSelectedRecipeID(for: project)?.uuidString ?? ""
         return [lineag] + packIDs + [stored]
+    }
+
+    // MARK: - Hoisted alert Bindings (type-checker workaround)
+    //
+    // Swift's type-checker times out when `Binding(get:set:)` is inlined
+    // inside an `.alert(...)` while the surrounding view body already has
+    // many modifiers (other alerts, sheets, computed properties, etc).
+    // PR 542 fix: each hoisted property below replaces an inline
+    // `isPresented: Binding(get:set:)` so the type-checker doesn't have
+    // to re-derive the closure inline.
+    private var suggestionsFeedbackPresented: Binding<Bool> {
+        Binding(
+            get: { self.suggestionsFeedback != nil },
+            set: { if !$0 { self.suggestionsFeedback = nil } }
+        )
+    }
+    private var embedErrorPresented: Binding<Bool> {
+        Binding(
+            get: { self.embedError != nil },
+            set: { if !$0 { self.embedError = nil } }
+        )
+    }
+    private var acceptAllFailurePresented: Binding<Bool> {
+        Binding(
+            get: {
+                self.durabilityCoordinator.activeAcceptRun == nil
+                    && self.durabilityCoordinator.acceptRunError != nil
+            },
+            set: { if !$0 { self.durabilityCoordinator.dismissAcceptRunError() } }
+        )
+    }
+    private var deleteErrorPresented: Binding<Bool> {
+        Binding(
+            get: { self.deleteError != nil },
+            set: { if !$0 { self.deleteError = nil } }
+        )
     }
 
     private func syncSectionsOrder() {
