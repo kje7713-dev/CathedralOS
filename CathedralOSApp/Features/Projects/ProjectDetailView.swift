@@ -1317,8 +1317,19 @@ struct ProjectDetailView: View {
         guard let model = selectedModel else { return preset.coverageHint }
         let baseCredits = Double(preset.defaultLengthMode.creditCost)
         let raw = baseCredits * model.outputCreditRate
-        let cost = max(model.minimumChargeCredits, Int(ceil(raw)))
-        return "\(cost) cr · \(preset.coverageHint)"
+        // Phase 3: keep math in Double so fractional credits from
+        // generation_models.minimum_charge_credits (NUMERIC(18,6)) display
+        // verbatim instead of silently rounding.
+        let cost = max(model.minimumChargeCredits, raw)
+        return "\(formattedCost(cost)) cr · \(preset.coverageHint)"
+    }
+
+    private func formattedCost(_ value: Double) -> String {
+        // Trim trailing zeros after a fractional component; integer values
+        // render as the integer itself (e.g. "1" not "1.0").
+        if value.rounded() == value { return String(Int(value)) }
+        let trimmed = String(format: "%g", value)
+        return trimmed
     }
 
     private var sectionsToRunSection: some View {

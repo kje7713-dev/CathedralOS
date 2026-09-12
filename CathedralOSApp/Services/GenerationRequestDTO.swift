@@ -326,5 +326,5 @@ struct GenerationCostEstimate: Codable {
     /// `true` if the user has enough credits to proceed with generation.
     let allowed: Bool
     /// Minimum charge enforced by the selected model regardless of actual token usage.
-    let minimumChargeCredits: Int
+    let minimumChargeCredits: Double
 }
