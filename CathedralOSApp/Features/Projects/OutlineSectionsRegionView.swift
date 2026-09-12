@@ -176,6 +176,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestionSourceRecipe: PromptPackExportPayload?
     @State private var suggestionsLoading = false
     @State private var recoverableSuggestions: OutlineSuggestionResult?
+    @State private var recipeSelectionService = RecipeSelectionService()
+    @State private var recipeSelection: RecipeSelectionResult?
     @State private var suggestionsError: String?
     @State private var suggestionsNotice: String?
     @State private var suggestionsFeedback: String?
@@ -240,6 +242,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             ChapterReaderView(chapter: section, project: project)
         }
         .task {
+            // PR 1: resolve the explicit recipe selection before any other
+            // path that needs it (suggestionsReady, loadSuggestions,
+            // loadRecoverableSuggestions, the review-sheet source).
+            recipeSelection = recipeSelectionService.resolve(for: project)
             ensureOutline()
             syncSectionsOrder()
             refreshAllOutputs()
@@ -254,6 +260,20 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         }
         .onChange(of: generationLaunch?.id) { _, _ in
             consumeGenerationLaunch()
+        }
+        // PR 1: re-resolve recipe selection whenever the project's promptPacks
+        // set changes (edit, import, sync, restore), or whenever the
+        // selection state mutates. The chooser Menu and Suggest Sections
+        // button both consume `recipeSelection` so this keeps them in sync.
+        .onChange(of: recipeSelectionKey) { _, _ in
+            let prior = recipeSelection?.selectedRecipe?.id
+            recipeSelection = recipeSelectionService.resolve(for: project)
+            // If the resolved selection changed (deleted, reselected, restored),
+            // any recoverable suggestions from the prior recipe are stale.
+            if let priorID = prior,
+               priorID != recipeSelection?.selectedRecipe?.id {
+                recoverableSuggestions = nil
+            }
         }
         // PR #342: observe the cathedralOSGenerationOutputsChanged notification
         // posted by DataDurabilityCoordinator.runOperation after any sync (manual
@@ -396,6 +416,18 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             .map { $0.id }
     }
 
+    /// Stable key covering both the project's prompt-pack IDs AND the current
+    /// stored selection. When ANY of these change (recipe edit, restore, store
+    /// write), the `.onChange` re-resolves `recipeSelection` so the chooser
+    /// and the Suggest Sections button stay aligned with the current state.
+    private var recipeSelectionKey: [String] {
+        let lineag = project.stableLineageID.uuidString
+        let packIDs = project.promptPacks.map { $0.id.uuidString }.sorted()
+        let stored = recipeSelectionService
+            .storedSelectedRecipeID(for: project)?.uuidString ?? ""
+        return [lineag] + packIDs + [stored]
+    }
+
     private func syncSectionsOrder() {
         guard let outline = currentOutline else {
             sectionsOrder = []
@@ -451,7 +483,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private var suggestionsReady: Bool {
-        guard project.promptPacks.first != nil else { return false }
+        // PR 1: explicit recipe selection. Never fall back to promptPacks.first.
+        guard recipeSelection?.isReadyForSuggestSections == true else { return false }
+        guard recipeSelection?.selectedRecipe != nil else { return false }
         guard let arc = project.storyArcs.first else { return false }
         guard arc.templateID != nil else { return false }
         return StoryArcTemplate.allTemplates.contains { $0.id == arc.templateID }
@@ -483,7 +517,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private func loadRecoverableSuggestions() async {
-        guard let recipe = project.promptPacks.first,
+        // PR 1: resolve through RecipeSelectionService so recoverable-suggestion
+        // matching and loadSuggestions use the exact same selected recipe.
+        guard let recipe = recipeSelection?.selectedRecipe,
               let projectID = recipe.project?.id else { return }
         do {
             let result = try await OutlineSuggestionService().latestCompletedRun(projectID: projectID)
@@ -510,7 +546,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 
     private func loadSuggestions() async {
         guard !suggestionRunActive else { return }
-        guard let recipe = project.promptPacks.first,
+        // PR 1: explicit recipe selection. Use the same selected recipe as
+        // loadRecoverableSuggestions and the review-sheet source.
+        guard let recipe = recipeSelection?.selectedRecipe,
               let arc = project.storyArcs.first,
               let templateID = arc.templateID,
               let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
@@ -563,6 +601,29 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         openRecoverableSuggestions()
                     } label: {
                         Label("Resume Suggestions", systemImage: "arrow.uturn.backward.circle")
+                            .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    }
+                }
+                // PR 1: when the project has multiple recipes the user must
+                // choose before Suggest Sections can run. The chooser is shown
+                // as a sibling Menu in the same header HStack so the layout
+                // already in production is preserved verbatim.
+                if recipeSelection?.kind == .pending,
+                   let recipes = recipeSelection?.recipes {
+                    Menu {
+                        ForEach(recipes, id: \.id) { pack in
+                            Button(pack.name) {
+                                recipeSelectionService.setSelectedRecipe(id: pack.id, for: project)
+                                recipeSelection = recipeSelectionService.resolve(for: project)
+                                // Clear any stale recoverable suggestions from a prior recipe.
+                                if let prior = recoverableSuggestions,
+                                   prior.sourceRecipe.promptPack.id != pack.id {
+                                    recoverableSuggestions = nil
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Choose Recipe", systemImage: "book.closed")
                             .font(CathedralTheme.Typography.body(13, weight: .semibold))
                     }
                 }
