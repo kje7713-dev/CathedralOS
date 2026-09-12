@@ -107,62 +107,64 @@ function makeLLMResponse(overrides: Partial<LLMResponse> = {}): LLMResponse {
 
 type AnyResult = unknown;
 
-interface MockAdminUsageEventRow {
-  user_id: string;
-  generation_output_id: string | null;
-  action: string;
-  purpose: string;
-  model_name: string;
-  input_tokens: number | null;
-  output_tokens: number | null;
-  generation_length_mode: string;
-  output_budget: number | null;
-  status: string;
-  credit_revenue_usd: number | null;
-  idempotency_key: string | null;
-}
-
-interface MockAdminCall {
-  table: string;
-  row: MockAdminUsageEventRow;
+interface MockRpcCall {
+  name: string;
+  params: Record<string, unknown>;
 }
 
 interface MockAdminClient {
-  insertCalls: MockAdminCall[];
-  resultsByCall: unknown[];
+  rpcCalls: MockRpcCall[];
+  insertCalls: MockRpcCall[];
+  rpc(name: string, params: Record<string, unknown>): Promise<{
+    data: unknown[] | null;
+    error: { message?: string } | null;
+  }>;
   from(table: string): {
-    insert(row: unknown): unknown;
+    insert(row: unknown): Promise<unknown>;
   };
 }
 
 function makeMockAdmin(opts: {
+  rpcResults?: unknown[];
   insertResults?: unknown[];
 } = {}): MockAdminClient {
-  const insertCalls: MockAdminCall[] = [];
-  const results = opts.insertResults ??
-    [{ data: { id: "row-1" }, error: null }];
-  let idx = 0;
+  const rpcCalls: MockRpcCall[] = [];
+  const insertCalls: MockRpcCall[] = [];
+  const rpcSeq = opts.rpcResults ?? [
+    {
+      data: [{
+        settlement_status: "settled",
+        usage_event_id: "row-1",
+        ledger_id: "ledger-1",
+        remaining_credits: 95,
+      }],
+      error: null,
+    },
+  ];
+  const insertSeq = opts.insertResults ?? [{ data: null, error: null }];
+  let rpcIdx = 0;
+  let insertIdx = 0;
   return {
+    rpcCalls,
     insertCalls,
-    resultsByCall: results,
-    from(table: string) {
+    rpc(name: string, params: Record<string, unknown>) {
+      rpcCalls.push({ name, params });
+      const result = rpcSeq[rpcIdx] ?? rpcSeq[rpcSeq.length - 1];
+      rpcIdx++;
+      return Promise.resolve(result as {
+        data: unknown[] | null;
+        error: { message?: string } | null;
+      });
+    },
+    // recordFailedUsageEvent still uses the postgrest .from().insert()
+    // shape; tests that exercise it call admin.rpcCalls to count both paths.
+    from(_table: string) {
       return {
         insert(row: unknown) {
-          // The mock admin types insert as `unknown` to keep lint quiet;
-          // narrow to the expected row shape so test assertions are typed.
-          insertCalls.push({
-            table,
-            row: row as MockAdminUsageEventRow,
-          });
-          const result = results[idx] ?? results[results.length - 1];
-          idx++;
-          return {
-            select: () => ({
-              maybeSingle: () => Promise.resolve(result),
-            }),
-            then: (resolve: (v: unknown) => void) =>
-              Promise.resolve(resolve(result)),
-          };
+          insertCalls.push({ name: "insert", params: row as Record<string, unknown> });
+          const result = insertSeq[insertIdx] ?? insertSeq[insertSeq.length - 1];
+          insertIdx++;
+          return Promise.resolve(result);
         },
       };
     },
@@ -283,7 +285,7 @@ Deno.test("runBillableLLM: insufficient credits throws BEFORE the provider is ca
     BillableLLMError,
   );
   assertEquals(providerCalls, 0);
-  assertEquals(admin.insertCalls.length, 0);
+  assertEquals(admin.rpcCalls.length, 0);
 });
 
 Deno.test("runBillableLLM: successful call records provider model + tokens in usage event", async () => {
@@ -305,16 +307,15 @@ Deno.test("runBillableLLM: successful call records provider model + tokens in us
   assertEquals(result.providerResult.modelName, "gpt-4o-mini-actual");
   assertEquals(result.providerResult.inputTokens, 1234);
   assertEquals(result.providerResult.outputTokens, 567);
-  assertEquals(admin.insertCalls.length, 1);
-  const row = admin.insertCalls[0].row;
-  assertEquals(row.user_id, USER_ID);
-  assertEquals(row.purpose, "coherence-check");
-  assertEquals(row.action, "check");
-  assertEquals(row.model_name, "gpt-4o-mini-actual");
-  assertEquals(row.input_tokens, 1234);
-  assertEquals(row.output_tokens, 567);
-  assertEquals(row.status, "complete");
-  assertEquals(row.idempotency_key, "idem-1");
+  assertEquals(admin.rpcCalls.length, 1);
+  const params = admin.rpcCalls[0].params;
+  assertEquals(params.p_user_id, USER_ID);
+  assertEquals(params.p_purpose, "coherence-check");
+  assertEquals(params.p_action, "check");
+  assertEquals(params.p_model_name, "gpt-4o-mini-actual");
+  assertEquals(params.p_input_tokens, 1234);
+  assertEquals(params.p_output_tokens, 567);
+  assertEquals(params.p_idempotency_key, "idem-1");
 });
 
 Deno.test("runBillableLLM: purpose + action reach the usage event unchanged", async () => {
@@ -328,9 +329,9 @@ Deno.test("runBillableLLM: purpose + action reach the usage event unchanged", as
     makeRequest({ purpose: "generate", action: "regenerate" }),
     deps,
   );
-  const row = admin.insertCalls[0].row;
-  assertEquals(row.purpose, "generate");
-  assertEquals(row.action, "regenerate");
+  const params = admin.rpcCalls[0].params;
+  assertEquals(params.p_purpose, "generate");
+  assertEquals(params.p_action, "regenerate");
 });
 
 Deno.test("runBillableLLM: providerOptions are forwarded to provider.complete()", async () => {
@@ -371,10 +372,21 @@ Deno.test("runBillableLLM: providerOptions absent is preserved as undefined", as
   assertEquals(capturedOptions, undefined);
 });
 
-Deno.test("runBillableLLM: confirmed unique-violation does NOT charge again", async () => {
+Deno.test("runBillableLLM: RPC 'duplicate' status does NOT charge again (idempotent replay)", async () => {
+  // PR5: idempotency moves into settle_billable_usage. The RPC returns
+  // settlement_status='duplicate' for replays; the runner reports
+  // charged=false / usageEventInserted=false without raising.
   const admin = makeMockAdmin({
-    insertResults: [
-      { data: null, error: { code: "23505", message: "duplicate key value" } },
+    rpcResults: [
+      {
+        data: [{
+          settlement_status: "duplicate",
+          usage_event_id: "row-existing",
+          ledger_id: null,
+          remaining_credits: 95,
+        }],
+        error: null,
+      },
     ],
   });
   const creditStore = makeCreditStore();
@@ -386,14 +398,15 @@ Deno.test("runBillableLLM: confirmed unique-violation does NOT charge again", as
   const result = await runBillableLLM(makeRequest(), deps);
   assertEquals(result.charged, false);
   assertEquals(result.usageEventInserted, false);
-  // creditStore.charge must NOT have been called — chargeCalls is empty.
+  // creditStore.charge is no longer called from this path.
   assertEquals(creditStore.chargeCalls.length, 0);
-  assertEquals(admin.insertCalls.length, 1);
+  assertEquals(admin.rpcCalls.length, 1);
+  assertEquals(admin.rpcCalls[0].name, "settle_billable_usage");
 });
 
 Deno.test("runBillableLLM: non-uniqueness DB error propagates as BillableLLMError (NOT silent duplicate)", async () => {
   const admin = makeMockAdmin({
-    insertResults: [
+    rpcResults: [
       { data: null, error: { code: "42P01", message: "undefined_table" } },
     ],
   });
@@ -413,7 +426,7 @@ Deno.test("runBillableLLM: missing inserted row data (no error) throws usage_eve
   // violation. The runner must NOT proceed to charging as if persistence
   // succeeded.
   const admin = makeMockAdmin({
-    insertResults: [{ data: null, error: null }],
+    rpcResults: [{ data: null, error: null }],
   });
   const creditStore = makeCreditStore();
   const deps: BillableLLMDependencies = {
@@ -427,7 +440,7 @@ Deno.test("runBillableLLM: missing inserted row data (no error) throws usage_eve
   );
   assertEquals(err.code, "usage_event_insert_failed");
   assertEquals(creditStore.chargeCalls.length, 0);
-  assertEquals(admin.insertCalls.length, 1);
+  assertEquals(admin.rpcCalls.length, 1);
 });
 
 Deno.test("runBillableLLM: provider failure records 'failed' usage event + throws", async () => {
@@ -446,8 +459,12 @@ Deno.test("runBillableLLM: provider failure records 'failed' usage event + throw
     () => runBillableLLM(makeRequest(), deps),
     ProviderError,
   );
+  // PR5: provider failure writes a failed-status audit row via
+  // recordFailedUsageEvent's .from().insert() path; the main settle RPC
+  // is never reached.
+  assertEquals(admin.rpcCalls.length, 0);
   assertEquals(admin.insertCalls.length, 1);
-  const row = admin.insertCalls[0].row;
+  const row = admin.insertCalls[0].params;
   assertEquals(row.status, "failed");
   assertEquals(row.purpose, "coherence-check");
   assertEquals(row.action, "check");
@@ -492,12 +509,20 @@ Deno.test("runBillableLLM: onProviderSuccess throw propagates WITHOUT recording 
     Error,
     "persistence failed",
   );
-  assertEquals(admin.insertCalls.length, 0);
+  assertEquals(admin.rpcCalls.length, 0);
 });
 
-Deno.test("runBillableLLM: credit charge exception throws credit_charge_failed (NOT a silent free-output path)", async () => {
-  const admin = makeMockAdmin();
-  const creditStore = makeCreditStore({ chargeShouldThrow: true });
+Deno.test("runBillableLLM: RPC failure throws credit_charge_failed (atomicity preserved)", async () => {
+  // PR5: when settle_billable_usage returns an error, the runner maps
+  // non-idempotency failures to credit_charge_failed. The RPC owns the
+  // usage_event INSERT + entitlement debit + ledger INSERT inside one
+  // transaction, so no audit row is ever left behind when it fails.
+  const admin = makeMockAdmin({
+    rpcResults: [
+      { data: null, error: { message: "connection terminated unexpectedly" } },
+    ],
+  });
+  const creditStore = makeCreditStore();
   const deps: BillableLLMDependencies = {
     adminClient: admin,
     provider: makeProvider(makeLLMResponse()),
@@ -508,9 +533,7 @@ Deno.test("runBillableLLM: credit charge exception throws credit_charge_failed (
     BillableLLMError,
   );
   assertEquals(err.code, "credit_charge_failed");
-  // The usage event IS inserted (audit trail preserved), but the charge
-  // failed — surface as a non-2xx response, NOT as a 200 + free output.
-  assertEquals(admin.insertCalls.length, 1);
+  assertEquals(admin.rpcCalls.length, 1);
   assertEquals(creditStore.chargeCalls.length, 0);
 });
 
@@ -658,8 +681,11 @@ Deno.test("recordFailedUsageEvent: writes a row with status='failed' + null toke
     outputBudget: 1500,
   };
   await recordFailedUsageEvent(admin, input);
+  // PR5: recordFailedUsageEvent still uses the postgrest .from().insert()
+  // path; the main settle RPC is not invoked on failure.
+  assertEquals(admin.rpcCalls.length, 0);
   assertEquals(admin.insertCalls.length, 1);
-  const row = admin.insertCalls[0].row;
+  const row = admin.insertCalls[0].params;
   assertEquals(row.status, "failed");
   assertEquals(row.purpose, "coherence-check");
   assertEquals(row.action, "check");
