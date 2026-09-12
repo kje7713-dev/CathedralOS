@@ -800,14 +800,39 @@ enum ProjectSchemaTemplateBuilder {
             // a project to whichever section the relationship cache happens to
             // contain.
             let outlineID = outline.id
+            // Fetch ALL sections for this outline (including child sections) so the
+            // Section Contract fields on grouped sub-sections survive the cloud
+            // round-trip. PR #537 (fix the shit arc, PR3) closed the prior
+            // "grouping is a follow-up" deferral; grouping is now first-class.
             let descriptor = FetchDescriptor<OutlineSection>(
                 predicate: #Predicate<OutlineSection> { section in
-                    section.outline?.id == outlineID && section.parent == nil
-                },
-                sortBy: [SortDescriptor(\.position)]
+                    section.outline?.id == outlineID
+                }
             )
             let authoritativeSections = (try? modelContext.fetch(descriptor)) ?? []
-            let sectionPayloads: [ProjectImportExportPayload.OutlineSectionPayload] = authoritativeSections
+            // Stable deterministic ordering: top-level sections first (by
+            // position, then UUID as tie-breaker), then child sections grouped
+            // by parent (by parent-UUID, position, UUID). Identical project
+            // state must produce identical snapshots to avoid snapshot churn —
+            // child groups commonly reuse positions such as 0, 1, 2, so the
+            // UUID tie-breaker is required for a fully deterministic order.
+            // NOTE: the import mapper does NOT depend on this order — its
+            // two-pass reconciliation handles child-before-parent payloads
+            // by creating every section in the first pass and resolving
+            // parent references in the second pass.
+            let topLevel = authoritativeSections.filter { $0.parent == nil }.sorted { lhs, rhs in
+                if lhs.position != rhs.position { return lhs.position < rhs.position }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            let children = authoritativeSections.filter { $0.parent != nil }.sorted { lhs, rhs in
+                let lhsParent = lhs.parent?.id.uuidString ?? ""
+                let rhsParent = rhs.parent?.id.uuidString ?? ""
+                if lhsParent != rhsParent { return lhsParent < rhsParent }
+                if lhs.position != rhs.position { return lhs.position < rhs.position }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            let sortedSections = topLevel + children
+            let sectionPayloads: [ProjectImportExportPayload.OutlineSectionPayload] = sortedSections
                 .map { section in
                     ProjectImportExportPayload.OutlineSectionPayload(
                         id: section.id.uuidString,

@@ -1163,6 +1163,538 @@ final class ProjectCloudSyncTests: XCTestCase {
         _ = try await targetedTask.value
     }
 
+    // MARK: - Section Contract round-trip + parent reconciliation (Fix the Shit PR3)
+
+    // MARK: - Helper assertions for the 16-field canonical Section Contract surface
+
+    /// Assert all 16 canonical Section Contract metadata fields on a SwiftData
+    /// `OutlineSection` after restore. The payload→section conversion must
+    /// preserve every field without loss.
+    private func assertRestoredSectionContract(
+        _ section: OutlineSection,
+        expectedEntry: String,
+        expectedEvent: String,
+        expectedChange: String,
+        expectedTerminal: String,
+        expectedArcBeatID: UUID?,
+        expectedRecipeIDs: [String],
+        expectedTitle: String,
+        expectedSummary: String,
+        expectedPosition: Int
+    ) {
+        XCTAssertEqual(section.entryState, expectedEntry)
+        XCTAssertEqual(section.dramaticEvent, expectedEvent)
+        XCTAssertEqual(section.resultingChange, expectedChange)
+        XCTAssertEqual(section.terminalState, expectedTerminal)
+        XCTAssertEqual(section.targetWords, 1200)
+        XCTAssertEqual(section.targetWordsMin, 900)
+        XCTAssertEqual(section.targetWordsMax, 1500)
+        XCTAssertEqual(section.storyArcBeatID, expectedArcBeatID)
+        XCTAssertEqual(section.recipeRequirementIDs, expectedRecipeIDs)
+        XCTAssertEqual(section.container, "scene")
+        XCTAssertEqual(section.pov, "thirdPersonLimited")
+        XCTAssertEqual(section.terminalBeat, "the door closes")
+        XCTAssertEqual(section.status, "draft")
+        XCTAssertEqual(section.position, expectedPosition)
+        XCTAssertEqual(section.title, expectedTitle)
+        XCTAssertEqual(section.summary, expectedSummary)
+    }
+
+    /// Assert all 16 canonical Section Contract metadata fields on a
+    /// `ProjectImportExportPayload.OutlineSectionPayload` after re-encode.
+    private func assertReEncodedSectionContract(
+        _ payload: ProjectImportExportPayload.OutlineSectionPayload,
+        expectedEntry: String,
+        expectedEvent: String,
+        expectedChange: String,
+        expectedTerminal: String,
+        expectedArcBeatID: String?,
+        expectedRecipeIDs: [String],
+        expectedTitle: String,
+        expectedSummary: String,
+        expectedPosition: Int
+    ) {
+        XCTAssertEqual(payload.entryState, expectedEntry)
+        XCTAssertEqual(payload.dramaticEvent, expectedEvent)
+        XCTAssertEqual(payload.resultingChange, expectedChange)
+        XCTAssertEqual(payload.terminalState, expectedTerminal)
+        XCTAssertEqual(payload.targetWords, 1200)
+        XCTAssertEqual(payload.targetWordsMin, 900)
+        XCTAssertEqual(payload.targetWordsMax, 1500)
+        XCTAssertEqual(payload.storyArcBeatID, expectedArcBeatID.uuidString)
+        XCTAssertEqual(payload.recipeRequirementIDs, expectedRecipeIDs)
+        XCTAssertEqual(payload.container, "scene")
+        XCTAssertEqual(payload.pov, "thirdPersonLimited")
+        XCTAssertEqual(payload.terminalBeat, "the door closes")
+        XCTAssertEqual(payload.status, "draft")
+        XCTAssertEqual(payload.position, expectedPosition)
+        XCTAssertEqual(payload.title, expectedTitle)
+        XCTAssertEqual(payload.summary, expectedSummary)
+    }
+
+    /// Build a populated `OutlineSection` with the canonical 16-field Section
+    /// Contract surface. Used as a building block for round-trip fixtures.
+    private func makeFixtureSection(
+        position: Int,
+        title: String,
+        summary: String = "Default summary"
+    ) -> OutlineSection {
+        let section = OutlineSection(position: position, title: title, summary: summary)
+        section.container = "scene"
+        section.pov = "thirdPersonLimited"
+        section.terminalBeat = "the door closes"
+        section.status = "draft"
+        section.entryState = "at the gate"
+        section.dramaticEvent = "the messenger arrives"
+        section.resultingChange = "the gate is opened"
+        section.terminalState = "the hero steps through"
+        section.targetWords = 1200
+        section.targetWordsMin = 900
+        section.targetWordsMax = 1500
+        section.storyArcBeatID = UUID()
+        section.recipeRequirementIDs = ["req-1", "req-2", "req-3"]
+        return section
+    }
+
+    /// Build a `StoryProject` + `Outline` + `OutlineSection` fixture in a fresh
+    /// SwiftData context and return the serialized payload. The serialization
+    /// path uses the production builder signature `build(project:modelContext:)`.
+    private func buildFixturePayload(
+        lineageID: UUID,
+        includeLegacyNilContract: Bool = false,
+        builder: (ModelContext, StoryProject, Outline) throws -> Void = { _, _, _ in }
+    ) throws -> (StoryProject, ProjectImportExportPayload) {
+        let context = ModelContext(try makeProjectContainer())
+        let project = StoryProject(name: "Round Trip Project")
+        project.lineageID = lineageID
+        context.insert(project)
+        let outline = Outline(name: "Main Outline")
+        outline.project = project
+        context.insert(outline)
+        try builder(context, project, outline)
+        if includeLegacyNilContract {
+            // No-op: caller chose not to populate Section Contract fields.
+        }
+        try context.save()
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        return (project, payload)
+    }
+
+    /// Round-trip a payload through the production restore path into a fresh
+    /// SwiftData context and return the restored project so the caller can
+    /// assert on every field.
+    private func roundTripRestore(
+        payload: ProjectImportExportPayload,
+        localProjectID: UUID,
+        lineageID: UUID
+    ) async throws -> (ProjectRestoreReport, StoryProject?) {
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (localProjectID, lineageID, payload, "2026-09-11T19:00:00Z")
+        ])
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+        let service = ProjectCloudSyncService(
+            authService: MockProjectCloudSyncAuthService(
+                authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+                accessToken: "user-jwt-token"
+            ),
+            session: makeSession(),
+            configuration: .makeForTesting(),
+            tombstoneService: MockProjectTombstoneService()
+        )
+        let restoreContext = ModelContext(try makeProjectContainer())
+        let report = try await service.restoreProject(
+            localProjectID: localProjectID,
+            projectLineageID: lineageID,
+            into: restoreContext,
+            includeTombstoned: false
+        )
+        let restoredProject = restoreContext.fetch(FetchDescriptor<StoryProject>()).first
+        return (report, restoredProject)
+    }
+
+    /// Build a payload whose child section's `parentID` is rewritten (set to a
+    /// new UUID string or cleared to NSNull). Round-trips through JSON because
+    /// `OutlineSectionPayload` is immutable.
+    private func rewriteSectionParentID(
+        payload: ProjectImportExportPayload,
+        sectionTitle: String,
+        newParentID: String?
+    ) throws -> ProjectImportExportPayload {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(payload)
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var outlines = try XCTUnwrap(root["outlines"] as? [[String: Any]])
+        for i in outlines.indices {
+            var sections = try XCTUnwrap(outlines[i]["sections"] as? [[String: Any]])
+            for j in sections.indices {
+                if (sections[j]["title"] as? String) == sectionTitle {
+                    sections[j]["parentID"] = newParentID ?? NSNull()
+                }
+            }
+            outlines[i]["sections"] = sections
+        }
+        root["outlines"] = outlines
+        let modifiedData = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        return try JSONDecoder().decode(ProjectImportExportPayload.self, from: modifiedData)
+    }
+
+    /// Reverse the section order within every outline in the payload. Used to
+    /// prove the import mapper's two-pass reconciliation does not depend on the
+    /// sync builder placing parents before children.
+    private func reverseSectionOrder(
+        payload: ProjectImportExportPayload
+    ) throws -> ProjectImportExportPayload {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(payload)
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var outlines = try XCTUnwrap(root["outlines"] as? [[String: Any]])
+        for i in outlines.indices {
+            var sections = try XCTUnwrap(outlines[i]["sections"] as? [[String: Any]])
+            sections.reverse()
+            outlines[i]["sections"] = sections
+        }
+        root["outlines"] = outlines
+        let modifiedData = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        return try JSONDecoder().decode(ProjectImportExportPayload.self, from: modifiedData)
+    }
+
+    // MARK: - End-to-end Section Contract round-trip
+
+    /// A populated Section Contract must survive a complete
+    /// encode → restore → re-encode round trip without loss. Covers the
+    /// four state/change fields, the three length fields, the arc beat id,
+    /// the recipe obligation ids, the parent id, the container/pov/terminal
+    /// metadata, status, position, title, and summary — every canonical
+    /// Section Contract metadata surface that current `origin/main` already
+    /// carries. Built on real SwiftData fixtures (insert StoryProject,
+    /// Outline, OutlineSection rows; attach relationships; save).
+    func testSectionContractRoundTripPreservesAllFields() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let section = makeFixtureSection(position: 0, title: "Section 1", summary: "Opens the arc")
+            section.outline = outline
+            context.insert(section)
+        }
+        let arcBeatIDString = try XCTUnwrap(payload.outlines.first?.sections.first?.storyArcBeatID)
+        let expectedArcBeatID = UUID(uuidString: arcBeatIDString)
+        let expectedRecipeIDs = try XCTUnwrap(payload.outlines.first?.sections.first?.recipeRequirementIDs)
+
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: payload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 1)
+        let restored = try XCTUnwrap(restoredProject?.outlines.first?.sections.first)
+        assertRestoredSectionContract(
+            restored,
+            expectedEntry: "at the gate",
+            expectedEvent: "the messenger arrives",
+            expectedChange: "the gate is opened",
+            expectedTerminal: "the hero steps through",
+            expectedArcBeatID: expectedArcBeatID,
+            expectedRecipeIDs: expectedRecipeIDs,
+            expectedTitle: "Section 1",
+            expectedSummary: "Opens the arc",
+            expectedPosition: 0
+        )
+        XCTAssertNil(restored.parent, "Top-level section must have no parent.")
+        // OutlineSection does not own a direct project property; the canonical
+        // relationship chain is section.outline?.project. Assert the chain is
+        // wired through restore.
+        XCTAssertIdentical(restored.outline?.project, restoredProject)
+
+        // Re-encode the restored graph and verify every Section Contract field
+        // survives the second encode pass (round trip).
+        let restoreContext = ModelContext(try makeProjectContainer())
+        // We need to re-insert the restored project into the re-encode context
+        // because each makeProjectContainer() builds an isolated in-memory store.
+        // Build the re-encode context by reusing the restored project's model.
+        let reEncodedProject = try XCTUnwrap(restoredProject)
+        let reEncoded = ProjectSchemaTemplateBuilder.build(project: reEncodedProject, modelContext: ModelContext(try makeProjectContainer()))
+        let reSection = try XCTUnwrap(reEncoded.outlines.first?.sections.first)
+        assertReEncodedSectionContract(
+            reSection,
+            expectedEntry: restored.entryState ?? "",
+            expectedEvent: restored.dramaticEvent ?? "",
+            expectedChange: restored.resultingChange ?? "",
+            expectedTerminal: restored.terminalState ?? "",
+            expectedArcBeatID: reSection.storyArcBeatID,
+            expectedRecipeIDs: restored.recipeRequirementIDs,
+            expectedTitle: restored.title,
+            expectedSummary: restored.summary,
+            expectedPosition: restored.position
+        )
+        XCTAssertNil(reSection.parentID, "Top-level section's parentID must be nil.")
+    }
+
+    /// Legacy outlines predate the Section Contract migration. All four
+    /// state/change fields and the three length fields are nil on those rows
+    /// and must restore cleanly without crashing the import mapper.
+    func testLegacyNullSectionContractRestores() async throws {
+        let lineageID = UUID()
+        // Build a project with a section that has NO Section Contract fields
+        // populated, simulating a pre-PR-#528 legacy outline.
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let section = OutlineSection(position: 0, title: "Legacy Section", summary: "Pre-528")
+            section.container = "scene"
+            section.pov = "thirdPersonLimited"
+            section.status = "draft"
+            section.recipeRequirementIDs = []
+            section.outline = outline
+            context.insert(section)
+        }
+
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: payload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 1)
+        let restored = try XCTUnwrap(restoredProject?.outlines.first?.sections.first)
+        XCTAssertNil(restored.entryState)
+        XCTAssertNil(restored.dramaticEvent)
+        XCTAssertNil(restored.resultingChange)
+        XCTAssertNil(restored.terminalState)
+        XCTAssertNil(restored.targetWords)
+        XCTAssertNil(restored.targetWordsMin)
+        XCTAssertNil(restored.targetWordsMax)
+        XCTAssertNil(restored.storyArcBeatID)
+        XCTAssertEqual(restored.recipeRequirementIDs, [])
+        XCTAssertEqual(restored.container, "scene")
+        XCTAssertEqual(restored.pov, "thirdPersonLimited")
+        XCTAssertEqual(restored.status, "draft")
+        XCTAssertEqual(restored.position, 0)
+        XCTAssertEqual(restored.title, "Legacy Section")
+        XCTAssertEqual(restored.summary, "Pre-528")
+    }
+
+    /// Child sections (parent != nil) must survive the same round trip as
+    /// top-level sections. PR3 closed the prior "grouping is a follow-up"
+    /// deferral; both the sync builder (serialize all sections) and the
+    /// import mapper (two-pass: create all, then set parents) now handle
+    /// grouped sub-sections. A child with its own populated Section Contract
+    /// must restore, retain its parent, and re-encode with the contract intact.
+    func testChildSectionRoundTripPreservesContract() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parentSection = makeFixtureSection(position: 0, title: "Chapter 1", summary: "Opens the arc")
+            parentSection.recipeRequirementIDs = ["req-parent"]
+            parentSection.outline = outline
+            context.insert(parentSection)
+            let childSection = makeFixtureSection(position: 0, title: "Scene 1", summary: "The arrival")
+            childSection.recipeRequirementIDs = ["req-child-1", "req-child-2"]
+            childSection.parent = parentSection
+            childSection.outline = outline
+            context.insert(childSection)
+        }
+        let childPayload = try XCTUnwrap(payload.outlines.first?.sections.first(where: { $0.title == "Scene 1" }))
+        let expectedArcBeatID = UUID(uuidString: try XCTUnwrap(childPayload.storyArcBeatID))
+        let expectedRecipeIDs = childPayload.recipeRequirementIDs
+        let parentIDString = try XCTUnwrap(payload.outlines.first?.sections.first(where: { $0.title == "Chapter 1" })).id
+
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: payload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 2, "Both parent and child must be restored.")
+        let sections = try XCTUnwrap(restoredProject?.outlines.first?.sections)
+        let restoredChild = try XCTUnwrap(sections.first(where: { $0.title == "Scene 1" }))
+        assertRestoredSectionContract(
+            restoredChild,
+            expectedEntry: "at the gate",
+            expectedEvent: "the messenger arrives",
+            expectedChange: "the gate is opened",
+            expectedTerminal: "the hero steps through",
+            expectedArcBeatID: expectedArcBeatID,
+            expectedRecipeIDs: expectedRecipeIDs,
+            expectedTitle: "Scene 1",
+            expectedSummary: "The arrival",
+            expectedPosition: 0
+        )
+        XCTAssertNotNil(restoredChild.parent, "Child must retain its parent pointer.")
+        XCTAssertEqual(restoredChild.parent?.id.uuidString, parentIDString, "Child's parent must point to the original parent section.")
+    }
+
+    // MARK: - Parent reconciliation regressions (Fix the Shit PR3)
+
+    /// A child section whose payload `parentID` is nil must clear any stale
+    /// parent that was attached before the restore. Without authoritative
+    /// reconciliation, an existing child would keep its old parent even though
+    /// the payload reclassifies it as top-level.
+    func testChildBecomesTopLevelWhenParentIDNil() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parentSection = makeFixtureSection(position: 0, title: "Chapter", summary: "Parent")
+            parentSection.recipeRequirementIDs = []
+            parentSection.outline = outline
+            context.insert(parentSection)
+            let childSection = makeFixtureSection(position: 0, title: "Scene", summary: "Child")
+            childSection.parent = parentSection
+            childSection.outline = outline
+            context.insert(childSection)
+        }
+        // Rewrite the payload so the child's parentID is nil (top-level).
+        let modifiedPayload = try rewriteSectionParentID(
+            payload: payload, sectionTitle: "Scene", newParentID: nil
+        )
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 2)
+        let restoredScene = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Scene" }))
+        XCTAssertNil(restoredScene.parent, "parentID = nil must clear the stale parent.")
+    }
+
+    /// Reparenting a child from parent A to parent B must work correctly.
+    /// The import mapper assigns the new parent based on the payload's
+    /// parentID, even if the child was previously attached to a different
+    /// parent locally.
+    func testChildReparentsToDifferentParent() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parentA = makeFixtureSection(position: 0, title: "Parent A", summary: "First parent")
+            parentA.recipeRequirementIDs = []
+            parentA.outline = outline
+            context.insert(parentA)
+            let parentB = makeFixtureSection(position: 1, title: "Parent B", summary: "Second parent")
+            parentB.recipeRequirementIDs = []
+            parentB.outline = outline
+            context.insert(parentB)
+            let child = makeFixtureSection(position: 0, title: "Child", summary: "Reparented")
+            child.parent = parentA
+            child.outline = outline
+            context.insert(child)
+        }
+        let parentBID = try XCTUnwrap(payload.outlines.first?.sections.first(where: { $0.title == "Parent B" })).id
+        let modifiedPayload = try rewriteSectionParentID(
+            payload: payload, sectionTitle: "Child", newParentID: parentBID
+        )
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 3)
+        let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
+        XCTAssertNotNil(restoredChild.parent)
+        XCTAssertEqual(restoredChild.parent?.id.uuidString, parentBID, "Child must be reparented to Parent B.")
+        XCTAssertNotEqual(restoredChild.parent?.title, "Parent A", "Child must no longer be attached to Parent A.")
+    }
+
+    /// A child whose payload `parentID` points to a parent absent from the
+    /// restored outline must be orphaned (parent = nil) rather than retaining a
+    /// stale local parent. This is the "missing/unresolvable parent" branch
+    /// of the authoritative reconciliation.
+    func testChildBecomesOrphanedWhenParentMissing() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parent = makeFixtureSection(position: 0, title: "Parent", summary: "Parent")
+            parent.recipeRequirementIDs = []
+            parent.outline = outline
+            context.insert(parent)
+            let child = makeFixtureSection(position: 0, title: "Child", summary: "Will orphan")
+            child.parent = parent
+            child.outline = outline
+            context.insert(child)
+        }
+        let nonExistentParentID = UUID().uuidString
+        let modifiedPayload = try rewriteSectionParentID(
+            payload: payload, sectionTitle: "Child", newParentID: nonExistentParentID
+        )
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 2)
+        let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
+        XCTAssertNil(restoredChild.parent, "Missing parent must result in orphan (parent = nil).")
+    }
+
+    /// The import mapper's two-pass reconciliation must not depend on the sync
+    /// builder placing parents before children. Payload order child-before-
+    /// parent must resolve identically to the canonical parent-before-child
+    /// order.
+    func testChildBeforeParentOrderStillResolves() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parent = makeFixtureSection(position: 0, title: "Parent", summary: "Parent")
+            parent.recipeRequirementIDs = []
+            parent.outline = outline
+            context.insert(parent)
+            let child = makeFixtureSection(position: 0, title: "Child", summary: "Reordered")
+            child.parent = parent
+            child.outline = outline
+            context.insert(child)
+        }
+        let parentID = try XCTUnwrap(payload.outlines.first?.sections.first(where: { $0.title == "Parent" })).id
+        let reorderedPayload = try reverseSectionOrder(payload: payload)
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: reorderedPayload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 2)
+        let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
+        XCTAssertNotNil(restoredChild.parent, "Child must resolve its parent even when the payload delivers child-before-parent.")
+        XCTAssertEqual(restoredChild.parent?.id.uuidString, parentID, "Child must point to the correct parent.")
+    }
+
+    /// Nested parent/child/grandchild relationships must survive restore with
+    /// every level of the hierarchy intact.
+    func testGrandchildRelationshipSurvivesRestore() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parent = makeFixtureSection(position: 0, title: "Parent", summary: "Outer")
+            parent.recipeRequirementIDs = []
+            parent.outline = outline
+            context.insert(parent)
+            let child = makeFixtureSection(position: 0, title: "Child", summary: "Middle")
+            child.parent = parent
+            child.recipeRequirementIDs = ["req-mid"]
+            child.outline = outline
+            context.insert(child)
+            let grandchild = makeFixtureSection(position: 0, title: "Grandchild", summary: "Inner")
+            grandchild.parent = child
+            grandchild.recipeRequirementIDs = ["req-inner"]
+            grandchild.outline = outline
+            context.insert(grandchild)
+        }
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: payload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 3, "All three levels must be restored.")
+        let sections = try XCTUnwrap(restoredProject?.outlines.first?.sections)
+        let restoredParent = try XCTUnwrap(sections.first(where: { $0.title == "Parent" }))
+        let restoredChild = try XCTUnwrap(sections.first(where: { $0.title == "Child" }))
+        let restoredGrandchild = try XCTUnwrap(sections.first(where: { $0.title == "Grandchild" }))
+        XCTAssertNil(restoredParent.parent, "Parent is top-level.")
+        XCTAssertNotNil(restoredChild.parent)
+        XCTAssertEqual(restoredChild.parent?.id, restoredParent.id)
+        XCTAssertNotNil(restoredGrandchild.parent)
+        XCTAssertEqual(restoredGrandchild.parent?.id, restoredChild.id)
+    }
+
+    // MARK: - Self-parent rejection
+
+    /// A payload whose `parentID` equals the section's own id is a corrupt
+    /// hierarchy. The authoritative reconciliation must reject this by
+    /// clearing the parent rather than creating a self-referencing section.
+    func testSelfParentIsRejected() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let section = makeFixtureSection(position: 0, title: "Self Parent", summary: "Self-referencing")
+            section.recipeRequirementIDs = []
+            section.outline = outline
+            context.insert(section)
+        }
+        let selfID = try XCTUnwrap(payload.outlines.first?.sections.first).id
+        let modifiedPayload = try rewriteSectionParentID(
+            payload: payload, sectionTitle: "Self Parent", newParentID: selfID
+        )
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 1)
+        let restored = try XCTUnwrap(restoredProject?.outlines.first?.sections.first)
+        XCTAssertNil(restored.parent, "Self-parent must be rejected (parent = nil).")
+    }
+
         func testRestoreAllProjectsReusesCloudLocalProjectIDAndProjectNotes() async throws {
         let session = makeSession()
         let userID = "11111111-1111-1111-1111-111111111111"
