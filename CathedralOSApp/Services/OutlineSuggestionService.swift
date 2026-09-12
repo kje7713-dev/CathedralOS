@@ -21,6 +21,13 @@ enum OutlineSuggestionError: Error, LocalizedError {
     case serverError(statusCode: Int, body: String? = nil)
     case networkError(String)
     case cancelled
+    // PR 2: per the recipe-selection integrity validator. Surfaced when
+    // `makeRequest` finds a stored selectedCharacterID / selectedStorySparkID /
+    // selectedAftertasteID / selectedRelationshipID / selectedThemeQuestionID /
+    // selectedMotifID that no longer resolves to a current entity belonging
+    // to the same project. Per spec the edge function is NOT called and
+    // no credits are consumed when this case fires.
+    case recipeIntegrityMissing(missingIDs: [RecipeIntegrityValidator.MissingID])
 
     var errorDescription: String? {
         switch self {
@@ -37,6 +44,8 @@ enum OutlineSuggestionError: Error, LocalizedError {
             return "Server error \(c)."
         case .networkError(let m):   return "Network error: \(m)"
         case .cancelled:              return "The suggestion run continues on the server. You can leave this screen and resume it later."
+        case .recipeIntegrityMissing(let missing):
+            return RecipeIntegrityValidator.errorMessage(for: missing)
         }
     }
 }
@@ -69,6 +78,17 @@ struct OutlineSuggestionService {
     ) throws -> OutlineSuggestionRequest {
         guard let project = recipe.project else {
             throw OutlineSuggestionError.invalidResponse("Recipe has no project")
+        }
+        // PR 2: recipe-selection integrity check BEFORE the recipe blob is
+        // built and BEFORE the edge function would be called. Per spec, when
+        // any selected ID is unresolved we do NOT call the edge function, do
+        // NOT consume credits, do NOT silently prune the selection. We throw
+        // a typed error so the view can name every missing class + UUID.
+        switch RecipeIntegrityValidator.validate(recipe: recipe) {
+        case .valid:
+            break
+        case .invalid(let missing):
+            throw OutlineSuggestionError.recipeIntegrityMissing(missingIDs: missing)
         }
         guard let templateID = arc.templateID, templateID == arcTemplate.id else {
             throw OutlineSuggestionError.invalidResponse("Arc template mismatch")
