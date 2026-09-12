@@ -30,8 +30,18 @@ struct OutlineSuggestionsReviewView: View {
         return run
     }
 
-    private var accepting: Bool { activeAcceptRun != nil }
+    /// True from the moment Accept All is tapped through to the run ID
+    /// being attached. Combines the coordinator's initiating state (set
+    /// BEFORE the POST) with the active run state (set AFTER the POST
+    /// returns). This eliminates the dead-button window between tap and
+    /// run ID that the bug report described.
+    private var accepting: Bool {
+        activeAcceptRun != nil || durabilityCoordinator.isAcceptRunInitiating
+    }
     private var acceptingProgress: String {
+        if durabilityCoordinator.isAcceptRunInitiating && activeAcceptRun == nil {
+            return "Starting Accept All…"
+        }
         guard let run = activeAcceptRun else { return "" }
         return "\(run.sectionsDone)/\(max(run.sectionsTotal, 1)) accepted…"
     }
@@ -112,9 +122,18 @@ struct OutlineSuggestionsReviewView: View {
             hasStartedAcceptance = activeAcceptRun != nil
         }
         .onChange(of: durabilityCoordinator.acceptRunRevision) { _, _ in
+            // Checkpoint: revision changed (either run lifecycle completed,
+            // stale state cleared, or explicit error reported).
+            NSLog("[accept_all] revision_changed revision=%u hasError=%d", durabilityCoordinator.acceptRunRevision, durabilityCoordinator.acceptRunError == nil ? 0 : 1)
             if hasStartedAcceptance && durabilityCoordinator.acceptRunError == nil {
                 dismiss()
             }
+        }
+        .onChange(of: durabilityCoordinator.acceptRunInitiationRevision) { _, _ in
+            // Checkpoint: initiation started or stale state cleared. Observers
+            // (e.g. on-device diagnostics) can tell that the coordinator was
+            // reached even before a server run ID exists.
+            NSLog("[accept_all] initiation_revision_changed revision=%u initiating=%d", durabilityCoordinator.acceptRunInitiationRevision, durabilityCoordinator.isAcceptRunInitiating ? 1 : 0)
         }
         .alert("Accept All", isPresented: Binding(
             get: { acceptErrorMessage != nil },
@@ -127,8 +146,19 @@ struct OutlineSuggestionsReviewView: View {
     }
 
     private func acceptAll() {
-        guard !accepting else { return }
+        guard !accepting else {
+            // Checkpoint: duplicate tap during initiation. Surface a diagnostic
+            // rather than silently dropping the second tap.
+            NSLog("[accept_all] duplicate_tap_during_initiation outline=%@", outline.id.uuidString)
+            durabilityCoordinator.reportAcceptRunError(
+                "Accept All is already starting. Wait for the run to attach."
+            )
+            return
+        }
+        // Checkpoint: Accept All tapped.
+        NSLog("[accept_all] tapped outline=%@ project=%@", outline.id.uuidString, project.id.uuidString)
         guard let baseURL = SupabaseConfiguration.projectURL else {
+            NSLog("[accept_all] backend_not_configured outline=%@", outline.id.uuidString)
             durabilityCoordinator.reportAcceptRunError(
                 "Accept All is unavailable because the backend is not configured."
             )
@@ -176,11 +206,18 @@ struct OutlineSuggestionsReviewView: View {
             return
         }
 
-        Task {
+        Task { @MainActor in
+            // Checkpoint: story arc sync started.
+            NSLog("[accept_all] story_arc_sync_started outline=%@ project=%@", outline.id.uuidString, projectID.uuidString)
             do {
                 _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
+                // Checkpoint: story arc sync completed.
+                NSLog("[accept_all] story_arc_sync_completed outline=%@ project=%@", outline.id.uuidString, projectID.uuidString)
+                // Checkpoint: coordinator begin requested.
+                NSLog("[accept_all] coordinator_begin_requested outline=%@ project=%@", outline.id.uuidString, projectID.uuidString)
                 beginAccept(projectID: projectID, baseURL: baseURL)
             } catch {
+                NSLog("[accept_all] story_arc_sync_failed outline=%@ project=%@ error=%@", outline.id.uuidString, projectID.uuidString, error.localizedDescription)
                 durabilityCoordinator.reportAcceptRunError("Could not sync the Story Arc before acceptance: \(error.localizedDescription)")
             }
         }
