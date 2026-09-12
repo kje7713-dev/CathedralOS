@@ -84,8 +84,11 @@ final class RecipeSelectionService {
         case 0:
             return RecipeSelectionResult(kind: .unavailable, recipes: [], selectedRecipe: nil)
         case 1:
+            // PR 1 (post-review fix): do NOT persist as an explicit user
+            // choice. If a second recipe is later added, the user must be
+            // prompted to choose rather than silently inheriting the
+            // single-recipe pick.
             let only = recipes[0]
-            setSelectedRecipe(id: only.id, for: project)
             return RecipeSelectionResult(kind: .autoSelected, recipes: recipes, selectedRecipe: only)
         default:
             let stored = storedSelectedRecipeID(for: project)
@@ -93,8 +96,10 @@ final class RecipeSelectionService {
                let match = recipes.first(where: { $0.id == stored }) {
                 return RecipeSelectionResult(kind: .selected, recipes: recipes, selectedRecipe: match)
             }
-            // Stored selection is missing or refers to a deleted recipe; clear it
-            // and require the user to choose before Suggest Sections can run.
+            // Stored selection is missing OR refers to a deleted recipe; clear
+            // it and require the user to choose before Suggest Sections can
+            // run. A user that picks A, then later sees A deleted, must be
+            // re-prompted rather than silently bound to A.
             clearSelection(for: project)
             return RecipeSelectionResult(kind: .pending, recipes: recipes, selectedRecipe: nil)
         }

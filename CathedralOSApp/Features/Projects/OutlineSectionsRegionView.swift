@@ -267,10 +267,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // button both consume `recipeSelection` so this keeps them in sync.
         .onChange(of: recipeSelectionKey) { _, _ in
             let prior = recipeSelection?.selectedRecipe?.id
+            // A `.autoSelected -> .pending` transition happens when a 2nd
+            // recipe is added; preserve recoverable suggestions so re-picking
+            // the original recipe re-surfaces them. Only an EXPLICIT prior
+            // selection that has now changed should clear recoverable.
+            let priorWasExplicit = recipeSelection?.kind == .selected
             recipeSelection = recipeSelectionService.resolve(for: project)
-            // If the resolved selection changed (deleted, reselected, restored),
-            // any recoverable suggestions from the prior recipe are stale.
-            if let priorID = prior,
+            if priorWasExplicit,
+               let priorID = prior,
                priorID != recipeSelection?.selectedRecipe?.id {
                 recoverableSuggestions = nil
             }
@@ -604,12 +608,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                             .font(CathedralTheme.Typography.body(13, weight: .semibold))
                     }
                 }
-                // PR 1: when the project has multiple recipes the user must
-                // choose before Suggest Sections can run. The chooser is shown
-                // as a sibling Menu in the same header HStack so the layout
-                // already in production is preserved verbatim.
-                if recipeSelection?.kind == .pending,
-                   let recipes = recipeSelection?.recipes {
+                // PR 1: the recipe chooser is visible whenever the project has
+                // multiple recipes, not only when pending. Pending -> show
+                // "Choose Recipe"; selected -> show the current recipe name so
+                // the user can switch via the same menu.
+                if let recipes = recipeSelection?.recipes, recipes.count >= 2 {
+                    let chosenName = recipes
+                        .first(where: { $0.id == recipeSelection?.selectedRecipe?.id })?
+                        .name
                     Menu {
                         ForEach(recipes, id: \.id) { pack in
                             Button(pack.name) {
@@ -623,8 +629,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                             }
                         }
                     } label: {
-                        Label("Choose Recipe", systemImage: "book.closed")
-                            .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                        if let chosenName {
+                            Label("Recipe: \(chosenName)", systemImage: "book.closed")
+                                .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                                .lineLimit(1)
+                        } else {
+                            Label("Choose Recipe", systemImage: "book.closed")
+                                .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                        }
                     }
                 }
                 Button {
