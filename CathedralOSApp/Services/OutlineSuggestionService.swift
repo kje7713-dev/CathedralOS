@@ -69,6 +69,7 @@ struct OutlineSuggestionService {
         self.session = session
     }
 
+    @MainActor
     func makeRequest(
         recipe: PromptPack,
         arc: StoryArc,
