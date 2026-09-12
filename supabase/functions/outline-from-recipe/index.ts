@@ -610,6 +610,129 @@ function errorResponse(
   return corsResponse(JSON.stringify({ errorCode: code, message }), { status });
 }
 
+/**
+ * PR6 (Fix the Shit cycle 6): reconstruct a valid StoryMaterialEnrichment
+ * from the live canonical recipe, with every item carrying `source: "recipe"`
+ * and a meaningful `sourceReference`. Used to recover the 41 persisted
+ * suggestion runs whose original enrichment pre-dated provenance tracking
+ * (or whose recipe hash no longer matches the live project). Pure JS: no
+ * LLM call, no credit charge.
+ */
+export function repairStoryMaterialFromRecipe(recipe: unknown, provenance: StoryMaterialProvenance): StoryMaterialEnrichment {
+  const r = (recipe ?? {}) as Record<string, unknown>;
+  const asArray = (v: unknown): unknown[] => Array.isArray(v) ? v : [];
+  const asString = (v: unknown, fallback = ""): string =>
+    typeof v === "string" && v.length > 0 ? v : fallback;
+
+  const characters = asArray(r.selectedCharacters).map((char, i) => {
+    const c = char as Record<string, unknown>;
+    const id = asString(c.id, `char-${i}`);
+    return {
+      id: `char-${id}`,
+      source: "recipe" as const,
+      sourceReference: `selectedCharacters[${id}]`,
+      label: asString(c.name, `Character ${i + 1}`),
+      description: asString(c.summary ?? c.description, asString(c.name, "")),
+    };
+  });
+
+  const antagonisticForces = asArray(r.selectedStorySpark).map((spark, i) => {
+    const s = spark as Record<string, unknown>;
+    const id = asString(s.id, `spark-${i}`);
+    return {
+      id: `spark-${id}`,
+      source: "recipe" as const,
+      sourceReference: `selectedStorySpark[${id}]`,
+      label: asString(s.title ?? s.text, `Spark ${i + 1}`),
+      description: asString(s.description ?? s.summary, ""),
+    };
+  });
+
+  const relationships = asArray(r.selectedRelationships).map((rel, i) => {
+    const relObj = rel as Record<string, unknown>;
+    const id = asString(relObj.id, `rel-${i}`);
+    return {
+      id: `rel-${id}`,
+      source: "recipe" as const,
+      sourceReference: `selectedRelationships[${id}]`,
+      label: asString(relObj.summary ?? relObj.label, `Relationship ${i + 1}`),
+      description: asString(relObj.description, ""),
+    };
+  });
+
+  const thematicPressures = [
+    ...asArray(r.selectedThemeQuestions).map((t, i) => {
+      const tObj = t as Record<string, unknown> | string;
+      const label = typeof tObj === "string"
+        ? tObj
+        : asString(tObj.question, `Theme ${i + 1}`);
+      return {
+        id: `theme-${i}`,
+        source: "recipe" as const,
+        sourceReference: `selectedThemeQuestions[${i}]`,
+        label,
+        description: typeof tObj === "object"
+          ? asString(tObj.description, asString(tObj.context, ""))
+          : "",
+      };
+    }),
+    ...asArray(r.selectedMotifs).map((m, i) => {
+      const mObj = m as Record<string, unknown> | string;
+      const label = typeof mObj === "string"
+        ? mObj
+        : asString(mObj.label, `Motif ${i + 1}`);
+      return {
+        id: `motif-${i}`,
+        source: "recipe" as const,
+        sourceReference: `selectedMotifs[${i}]`,
+        label,
+        description: typeof mObj === "object"
+          ? asString(mObj.description, "")
+          : "",
+      };
+    }),
+    ...asArray(r.selectedAftertaste).map((a, i) => {
+      const aObj = a as Record<string, unknown> | string;
+      const label = typeof aObj === "string"
+        ? aObj
+        : asString(aObj.title ?? aObj.text, `Aftertaste ${i + 1}`);
+      return {
+        id: `aftertaste-${i}`,
+        source: "recipe" as const,
+        sourceReference: `selectedAftertaste[${i}]`,
+        label,
+        description: typeof aObj === "object"
+          ? asString(aObj.description, "")
+          : "",
+      };
+    }),
+  ];
+
+  return {
+    schema: "cathedralos.story_material_enrichment",
+    version: 2,
+    format: "novel",
+    rationale:
+      "Recovered from canonical recipe; legacy run pre-dates story-material provenance (PR6 of Fix the Shit).",
+    characters,
+    antagonisticForces,
+    relationships,
+    thematicPressures,
+    locations: [],
+    institutionsAndGroups: [],
+    conflictSources: [],
+    escalationLadder: [],
+    reversals: [],
+    consequences: [],
+    discoveries: [],
+    unresolvedQuestions: [],
+    sourceRecipeHash: provenance.sourceRecipeHash,
+    sourceRecipeVersion: provenance.sourceRecipeVersion,
+    sourcePromptPackID: provenance.sourcePromptPackID,
+    sourcePromptPackName: provenance.sourcePromptPackName,
+  };
+}
+
 export function validateRequest(req: unknown): string | null {
   if (!req || typeof req !== "object") return "request must be an object";
   const r = req as Partial<OutlineFromRecipeRequest>;
@@ -2281,10 +2404,45 @@ async function runSuggestionJob(
     }
     const resume = expansionResumeState(claimedRun);
     if (requestedStoryMaterialFormat(body) === "novel" && resume && claimedRun.story_material) {
-      const resumedMaterial = validateStoryMaterialEnrichment(claimedRun.story_material as StoryMaterialEnrichment, { recipe: body.recipe });
-      const sufficiency = storyMaterialSufficiency(resumedMaterial, body.recipe, requestedStoryMaterialFormat(body));
-      if (!isCompatibleStoryMaterialEnrichment(resumedMaterial, provenance, requestedStoryMaterialFormat(body)) || !sufficiency.sufficient) {
-        throw new Error("persisted expansion checkpoint has incompatible story material");
+      let resumedMaterial: StoryMaterialEnrichment;
+      let priorCompatibility: boolean | undefined;
+      let priorSufficiency: boolean | undefined;
+      let priorValidationError: string | undefined;
+      try {
+        resumedMaterial = validateStoryMaterialEnrichment(
+          claimedRun.story_material as StoryMaterialEnrichment,
+          { recipe: body.recipe },
+        );
+        priorCompatibility = isCompatibleStoryMaterialEnrichment(
+          resumedMaterial, provenance, requestedStoryMaterialFormat(body),
+        );
+        const sufficiency = storyMaterialSufficiency(
+          resumedMaterial, body.recipe, requestedStoryMaterialFormat(body),
+        );
+        priorSufficiency = sufficiency.sufficient;
+      } catch (error) {
+        // Persisted material failed structural validation (legacy shape,
+        // wrong schema/version, or duplicate ids). Treat as incompatible.
+        priorValidationError = error instanceof Error ? error.message : "validation_failed";
+        priorCompatibility = false;
+        priorSufficiency = false;
+        resumedMaterial = repairStoryMaterialFromRecipe(body.recipe, provenance);
+      }
+      if (priorCompatibility === false || priorSufficiency === false) {
+        // PR6 (Fix the Shit cycle 6): repair instead of throwing. The 41
+        // persisted runs pre-date story-material provenance OR carry a stale
+        // recipe hash; re-derive from the live canonical recipe (no LLM,
+        // no charge) and persist the repair so future resumes can validate.
+        resumedMaterial = repairStoryMaterialFromRecipe(body.recipe, provenance);
+        diagnostics = {
+          ...diagnostics,
+          stage: "story_material_repaired",
+          repairedAt: new Date().toISOString(),
+          repairedFromRecipeHash: provenance.sourceRecipeHash,
+          priorCompatibility,
+          priorSufficiency,
+          priorValidationError,
+        };
       }
       body = { ...body, storyMaterialEnrichment: resumedMaterial };
       latestValidSuggestions = resume.suggestions;

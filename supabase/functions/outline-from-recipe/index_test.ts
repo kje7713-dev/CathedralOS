@@ -42,6 +42,7 @@ import {
   validateSuggestions,
   buildEnrichmentPrompt,
   countStoryMaterialItems,
+  repairStoryMaterialFromRecipe,
   validateStoryMaterialEnrichment,
   storyMaterialSufficiency,
   recipeProvenance,
@@ -1007,6 +1008,88 @@ function enrichmentFixture(): any {
     reversals: [], consequences: [], relationships: [], discoveries: [], unresolvedQuestions: [], thematicPressures: [],
   };
 }
+
+// PR6 (Fix the Shit cycle 6): the recovery path must produce a valid
+// StoryMaterialEnrichment from any canonical recipe. These tests guard
+// the contract that lets the 41 legacy persisted runs be resumed
+// without regeneration or re-billing.
+Deno.test("repairStoryMaterialFromRecipe: produces a valid enrichment from a sparse canonical recipe", () => {
+  const provenance = {
+    sourceRecipeHash: "deadbeef",
+    sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-1",
+    sourcePromptPackName: "Test Pack",
+  };
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    project: { id: "proj-1", summary: "A brooding thriller" },
+    promptPack: { id: "pack-1", name: "Test Pack" },
+    selectedCharacters: [
+      { id: "c-1", name: "Mara", summary: "Disgraced detective" },
+      { id: "c-2", name: "Vik", summary: "Rival fixer" },
+    ],
+    selectedStorySpark: [
+      { id: "s-1", title: "Cold case reopen", description: "An old murder returns" },
+    ],
+    selectedAftertaste: [
+      { title: "Quiet dread", description: "The reader should feel watched" },
+    ],
+    selectedRelationships: [
+      { id: "r-1", summary: "Mara + Vik", description: "Ex-partners turned enemies" },
+    ],
+    selectedThemeQuestions: ["Can the past be trusted?"],
+    selectedMotifs: ["mirrors", "smoke"],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe, provenance);
+  // Schema + provenance fields
+  assertEquals(repaired.schema, "cathedralos.story_material_enrichment");
+  assertEquals(repaired.version, 2);
+  assertEquals(repaired.format, "novel");
+  assertEquals(repaired.sourceRecipeHash, "deadbeef");
+  assertEquals(repaired.sourceRecipeVersion, 1);
+  assertEquals(repaired.sourcePromptPackID, "pack-1");
+  assertEquals(repaired.sourcePromptPackName, "Test Pack");
+  // Every item carries source: "recipe" + sourceReference + label + description
+  const allItems = [
+    ...repaired.characters,
+    ...repaired.antagonisticForces,
+    ...repaired.relationships,
+    ...repaired.thematicPressures,
+  ];
+  for (const item of allItems) {
+    assertEquals(item.source, "recipe");
+    assertEquals(typeof item.sourceReference, "string");
+    assertEquals(item.sourceReference !== "", true);
+    assertEquals(item.label !== "", true);
+  }
+  // Mapping checks
+  assertEquals(repaired.characters.length, 2);
+  assertEquals(repaired.characters[0].id, "char-c-1");
+  assertEquals(repaired.characters[0].sourceReference, "selectedCharacters[c-1]");
+  assertEquals(repaired.antagonisticForces.length, 1);
+  assertEquals(repaired.antagonisticForces[0].sourceReference, "selectedStorySpark[s-1]");
+  assertEquals(repaired.relationships.length, 1);
+  assertEquals(repaired.relationships[0].sourceReference, "selectedRelationships[r-1]");
+  // Aftertaste is folded into thematicPressures
+  assertEquals(repaired.thematicPressures.length, 4); // 1 theme question + 2 motifs + 1 aftertaste
+  // Empty categories stay empty
+  assertEquals(repaired.locations.length, 0);
+  assertEquals(repaired.escalationLadder.length, 0);
+});
+
+Deno.test("repairStoryMaterialFromRecipe: handles an empty canonical recipe without throwing", () => {
+  const provenance = {
+    sourceRecipeHash: "empty",
+    sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-empty",
+    sourcePromptPackName: "Empty",
+  };
+  const repaired = repairStoryMaterialFromRecipe({}, provenance);
+  assertEquals(repaired.schema, "cathedralos.story_material_enrichment");
+  assertEquals(repaired.characters.length, 0);
+  assertEquals(repaired.thematicPressures.length, 0);
+  assertEquals(repaired.sourceRecipeHash, "empty");
+});
 
 Deno.test("story material enrichment validates provenance and remains inspectable for reuse", () => {
   const material = validateStoryMaterialEnrichment(enrichmentFixture());
