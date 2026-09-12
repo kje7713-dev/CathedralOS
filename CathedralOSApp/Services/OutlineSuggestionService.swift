@@ -229,7 +229,7 @@ struct OutlineSuggestionService {
             return true
         case .serverError(let statusCode, _):
             return statusCode == 408 || statusCode == 425 || statusCode == 429 || (500...599).contains(statusCode)
-        case .notConfigured, .providerError, .insufficientCredits, .invalidResponse:
+        case .notConfigured, .providerError, .insufficientCredits, .invalidResponse, .recipeIntegrityMissing:
             return false
         }
     }

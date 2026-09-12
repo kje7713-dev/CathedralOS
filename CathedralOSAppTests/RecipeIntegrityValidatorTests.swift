@@ -328,6 +328,36 @@ final class RecipeIntegrityValidatorTests: XCTestCase {
     }
 }
 
+    // PR 2 review regression: spec says every selected ID must resolve
+    // to EXACTLY ONE entity in the recipe's project (count != 1).
+    // If two project entities share the selected UUID (e.g. corrupt
+    // migration, duplicate import), validation must fail closed -- the
+    // pre-fix `contains(where:)` accepted count >= 1 which silently
+    // accepted the duplicate case.
+    func testDuplicateProjectEntitiesShareSelectedUUIDFailsValidation() throws {
+        let sharedUUID = UUID()
+        let dup1 = StoryCharacter(name: "Dup1")
+        dup1.id = sharedUUID
+        dup1.project = project
+        context.insert(dup1)
+        let dup2 = StoryCharacter(name: "Dup2")
+        dup2.id = sharedUUID
+        dup2.project = project
+        context.insert(dup2)
+        try context.save()
+
+        pack.selectedCharacterIDs = [sharedUUID]
+        let result = RecipeIntegrityValidator.validate(recipe: pack)
+        switch result {
+        case .valid:
+            XCTFail("Expected .invalid for duplicate UUID across project entities (count must be exactly 1, not 2)")
+        case .invalid(let missing):
+            XCTAssertTrue(missing.contains(where: {
+                $0.entityClass == .character && $0.id == sharedUUID
+            }), "Duplicate character UUID must be reported because count != 1")
+        }
+    }
+
 // MARK: - Test helpers
 
 private func makeInMemoryContext() throws -> ModelContext {

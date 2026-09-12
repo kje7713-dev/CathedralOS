@@ -58,35 +58,38 @@ struct RecipeIntegrityValidator {
         var missing: [MissingID] = []
 
         for id in recipe.selectedCharacterIDs {
-            if !project.characters.contains(where: { $0.id == id }) {
+            // PR 2 review: enforce the EXACTLY-ONE contract. count != 1
+            // covers both "ID no longer resolves" (count == 0) and
+            // "two project entities share this UUID" (count == 2).
+            if project.characters.filter({ $0.id == id }).count != 1 {
                 missing.append(MissingID(entityClass: .character, id: id))
             }
         }
 
         if let sparkID = recipe.selectedStorySparkID,
-           !project.storySparks.contains(where: { $0.id == sparkID }) {
+           project.storySparks.filter({ $0.id == sparkID }).count != 1 {
             missing.append(MissingID(entityClass: .storySpark, id: sparkID))
         }
 
         if let afterID = recipe.selectedAftertasteID,
-           !project.aftertastes.contains(where: { $0.id == afterID }) {
+           project.aftertastes.filter({ $0.id == afterID }).count != 1 {
             missing.append(MissingID(entityClass: .aftertaste, id: afterID))
         }
 
         for id in recipe.selectedRelationshipIDs {
-            if !project.relationships.contains(where: { $0.id == id }) {
+            if project.relationships.filter({ $0.id == id }).count != 1 {
                 missing.append(MissingID(entityClass: .relationship, id: id))
             }
         }
 
         for id in recipe.selectedThemeQuestionIDs {
-            if !project.themeQuestions.contains(where: { $0.id == id }) {
+            if project.themeQuestions.filter({ $0.id == id }).count != 1 {
                 missing.append(MissingID(entityClass: .themeQuestion, id: id))
             }
         }
 
         for id in recipe.selectedMotifIDs {
-            if !project.motifs.contains(where: { $0.id == id }) {
+            if project.motifs.filter({ $0.id == id }).count != 1 {
                 missing.append(MissingID(entityClass: .motif, id: id))
             }
         }
