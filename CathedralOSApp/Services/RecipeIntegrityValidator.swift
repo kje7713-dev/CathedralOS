@@ -1,24 +1,42 @@
 import Foundation
 
-// MARK: - RecipeIntegrityValidator (PR 2)
+// MARK: - RecipeIntegrityValidator (PR 2, refactored PR 543)
 //
-// Pre-fix the Suggest Sections path in `OutlineSuggestionService.makeRequest`
-// could submit a recipe whose stored selected-character / story-spark /
-// aftertaste / relationship / theme-question / motif IDs no longer pointed
-// at entities belonging to the same project. The planner then silently
-// produced a degraded payload (missing material the recipe claimed to
-// contain) and the server still got billed. PR 2 closes that gap.
+// Defensive corruption check that runs immediately after
+// `RecipeReferenceReconciler.reconcile(_:in:)` and immediately before
+// `OutlineSuggestionService.makeRequest` builds the outline request.
 //
-// Behavior (per PR 2 spec):
-//   - `validate(recipe:)` returns `.valid` iff every selected ID resolves
-//     to exactly one entity belonging to the recipe's project.
-//   - On any unresolved ID, returns `.invalid(missingIDs:)` listing every
-//     missing entity class + UUID in a single pass — NOT just the first
-//     failure — so the user can fix everything in one edit cycle.
-//   - The validator MUST NOT mutate the recipe: no auto-prune, no
-//     auto-replace, no silent removal of stale IDs.
-//   - The validator does NOT touch `outline-from-recipe`, `PromptPackExportPayload`,
-//     Accept All, billing, Story Arc behavior, or cloud migrations.
+// Pre-fix the Suggest Sections path could submit a recipe whose stored
+// selected-character / story-spark / aftertaste / relationship /
+// theme-question / motif IDs no longer pointed at entities belonging
+// to the same project — the planner silently produced a degraded
+// payload and the server still got billed. The PR 2 validator fixed
+// the billing leak by failing closed.
+//
+// After the PR 543 refactor, soft-validation of stale references (IDs
+// pointing at entities that were deleted from the project) has moved
+// upstream into `RecipeReferenceReconciler`, which is invoked by the
+// view layer immediately before `makeRequest`. The reconciler scrubs
+// stale IDs silently and persists the prune once. After the reconcile,
+// the remaining failure modes here are irreconcilable conditions that
+// the reconciler cannot safely fix:
+//
+//   - Duplicate UUID: two project entities share a UUID. The recipe's
+//     reference is ambiguous and cannot be safely reconciled.
+//   - Cross-project ID: a UUID that exists in a *different* project.
+//     A project-scoped integrity violation.
+//
+// On any irreconcilable condition, returns `.invalid(missingIDs:)`
+// listing every problematic class + UUID in a single pass — NOT just
+// the first failure — so the user can fix everything in one edit
+// cycle. The caller surfaces the typed `OutlineSuggestionError.
+// recipeIntegrityMissing` to the user with all conflicts at once.
+//
+// The validator MUST NOT mutate `PromptPack`: no auto-prune, no
+// auto-replace. Pure read against the project's relationship
+// collections. The validator does NOT touch `outline-from-recipe`,
+// `PromptPackExportPayload`, Accept All, billing, Story Arc
+// behavior, or cloud migrations.
 
 struct RecipeIntegrityValidator {
 

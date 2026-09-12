@@ -588,6 +588,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             return
         }
         do {
+            // Reconcile legacy stale IDs before building the request.
+            // `makeRequest` is pure — the caller owns the persist step.
+            RecipeReferenceReconciler.reconcile(recipe, in: modelContext)
             let service = OutlineSuggestionService()
             let request = try service.makeRequest(
                 recipe: recipe,

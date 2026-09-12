@@ -4,23 +4,26 @@ import SwiftData
 
 // MARK: - RecipeIntegrityValidatorTests
 //
-// PR 2 regression coverage for "fix(recipe): reject unresolved planning
-// selections". Pre-fix the Suggest Sections path could submit a recipe whose
-// stored IDs no longer pointed at entities belonging to the same project;
-// the planner silently produced a degraded payload and the server still
-// billed credits. PR 2 closes that gap.
+// Defensive corruption check coverage for the post-PR 543 refactor
+// validator. Pre-fix the Suggest Sections path could submit a recipe
+// whose stored IDs no longer pointed at entities belonging to the same
+// project; the planner silently produced a degraded payload and the
+// server still got billed. PR 2 closed that leak.
 //
-// Spec'd tests:
-//   1. fully valid selections pass
-//   2. each entity class fails when its selected ID is missing
-//   3. no request is produced from a malformed selection set
+// After the PR 543 refactor:
+//   - Stale references (IDs pointing at deleted entities) are handled
+//     upstream by `RecipeReferenceReconciler.reconcile(_:in:)` — the
+//     view layer calls it immediately before `makeRequest` and the
+//     prune is persisted once. Stale IDs never reach the validator
+//     in production.
+//   - The validator is now a defensive check. Its remaining job is to
+//     fail closed for irreconcilable conditions that the reconciler
+//     cannot safely fix: duplicate UUIDs (two project entities share
+//     the same id) and cross-project IDs (a UUID lives in a different
+//     project).
 //
-// Plus the additional tests Kevin flagged in the PR 2 test plan:
-//   4. validator does not mutate the recipe (no silent prune)
-//   5. cross-project UUID fails (project-scoped integrity)
-//   6. empty selection arrays pass
-//   7. multiple missing classes are reported in one pass
-//   8. error message names entity class and missing UUID
+// Tests in this file focus on those irreconcilable cases. The cascade
+// and the legacy-prune behavior live in `RecipeReferenceReconcilerTests`.
 
 @MainActor
 final class RecipeIntegrityValidatorTests: XCTestCase {
@@ -93,157 +96,32 @@ final class RecipeIntegrityValidatorTests: XCTestCase {
         super.tearDown()
     }
 
-    // 1. Fully valid selections -> .valid.
-    func testFullyValidSelectionsPass() {
+    // 1. Fully valid selections (everything resolves 1:1 in this project) -> .valid.
+    func testValidSelectionsPass() {
         let result = RecipeIntegrityValidator.validate(recipe: pack)
         if case .invalid(let missing) = result {
             XCTFail("Expected .valid, got .invalid with \(missing)")
         }
     }
 
-    // 2. Each entity class fails when its selected ID is missing.
-    // 2a. Character.
-    func testCharacterClassFailsWhenSelectedIDMissing() {
-        let orphan = UUID()
-        pack.selectedCharacterIDs.append(orphan)
+    // 2. Empty selection arrays pass: a recipe with zero selected entities
+    //    is structurally valid; no entity class needs to be present.
+    func testEmptySelectionsArraysPass() {
+        pack.selectedCharacterIDs = []
+        pack.selectedStorySparkID = nil
+        pack.selectedAftertasteID = nil
+        pack.selectedRelationshipIDs = []
+        pack.selectedThemeQuestionIDs = []
+        pack.selectedMotifIDs = []
+
         let result = RecipeIntegrityValidator.validate(recipe: pack)
-        switch result {
-        case .valid:
-            XCTFail("Expected .invalid for orphan character ID")
-        case .invalid(let missing):
-            XCTAssertTrue(missing.contains(where: {
-                $0.entityClass == .character && $0.id == orphan
-            }), "Expected orphan character in missing list")
+        if case .invalid(let missing) = result {
+            XCTFail("Expected .valid for empty selections, got .invalid with \(missing)")
         }
     }
 
-    // 2b. Story spark.
-    func testStorySparkClassFailsWhenSelectedIDMissing() {
-        let orphan = UUID()
-        pack.selectedStorySparkID = orphan
-        let result = RecipeIntegrityValidator.validate(recipe: pack)
-        switch result {
-        case .valid:
-            XCTFail("Expected .invalid for orphan storySpark ID")
-        case .invalid(let missing):
-            XCTAssertTrue(missing.contains(where: {
-                $0.entityClass == .storySpark && $0.id == orphan
-            }))
-        }
-    }
-
-    // 2c. Aftertaste.
-    func testAftertasteClassFailsWhenSelectedIDMissing() {
-        let orphan = UUID()
-        pack.selectedAftertasteID = orphan
-        let result = RecipeIntegrityValidator.validate(recipe: pack)
-        switch result {
-        case .valid:
-            XCTFail("Expected .invalid for orphan aftertaste ID")
-        case .invalid(let missing):
-            XCTAssertTrue(missing.contains(where: {
-                $0.entityClass == .aftertaste && $0.id == orphan
-            }))
-        }
-    }
-
-    // 2d. Relationship.
-    func testRelationshipClassFailsWhenSelectedIDMissing() {
-        let orphan = UUID()
-        pack.selectedRelationshipIDs.append(orphan)
-        let result = RecipeIntegrityValidator.validate(recipe: pack)
-        switch result {
-        case .valid:
-            XCTFail("Expected .invalid for orphan relationship ID")
-        case .invalid(let missing):
-            XCTAssertTrue(missing.contains(where: {
-                $0.entityClass == .relationship && $0.id == orphan
-            }))
-        }
-    }
-
-    // 2e. Theme question.
-    func testThemeQuestionClassFailsWhenSelectedIDMissing() {
-        let orphan = UUID()
-        pack.selectedThemeQuestionIDs.append(orphan)
-        let result = RecipeIntegrityValidator.validate(recipe: pack)
-        switch result {
-        case .valid:
-            XCTFail("Expected .invalid for orphan themeQuestion ID")
-        case .invalid(let missing):
-            XCTAssertTrue(missing.contains(where: {
-                $0.entityClass == .themeQuestion && $0.id == orphan
-            }))
-        }
-    }
-
-    // 2f. Motif.
-    func testMotifClassFailsWhenSelectedIDMissing() {
-        let orphan = UUID()
-        pack.selectedMotifIDs.append(orphan)
-        let result = RecipeIntegrityValidator.validate(recipe: pack)
-        switch result {
-        case .valid:
-            XCTFail("Expected .invalid for orphan motif ID")
-        case .invalid(let missing):
-            XCTAssertTrue(missing.contains(where: {
-                $0.entityClass == .motif && $0.id == orphan
-            }))
-        }
-    }
-
-    // 3. Wire-up: makeRequest throws on a malformed selection set; no request is produced.
-    func testNoRequestProducedFromMalformedSelectionSet() throws {
-        let orphan = UUID()
-        pack.selectedCharacterIDs = [orphan]  // invalid; project has only character.id
-
-        // Use a real StoryArc + template so makeRequest reaches the validator.
-        let arc = StoryArc()
-        arc.templateID = StoryArcTemplate.allTemplates.first?.id
-        arc.project = project
-        context.insert(arc)
-        try context.save()
-
-        let template = StoryArcTemplate.allTemplates.first!
-
-        XCTAssertThrowsError(
-            try OutlineSuggestionService().makeRequest(
-                recipe: pack, arc: arc, arcTemplate: template
-            )
-        ) { error in
-            guard case OutlineSuggestionError.recipeIntegrityMissing(let missing) = error else {
-                XCTFail("Expected .recipeIntegrityMissing, got \(error)")
-                return false
-            }
-            return missing.contains(where: { $0.entityClass == .character && $0.id == orphan })
-        }
-    }
-
-    // 4. Validator does not mutate the recipe on .invalid.
-    func testValidatorDoesNotMutateRecipe() {
-        let originalCharacterIDs = pack.selectedCharacterIDs
-        let originalSpark = pack.selectedStorySparkID
-        let originalAfter = pack.selectedAftertasteID
-        let originalRels = pack.selectedRelationshipIDs
-        let originalThemes = pack.selectedThemeQuestionIDs
-        let originalMotifs = pack.selectedMotifIDs
-
-        let orphan = UUID()
-        pack.selectedCharacterIDs = [orphan]  // now invalid
-
-        _ = RecipeIntegrityValidator.validate(recipe: pack)
-
-        // Spec: validator does NOT silently prune.
-        XCTAssertEqual(pack.selectedCharacterIDs, [orphan])
-        XCTAssertEqual(pack.selectedStorySparkID, originalSpark)
-        XCTAssertEqual(pack.selectedAftertasteID, originalAfter)
-        XCTAssertEqual(pack.selectedRelationshipIDs, originalRels)
-        XCTAssertEqual(pack.selectedThemeQuestionIDs, originalThemes)
-        XCTAssertEqual(pack.selectedMotifIDs, originalMotifs)
-    }
-
-    // 5. Cross-project UUID fails: an entity in a DIFFERENT project must
-    //    not satisfy validation. Project-scoped integrity.
+    // 3. Cross-project UUID fails: an entity in a DIFFERENT project must
+    //    not satisfy validation. Project-scoped integrity is irreconcilable.
     func testCrossProjectIDFails() throws {
         let otherContext = try makeInMemoryContext()
         let otherProject = StoryProject(name: "Other Project")
@@ -267,73 +145,9 @@ final class RecipeIntegrityValidatorTests: XCTestCase {
         }
     }
 
-    // 6. Empty selection arrays pass: a recipe with zero selected entities
-    //    is structurally valid; no entity class needs to be present.
-    func testEmptySelectionsArraysPass() {
-        pack.selectedCharacterIDs = []
-        pack.selectedStorySparkID = nil
-        pack.selectedAftertasteID = nil
-        pack.selectedRelationshipIDs = []
-        pack.selectedThemeQuestionIDs = []
-        pack.selectedMotifIDs = []
-
-        let result = RecipeIntegrityValidator.validate(recipe: pack)
-        if case .invalid(let missing) = result {
-            XCTFail("Expected .valid for empty selections, got .invalid with \(missing)")
-        }
-    }
-
-    // 7. Multiple missing classes are reported in a single pass.
-    func testMultipleMissingClassesReportAllInOnePass() {
-        let orphanChar = UUID()
-        let orphanTheme = UUID()
-        let orphanMotif = UUID()
-
-        pack.selectedCharacterIDs = [orphanChar]
-        pack.selectedStorySparkID = nil         // clear (was valid)
-        pack.selectedAftertasteID = nil        // clear
-        pack.selectedRelationshipIDs = []      // clear
-        pack.selectedThemeQuestionIDs = [orphanTheme]
-        pack.selectedMotifIDs = [orphanMotif]
-
-        let result = RecipeIntegrityValidator.validate(recipe: pack)
-        switch result {
-        case .valid:
-            XCTFail("Expected .invalid with multiple missing classes")
-        case .invalid(let missing):
-            XCTAssertEqual(missing.count, 3, "All three missing classes must be reported")
-            XCTAssertTrue(missing.contains(where: { $0.entityClass == .character && $0.id == orphanChar }))
-            XCTAssertTrue(missing.contains(where: { $0.entityClass == .themeQuestion && $0.id == orphanTheme }))
-            XCTAssertTrue(missing.contains(where: { $0.entityClass == .motif && $0.id == orphanMotif }))
-        }
-    }
-
-    // 8. Error message names the entity class AND the missing UUID so the
-    //    user knows exactly what to edit.
-    func testErrorMessageNamesEntityClassAndMissingID() {
-        let orphan = UUID()
-        pack.selectedCharacterIDs = [orphan]
-        let result = RecipeIntegrityValidator.validate(recipe: pack)
-        guard case .invalid(let missing) = result else {
-            XCTFail("Expected .invalid")
-            return
-        }
-        let message = RecipeIntegrityValidator.errorMessage(for: missing)
-        XCTAssertTrue(message.contains("Recipe references deleted/missing material and must be edited"),
-                      "Message must call out the 'must be edited' instruction: \(message)")
-        XCTAssertTrue(message.contains("character"),
-                      "Message must name the entity class: \(message)")
-        XCTAssertTrue(message.contains(orphan.uuidString.prefix(8).lowercased()),
-                      "Message must include the missing UUID (first 8 chars): \(message)")
-    }
-}
-
-    // PR 2 review regression: spec says every selected ID must resolve
-    // to EXACTLY ONE entity in the recipe's project (count != 1).
-    // If two project entities share the selected UUID (e.g. corrupt
-    // migration, duplicate import), validation must fail closed -- the
-    // pre-fix `contains(where:)` accepted count >= 1 which silently
-    // accepted the duplicate case.
+    // 4. Duplicate UUID fails: two project entities share a UUID (corrupt
+    //    migration, duplicate import, etc.). The recipe'''s reference is
+    //    ambiguous; validator must fail closed. count != 1 catches this.
     func testDuplicateProjectEntitiesShareSelectedUUIDFailsValidation() throws {
         let sharedUUID = UUID()
         let dup1 = StoryCharacter(name: "Dup1")
@@ -357,6 +171,145 @@ final class RecipeIntegrityValidatorTests: XCTestCase {
             }), "Duplicate character UUID must be reported because count != 1")
         }
     }
+
+    // 5. Multiple irreconcilable classes are reported in a single pass.
+    func testMultipleIrreconcilableClassesReportAllInOnePass() throws {
+        // Two characters sharing one UUID (duplicate on character).
+        let sharedChar = UUID()
+        let dup1 = StoryCharacter(name: "Dup1")
+        dup1.id = sharedChar
+        dup1.project = project
+        context.insert(dup1)
+        let dup2 = StoryCharacter(name: "Dup2")
+        dup2.id = sharedChar
+        dup2.project = project
+        context.insert(dup2)
+
+        // Two motifs sharing one UUID (duplicate on motif).
+        let sharedMotif = UUID()
+        let m1 = Motif(name: "M1")
+        m1.id = sharedMotif
+        m1.project = project
+        context.insert(m1)
+        let m2 = Motif(name: "M2")
+        m2.id = sharedMotif
+        m2.project = project
+        context.insert(m2)
+        try context.save()
+
+        pack.selectedCharacterIDs = [sharedChar]
+        pack.selectedMotifIDs = [sharedMotif]
+
+        let result = RecipeIntegrityValidator.validate(recipe: pack)
+        switch result {
+        case .valid:
+            XCTFail("Expected .invalid with multiple irreconcilable classes")
+        case .invalid(let missing):
+            XCTAssertEqual(missing.count, 2, "Both irreconcilable classes must be reported")
+            XCTAssertTrue(missing.contains(where: { $0.entityClass == .character && $0.id == sharedChar }))
+            XCTAssertTrue(missing.contains(where: { $0.entityClass == .motif && $0.id == sharedMotif }))
+        }
+    }
+
+    // 6. Validator does not mutate the recipe on .invalid. Pure read.
+    func testValidatorDoesNotMutateRecipe() {
+        let originalCharacterIDs = pack.selectedCharacterIDs
+        let originalSpark = pack.selectedStorySparkID
+        let originalAfter = pack.selectedAftertasteID
+        let originalRels = pack.selectedRelationshipIDs
+        let originalThemes = pack.selectedThemeQuestionIDs
+        let originalMotifs = pack.selectedMotifIDs
+
+        // Set up an irreconcilable state (cross-project character) and
+        // run the validator.
+        let otherContext = try! makeInMemoryContext()
+        let otherProject = StoryProject(name: "Other")
+        otherContext.insert(otherProject)
+        let otherChar = StoryCharacter(name: "Other")
+        otherChar.project = otherProject
+        otherContext.insert(otherChar)
+        try otherContext.save()
+
+        pack.selectedCharacterIDs = [otherChar.id]  // irreconcilable
+
+        _ = RecipeIntegrityValidator.validate(recipe: pack)
+
+        // Spec: validator does NOT silently prune, replace, or mutate.
+        XCTAssertEqual(pack.selectedCharacterIDs, [otherChar.id])
+        XCTAssertEqual(pack.selectedStorySparkID, originalSpark)
+        XCTAssertEqual(pack.selectedAftertasteID, originalAfter)
+        XCTAssertEqual(pack.selectedRelationshipIDs, originalRels)
+        XCTAssertEqual(pack.selectedThemeQuestionIDs, originalThemes)
+        XCTAssertEqual(pack.selectedMotifIDs, originalMotifs)
+    }
+
+    // 7. Error message names the entity class AND the missing UUID so the
+    //    user knows exactly what to edit.
+    func testErrorMessageNamesEntityClassAndMissingID() {
+        // Force an irreconcilable via cross-project.
+        let otherContext = try! makeInMemoryContext()
+        let otherProject = StoryProject(name: "Other")
+        otherContext.insert(otherProject)
+        let otherChar = StoryCharacter(name: "Other")
+        otherChar.project = otherProject
+        otherContext.insert(otherChar)
+        try otherContext.save()
+        pack.selectedCharacterIDs = [otherChar.id]
+
+        let result = RecipeIntegrityValidator.validate(recipe: pack)
+        guard case .invalid(let missing) = result else {
+            XCTFail("Expected .invalid")
+            return
+        }
+        let message = RecipeIntegrityValidator.errorMessage(for: missing)
+        XCTAssertTrue(message.contains("Recipe references deleted/missing material and must be edited"),
+                      "Message must call out the '\''must be edited'\'' instruction: \(message)")
+        XCTAssertTrue(message.contains("character"),
+                      "Message must name the entity class: \(message)")
+        XCTAssertTrue(message.contains(otherChar.id.uuidString.prefix(8).lowercased()),
+                      "Message must include the missing UUID (first 8 chars): \(message)")
+    }
+
+    // 8. Wire-up: makeRequest still throws .recipeIntegrityMissing on
+    //    irreconcilable corruption (duplicate UUID). In production the
+    //    reconciler would have run first and removed any stale IDs; this
+    //    test exercises the path where corruption reaches the validator
+    //    and proves makeRequest fails closed.
+    func testMakeRequestThrowsOnDuplicateCharacterIDs() throws {
+        let sharedUUID = UUID()
+        let dup1 = StoryCharacter(name: "Dup1")
+        dup1.id = sharedUUID
+        dup1.project = project
+        context.insert(dup1)
+        let dup2 = StoryCharacter(name: "Dup2")
+        dup2.id = sharedUUID
+        dup2.project = project
+        context.insert(dup2)
+        try context.save()
+
+        pack.selectedCharacterIDs = [sharedUUID]
+
+        let arc = StoryArc()
+        arc.templateID = StoryArcTemplate.allTemplates.first?.id
+        arc.project = project
+        context.insert(arc)
+        try context.save()
+
+        let template = StoryArcTemplate.allTemplates.first!
+
+        XCTAssertThrowsError(
+            try OutlineSuggestionService().makeRequest(
+                recipe: pack, arc: arc, arcTemplate: template
+            )
+        ) { error in
+            guard case OutlineSuggestionError.recipeIntegrityMissing(let missing) = error else {
+                XCTFail("Expected .recipeIntegrityMissing, got \(error)")
+                return false
+            }
+            return missing.contains(where: { $0.entityClass == .character && $0.id == sharedUUID })
+        }
+    }
+}
 
 // MARK: - Test helpers
 
