@@ -17,6 +17,7 @@ import {
   computeMaxChargeCredits,
   computeProviderCogsCents,
   DEFAULT_PRICING,
+  mapModelRow,
   snapshotPricing,
 } from "./_generation_models.ts";
 
@@ -173,6 +174,90 @@ Deno.test("pricing: customer charge is INVARIANT on cache outcome (PR-372 load-b
 // ---------------------------------------------------------------------------
 // 3. The 0.25-credit product floor works
 // ---------------------------------------------------------------------------
+
+// 5. Phase 3 fractional preservation through mapModelRow + snapshotPricing
+// -----------------------------------------------------------------------
+// PR4 (Fix the Shit cycle 4): the legacy Math.max(1, Math.round(...)) clamp
+// forced integer 1 and overrode the canonical 0.25 product floor. These
+// assertions guard against regression of that fragment.
+
+Deno.test("pricing: mapModelRow preserves 0.25 from DB row (no legacy floor clamp)", () => {
+  const row = {
+    id: "gpt-fractional-25",
+    provider: "openai",
+    provider_model: "gpt-fractional-25",
+    display_name: "Fractional floor model",
+    description: null,
+    input_credit_rate: 1,
+    output_credit_rate: 2,
+    minimum_charge_credits: 0.25,
+    max_output_tokens: 16000,
+    enabled: true,
+    sort_order: 0,
+    billing_multiplier: 2.0,
+    provider_input_usd_per_1m: 0.15,
+    provider_cached_input_usd_per_1m: 0.075,
+    provider_cache_write_usd_per_1m: 0.1875,
+    provider_output_usd_per_1m: 0.6,
+    pricing_effective_at: "2026-01-01T00:00:00Z",
+    cache_mode: "implicit",
+  } satisfies Record<string, unknown>;
+  const model = mapModelRow(row);
+  assertEquals(model.minimum_charge_credits, 0.25);
+  const snap = snapshotPricing(model);
+  assertEquals(snap.minimumChargeCredits, 0.25);
+});
+
+Deno.test("pricing: mapModelRow falls back to 0.25 when DB minimum is null", () => {
+  const row = {
+    id: "gpt-fractional-null",
+    provider: "openai",
+    provider_model: "gpt-fractional-null",
+    display_name: "Null floor model",
+    description: null,
+    input_credit_rate: 1,
+    output_credit_rate: 2,
+    minimum_charge_credits: null,
+    max_output_tokens: 16000,
+    enabled: true,
+    sort_order: 0,
+    billing_multiplier: 2.0,
+    provider_input_usd_per_1m: 0.15,
+    provider_cached_input_usd_per_1m: 0.075,
+    provider_cache_write_usd_per_1m: 0.1875,
+    provider_output_usd_per_1m: 0.6,
+    pricing_effective_at: "2026-01-01T00:00:00Z",
+    cache_mode: "implicit",
+  } satisfies Record<string, unknown>;
+  const model = mapModelRow(row);
+  assertEquals(model.minimum_charge_credits, 0.25);
+});
+
+Deno.test("pricing: mapModelRow rounds fractional DB values to 6 decimals", () => {
+  const row = {
+    id: "gpt-six-decimal",
+    provider: "openai",
+    provider_model: "gpt-six-decimal",
+    display_name: "Six decimal model",
+    description: null,
+    input_credit_rate: 1,
+    output_credit_rate: 2,
+    // 0.123456789 -> round6 -> 0.123457 (round-half-up at 1e-6).
+    minimum_charge_credits: 0.123456789,
+    max_output_tokens: 16000,
+    enabled: true,
+    sort_order: 0,
+    billing_multiplier: 2.0,
+    provider_input_usd_per_1m: 0.15,
+    provider_cached_input_usd_per_1m: 0.075,
+    provider_cache_write_usd_per_1m: 0.1875,
+    provider_output_usd_per_1m: 0.6,
+    pricing_effective_at: "2026-01-01T00:00:00Z",
+    cache_mode: "implicit",
+  } satisfies Record<string, unknown>;
+  const model = mapModelRow(row);
+  assertEquals(model.minimum_charge_credits, 0.123457);
+});
 
 Deno.test("pricing: 0.25 floor applies for trivially small requests", () => {
   const pricing = makeSnapshot();

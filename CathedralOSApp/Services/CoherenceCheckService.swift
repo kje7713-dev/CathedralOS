@@ -204,7 +204,7 @@ struct CoherenceCheckResponseBody: Codable {
     let estimatedCredits: Double?
     let availableCredits: Int?
     let allowed: Bool?
-    let minimumChargeCredits: Int?
+    let minimumChargeCredits: Double?
     let warnings: [CoherenceWarning]?
     let diagnostics: CoherenceDiagnostics?
 
@@ -223,7 +223,7 @@ struct CoherenceCostEstimate: Codable {
     let estimatedCredits: Double
     let availableCredits: Int
     let allowed: Bool
-    let minimumChargeCredits: Int
+    let minimumChargeCredits: Double
 }
 
 struct CoherenceCheckService {
