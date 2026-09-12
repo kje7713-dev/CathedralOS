@@ -1860,11 +1860,14 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             outline.sections.map { ($0.id, $0) },
             uniquingKeysWith: { _, later in later }
         )
-        // First pass: create or update every section and collect parent
-        // references. The sync builder sorts parents before children, so the
-        // first pass is sufficient to guarantee every child's parent section
-        // already exists in `outline.sections` before the second pass runs.
-        var parentMappings: [(OutlineSection, UUID)] = []
+        // First pass: create or update every section. Collect a parent
+        // reference for EVERY payload (including nil parentID) so the second
+        // pass can authoritatively clear stale parents on sections the payload
+        // reclassifies as top-level. The two-pass design does NOT depend on
+        // the sync builder placing parents before children — every section
+        // exists in `outline.sections` after this pass regardless of input
+        // order.
+        var parentMappings: [(OutlineSection, UUID?)] = []
         for payload in payloads {
             let parsedID = payload.id.flatMap(UUID.init(uuidString:))
             let section: OutlineSection
@@ -1905,17 +1908,28 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             if !outline.sections.contains(where: { $0.id == section.id }) {
                 outline.sections.append(section)
             }
-            if let parentIDString = payload.parentID,
-               let parentID = UUID(uuidString: parentIDString) {
-                parentMappings.append((section, parentID))
-            }
+            // nil parentID means "should be top-level" — still recorded so the
+            // second pass can clear any stale parent that was attached before
+            // this restore.
+            let parentID = payload.parentID.flatMap(UUID.init(uuidString:))
+            parentMappings.append((section, parentID))
         }
-        // Second pass: resolve parent references for child sections. A missing
-        // parent (deleted upstream) leaves the child orphaned rather than
-        // crashing the restore; the Section Contract fields are still intact.
+        // Second pass: authoritatively reconcile the parent relationship for
+        // every section that appeared in the payload. Every case is handled
+        // deterministically so the restore is the single source of truth:
+        //   - valid parent ID matching an existing section → assign that parent
+        //   - nil parent ID → clear any stale parent (section becomes top-level)
+        //   - parent ID not resolvable → clear any stale parent (child orphaned)
+        //   - parent ID matching the section itself → clear (reject self-parent)
+        // Reparenting A → B falls out of the same logic — the second pass
+        // simply assigns the new parent.
         for (section, parentID) in parentMappings {
-            if let parent = outline.sections.first(where: { $0.id == parentID }) {
+            if let parentID,
+               let parent = outline.sections.first(where: { $0.id == parentID }),
+               parent.id != section.id {
                 section.parent = parent
+            } else {
+                section.parent = nil
             }
         }
     }

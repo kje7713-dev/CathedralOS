@@ -810,14 +810,28 @@ enum ProjectSchemaTemplateBuilder {
                 }
             )
             let authoritativeSections = (try? modelContext.fetch(descriptor)) ?? []
-            // Parents must precede children in the payload so the import mapper
-            // can resolve `parentID` references when children are reconciled.
-            let sortedSections = authoritativeSections.sorted { lhs, rhs in
-                let lhsIsTopLevel = lhs.parent == nil
-                let rhsIsTopLevel = rhs.parent == nil
-                if lhsIsTopLevel != rhsIsTopLevel { return lhsIsTopLevel }
-                return lhs.position < rhs.position
+            // Stable deterministic ordering: top-level sections first (by
+            // position, then UUID as tie-breaker), then child sections grouped
+            // by parent (by parent-UUID, position, UUID). Identical project
+            // state must produce identical snapshots to avoid snapshot churn —
+            // child groups commonly reuse positions such as 0, 1, 2, so the
+            // UUID tie-breaker is required for a fully deterministic order.
+            // NOTE: the import mapper does NOT depend on this order — its
+            // two-pass reconciliation handles child-before-parent payloads
+            // by creating every section in the first pass and resolving
+            // parent references in the second pass.
+            let topLevel = authoritativeSections.filter { $0.parent == nil }.sorted { lhs, rhs in
+                if lhs.position != rhs.position { return lhs.position < rhs.position }
+                return lhs.id.uuidString < rhs.id.uuidString
             }
+            let children = authoritativeSections.filter { $0.parent != nil }.sorted { lhs, rhs in
+                let lhsParent = lhs.parent?.id.uuidString ?? ""
+                let rhsParent = rhs.parent?.id.uuidString ?? ""
+                if lhsParent != rhsParent { return lhsParent < rhsParent }
+                if lhs.position != rhs.position { return lhs.position < rhs.position }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            let sortedSections = topLevel + children
             let sectionPayloads: [ProjectImportExportPayload.OutlineSectionPayload] = sortedSections
                 .map { section in
                     ProjectImportExportPayload.OutlineSectionPayload(
