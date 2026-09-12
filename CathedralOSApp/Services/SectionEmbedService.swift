@@ -42,6 +42,22 @@ enum SectionEmbedError: Error, LocalizedError {
     }
 }
 
+/// Test seam: lets tests inject a fake Accept All service without changing
+/// production call sites. SectionEmbedService conforms below.
+protocol SectionEmbedServicing {
+    func startAcceptAll(
+        edgeFunctionURL: URL,
+        outlineID: UUID,
+        projectID: UUID,
+        suggestions: [OutlineSuggestion],
+        startingPosition: Int,
+        idempotencyKey: String,
+        sourceRecipe: PromptPackExportPayload
+    ) async throws -> AcceptOutlineSectionsResult
+
+    func acceptAllStatus(runID: String) async throws -> AcceptOutlineSectionsResult
+}
+
 struct SectionEmbedService {
     private let sessionProvider: any SupabaseSessionProvider
     private let session: URLSession
@@ -483,3 +499,7 @@ extension SectionEmbedService {
         }
     }
 }
+
+
+// MARK: - SectionEmbedServicing conformance
+extension SectionEmbedService: SectionEmbedServicing {}

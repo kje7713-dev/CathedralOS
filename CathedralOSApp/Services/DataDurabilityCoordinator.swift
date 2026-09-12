@@ -452,12 +452,31 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var activeAcceptRun: AcceptRunMetadata?
     @Published private(set) var acceptRunError: String?
     @Published private(set) var acceptRunRevision: UInt = 0
+    /// Bumped immediately when Accept All is tapped so the UI can show a busy
+    /// state during syncArc()/POST before the server returns a run ID. Pair
+    /// with `acceptRunError` to render pre-POST failure instead of a silent
+    /// dead button.
+    @Published private(set) var acceptRunInitiationRevision: UInt = 0
+    /// True from the moment Accept All is tapped until the coordinator either
+    /// owns a live server run or surfaces a refusal/error. Prevents duplicate
+    /// taps from creating concurrent jobs.
+    @Published private(set) var isAcceptRunInitiating: Bool = false
     private var acceptPollingTask: Task<Void, Never>?
     private static let acceptRunKey = "cathedralos.acceptOutline.activeRun"
 
     /// Starts the server-owned Accept All job. The task and all completion work
     /// belong to this coordinator, so dismissing the review sheet cannot cancel
-    /// reconciliation. A second call while a run is active is ignored.
+    /// reconciliation.
+    ///
+    /// Refuses never silently. If a same-outline run is already terminal/stale
+    /// it is reconciled first and the requested run is allowed to proceed.
+    /// If a different outline/project run is active, the refusal is surfaced
+    /// with full diagnostics so the UI can show the user exactly why their
+    /// tap did not start a new server job.
+    ///
+    /// Pre-PR-540 behaviour preserved for valid (no-conflict) requests:
+    /// `acceptPollingTask` owns the lifecycle; the review sheet cannot cancel
+    /// reconciliation by dismissing.
     func beginAcceptAll(
         edgeFunctionURL: URL,
         outlineID: UUID,
@@ -468,18 +487,64 @@ final class DataDurabilityCoordinator: ObservableObject {
         idempotencyKey: String,
         sourceRecipe: PromptPackExportPayload,
         context: ModelContext,
-        service: SectionEmbedService = SectionEmbedService()
+        service: any SectionEmbedServicing = SectionEmbedService()
     ) {
-        guard acceptPollingTask == nil, activeAcceptRun == nil else { return }
-        guard isRecoveryReadyForUploads else {
-            acceptRunError = "Recovery must finish before Accept All can sync."
-            acceptRunRevision &+= 1
+        // Checkpoint 1: Accept All tapped.
+        logger.log("accept_all: tapped outline=\(outlineID.uuidString, privacy: .public) project=\(projectID.uuidString, privacy: .public)")
+
+        // Cross-outline / cross-project guard. If the coordinator already owns
+        // an active run for a DIFFERENT project or outline, refuse explicitly
+        // with diagnostics rather than silently returning.
+        if let existing = activeAcceptRun, existing.isActive,
+           existing.projectLineageID != projectLineageID || existing.outlineID != outlineID {
+            logger.error("accept_all: refused due to in-flight run existing_run=\(existing.runID, privacy: .public) existing_status=\(existing.status, privacy: .public) existing_project=\(existing.projectLineageID.uuidString, privacy: .public) existing_outline=\(existing.outlineID.uuidString, privacy: .public) requested_project=\(projectLineageID.uuidString, privacy: .public) requested_outline=\(outlineID.uuidString, privacy: .public)")
+            reportAcceptRunError("Another Accept All is in progress. Wait for it to finish, or restart the app to clear it.")
             return
         }
+        // Same-project/outline guard: if there is an active run for the same
+        // outline, refuse explicitly. The user can dismiss the active run
+        // first via resumeAcceptAllIfNeeded reconciliation, but a fresh tap
+        // must never silently no-op.
+        if let existing = activeAcceptRun, existing.isActive,
+           existing.projectLineageID == projectLineageID, existing.outlineID == outlineID {
+            logger.log("accept_all: refused due to same-outline active run run=\(existing.runID, privacy: .public) status=\(existing.status, privacy: .public)")
+            reportAcceptRunError("Accept All is already in progress for this outline.")
+            return
+        }
+        // Stale-state reconciliation: if a terminal run is held in memory or
+        // persisted defaults, clear it so the new request can proceed. This
+        // prevents a previous run's terminal state from permanently blocking
+        // the next Accept All.
+        if let existing = activeAcceptRun, existing.isTerminal {
+            logger.log("accept_all: reconciling prior terminal run=\(existing.runID, privacy: .public) status=\(existing.status, privacy: .public)")
+            clearAcceptRunState(reason: "reconciled prior terminal run")
+        } else if acceptPollingTask != nil {
+            // Polling task present but activeAcceptRun was nil (resumed state):
+            // a previous request is still attached. Cancel and reconcile.
+            logger.log("accept_all: cancelling stale polling task before fresh request")
+            acceptPollingTask?.cancel()
+            acceptPollingTask = nil
+            acceptRunDefaults.removeObject(forKey: Self.acceptRunKey)
+        }
+
+        guard isRecoveryReadyForUploads else {
+            logger.error("accept_all: refused due to recovery not ready")
+            reportAcceptRunError("Recovery must finish before Accept All can sync.")
+            return
+        }
+
+        // Mark initiation state immediately so the UI can show busy before
+        // server POST. This eliminates the dead-button window between tap
+        // and run-ID.
         acceptRunError = nil
+        isAcceptRunInitiating = true
+        acceptRunInitiationRevision &+= 1
+        logger.log("accept_all: initiation started")
         acceptPollingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
+                // Checkpoint 2: POST starting.
+                logger.log("accept_all: POST starting outline=\(outlineID.uuidString, privacy: .public)")
                 let queued = try await service.startAcceptAll(
                     edgeFunctionURL: edgeFunctionURL,
                     outlineID: outlineID,
@@ -489,6 +554,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                     idempotencyKey: idempotencyKey,
                     sourceRecipe: sourceRecipe
                 )
+                // Checkpoint 3: run ID received.
+                logger.log("accept_all: run_id received run=\(queued.runID, privacy: .public) status=\(queued.status, privacy: .public)")
                 var metadata = AcceptRunMetadata(
                     runID: queued.runID,
                     projectID: projectID,
@@ -501,20 +568,39 @@ final class DataDurabilityCoordinator: ObservableObject {
                     error: queued.error
                 )
                 self.activeAcceptRun = metadata
+                self.isAcceptRunInitiating = false
                 self.persistAcceptRun(metadata)
                 await self.pollAcceptRun(context: context, service: service)
             } catch {
+                // Checkpoint 4: POST or run attach failed.
+                logger.error("accept_all: POST failed error=\(error.localizedDescription, privacy: .public)")
                 self.acceptPollingTask = nil
                 self.activeAcceptRun = nil
+                self.isAcceptRunInitiating = false
                 self.acceptRunError = error.localizedDescription
                 self.acceptRunRevision &+= 1
             }
         }
     }
 
+    /// Clears in-memory and persisted Accept All run state. Called when the
+    /// server tells us the run is gone (404), or when reconciling a terminal
+    /// prior run before starting a fresh request.
+    private func clearAcceptRunState(reason: String) {
+        logger.log("accept_all: clearing state reason=\(reason, privacy: .public)")
+        acceptPollingTask?.cancel()
+        acceptPollingTask = nil
+        activeAcceptRun = nil
+        isAcceptRunInitiating = false
+        acceptRunDefaults.removeObject(forKey: Self.acceptRunKey)
+        acceptRunInitiationRevision &+= 1
+    }
+
     /// Reattaches the live coordinator to a persisted job after app launch or
-    /// project navigation. Terminal completed jobs are reconciled immediately.
-    func resumeAcceptAllIfNeeded(context: ModelContext, service: SectionEmbedService = SectionEmbedService()) {
+    /// project navigation. Terminal completed jobs are reconciled immediately
+    /// (and their state cleared so the next Accept All tap can proceed without
+    /// the prior run's terminal state blocking).
+    func resumeAcceptAllIfNeeded(context: ModelContext, service: any SectionEmbedServicing = SectionEmbedService()) {
         guard isRecoveryReadyForUploads else { return }
         guard acceptPollingTask == nil else { return }
         guard let data = acceptRunDefaults.data(forKey: Self.acceptRunKey),
@@ -523,11 +609,18 @@ final class DataDurabilityCoordinator: ObservableObject {
         activeAcceptRun = metadata
         acceptRunError = metadata.error
         if metadata.isTerminal {
+            // Persisted terminal run: reconcile immediately and clear so the
+            // next tap is not blocked by the prior terminal state.
+            logger.log("accept_all_resume: reconciling persisted terminal run=\(metadata.runID, privacy: .public) status=\(metadata.status, privacy: .public)")
             acceptPollingTask = Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.finishAcceptRun(metadata, context: context)
+                // finishAcceptRun already clears state; ensure no stale
+                // marker remains.
+                acceptRunDefaults.removeObject(forKey: Self.acceptRunKey)
             }
         } else {
+            logger.log("accept_all_resume: reattaching polling for run=\(metadata.runID, privacy: .public)")
             acceptPollingTask = Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.pollAcceptRun(context: context, service: service)
@@ -535,7 +628,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
     }
 
-    private func pollAcceptRun(context: ModelContext, service: SectionEmbedService) async {
+    private func pollAcceptRun(context: ModelContext, service: any SectionEmbedServicing) async {
         guard var metadata = activeAcceptRun else { return }
         while !Task.isCancelled {
             do {
@@ -555,15 +648,60 @@ final class DataDurabilityCoordinator: ObservableObject {
             } catch is CancellationError {
                 break
             } catch {
-                // Keep the persisted running metadata and continue retrying.
-                // A later project/app reopen can also reattach if the process
-                // was suspended or terminated; a transient poll failure must
-                // never orphan the server-owned job.
+                // Distinguish permanent from transient poll failures. A
+                // permanently missing server run must NOT keep this client
+                // stuck forever in an active state, because that would
+                // silently block every future Accept All tap.
+                if Self.isPermanentAcceptPollFailure(error) {
+                    logger.error("accept_all_poll: permanent failure run=\(metadata.runID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                    acceptRunError = "Accept All server run is no longer available. The local state has been cleared so you can try again."
+                    acceptRunRevision &+= 1
+                    clearAcceptRunState(reason: "server reported run not found or permanent failure")
+                    return
+                }
+                // Transient (network, timeout, 5xx). Keep the persisted
+                // running metadata and continue retrying; a later project/app
+                // reopen can also reattach if the process was suspended or
+                // terminated.
                 acceptRunError = error.localizedDescription
             }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
         acceptPollingTask = nil
+    }
+
+    /// True when a polling failure is permanent and the server will never
+    /// recover the run. Used by `pollAcceptRun` to decide whether to clear
+    /// stale state instead of retrying forever.
+    ///
+    /// - HTTP 404 / "accept run not found": server has no such run.
+    /// - Malformed run UUID: client-side data corruption.
+    /// - Invalid response body that cannot be a transient network blip.
+    static func isPermanentAcceptPollFailure(_ error: Error) -> Bool {
+        // SectionEmbedError wraps the HTTP status from accept-outline-sections.
+        if let server = error as? SectionEmbedError {
+            switch server {
+            case .serverError(let status, _):
+                // 404 / 410 = server has no such run.
+                if status == 404 || status == 410 { return true }
+                // Other 4xx (except 401 re-auth and 429 rate-limit) are
+                // permanent: the request will never succeed for this run id.
+                if (400...499).contains(status) && status != 401 && status != 429 { return true }
+                return false
+            case .invalidResponse:
+                // Persistent invalid-response for the same run id is permanent.
+                // Without this branch, a permanently bad server response would
+                // loop forever and block every future Accept All tap.
+                return true
+            case .notConfigured, .notAuthenticated, .rateLimited, .providerError, .networkError:
+                return false
+            }
+        }
+        // Unrecognised error types (URLSession transport, NSURLError*, etc.)
+        // are treated as transient so a server-owned job is not lost to a
+        // transient transport blip. CancellationError is handled separately
+        // by the poll loop's `catch is CancellationError`.
+        return false
     }
 
     private func finishAcceptRun(_ metadata: AcceptRunMetadata, context: ModelContext) async {
@@ -592,6 +730,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         acceptRunDefaults.removeObject(forKey: Self.acceptRunKey)
         activeAcceptRun = nil
         acceptPollingTask = nil
+        isAcceptRunInitiating = false
         acceptRunRevision &+= 1
         outputRefreshRevision &+= 1
         NotificationCenter.default.post(name: .cathedralOSGenerationOutputsChanged, object: nil)

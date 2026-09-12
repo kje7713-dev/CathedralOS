@@ -59,19 +59,30 @@ enum StoryArcSyncError: Error, LocalizedError {
 struct StoryArcSyncService {
     private let authService: AuthService
     private let session: URLSession
+    /// Optional injected backend client. When nil, syncArc creates a real
+    /// `SupabaseBackendClient()` from Info.plist. Tests inject a stub that
+    /// returns a canned `ValidatedSupabaseConfiguration` so the request body
+    /// can be captured without requiring live Info.plist keys.
+    private let backendOverride: (any BackendClient)?
 
     init(
         authService: AuthService = BackendAuthService.shared,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        backend: (any BackendClient)? = nil
     ) {
         self.authService = authService
         self.session = session
+        self.backendOverride = backend
     }
 
     /// Sync a StoryArc (and all its current beats) to the server.
     /// - Parameter arc: The local StoryArc. Must have a non-nil `project` —
-    ///   the project's UUID is used for both `local_project_id` and
-    ///   `lineage_id` (matches the convention embed-section uses).
+    ///   the project's UUID is used for `local_project_id` and the project's
+    ///   canonical `stableLineageID` (which is `lineageID ?? id`) is used
+    ///   for `lineage_id`. This matches the convention in
+    ///   ProjectCloudSyncService so server-side snapshots and the
+    ///   story_arcs row reference the same canonical lineage that
+    ///   production snapshots already use.
     /// - Returns: SyncArcResponse with upsert/delete counts.
 
 // MARK: - Authoritative root-fetch helper
@@ -145,7 +156,13 @@ static func fetchAuthoritativeBeats(
             "story_arc_id": arc.id.uuidString,
             "template_id": arc.templateID?.uuidString as Any,
             "local_project_id": project.id.uuidString,
-            "lineage_id": project.id.uuidString,
+            // Use the canonical stableLineageID for lineage_id so server-side
+            // story_arcs.lineage_id matches the canonical lineage already
+            // stored on production project_snapshots. Using project.id here
+            // would record the local SwiftData UUID instead and cause the
+            // server row to disagree with snapshots/embed-section, which is
+            // the separate identity defect called out in the bug report.
+            "lineage_id": project.stableLineageID.uuidString,
             "customizations": customizationsObject,
             "beats": beatsArray,
         ]
@@ -157,17 +174,21 @@ static func fetchAuthoritativeBeats(
             throw StoryArcSyncError.networkError("Could not encode request: \(error.localizedDescription)")
         }
 
-        let client: SupabaseBackendClient
-        do {
-            client = try SupabaseBackendClient()
-        } catch {
-            let reason: String
-            if let backendError = error as? BackendClientError, case .notConfigured(let r) = backendError {
-                reason = r
-            } else {
-                reason = String(describing: error)
+        let client: any BackendClient
+        if let backendOverride {
+            client = backendOverride
+        } else {
+            do {
+                client = try SupabaseBackendClient()
+            } catch {
+                let reason: String
+                if let backendError = error as? BackendClientError, case .notConfigured(let r) = backendError {
+                    reason = r
+                } else {
+                    reason = String(describing: error)
+                }
+                throw StoryArcSyncError.notConfigured(reason: reason)
             }
-            throw StoryArcSyncError.notConfigured(reason: reason)
         }
 
         let url = client.edgeFunctionURL(path: SupabaseConfiguration.syncStoryArcEdgeFunctionPath)
