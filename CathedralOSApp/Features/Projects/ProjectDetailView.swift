@@ -795,6 +795,9 @@ struct ProjectDetailView: View {
                 .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
+                        for pack in project.promptPacks {
+                            pack.remove(characterID: char.id)
+                        }
                         modelContext.delete(char)
                     } label: {
                         Label("Delete", systemImage: "trash")
@@ -854,6 +857,9 @@ struct ProjectDetailView: View {
                 .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
+                        for pack in project.promptPacks {
+                            pack.remove(sparkID: spark.id)
+                        }
                         modelContext.delete(spark)
                     } label: {
                         Label("Delete", systemImage: "trash")
@@ -892,6 +898,9 @@ struct ProjectDetailView: View {
                 .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
+                        for pack in project.promptPacks {
+                            pack.remove(aftertasteID: a.id)
+                        }
                         modelContext.delete(a)
                     } label: {
                         Label("Delete", systemImage: "trash")
@@ -971,6 +980,9 @@ struct ProjectDetailView: View {
                 .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
+                        for pack in project.promptPacks {
+                            pack.remove(relationshipID: r.id)
+                        }
                         modelContext.delete(r)
                     } label: {
                         Label("Delete", systemImage: "trash")
@@ -1007,6 +1019,9 @@ struct ProjectDetailView: View {
                 .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
+                        for pack in project.promptPacks {
+                            pack.remove(themeQuestionID: t.id)
+                        }
                         modelContext.delete(t)
                     } label: {
                         Label("Delete", systemImage: "trash")
@@ -1043,6 +1058,9 @@ struct ProjectDetailView: View {
                 .listRowInsets(EdgeInsets())
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
+                        for pack in project.promptPacks {
+                            pack.remove(motifID: m.id)
+                        }
                         modelContext.delete(m)
                     } label: {
                         Label("Delete", systemImage: "trash")
