@@ -132,6 +132,7 @@
 		000000000000000000000168 /* GenerationOutputSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000167 /* GenerationOutputSyncTests.swift */; };
 		0000000000000000000001FE /* DataDurabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001FF /* DataDurabilityTests.swift */; };
 		1BC2956009E64F8599A3F06745ADDF5F /* RecipeSelectionServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68099DE367044144ADA484D4A8B8BD7B /* RecipeSelectionServiceTests.swift */; };
+		88FD8BA2FA8A4347A7F2AF50FB79AB6C /* RecipeIntegrityValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59D9B63E01A448EE996795F46F76732B /* RecipeIntegrityValidatorTests.swift */; };
 		F5557071B4AE46FDBB7847711CE2A705 /* AcceptAllLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8F3A4A27894451A926AC4AEDF0C77F /* AcceptAllLifecycleTests.swift */; };
 		DACD11FEC7CB465190C4A47F1713C98B /* StoryArcSyncLineageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA88AB29D6B84D85A00902FCCA8C58EC /* StoryArcSyncLineageTests.swift */; };
 00000000000000000000016A /* ImportHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000169 /* ImportHardeningTests.swift */; };
@@ -181,6 +182,7 @@
 		01182B640C6F421187F8DFAD /* OutlineSuggestionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */; };
 		9D0E1F2A3B4C5D6E7F8A9B0C /* SectionEmbedService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C9D0E1F2A3B4C5D6E7F8A9B /* SectionEmbedService.swift */; };
 		21D8EE71685D460DA28631530A2553EC /* RecipeSelectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29F226E2801B483693D933E61E96063B /* RecipeSelectionService.swift */; };
+		65BADFE54AA74A1EA1B20F018CFFE42E /* RecipeIntegrityValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78C324EA8BC94DF78F864B9651316688 /* RecipeIntegrityValidator.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* OutlineSectionCloudDeletion.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* OutlineSectionCloudDeletion.swift */; };
 		E406DFF81C0E46BD926E0CE4 /* BeatDeleteDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = B110FAB43E574B3BBA7EBAFE /* BeatDeleteDiagnostics.swift */; };
 		10621F3654A24EB7BD4AD2CA /* RunOutlineService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5430CDF96B54F2DB1EA9DB3 /* RunOutlineService.swift */; };
@@ -337,6 +339,7 @@
 		000000000000000000000167 /* GenerationOutputSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationOutputSyncTests.swift; sourceTree = "<group>"; };
 		0000000000000000000001FF /* DataDurabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataDurabilityTests.swift; sourceTree = "<group>"; };
 		68099DE367044144ADA484D4A8B8BD7B /* RecipeSelectionServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeSelectionServiceTests.swift; sourceTree = "<group>"; };
+		59D9B63E01A448EE996795F46F76732B /* RecipeIntegrityValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeIntegrityValidatorTests.swift; sourceTree = "<group>"; };
 		3C8F3A4A27894451A926AC4AEDF0C77F /* AcceptAllLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcceptAllLifecycleTests.swift; sourceTree = "<group>"; };
 		CA88AB29D6B84D85A00902FCCA8C58EC /* StoryArcSyncLineageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcSyncLineageTests.swift; sourceTree = "<group>"; };
 000000000000000000000169 /* ImportHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportHardeningTests.swift; sourceTree = "<group>"; };
@@ -386,6 +389,7 @@
 		81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSuggestionService.swift; sourceTree = "<group>"; };
 		8C9D0E1F2A3B4C5D6E7F8A9B /* SectionEmbedService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionEmbedService.swift; sourceTree = "<group>"; };
 		29F226E2801B483693D933E61E96063B /* RecipeSelectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeSelectionService.swift; sourceTree = "<group>"; };
+		78C324EA8BC94DF78F864B9651316688 /* RecipeIntegrityValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeIntegrityValidator.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60718293A4B5D /* OutlineSectionCloudDeletion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSectionCloudDeletion.swift; sourceTree = "<group>"; };
 		B110FAB43E574B3BBA7EBAFE /* BeatDeleteDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeatDeleteDiagnostics.swift; sourceTree = "<group>"; };
 		D5430CDF96B54F2DB1EA9DB3 /* RunOutlineService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunOutlineService.swift; sourceTree = "<group>"; };
@@ -603,6 +607,7 @@
 				000000000000000000000167 /* GenerationOutputSyncTests.swift */,
 				0000000000000000000001FF /* DataDurabilityTests.swift */,
 				68099DE367044144ADA484D4A8B8BD7B /* RecipeSelectionServiceTests.swift */,
+				59D9B63E01A448EE996795F46F76732B /* RecipeIntegrityValidatorTests.swift */,
 				3C8F3A4A27894451A926AC4AEDF0C77F /* AcceptAllLifecycleTests.swift */,
 				CA88AB29D6B84D85A00902FCCA8C58EC /* StoryArcSyncLineageTests.swift */,
 				000000000000000000000169 /* ImportHardeningTests.swift */,
@@ -685,6 +690,7 @@
 				AABBCCDD000000000000E002 /* KindleExportDownloader.swift */,
 				8C9D0E1F2A3B4C5D6E7F8A9B /* SectionEmbedService.swift */,
 				29F226E2801B483693D933E61E96063B /* RecipeSelectionService.swift */,
+				78C324EA8BC94DF78F864B9651316688 /* RecipeIntegrityValidator.swift */,
 				A1B2C3D4E5F60718293A4B5D /* OutlineSectionCloudDeletion.swift */,
 				B110FAB43E574B3BBA7EBAFE /* BeatDeleteDiagnostics.swift */,
 				D5430CDF96B54F2DB1EA9DB3 /* RunOutlineService.swift */,
@@ -980,6 +986,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 				01182B640C6F421187F8DFAD /* OutlineSuggestionService.swift in Sources */,
 				9D0E1F2A3B4C5D6E7F8A9B0C /* SectionEmbedService.swift in Sources */,
 				21D8EE71685D460DA28631530A2553EC /* RecipeSelectionService.swift in Sources */,
+				65BADFE54AA74A1EA1B20F018CFFE42E /* RecipeIntegrityValidator.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* OutlineSectionCloudDeletion.swift in Sources */,
 				E406DFF81C0E46BD926E0CE4 /* BeatDeleteDiagnostics.swift in Sources */,
 				10621F3654A24EB7BD4AD2CA /* RunOutlineService.swift in Sources */,
@@ -1108,6 +1115,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 				000000000000000000000168 /* GenerationOutputSyncTests.swift in Sources */,
 				0000000000000000000001FE /* DataDurabilityTests.swift in Sources */,
 				1BC2956009E64F8599A3F06745ADDF5F /* RecipeSelectionServiceTests.swift in Sources */,
+				88FD8BA2FA8A4347A7F2AF50FB79AB6C /* RecipeIntegrityValidatorTests.swift in Sources */,
 				F5557071B4AE46FDBB7847711CE2A705 /* AcceptAllLifecycleTests.swift in Sources */,
 				DACD11FEC7CB465190C4A47F1713C98B /* StoryArcSyncLineageTests.swift in Sources */,
 				00000000000000000000016A /* ImportHardeningTests.swift in Sources */,
