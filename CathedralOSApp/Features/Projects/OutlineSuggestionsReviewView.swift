@@ -48,21 +48,19 @@ struct OutlineSuggestionsReviewView: View {
     private var acceptErrorMessage: String? { activeAcceptRun == nil ? durabilityCoordinator.acceptRunError : nil }
     @State private var hasStartedAcceptance = false
 
-    // PR 11: stable across view recreation so repeated taps/reopened sheets
-    // resolve to the same server job instead of creating a second batch.
-    // Derived via AcceptAllRequestBuilder so the fingerprint includes every
-    // Section Contract field (entryState, dramaticEvent, resultingChange,
-    // terminalState, recipeRequirementIDs), project identity, outline identity,
-    // and the complete canonical source recipe — not just title/summary/
-    // container/POV/terminalBeat/storyArcBeatID as before.
+    // PR 11 (deferred): the deterministic AcceptAllRequestBuilder lives
+    // in CathedralOSApp/Services/AcceptAllRequestBuilder.swift but is NOT
+    // registered in this bundle's Xcode project (the pbxproj registration
+    // was reverted alongside PR 9's wire-up to recover from a parse-time
+    // corruption). Fall back to the pre-PR 11 narrower fingerprint — same
+    // logical batch → same key — until the deterministic builder + pbxproj
+    // re-registration land together with PR 9's iOS wire-up follow-up.
     private var acceptanceIdempotencyKey: String {
-        let builder = AcceptAllRequestBuilder(
-            projectID: project.id,
-            outlineID: outline.id,
-            suggestions: suggestions,
-            sourceRecipe: sourceRecipe
-        )
-        return builder.idempotencyKey
+        let content = suggestions.map { "\($0.title)|\($0.summary)|\($0.container)|\($0.pov)|\($0.terminalBeat)|\($0.storyArcBeatID)" }.joined(separator: "\n")
+        let digest = SHA256.hash(data: Data(content.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "\(outline.id.uuidString):\(digest)"
     }
 
     var body: some View {

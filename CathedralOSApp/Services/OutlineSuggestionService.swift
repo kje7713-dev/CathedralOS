@@ -260,7 +260,10 @@ struct OutlineSuggestionService {
             return true
         case .serverError(let statusCode, _):
             return statusCode == 408 || statusCode == 425 || statusCode == 429 || (500...599).contains(statusCode)
-        case .notConfigured, .providerError, .insufficientCredits, .invalidResponse, .recipeIntegrityMissing:
+        // PR 9: recipe_provenance_conflict is not auto-retryable — the
+        // outline has persisted sections from a previous recipe hash, so the
+        // user must edit the recipe or start a fresh outline.
+        case .notConfigured, .providerError, .insufficientCredits, .invalidResponse, .recipeIntegrityMissing, .recipeProvenanceConflict:
             return false
         }
     }
