@@ -578,7 +578,8 @@
 				A000000000000000000000B3 /* StoryArcBeat.swift */,
 				A000000000000000000000B5 /* Outline.swift */,
 				A000000000000000000000B7 /* OutlineSection.swift */,
-				C000000000000000000000B1 /* StoryArcTemplate.swift */,		F3EE330364824863A746DB8C /* OutlineSuggestion.swift */,
+				C000000000000000000000B1 /* StoryArcTemplate.swift */,
+				F3EE330364824863A746DB8C /* OutlineSuggestion.swift */,
 
 			);
 			path = Models;
@@ -707,7 +708,8 @@
 				000000000000000000000195 /* DiagnosticsViewModel.swift */,
 				00000000000000000000019C /* GenerationModelService.swift */,
 				0000000000000000000001A3 /* ProjectCloudSyncService.swift */,
-				0000000000000000000001AC /* AuthSessionResolver.swift */,		81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */,
+				0000000000000000000001AC /* AuthSessionResolver.swift */,
+				81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */,
 				AABBCCDD000000000000E002 /* KindleExportDownloader.swift */,
 				8C9D0E1F2A3B4C5D6E7F8A9B /* SectionEmbedService.swift */,
 				29F226E2801B483693D933E61E96063B /* RecipeSelectionService.swift */,
@@ -1088,7 +1090,8 @@ echo \"Runtime config plist injection completed: keys present\"";
 				0000000000000000000001A2 /* ProjectCloudSyncService.swift in Sources */,
 				0000000000000000000001AD /* AuthSessionResolver.swift in Sources */,
 				000000000000000000000198 /* DiagnosticsView.swift in Sources */,
-				000000000000000000000FF1 /* RecipeCard.swift in Sources */,				000000000000000000000FF3 /* HomeView.swift in Sources */,
+				000000000000000000000FF1 /* RecipeCard.swift in Sources */,
+				000000000000000000000FF3 /* HomeView.swift in Sources */,
 				A000000000000000000000B2 /* StoryArc.swift in Sources */,
 				A000000000000000000000B4 /* StoryArcBeat.swift in Sources */,
 				A000000000000000000000B6 /* Outline.swift in Sources */,
