@@ -206,9 +206,6 @@
 		AABBCCDD000000000000E005 /* KindleExportShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABBCCDD000000000000E006 /* KindleExportShareSheet.swift */; };
 		7EDD7D6456B247229EF219F0 /* KindleExportServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C80967683CED4FC99C3473F1 /* KindleExportServiceTests.swift */; };
 		AABBCCDD000000000000B001 /* KindleExportPollerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABBCCDD000000000000B002 /* KindleExportPollerTests.swift */; };
-		4DCF3F6508EC4880905FC9664BAE417D /* AcceptAllRequestBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DCF3F6508EC4880905FC9664BAE417D /* AcceptAllRequestBuilder.swift */; };
-		25BB5C898E79467683FFFFFC9B71561C /* RecipeProvenanceGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25BB5C898E79467683FFFFFC9B71561C /* RecipeProvenanceGuard.swift */; };
-		66CDF9B585E344F8BD75361BCF7934B2 /* RecipeProvenanceGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66CDF9B585E344F8BD75361BCF7934B2 /* RecipeProvenanceGuardTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -421,9 +418,6 @@
 		AABBCCDD000000000000A002 /* KindleExportPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportPoller.swift; sourceTree = "<group>"; };
 		C80967683CED4FC99C3473F1 /* KindleExportServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportServiceTests.swift; sourceTree = "<group>"; };
 		AABBCCDD000000000000B002 /* KindleExportPollerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportPollerTests.swift; sourceTree = "<group>"; };
-		4DCF3F6508EC4880905FC9664BAE417D /* AcceptAllRequestBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcceptAllRequestBuilder.swift; sourceTree = "<group>"; };
-		25BB5C898E79467683FFFFFC9B71561C /* RecipeProvenanceGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeProvenanceGuard.swift; sourceTree = "<group>"; };
-		66CDF9B585E344F8BD75361BCF7934B2 /* RecipeProvenanceGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeProvenanceGuardTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -578,8 +572,7 @@
 				A000000000000000000000B3 /* StoryArcBeat.swift */,
 				A000000000000000000000B5 /* Outline.swift */,
 				A000000000000000000000B7 /* OutlineSection.swift */,
-				C000000000000000000000B1 /* StoryArcTemplate.swift */,
-				F3EE330364824863A746DB8C /* OutlineSuggestion.swift */,
+				C000000000000000000000B1 /* StoryArcTemplate.swift */,		F3EE330364824863A746DB8C /* OutlineSuggestion.swift */,
 
 			);
 			path = Models;
@@ -625,7 +618,6 @@
 				0000000000000000000001FF /* DataDurabilityTests.swift */,
 				68099DE367044144ADA484D4A8B8BD7B /* RecipeSelectionServiceTests.swift */,
 				59D9B63E01A448EE996795F46F76732B /* RecipeIntegrityValidatorTests.swift */,
-				66CDF9B585E344F8BD75361BCF7934B2 /* RecipeProvenanceGuardTests.swift */,
 				79D3F415-536D-52C5-8435-54778330F6F7 /* RecipeReferenceReconcilerTests.swift */,
 				8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D3E /* OutlineSuggestionIdentityContractTests.swift */,
 				3C8F3A4A27894451A926AC4AEDF0C77F /* AcceptAllLifecycleTests.swift */,
@@ -708,15 +700,12 @@
 				000000000000000000000195 /* DiagnosticsViewModel.swift */,
 				00000000000000000000019C /* GenerationModelService.swift */,
 				0000000000000000000001A3 /* ProjectCloudSyncService.swift */,
-				0000000000000000000001AC /* AuthSessionResolver.swift */,
-				81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */,
+				0000000000000000000001AC /* AuthSessionResolver.swift */,		81C406355C554DAC928F9925 /* OutlineSuggestionService.swift */,
 				AABBCCDD000000000000E002 /* KindleExportDownloader.swift */,
 				8C9D0E1F2A3B4C5D6E7F8A9B /* SectionEmbedService.swift */,
 				29F226E2801B483693D933E61E96063B /* RecipeSelectionService.swift */,
 				78C324EA8BC94DF78F864B9651316688 /* RecipeIntegrityValidator.swift */,
 				CA4371A9-957C-5309-B49C-6B872511DFF9 /* RecipeReferenceReconciler.swift */,
-				4DCF3F6508EC4880905FC9664BAE417D /* AcceptAllRequestBuilder.swift */,
-				25BB5C898E79467683FFFFFC9B71561C /* RecipeProvenanceGuard.swift */,
 				A1B2C3D4E5F60718293A4B5D /* OutlineSectionCloudDeletion.swift */,
 				B110FAB43E574B3BBA7EBAFE /* BeatDeleteDiagnostics.swift */,
 				D5430CDF96B54F2DB1EA9DB3 /* RunOutlineService.swift */,
@@ -1013,9 +1002,6 @@ echo \"Runtime config plist injection completed: keys present\"";
 				9D0E1F2A3B4C5D6E7F8A9B0C /* SectionEmbedService.swift in Sources */,
 				21D8EE71685D460DA28631530A2553EC /* RecipeSelectionService.swift in Sources */,
 				65BADFE54AA74A1EA1B20F018CFFE42E /* RecipeIntegrityValidator.swift in Sources */,
-				4DCF3F6508EC4880905FC9664BAE417D /* AcceptAllRequestBuilder.swift in Sources */,
-				25BB5C898E79467683FFFFFC9B71561C /* RecipeProvenanceGuard.swift in Sources */,
-				66CDF9B585E344F8BD75361BCF7934B2 /* RecipeProvenanceGuardTests.swift in Sources */,
 				EF4C58D5-DEB6-5401-93A1-913442B94FA3 /* RecipeReferenceReconciler.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* OutlineSectionCloudDeletion.swift in Sources */,
 				E406DFF81C0E46BD926E0CE4 /* BeatDeleteDiagnostics.swift in Sources */,
@@ -1090,8 +1076,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 				0000000000000000000001A2 /* ProjectCloudSyncService.swift in Sources */,
 				0000000000000000000001AD /* AuthSessionResolver.swift in Sources */,
 				000000000000000000000198 /* DiagnosticsView.swift in Sources */,
-				000000000000000000000FF1 /* RecipeCard.swift in Sources */,
-				000000000000000000000FF3 /* HomeView.swift in Sources */,
+				000000000000000000000FF1 /* RecipeCard.swift in Sources */,				000000000000000000000FF3 /* HomeView.swift in Sources */,
 				A000000000000000000000B2 /* StoryArc.swift in Sources */,
 				A000000000000000000000B4 /* StoryArcBeat.swift in Sources */,
 				A000000000000000000000B6 /* Outline.swift in Sources */,

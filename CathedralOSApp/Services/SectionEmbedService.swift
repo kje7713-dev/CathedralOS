@@ -45,10 +45,14 @@ enum SectionEmbedError: Error, LocalizedError {
 /// Test seam: lets tests inject a fake Accept All service without changing
 /// production call sites. SectionEmbedService conforms below.
 protocol SectionEmbedServicing {
+    // PR 13 (recipe-to-acceptance recovery arc): projectLineageID threaded
+    // from the iOS side (Outline.stableLineageID) so the server can
+    // validate the lineage before allowing the run to proceed.
     func startAcceptAll(
         edgeFunctionURL: URL,
         outlineID: UUID,
         projectID: UUID,
+        projectLineageID: UUID?,
         suggestions: [OutlineSuggestion],
         startingPosition: Int,
         idempotencyKey: String,
