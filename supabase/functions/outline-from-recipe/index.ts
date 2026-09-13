@@ -1662,7 +1662,7 @@ export async function logRequest(
   status: string,
   errorCode?: string,
 ): Promise<void> {
-  await supabase.from("generation_request_logs").insert({
+  const { error } = await supabase.from("generation_request_logs").insert({
     request_id: crypto.randomUUID(),
     user_id: userId,
     action: "outline-from-recipe",
@@ -1673,6 +1673,17 @@ export async function logRequest(
     model_name: OPENAI_MODEL,
     created_at: new Date().toISOString(),
   });
+  if (error) {
+    // Supabase returns insert failures via the resolved value rather than
+    // throwing, so an `await insert(...)` swallows them. Throw here so the
+    // caller's try/catch (or any direct caller) actually sees the failure
+    // — production logging depends on this visibility because
+    // generation_request_logs is service-role INSERT-only and a silently
+    // dropped error would leave the rate limiter blind to new requests.
+    throw new Error(
+      `logRequest failed: ${error.message ?? JSON.stringify(error)}`,
+    );
+  }
 }
 
 async function callOpenAI(
@@ -3027,7 +3038,7 @@ Deno.serve(async (req: Request) => {
   // failure could allow one extra request through the limit window.
   if (isFreshInsert) {
     try {
-      await logRequest(userClient, user.id, "queued");
+      await logRequest(db, user.id, "queued");
     } catch (logError) {
       console.error("[outline-from-recipe] logRequest failed", logError);
     }

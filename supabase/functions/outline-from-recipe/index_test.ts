@@ -1934,7 +1934,7 @@ Deno.test("PR7 POST handler reorders: resolve-existing BEFORE checkRateLimit", a
 Deno.test("PR7 POST handler gates logRequest on isFreshInsert (reconnects skip logRequest)", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const isFreshInsertDecl = source.indexOf("const isFreshInsert = !insert.error && !!insert.data;");
-  const logRequestCall = source.indexOf("await logRequest(userClient, user.id, \"queued\");");
+  const logRequestCall = source.indexOf("await logRequest(db, user.id, \"queued\");");
   const logRequestGuard = source.indexOf("if (isFreshInsert) {");
   assertEquals(isFreshInsertDecl > 0, true, "POST handler must declare isFreshInsert");
   assertEquals(logRequestCall > 0, true, "POST handler must call logRequest");
@@ -1942,4 +1942,78 @@ Deno.test("PR7 POST handler gates logRequest on isFreshInsert (reconnects skip l
     "logRequest call must be guarded by isFreshInsert so reconnects (upfront resolve hit) and 23505 race-fallbacks do NOT log");
   assertEquals(logRequestGuard < logRequestCall, true,
     "isFreshInsert guard must precede the logRequest call");
+  // PR 7 follow-up: generation_request_logs is service-role INSERT-only.
+  // Using userClient (authenticated JWT) for logRequest would silently
+  // 42501 in production, breaking the rate-limit counter. The call site
+  // must use the admin client (db) so the insert actually lands.
+  assertEquals(source.indexOf("await logRequest(userClient, user.id") === -1, true,
+    "logRequest must be called through the admin/service-role client (db), not userClient — generation_request_logs is service-role INSERT-only");
 });
+Deno.test("PR7-fix logRequest throws visibly when Supabase insert returns error (regression for service-role-only table)", async () => {
+  let inserted: any = null;
+  const mockSupabase = {
+    from(_table: string) {
+      return {
+        insert(data: any) {
+          inserted = data;
+          // Simulate the production failure mode that motivated this fix:
+          // generation_request_logs is service-role INSERT-only, so an
+          // insert attempted via an authenticated client returns a 42501
+          // row-level security violation rather than throwing. Supabase
+          // returns errors via the resolved value, so logRequest must
+          // explicitly throw to make the failure visible to callers.
+          return Promise.resolve({
+            error: {
+              message:
+                'new row violates row-level security policy for table "generation_request_logs"',
+              code: "42501",
+              details: null,
+              hint: null,
+            },
+            data: null,
+          });
+        },
+      };
+    },
+  };
+  let caught: Error | null = null;
+  try {
+    await logRequest(mockSupabase as any, "user-z", "queued");
+  } catch (err) {
+    caught = err as Error;
+  }
+  assertEquals(inserted !== null, true,
+    "logRequest must still attempt the insert before reporting failure (so the failure is real, not skipped)");
+  assertEquals(inserted.user_id, "user-z", "insert payload must still be built before throw");
+  assertEquals(caught !== null, true,
+    "logRequest must throw when Supabase returns an error so the failure is not silently swallowed by `await`");
+  assertEquals(
+    typeof caught?.message === "string" &&
+      caught.message.includes("row-level security policy"),
+    true,
+    "Thrown error must surface the underlying Supabase error message so production RLS rejections are visible in logs",
+  );
+});
+
+Deno.test("PR7-fix logRequest throws with non-empty message even when Supabase error has no message field", async () => {
+  const mockSupabase = {
+    from(_table: string) {
+      return {
+        insert(_data: any) {
+          return Promise.resolve({ error: { code: "PGRST000" }, data: null });
+        },
+      };
+    },
+  };
+  let caught: Error | null = null;
+  try {
+    await logRequest(mockSupabase as any, "user-w", "queued");
+  } catch (err) {
+    caught = err as Error;
+  }
+  assertEquals(caught !== null, true,
+    "logRequest must throw on any Supabase error, even one missing the message field");
+  assertEquals(typeof caught?.message === "string" && caught.message.length > 0, true,
+    "Thrown error must carry a non-empty message so log scrapers / on-call see something actionable");
+});
+
