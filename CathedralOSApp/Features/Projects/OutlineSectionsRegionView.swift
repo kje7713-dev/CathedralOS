@@ -592,10 +592,16 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             // `makeRequest` is pure — the caller owns the persist step.
             RecipeReferenceReconciler.reconcile(recipe, in: modelContext)
             let service = OutlineSuggestionService()
+            // PR 4: pass current Outline (server validates ownership +
+            // canonical lineage pre-billable) and explicit requestedFormat
+            // so enrichment provenance is persisted to this outline and
+            // the server does not fall back to implicit "novel".
             let request = try service.makeRequest(
                 recipe: recipe,
                 arc: arc,
                 arcTemplate: template,
+                outline: currentOutline,
+                requestedFormat: "novel",
                 existingSections: currentOutline?.sections ?? []
             )
             suggestionsError = nil

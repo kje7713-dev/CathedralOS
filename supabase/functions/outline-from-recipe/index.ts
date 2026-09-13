@@ -361,6 +361,10 @@ interface OutlineFromRecipeRequest {
   storyMaterialEnrichment?: StoryMaterialEnrichment; // candidate reuse from a prior planning pass
   requestedFormat?: StoryMaterialFormat;
   outline_id?: string;
+  // PR 4: canonical planning identity. Server-validated pre-billable so a
+  // stale Outline reference (delete + restore, sync race) cannot survive
+  // into a paid LLM call.
+  project_lineage_id?: string;
   idempotencyKey?: string;
 }
 
@@ -791,6 +795,19 @@ export function validateRequest(req: unknown): string | null {
     )
   ) {
     return "arcTemplate.beats must have non-empty ids";
+  }
+  // PR 4: format-level check for canonical identity fields. The actual
+  // ownership/lineage validation runs in the POST handler with a DB lookup,
+  // pre-billable, because validateRequest is pure.
+  if (r.outline_id !== undefined) {
+    if (typeof r.outline_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(r.outline_id)) {
+      return "outline_id must be a UUID string when present";
+    }
+  }
+  if (r.project_lineage_id !== undefined) {
+    if (typeof r.project_lineage_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(r.project_lineage_id)) {
+      return "project_lineage_id must be a UUID string when present";
+    }
   }
   return null;
 }
@@ -2853,10 +2870,53 @@ Deno.serve(async (req: Request) => {
     );
   }
   const db = admin();
+  // PR 4: canonical planning identity ownership check, pre-billable.
+  // When outline_id is present, verify (a) the outline belongs to the
+  // authenticated user, (b) it belongs to the supplied project identity,
+  // and (c) its canonical lineage matches the supplied project_lineage_id.
+  // A stale reference (delete + restore, sync race, lineage drift) is
+  // rejected before the run is created so the user does not get billed
+  // for a planning run that would silently target the wrong outline.
+  // When outline_id is absent (legacy callers) the check is skipped and
+  // enrichment provenance persistence is also skipped (existing
+  // persistEnrichmentProvenance early-return behaviour).
+  if (body.outline_id) {
+    const { data: outlineRow, error: outlineError } = await db
+      .from("outlines")
+      .select("id, user_id, project_id, lineage_id")
+      .eq("id", body.outline_id)
+      .maybeSingle();
+    if (outlineError) {
+      console.error("[outline-from-recipe] outline lookup failed", outlineError);
+      return errorResponse("db_error", "Could not verify outline ownership", 500);
+    }
+    if (!outlineRow) {
+      return errorResponse("outline_not_found", "outline_id does not reference an existing outline", 400);
+    }
+    if (outlineRow.user_id !== user.id) {
+      return errorResponse("outline_not_owned", "outline_id does not belong to the authenticated user", 403);
+    }
+    if (outlineRow.project_id !== body.recipe.project.id) {
+      return errorResponse("outline_wrong_project", "outline_id does not belong to the supplied project identity", 400);
+    }
+    if (
+      body.project_lineage_id !== undefined &&
+      outlineRow.lineage_id !== null &&
+      outlineRow.lineage_id !== body.project_lineage_id
+    ) {
+      return errorResponse("outline_lineage_mismatch", "outline_id lineage does not match the supplied project_lineage_id", 400);
+    }
+  }
   const identity = await logicalSuggestionIdentity(body);
   const insert = await db.from("outline_suggestion_runs").insert({
     user_id: user.id,
     project_id: body.recipe.project.id,
+    // PR 4: persist canonical lineage on the run so future resume / repair /
+    // ownership queries can reconcile local project UUID drift against the
+    // canonical lineage. Legacy callers may send undefined; the column
+    // allows null and the server-side ownership check has already passed
+    // (or was skipped because outline_id was also absent).
+    project_lineage_id: body.project_lineage_id ?? null,
     idempotency_key: identity.key,
     request_fingerprint: identity.fingerprint,
     request_json: body,

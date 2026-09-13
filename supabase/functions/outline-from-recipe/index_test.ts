@@ -159,6 +159,51 @@ Deno.test("canonical recipe payload passes request validation", () => {
     "arcTemplate.id and non-empty arcTemplate.beats required",
   );
 });
+Deno.test("PR4 validateRequest accepts outline_id + project_lineage_id + requestedFormat", () => {
+  assertEquals(
+    validateRequest({
+      ...sparseRequest,
+      outline_id: "11111111-1111-4111-8111-111111111111",
+      project_lineage_id: "22222222-2222-4222-8222-222222222222",
+      requestedFormat: "novel",
+    }),
+    null,
+    "Full PR 4 wire shape (outline_id + project_lineage_id + requestedFormat) must pass validation; the POST handler does the DB-backed ownership check pre-billable",
+  );
+});
+
+Deno.test("PR4 validateRequest rejects malformed outline_id", () => {
+  assertEquals(
+    validateRequest({ ...sparseRequest, outline_id: "not-a-uuid" }),
+    "outline_id must be a UUID string when present",
+  );
+  assertEquals(
+    validateRequest({ ...sparseRequest, outline_id: 12345 }),
+    "outline_id must be a UUID string when present",
+  );
+});
+
+Deno.test("PR4 validateRequest rejects malformed project_lineage_id", () => {
+  assertEquals(
+    validateRequest({ ...sparseRequest, project_lineage_id: "nope" }),
+    "project_lineage_id must be a UUID string when present",
+  );
+  assertEquals(
+    validateRequest({ ...sparseRequest, project_lineage_id: null }),
+    "project_lineage_id must be a UUID string when present",
+  );
+});
+
+Deno.test("PR4 validateRequest accepts missing outline_id for legacy callers", () => {
+  // Legacy callers that have not yet been migrated to the new contract
+  // omit outline_id entirely. The server treats this as 'skip enrichment
+  // provenance + skip ownership check' (backward compatibility).
+  assertEquals(validateRequest(sparseRequest), null);
+  assertEquals(
+    validateRequest({ ...sparseRequest, outline_id: undefined }),
+    null,
+  );
+});
 
 Deno.test("recipe obligations derive required plot signals and supporting-only texture", () => {
   const obligations = deriveRecipeObligations({
