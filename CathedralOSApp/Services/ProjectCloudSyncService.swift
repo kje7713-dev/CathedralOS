@@ -993,33 +993,34 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             // section-delete intent at the snapshot layer (deletions flow
             // through OutlineSuggestionsReviewView / SectionEmbedService),
             // so p_deleted_section_ids is an empty array per call.
-            // PostgREST RPC body is an array of objects. Each object has
-            // mixed-type values (String, Int, ProjectImportExportPayload, [String]),
-            // so the dictionary literal needs an explicit [String: Any] cast.
-            // PostgREST RPC body is an array of objects. Each object has
-            // mixed-type values (String, Int, ProjectImportExportPayload, [String]).
-            // We use JSONSerialization (not JSONEncoder) because the values
-            // are [String: Any] dictionaries and Any does not conform to
-            // Encodable. JSONSerialization bridges through Objective-C and
-            // supports any JSON-compatible value type.
-            do {
-                let payload: [[String: Any]] = snapshots.map { snapshot in
-                    [
-                        "p_user_id": user.id,
-                        "p_local_project_id": snapshot.localProjectID,
-                        "p_schema": snapshot.payload.schema,
-                        "p_version": snapshot.payload.version,
-                        "p_snapshot_json": snapshot.payload,
-                        "p_deleted_section_ids": [] as [String],
-                    ]
+            // Encode the Codable snapshot payload first, then bridge its
+            // JSON object into the mixed-type RPC dictionary.
+            let payload: [[String: Any]] = try snapshots.map { snapshot in
+                let snapshotData = try encoder.encode(snapshot.payload)
+                guard let snapshotJSON = try JSONSerialization.jsonObject(
+                    with: snapshotData,
+                    options: [.fragmentsAllowed]
+                ) as? [String: Any] else {
+                    throw ProjectCloudSyncError.encodingError(
+                        NSError(domain: "ProjectCloudSync", code: 1)
+                    )
                 }
-                request.httpBody = try JSONSerialization.data(
-                    withJSONObject: payload,
-                    options: [.sortedKeys]
-                )
-            } catch {
-                throw ProjectCloudSyncError.encodingError(error)
+                return [
+                    "p_user_id": user.id,
+                    "p_local_project_id": snapshot.localProjectID,
+                    "p_schema": snapshot.payload.schema,
+                    "p_version": snapshot.payload.version,
+                    "p_snapshot_json": snapshotJSON,
+                    "p_deleted_section_ids": [] as [String],
+                ]
             }
+            request.httpBody = try JSONSerialization.data(
+                withJSONObject: payload,
+                options: [.sortedKeys]
+            )
+        } catch {
+            throw ProjectCloudSyncError.encodingError(error)
+        }
 
         _ = try await fetch([ProjectSnapshotWriteResponse].self, request: request)
     }
