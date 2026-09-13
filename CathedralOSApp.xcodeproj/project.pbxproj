@@ -137,6 +137,8 @@
 		7A8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D /* OutlineSuggestionIdentityContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D3E /* OutlineSuggestionIdentityContractTests.swift */; };
 		F5557071B4AE46FDBB7847711CE2A705 /* AcceptAllLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8F3A4A27894451A926AC4AEDF0C77F /* AcceptAllLifecycleTests.swift */; };
 		DACD11FEC7CB465190C4A47F1713C98B /* StoryArcSyncLineageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA88AB29D6B84D85A00902FCCA8C58EC /* StoryArcSyncLineageTests.swift */; };
+		A1B2C3D4E5F60718293A4B5C6D7E8F90 /* OutlineSuggestionRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D7E8F90A1 /* OutlineSuggestionRecoveryTests.swift */; };
+		C3D4E5F60718293A4B5C6D7E8F90A1B2 /* SuggestionRunMetadataLineageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F90A1B2C3 /* SuggestionRunMetadataLineageTests.swift */; };
 00000000000000000000016A /* ImportHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000169 /* ImportHardeningTests.swift */; };
 00000000000000000000016C /* ImportedEntityEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000016B /* ImportedEntityEditingTests.swift */; };
 00000000000000000000016E /* RemixFromSharedOutputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000016D /* RemixFromSharedOutputTests.swift */; };
@@ -347,6 +349,8 @@
 		8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D3E /* OutlineSuggestionIdentityContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSuggestionIdentityContractTests.swift; sourceTree = "<group>"; };
 		3C8F3A4A27894451A926AC4AEDF0C77F /* AcceptAllLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcceptAllLifecycleTests.swift; sourceTree = "<group>"; };
 		CA88AB29D6B84D85A00902FCCA8C58EC /* StoryArcSyncLineageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcSyncLineageTests.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5C6D7E8F90A1 /* OutlineSuggestionRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSuggestionRecoveryTests.swift; sourceTree = "<group>"; };
+		D4E5F60718293A4B5C6D7E8F90A1B2C3 /* SuggestionRunMetadataLineageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuggestionRunMetadataLineageTests.swift; sourceTree = "<group>"; };
 000000000000000000000169 /* ImportHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportHardeningTests.swift; sourceTree = "<group>"; };
 00000000000000000000016B /* ImportedEntityEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedEntityEditingTests.swift; sourceTree = "<group>"; };
 00000000000000000000016D /* RemixFromSharedOutputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemixFromSharedOutputTests.swift; sourceTree = "<group>"; };
@@ -618,6 +622,8 @@
 				8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D3E /* OutlineSuggestionIdentityContractTests.swift */,
 				3C8F3A4A27894451A926AC4AEDF0C77F /* AcceptAllLifecycleTests.swift */,
 				CA88AB29D6B84D85A00902FCCA8C58EC /* StoryArcSyncLineageTests.swift */,
+				B2C3D4E5F60718293A4B5C6D7E8F90A1 /* OutlineSuggestionRecoveryTests.swift */,
+				D4E5F60718293A4B5C6D7E8F90A1B2C3 /* SuggestionRunMetadataLineageTests.swift */,
 				000000000000000000000169 /* ImportHardeningTests.swift */,
 				00000000000000000000016B /* ImportedEntityEditingTests.swift */,
 				00000000000000000000016D /* RemixFromSharedOutputTests.swift */,
@@ -1130,6 +1136,8 @@ echo \"Runtime config plist injection completed: keys present\"";
 				7A8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D /* OutlineSuggestionIdentityContractTests.swift in Sources */,
 				F5557071B4AE46FDBB7847711CE2A705 /* AcceptAllLifecycleTests.swift in Sources */,
 				DACD11FEC7CB465190C4A47F1713C98B /* StoryArcSyncLineageTests.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C6D7E8F90 /* OutlineSuggestionRecoveryTests.swift in Sources */,
+				C3D4E5F60718293A4B5C6D7E8F90A1B2 /* SuggestionRunMetadataLineageTests.swift in Sources */,
 				00000000000000000000016A /* ImportHardeningTests.swift in Sources */,
 				00000000000000000000016C /* ImportedEntityEditingTests.swift in Sources */,
 				00000000000000000000016E /* RemixFromSharedOutputTests.swift in Sources */,

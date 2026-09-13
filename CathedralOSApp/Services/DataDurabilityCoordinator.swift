@@ -49,6 +49,12 @@ enum AcceptRunStatus: String, Codable, Equatable {
 
 struct SuggestionRunMetadata: Codable {
     let projectID: UUID
+    // PR 6: canonical stableLineageID owns resume-state identity so that local
+    // project UUID drift (delete + recreate, restore from backup, sync race)
+    // does not orphan an in-flight or resumable suggestion run. Optional in
+    // JSON for backward-compat decode of metadata written before PR 6; new
+    // writes always include it.
+    let lineageID: UUID?
     let request: OutlineSuggestionRequest
     let idempotencyKey: String
     var runID: String?
@@ -199,9 +205,16 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var suggestionRunRevision: UInt = 0
 
     private static let suggestionRunPrefix = "cathedralos.outlineSuggestion.run."
+    // PR 6: lineage-owned resume-state key. New writes go here; legacy
+    // project-keyed entries are still read as a fallback during migration.
+    private static let lineageRunPrefix = "cathedralos.outlineSuggestion.lineage."
 
     private static func suggestionRunKey(for projectID: UUID) -> String {
         "\(suggestionRunPrefix)\(projectID.uuidString)"
+    }
+
+    private static func lineageRunKey(for lineageID: UUID) -> String {
+        "\(lineageRunPrefix)\(lineageID.uuidString)"
     }
 
     private static func runStatusKey(for projectLineageID: UUID) -> String {
@@ -762,15 +775,26 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     func beginSuggestionRun(
         projectID: UUID,
+        lineageID: UUID,
         request: OutlineSuggestionRequest,
         service: OutlineSuggestionService = OutlineSuggestionService()
     ) {
         if let existing = activeSuggestionRuns[projectID], existing.isActive {
-            attachSuggestionTask(existing, service: service)
-            return
+            // PR 6 refactor: exact-match check. An existing active run whose
+            // idempotency key matches the new request represents the same
+            // logical planning identity — re-attach and let it complete. A
+            // mismatched key means the user changed the recipe/arc/sections
+            // between kicks; cancel the prior run and start fresh.
+            if existing.idempotencyKey == request.idempotencyKey {
+                attachSuggestionTask(existing, service: service)
+                return
+            }
+            suggestionPollingTasks[projectID]?.cancel()
+            clearSuggestionRun(for: projectID)
         }
         let metadata = SuggestionRunMetadata(
             projectID: projectID,
+            lineageID: lineageID,
             request: request,
             idempotencyKey: request.idempotencyKey,
             runID: nil,
@@ -784,25 +808,91 @@ final class DataDurabilityCoordinator: ObservableObject {
         attachSuggestionTask(metadata, service: service)
     }
 
+    /// Legacy entry point used by callers that do not yet know the canonical
+    /// lineage. Persists under the project-keyed legacy slot only; resume
+    /// from legacy will be re-migrated to the lineage key on the next begin.
+    func beginSuggestionRun(
+        projectID: UUID,
+        request: OutlineSuggestionRequest,
+        service: OutlineSuggestionService = OutlineSuggestionService()
+    ) {
+        beginSuggestionRun(
+            projectID: projectID,
+            lineageID: projectID,
+            request: request,
+            service: service
+        )
+    }
+
+    /// PR 6: resume-state is keyed by canonical lineage. The active-run
+    /// dictionary stays keyed by local projectID for backward compatibility
+    /// with all existing view lookups; the resume path reads from the
+    /// lineage-owned UserDefaults slot, falling back to the legacy
+    /// project-keyed slot for metadata written before PR 6.
+    ///
+    /// `currentIdempotencyKey` enables exact-match resume. When the caller
+    /// has already built the current `OutlineSuggestionRequest`, any
+    /// persisted or active run whose stored key differs is discarded rather
+    /// than reattached. This blocks stale in-flight runs (the user edited the
+    /// recipe, arc beats, or existing sections between launch and resume)
+    /// from completing against the user's changed planning identity. Pass
+    /// nil to skip the check (legacy / external callers that have not yet
+    /// been migrated to lineage-aware resume).
     func resumeSuggestionRunIfNeeded(
         projectID: UUID,
+        lineageID: UUID,
+        currentIdempotencyKey: String? = nil,
         service: OutlineSuggestionService = OutlineSuggestionService()
     ) {
         guard suggestionPollingTasks[projectID] == nil else { return }
         if let active = activeSuggestionRuns[projectID] {
-            attachSuggestionTask(active, service: service)
-            return
+            // PR 6 refactor: surface guard at the active-run layer. If the
+            // active run was queued under a different planning identity, do
+            // not reattach its polling task — the user has changed the
+            // request and the active run no longer represents their intent.
+            if let currentIdempotencyKey,
+               active.idempotencyKey != currentIdempotencyKey {
+                clearSuggestionRun(for: projectID)
+            } else {
+                attachSuggestionTask(active, service: service)
+                return
+            }
         }
-        guard let data = suggestionRunDefaults.data(forKey: Self.suggestionRunKey(for: projectID)),
-              let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else { return }
-        activeSuggestionRuns[projectID] = metadata
-        attachSuggestionTask(metadata, service: service)
+        if let metadata = loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID,
+            expectedIdempotencyKey: currentIdempotencyKey
+        ) {
+            activeSuggestionRuns[projectID] = metadata
+            attachSuggestionTask(metadata, service: service)
+        }
+    }
+
+    /// Legacy entry point. Reads from the legacy project-keyed slot only;
+    /// callers should migrate to the lineage-aware overload.
+    func resumeSuggestionRunIfNeeded(
+        projectID: UUID,
+        service: OutlineSuggestionService = OutlineSuggestionService()
+    ) {
+        resumeSuggestionRunIfNeeded(
+            projectID: projectID,
+            lineageID: projectID,
+            service: service
+        )
     }
 
     func resumeAllSuggestionRuns(service: OutlineSuggestionService = OutlineSuggestionService()) {
-        for key in suggestionRunDefaults.dictionaryRepresentation().keys where key.hasPrefix(Self.suggestionRunPrefix) {
+        // PR 6: iterate both legacy project-keyed and lineage-keyed slots.
+        // Lineage slots take precedence; legacy slots are migrated on next
+        // begin/persist. De-dupe by projectID so a legacy entry cannot double-
+        // resume a run that has already been migrated to the lineage key.
+        var seen = Set<UUID>()
+        for key in suggestionRunDefaults.dictionaryRepresentation().keys
+            where key.hasPrefix(Self.lineageRunPrefix) || key.hasPrefix(Self.suggestionRunPrefix) {
             guard let data = suggestionRunDefaults.data(forKey: key),
                   let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else { continue }
+            if seen.contains(metadata.projectID) { continue }
+            seen.insert(metadata.projectID)
             activeSuggestionRuns[metadata.projectID] = metadata
             attachSuggestionTask(metadata, service: service)
         }
@@ -865,6 +955,19 @@ final class DataDurabilityCoordinator: ObservableObject {
 
                 switch job.status {
                 case "completed":
+                    // PR 6 refactor: surface guard. If a newer request has
+                    // superseded this run while it was in flight (the user
+                    // edited recipe/arc/sections and kicked a new begin),
+                    // the active slot now holds the newer metadata under a
+                    // different idempotency key. Do not surface this stale
+                    // result — the newer run owns completion; the view will
+                    // surface that one through its own completed event.
+                    if let currentActive = activeSuggestionRuns[metadata.projectID],
+                       currentActive.idempotencyKey != metadata.idempotencyKey {
+                        clearSuggestionRun(for: metadata.projectID)
+                        suggestionPollingTasks[metadata.projectID] = nil
+                        return
+                    }
                     let result = OutlineSuggestionResult(
                         suggestions: job.suggestions ?? [],
                         warnings: job.warnings ?? [],
@@ -921,14 +1024,72 @@ final class DataDurabilityCoordinator: ObservableObject {
         suggestionPollingTasks[metadata.projectID] = nil
     }
 
+
+    /// PR 6: read durable suggestion-run metadata using the canonical lineage
+    /// as the primary key. Falls back to the legacy project-keyed slot for
+    /// metadata written before PR 6; if the legacy entry's lineageID (when
+    /// present) does not match the supplied canonical lineage, the entry is
+    /// discarded rather than resumed, preventing stale runs from resurfacing
+    /// under the wrong project.
+    ///
+    /// `expectedIdempotencyKey` enables exact-match resume: when the caller has
+    /// already built the current `OutlineSuggestionRequest`, the persisted
+    /// entry is only surfaced if its `idempotencyKey` matches. This blocks
+    /// stale active/in-flight runs (recipe/arc/section edits under the same
+    /// project UUID) from being reattached or completed against the user's
+    /// changed planning identity. Pass nil to skip the exact-match check
+    /// (legacy / external callers).
+    ///
+    /// Internal (not private) so regression tests in
+    /// `SuggestionRunMetadataLineageTests` can exercise both the lineage and
+    /// idempotency-key guards without spinning up the full polling path.
+    func loadSuggestionRunMetadata(
+        lineageID: UUID,
+        projectID: UUID,
+        expectedIdempotencyKey: String? = nil
+    ) -> SuggestionRunMetadata? {
+        if let data = suggestionRunDefaults.data(forKey: Self.lineageRunKey(for: lineageID)),
+           let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) {
+            if let expectedIdempotencyKey,
+               metadata.idempotencyKey != expectedIdempotencyKey {
+                return nil
+            }
+            return metadata
+        }
+        guard let data = suggestionRunDefaults.data(forKey: Self.suggestionRunKey(for: projectID)),
+              let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else {
+            return nil
+        }
+        if let storedLineage = metadata.lineageID, storedLineage != lineageID {
+            return nil
+        }
+        // PR 6 refactor: legacy project-keyed entries must also match the
+        // current request identity. A mismatched legacy entry is the classic
+        // recipe-edit-under-stable-PromptPack-UUID case and must not surface.
+        if let expectedIdempotencyKey,
+           metadata.idempotencyKey != expectedIdempotencyKey {
+            return nil
+        }
+        return metadata
+    }
+
     private func persistSuggestionRun(_ metadata: SuggestionRunMetadata) {
         guard let data = try? JSONEncoder().encode(metadata) else { return }
-        suggestionRunDefaults.set(data, forKey: Self.suggestionRunKey(for: metadata.projectID))
+        // PR 6: write to the lineage-owned key; remove the legacy project key
+        // so a subsequent resume reads the canonical slot.
+        suggestionRunDefaults.set(data, forKey: Self.lineageRunKey(for: metadata.lineageID ?? metadata.projectID))
+        suggestionRunDefaults.removeObject(forKey: Self.suggestionRunKey(for: metadata.projectID))
     }
 
     private func clearSuggestionRun(for projectID: UUID) {
+        // PR 6: capture the lineage before nil-ing the active-run slot so we
+        // can remove the lineage-owned UserDefaults entry too.
+        let lineageID = activeSuggestionRuns[projectID]?.lineageID
         activeSuggestionRuns[projectID] = nil
         suggestionRunDefaults.removeObject(forKey: Self.suggestionRunKey(for: projectID))
+        if let lineageID {
+            suggestionRunDefaults.removeObject(forKey: Self.lineageRunKey(for: lineageID))
+        }
     }
 
     private func failSuggestionRun(_ projectID: UUID, message: String) {
