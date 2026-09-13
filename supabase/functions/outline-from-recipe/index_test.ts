@@ -42,6 +42,7 @@ import {
   buildEnrichmentPrompt,
   countStoryMaterialItems,
   repairStoryMaterialFromRecipe,
+  resumeOrRepairStoryMaterial,
   validateStoryMaterialEnrichment,
   storyMaterialSufficiency,
   recipeProvenance,
@@ -1600,32 +1601,256 @@ Deno.test("PR8 repairStoryMaterialFromRecipe: a sparse canonical recipe yields i
   assertEquals(sufficiency.reasons.length > 0, true);
 });
 
-Deno.test("PR8 resume call site: runs sufficiency after repair, persists story_material, preserves audit fields", async () => {
-  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  // The resume block must run storyMaterialSufficiency on the repair output
-  // and fail closed if the canonical recipe cannot satisfy sufficiency.
-  const repairBlock = /if \(priorCompatibility === false \|\| priorSufficiency === false\)[\s\S]{0,2000}resumedMaterial = repairStoryMaterialFromRecipe[\s\S]{0,1500}storyMaterialSufficiency\(\s*resumedMaterial[\s\S]{0,500}throw new StoryMaterialSufficiencyError/;
-  assertEquals(
-    repairBlock.test(source),
-    true,
-    "Resume call site must run storyMaterialSufficiency on the repair output and throw StoryMaterialSufficiencyError when the repair cannot satisfy sufficiency",
-  );
-  // The resume path's final updateRun must include story_material so the
-  // repaired value persists for future resumes.
-  assertEquals(
-    /resume[\s\S]{0,3500}story_material:\s*resumedMaterial/.test(source),
-    true,
-    "Resume call site's final updateRun must include story_material: resumedMaterial",
-  );
-  // The repair audit fields must survive the subsequent diagnostics
-  // assignment (the previous shape wrote them and the next spread overwrote
-  // them, so they never landed in the run row).
-  assertEquals(
-    /storyMaterialRepair: repairAudit/.test(source),
-    true,
-    "Resume call site must preserve repair audit fields (repairedAt, repairedFromRecipeHash, priorCompatibility, priorSufficiency, priorValidationError, repairSufficiency*) under diagnostics.storyMaterialRepair so they actually land in the persisted run row",
-  );
+Deno.test("PR8 (revised) repairStoryMaterialFromRecipe: preserves authored character summaries, motif descriptions, relationship descriptions, theme descriptions, spark descriptions, aftertaste descriptions", () => {
+  const provenance = {
+    sourceRecipeHash: "preserve",
+    sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-pr",
+    sourcePromptPackName: "Preserve",
+  };
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-pr", summary: "A brooding thriller" },
+    setting: { included: false },
+    promptPack: { id: "pack-pr", name: "Preserve" },
+    selectedCharacters: [
+      { id: "c-1", name: "Mara", summary: "Disgraced detective returning to a cold case" },
+      { id: "c-2", name: "Vik", description: "Rival fixer with a long memory" },
+    ],
+    selectedStorySpark: { title: "Cold case reopen", description: "An old murder returns with new evidence" },
+    selectedAftertaste: { title: "Quiet dread", description: "The reader should feel watched in the final scene" },
+    selectedRelationships: [
+      { id: "r-1", summary: "Mara + Vik", description: "Ex-partners turned enemies by a shared failure" },
+    ],
+    selectedThemeQuestions: [
+      { question: "Can the past be trusted?", description: "Memory versus official record" },
+    ],
+    selectedMotifs: [
+      { label: "Mirrors", description: "Reflections of a fractured identity" },
+      { label: "Smoke" },
+    ],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe, provenance);
+
+  // PR8 (revised): label/description come from the actual recipe objects,
+  // NOT from the recipeMaterialHandles map value (which would discard
+  // summary/description in favor of just `name`).
+  const c1 = repaired.characters.find((item) => item.sourceReference === "character:c-1" as string);
+  assertEquals(c1?.label, "Mara");
+  assertEquals(c1?.description, "Disgraced detective returning to a cold case");
+  const c2 = repaired.characters.find((item) => item.sourceReference === "character:c-2" as string);
+  assertEquals(c2?.label, "Vik");
+  assertEquals(c2?.description, "Rival fixer with a long memory");
+
+  const r1 = repaired.relationships.find((item) => item.sourceReference === "relationship:r-1" as string);
+  assertEquals(r1?.label, "Mara + Vik");
+  assertEquals(r1?.description, "Ex-partners turned enemies by a shared failure");
+
+  const spark = repaired.antagonisticForces.find((item) => item.sourceReference === "storySpark" as string);
+  assertEquals(spark?.label, "Cold case reopen");
+  assertEquals(spark?.description, "An old murder returns with new evidence");
+
+  const after = repaired.unresolvedQuestions.find((item) => item.sourceReference === "aftertaste" as string);
+  assertEquals(after?.label, "Quiet dread");
+  assertEquals(after?.description, "The reader should feel watched in the final scene");
+
+  const themeItem = repaired.thematicPressures.find((item) => typeof item.sourceReference === "string" && item.sourceReference.startsWith("theme:"));
+  assertEquals(themeItem?.description, "Memory versus official record");
+
+  const mirror = repaired.thematicPressures.find((item) => item.sourceReference === "motif:motif-1" as string);
+  assertEquals(mirror?.label, "Mirrors");
+  assertEquals(mirror?.description, "Reflections of a fractured identity");
+
+  // Smoke motif has no description — falls back to label, not to the handle.
+  const smoke = repaired.thematicPressures.find((item) => item.sourceReference === "motif:motif-2" as string);
+  assertEquals(smoke?.label, "Smoke");
+  assertEquals(smoke?.description, "Smoke");
+
+  // Self-validate still passes — the validator checks label/description
+  // structure; reading from actual recipe objects produces richer text
+  // without breaking the sourceReference contract.
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
 });
+
+Deno.test("PR8 (revised) resumeOrRepairStoryMaterial: persists story_material + diagnostics.storyMaterialRepair BEFORE returning when a repair is required", async () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-r", summary: "Repair-then-persist test" },
+    setting: { included: false },
+    promptPack: { id: "pack-r", name: "RepairPersist" },
+    selectedCharacters: [{ id: "c-1", name: "Solo", summary: "Lone traveler" }],
+    selectedStorySpark: { title: "Spark", description: "Spark desc" },
+    selectedAftertaste: null,
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const provenance = await recipeProvenance(recipe as any);
+  // Persisted material is a stale legacy shape — fails structural validation,
+  // forcing the repair branch.
+  const claimedMaterial = { schema: "wrong", version: 1 } as any;
+  const calls: Array<Record<string, unknown>> = [];
+  const updateRun = async (patch: Record<string, unknown>) => {
+    calls.push(patch);
+  };
+  const result = await resumeOrRepairStoryMaterial({
+    claimedMaterial,
+    recipe: recipe as any,
+    provenance,
+    // shortStory sufficiency is achievable from this canonical recipe
+    // (characters > 0 with format=shortStory). Use shortStory so the
+    // repair output passes sufficiency and the helper persists BEFORE
+    // returning. The sparse/novel sufficiency-fail test below exercises
+    // the opposite branch with format="novel".
+    format: "shortStory",
+    updateRun,
+  });
+  // Audit must be populated (a repair happened).
+  assertEquals(result.audit !== null, true);
+  // updateRun must be called exactly once with the repaired material +
+  // repair audit BEFORE the helper returned.
+  assertEquals(calls.length, 1);
+  assertEquals(
+    calls[0].story_material !== undefined,
+    true,
+    "story_material must be persisted BEFORE the helper returns",
+  );
+  const persistedDiagnostics = calls[0].diagnostics as Record<string, unknown>;
+  assertEquals(persistedDiagnostics.stage, "story_material_repaired");
+  assertEquals(persistedDiagnostics.storyMaterialRepair !== undefined, true);
+  // Returned material equals persisted material — no second repair will be
+  // attempted on the next resume.
+  assertEquals(calls[0].story_material, result.material);
+});
+
+Deno.test("PR8 (revised) resumeOrRepairStoryMaterial: retries do NOT re-repair or re-persist when the first repair already landed", async () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-rt", summary: "Retry path test" },
+    setting: { included: false },
+    promptPack: { id: "pack-rt", name: "Retry" },
+    selectedCharacters: [{ id: "c-1", name: "Solo", summary: "Lone traveler" }],
+    selectedStorySpark: { title: "Spark", description: "Spark desc" },
+    selectedAftertaste: null,
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const provenance = await recipeProvenance(recipe as any);
+  // First call: legacy shape forces a repair.
+  let firstCalls = 0;
+  const firstUpdateRun = async () => {
+    firstCalls++;
+  };
+  const first = await resumeOrRepairStoryMaterial({
+    claimedMaterial: { schema: "wrong", version: 1 } as any,
+    recipe: recipe as any,
+    provenance,
+    // shortStory sufficiency is met by this canonical recipe (characters > 0).
+    // repairStoryMaterialFromRecipe now accepts a format parameter, so the
+    // repair output is also shortStory-formatted and compatible on retry.
+    format: "shortStory",
+    updateRun: firstUpdateRun,
+  });
+  assertEquals(firstCalls, 1);
+  assertEquals(first.audit !== null, true);
+  const repairedMaterial = first.material;
+
+  // Second call (retry / next resume): persisted material is the
+  // already-repaired material. It must validate cleanly, NOT trigger a
+  // second repair, and NOT call updateRun.
+  let secondCalls = 0;
+  const secondUpdateRun = async () => {
+    secondCalls++;
+  };
+  const second = await resumeOrRepairStoryMaterial({
+    claimedMaterial: repairedMaterial,
+    recipe: recipe as any,
+    provenance,
+    format: "shortStory",
+    updateRun: secondUpdateRun,
+  });
+  assertEquals(secondCalls, 0, "retry with persisted material must NOT re-persist");
+  assertEquals(second.audit, null, "retry with persisted material must NOT re-repair");
+  assertEquals(second.material, repairedMaterial);
+});
+
+Deno.test("PR8 (revised) resumeOrRepairStoryMaterial: a sparse recipe that cannot satisfy sufficiency throws StoryMaterialSufficiencyError and does NOT partially persist", async () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-sparse", summary: "Sparse" },
+    setting: { included: false },
+    promptPack: { id: "pack-sparse", name: "Sparse" },
+    selectedCharacters: [],
+    selectedStorySpark: null,
+    selectedAftertaste: null,
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const provenance = await recipeProvenance(recipe as any);
+  const claimedMaterial = { schema: "wrong", version: 1 } as any;
+  let calls = 0;
+  const updateRun = async () => {
+    calls++;
+  };
+  let threw = false;
+  try {
+    await resumeOrRepairStoryMaterial({
+      claimedMaterial,
+      recipe: recipe as any,
+      provenance,
+      format: "novel",
+      updateRun,
+    });
+  } catch (error) {
+    threw = true;
+    assertEquals(String(error).includes("story material enrichment is insufficient"), true);
+  }
+  assertEquals(threw, true, "sparse recipe must fail closed via StoryMaterialSufficiencyError");
+  assertEquals(calls, 0, "must NOT persist a partial repair when sufficiency fails");
+});
+
+Deno.test("PR8 (revised) resumeOrRepairStoryMaterial: a healthy persisted material returns without persisting or repairing", async () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-ok", summary: "Healthy" },
+    setting: { included: false },
+    promptPack: { id: "pack-ok", name: "OK" },
+    selectedCharacters: [{ id: "c-1", name: "Healthy", summary: "Already validated" }],
+    selectedStorySpark: null,
+    selectedAftertaste: null,
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const provenance = await recipeProvenance(recipe as any);
+  // PR8 (revised): pass the same format the helper will receive so the
+  // pre-built material is format-compatible and isCompatibleStoryMaterialEnrichment
+  // does not return false on a format mismatch (which would re-trigger the
+  // repair branch).
+  const healthyMaterial = repairStoryMaterialFromRecipe(recipe as any, provenance, "shortStory");
+  let calls = 0;
+  const updateRun = async () => {
+    calls++;
+  };
+  const result = await resumeOrRepairStoryMaterial({
+    claimedMaterial: healthyMaterial,
+    recipe: recipe as any,
+    provenance,
+    format: "shortStory",
+    updateRun,
+  });
+  assertEquals(calls, 0, "healthy persisted material must not trigger a repair-side updateRun");
+  assertEquals(result.audit, null);
+  assertEquals(result.material, healthyMaterial);
+});
+
 
 Deno.test("repairStoryMaterialFromRecipe: handles an empty canonical recipe without throwing", () => {
   const provenance = {

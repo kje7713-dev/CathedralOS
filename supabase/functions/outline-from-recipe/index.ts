@@ -647,42 +647,37 @@ function errorResponse(
  * running storyMaterialSufficiency and failing closed if the canonical
  * recipe cannot satisfy sufficiency. Pure JS: no LLM call, no credit charge.
  */
-export function repairStoryMaterialFromRecipe(recipe: unknown, provenance: StoryMaterialProvenance): StoryMaterialEnrichment {
+export function repairStoryMaterialFromRecipe(
+  recipe: unknown,
+  provenance: StoryMaterialProvenance,
+  // PR8 (revised): format parameter so the helper does not re-repair forever
+  // when callers request a format other than "novel". Defaults to "novel"
+  // which preserves every existing call site.
+  format: StoryMaterialFormat = "novel",
+): StoryMaterialEnrichment {
   const r = (recipe ?? {}) as CanonicalRecipeEnvelope;
+  // recipeMaterialHandles() is the canonical sourceReference authority: it
+  // produces the exact "category:<id>" handle strings we emit, and a sparse
+  // recipe cannot manufacture handles it did not produce. We use it as the
+  // single source of canonical handle strings.
+  //
+  // PR8 (revised): label/description are read from the ACTUAL recipe
+  // objects (recipe.selectedCharacters[i].summary, recipe.selectedMotifs[i]
+  // .description, recipe.selectedThemeQuestions[i].description, etc.) — NOT
+  // from the recipeMaterialHandles map value. The map value is a canonical
+  // short identifier (name || label || JSON.stringify(row)); when a row has
+  // both `name` and `summary`, reading the map value discards summary and
+  // authored character/motif/relationship descriptions are lost. Reading
+  // directly from the recipe preserves them.
   const handles = recipeMaterialHandles(r);
 
-  const handleValue = (handle: string): string => handles.get(handle) ?? "";
-
-  const parseValue = (value: string): Record<string, unknown> | string | null => {
-    if (!value) return null;
-    try {
-      const parsed = JSON.parse(value);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-      return null;
-    } catch {
-      // value is a plain string (e.g., character name); keep as-is
-      return value;
-    }
-  };
-
-  const pickStr = (parsed: Record<string, unknown> | string | null, ...keys: string[]): string => {
-    if (typeof parsed === "string") return parsed.trim();
-    if (!parsed) return "";
-    for (const key of keys) {
-      const v = parsed[key];
-      if (typeof v === "string" && v.trim()) return v.trim();
-    }
-    return "";
-  };
-
+  const idPortionOf = (handle: string): string => handle.replace(/^[a-zA-Z]+:/, "");
   const itemFromHandle = (handle: string, label: string, description: string): StoryMaterialItem => {
     // validateStoryMaterialEnrichment rejects label === sourceReference and
-    // description === sourceReference. For sparse recipes where the recipe
-    // field is missing, fall back to the id portion of the handle so the
-    // item is still structurally distinct from its sourceReference.
-    const idPortion = handle.replace(/^[a-zA-Z]+:/, "");
+    // description === sourceReference. For sparse recipes where the relevant
+    // recipe field is missing, fall back to the id portion of the handle so
+    // the item is still structurally distinct from its sourceReference.
+    const idPortion = idPortionOf(handle);
     const safeLabel = label && label !== handle ? label : idPortion || handle;
     const safeDescription = description && description !== handle && description !== safeLabel
       ? description
@@ -696,64 +691,110 @@ export function repairStoryMaterialFromRecipe(recipe: unknown, provenance: Story
     };
   };
 
-  // project.summary → discoveries[0]
-  const discoveries: StoryMaterialItem[] = [];
-  if (handles.has("project.summary")) {
-    discoveries.push(itemFromHandle("project.summary", "Project Premise", handleValue("project.summary")));
-  }
+  const pickStr = (row: Record<string, unknown> | null | undefined, ...keys: string[]): string => {
+    if (!row) return "";
+    for (const key of keys) {
+      const v = row[key];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    return "";
+  };
 
-  // character:<id> → characters
+  const handleFor = (prefix: string, row: Record<string, unknown>, index: number): string | null => {
+    const id = typeof row.id === "string" && row.id.trim()
+      ? row.id.trim()
+      : `${prefix}-${index + 1}`;
+    const handle = `${prefix}:${id}`;
+    // Skip rows whose id does not appear in the canonical handle set —
+    // recipeMaterialHandles is the single authority for handle strings.
+    // For canonical recipes every row produces a handle; this guard covers
+    // legacy/sparse recipes with malformed rows.
+    return handles.has(handle) ? handle : null;
+  };
+
+  // characters: character:<id> → characters[i]
   const characters: StoryMaterialItem[] = [];
-  for (const handle of handles.keys()) {
-    if (!handle.startsWith("character:")) continue;
-    const parsed = parseValue(handleValue(handle));
-    const name = pickStr(parsed, "name", "label");
-    const summary = pickStr(parsed, "summary", "description");
-    characters.push(itemFromHandle(handle, name, summary));
+  if (Array.isArray(r.selectedCharacters)) {
+    r.selectedCharacters.forEach((row, index) => {
+      if (!row || typeof row !== "object") return;
+      const rowObj = row as Record<string, unknown>;
+      const handle = handleFor("character", rowObj, index);
+      if (!handle) return;
+      const label = pickStr(rowObj, "name", "label");
+      const description = pickStr(rowObj, "summary", "description");
+      characters.push(itemFromHandle(handle, label, description));
+    });
   }
 
-  // storySpark → antagonisticForces[0] (single object, not array)
+  // relationships: relationship:<id> → relationships[i]
+  const relationships: StoryMaterialItem[] = [];
+  if (Array.isArray(r.selectedRelationships)) {
+    r.selectedRelationships.forEach((row, index) => {
+      if (!row || typeof row !== "object") return;
+      const rowObj = row as Record<string, unknown>;
+      const handle = handleFor("relationship", rowObj, index);
+      if (!handle) return;
+      const label = pickStr(rowObj, "summary", "label");
+      const description = pickStr(rowObj, "description", "summary");
+      relationships.push(itemFromHandle(handle, label, description));
+    });
+  }
+
+  // thematicPressures: theme:<id> + motif:<id> (no dedicated motif category)
+  const thematicPressures: StoryMaterialItem[] = [];
+  if (Array.isArray(r.selectedThemeQuestions)) {
+    r.selectedThemeQuestions.forEach((row, index) => {
+      if (typeof row === "string") return; // recipeMaterialHandles skips strings; match.
+      if (!row || typeof row !== "object") return;
+      const rowObj = row as Record<string, unknown>;
+      const handle = handleFor("theme", rowObj, index);
+      if (!handle) return;
+      const label = pickStr(rowObj, "question", "label", "name");
+      const description = pickStr(rowObj, "description", "context", "summary");
+      thematicPressures.push(itemFromHandle(handle, label, description));
+    });
+  }
+  if (Array.isArray(r.selectedMotifs)) {
+    r.selectedMotifs.forEach((row, index) => {
+      if (typeof row === "string") return; // recipeMaterialHandles skips strings; match.
+      if (!row || typeof row !== "object") return;
+      const rowObj = row as Record<string, unknown>;
+      const handle = handleFor("motif", rowObj, index);
+      if (!handle) return;
+      const label = pickStr(rowObj, "label", "name");
+      const description = pickStr(rowObj, "description");
+      thematicPressures.push(itemFromHandle(handle, label, description));
+    });
+  }
+
+  // discoveries: project.summary → discoveries[0]
+  const discoveries: StoryMaterialItem[] = [];
+  if (handles.has("project.summary") && r.project && typeof r.project.summary === "string" && r.project.summary.trim()) {
+    discoveries.push(itemFromHandle("project.summary", "Project Premise", r.project.summary.trim()));
+  }
+
+  // antagonisticForces: storySpark → antagonisticForces[0] (single object)
   const antagonisticForces: StoryMaterialItem[] = [];
-  if (handles.has("storySpark")) {
-    const parsed = parseValue(handleValue("storySpark"));
-    const title = pickStr(parsed, "title", "text");
-    const description = pickStr(parsed, "description", "summary");
+  if (handles.has("storySpark") && r.selectedStorySpark && typeof r.selectedStorySpark === "object") {
+    const spark = r.selectedStorySpark as Record<string, unknown>;
+    const title = pickStr(spark, "title", "text");
+    const description = pickStr(spark, "description", "summary");
     antagonisticForces.push(itemFromHandle("storySpark", title, description));
   }
 
-  // relationship:<id> → relationships
-  const relationships: StoryMaterialItem[] = [];
-  for (const handle of handles.keys()) {
-    if (!handle.startsWith("relationship:")) continue;
-    const parsed = parseValue(handleValue(handle));
-    const label = pickStr(parsed, "summary", "label");
-    const description = pickStr(parsed, "description", "summary");
-    relationships.push(itemFromHandle(handle, label, description));
-  }
-
-  // theme:<id> + motif:<id> → thematicPressures (no dedicated motif category)
-  const thematicPressures: StoryMaterialItem[] = [];
-  for (const handle of handles.keys()) {
-    if (!handle.startsWith("theme:") && !handle.startsWith("motif:")) continue;
-    const parsed = parseValue(handleValue(handle));
-    const label = pickStr(parsed, "question", "label", "name");
-    const description = pickStr(parsed, "description", "context", "summary");
-    thematicPressures.push(itemFromHandle(handle, label, description));
-  }
-
-  // aftertaste → unresolvedQuestions[0] (single object, not array)
+  // unresolvedQuestions: aftertaste → unresolvedQuestions[0] (single object)
   const unresolvedQuestions: StoryMaterialItem[] = [];
-  if (handles.has("aftertaste")) {
-    const parsed = parseValue(handleValue("aftertaste"));
-    const title = pickStr(parsed, "title", "text");
-    const description = pickStr(parsed, "description", "summary");
+  if (handles.has("aftertaste") && r.selectedAftertaste && typeof r.selectedAftertaste === "object") {
+    const a = r.selectedAftertaste as Record<string, unknown>;
+    const title = pickStr(a, "title", "text");
+    const description = pickStr(a, "description", "summary");
     unresolvedQuestions.push(itemFromHandle("aftertaste", title, description));
   }
 
   const material: StoryMaterialEnrichment = {
     schema: "cathedralos.story_material_enrichment",
     version: 2,
-    format: "novel",
+    format,
     rationale:
       "Recovered from canonical recipe handles; legacy run pre-dates story-material provenance (PR8 of the recipe-to-acceptance recovery arc).",
     characters,
@@ -775,10 +816,88 @@ export function repairStoryMaterialFromRecipe(recipe: unknown, provenance: Story
   };
 
   // Self-validate: throw if the structural contract is violated. Call sites
-  // are responsible for running storyMaterialSufficiency and failing closed
-  // if the canonical recipe cannot satisfy sufficiency.
+  // run storyMaterialSufficiency on the returned material and fail closed
+  // when the canonical recipe cannot satisfy sufficiency.
   validateStoryMaterialEnrichment(material, { recipe: r });
   return material;
+}
+
+/**
+ * PR8 (revised): resume story material from a claimed run, repairing it
+ * via the live canonical recipe if it fails validation or sufficiency.
+ *
+ * The helper PERSISTS the (possibly repaired) material and the repair
+ * audit fields BEFORE returning, so a downstream expandNovel failure or
+ * worker interruption cannot lose the completed repair. On the next
+ * resume, the persisted material validates cleanly and this helper
+ * returns the same material with audit=null — no second repair attempt,
+ * no second persist.
+ *
+ * Pure (no Deno.serve, no global DB), dependency-injected `updateRun`,
+ * fully unit-testable.
+ */
+export async function resumeOrRepairStoryMaterial(options: {
+  claimedMaterial: unknown;
+  recipe: CanonicalRecipeEnvelope;
+  provenance: StoryMaterialProvenance;
+  format: StoryMaterialFormat;
+  updateRun: (patch: Record<string, unknown>) => Promise<unknown>;
+}): Promise<{ material: StoryMaterialEnrichment; audit: Record<string, unknown> | null }> {
+  let material: StoryMaterialEnrichment;
+  let priorCompatibility: boolean | undefined;
+  let priorSufficiency: boolean | undefined;
+  let priorValidationError: string | undefined;
+  let audit: Record<string, unknown> | null = null;
+
+  try {
+    material = validateStoryMaterialEnrichment(options.claimedMaterial, { recipe: options.recipe });
+    priorCompatibility = isCompatibleStoryMaterialEnrichment(material, options.provenance, options.format);
+    const sufficiency = storyMaterialSufficiency(material, options.recipe, options.format);
+    priorSufficiency = sufficiency.sufficient;
+  } catch (error) {
+    // Persisted material failed structural validation (legacy shape, wrong
+    // schema/version, or duplicate ids). Treat as incompatible; the repair
+    // block below assigns material.
+    priorValidationError = error instanceof Error ? error.message : "validation_failed";
+    priorCompatibility = false;
+    priorSufficiency = false;
+    material = repairStoryMaterialFromRecipe(options.recipe, options.provenance, options.format);
+  }
+
+  if (priorCompatibility === false || priorSufficiency === false) {
+    // PR8 (revised): repair via canonical recipe handles.
+    // repairStoryMaterialFromRecipe self-validates and throws on structural
+    // failure; this block also runs sufficiency on the repair output and
+    // fails closed if the canonical recipe cannot supply enough material.
+    const repairSufficiency = storyMaterialSufficiency(material, options.recipe, options.format);
+    if (!repairSufficiency.sufficient) {
+      // Fail closed: do NOT persist anything if the repair cannot satisfy
+      // sufficiency. Throwing here keeps the run row in its pre-repair
+      // state; the next resume will retry with the same recipe
+      // (deterministic) and we do not leak a partial repair.
+      throw new StoryMaterialSufficiencyError(repairSufficiency.reasons);
+    }
+    audit = {
+      repairedAt: new Date().toISOString(),
+      repairedFromRecipeHash: options.provenance.sourceRecipeHash,
+      priorCompatibility,
+      priorSufficiency,
+      priorValidationError,
+      repairSufficiencyRecipeDerivedItemCount: repairSufficiency.recipeDerivedItemCount,
+      repairSufficiencyPlannerInventedItemCount: repairSufficiency.plannerInventedItemCount,
+      repairSufficiencyCounts: repairSufficiency.counts,
+    };
+    // Persist the repaired material + audit BEFORE returning so a
+    // downstream expandNovel failure or worker interruption cannot lose
+    // the completed repair. The next resume will validate this persisted
+    // material and skip the repair block above (no second persist).
+    await options.updateRun({
+      story_material: material,
+      diagnostics: { storyMaterialRepair: audit, stage: "story_material_repaired" },
+    });
+  }
+
+  return { material, audit };
 }
 
 export function validateRequest(req: unknown): string | null {
@@ -2462,68 +2581,42 @@ async function runSuggestionJob(
     }
     const resume = expansionResumeState(claimedRun);
     if (requestedStoryMaterialFormat(body) === "novel" && resume && claimedRun.story_material) {
-      let resumedMaterial!: StoryMaterialEnrichment; // definite assignment: catch path is satisfied by the repair block below
-      let priorCompatibility: boolean | undefined;
-      let priorSufficiency: boolean | undefined;
-      let priorValidationError: string | undefined;
-      let repairAudit: Record<string, unknown> | null = null;
-      try {
-        resumedMaterial = validateStoryMaterialEnrichment(
-          claimedRun.story_material as StoryMaterialEnrichment,
-          { recipe: body.recipe },
-        );
-        priorCompatibility = isCompatibleStoryMaterialEnrichment(
-          resumedMaterial, provenance, requestedStoryMaterialFormat(body),
-        );
-        const sufficiency = storyMaterialSufficiency(
-          resumedMaterial, body.recipe, requestedStoryMaterialFormat(body),
-        );
-        priorSufficiency = sufficiency.sufficient;
-      } catch (error) {
-        // Persisted material failed structural validation (legacy shape,
-        // wrong schema/version, or duplicate ids). Treat as incompatible;
-        // the repair block below assigns resumedMaterial.
-        priorValidationError = error instanceof Error ? error.message : "validation_failed";
-        priorCompatibility = false;
-        priorSufficiency = false;
-      }
-      if (priorCompatibility === false || priorSufficiency === false) {
-        // PR8 (Fix the Shit cycle 8): repair via canonical recipe handles.
-        // repairStoryMaterialFromRecipe self-validates and throws on
-        // structural failure; this block also runs sufficiency on the
-        // repair output and fails closed if the canonical recipe cannot
-        // supply enough material for novel-scale planning.
-        resumedMaterial = repairStoryMaterialFromRecipe(body.recipe, provenance);
-        const repairSufficiency = storyMaterialSufficiency(
-          resumedMaterial, body.recipe, requestedStoryMaterialFormat(body),
-        );
-        if (!repairSufficiency.sufficient) {
-          throw new StoryMaterialSufficiencyError(repairSufficiency.reasons);
-        }
-        repairAudit = {
-          repairedAt: new Date().toISOString(),
-          repairedFromRecipeHash: provenance.sourceRecipeHash,
-          priorCompatibility,
-          priorSufficiency,
-          priorValidationError,
-          repairSufficiencyRecipeDerivedItemCount: repairSufficiency.recipeDerivedItemCount,
-          repairSufficiencyPlannerInventedItemCount: repairSufficiency.plannerInventedItemCount,
-          repairSufficiencyCounts: repairSufficiency.counts,
-        };
-      }
+      // PR8 (revised): delegate validation/repair to resumeOrRepairStoryMaterial.
+      // The helper persists story_material + diagnostics.storyMaterialRepair
+      // BEFORE returning when a repair is required, so a downstream
+      // expandNovel failure or worker interruption cannot lose the completed
+      // repair. When no repair is required the helper is a no-op persist-wise
+      // and we explicitly persist the validated material below.
+      const { material: resumedMaterial, audit: repairAudit } = await resumeOrRepairStoryMaterial({
+        claimedMaterial: claimedRun.story_material,
+        recipe: body.recipe,
+        provenance,
+        format: requestedStoryMaterialFormat(body),
+        updateRun,
+      });
       body = { ...body, storyMaterialEnrichment: resumedMaterial };
       latestValidSuggestions = resume.suggestions;
-      // PR8: preserve the repair audit fields through the subsequent
-      // diagnostics assignment so they actually land in the persisted row.
-      // The previous shape wrote audit fields into diagnostics but the next
-      // spread (claimedRun.diagnostics) overwrote them — they never landed
-      // in the run row.
+      // PR8 (revised): preserve the repair audit fields through the
+      // subsequent diagnostics assignment so they actually land in the
+      // persisted row. The previous shape wrote audit fields into
+      // diagnostics but the next spread (claimedRun.diagnostics) overwrote
+      // them — they never landed in the run row.
       diagnostics = {
         ...(claimedRun.diagnostics && typeof claimedRun.diagnostics === "object" ? claimedRun.diagnostics : {}),
         ...(repairAudit ? { storyMaterialRepair: repairAudit } : {}),
         stage: "expansion_resume",
         resumedFromRound: resume.startRound,
       };
+      // PR8 (revised): persist the (possibly repaired) story_material and
+      // the resume-stage diagnostics BEFORE expandNovel so a later failure
+      // or interruption cannot lose the completed repair. Idempotent with
+      // any earlier persist inside resumeOrRepairStoryMaterial — the final
+      // updateRun below overwrites the same fields with completed-stage
+      // diagnostics on success.
+      await updateRun({
+        story_material: resumedMaterial,
+        diagnostics,
+      });
       const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
       const expanded = await expandNovel(resume.suggestions, recipeObligations, resume.startRound, resume.priorDiagnostics);
       const expandedQuality = validateOutlinePlanningQuality(expanded.suggestions, resumedMaterial, requestedStoryMaterialFormat(body), body.arcTemplate);
@@ -2554,6 +2647,10 @@ async function runSuggestionJob(
           `Novel outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum at completion.`,
         );
       }
+      // PR8 (revised): story_material was already persisted above (before
+      // expandNovel) so future resumes can validate without re-repairing.
+      // The final updateRun only carries the completed-stage diagnostics
+      // and standard completion fields.
       await updateRun({
         status: "completed",
         suggestions: expanded.suggestions,
@@ -2561,9 +2658,6 @@ async function runSuggestionJob(
         credit_cost_charged: creditCostCharged,
         remaining_credits: remainingCredits,
         completed_at: new Date().toISOString(),
-        // PR8: persist the (possibly repaired) story_material so future
-        // resumes can validate without going through the repair path again.
-        story_material: resumedMaterial,
         diagnostics,
         lease_owner: null,
         lease_expires_at: null,

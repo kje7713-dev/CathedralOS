@@ -985,45 +985,93 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         return availableBeats.first { $0.id == id }?.label
     }
 
-    /// Accept an OutlineSection: call embed-section edge function, then flip
-    /// status to "accepted" on success. Phase 3 of novel-building per
-    /// docs/novel-building.md — makes the section indexable for later
-    /// retrieval-augmented generation. Re-accepting an already-accepted
-    /// section is not allowed by the UI (button hidden), but the backend
-    /// UPSERTs on outline_section_id so future re-embed flows will overwrite.
+    /// Accept an OutlineSection. Planning acceptance is now DECOUPLED from
+    /// scene-memory extraction:
+    ///
+    /// 1. The section is marked "accepted" synchronously and the SwiftData
+    ///    save + durability save fire. This must NOT depend on the
+    ///    embed-section call succeeding.
+    ///
+    /// 2. Scene-memory extraction (`embed-section` → LLM extract + embed +
+    ///    section_embeddings UPSERT) is fired fire-and-forget only when
+    ///    real prose exists — i.e. the section has at least one
+    ///    GenerationOutput. A manual / blank New Section (no outputs)
+    ///    accepts with NO LLM call and NO section_embeddings row.
+    ///
+    /// 3. If the embed call fails for a generated section, the failure is
+    ///    surfaced as `embedError` (non-blocking warning) but the planning
+    ///    acceptance is preserved.
+    ///
+    /// This change does NOT broaden to Accept All — that flow goes through
+    /// the `accept-outline-sections` Deno worker, unchanged. Scene-memory
+    /// extraction for the Accept All path remains server-owned.
     private func acceptSection(_ section: OutlineSection) async {
         guard acceptingSectionID == nil else { return }
         acceptingSectionID = section.id
         defer { acceptingSectionID = nil }
 
+        // (1) Planning acceptance: synchronous, unconditional on the embed
+        // call. A manual / blank New Section accepts here with no LLM call.
+        guard let outlineID = section.outline?.id ?? currentOutline?.id else {
+            embedError = "Section has no outline. Refresh the project and try again."
+            return
+        }
+        section.status = "accepted"
+        do {
+            try modelContext.save()
+        } catch {
+            embedError = "Could not save section status: \(error.localizedDescription)"
+            return
+        }
+        print("[OutlineSections] accepted: section=\(section.id.uuidString.prefix(8))")
+        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+
+        // (2) Scene-memory extraction: fire only when real prose exists.
+        // Manual sections skip this entirely. Generated sections get a
+        // fire-and-forget embed call tagged with the latest output's id
+        // so the backend can link section_embeddings to the originating
+        // generation.
+        let sectionOutputs = outputsBySection[section.id] ?? []
+        guard !sectionOutputs.isEmpty else { return }
+        let latestOutputID = sectionOutputs.first?.id.uuidString
+        Task {
+            await self.fireSceneMemoryExtraction(
+                section: section,
+                outlineID: outlineID,
+                outputID: latestOutputID,
+            )
+        }
+    }
+
+    /// Fire-and-forget scene-memory extraction for a generated section.
+    /// Failures are surfaced as `embedError` (non-blocking) but do NOT
+    /// roll back the planning acceptance — status remains "accepted".
+    private func fireSceneMemoryExtraction(
+        section: OutlineSection,
+        outlineID: UUID,
+        outputID: String?,
+    ) async {
         guard let baseURL = SupabaseConfiguration.projectURL else {
-            embedError = "Backend not configured."
+            embedError = "Section accepted; scene memory extract skipped (backend not configured)."
             return
         }
         let embedURL = baseURL
             .appendingPathComponent("functions/v1")
             .appendingPathComponent(SupabaseConfiguration.embedSectionEdgeFunctionPath)
-
-        guard let outlineID = section.outline?.id ?? currentOutline?.id else {
-            embedError = "Section has no outline. Refresh the project and try again."
-            return
-        }
         let service = SectionEmbedService()
         do {
             let response = try await service.embedSection(
                 edgeFunctionURL: embedURL,
                 projectID: project.id,
                 outlineID: outlineID,
-                section: section
+                section: section,
+                outputID: outputID,
             )
-            section.status = "accepted"
-            try modelContext.save()
             print("[OutlineSections] Embed OK: section=\(section.id.uuidString.prefix(8)) dim=\(response.embedding_dim) summary.len=\(response.extracted_summary.count)")
-            Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
         } catch let error as SectionEmbedError {
-            embedError = error.localizedDescription
+            embedError = "Section accepted; scene memory extract failed: \(error.localizedDescription)"
         } catch {
-            embedError = error.localizedDescription
+            embedError = "Section accepted; scene memory extract failed: \(error.localizedDescription)"
         }
     }
     // MARK: - Day 4 generation wiring
