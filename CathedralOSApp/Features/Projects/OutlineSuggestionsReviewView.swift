@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import CryptoKit
 
 /// Review sheet for AI-generated outline suggestions (Phase 2).
 ///
@@ -48,19 +47,17 @@ struct OutlineSuggestionsReviewView: View {
     private var acceptErrorMessage: String? { activeAcceptRun == nil ? durabilityCoordinator.acceptRunError : nil }
     @State private var hasStartedAcceptance = false
 
-    // PR 11 (deferred): the deterministic AcceptAllRequestBuilder lives
-    // in CathedralOSApp/Services/AcceptAllRequestBuilder.swift but is NOT
-    // registered in this bundle's Xcode project (the pbxproj registration
-    // was reverted alongside PR 9's wire-up to recover from a parse-time
-    // corruption). Fall back to the pre-PR 11 narrower fingerprint — same
-    // logical batch → same key — until the deterministic builder + pbxproj
-    // re-registration land together with PR 9's iOS wire-up follow-up.
+    private var acceptAllBuilder: AcceptAllRequestBuilder {
+        AcceptAllRequestBuilder(
+            projectID: project.id,
+            outlineID: outline.id,
+            suggestions: suggestions,
+            sourceRecipe: sourceRecipe
+        )
+    }
+
     private var acceptanceIdempotencyKey: String {
-        let content = suggestions.map { "\($0.title)|\($0.summary)|\($0.container)|\($0.pov)|\($0.terminalBeat)|\($0.storyArcBeatID)" }.joined(separator: "\n")
-        let digest = SHA256.hash(data: Data(content.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return "\(outline.id.uuidString):\(digest)"
+        acceptAllBuilder.idempotencyKey
     }
 
     var body: some View {

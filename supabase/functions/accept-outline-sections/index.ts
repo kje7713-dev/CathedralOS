@@ -594,18 +594,22 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       console.error("[accept-outline-sections] snapshot merge failed", err);
     }
     const committedDone = Number(commit.sections_done ?? normalizedSections.length);
-    const outcome = acceptRunTerminalOutcome(
-      snapshotError ? 1 : 0,
-      snapshotError,
-      null,
-    );
-    await db.from("outline_accept_runs").update({
-      status: outcome.status,
-      sections_done: committedDone,
-      sections_failed: snapshotError ? 1 : 0,
-      error: outcome.error,
-      completed_at: new Date().toISOString(),
-    }).eq("id", runID);
+    if (snapshotError) {
+      // Relational Accept All is already committed. Keep the durable run
+      // retryable rather than reporting a terminal failure for a derived-view
+      // repair; the next worker invocation re-runs the idempotent snapshot RPC.
+      await db.from("outline_accept_runs").update({
+        status: "pending", sections_done: committedDone, sections_failed: 0,
+        error: `snapshot_repair_pending: ${snapshotError}`.slice(0, 2000),
+        completed_at: null,
+      }).eq("id", runID);
+    } else {
+      const outcome = acceptRunTerminalOutcome(0, null, null);
+      await db.from("outline_accept_runs").update({
+        status: outcome.status, sections_done: committedDone, sections_failed: 0,
+        error: outcome.error, completed_at: new Date().toISOString(),
+      }).eq("id", runID);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await db.from("outline_accept_runs").update({

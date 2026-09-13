@@ -3024,6 +3024,32 @@ Deno.serve(async (req: Request) => {
     return errorResponse("invalid_request", validationError, 400);
   }
   const db = admin();
+  // Current clients must identify the concrete Outline and canonical project
+  // lineage. Validate against the real schema (local_project_id + lineage_id)
+  // before rate limiting, run creation, or any billable work.
+  if (!body.outline_id || !body.project_lineage_id) {
+    return errorResponse("planning_identity_required", "outline_id and project_lineage_id are required", 400);
+  }
+  const { data: outlineRow, error: outlineError } = await db
+    .from("outlines")
+    .select("id, user_id, local_project_id, lineage_id, source_recipe_hash")
+    .eq("id", body.outline_id)
+    .maybeSingle();
+  if (outlineError) return errorResponse("db_error", "Could not verify outline ownership", 500);
+  if (!outlineRow) return errorResponse("outline_not_found", "outline_id does not reference an existing outline", 400);
+  if (outlineRow.user_id !== user.id) return errorResponse("outline_not_owned", "outline_id does not belong to the authenticated user", 403);
+  if (String(outlineRow.local_project_id).toLowerCase() !== String(body.recipe.project.id).toLowerCase()) {
+    return errorResponse("outline_wrong_project", "outline_id does not belong to the supplied project identity", 400);
+  }
+  if (!outlineRow.lineage_id || String(outlineRow.lineage_id).toLowerCase() !== String(body.project_lineage_id).toLowerCase()) {
+    return errorResponse("outline_lineage_mismatch", "outline_id lineage does not match the supplied project_lineage_id", 400);
+  }
+  const provenance = await recipeProvenance(body.recipe);
+  if (outlineRow.source_recipe_hash && outlineRow.source_recipe_hash !== provenance.sourceRecipeHash) {
+    const { count } = await db.from("outline_sections").select("id", { count: "exact", head: true })
+      .eq("outline_id", body.outline_id).neq("status", "deleted");
+    if ((count ?? 0) > 0) return errorResponse("recipe_provenance_conflict", "Recipe changed after sections were planned; start a fresh outline or edit the existing recipe.", 409);
+  }
   // PR 7: calculate logical identity BEFORE checkRateLimit so reconnects
   // can short-circuit without consuming a rate-limit slot or logging.
   const identity = await logicalSuggestionIdentity(body);
@@ -3093,43 +3119,6 @@ Deno.serve(async (req: Request) => {
         headers: { "Retry-After": String(rateResult.retryAfterSeconds ?? 60) },
       },
     );
-  }
-  // PR 4: canonical planning identity ownership check, pre-billable.
-  // When outline_id is present, verify (a) the outline belongs to the
-  // authenticated user, (b) it belongs to the supplied project identity,
-  // and (c) its canonical lineage matches the supplied project_lineage_id.
-  // A stale reference (delete + restore, sync race, lineage drift) is
-  // rejected before the run is created so the user does not get billed
-  // for a planning run that would silently target the wrong outline.
-  // When outline_id is absent (legacy callers) the check is skipped and
-  // enrichment provenance persistence is also skipped (existing
-  // persistEnrichmentProvenance early-return behaviour).
-  if (body.outline_id) {
-    const { data: outlineRow, error: outlineError } = await db
-      .from("outlines")
-      .select("id, user_id, project_id, lineage_id")
-      .eq("id", body.outline_id)
-      .maybeSingle();
-    if (outlineError) {
-      console.error("[outline-from-recipe] outline lookup failed", outlineError);
-      return errorResponse("db_error", "Could not verify outline ownership", 500);
-    }
-    if (!outlineRow) {
-      return errorResponse("outline_not_found", "outline_id does not reference an existing outline", 400);
-    }
-    if (outlineRow.user_id !== user.id) {
-      return errorResponse("outline_not_owned", "outline_id does not belong to the authenticated user", 403);
-    }
-    if (outlineRow.project_id !== body.recipe.project.id) {
-      return errorResponse("outline_wrong_project", "outline_id does not belong to the supplied project identity", 400);
-    }
-    if (
-      body.project_lineage_id !== undefined &&
-      outlineRow.lineage_id !== null &&
-      outlineRow.lineage_id !== body.project_lineage_id
-    ) {
-      return errorResponse("outline_lineage_mismatch", "outline_id lineage does not match the supplied project_lineage_id", 400);
-    }
   }
   const insert = await db.from("outline_suggestion_runs").insert({
     user_id: user.id,

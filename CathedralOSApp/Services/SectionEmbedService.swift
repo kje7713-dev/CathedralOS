@@ -357,32 +357,14 @@ extension SectionEmbedService {
         do { client = try SupabaseBackendClient() }
         catch { throw SectionEmbedError.notConfigured(reason: String(describing: error)) }
 
-        // PR 11 (deferred): deterministic section UUIDs from a canonical
-        // AcceptAllRequestBuilder. The builder file is not registered in the
-        // bundle's Xcode project on this branch (its pbxproj registration
-        // was reverted to fix a parse-time corruption); fall back to random
-        // UUIDs here. The deterministic builder + pbxproj re-registration
-        // land together with PR 9's full iOS wire-up follow-up.
-        let sections = suggestions.enumerated().map { offset, suggestion in
-            AcceptOutlineSection(
-                id: UUID().uuidString,
-                position: startingPosition + offset,
-                title: suggestion.title,
-                summary: suggestion.summary,
-                container: suggestion.container,
-                pov: suggestion.pov,
-                terminalBeat: suggestion.terminalBeat,
-                entryState: suggestion.entryState,
-                dramaticEvent: suggestion.dramaticEvent,
-                resultingChange: suggestion.resultingChange,
-                terminalState: suggestion.terminalState,
-                targetWords: nil,
-                targetWordsMin: nil,
-                targetWordsMax: nil,
-                storyArcBeatID: suggestion.storyArcBeatID,
-                recipeRequirementIDs: suggestion.recipeRequirementIDs
-            )
-        }
+        let builder = AcceptAllRequestBuilder(
+            projectID: projectID,
+            outlineID: outlineID,
+            suggestions: suggestions,
+            sourceRecipe: sourceRecipe
+        )
+        let sections = builder.buildSections(startingPosition: startingPosition)
+        // The builder preserves storyArcBeatID: suggestion.storyArcBeatID for every section.
         let requestBody = AcceptOutlineSectionsRequest(
             outline_id: outlineID.uuidString,
             project_id: projectID.uuidString,
