@@ -298,6 +298,51 @@ export interface LengthContract {
   projected_word_count: number;
 }
 
+/**
+ * PR 14 (recipe-to-acceptance recovery arc): recompute the Outline-level
+ * projected_word_count from the resulting complete generation-bearing
+ * Outline. Counts leaves only (sections that have no children) so grouping
+ * parents like chapters are not double-counted against their scenes.
+ *
+ * Retry safety: re-running this against the same set of section ids does
+ * not inflate the total (the leaves are a property of the stored rows,
+ * not of the in-flight batch).
+ */
+export async function fetchLeafSectionTotals(
+  db: ReturnType<typeof admin>,
+  outlineID: string,
+): Promise<{
+  projectedWordCount: number;
+  targetWordCountMin: number;
+  targetWordCountMax: number;
+}> {
+  // Leaves = sections with no children referencing them as parent_id.
+  // We project target_words / target_words_min / target_words_max so the
+  // per-leaf container-derived numbers sum into the Outline-level totals.
+  const { data, error } = await db.from("outline_sections")
+    .select("id,parent_id,target_words,target_words_min,target_words_max,status")
+    .eq("outline_id", outlineID)
+    .not("status", "eq", "deleted");
+  if (error) {
+    throw new Error(`Could not read outline sections for length recompute: ${error.message}`);
+  }
+  const rows = data ?? [];
+  const childIDs = new Set<string>();
+  for (const row of rows) {
+    if (row.parent_id) childIDs.add(row.parent_id);
+  }
+  let projected = 0;
+  let min = 0;
+  let max = 0;
+  for (const row of rows) {
+    if (childIDs.has(row.id)) continue; // skip grouping parents
+    projected += Number(row.target_words ?? 0);
+    min += Number(row.target_words_min ?? 0);
+    max += Number(row.target_words_max ?? 0);
+  }
+  return { projectedWordCount: projected, targetWordCountMin: min, targetWordCountMax: max };
+}
+
 export function buildLengthContract(
   sections: Array<{ container?: string | null }>,
 ): {
@@ -515,8 +560,22 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     if (insertError) {
       throw new Error(`Could not create sections: ${insertError.message}`);
     }
+    // PR 14 (recipe-to-acceptance recovery arc): recompute the
+    // Outline-level length contract from the resulting complete
+    // generation-bearing Outline so the total includes pre-existing +
+    // newly accepted sections exactly once. buildLengthContract is still
+    // used above for per-section targetWords / targetWordsMin /
+    // targetWordsMax on the newly inserted rows.
+    const leafTotals = await fetchLeafSectionTotals(db, normalizedRequest.outline_id);
+    const recomputedContract = {
+      planning_format: lengthContract.outline.planning_format,
+      target_word_count: leafTotals.projectedWordCount,
+      target_word_count_min: leafTotals.targetWordCountMin,
+      target_word_count_max: leafTotals.targetWordCountMax,
+      projected_word_count: leafTotals.projectedWordCount,
+    };
     const { error: outlineContractError } = await db.from("outlines")
-      .update(lengthContract.outline)
+      .update(recomputedContract)
       .eq("id", normalizedRequest.outline_id);
     if (outlineContractError) {
       throw new Error(

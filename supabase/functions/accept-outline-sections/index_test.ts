@@ -4,6 +4,7 @@ import {
   buildLengthContract,
   canonicalUUID,
   computeRequestFingerprint,
+  fetchLeafSectionTotals,
   hashCanonicalRecipe,
   mergeSectionsByCanonicalID,
   normalizeStoryArcBeatIDs,
@@ -519,4 +520,133 @@ Deno.test("PR13 validate(): rejects malformed UUID project_lineage_id", () => {
   // current contract: validate() does NOT validate UUID format for
   // project_lineage_id (only types it as string).
   assertEquals(validate(body as any), null);
+});
+
+
+// MARK: - PR 14: fetchLeafSectionTotals
+//
+// PR 14 recomputes the Outline-level length contract from the resulting
+// complete generation-bearing Outline (leaves only) so the total includes
+// pre-existing + newly accepted sections exactly once, with no double
+// counting of grouping parents like chapters-with-scenes.
+//
+// The helper accepts a Supabase client whose .from("outline_sections")
+// returns a select() -> eq() -> not() -> then(...) chain. We mock that
+// chain inline (no real DB) and assert the summed totals.
+
+// Lightweight stub: resolves the .then() await with the supplied rows.
+function makeSectionsDB(rows: Array<Record<string, unknown>>) {
+  const thenable: Promise<{ data: unknown; error: null }> = Promise.resolve({
+    data: rows,
+    error: null,
+  });
+  const chain: any = {
+    select: () => chain,
+    eq: () => chain,
+    not: () => chain,
+    then: (
+      onFulfilled: (v: { data: unknown; error: null }) => unknown,
+    ) => thenable.then(onFulfilled),
+  };
+  return { from: () => chain } as any;
+}
+
+Deno.test("PR14 fetchLeafSectionTotals: sums leaves only (grouping parents excluded; no double-counting)", async () => {
+  // Realistic Outline fixture: two grouping parents (chapters) each with
+  // scenes, plus a top-level generation row (parent_id = null, no
+  // children). Leaves = scene A (1500) + scene B (2000) + scene C (3000)
+  // + scene D (2500) = 9000. Grouping parents chapter-1 and chapter-2 are
+  // excluded (each has children, so they appear in childIDs).
+  const rows = [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      parent_id: "22222222-2222-4222-8222-222222222222",
+      target_words: 1500, target_words_min: 1000, target_words_max: 2000,
+      status: "accepted",
+    },
+    {
+      id: "33333333-3333-4333-8333-333333333333",
+      parent_id: "22222222-2222-4222-8222-222222222222",
+      target_words: 2000, target_words_min: 1500, target_words_max: 2500,
+      status: "accepted",
+    },
+    {
+      id: "44444444-4444-4444-8444-444444444444",
+      parent_id: null,
+      target_words: 3000, target_words_min: 2500, target_words_max: 3500,
+      status: "accepted",
+    },
+    {
+      id: "66666666-6666-4666-8666-666666666666",
+      parent_id: "55555555-4555-8555-555555555555",
+      target_words: 2500, target_words_min: 2000, target_words_max: 3000,
+      status: "accepted",
+    },
+    {
+      id: "22222222-2222-4222-8222-222222222222",
+      parent_id: null,
+      target_words: 1000, target_words_min: 800, target_words_max: 1200,
+      status: "accepted",
+    },
+    {
+      id: "55555555-4555-8555-555555555555",
+      parent_id: null,
+      target_words: 1500, target_words_min: 1200, target_words_max: 1800,
+      status: "accepted",
+    },
+  ];
+  const db = makeSectionsDB(rows);
+  const totals = await fetchLeafSectionTotals(db, "out-1");
+  assertEquals(totals.projectedWordCount, 9000);
+  assertEquals(totals.targetWordCountMin, 7000); // 1000+1500+2500+2000
+  assertEquals(totals.targetWordCountMax, 11000); // 2000+2500+3500+3000
+});
+
+Deno.test("PR14 fetchLeafSectionTotals: retrying the same section ids does not inflate the total", async () => {
+  // Spec regression: running the recompute twice against the same set of
+  // sections must produce the same total. We exercise this by simulating
+  // a "retry" — the helper runs against the same DB rows twice and the
+  // result is identical. Plus a grouping parent that would inflate the
+  // total if double-counted.
+  const rows = [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      parent_id: null,
+      target_words: 5000, target_words_min: 4000, target_words_max: 6000,
+      status: "accepted",
+    },
+    {
+      id: "22222222-2222-4222-8222-222222222222",
+      parent_id: "11111111-1111-4111-8111-111111111111",
+      target_words: 7000, target_words_min: 6000, target_words_max: 8000,
+      status: "accepted",
+    },
+  ];
+  const db = makeSectionsDB(rows);
+  const first = await fetchLeafSectionTotals(db, "out-1");
+  const second = await fetchLeafSectionTotals(db, "out-1");
+  assertEquals(first.projectedWordCount, second.projectedWordCount);
+  assertEquals(first.projectedWordCount, 7000); // only the leaf (no double-count of grouping parent)
+});
+
+Deno.test("PR14 fetchLeafSectionTotals: an empty outline returns zero", async () => {
+  const db = makeSectionsDB([]);
+  const totals = await fetchLeafSectionTotals(db, "out-1");
+  assertEquals(totals.projectedWordCount, 0);
+  assertEquals(totals.targetWordCountMin, 0);
+  assertEquals(totals.targetWordCountMax, 0);
+});
+
+Deno.test("PR14 fetchLeafSectionTotals: handles null target_words gracefully (sums 0 for missing fields)", async () => {
+  const rows = [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      parent_id: null,
+      target_words: null, target_words_min: null, target_words_max: null,
+      status: "accepted",
+    },
+  ];
+  const db = makeSectionsDB(rows);
+  const totals = await fetchLeafSectionTotals(db, "out-1");
+  assertEquals(totals.projectedWordCount, 0);
 });
