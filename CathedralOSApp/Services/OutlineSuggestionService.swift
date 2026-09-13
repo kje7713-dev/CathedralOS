@@ -434,4 +434,3 @@ struct OutlineSuggestionService {
     }
 }
 
-extension OutlineSuggestionService {
