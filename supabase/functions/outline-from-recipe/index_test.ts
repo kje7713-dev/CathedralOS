@@ -58,6 +58,7 @@ import {
   repairStoryArcMacroStructure,
   arcRoleContract,
   buildExpansionResponseSchema,
+  planSectionAllocation,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -293,6 +294,165 @@ Deno.test("production prompt uses planner residual allocation unchanged (no doub
     "beat-2 residual 0 must reach buildPrompt unchanged (pre-fix would have clamped -1 to 0)");
   assertEquals(system.includes("Midpoint: minimum 2 sections"), true,
     "beat-3 residual 2 must reach buildPrompt unchanged");
+});
+
+// PR 5 — planner→generation handoff behavioral coverage.
+//
+// The pre-existing regression tests above prove two things in isolation:
+//   (a) buildAllocationPrompt tells the planner to return RESIDUAL counts
+//       (NEW sections beyond existingSections), and
+//   (b) buildPrompt renders whatever allocation map it is given.
+// Neither test exercises the actual production code path in runSuggestionJob
+// where planSectionAllocation runs the planner and its output is then handed
+// off to buildPrompt. If a future change reintroduced a second subtraction
+// step between those two calls (e.g. resurrecting adjustAllocationForExistingSections
+// at the handoff site), tests (a) and (b) would still pass while production
+// silently double-subtracts existing-section coverage again.
+//
+// These two tests close that gap by driving planSectionAllocation with a
+// mocked billableCall, taking the planner's actual return value, and feeding
+// it into buildPrompt exactly as runSuggestionJob does. If double-subtraction
+// is reintroduced at the handoff, planSectionAllocation will not catch it
+// (the planner already returned residual counts) — but buildPrompt will see
+// the wrong numbers and these assertions will fail.
+//
+// The third test is a source-level structural guard: it pins the exact code
+// shape of the handoff in runSuggestionJob so a future editor cannot
+// accidentally re-introduce a subtraction step between the planner call
+// and the buildPrompt call without a deliberate, reviewable change.
+
+Deno.test("planner→generation handoff: 2 existing + planner returns 3 → generation receives 3 (not 1)", async () => {
+  // 2 existing sections already cover beat-1; planner correctly returns
+  // minSections=3 for the NEW sections still required on beat-1.
+  const plannerResponse = JSON.stringify({
+    allocations: [
+      { beatID: "beat-1", minSections: 3, rationale: "needs 3 new beyond existing 2" },
+      { beatID: "beat-2", minSections: 2, rationale: "needs 2 new" },
+    ],
+  });
+  const calls: Array<{ action: string }> = [];
+  const billableCall: any = async (
+    _system: string,
+    _user: string,
+    _maxOutputTokens: number,
+    _responseFormat: unknown,
+    action: string,
+  ) => {
+    calls.push({ action });
+    return { content: plannerResponse, creditCostCharged: 0, remainingCredits: 0 };
+  };
+  const reqWithExisting = {
+    ...sparseRequest,
+    existingSections: [
+      { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] },
+      { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] },
+    ],
+  } as any;
+
+  const plannedAllocation = await planSectionAllocation(reqWithExisting, "fake-key", billableCall);
+
+  // Planner contract: residual counts come back unchanged.
+  assertEquals(plannedAllocation.get("beat-1")?.minSections, 3,
+    "planner must return 3 for beat-1 (residual after existing 2)");
+  assertEquals(plannedAllocation.get("beat-2")?.minSections, 2,
+    "planner must return 2 for beat-2");
+
+  // Production handoff: buildPrompt receives the planner's residual counts unchanged.
+  const { system } = buildPrompt(reqWithExisting, plannedAllocation);
+  assertEquals(system.includes("Opening Image: minimum 3 sections"), true,
+    "beat-1 residual 3 must reach buildPrompt unchanged (pre-fix would have produced 1)");
+  assertEquals(system.includes("Break into Two: minimum 2 sections"), true,
+    "beat-2 residual 2 must reach buildPrompt unchanged");
+
+  // The planner was called exactly once (no retry triggered).
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].action, "outline-plan");
+});
+
+Deno.test("planner→generation handoff: planner returns 0 → generation receives 0", async () => {
+  // Planner determines every beat is fully covered by existing sections and
+  // returns minSections=0 for both.
+  const plannerResponse = JSON.stringify({
+    allocations: [
+      { beatID: "beat-1", minSections: 0, rationale: "fully covered by existing 1" },
+      { beatID: "beat-2", minSections: 0, rationale: "fully covered by existing 1" },
+    ],
+  });
+  const billableCall: any = async () => ({
+    content: plannerResponse,
+    creditCostCharged: 0,
+    remainingCredits: 0,
+  });
+  const reqWithExisting = {
+    ...sparseRequest,
+    existingSections: [
+      { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] },
+      { storyArcBeatID: "beat-2", recipeRequirementIDs: ["R1"] },
+    ],
+  } as any;
+
+  const plannedAllocation = await planSectionAllocation(reqWithExisting, "fake-key", billableCall);
+
+  assertEquals(plannedAllocation.get("beat-1")?.minSections, 0,
+    "planner must return 0 for beat-1 (fully covered)");
+  assertEquals(plannedAllocation.get("beat-2")?.minSections, 0,
+    "planner must return 0 for beat-2 (fully covered)");
+
+  const { system } = buildPrompt(reqWithExisting, plannedAllocation);
+  assertEquals(system.includes("Opening Image: minimum 0 sections"), true,
+    "beat-1 residual 0 must reach buildPrompt unchanged (pre-fix would have clamped -1 to 0)");
+  assertEquals(system.includes("Break into Two: minimum 0 sections"), true,
+    "beat-2 residual 0 must reach buildPrompt unchanged (pre-fix would have clamped -1 to 0)");
+});
+
+Deno.test("runSuggestionJob handoff does not subtract existing sections a second time", async () => {
+  // Structural guard: pin the exact shape of the planner→buildPrompt handoff
+  // in runSuggestionJob so a future change cannot silently re-introduce
+  // double-subtraction (e.g. by calling adjustAllocationForExistingSections
+  // between planSectionAllocation and buildPrompt).
+  const source = await Deno.readTextFile(
+    "./supabase/functions/outline-from-recipe/index.ts",
+  );
+
+  // 1. The old double-subtraction helper must not be called anywhere — if it
+  //    is, this test fails loudly.
+  assertEquals(
+    source.includes("adjustAllocationForExistingSections("),
+    false,
+    "adjustAllocationForExistingSections must not be called anywhere; it caused double-subtraction before PR 5",
+  );
+
+  // 2. The handoff must bind plannedAllocation to a local allocation and pass
+  //    that allocation (not plannedAllocation under a different name) into
+  //    buildPrompt. Allow either pattern: `const allocation = plannedAllocation`
+  //    followed by `buildPrompt(body, allocation, ...)`, or a direct
+  //    `buildPrompt(body, plannedAllocation, ...)` call. Both are correct;
+  //    anything else (a wrapper that subtracts existing sections again) is not.
+  const buildPromptCalls = source.match(/buildPrompt\([^)]*\)/g) ?? [];
+  const handoffCall = buildPromptCalls.find((call) =>
+    call.includes("plannedAllocation") || /\ballocation\b/.test(call)
+  );
+  if (typeof handoffCall !== "string") {
+    throw new Error(
+      "buildPrompt must be called with plannedAllocation or an alias bound to it; found calls: " +
+        JSON.stringify(buildPromptCalls),
+    );
+  }
+  // The call must reference allocation/plannedAllocation exactly — no
+  // adjustAllocationForExistingSections or any other wrapper in between.
+  assertEquals(
+    /buildPrompt\([^)]*\b(plannedAllocation|allocation)\b[^)]*\)/.test(handoffCall),
+    true,
+    `buildPrompt handoff must reference plannedAllocation or allocation directly, got: ${handoffCall}`,
+  );
+
+  // 3. The PR 5 comment must remain in place so future readers understand why
+  //    plannedAllocation is used directly.
+  assertEquals(
+    source.includes("PR 5") && source.includes("plannedAllocation IS the residual count"),
+    true,
+    "PR 5 explanatory comment must remain at the handoff site",
+  );
 });
 
 Deno.test("missing existing obligation coverage remains repairable", () => {

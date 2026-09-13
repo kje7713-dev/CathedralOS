@@ -1546,7 +1546,7 @@ Output JSON only. No commentary, no prose.`;
   return { system, user };
 }
 
-async function planSectionAllocation(
+export async function planSectionAllocation(
   req: OutlineFromRecipeRequest,
   apiKey: string,
   billableCall?: SuggestionLLMCall,
