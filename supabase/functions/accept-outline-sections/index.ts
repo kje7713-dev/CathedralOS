@@ -139,6 +139,27 @@ export async function hashCanonicalRecipe(
   ).join("");
 }
 
+/**
+ * PR 12 (recipe-to-acceptance recovery arc): canonical server-side request
+ * fingerprint for Accept All idempotency. Stable canonical JSON serialization
+ * of the immutable request body, with `idempotency_key` excluded so the
+ * fingerprint itself does not include the key used to look up its row.
+ *
+ * Identical inputs → identical fingerprint. Different inputs (any field,
+ * key order, or recipe content) → different fingerprint.
+ */
+export async function computeRequestFingerprint(body: RequestBody): Promise<string> {
+  const { idempotency_key: _ignored, ...rest } = body;
+  const bytes = new TextEncoder().encode(
+    JSON.stringify(canonicalizeJSON(rest)),
+  );
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
 async function freezeOutlineRecipe(
   db: ReturnType<typeof admin>,
   outlineID: string,
@@ -592,23 +613,76 @@ Deno.serve(async (req) => {
   if (!ownedOutline) {
     return errorResponse("not_found", "outline not found", 404);
   }
+  // PR 12: compute the canonical server-side request fingerprint BEFORE
+  // insert. Used to detect idempotency-key reuse with a different request
+  // body (HTTP 409 idempotency_conflict) and to bind legacy rows on first
+  // matching POST after the migration.
+  const fingerprint = await computeRequestFingerprint(body);
+
   let { data: run, error } = await db.from("outline_accept_runs").insert({
     user_id: identity.user.id,
     outline_id: body.outline_id,
     project_id: body.project_id,
     idempotency_key: body.idempotency_key,
+    request_fingerprint: fingerprint,
     request_json: body,
     sections_total: body.sections.length,
-  }).select("id,status,created_at,updated_at").single();
+  }).select(
+    "id,status,created_at,updated_at,request_fingerprint,request_json",
+  ).single();
   if (error) {
+    // Duplicate (user_id, idempotency_key). Fetch the existing row's
+    // fingerprint + stored body to compare against the new request.
     const existing = await db.from("outline_accept_runs").select(
-      "id,status,created_at,updated_at",
+      "id,status,created_at,updated_at,request_fingerprint,request_json",
     ).eq("user_id", identity.user.id).eq(
       "idempotency_key",
       body.idempotency_key,
     ).single();
     if (!existing.data) return errorResponse("db_error", error.message, 500);
-    run = existing.data;
+    const existingRow = existing.data;
+
+    // PR 12: three-way comparison.
+    //   1. Same key + same fingerprint → resolve existing run, do not rebind.
+    //   2. Same key + null fingerprint (legacy row) → hash stored body, bind
+    //      the fingerprint if it matches the new request, else 409 conflict.
+    //   3. Same key + different fingerprint → 409 idempotency_conflict.
+    if (existingRow.request_fingerprint === fingerprint) {
+      run = existingRow;
+    } else if (existingRow.request_fingerprint === null) {
+      let legacyFingerprint: string;
+      try {
+        legacyFingerprint = await computeRequestFingerprint(
+          existingRow.request_json as RequestBody,
+        );
+      } catch (_) {
+        // Stored body is malformed or missing fields. Treat as conflict
+        // rather than silently rebinding.
+        return errorResponse(
+          "idempotency_conflict",
+          "Idempotency key already used with a different request body",
+          409,
+        );
+      }
+      if (legacyFingerprint !== fingerprint) {
+        return errorResponse(
+          "idempotency_conflict",
+          "Idempotency key already used with a different request body",
+          409,
+        );
+      }
+      // Bind the fingerprint to the legacy row and resolve.
+      await db.from("outline_accept_runs").update({
+        request_fingerprint: fingerprint,
+      }).eq("id", existingRow.id);
+      run = { ...existingRow, request_fingerprint: fingerprint };
+    } else {
+      return errorResponse(
+        "idempotency_conflict",
+        "Idempotency key already used with a different request body",
+        409,
+      );
+    }
   }
   const resolvedRun = run;
   if (!resolvedRun) {

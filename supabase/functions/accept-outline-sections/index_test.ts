@@ -1,8 +1,9 @@
-import { assertEquals } from "jsr:@std/assert@1";
+import { assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 import { acceptRunTerminalOutcome } from "./_outcome.ts";
 import {
   buildLengthContract,
   canonicalUUID,
+  computeRequestFingerprint,
   hashCanonicalRecipe,
   mergeSectionsByCanonicalID,
   normalizeStoryArcBeatIDs,
@@ -334,4 +335,109 @@ Deno.test("recipe provenance hash is deterministic across object key order", asy
     schema: "cathedralos.prompt_pack_export",
   };
   assertEquals(await hashCanonicalRecipe(a), await hashCanonicalRecipe(b));
+});
+
+
+// MARK: - PR 12: computeRequestFingerprint
+//
+// PR 12 binds Accept All idempotency keys to the exact server request via a
+// stable canonical SHA256 fingerprint of the immutable request body
+// (idempotency_key excluded). The fingerprint must:
+//   - be identical for identical inputs;
+//   - exclude idempotency_key (so the key used to look up its own row is
+//     not part of the value being compared);
+//   - be canonical with respect to key order (sorted JSON);
+//   - change when any other field changes.
+
+function makeFingerprintFixture(
+  opts: {
+    key?: string;
+    outlineID?: string;
+    projectID?: string;
+    sections?: unknown[];
+  } = {},
+): Record<string, unknown> {
+  const key = opts.key ?? "key-1";
+  const outlineID = opts.outlineID ?? "11111111-1111-1111-1111-111111111111";
+  const projectID = opts.projectID ?? "22222222-2222-2222-2222-222222222222";
+  const sections = opts.sections ?? [{ id: "s-1", position: 0, title: "S1", summary: "Sum1" }];
+  return {
+    outline_id: outlineID,
+    project_id: projectID,
+    idempotency_key: key,
+    source_recipe_json: { project: { id: "p", name: "P", summary: "Premise" } },
+    sections,
+  };
+}
+
+Deno.test("PR12 computeRequestFingerprint: identical inputs produce identical fingerprint", async () => {
+  const body = makeFingerprintFixture();
+  const a = await computeRequestFingerprint(body as any);
+  const b = await computeRequestFingerprint(body as any);
+  assertEquals(a, b);
+  // Fingerprint is 64 lowercase hex chars (SHA-256).
+  assertEquals(a.length, 64);
+  assertEquals(/^[0-9a-f]{64}$/.test(a), true);
+});
+
+Deno.test("PR12 computeRequestFingerprint: excludes idempotency_key", async () => {
+  const body1 = makeFingerprintFixture({ key: "key-A" });
+  const body2 = makeFingerprintFixture({ key: "key-B" });
+  const f1 = await computeRequestFingerprint(body1 as any);
+  const f2 = await computeRequestFingerprint(body2 as any);
+  assertEquals(f1, f2, "fingerprint must NOT include idempotency_key");
+});
+
+Deno.test("PR12 computeRequestFingerprint: canonical key order (reordered keys same fingerprint)", async () => {
+  // Build equivalent bodies with different key insertion order. Canonical
+  // serialization (sorted keys) must yield the same fingerprint.
+  const a = {
+    outline_id: "11111111-1111-1111-1111-111111111111",
+    project_id: "22222222-2222-2222-2222-222222222222",
+    idempotency_key: "k",
+    source_recipe_json: { project: { id: "p", name: "P", summary: "S" } },
+    sections: [],
+  };
+  const b = {
+    sections: [],
+    source_recipe_json: { project: { summary: "S", name: "P", id: "p" } },
+    idempotency_key: "k",
+    project_id: "22222222-2222-2222-2222-222222222222",
+    outline_id: "11111111-1111-1111-1111-111111111111",
+  };
+  const fa = await computeRequestFingerprint(a as any);
+  const fb = await computeRequestFingerprint(b as any);
+  assertEquals(fa, fb, "key-order permutations must fingerprint the same");
+});
+
+Deno.test("PR12 computeRequestFingerprint: changes when any included field changes", async () => {
+  const base = makeFingerprintFixture();
+  const baseFingerprint = await computeRequestFingerprint(base as any);
+
+  // Each tuple varies exactly one field (NOT idempotency_key, which must be
+  // excluded). The fingerprint must differ.
+  const variations: Array<[string, Record<string, unknown>]> = [
+    ["outline_id",        makeFingerprintFixture({ outlineID: "99999999-9999-9999-9999-999999999999" })],
+    ["project_id",        makeFingerprintFixture({ projectID: "99999999-9999-9999-9999-999999999999" })],
+    ["sections",          makeFingerprintFixture({ sections: [{ id: "s-99", position: 0, title: "Different", summary: "Different" }] })],
+    [
+      "source_recipe_json",
+      makeFingerprintFixture({ sections: undefined as any }), // placeholder; overwritten below
+    ],
+  ];
+  // The source_recipe_json variation requires a different fixture shape
+  // (the previous fixture has the same recipe). Replace it with an explicit
+  // body whose recipe differs.
+  const recipeVaried = makeFingerprintFixture();
+  (recipeVaried as any).source_recipe_json = { project: { id: "p", name: "P", summary: "DIFFERENT PREMISE" } };
+  variations[3] = ["source_recipe_json", recipeVaried];
+
+  for (const [fieldName, varied] of variations) {
+    const variedFingerprint = await computeRequestFingerprint(varied as any);
+    assertNotEquals(
+      variedFingerprint,
+      baseFingerprint,
+      `Changing ${fieldName} must change the fingerprint`,
+    );
+  }
 });
