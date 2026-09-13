@@ -2410,15 +2410,23 @@ class StoryMaterialValidationError extends Error {
   }
 }
 
-async function persistEnrichmentProvenance(db: any, body: OutlineFromRecipeRequest, runId: string, material: StoryMaterialEnrichment, provenance: StoryMaterialProvenance): Promise<void> {
+async function persistPlanningProvenance(db: any, body: OutlineFromRecipeRequest, runId: string, material: StoryMaterialEnrichment, provenance: StoryMaterialProvenance): Promise<void> {
   if (!body.outline_id) return;
+  const pack = body.recipe.promptPack as Record<string, unknown>;
   const { error } = await db.from("outlines").update({
+    // A zero-section drift replan replaces the old frozen contract. Without
+    // this write Accept All later compares against the stale recipe hash.
+    source_recipe_json: body.recipe,
+    source_recipe_hash: provenance.sourceRecipeHash,
+    source_recipe_version: body.recipe.version,
+    source_prompt_pack_id: String(pack.id ?? ""),
+    source_prompt_pack_name: String(pack.name ?? ""),
     enrichment_schema_version: material.version,
     enrichment_source_recipe_hash: provenance.sourceRecipeHash,
     enrichment_run_id: runId,
     enrichment_planner_version: "story-material-v2",
   }).eq("id", body.outline_id);
-  if (error) throw new Error(`Could not persist outline enrichment provenance: ${error.message}`);
+  if (error) throw new Error(`Could not persist outline planning provenance: ${error.message}`);
 }
 
 async function runSuggestionJob(
@@ -2729,7 +2737,7 @@ async function runSuggestionJob(
       story_material: storyMaterial,
       diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" },
     });
-    await persistEnrichmentProvenance(db, body, runId, storyMaterial, provenance);
+    await persistPlanningProvenance(db, body, runId, storyMaterial, provenance);
     body = { ...body, storyMaterialEnrichment: storyMaterial };
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
     const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);

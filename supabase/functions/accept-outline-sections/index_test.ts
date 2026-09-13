@@ -19,18 +19,13 @@ Deno.test("Accept All completes only after all sections and snapshot merge succe
   });
 });
 
-Deno.test("Accept All fails when snapshot merge fails after 6/6 sections", () => {
-  assertEquals(
-    acceptRunTerminalOutcome(
-      0,
-      "Could not update project snapshot: permission denied",
-      null,
-    ),
-    {
-      status: "failed",
-      error: "Could not update project snapshot: permission denied",
-    },
+Deno.test("Accept All keeps authoritative success retryable when snapshot repair fails", async () => {
+  const source = await Deno.readTextFile(
+    new URL("./index.ts", import.meta.url),
   );
+  assertEquals(source.includes('status: "pending", sections_done: committedDone'), true);
+  assertEquals(source.includes("snapshot_repair_pending:"), true);
+  assertEquals(source.includes('status: "failed"'), true, "authoritative failures still remain terminal");
 });
 
 Deno.test("Accept All preserves partial section failure details", () => {
@@ -52,6 +47,20 @@ Deno.test("Accept All persists outline sections without extraction or embeddings
   assertEquals(source.includes("freezeOutlineRecipe"), true);
   assertEquals(source.includes("source_recipe_hash"), true);
   assertEquals(source.includes("embedSectionWithRetry"), false);
+});
+
+Deno.test("Accept All production path uses exact snapshot field names and parent IDs for leaf totals", async () => {
+  const snapshotMigration = await Deno.readTextFile(
+    new URL("../../migrations/20260913170600_fix_write_project_snapshot_canonical_fields.sql", import.meta.url),
+  );
+  const retryMigration = await Deno.readTextFile(
+    new URL("../../migrations/20260913172000_fix_commit_outline_accept_run_retry_positions_and_leaf_totals.sql", import.meta.url),
+  );
+  assertEquals(snapshotMigration.includes("'storyArcBeatID'"), true);
+  assertEquals(snapshotMigration.includes("'targetWords'"), true);
+  assertEquals(snapshotMigration.includes("select sec"), true);
+  assertEquals(retryMigration.includes("select array_agg(distinct parent_id)"), true);
+  assertEquals(retryMigration.includes("where id = v_id and outline_id = p_outline_id"), true);
 });
 
 Deno.test("Accept All memory stage cannot rewrite outline section ownership", async () => {

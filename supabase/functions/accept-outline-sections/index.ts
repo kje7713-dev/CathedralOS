@@ -603,6 +603,11 @@ async function runJob(runID: string, authHeader: string, userID: string) {
         error: `snapshot_repair_pending: ${snapshotError}`.slice(0, 2000),
         completed_at: null,
       }).eq("id", runID);
+      // A pending row is not a retry by itself. Re-enter the worker after the
+      // state transition; claim_outline_accept_run will atomically claim it
+      // and rerun the idempotent snapshot reconciliation.
+      // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime.
+      EdgeRuntime.waitUntil(runJob(runID, authHeader, userID));
     } else {
       const outcome = acceptRunTerminalOutcome(0, null, null);
       await db.from("outline_accept_runs").update({
