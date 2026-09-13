@@ -977,10 +977,9 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         // sections by omission. The RPC reconciles the incoming snapshot
         // with relational outline_sections and retains server sections
         // absent from client unless explicit delete intent exists.
-        let url = restURL(client: client, path: "rpc/write_project_snapshot_canonical")
-        guard let resolvedURL = url else {
-            throw ProjectCloudSyncError.notConfigured
-        }
+        // restURL returns non-optional URL (matches the pattern used by
+        // 7 other call sites in this file). No guard let needed.
+        let resolvedURL = restURL(client: client, path: "rpc/write_project_snapshot_canonical")
 
         var request = client.authorizedRequest(for: resolvedURL, userAccessToken: accessToken)
         request.httpMethod = "POST"
@@ -997,7 +996,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             request.httpBody = try encoder.encode(
                 snapshots.map { snapshot in
                     [
-                        "p_user_id": user.id.uuidString,
+                        "p_user_id": user.id,
                         "p_local_project_id": snapshot.localProjectID,
                         "p_schema": snapshot.payload.schema,
                         "p_version": snapshot.payload.version,
