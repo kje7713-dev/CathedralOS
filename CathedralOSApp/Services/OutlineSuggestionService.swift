@@ -28,6 +28,16 @@ enum OutlineSuggestionError: Error, LocalizedError {
     // to the same project. Per spec the edge function is NOT called and
     // no credits are consumed when this case fires.
     case recipeIntegrityMissing(missingIDs: [RecipeIntegrityValidator.MissingID])
+    // PR 9 (recipe-to-acceptance recovery arc): the outline already has a
+    // frozen recipe hash that does not match the supplied recipe, AND the
+    // outline has at least one persisted section. We refuse the billable
+    // planning call and surface a clear, user-facing message rather than
+    // letting the LLM run and fail later at Accept All time.
+    case recipeProvenanceConflict(
+        frozenRecipeHash: String,
+        currentRecipeHash: String,
+        sectionCount: Int,
+    )
 
     var errorDescription: String? {
         switch self {
@@ -46,6 +56,8 @@ enum OutlineSuggestionError: Error, LocalizedError {
         case .cancelled:              return "The suggestion run continues on the server. You can leave this screen and resume it later."
         case .recipeIntegrityMissing(let missing):
             return RecipeIntegrityValidator.errorMessage(for: missing)
+        case .recipeProvenanceConflict(_, _, let count):
+            return "This outline was planned against a different recipe (\(count) section\(count == 1 ? "" : "s") already accepted). Edit the outline to start fresh, or open the recipe to confirm it matches before re-planning."
         }
     }
 }
@@ -131,6 +143,7 @@ struct OutlineSuggestionService {
         do { client = try SupabaseBackendClient() }
         catch { throw OutlineSuggestionError.notConfigured(reason: String(describing: error)) }
         let userAccessToken = try await validAccessToken()
+
         var urlRequest = client.authorizedRequest(
             for: client.edgeFunctionURL(path: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath),
             userAccessToken: userAccessToken
@@ -247,7 +260,10 @@ struct OutlineSuggestionService {
             return true
         case .serverError(let statusCode, _):
             return statusCode == 408 || statusCode == 425 || statusCode == 429 || (500...599).contains(statusCode)
-        case .notConfigured, .providerError, .insufficientCredits, .invalidResponse, .recipeIntegrityMissing:
+        // PR 9: recipe_provenance_conflict is not auto-retryable — the
+        // outline has persisted sections from a previous recipe hash, so the
+        // user must edit the recipe or start a fresh outline.
+        case .notConfigured, .providerError, .insufficientCredits, .invalidResponse, .recipeIntegrityMissing, .recipeProvenanceConflict:
             return false
         }
     }

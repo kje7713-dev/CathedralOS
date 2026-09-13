@@ -496,8 +496,16 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     /// Auto-create the project's outline if missing. PR #2c keeps it
     /// single-outline-per-project (mirrors `StoryArc`'s at-most-one rule).
     private func ensureOutline() {
-        guard project.outlines.isEmpty else { return }
+        let currentArcID = project.storyArcs.first?.id
+        if let existing = project.outlines.first {
+            if existing.storyArcID != currentArcID {
+                existing.storyArcID = currentArcID
+                try? modelContext.save()
+            }
+            return
+        }
         let outline = Outline(name: "Outline")
+        outline.storyArcID = currentArcID
         modelContext.insert(outline)
         outline.project = project
         try? modelContext.save()

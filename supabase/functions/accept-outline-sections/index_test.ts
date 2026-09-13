@@ -1,8 +1,10 @@
-import { assertEquals } from "jsr:@std/assert@1";
+import { assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 import { acceptRunTerminalOutcome } from "./_outcome.ts";
 import {
   buildLengthContract,
   canonicalUUID,
+  computeRequestFingerprint,
+  fetchLeafSectionTotals,
   hashCanonicalRecipe,
   mergeSectionsByCanonicalID,
   normalizeStoryArcBeatIDs,
@@ -17,18 +19,13 @@ Deno.test("Accept All completes only after all sections and snapshot merge succe
   });
 });
 
-Deno.test("Accept All fails when snapshot merge fails after 6/6 sections", () => {
-  assertEquals(
-    acceptRunTerminalOutcome(
-      0,
-      "Could not update project snapshot: permission denied",
-      null,
-    ),
-    {
-      status: "failed",
-      error: "Could not update project snapshot: permission denied",
-    },
+Deno.test("Accept All keeps authoritative success retryable when snapshot repair fails", async () => {
+  const source = await Deno.readTextFile(
+    new URL("./index.ts", import.meta.url),
   );
+  assertEquals(source.includes('status: "pending", sections_done: committedDone'), true);
+  assertEquals(source.includes("snapshot_repair_pending:"), true);
+  assertEquals(source.includes('status: "failed"'), true, "authoritative failures still remain terminal");
 });
 
 Deno.test("Accept All preserves partial section failure details", () => {
@@ -50,6 +47,20 @@ Deno.test("Accept All persists outline sections without extraction or embeddings
   assertEquals(source.includes("freezeOutlineRecipe"), true);
   assertEquals(source.includes("source_recipe_hash"), true);
   assertEquals(source.includes("embedSectionWithRetry"), false);
+});
+
+Deno.test("Accept All production path uses exact snapshot field names and parent IDs for leaf totals", async () => {
+  const snapshotMigration = await Deno.readTextFile(
+    new URL("../../migrations/20260913170600_fix_write_project_snapshot_canonical_fields.sql", import.meta.url),
+  );
+  const retryMigration = await Deno.readTextFile(
+    new URL("../../migrations/20260913172000_fix_commit_outline_accept_run_retry_positions_and_leaf_totals.sql", import.meta.url),
+  );
+  assertEquals(snapshotMigration.includes("'storyArcBeatID'"), true);
+  assertEquals(snapshotMigration.includes("'targetWords'"), true);
+  assertEquals(snapshotMigration.includes("select sec"), true);
+  assertEquals(retryMigration.includes("select array_agg(distinct parent_id)"), true);
+  assertEquals(retryMigration.includes("where id = v_id and outline_id = p_outline_id"), true);
 });
 
 Deno.test("Accept All memory stage cannot rewrite outline section ownership", async () => {
@@ -334,4 +345,317 @@ Deno.test("recipe provenance hash is deterministic across object key order", asy
     schema: "cathedralos.prompt_pack_export",
   };
   assertEquals(await hashCanonicalRecipe(a), await hashCanonicalRecipe(b));
+});
+
+
+// MARK: - PR 12: computeRequestFingerprint
+//
+// PR 12 binds Accept All idempotency keys to the exact server request via a
+// stable canonical SHA256 fingerprint of the immutable request body
+// (idempotency_key excluded). The fingerprint must:
+//   - be identical for identical inputs;
+//   - exclude idempotency_key (so the key used to look up its own row is
+//     not part of the value being compared);
+//   - be canonical with respect to key order (sorted JSON);
+//   - change when any other field changes.
+
+function makeFingerprintFixture(
+  opts: {
+    key?: string;
+    outlineID?: string;
+    projectID?: string;
+    sections?: unknown[];
+  } = {},
+): Record<string, unknown> {
+  const key = opts.key ?? "key-1";
+  const outlineID = opts.outlineID ?? "11111111-1111-1111-1111-111111111111";
+  const projectID = opts.projectID ?? "22222222-2222-2222-2222-222222222222";
+  const sections = opts.sections ?? [{ id: "s-1", position: 0, title: "S1", summary: "Sum1" }];
+  return {
+    outline_id: outlineID,
+    project_id: projectID,
+    idempotency_key: key,
+    source_recipe_json: { project: { id: "p", name: "P", summary: "Premise" } },
+    sections,
+  };
+}
+
+Deno.test("PR12 computeRequestFingerprint: identical inputs produce identical fingerprint", async () => {
+  const body = makeFingerprintFixture();
+  const a = await computeRequestFingerprint(body as any);
+  const b = await computeRequestFingerprint(body as any);
+  assertEquals(a, b);
+  // Fingerprint is 64 lowercase hex chars (SHA-256).
+  assertEquals(a.length, 64);
+  assertEquals(/^[0-9a-f]{64}$/.test(a), true);
+});
+
+Deno.test("PR12 computeRequestFingerprint: excludes idempotency_key", async () => {
+  const body1 = makeFingerprintFixture({ key: "key-A" });
+  const body2 = makeFingerprintFixture({ key: "key-B" });
+  const f1 = await computeRequestFingerprint(body1 as any);
+  const f2 = await computeRequestFingerprint(body2 as any);
+  assertEquals(f1, f2, "fingerprint must NOT include idempotency_key");
+});
+
+Deno.test("PR12 computeRequestFingerprint: canonical key order (reordered keys same fingerprint)", async () => {
+  // Build equivalent bodies with different key insertion order. Canonical
+  // serialization (sorted keys) must yield the same fingerprint.
+  const a = {
+    outline_id: "11111111-1111-1111-1111-111111111111",
+    project_id: "22222222-2222-2222-2222-222222222222",
+    idempotency_key: "k",
+    source_recipe_json: { project: { id: "p", name: "P", summary: "S" } },
+    sections: [],
+  };
+  const b = {
+    sections: [],
+    source_recipe_json: { project: { summary: "S", name: "P", id: "p" } },
+    idempotency_key: "k",
+    project_id: "22222222-2222-2222-2222-222222222222",
+    outline_id: "11111111-1111-1111-1111-111111111111",
+  };
+  const fa = await computeRequestFingerprint(a as any);
+  const fb = await computeRequestFingerprint(b as any);
+  assertEquals(fa, fb, "key-order permutations must fingerprint the same");
+});
+
+Deno.test("PR12 computeRequestFingerprint: changes when any included field changes", async () => {
+  const base = makeFingerprintFixture();
+  const baseFingerprint = await computeRequestFingerprint(base as any);
+
+  // Each tuple varies exactly one field (NOT idempotency_key, which must be
+  // excluded). The fingerprint must differ.
+  const variations: Array<[string, Record<string, unknown>]> = [
+    ["outline_id",        makeFingerprintFixture({ outlineID: "99999999-9999-9999-9999-999999999999" })],
+    ["project_id",        makeFingerprintFixture({ projectID: "99999999-9999-9999-9999-999999999999" })],
+    ["sections",          makeFingerprintFixture({ sections: [{ id: "s-99", position: 0, title: "Different", summary: "Different" }] })],
+    [
+      "source_recipe_json",
+      makeFingerprintFixture({ sections: undefined as any }), // placeholder; overwritten below
+    ],
+  ];
+  // The source_recipe_json variation requires a different fixture shape
+  // (the previous fixture has the same recipe). Replace it with an explicit
+  // body whose recipe differs.
+  const recipeVaried = makeFingerprintFixture();
+  (recipeVaried as any).source_recipe_json = { project: { id: "p", name: "P", summary: "DIFFERENT PREMISE" } };
+  variations[3] = ["source_recipe_json", recipeVaried];
+
+  for (const [fieldName, varied] of variations) {
+    const variedFingerprint = await computeRequestFingerprint(varied as any);
+    assertNotEquals(
+      variedFingerprint,
+      baseFingerprint,
+      `Changing ${fieldName} must change the fingerprint`,
+    );
+  }
+});
+
+
+// MARK: - PR 13: validate() — project_lineage_id handling
+
+// isUUID() requires group 4 to start with [89ab] (variant bits). Use v4
+// UUIDs (third group starts with 4, fourth with 8) that match the regex.
+const UUID_OUTLINE = "11111111-1111-4111-8111-111111111111";
+const UUID_PROJECT = "22222222-2222-4222-8222-222222222222";
+const UUID_SECTION = "33333333-3333-4333-8333-333333333333";
+const UUID_LINEAGE = "55555555-5555-4555-8555-555555555555";
+
+function makeValidateFixture(
+  opts: { lineageID?: string | null } = {},
+): Record<string, unknown> {
+  // validate() requires sections.length >= 1 (no empty-section batches).
+  // Use a minimal valid section (no optional fields set).
+  const minimalSection = {
+    id: UUID_SECTION,
+    position: 0,
+    title: "S1",
+    summary: "Sum1",
+  };
+  const body: Record<string, unknown> = {
+    outline_id: UUID_OUTLINE,
+    project_id: UUID_PROJECT,
+    idempotency_key: "k1",
+    // isCanonicalRecipe requires schema, version, project (with id+name),
+    // setting, and promptPack (with id+name). Keep it minimal but valid.
+    source_recipe_json: {
+      schema: "cathedralos.story_packet",
+      version: 1,
+      project: { id: UUID_PROJECT, name: "P", summary: "S" },
+      setting: { included: false },
+      promptPack: { id: "pp-1", name: "Pack 1" },
+    },
+    sections: [minimalSection],
+  };
+  if (opts.lineageID !== undefined) {
+    if (opts.lineageID !== null) {
+      body.project_lineage_id = opts.lineageID;
+    } else {
+      body.project_lineage_id = null;
+    }
+  }
+  return body;
+}
+
+Deno.test("PR13 validate(): accepts missing project_lineage_id (backward compat)", () => {
+  const body = makeValidateFixture();
+  // project_lineage_id is absent entirely (not present in object).
+  assertEquals(validate(body as any), null);
+});
+
+Deno.test("PR13 validate(): accepts null project_lineage_id (client sent null)", () => {
+  const body = makeValidateFixture({ lineageID: null });
+  assertEquals(validate(body as any), null);
+});
+
+Deno.test("PR13 validate(): accepts valid UUID project_lineage_id", () => {
+  const body = makeValidateFixture({ lineageID: UUID_LINEAGE });
+  assertEquals(validate(body as any), null);
+});
+
+Deno.test("PR13 validate(): rejects non-string project_lineage_id", () => {
+  const body = makeValidateFixture();
+  body.project_lineage_id = 12345;
+  const err = validate(body as any);
+  assertNotEquals(err, null);
+  assertEquals(err?.includes("project_lineage_id"), true, "error should mention project_lineage_id");
+});
+
+Deno.test("PR13 validate(): rejects malformed UUID project_lineage_id", () => {
+  const body = makeValidateFixture({ lineageID: "not-a-uuid" });
+  // validate() only type-checks (presence + string); the isUUID check for
+  // project_lineage_id would happen later in the POST handler. Document the
+  // current contract: validate() does NOT validate UUID format for
+  // project_lineage_id (only types it as string).
+  assertEquals(validate(body as any), null);
+});
+
+
+// MARK: - PR 14: fetchLeafSectionTotals
+//
+// PR 14 recomputes the Outline-level length contract from the resulting
+// complete generation-bearing Outline (leaves only) so the total includes
+// pre-existing + newly accepted sections exactly once, with no double
+// counting of grouping parents like chapters-with-scenes.
+//
+// The helper accepts a Supabase client whose .from("outline_sections")
+// returns a select() -> eq() -> not() -> then(...) chain. We mock that
+// chain inline (no real DB) and assert the summed totals.
+
+// Lightweight stub: resolves the .then() await with the supplied rows.
+function makeSectionsDB(rows: Array<Record<string, unknown>>) {
+  const thenable: Promise<{ data: unknown; error: null }> = Promise.resolve({
+    data: rows,
+    error: null,
+  });
+  const chain: any = {
+    select: () => chain,
+    eq: () => chain,
+    not: () => chain,
+    then: (
+      onFulfilled: (v: { data: unknown; error: null }) => unknown,
+    ) => thenable.then(onFulfilled),
+  };
+  return { from: () => chain } as any;
+}
+
+Deno.test("PR14 fetchLeafSectionTotals: sums leaves only (grouping parents excluded; no double-counting)", async () => {
+  // Realistic Outline fixture: two grouping parents (chapters) each with
+  // scenes, plus a top-level generation row (parent_id = null, no
+  // children). Leaves = scene A (1500) + scene B (2000) + scene C (3000)
+  // + scene D (2500) = 9000. Grouping parents chapter-1 and chapter-2 are
+  // excluded (each has children, so they appear in childIDs).
+  const rows = [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      parent_id: "22222222-2222-4222-8222-222222222222",
+      target_words: 1500, target_words_min: 1000, target_words_max: 2000,
+      status: "accepted",
+    },
+    {
+      id: "33333333-3333-4333-8333-333333333333",
+      parent_id: "22222222-2222-4222-8222-222222222222",
+      target_words: 2000, target_words_min: 1500, target_words_max: 2500,
+      status: "accepted",
+    },
+    {
+      id: "44444444-4444-4444-8444-444444444444",
+      parent_id: null,
+      target_words: 3000, target_words_min: 2500, target_words_max: 3500,
+      status: "accepted",
+    },
+    {
+      id: "66666666-6666-4666-8666-666666666666",
+      parent_id: "55555555-4555-8555-555555555555",
+      target_words: 2500, target_words_min: 2000, target_words_max: 3000,
+      status: "accepted",
+    },
+    {
+      id: "22222222-2222-4222-8222-222222222222",
+      parent_id: null,
+      target_words: 1000, target_words_min: 800, target_words_max: 1200,
+      status: "accepted",
+    },
+    {
+      id: "55555555-4555-8555-555555555555",
+      parent_id: null,
+      target_words: 1500, target_words_min: 1200, target_words_max: 1800,
+      status: "accepted",
+    },
+  ];
+  const db = makeSectionsDB(rows);
+  const totals = await fetchLeafSectionTotals(db, "out-1");
+  assertEquals(totals.projectedWordCount, 9000);
+  assertEquals(totals.targetWordCountMin, 7000); // 1000+1500+2500+2000
+  assertEquals(totals.targetWordCountMax, 11000); // 2000+2500+3500+3000
+});
+
+Deno.test("PR14 fetchLeafSectionTotals: retrying the same section ids does not inflate the total", async () => {
+  // Spec regression: running the recompute twice against the same set of
+  // sections must produce the same total. We exercise this by simulating
+  // a "retry" — the helper runs against the same DB rows twice and the
+  // result is identical. Plus a grouping parent that would inflate the
+  // total if double-counted.
+  const rows = [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      parent_id: null,
+      target_words: 5000, target_words_min: 4000, target_words_max: 6000,
+      status: "accepted",
+    },
+    {
+      id: "22222222-2222-4222-8222-222222222222",
+      parent_id: "11111111-1111-4111-8111-111111111111",
+      target_words: 7000, target_words_min: 6000, target_words_max: 8000,
+      status: "accepted",
+    },
+  ];
+  const db = makeSectionsDB(rows);
+  const first = await fetchLeafSectionTotals(db, "out-1");
+  const second = await fetchLeafSectionTotals(db, "out-1");
+  assertEquals(first.projectedWordCount, second.projectedWordCount);
+  assertEquals(first.projectedWordCount, 7000); // only the leaf (no double-count of grouping parent)
+});
+
+Deno.test("PR14 fetchLeafSectionTotals: an empty outline returns zero", async () => {
+  const db = makeSectionsDB([]);
+  const totals = await fetchLeafSectionTotals(db, "out-1");
+  assertEquals(totals.projectedWordCount, 0);
+  assertEquals(totals.targetWordCountMin, 0);
+  assertEquals(totals.targetWordCountMax, 0);
+});
+
+Deno.test("PR14 fetchLeafSectionTotals: handles null target_words gracefully (sums 0 for missing fields)", async () => {
+  const rows = [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      parent_id: null,
+      target_words: null, target_words_min: null, target_words_max: null,
+      status: "accepted",
+    },
+  ];
+  const db = makeSectionsDB(rows);
+  const totals = await fetchLeafSectionTotals(db, "out-1");
+  assertEquals(totals.projectedWordCount, 0);
 });

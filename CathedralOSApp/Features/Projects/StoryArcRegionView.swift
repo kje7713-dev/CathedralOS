@@ -488,6 +488,16 @@ struct StoryArcRegionView: View {
             arcToSync = existing
         }
 
+        // Normal authoring owns one Outline per project. Link it at the
+        // moment the arc is created/switched so arc-first and outline-first
+        // flows persist the same canonical storyArcID before sync/restore.
+        // Do not rely on the relationship cache here: an outline may already
+        // exist while project.outlines is stale after an outline-first flow.
+        let persistedOutline = (try? modelContext.fetch(FetchDescriptor<Outline>()))?
+            .first(where: { $0.project?.id == project.id }) ?? project.outlines.first
+        if let outline = persistedOutline, outline.storyArcID != arcToSync.id {
+            outline.storyArcID = arcToSync.id
+        }
         do {
             try modelContext.save()
         } catch {

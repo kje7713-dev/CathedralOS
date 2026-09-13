@@ -162,6 +162,17 @@ Deno.test("canonical recipe payload passes request validation", () => {
     "arcTemplate.id and non-empty arcTemplate.beats required",
   );
 });
+Deno.test("POST production path validates local_project_id and lineage before billing", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes("local_project_id"), true);
+  assertEquals(source.includes("outlineRow.lineage_id"), true);
+  assertEquals(source.includes('select("id, user_id, local_project_id, lineage_id, source_recipe_hash")'), true);
+  assertEquals(source.includes('.select("id, user_id, project_id, lineage_id")'), false);
+  const ownership = source.indexOf("const { data: outlineRow");
+  const insert = source.indexOf("const insert = await db");
+  assertEquals(ownership >= 0 && insert > ownership, true);
+});
+
 Deno.test("PR4 validateRequest accepts outline_id + project_lineage_id + requestedFormat", () => {
   assertEquals(
     validateRequest({
