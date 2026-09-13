@@ -37,6 +37,24 @@ struct OutlineSuggestionRequest: Codable {
     /// Deterministic logical request identity. The server enforces uniqueness
     /// per authenticated user before any billable work begins.
     let idempotencyKey: String
+    // PR 4: canonical planning identity. Server-validated pre-billable.
+    //   - outline_id: the Outline this planning run targets. Server checks
+    //     ownership (user_id + project_id + canonical lineage) before any
+    //     paid LLM call. When present, enrichment provenance is persisted
+    //     to this outline (`persistEnrichmentProvenance` previously
+    //     early-returned when outline_id was nil).
+    //   - project_lineage_id: canonical stableLineageID of the project
+    //     owning the outline. Server uses it to validate lineage drift
+    //     between local project UUID and canonical lineage before billing.
+    //   - requestedFormat: explicit wire format ("novel" | "shortStory" |
+    //     "other"). Defaults to "novel" for the novel workflow.
+    // Optional for backward compat with callers that have not yet migrated
+    // (PR 6 view's legacy path, mock services). The server treats a missing
+    // outline_id as "skip enrichment provenance" and a missing lineage_id as
+    // "fall back to recipe.project.id", but logs the gap.
+    let outline_id: UUID?
+    let project_lineage_id: UUID?
+    let requestedFormat: String?
 }
 
 struct ArcTemplateBlob: Codable {

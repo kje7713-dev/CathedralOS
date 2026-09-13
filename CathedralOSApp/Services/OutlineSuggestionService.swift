@@ -74,6 +74,8 @@ struct OutlineSuggestionService {
         recipe: PromptPack,
         arc: StoryArc,
         arcTemplate: StoryArcTemplate,
+        outline: Outline? = nil,
+        requestedFormat: String = "novel",
         hint: String? = nil,
         existingSections: [OutlineSection] = []
     ) throws -> OutlineSuggestionRequest {
@@ -97,13 +99,28 @@ struct OutlineSuggestionService {
         let sourceRecipe = buildRecipeBlob(recipe: recipe, project: project)
         let arcBlob = buildArcTemplateBlob(arc: arc, template: arcTemplate)
         let existing = existingSections.isEmpty ? nil : buildExistingSectionBlobs(existingSections)
+        // PR 4: canonical planning identity fields. The server validates
+        // outline_id ownership (user_id + project_id + canonical lineage)
+        // BEFORE any billable LLM call; when outline_id is nil the server
+        // skips enrichment provenance persistence (legacy callers).
+        // project_lineage_id is canonical stableLineageID; server uses it
+        // to detect lineage drift between local project UUID and canonical
+        // identity (delete + restore from backup case).
+        let outlineID = outline?.id
+        let lineageID = project.stableLineageID
         let identityRequest = OutlineSuggestionRequest(
             recipe: sourceRecipe, arcTemplate: arcBlob, hint: hint,
-            existingSections: existing, idempotencyKey: ""
+            existingSections: existing, idempotencyKey: "",
+            outline_id: outlineID,
+            project_lineage_id: lineageID,
+            requestedFormat: requestedFormat
         )
         return OutlineSuggestionRequest(
             recipe: sourceRecipe, arcTemplate: arcBlob, hint: hint,
-            existingSections: existing, idempotencyKey: Self.idempotencyKey(for: identityRequest)
+            existingSections: existing, idempotencyKey: Self.idempotencyKey(for: identityRequest),
+            outline_id: outlineID,
+            project_lineage_id: lineageID,
+            requestedFormat: requestedFormat
         )
     }
 

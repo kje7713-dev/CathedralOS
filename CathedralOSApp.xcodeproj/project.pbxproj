@@ -134,6 +134,7 @@
 		1BC2956009E64F8599A3F06745ADDF5F /* RecipeSelectionServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68099DE367044144ADA484D4A8B8BD7B /* RecipeSelectionServiceTests.swift */; };
 		88FD8BA2FA8A4347A7F2AF50FB79AB6C /* RecipeIntegrityValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59D9B63E01A448EE996795F46F76732B /* RecipeIntegrityValidatorTests.swift */; };
 		541ABDD4-07D5-598A-A9B9-22AE460960AE /* RecipeReferenceReconcilerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79D3F415-536D-52C5-8435-54778330F6F7 /* RecipeReferenceReconcilerTests.swift */; };
+		7A8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D /* OutlineSuggestionIdentityContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D3E /* OutlineSuggestionIdentityContractTests.swift */; };
 		F5557071B4AE46FDBB7847711CE2A705 /* AcceptAllLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8F3A4A27894451A926AC4AEDF0C77F /* AcceptAllLifecycleTests.swift */; };
 		DACD11FEC7CB465190C4A47F1713C98B /* StoryArcSyncLineageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA88AB29D6B84D85A00902FCCA8C58EC /* StoryArcSyncLineageTests.swift */; };
 00000000000000000000016A /* ImportHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000169 /* ImportHardeningTests.swift */; };
@@ -343,6 +344,7 @@
 		68099DE367044144ADA484D4A8B8BD7B /* RecipeSelectionServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeSelectionServiceTests.swift; sourceTree = "<group>"; };
 		59D9B63E01A448EE996795F46F76732B /* RecipeIntegrityValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeIntegrityValidatorTests.swift; sourceTree = "<group>"; };
 		79D3F415-536D-52C5-8435-54778330F6F7 /* RecipeReferenceReconcilerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeReferenceReconcilerTests.swift; sourceTree = "<group>"; };
+		8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D3E /* OutlineSuggestionIdentityContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSuggestionIdentityContractTests.swift; sourceTree = "<group>"; };
 		3C8F3A4A27894451A926AC4AEDF0C77F /* AcceptAllLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcceptAllLifecycleTests.swift; sourceTree = "<group>"; };
 		CA88AB29D6B84D85A00902FCCA8C58EC /* StoryArcSyncLineageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryArcSyncLineageTests.swift; sourceTree = "<group>"; };
 000000000000000000000169 /* ImportHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportHardeningTests.swift; sourceTree = "<group>"; };
@@ -613,6 +615,7 @@
 				68099DE367044144ADA484D4A8B8BD7B /* RecipeSelectionServiceTests.swift */,
 				59D9B63E01A448EE996795F46F76732B /* RecipeIntegrityValidatorTests.swift */,
 				79D3F415-536D-52C5-8435-54778330F6F7 /* RecipeReferenceReconcilerTests.swift */,
+				8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D3E /* OutlineSuggestionIdentityContractTests.swift */,
 				3C8F3A4A27894451A926AC4AEDF0C77F /* AcceptAllLifecycleTests.swift */,
 				CA88AB29D6B84D85A00902FCCA8C58EC /* StoryArcSyncLineageTests.swift */,
 				000000000000000000000169 /* ImportHardeningTests.swift */,
@@ -1124,6 +1127,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 				1BC2956009E64F8599A3F06745ADDF5F /* RecipeSelectionServiceTests.swift in Sources */,
 				88FD8BA2FA8A4347A7F2AF50FB79AB6C /* RecipeIntegrityValidatorTests.swift in Sources */,
 				541ABDD4-07D5-598A-A9B9-22AE460960AE /* RecipeReferenceReconcilerTests.swift in Sources */,
+				7A8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D /* OutlineSuggestionIdentityContractTests.swift in Sources */,
 				F5557071B4AE46FDBB7847711CE2A705 /* AcceptAllLifecycleTests.swift in Sources */,
 				DACD11FEC7CB465190C4A47F1713C98B /* StoryArcSyncLineageTests.swift in Sources */,
 				00000000000000000000016A /* ImportHardeningTests.swift in Sources */,
