@@ -28,6 +28,16 @@ enum OutlineSuggestionError: Error, LocalizedError {
     // to the same project. Per spec the edge function is NOT called and
     // no credits are consumed when this case fires.
     case recipeIntegrityMissing(missingIDs: [RecipeIntegrityValidator.MissingID])
+    // PR 9 (recipe-to-acceptance recovery arc): the outline already has a
+    // frozen recipe hash that does not match the supplied recipe, AND the
+    // outline has at least one persisted section. We refuse the billable
+    // planning call and surface a clear, user-facing message rather than
+    // letting the LLM run and fail later at Accept All time.
+    case recipeProvenanceConflict(
+        frozenRecipeHash: String,
+        currentRecipeHash: String,
+        sectionCount: Int,
+    )
 
     var errorDescription: String? {
         switch self {
@@ -46,6 +56,8 @@ enum OutlineSuggestionError: Error, LocalizedError {
         case .cancelled:              return "The suggestion run continues on the server. You can leave this screen and resume it later."
         case .recipeIntegrityMissing(let missing):
             return RecipeIntegrityValidator.errorMessage(for: missing)
+        case .recipeProvenanceConflict(_, _, let count):
+            return "This outline was planned against a different recipe (\(count) section\(count == 1 ? "" : "s") already accepted). Edit the outline to start fresh, or open the recipe to confirm it matches before re-planning."
         }
     }
 }
@@ -131,6 +143,32 @@ struct OutlineSuggestionService {
         do { client = try SupabaseBackendClient() }
         catch { throw OutlineSuggestionError.notConfigured(reason: String(describing: error)) }
         let userAccessToken = try await validAccessToken()
+
+        // PR 9 (recipe-to-acceptance recovery arc): pre-flight recipe-provenance
+        // guard. Compute the current recipe hash + load the outline's frozen
+        // hash + section count BEFORE any billable LLM call so a drifted recipe
+        // on an outline that already has accepted sections surfaces
+        // recipe_provenance_conflict instead of letting planning succeed and
+        // only failing at Accept All because the outline's provenance was
+        // frozen for another recipe hash.
+        let provenance = try await fetchOutlineProvenance(
+            outlineID: request.outline_id.uuidString,
+            userAccessToken: userAccessToken,
+            client: client,
+        )
+        let outcome = RecipeProvenanceGuard.check(
+            recipe: request.recipe,
+            frozenRecipeHash: provenance.frozenRecipeHash,
+            sectionCount: provenance.sectionCount,
+        )
+        if case .conflict(let frozen, let current, let count) = outcome.decision {
+            throw OutlineSuggestionError.recipeProvenanceConflict(
+                frozenRecipeHash: frozen,
+                currentRecipeHash: current,
+                sectionCount: count,
+            )
+        }
+
         var urlRequest = client.authorizedRequest(
             for: client.edgeFunctionURL(path: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath),
             userAccessToken: userAccessToken
@@ -325,3 +363,75 @@ struct OutlineSuggestionService {
         }
     }
 }
+
+    /// PR 9: fetch the outline's frozen source_recipe_hash + section count
+    /// via PostgREST so the pre-flight recipe-provenance guard can run BEFORE
+    /// the billable outline-from-recipe call. Returns nil hash when the
+    /// outline has no frozen hash yet (first-time planning).
+    private func fetchOutlineProvenance(
+        outlineID: String,
+        userAccessToken: String,
+        client: SupabaseBackendClient,
+    ) async throws -> (frozenRecipeHash: String?, sectionCount: Int) {
+        // Outline row.
+        var outlineComponents = URLComponents(
+            url: client.restURL(path: "outlines"),
+            resolvingAgainstBaseURL: false,
+        )
+        outlineComponents?.queryItems = [
+            URLQueryItem(name: "id", value: "eq.\(outlineID)"),
+            URLQueryItem(name: "select", value: "source_recipe_hash"),
+        ]
+        guard let outlineURL = outlineComponents?.url else {
+            throw OutlineSuggestionError.invalidResponse("Could not build outline provenance URL")
+        }
+        var outlineRequest = client.authorizedRequest(for: outlineURL, userAccessToken: userAccessToken)
+        outlineRequest.httpMethod = "GET"
+        outlineRequest.timeoutInterval = 15
+        let (outlineData, outlineResponse) = try await performRequest(outlineRequest)
+        guard let outlineHTTP = outlineResponse as? HTTPURLResponse else {
+            throw OutlineSuggestionError.networkError("Non-HTTP response (outline)")
+        }
+        if outlineHTTP.statusCode == 404 {
+            // Outline not found — let the server edge function surface the
+            // authoritative 404 on POST. No need to block here.
+            return (nil, 0)
+        }
+        guard (200...299).contains(outlineHTTP.statusCode) else {
+            throw OutlineSuggestionError.serverError(
+                statusCode: outlineHTTP.statusCode,
+                body: String(data: outlineData, encoding: .utf8),
+            )
+        }
+        let frozenHash: String? = {
+            struct OutlineRow: Decodable { let source_recipe_hash: String? }
+            let rows = try? JSONDecoder().decode([OutlineRow].self, from: outlineData)
+            return rows?.first?.source_recipe_hash
+        }()
+        // Section count via head+count=exact (cheap).
+        var countComponents = URLComponents(
+            url: client.restURL(path: "outline_sections"),
+            resolvingAgainstBaseURL: false,
+        )
+        countComponents?.queryItems = [
+            URLQueryItem(name: "outline_id", value: "eq.\(outlineID)"),
+            URLQueryItem(name: "select", value: "id"),
+        ]
+        guard let countURL = countComponents?.url else {
+            throw OutlineSuggestionError.invalidResponse("Could not build section count URL")
+        }
+        var countRequest = client.authorizedRequest(for: countURL, userAccessToken: userAccessToken)
+        countRequest.httpMethod = "GET"
+        countRequest.timeoutInterval = 15
+        let (countData, countResponse) = try await performRequest(countRequest)
+        guard let countHTTP = countResponse as? HTTPURLResponse,
+              (200...299).contains(countHTTP.statusCode) else {
+            return (frozenHash, 0)
+        }
+        struct SectionIDRow: Decodable { let id: String }
+        let sectionIDs = (try? JSONDecoder().decode([SectionIDRow].self, from: countData)) ?? []
+        return (frozenHash, sectionIDs.count)
+    }
+}
+
+extension OutlineSuggestionService {
