@@ -20,7 +20,6 @@ import {
   buildSuggestionResponseSchema,
   STORY_MATERIAL_ENRICHMENT_SCHEMA,
   calculateRepairAllocation,
-  adjustAllocationForExistingSections,
   ExpansionValidationError,
   NovelScalePlanningError,
   MAX_EXPANSION_ROUNDS,
@@ -180,18 +179,120 @@ Deno.test("recipe obligations derive required plot signals and supporting-only t
   assertEquals(obligations.every((item) => item.id.startsWith("R")), true);
 });
 
-Deno.test("existing accepted sections satisfy obligation coverage and reduce repair allocation", () => {
+Deno.test("existing accepted sections satisfy obligation coverage", () => {
   const obligations = deriveRecipeObligations({ ...sparseRequest.recipe, selectedStorySpark: { text: "R2" } } as any);
   const existing = [{ storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] }];
   const coverage = obligationCoverage([...existing, { recipeRequirementIDs: ["R2"] }], obligations);
   assertEquals(coverage.covered, { R1: 1, R2: 1 });
   assertEquals(coverage.missingRequired, []);
-  const adjusted = adjustAllocationForExistingSections(new Map([
-    ["beat-1", { minSections: 1, rationale: "covered" }],
-    ["beat-2", { minSections: 2, rationale: "new" }],
-  ]), existing);
-  assertEquals(adjusted.get("beat-1")?.minSections, 0);
-  assertEquals(adjusted.get("beat-2")?.minSections, 2);
+});
+
+// PR 5 — "count existing section coverage once" regression suite.
+//
+// The bug: buildAllocationPrompt instructed the planner to return minSections as
+// the number of NEW sections still required after considering existingSections,
+// but the production planning path then called adjustAllocationForExistingSections
+// and subtracted existing-section counts AGAIN. Existing coverage was therefore
+// counted twice.
+//
+// The fix: delete adjustAllocationForExistingSections, use plannedAllocation
+// directly, and tighten the planner prompt so the residual contract is
+// unambiguous. These tests prove the new contract at the prompt level and at the
+// production-prompt level (which consumes the planner's residual output
+// unchanged).
+
+Deno.test("planner prompt passes empty existingSectionsByBeat when no existing sections", () => {
+  const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [] } as any);
+  assertEquals(
+    system.includes("minSections represents the number of additional sections still required beyond existingSections"),
+    true,
+    "planner prompt must explicitly state the residual-count contract",
+  );
+  const parsed = JSON.parse(user);
+  for (const beat of parsed.arcTemplate.beats) {
+    assertEquals(parsed.existingSectionsByBeat[beat.id], []);
+  }
+  assertEquals(parsed.existingUnlinkedSections, []);
+});
+
+Deno.test("planner prompt groups one existing section onto its linked beat", () => {
+  const section = { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] };
+  const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [section] } as any);
+  assertEquals(
+    system.includes("existing coverage is already accounted for; do not include it in minSections"),
+    true,
+    "planner prompt must instruct planner NOT to count existing coverage in minSections",
+  );
+  const parsed = JSON.parse(user);
+  assertEquals(parsed.existingSectionsByBeat["beat-1"], [section]);
+  assertEquals(parsed.existingSectionsByBeat["beat-2"], []);
+  assertEquals(parsed.existingUnlinkedSections, []);
+});
+
+Deno.test("planner prompt groups two existing sections onto the same beat", () => {
+  const s1 = { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] };
+  const s2 = { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R2"] };
+  const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [s1, s2] } as any);
+  assertEquals(
+    system.includes("minSections represents the number of additional sections still required beyond existingSections"),
+    true,
+  );
+  const parsed = JSON.parse(user);
+  assertEquals(parsed.existingSectionsByBeat["beat-1"], [s1, s2]);
+  assertEquals(parsed.existingSectionsByBeat["beat-2"], []);
+  assertEquals(parsed.existingUnlinkedSections, []);
+});
+
+Deno.test("planner prompt groups mixed beats with different existing coverage plus unlinked", () => {
+  const s1 = { storyArcBeatID: "beat-1" };
+  const s2 = { storyArcBeatID: "beat-1" };
+  const s3 = { storyArcBeatID: "beat-2" };
+  const s4 = { storyArcBeatID: "beat-unknown" }; // unlinked to the arc template
+  const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [s1, s2, s3, s4] } as any);
+  assertEquals(
+    system.includes("minSections represents the number of additional sections still required beyond existingSections"),
+    true,
+  );
+  const parsed = JSON.parse(user);
+  assertEquals(parsed.existingSectionsByBeat["beat-1"], [s1, s2]);
+  assertEquals(parsed.existingSectionsByBeat["beat-2"], [s3]);
+  // beat-unknown is not in the arc template, so per-beat bucket is absent and
+  // the section falls into existingUnlinkedSections.
+  assertEquals(parsed.existingSectionsByBeat["beat-unknown"], undefined);
+  assertEquals(parsed.existingUnlinkedSections, [s4]);
+});
+
+Deno.test("production prompt uses planner residual allocation unchanged (no double subtraction)", () => {
+  // Simulate the planner's residual output:
+  //   - 2 existing on beat-1, planner returned 3 additional new sections
+  //   - 1 existing on beat-2, planner returned 0 (already covered)
+  //   - 0 existing on beat-3, planner returned 2
+  // Pre-PR-5, adjustAllocationForExistingSections would have subtracted again:
+  //   beat-1: 3 - 2 = 1  (BUG: undergenerates by 2 sections)
+  //   beat-2: 0 - 1 = -1 -> clamped to 0 (silently wrong)
+  // Post-PR-5, buildPrompt must reflect the planner's residual counts directly.
+  const sparseWithThirdBeat = {
+    ...sparseRequest,
+    arcTemplate: {
+      ...sparseRequest.arcTemplate,
+      beats: [
+        ...sparseRequest.arcTemplate.beats,
+        { id: "beat-3", role: "midpoint", label: "Midpoint", description: "Reversal." },
+      ],
+    },
+  } as any;
+  const residual = new Map([
+    ["beat-1", { minSections: 3, rationale: "needs 3 new beyond existing 2" }],
+    ["beat-2", { minSections: 0, rationale: "fully covered by existing 1" }],
+    ["beat-3", { minSections: 2, rationale: "needs 2 new" }],
+  ]);
+  const { system } = buildPrompt(sparseWithThirdBeat, residual as any);
+  assertEquals(system.includes("Opening Image: minimum 3 sections"), true,
+    "beat-1 residual 3 must reach buildPrompt unchanged (pre-fix would have produced 1)");
+  assertEquals(system.includes("Break into Two: minimum 0 sections"), true,
+    "beat-2 residual 0 must reach buildPrompt unchanged (pre-fix would have clamped -1 to 0)");
+  assertEquals(system.includes("Midpoint: minimum 2 sections"), true,
+    "beat-3 residual 2 must reach buildPrompt unchanged");
 });
 
 Deno.test("missing existing obligation coverage remains repairable", () => {
@@ -577,7 +678,7 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
   assertEquals(allocationPrompt.includes("70,000-90,000 word"), true);
-  assertEquals(allocationPrompt.includes("minimum number of distinct dramatic sections"), true);
+  assertEquals(allocationPrompt.includes("minimum number of NEW dramatic sections still required"), true);
   assertEquals(allocationPrompt.includes("floor, not a target or maximum"), true);
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);

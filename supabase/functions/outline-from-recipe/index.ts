@@ -1273,20 +1273,6 @@ export function calculateRepairAllocation(
 }
 
 
-export function adjustAllocationForExistingSections(
-  allocation: Map<string, Allocation>,
-  existingSections: ExistingSectionBlob[] = [],
-): Map<string, Allocation> {
-  const counts = new Map<string, number>();
-  for (const section of existingSections) {
-    if (section.storyArcBeatID) counts.set(section.storyArcBeatID, (counts.get(section.storyArcBeatID) ?? 0) + 1);
-  }
-  return new Map(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, {
-    minSections: Math.max(0, plan.minSections - (counts.get(beatID) ?? 0)),
-    rationale: plan.rationale,
-  }]));
-}
-
 export function buildPrompt(
   req: OutlineFromRecipeRequest,
   allocation: Map<string, Allocation>,
@@ -1521,7 +1507,7 @@ export function buildAllocationPrompt(
 
 This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections. Use the supplied premise, characters, and arc to decide where density belongs.
 
-For every Story Arc beat, determine the minimum number of distinct dramatic sections required to adequately realize that movement in a novel. Output exactly one JSON object with beatID matching the supplied UUID exactly, minSections as an integer from 0 through 10, and a concise rationale. Include every beat exactly once. This number is a floor, not a target or maximum. Major movements should generally require more minimum coverage than transitions, but the later outline generator may create additional sections whenever the material supports them. A beat sufficiently covered by existing sections may use minSections 0. Do not output any other root key.
+For every Story Arc beat, determine the minimum number of NEW dramatic sections still required to adequately realize that movement in a novel after considering the supplied existingSections. Output exactly one JSON object with beatID matching the supplied UUID exactly, minSections as an integer from 0 through 10, and a concise rationale. Include every beat exactly once. minSections represents the number of additional sections still required beyond existingSections — it is a floor, not a target or maximum. The later outline generator may create additional sections whenever the material supports them. A beat sufficiently covered by existing sections may use minSections 0 (existing coverage is already accounted for; do not include it in minSections). Do not output any other root key.
 
 Output JSON only. No commentary, no prose.`;
 
@@ -2568,7 +2554,12 @@ async function runSuggestionJob(
       openaiKey,
       billableCall,
     );
-    const allocation = adjustAllocationForExistingSections(plannedAllocation, body.existingSections);
+    // PR 5: plannedAllocation IS the residual count (existingSections already accounted for).
+    // Previously we called adjustAllocationForExistingSections here, which double-subtracted
+    // existing-section counts because the planner was already instructed (via
+    // buildAllocationPrompt) to return minSections as the number of NEW sections still
+    // required after considering existingSections.
+    const allocation = plannedAllocation;
     const allocationCountsByBeat = Object.fromEntries(
       Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections]),
     );
