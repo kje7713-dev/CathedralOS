@@ -575,10 +575,15 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
               let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
             return nil
         }
+        // PR 4 rebased: outline/lineage/format identity feeds the key, so
+        // a stale Outline reference (delete + restore, lineage drift) will
+        // produce a different hash and block exact-match resume.
         return try? OutlineSuggestionService().makeRequest(
             recipe: recipe,
             arc: arc,
             arcTemplate: template,
+            outline: currentOutline,
+            requestedFormat: "novel",
             existingSections: currentOutline?.sections ?? []
         ).idempotencyKey
     }
@@ -608,10 +613,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             //    lineage. The idempotency key is derived from the full request
             //    so any change to recipe content, arc beats, or section
             //    contracts produces a different key.
+            // PR 4 rebased: pass current Outline + explicit requestedFormat
+            // so outline/lineage/format identity feeds the exact-match key.
             let request = try service.makeRequest(
                 recipe: recipe,
                 arc: arc,
                 arcTemplate: template,
+                outline: currentOutline,
+                requestedFormat: "novel",
                 existingSections: currentOutline?.sections ?? []
             )
             // 3 + 4. recover only a completed run whose idempotency key

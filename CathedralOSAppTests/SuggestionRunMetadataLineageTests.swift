@@ -44,7 +44,10 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             arcTemplate: arcPayload,
             hint: nil,
             existingSections: nil,
-            idempotencyKey: "suggestion-test"
+            idempotencyKey: "suggestion-test",
+            outline_id: nil,
+            project_lineage_id: nil,
+            requestedFormat: nil
         )
     }
 

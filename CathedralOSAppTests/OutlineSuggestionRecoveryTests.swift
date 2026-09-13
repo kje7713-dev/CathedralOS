@@ -30,7 +30,10 @@ final class OutlineSuggestionRecoveryTests: XCTestCase {
         beatDescription: String = "Establish the world.",
         existingSectionTitle: String? = nil,
         existingSectionSummary: String = "Prior context.",
-        hint: String? = nil
+        hint: String? = nil,
+        outlineID: UUID? = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        projectLineageID: UUID? = UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        requestedFormat: String? = "novel"
     ) -> OutlineSuggestionRequest {
         let projectPayload = PromptPackExportPayload.ProjectPayload(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
@@ -94,7 +97,10 @@ final class OutlineSuggestionRecoveryTests: XCTestCase {
             arcTemplate: arcPayload,
             hint: hint,
             existingSections: existingSection.map { [$0] },
-            idempotencyKey: ""
+            idempotencyKey: "",
+            outline_id: outlineID,
+            project_lineage_id: projectLineageID,
+            requestedFormat: requestedFormat
         )
     }
 
@@ -177,5 +183,35 @@ final class OutlineSuggestionRecoveryTests: XCTestCase {
         // SHA-256 hex = 64 chars after the prefix.
         XCTAssertEqual(k.count, "suggestion-".count + 64,
             "Idempotency key body must be a 64-char SHA-256 hex digest")
+    }
+
+    // MARK: - PR 4 identity (post-rebase): outline/lineage/format feed the hash
+
+    func testOutlineIDChangeProducesDifferentKey() {
+        let a = makeRequest(outlineID: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        let b = makeRequest(outlineID: UUID(uuidString: "99999999-9999-4999-8999-999999999999"))
+        XCTAssertNotEqual(key(for: a), key(for: b),
+            "Different outline_id must produce a different idempotency key so a stale Outline reference is blocked from exact-match resume")
+    }
+
+    func testProjectLineageIDChangeProducesDifferentKey() {
+        let a = makeRequest(projectLineageID: UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"))
+        let b = makeRequest(projectLineageID: UUID(uuidString: "88888888-8888-4888-8888-888888888888"))
+        XCTAssertNotEqual(key(for: a), key(for: b),
+            "Different project_lineage_id must produce a different idempotency key so lineage drift (delete + restore from backup) blocks resume")
+    }
+
+    func testRequestedFormatChangeProducesDifferentKey() {
+        let a = makeRequest(requestedFormat: "novel")
+        let b = makeRequest(requestedFormat: "shortStory")
+        XCTAssertNotEqual(key(for: a), key(for: b),
+            "Different requestedFormat must produce a different idempotency key so the server cannot bill a 'novel' run against a request scoped to a shorter format")
+    }
+
+    func testNilOutlineIDDiffersFromNonNil() {
+        let a = makeRequest(outlineID: nil)
+        let b = makeRequest(outlineID: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        XCTAssertNotEqual(key(for: a), key(for: b),
+            "nil outline_id (legacy caller path) must hash differently from a populated outline_id so legacy callers cannot collide with the new contract")
     }
 }
