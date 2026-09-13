@@ -993,6 +993,9 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             // section-delete intent at the snapshot layer (deletions flow
             // through OutlineSuggestionsReviewView / SectionEmbedService),
             // so p_deleted_section_ids is an empty array per call.
+            // PostgREST RPC body is an array of objects. Each object has
+            // mixed-type values (String, Int, ProjectImportExportPayload, [String]),
+            // so the dictionary literal needs an explicit [String: Any] cast.
             request.httpBody = try encoder.encode(
                 snapshots.map { snapshot in
                     [
@@ -1002,7 +1005,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                         "p_version": snapshot.payload.version,
                         "p_snapshot_json": snapshot.payload,
                         "p_deleted_section_ids": [] as [String],
-                    ]
+                    ] as [String: Any]
                 }
             )
         } catch {
