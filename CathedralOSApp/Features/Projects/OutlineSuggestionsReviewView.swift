@@ -48,14 +48,21 @@ struct OutlineSuggestionsReviewView: View {
     private var acceptErrorMessage: String? { activeAcceptRun == nil ? durabilityCoordinator.acceptRunError : nil }
     @State private var hasStartedAcceptance = false
 
-    // Stable across view recreation so repeated taps/reopened sheets resolve
-    // to the same server job instead of creating a second batch.
+    // PR 11: stable across view recreation so repeated taps/reopened sheets
+    // resolve to the same server job instead of creating a second batch.
+    // Derived via AcceptAllRequestBuilder so the fingerprint includes every
+    // Section Contract field (entryState, dramaticEvent, resultingChange,
+    // terminalState, recipeRequirementIDs), project identity, outline identity,
+    // and the complete canonical source recipe — not just title/summary/
+    // container/POV/terminalBeat/storyArcBeatID as before.
     private var acceptanceIdempotencyKey: String {
-        let content = suggestions.map { "\($0.title)|\($0.summary)|\($0.container)|\($0.pov)|\($0.terminalBeat)|\($0.storyArcBeatID)" }.joined(separator: "\n")
-        let digest = SHA256.hash(data: Data(content.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return "\(outline.id.uuidString):\(digest)"
+        let builder = AcceptAllRequestBuilder(
+            projectID: project.id,
+            outlineID: outline.id,
+            suggestions: suggestions,
+            sourceRecipe: sourceRecipe
+        )
+        return builder.idempotencyKey
     }
 
     var body: some View {

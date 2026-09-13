@@ -344,9 +344,19 @@ extension SectionEmbedService {
         do { client = try SupabaseBackendClient() }
         catch { throw SectionEmbedError.notConfigured(reason: String(describing: error)) }
 
+        // PR 11: section UUIDs are now deterministic from the canonical
+        // AcceptAllRequestBuilder (logical batch fingerprint + ordinal)
+        // instead of random UUIDs. Same logical batch → same section IDs
+        // across view recreation, retries, and reproductions.
+        let builder = AcceptAllRequestBuilder(
+            projectID: projectID,
+            outlineID: outlineID,
+            suggestions: suggestions,
+            sourceRecipe: sourceRecipe
+        )
         let sections = suggestions.enumerated().map { offset, suggestion in
             AcceptOutlineSection(
-                id: UUID().uuidString,
+                id: builder.sectionUUID(forOrdinal: offset).uuidString,
                 position: startingPosition + offset,
                 title: suggestion.title,
                 summary: suggestion.summary,
