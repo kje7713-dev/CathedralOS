@@ -523,85 +523,69 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       id: canonicalUUID(section.id),
     }));
     const normalizedRequest = { ...request, sections: normalizedSections };
-    await freezeOutlineRecipe(
-      db,
-      normalizedRequest.outline_id,
-      normalizedRequest.source_recipe_json,
-    );
-    const sectionIDs = normalizedSections.map((s) => s.id);
-    await db.from("outline_accept_runs").update({
-      sections_total: normalizedSections.length,
-      section_ids: sectionIDs,
-    }).eq("id", runID);
-    const { data: positions, error: positionError } = await db.from(
-      "outline_sections",
-    )
-      .select("position")
-      .eq("outline_id", normalizedRequest.outline_id)
-      .order("position", { ascending: false })
-      .limit(1);
-    if (positionError) {
-      throw new Error(
-        `Could not read outline position: ${positionError.message}`,
-      );
-    }
-    const basePosition = (positions?.[0]?.position ?? -1) + 1;
-    const lengthContract = buildLengthContract(normalizedSections);
-    const { error: insertError } = await db.from("outline_sections").upsert(
-      normalizedSections.map((s, index) =>
-        sectionRow(
-          { ...s, ...lengthContract.sections[index] },
-          normalizedRequest.outline_id,
-          basePosition + index,
-        )
-      ),
-      { onConflict: "id" },
-    );
-    if (insertError) {
-      throw new Error(`Could not create sections: ${insertError.message}`);
-    }
-    // PR 14 (recipe-to-acceptance recovery arc): recompute the
-    // Outline-level length contract from the resulting complete
-    // generation-bearing Outline so the total includes pre-existing +
-    // newly accepted sections exactly once. buildLengthContract is still
-    // used above for per-section targetWords / targetWordsMin /
-    // targetWordsMax on the newly inserted rows.
-    const leafTotals = await fetchLeafSectionTotals(db, normalizedRequest.outline_id);
-    const recomputedContract = {
-      planning_format: lengthContract.outline.planning_format,
-      target_word_count: leafTotals.projectedWordCount,
-      target_word_count_min: leafTotals.targetWordCountMin,
-      target_word_count_max: leafTotals.targetWordCountMax,
-      projected_word_count: leafTotals.projectedWordCount,
+
+    // PR 15 (recipe-to-acceptance recovery arc): delegate the
+    // authoritative writes (recipe provenance freeze + section upsert +
+    // outline length recompute + run-completion mark) to one
+    // PostgreSQL transaction via commit_outline_accept_run(...). If any
+    // step raises inside the RPC, the transaction rolls back and the
+    // function returns status="failed". Retries of the same run/request
+    // are idempotent because position assignment reads max(existing)+1
+    // and the section upsert is ON CONFLICT DO UPDATE.
+    // PR 15: compute recipe hash + extract provenance fields inline
+    // (this file has hashCanonicalRecipe but no recipeProvenance helper).
+    const recipeObj = normalizedRequest.source_recipe_json as unknown as {
+      version?: number;
+      promptPack?: { id?: string; name?: string };
     };
-    const { error: outlineContractError } = await db.from("outlines")
-      .update(recomputedContract)
-      .eq("id", normalizedRequest.outline_id);
-    if (outlineContractError) {
+    const recipeHash = await hashCanonicalRecipe(
+      normalizedRequest.source_recipe_json as CanonicalRecipe,
+    );
+    const sectionsPayload = normalizedSections.map((s) => ({
+      id: s.id,
+      title: s.title,
+      summary: s.summary,
+      container: s.container,
+      pov: s.pov,
+      terminal_beat: s.terminalBeat,
+      entry_state: s.entryState,
+      dramatic_event: s.dramaticEvent,
+      resulting_change: s.resultingChange,
+      terminal_state: s.terminalState,
+      story_arc_beat_id: s.storyArcBeatID,
+      recipe_requirement_ids: s.recipeRequirementIDs ?? [],
+    }));
+    const { data: commitResult, error: commitError } = await db.rpc(
+      "commit_outline_accept_run",
+      {
+        p_run_id: runID,
+        p_user_id: userID,
+        p_outline_id: normalizedRequest.outline_id,
+        p_recipe_hash: recipeHash,
+        p_recipe_version: Number(recipeObj.version ?? 0),
+        p_recipe_prompt_pack_id: String(recipeObj.promptPack?.id ?? ""),
+        p_recipe_prompt_pack_name: String(recipeObj.promptPack?.name ?? ""),
+        p_source_recipe_json: normalizedRequest.source_recipe_json,
+        p_sections: sectionsPayload,
+      },
+    );
+    if (commitError) {
       throw new Error(
-        `Could not persist outline length contract: ${outlineContractError.message}`,
+        `Atomic Accept All commit failed: ${commitError.message}`,
       );
     }
-    // Accept All stores outline planning metadata only. Outline suggestions
-    // are not generated prose and must not create RAG embeddings or provider
-    // charges; generated prose is embedded later by generate-story.
-    const { error: acceptedError } = await db.from("outline_sections")
-      .update({ status: "accepted" })
-      .eq("outline_id", normalizedRequest.outline_id)
-      .in("id", normalizedSections.map((section) => section.id));
-    if (acceptedError) {
-      throw new Error(`Could not accept sections: ${acceptedError.message}`);
+    const commit = (Array.isArray(commitResult) ? commitResult[0] : commitResult) ?? {};
+    if (commit.status === "failed") {
+      throw new Error(
+        `Atomic Accept All commit failed server-side: ${commit.error ?? "unknown"}`,
+      );
     }
-    const done = normalizedSections.length;
-    const failed = 0;
-    await db.from("outline_accept_runs").update({
-      sections_done: done,
-      sections_failed: failed,
-    }).eq("id", runID);
-    // The project snapshot is the source restored by iOS. Keep it in sync
-    // with the relational rows before reporting the job as terminal; otherwise
-    // a successful Accept All is immediately erased by the next cloud restore.
-    // A merge error must remain a failed job even after all sections persist.
+    // PR 15 (continued): the project snapshot is a derived view of the
+    // relational rows. Run the snapshot merge AFTER the atomic commit
+    // succeeds — if it fails, the run is marked failed but the
+    // authoritative section writes (already committed) remain. A retry of
+    // the same run/request will reconcile the snapshot without losing
+    // positions (commit_outline_accept_run is idempotent).
     let snapshotError: string | null = null;
     try {
       await mergeSectionsIntoSnapshot(db, normalizedRequest, userID);
@@ -609,15 +593,16 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       snapshotError = err instanceof Error ? err.message : String(err);
       console.error("[accept-outline-sections] snapshot merge failed", err);
     }
+    const committedDone = Number(commit.sections_done ?? normalizedSections.length);
     const outcome = acceptRunTerminalOutcome(
-      failed,
+      snapshotError ? 1 : 0,
       snapshotError,
       null,
     );
     await db.from("outline_accept_runs").update({
       status: outcome.status,
-      sections_done: done,
-      sections_failed: failed,
+      sections_done: committedDone,
+      sections_failed: snapshotError ? 1 : 0,
       error: outcome.error,
       completed_at: new Date().toISOString(),
     }).eq("id", runID);
