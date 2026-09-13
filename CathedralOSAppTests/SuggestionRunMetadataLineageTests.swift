@@ -143,4 +143,217 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         XCTAssertNil(reDecoded.lineageID,
             "Re-encoded legacy metadata must preserve nil lineageID so the coordinator's loadSuggestionRunMetadata falls back to the legacy project key")
     }
+
+
+    // MARK: - Exact-match resume (PR 6 refactor)
+    //
+    // PR 6 refactor: `loadSuggestionRunMetadata` accepts an
+    // `expectedIdempotencyKey` parameter. When supplied, a persisted
+    // entry is only returned if its stored idempotency key matches the
+    // freshly built current request. This blocks stale active/in-flight
+    // runs (recipe/arc/section edits under the same project UUID) from
+    // being reattached or completed against the user's changed planning
+    // identity. The tests below prove:
+    //
+    //   - lineage slot accepts matching key, discards mismatched key
+    //   - legacy project slot still discards on lineage mismatch
+    //   - legacy project slot also discards on key mismatch (NEW)
+    //   - nil expected key preserves legacy behaviour
+    //   - nil result when neither slot has an entry
+
+    private func makeCoordinatorWithIsolatedDefaults()
+        throws -> (DataDurabilityCoordinator, UserDefaults, String)
+    {
+        let suiteName = "SuggestionRunMetadataLineageTests.exact-match.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let coordinator = DataDurabilityCoordinator(defaults: defaults)
+        return (coordinator, defaults, suiteName)
+    }
+
+    private func seedLineageEntry(
+        in defaults: UserDefaults,
+        lineageID: UUID,
+        projectID: UUID,
+        idempotencyKey: String
+    ) throws {
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID,
+            lineageID: lineageID,
+            request: makeRequest(),
+            idempotencyKey: idempotencyKey,
+            runID: nil,
+            status: "starting",
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0)
+        )
+        let data = try JSONEncoder().encode(metadata)
+        defaults.set(
+            data,
+            forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)"
+        )
+    }
+
+    private func seedLegacyProjectEntry(
+        in defaults: UserDefaults,
+        lineageID: UUID?,  // nil simulates pre-PR-6 metadata
+        projectID: UUID,
+        idempotencyKey: String
+    ) throws {
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID,
+            lineageID: lineageID,
+            request: makeRequest(),
+            idempotencyKey: idempotencyKey,
+            runID: nil,
+            status: "starting",
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0)
+        )
+        let data = try JSONEncoder().encode(metadata)
+        defaults.set(
+            data,
+            forKey: "cathedralos.outlineSuggestion.run.\(projectID.uuidString)"
+        )
+    }
+
+    func testLoadReturnsLineageEntryWhenExpectedIdempotencyKeyMatches() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let lineageID = UUID()
+        let projectID = UUID()
+        let currentKey = "suggestion-current"
+        try seedLineageEntry(
+            in: defaults,
+            lineageID: lineageID,
+            projectID: projectID,
+            idempotencyKey: currentKey
+        )
+        let loaded = coordinator.loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID,
+            expectedIdempotencyKey: currentKey
+        )
+        XCTAssertNotNil(loaded,
+            "Lineage entry whose key matches the current request must be returned")
+        XCTAssertEqual(loaded?.lineageID, lineageID)
+        XCTAssertEqual(loaded?.idempotencyKey, currentKey)
+    }
+
+    func testLoadDiscardsLineageEntryWhenExpectedIdempotencyKeyDiffers() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let lineageID = UUID()
+        let projectID = UUID()
+        try seedLineageEntry(
+            in: defaults,
+            lineageID: lineageID,
+            projectID: projectID,
+            idempotencyKey: "suggestion-stale-recipe-edit"
+        )
+        let loaded = coordinator.loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID,
+            expectedIdempotencyKey: "suggestion-current-after-recipe-edit"
+        )
+        XCTAssertNil(loaded,
+            "Lineage entry whose key differs from the current request must be discarded, blocking stale resume after recipe/arc/section edits")
+    }
+
+    func testLoadDiscardsLegacyProjectEntryWhenStoredLineageMismatches() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let projectID = UUID()
+        let storedLineage = UUID()
+        let suppliedLineage = UUID()  // different from storedLineage
+        try seedLegacyProjectEntry(
+            in: defaults,
+            lineageID: storedLineage,
+            projectID: projectID,
+            idempotencyKey: "suggestion-anything"
+        )
+        let loaded = coordinator.loadSuggestionRunMetadata(
+            lineageID: suppliedLineage,
+            projectID: projectID,
+            expectedIdempotencyKey: "suggestion-current"
+        )
+        XCTAssertNil(loaded,
+            "Legacy entry whose stored lineageID differs from the supplied canonical lineage must be discarded (prevents stale runs from resurfacing under the wrong project)")
+    }
+
+    func testLoadDiscardsLegacyProjectEntryWhenExpectedIdempotencyKeyDiffers() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        // Legacy metadata WITHOUT a stored lineageID (pre-PR-6 shape) so the
+        // lineage-mismatch check passes — proves the idempotency-key check is
+        // an independent guard on legacy entries.
+        let projectID = UUID()
+        let lineageID = UUID()
+        try seedLegacyProjectEntry(
+            in: defaults,
+            lineageID: nil,
+            projectID: projectID,
+            idempotencyKey: "suggestion-legacy-recipe-edit"
+        )
+        let loaded = coordinator.loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID,
+            expectedIdempotencyKey: "suggestion-current-after-recipe-edit"
+        )
+        XCTAssertNil(loaded,
+            "Legacy project-keyed entry whose stored key differs from the current request must be discarded, blocking stale resume of pre-PR-6 metadata")
+    }
+
+    func testLoadReturnsLegacyEntryWhenNoExpectedKeyProvided() throws {
+        // Backward-compat: legacy/external callers that have not yet been
+        // migrated to lineage-aware resume pass nil for expectedIdempotencyKey.
+        // The coordinator must return the entry unchanged.
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let projectID = UUID()
+        let lineageID = UUID()
+        try seedLegacyProjectEntry(
+            in: defaults,
+            lineageID: lineageID,
+            projectID: projectID,
+            idempotencyKey: "suggestion-anything"
+        )
+        let loaded = coordinator.loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID,
+            expectedIdempotencyKey: nil
+        )
+        XCTAssertNotNil(loaded,
+            "When expectedIdempotencyKey is nil (legacy callers), legacy entries must still decode and surface")
+    }
+
+    func testLoadReturnsLineageEntryWhenNoExpectedKeyProvided() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let lineageID = UUID()
+        let projectID = UUID()
+        try seedLineageEntry(
+            in: defaults,
+            lineageID: lineageID,
+            projectID: projectID,
+            idempotencyKey: "suggestion-anything"
+        )
+        let loaded = coordinator.loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID,
+            expectedIdempotencyKey: nil
+        )
+        XCTAssertNotNil(loaded,
+            "When expectedIdempotencyKey is nil, lineage entries must still surface (legacy callers)")
+    }
+
+    func testLoadReturnsNilWhenNoEntriesExist() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let loaded = coordinator.loadSuggestionRunMetadata(
+            lineageID: UUID(),
+            projectID: UUID(),
+            expectedIdempotencyKey: "suggestion-current"
+        )
+        XCTAssertNil(loaded, "Empty UserDefaults suite must yield no metadata")
+    }
 }

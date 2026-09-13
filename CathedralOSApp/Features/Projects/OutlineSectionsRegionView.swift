@@ -250,11 +250,19 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             syncSectionsOrder()
             refreshAllOutputs()
             consumeGenerationLaunch()
+            // PR 6 refactor: build the current request identity BEFORE
+            // resuming any persisted/active run. Stale runs (recipe/arc/
+            // section edits under the same project UUID) must not be
+            // reattached or surfaced. The coordinator's exact-match guard
+            // will discard any persisted/active entry whose idempotency key
+            // differs from the freshly built current key.
+            let currentKey = currentSuggestionIdempotencyKey()
             // PR 6: pass canonical stableLineageID so resume-state survives
             // local project UUID drift (delete + recreate, restore from backup).
             durabilityCoordinator.resumeSuggestionRunIfNeeded(
                 projectID: project.id,
-                lineageID: project.stableLineageID
+                lineageID: project.stableLineageID,
+                currentIdempotencyKey: currentKey
             )
             suggestionsLoading = durabilityCoordinator.activeSuggestionRun(for: project.id)?.isActive == true
             consumeSuggestionCoordinatorEvent()
@@ -549,6 +557,32 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         }
     }
 
+    /// PR 6 refactor: build the current `OutlineSuggestionRequest`
+    /// idempotency key from the live recipe/arc/template/sections snapshot.
+    /// The view computes this BEFORE calling `resumeSuggestionRunIfNeeded`
+    /// so the coordinator's exact-match guard can discard any persisted or
+    /// active run whose stored key no longer represents the user's current
+    /// planning identity. Returns nil when any required input is missing
+    /// (no recipe selected, no arc, no template) — in that case the caller
+    /// falls back to the legacy key-agnostic resume behaviour, which is
+    /// safe because without a request there is nothing current to mismatch
+    /// against.
+    private func currentSuggestionIdempotencyKey() -> String? {
+        guard let recipe = recipeSelection?.selectedRecipe,
+              let project = recipe.project,
+              let arc = project.storyArcs.first,
+              let templateID = arc.templateID,
+              let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
+            return nil
+        }
+        return try? OutlineSuggestionService().makeRequest(
+            recipe: recipe,
+            arc: arc,
+            arcTemplate: template,
+            existingSections: currentOutline?.sections ?? []
+        ).idempotencyKey
+    }
+
     private func loadRecoverableSuggestions() async {
         // PR 6: recover by exact planning identity, NOT by latest completed
         // project run. The previous implementation surfaced stale suggestions
@@ -558,12 +592,15 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // 1. resolve the explicitly selected recipe (already established in PR 1)
         guard let recipe = recipeSelection?.selectedRecipe,
               let project = recipe.project,
-              let projectID = project.id,
               let arc = project.storyArcs.first,
               let templateID = arc.templateID,
               let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
             return
         }
+        // PR 6 refactor: project.id is non-optional, so it cannot live in a
+        // guard-let chain. Bind after the guard exits; the binding is required
+        // because the findRun call below uses `projectID` as a named argument.
+        let projectID = project.id
         do {
             let service = OutlineSuggestionService()
             // 2. build the current OutlineSuggestionRequest using the current
