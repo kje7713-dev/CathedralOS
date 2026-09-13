@@ -1623,7 +1623,7 @@ export async function planSectionAllocation(
   );
 }
 
-async function checkRateLimit(
+export async function checkRateLimit(
   supabase: ReturnType<typeof makeSupabase>,
   userId: string,
 ): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
@@ -1656,7 +1656,7 @@ async function checkRateLimit(
   return { allowed: true };
 }
 
-async function logRequest(
+export async function logRequest(
   supabase: ReturnType<typeof makeSupabase>,
   userId: string,
   status: string,
@@ -2856,6 +2856,64 @@ Deno.serve(async (req: Request) => {
   if (validationError) {
     return errorResponse("invalid_request", validationError, 400);
   }
+  const db = admin();
+  // PR 7: calculate logical identity BEFORE checkRateLimit so reconnects
+  // can short-circuit without consuming a rate-limit slot or logging.
+  const identity = await logicalSuggestionIdentity(body);
+  // PR 7: resolve an existing matching idempotent run first. If the
+  // current request's idempotency key is already bound to a run with the
+  // same fingerprint, reconnect to it (no rate limit, no log entry). If
+  // the fingerprint differs, reject as 409 idempotency_conflict. This is
+  // the idempotency-safe path for app reconnects / worker retries /
+  // iOS suggestion-status polling that re-submits the same request after
+  // a transient network failure.
+  const { data: existing, error: existingError } = await db
+    .from("outline_suggestion_runs")
+    .select("id, status, request_fingerprint, lease_expires_at, error_code, suggestions, warnings, error, diagnostics, story_material, credit_cost_charged, remaining_credits, request_json, created_at, updated_at, completed_at, attempt_count")
+    .eq("user_id", user.id)
+    .eq("idempotency_key", identity.key)
+    .maybeSingle();
+  if (existingError) {
+    console.error("[outline-from-recipe] existing-run resolve failed", existingError);
+    return errorResponse("db_error", existingError.message ?? "Could not resolve existing run", 500);
+  }
+  if (existing) {
+    if (
+      existing.request_fingerprint &&
+      existing.request_fingerprint !== identity.fingerprint
+    ) {
+      return errorResponse(
+        "idempotency_conflict",
+        "The idempotency key is already bound to a different suggestion request",
+        409,
+      );
+    }
+    // Reconnect: return existing run status. Skip checkRateLimit + logRequest
+    // so a stray reconnect does NOT consume a rate-limit slot or produce
+    // a duplicate request-log entry.
+    return corsResponse(
+      JSON.stringify({
+        run_id: existing.id,
+        status: existing.status,
+        suggestions: existing.suggestions,
+        warnings: existing.warnings,
+        errorCode: existing.error_code,
+        error: existing.error,
+        diagnostics: existing.diagnostics,
+        storyMaterialEnrichment: existing.story_material,
+        created_at: existing.created_at,
+        updated_at: existing.updated_at,
+        completed_at: existing.completed_at,
+        creditCostCharged: existing.credit_cost_charged,
+        remainingCredits: existing.remaining_credits,
+        sourceRecipe: existing.request_json?.recipe ?? null,
+      }),
+      { status: 200 },
+    );
+  }
+  // PR 7: only NEW logical requests reach checkRateLimit. Reconnects were
+  // handled by the resolve-existing path above; this is a fresh
+  // outline-from-recipe request with a brand-new idempotency key.
   const rateResult = await checkRateLimit(userClient, user.id);
   if (!rateResult.allowed) {
     return corsResponse(
@@ -2869,7 +2927,6 @@ Deno.serve(async (req: Request) => {
       },
     );
   }
-  const db = admin();
   // PR 4: canonical planning identity ownership check, pre-billable.
   // When outline_id is present, verify (a) the outline belongs to the
   // authenticated user, (b) it belongs to the supplied project identity,
@@ -2907,7 +2964,6 @@ Deno.serve(async (req: Request) => {
       return errorResponse("outline_lineage_mismatch", "outline_id lineage does not match the supplied project_lineage_id", 400);
     }
   }
-  const identity = await logicalSuggestionIdentity(body);
   const insert = await db.from("outline_suggestion_runs").insert({
     user_id: user.id,
     project_id: body.recipe.project.id,
@@ -2923,6 +2979,11 @@ Deno.serve(async (req: Request) => {
     status: "pending",
   }).select("id, status, created_at, updated_at, suggestions, warnings, error_code, error, credit_cost_charged, remaining_credits, request_json").maybeSingle();
 
+  // PR 7: track whether this is a fresh insert (eligible for logRequest)
+  // or a 23505 race-fallback (reconnect, NOT eligible). Upfront resolve
+  // already short-circuited reconnects; 23505 here means two clients raced
+  // past the upfront check at the same microsecond.
+  const isFreshInsert = !insert.error && !!insert.data;
   let run: any = insert.data;
   if (insert.error) {
     if (insert.error.code !== "23505") {
@@ -2956,6 +3017,20 @@ Deno.serve(async (req: Request) => {
   }
   if (!run) {
     return errorResponse("db_error", "Could not create or resolve suggestion run", 500);
+  }
+  // PR 7: log the request exactly once per NEW logical suggestion request.
+  // Fresh inserts (the first POST with a given idempotency_key) get one
+  // "queued" entry; reconnects (upfront resolve hit) and 23505
+  // race-fallbacks do NOT log so the rate-limit counter does not double
+  // count duplicates. logRequest failure is non-fatal — the worker still
+  // runs the job; checkRateLimit counts entries so a transient log
+  // failure could allow one extra request through the limit window.
+  if (isFreshInsert) {
+    try {
+      await logRequest(userClient, user.id, "queued");
+    } catch (logError) {
+      console.error("[outline-from-recipe] logRequest failed", logError);
+    }
   }
   // A pending duplicate may be the only way to restart a worker lost during
   // suspension. The pending claim inside runSuggestionJob makes this race-safe.

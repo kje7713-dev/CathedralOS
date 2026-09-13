@@ -59,6 +59,8 @@ import {
   arcRoleContract,
   buildExpansionResponseSchema,
   planSectionAllocation,
+  checkRateLimit,
+  logRequest,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -1787,4 +1789,157 @@ Deno.test("PR3 all seven built-in template families use explicit canonical role 
   assertEquals(arcRoleContract({ role: "ten", label: "Ten" }, "Kishōtenketsu").allowedFunctions.includes("reversal"), true);
   const ketsu = { name: "Kishōtenketsu", beats: [{ id: "k", role: "ketsu", label: "Ketsu" }] };
   assertEquals(validateStoryArcSemantics([semanticSection("k", "Unfinished", "The event continues.", "transformation")] as any, ketsu as any).some((issue) => issue.includes("required dramatic function resolution")), true);
+});
+
+
+// MARK: - PR 7: idempotency-safe planning rate limits
+
+Deno.test("PR7 checkRateLimit returns allowed=true when no prior entries exist", async () => {
+  const calls: string[] = [];
+  const mockSupabase = {
+    from(table: string) {
+      calls.push(`from:${table}`);
+      return {
+        select() {
+          return {
+            eq() {
+              return {
+                eq() {
+                  return {
+                    gte: async () => ({ count: 0, error: null }),
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+  const result = await checkRateLimit(mockSupabase as any, "user-x");
+  assertEquals(result.allowed, true, "No entries in either window must allow the request");
+  assertEquals(result.retryAfterSeconds, undefined);
+  assertEquals(calls.includes("from:generation_request_logs"), true,
+    "checkRateLimit must query generation_request_logs (per-minute and per-hour counts)");
+});
+
+Deno.test("PR7 checkRateLimit blocks when per-minute count hits RATE_LIMIT_PER_MINUTE (5)", async () => {
+  const mockSupabase = {
+    from(_table: string) {
+      return {
+        select() {
+          return {
+            eq() {
+              return {
+                eq() {
+                  return {
+                    gte: async () => ({ count: 5, error: null }),
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+  const result = await checkRateLimit(mockSupabase as any, "user-x");
+  assertEquals(result.allowed, false);
+  assertEquals(result.retryAfterSeconds, 60,
+    "Per-minute hit must return retryAfterSeconds=60 so the client backs off for one minute");
+});
+
+Deno.test("PR7 checkRateLimit blocks when per-hour count hits RATE_LIMIT_PER_HOUR (30)", async () => {
+  let callIndex = 0;
+  const mockSupabase = {
+    from(_table: string) {
+      return {
+        select() {
+          return {
+            eq() {
+              return {
+                eq() {
+                  return {
+                    gte: async () => {
+                      callIndex++;
+                      return { count: callIndex === 1 ? 0 : 30, error: null };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+  const result = await checkRateLimit(mockSupabase as any, "user-x");
+  assertEquals(result.allowed, false);
+  assertEquals(result.retryAfterSeconds, 3600,
+    "Per-hour hit must return retryAfterSeconds=3600 so the client backs off for one hour");
+});
+
+Deno.test("PR7 logRequest inserts one outline-from-recipe log entry with the right shape", async () => {
+  let inserted: any = null;
+  const mockSupabase = {
+    from(table: string) {
+      if (table !== "generation_request_logs") throw new Error(`unexpected table: ${table}`);
+      return {
+        insert(data: any) {
+          inserted = data;
+          return Promise.resolve({ error: null });
+        },
+      };
+    },
+  };
+  await logRequest(mockSupabase as any, "user-x", "queued");
+  assertEquals(inserted !== null, true, "logRequest must insert into generation_request_logs");
+  assertEquals(inserted.action, "outline-from-recipe",
+    "Log action must be 'outline-from-recipe' so checkRateLimit counts this entry");
+  assertEquals(inserted.user_id, "user-x");
+  assertEquals(inserted.status, "queued");
+  assertEquals(inserted.error_code, null);
+  assertEquals(typeof inserted.request_id, "string", "Each log entry must have a unique request_id");
+  assertEquals(typeof inserted.created_at, "string", "Log entry must carry a created_at timestamp");
+});
+
+Deno.test("PR7 logRequest passes through errorCode when supplied", async () => {
+  let inserted: any = null;
+  const mockSupabase = {
+    from(_table: string) {
+      return {
+        insert(data: any) {
+          inserted = data;
+          return Promise.resolve({ error: null });
+        },
+      };
+    },
+  };
+  await logRequest(mockSupabase as any, "user-y", "failed", "rate_limited");
+  assertEquals(inserted.status, "failed");
+  assertEquals(inserted.error_code, "rate_limited",
+    "When the request fails the log entry must record the failure code so audit queries can attribute the slot consumption");
+});
+
+Deno.test("PR7 POST handler reorders: resolve-existing BEFORE checkRateLimit", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  const resolveExistingIdx = source.indexOf("PR 7: resolve an existing matching idempotent run first");
+  const checkRateLimitIdx = source.indexOf("await checkRateLimit(userClient, user.id);");
+  assertEquals(resolveExistingIdx > 0, true, "POST handler must contain the upfront resolve-existing block");
+  assertEquals(checkRateLimitIdx > 0, true, "POST handler must call checkRateLimit");
+  assertEquals(resolveExistingIdx < checkRateLimitIdx, true,
+    "resolve-existing must be ordered BEFORE checkRateLimit so reconnects do NOT consume a rate-limit slot");
+});
+
+Deno.test("PR7 POST handler gates logRequest on isFreshInsert (reconnects skip logRequest)", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  const isFreshInsertDecl = source.indexOf("const isFreshInsert = !insert.error && !!insert.data;");
+  const logRequestCall = source.indexOf("await logRequest(userClient, user.id, \"queued\");");
+  const logRequestGuard = source.indexOf("if (isFreshInsert) {");
+  assertEquals(isFreshInsertDecl > 0, true, "POST handler must declare isFreshInsert");
+  assertEquals(logRequestCall > 0, true, "POST handler must call logRequest");
+  assertEquals(logRequestGuard > 0, true,
+    "logRequest call must be guarded by isFreshInsert so reconnects (upfront resolve hit) and 23505 race-fallbacks do NOT log");
+  assertEquals(logRequestGuard < logRequestCall, true,
+    "isFreshInsert guard must precede the logRequest call");
 });
