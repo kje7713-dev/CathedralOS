@@ -1001,7 +1001,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 				0000000000000000000000EC /* PromptPackExportBuilder.swift in Sources */,
 				0000000000000000000000F3 /* FieldLevel.swift in Sources */,
 				1F396EF4F70949FBB3759325 /* OutlineSuggestion.swift in Sources */,
-				C0FFEE110000000000000000000001 /* AcceptAllRequestBuilder.swift in Sources */,
+				C0FFEE110000000000000001 /* AcceptAllRequestBuilder.swift in Sources */,
 				01182B640C6F421187F8DFAD /* OutlineSuggestionService.swift in Sources */,
 				9D0E1F2A3B4C5D6E7F8A9B0C /* SectionEmbedService.swift in Sources */,
 				21D8EE71685D460DA28631530A2553EC /* RecipeSelectionService.swift in Sources */,
