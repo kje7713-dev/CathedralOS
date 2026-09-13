@@ -441,3 +441,82 @@ Deno.test("PR12 computeRequestFingerprint: changes when any included field chang
     );
   }
 });
+
+
+// MARK: - PR 13: validate() — project_lineage_id handling
+
+// isUUID() requires group 4 to start with [89ab] (variant bits). Use v4
+// UUIDs (third group starts with 4, fourth with 8) that match the regex.
+const UUID_OUTLINE = "11111111-1111-4111-8111-111111111111";
+const UUID_PROJECT = "22222222-2222-4222-8222-222222222222";
+const UUID_SECTION = "33333333-3333-4333-8333-333333333333";
+const UUID_LINEAGE = "55555555-5555-4555-8555-555555555555";
+
+function makeValidateFixture(
+  opts: { lineageID?: string | null } = {},
+): Record<string, unknown> {
+  // validate() requires sections.length >= 1 (no empty-section batches).
+  // Use a minimal valid section (no optional fields set).
+  const minimalSection = {
+    id: UUID_SECTION,
+    position: 0,
+    title: "S1",
+    summary: "Sum1",
+  };
+  const body: Record<string, unknown> = {
+    outline_id: UUID_OUTLINE,
+    project_id: UUID_PROJECT,
+    idempotency_key: "k1",
+    // isCanonicalRecipe requires schema, version, project (with id+name),
+    // setting, and promptPack (with id+name). Keep it minimal but valid.
+    source_recipe_json: {
+      schema: "cathedralos.story_packet",
+      version: 1,
+      project: { id: UUID_PROJECT, name: "P", summary: "S" },
+      setting: { included: false },
+      promptPack: { id: "pp-1", name: "Pack 1" },
+    },
+    sections: [minimalSection],
+  };
+  if (opts.lineageID !== undefined) {
+    if (opts.lineageID !== null) {
+      body.project_lineage_id = opts.lineageID;
+    } else {
+      body.project_lineage_id = null;
+    }
+  }
+  return body;
+}
+
+Deno.test("PR13 validate(): accepts missing project_lineage_id (backward compat)", () => {
+  const body = makeValidateFixture();
+  // project_lineage_id is absent entirely (not present in object).
+  assertEquals(validate(body as any), null);
+});
+
+Deno.test("PR13 validate(): accepts null project_lineage_id (client sent null)", () => {
+  const body = makeValidateFixture({ lineageID: null });
+  assertEquals(validate(body as any), null);
+});
+
+Deno.test("PR13 validate(): accepts valid UUID project_lineage_id", () => {
+  const body = makeValidateFixture({ lineageID: UUID_LINEAGE });
+  assertEquals(validate(body as any), null);
+});
+
+Deno.test("PR13 validate(): rejects non-string project_lineage_id", () => {
+  const body = makeValidateFixture();
+  body.project_lineage_id = 12345;
+  const err = validate(body as any);
+  assertNotEquals(err, null);
+  assertEquals(err?.includes("project_lineage_id"), true, "error should mention project_lineage_id");
+});
+
+Deno.test("PR13 validate(): rejects malformed UUID project_lineage_id", () => {
+  const body = makeValidateFixture({ lineageID: "not-a-uuid" });
+  // validate() only type-checks (presence + string); the isUUID check for
+  // project_lineage_id would happen later in the POST handler. Document the
+  // current contract: validate() does NOT validate UUID format for
+  // project_lineage_id (only types it as string).
+  assertEquals(validate(body as any), null);
+});

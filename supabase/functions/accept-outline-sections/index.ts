@@ -77,6 +77,12 @@ type CanonicalRecipe = Record<string, unknown>;
 type RequestBody = {
   outline_id: string;
   project_id: string;
+  // PR 13 (recipe-to-acceptance recovery arc): canonical stableLineageID
+  // of the project owning this outline. Optional for backward compat with
+  // clients that have not yet migrated; when present, the server validates
+  // that it matches the Outline's persisted lineage. When absent, the
+  // server logs the gap and skips the lineage-match check.
+  project_lineage_id?: string | null;
   idempotency_key: string;
   source_recipe_json: CanonicalRecipe;
   sections: Section[];
@@ -214,6 +220,10 @@ export function validate(body: RequestBody): string | null {
     !body || !isUUID(body.outline_id) || typeof body.project_id !== "string" ||
     body.project_id.length === 0
   ) return "outline_id and project_id are required";
+  if (
+    body.project_lineage_id != null &&
+    typeof body.project_lineage_id !== "string"
+  ) return "project_lineage_id must be a string when present";
   if (
     typeof body.idempotency_key !== "string" ||
     body.idempotency_key.length < 1 || body.idempotency_key.length > 1000
@@ -605,13 +615,105 @@ Deno.serve(async (req) => {
   if (validationError) {
     return errorResponse("invalid_request", validationError, 400);
   }
-  const { data: ownedOutline } = await db.from("outlines")
-    .select("id")
+  // PR 13: complete ownership-graph validation in a single pass.
+  //   - outline.user_id == auth.uid()
+  //   - outline exists
+  //   - outline.lineage_id (when set) == body.project_lineage_id (when set)
+  //   - outline.story_arc_id (when set) owns every non-null section.storyArcBeatID
+  //   - source_recipe_json.project.id == body.project_id
+  // The pre-existing section UUID collision check (every submitted id may
+  // only already belong to THIS same Outline/user) is performed inside
+  // runJob() against the live outline_sections table because the user's
+  // request body is JSON-only and we cannot trust a pre-checked client.
+  const { data: ownedOutline, error: ownedError } = await db.from("outlines")
+    .select("id,user_id,lineage_id,story_arc_id")
     .eq("id", body.outline_id)
     .eq("user_id", identity.user.id)
     .maybeSingle();
+  if (ownedError) {
+    return errorResponse("db_error", ownedError.message, 500);
+  }
   if (!ownedOutline) {
     return errorResponse("not_found", "outline not found", 404);
+  }
+  // PR 13: lineage match (when both sides are present).
+  if (
+    body.project_lineage_id != null && ownedOutline.lineage_id != null &&
+    body.project_lineage_id !== ownedOutline.lineage_id
+  ) {
+    return errorResponse(
+      "lineage_mismatch",
+      "project_lineage_id does not match outline.lineage_id",
+      409,
+    );
+  }
+  // PR 13: source_recipe_json.project.id must equal body.project_id.
+  // CanonicalRecipe is a JSON object typed loosely; treat absent/invalid
+  // project.id as a malformed request.
+  const recipeProjectId = (body.source_recipe_json as { project?: { id?: unknown } })
+    ?.project?.id;
+  if (typeof recipeProjectId !== "string" || recipeProjectId.length === 0) {
+    return errorResponse(
+      "invalid_request",
+      "source_recipe_json.project.id is required",
+      400,
+    );
+  }
+  if (recipeProjectId !== body.project_id) {
+    return errorResponse(
+      "recipe_project_mismatch",
+      "source_recipe_json.project.id does not match body.project_id",
+      409,
+    );
+  }
+  // PR 13: every non-null submitted beat must belong to the outline's
+  // linked StoryArc. Outline with no story_arc_id cannot accept beat-tagged
+  // sections; outline with story_arc_id must own every submitted beat.
+  const submittedBeatIDs = Array.from(new Set(
+    body.sections
+      .map((s) => s.storyArcBeatID)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  ));
+  if (submittedBeatIDs.length > 0) {
+    if (!ownedOutline.story_arc_id) {
+      return errorResponse(
+        "beat_without_arc",
+        "submitted beats reference a Story Arc but the outline has no story_arc_id",
+        409,
+      );
+    }
+    const { data: arcBeats, error: arcBeatsError } = await db.from("story_arc_beats")
+      .select("id,story_arc_id")
+      .in("id", submittedBeatIDs);
+    if (arcBeatsError) {
+      return errorResponse("db_error", arcBeatsError.message, 500);
+    }
+    const arcBeatSet = new Set((arcBeats ?? []).map((b) => b.id));
+    // Missing beats (already validated upstream as malformed UUIDs by
+    // validate()).
+    for (const id of submittedBeatIDs) {
+      if (!arcBeatSet.has(id)) {
+        return errorResponse(
+          "beat_not_in_arc",
+          `submitted beat ${id} does not belong to the outline's StoryArc`,
+          409,
+        );
+      }
+    }
+    // Foreign-project beat guard: even if the beat UUID is well-formed and
+    // exists in the global story_arc_beats table, it must belong to the
+    // outline's story_arc_id. Reject any beat whose story_arc_id differs.
+    const arcBeatMap = new Map((arcBeats ?? []).map((b) => [b.id, b.story_arc_id]));
+    for (const id of submittedBeatIDs) {
+      const beatArcID = arcBeatMap.get(id);
+      if (beatArcID && beatArcID !== ownedOutline.story_arc_id) {
+        return errorResponse(
+          "beat_foreign_arc",
+          `submitted beat ${id} belongs to a different StoryArc`,
+          409,
+        );
+      }
+    }
   }
   // PR 12: compute the canonical server-side request fingerprint BEFORE
   // insert. Used to detect idempotency-key reuse with a different request

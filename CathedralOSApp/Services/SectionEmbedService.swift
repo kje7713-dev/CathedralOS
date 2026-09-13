@@ -296,6 +296,10 @@ struct AcceptOutlineSection: Codable {
 struct AcceptOutlineSectionsRequest: Codable {
     let outline_id: String
     let project_id: String
+    // PR 13 (recipe-to-acceptance recovery arc): canonical stableLineageID
+    // of the project owning this outline. Server validates it matches
+    // outline.lineage_id before allowing the run to proceed.
+    let project_lineage_id: String?
     let idempotency_key: String
     let source_recipe_json: PromptPackExportPayload
     let sections: [AcceptOutlineSection]
@@ -334,6 +338,11 @@ extension SectionEmbedService {
         edgeFunctionURL: URL,
         outlineID: UUID,
         projectID: UUID,
+        // PR 13: canonical stableLineageID of the project owning this
+        // outline. Optional for backward compat with older callers that
+        // have not yet migrated; the server logs the gap and skips the
+        // lineage-match check when absent.
+        projectLineageID: UUID? = nil,
         suggestions: [OutlineSuggestion],
         startingPosition: Int,
         idempotencyKey: String,
@@ -377,6 +386,10 @@ extension SectionEmbedService {
         let requestBody = AcceptOutlineSectionsRequest(
             outline_id: outlineID.uuidString,
             project_id: projectID.uuidString,
+            // PR 13: thread the canonical stableLineageID through to the
+            // server. Server validates against outline.lineage_id (rejects
+            // 409 lineage_mismatch when both sides are present and differ).
+            project_lineage_id: projectLineageID?.uuidString,
             idempotency_key: idempotencyKey,
             source_recipe_json: sourceRecipe,
             sections: sections

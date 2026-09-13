@@ -562,6 +562,13 @@ final class DataDurabilityCoordinator: ObservableObject {
                     edgeFunctionURL: edgeFunctionURL,
                     outlineID: outlineID,
                     projectID: projectID,
+                    // PR 13 (recipe-to-acceptance recovery arc): forward the
+                    // canonical stableLineageID so the server can validate
+                    // it matches outline.lineage_id (rejects 409
+                    // lineage_mismatch when both sides are present and
+                    // differ). Backward-compat: older callers omit this and
+                    // the server logs the gap and skips the lineage check.
+                    projectLineageID: projectLineageID,
                     suggestions: suggestions,
                     startingPosition: startingPosition,
                     idempotencyKey: idempotencyKey,
