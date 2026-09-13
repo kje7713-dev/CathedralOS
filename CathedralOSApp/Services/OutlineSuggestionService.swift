@@ -432,5 +432,4 @@ struct OutlineSuggestionService {
         let sectionIDs = (try? JSONDecoder().decode([SectionIDRow].self, from: countData)) ?? []
         return (frozenHash, sectionIDs.count)
     }
-}
 
