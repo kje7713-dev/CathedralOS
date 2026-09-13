@@ -250,7 +250,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             syncSectionsOrder()
             refreshAllOutputs()
             consumeGenerationLaunch()
-            durabilityCoordinator.resumeSuggestionRunIfNeeded(projectID: project.id)
+            // PR 6: pass canonical stableLineageID so resume-state survives
+            // local project UUID drift (delete + recreate, restore from backup).
+            durabilityCoordinator.resumeSuggestionRunIfNeeded(
+                projectID: project.id,
+                lineageID: project.stableLineageID
+            )
             suggestionsLoading = durabilityCoordinator.activeSuggestionRun(for: project.id)?.isActive == true
             consumeSuggestionCoordinatorEvent()
             await loadRecoverableSuggestions()
@@ -545,20 +550,53 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private func loadRecoverableSuggestions() async {
-        // PR 1: resolve through RecipeSelectionService so recoverable-suggestion
-        // matching and loadSuggestions use the exact same selected recipe.
+        // PR 6: recover by exact planning identity, NOT by latest completed
+        // project run. The previous implementation surfaced stale suggestions
+        // whenever the recipe content, arc beats, or existing section
+        // contracts changed under the same PromptPack/project UUID pair.
+        //
+        // 1. resolve the explicitly selected recipe (already established in PR 1)
         guard let recipe = recipeSelection?.selectedRecipe,
-              let projectID = recipe.project?.id else { return }
+              let project = recipe.project,
+              let projectID = project.id,
+              let arc = project.storyArcs.first,
+              let templateID = arc.templateID,
+              let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
+            return
+        }
         do {
-            let result = try await OutlineSuggestionService().latestCompletedRun(projectID: projectID)
-            guard let result,
-                  result.sourceRecipe.project.id == projectID,
-                  result.sourceRecipe.promptPack.id == recipe.id,
-                  !result.suggestions.isEmpty else {
+            let service = OutlineSuggestionService()
+            // 2. build the current OutlineSuggestionRequest using the current
+            //    recipe, arc, Outline, existing sections, format and canonical
+            //    lineage. The idempotency key is derived from the full request
+            //    so any change to recipe content, arc beats, or section
+            //    contracts produces a different key.
+            let request = try service.makeRequest(
+                recipe: recipe,
+                arc: arc,
+                arcTemplate: template,
+                existingSections: currentOutline?.sections ?? []
+            )
+            // 3 + 4. recover only a completed run whose idempotency key
+            //    matches that exact request. `findRun` is best-effort and
+            //    returns nil when no match exists.
+            guard let job = try await service.findRun(
+                projectID: projectID,
+                idempotencyKey: request.idempotencyKey
+            ),
+            job.status == "completed",
+            let suggestions = job.suggestions, !suggestions.isEmpty,
+            let sourceRecipe = job.sourceRecipe else {
                 recoverableSuggestions = nil
                 return
             }
-            recoverableSuggestions = result
+            recoverableSuggestions = OutlineSuggestionResult(
+                suggestions: suggestions,
+                warnings: job.warnings ?? [],
+                creditCostCharged: job.creditCostCharged,
+                remainingCredits: job.remainingCredits,
+                sourceRecipe: sourceRecipe
+            )
         } catch {
             // Recovery is best-effort and must not block the normal Suggest flow.
             recoverableSuggestions = nil
@@ -607,8 +645,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             suggestionsError = nil
             suggestionsNotice = nil
             suggestionsLoading = true
+            // PR 6: pass canonical stableLineageID so the durable run key
+            // survives local project UUID drift.
             durabilityCoordinator.beginSuggestionRun(
                 projectID: project.id,
+                lineageID: project.stableLineageID,
                 request: request,
                 service: service
             )

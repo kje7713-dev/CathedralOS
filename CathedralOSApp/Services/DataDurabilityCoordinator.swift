@@ -49,6 +49,12 @@ enum AcceptRunStatus: String, Codable, Equatable {
 
 struct SuggestionRunMetadata: Codable {
     let projectID: UUID
+    // PR 6: canonical stableLineageID owns resume-state identity so that local
+    // project UUID drift (delete + recreate, restore from backup, sync race)
+    // does not orphan an in-flight or resumable suggestion run. Optional in
+    // JSON for backward-compat decode of metadata written before PR 6; new
+    // writes always include it.
+    let lineageID: UUID?
     let request: OutlineSuggestionRequest
     let idempotencyKey: String
     var runID: String?
@@ -199,9 +205,16 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var suggestionRunRevision: UInt = 0
 
     private static let suggestionRunPrefix = "cathedralos.outlineSuggestion.run."
+    // PR 6: lineage-owned resume-state key. New writes go here; legacy
+    // project-keyed entries are still read as a fallback during migration.
+    private static let lineageRunPrefix = "cathedralos.outlineSuggestion.lineage."
 
     private static func suggestionRunKey(for projectID: UUID) -> String {
         "\(suggestionRunPrefix)\(projectID.uuidString)"
+    }
+
+    private static func lineageRunKey(for lineageID: UUID) -> String {
+        "\(lineageRunPrefix)\(lineageID.uuidString)"
     }
 
     private static func runStatusKey(for projectLineageID: UUID) -> String {
@@ -762,6 +775,7 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     func beginSuggestionRun(
         projectID: UUID,
+        lineageID: UUID,
         request: OutlineSuggestionRequest,
         service: OutlineSuggestionService = OutlineSuggestionService()
     ) {
@@ -771,6 +785,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
         let metadata = SuggestionRunMetadata(
             projectID: projectID,
+            lineageID: lineageID,
             request: request,
             idempotencyKey: request.idempotencyKey,
             runID: nil,
@@ -784,8 +799,30 @@ final class DataDurabilityCoordinator: ObservableObject {
         attachSuggestionTask(metadata, service: service)
     }
 
+    /// Legacy entry point used by callers that do not yet know the canonical
+    /// lineage. Persists under the project-keyed legacy slot only; resume
+    /// from legacy will be re-migrated to the lineage key on the next begin.
+    func beginSuggestionRun(
+        projectID: UUID,
+        request: OutlineSuggestionRequest,
+        service: OutlineSuggestionService = OutlineSuggestionService()
+    ) {
+        beginSuggestionRun(
+            projectID: projectID,
+            lineageID: projectID,
+            request: request,
+            service: service
+        )
+    }
+
+    /// PR 6: resume-state is keyed by canonical lineage. The active-run
+    /// dictionary stays keyed by local projectID for backward compatibility
+    /// with all existing view lookups; the resume path reads from the
+    /// lineage-owned UserDefaults slot, falling back to the legacy
+    /// project-keyed slot for metadata written before PR 6.
     func resumeSuggestionRunIfNeeded(
         projectID: UUID,
+        lineageID: UUID,
         service: OutlineSuggestionService = OutlineSuggestionService()
     ) {
         guard suggestionPollingTasks[projectID] == nil else { return }
@@ -793,16 +830,37 @@ final class DataDurabilityCoordinator: ObservableObject {
             attachSuggestionTask(active, service: service)
             return
         }
-        guard let data = suggestionRunDefaults.data(forKey: Self.suggestionRunKey(for: projectID)),
-              let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else { return }
-        activeSuggestionRuns[projectID] = metadata
-        attachSuggestionTask(metadata, service: service)
+        if let metadata = loadSuggestionRunMetadata(lineageID: lineageID, projectID: projectID) {
+            activeSuggestionRuns[projectID] = metadata
+            attachSuggestionTask(metadata, service: service)
+        }
+    }
+
+    /// Legacy entry point. Reads from the legacy project-keyed slot only;
+    /// callers should migrate to the lineage-aware overload.
+    func resumeSuggestionRunIfNeeded(
+        projectID: UUID,
+        service: OutlineSuggestionService = OutlineSuggestionService()
+    ) {
+        resumeSuggestionRunIfNeeded(
+            projectID: projectID,
+            lineageID: projectID,
+            service: service
+        )
     }
 
     func resumeAllSuggestionRuns(service: OutlineSuggestionService = OutlineSuggestionService()) {
-        for key in suggestionRunDefaults.dictionaryRepresentation().keys where key.hasPrefix(Self.suggestionRunPrefix) {
+        // PR 6: iterate both legacy project-keyed and lineage-keyed slots.
+        // Lineage slots take precedence; legacy slots are migrated on next
+        // begin/persist. De-dupe by projectID so a legacy entry cannot double-
+        // resume a run that has already been migrated to the lineage key.
+        var seen = Set<UUID>()
+        for key in suggestionRunDefaults.dictionaryRepresentation().keys
+            where key.hasPrefix(Self.lineageRunPrefix) || key.hasPrefix(Self.suggestionRunPrefix) {
             guard let data = suggestionRunDefaults.data(forKey: key),
                   let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else { continue }
+            if seen.contains(metadata.projectID) { continue }
+            seen.insert(metadata.projectID)
             activeSuggestionRuns[metadata.projectID] = metadata
             attachSuggestionTask(metadata, service: service)
         }
@@ -921,14 +979,48 @@ final class DataDurabilityCoordinator: ObservableObject {
         suggestionPollingTasks[metadata.projectID] = nil
     }
 
+
+    /// PR 6: read durable suggestion-run metadata using the canonical lineage
+    /// as the primary key. Falls back to the legacy project-keyed slot for
+    /// metadata written before PR 6; if the legacy entry's lineageID (when
+    /// present) does not match the supplied canonical lineage, the entry is
+    /// discarded rather than resumed, preventing stale runs from resurfacing
+    /// under the wrong project.
+    private func loadSuggestionRunMetadata(
+        lineageID: UUID,
+        projectID: UUID
+    ) -> SuggestionRunMetadata? {
+        if let data = suggestionRunDefaults.data(forKey: Self.lineageRunKey(for: lineageID)),
+           let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) {
+            return metadata
+        }
+        guard let data = suggestionRunDefaults.data(forKey: Self.suggestionRunKey(for: projectID)),
+              let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else {
+            return nil
+        }
+        if let storedLineage = metadata.lineageID, storedLineage != lineageID {
+            return nil
+        }
+        return metadata
+    }
+
     private func persistSuggestionRun(_ metadata: SuggestionRunMetadata) {
         guard let data = try? JSONEncoder().encode(metadata) else { return }
-        suggestionRunDefaults.set(data, forKey: Self.suggestionRunKey(for: metadata.projectID))
+        // PR 6: write to the lineage-owned key; remove the legacy project key
+        // so a subsequent resume reads the canonical slot.
+        suggestionRunDefaults.set(data, forKey: Self.lineageRunKey(for: metadata.lineageID ?? metadata.projectID))
+        suggestionRunDefaults.removeObject(forKey: Self.suggestionRunKey(for: metadata.projectID))
     }
 
     private func clearSuggestionRun(for projectID: UUID) {
+        // PR 6: capture the lineage before nil-ing the active-run slot so we
+        // can remove the lineage-owned UserDefaults entry too.
+        let lineageID = activeSuggestionRuns[projectID]?.lineageID
         activeSuggestionRuns[projectID] = nil
         suggestionRunDefaults.removeObject(forKey: Self.suggestionRunKey(for: projectID))
+        if let lineageID {
+            suggestionRunDefaults.removeObject(forKey: Self.lineageRunKey(for: lineageID))
+        }
     }
 
     private func failSuggestionRun(_ projectID: UUID, message: String) {
