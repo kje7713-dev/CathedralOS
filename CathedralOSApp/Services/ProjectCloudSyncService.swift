@@ -971,31 +971,39 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     private func syncSnapshots(_ snapshots: [ProjectSnapshotSyncInput]) async throws {
         guard !snapshots.isEmpty else { return }
         let (client, user, accessToken) = try await validatedClientAndSession()
-        var components = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "on_conflict", value: "user_id,local_project_id")
-        ]
-        guard let url = components?.url else {
+        // PR 10 (recipe-to-acceptance recovery arc): call the canonical
+        // write path RPC instead of a blind PostgREST upsert so a stale
+        // client payload can no longer erase server-authoritative Outline
+        // sections by omission. The RPC reconciles the incoming snapshot
+        // with relational outline_sections and retains server sections
+        // absent from client unless explicit delete intent exists.
+        let url = restURL(client: client, path: "rpc/write_project_snapshot_canonical")
+        guard let resolvedURL = url else {
             throw ProjectCloudSyncError.notConfigured
         }
 
-        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
+        var request = client.authorizedRequest(for: resolvedURL, userAccessToken: accessToken)
         request.httpMethod = "POST"
-        request.setValue("resolution=merge-duplicates,return=representation", forHTTPHeaderField: "Prefer")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         do {
+            // The RPC accepts an array of canonical-write arguments, one
+            // per snapshot. iOS does not currently surface an explicit
+            // section-delete intent at the snapshot layer (deletions flow
+            // through OutlineSuggestionsReviewView / SectionEmbedService),
+            // so p_deleted_section_ids is an empty array per call.
             request.httpBody = try encoder.encode(
                 snapshots.map { snapshot in
-                    ProjectSnapshotUpsertRequest(
-                        userID: user.id,
-                        localProjectID: snapshot.localProjectID,
-                        lineageID: snapshot.payload.project.lineageID ?? snapshot.localProjectID,
-                        schema: snapshot.payload.schema,
-                        version: snapshot.payload.version,
-                        snapshotJSON: snapshot.payload
-                    )
+                    [
+                        "p_user_id": user.id.uuidString,
+                        "p_local_project_id": snapshot.localProjectID,
+                        "p_schema": snapshot.payload.schema,
+                        "p_version": snapshot.payload.version,
+                        "p_snapshot_json": snapshot.payload,
+                        "p_deleted_section_ids": [] as [String],
+                    ]
                 }
             )
         } catch {
