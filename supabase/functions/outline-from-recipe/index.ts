@@ -467,15 +467,26 @@ export async function recipeProvenance(recipe: CanonicalRecipeEnvelope): Promise
 }
 
 function recipeMaterialHandles(recipe: CanonicalRecipeEnvelope): Map<string, string> {
+  // PR8: this is the single authority for canonical recipe-backed references.
+  // It must handle sparse / partially-populated recipes defensively so that
+  // repairStoryMaterialFromRecipe can call it on any input without crashing.
+  // Production callers (validateRequest → outline-from-recipe POST handler)
+  // already enforce the full canonical schema; this guard covers the
+  // repair path which receives legacy / partial / blank recipes.
   const handles = new Map<string, string>();
-  if (typeof recipe.project.summary === "string" && recipe.project.summary.trim()) handles.set("project.summary", recipe.project.summary);
-  const add = (prefix: string, values: unknown[], fallback: string) => values.forEach((value, index) => {
-    if (!value || typeof value !== "object") return;
-    const row = value as Record<string, unknown>;
-    const id = typeof row.id === "string" && row.id.trim() ? row.id : `${fallback}-${index + 1}`;
-    const handle = `${prefix}:${id}`;
-    handles.set(handle, typeof row.name === "string" ? row.name : typeof row.label === "string" ? row.label : JSON.stringify(row));
-  });
+  if (recipe?.project && typeof recipe.project.summary === "string" && recipe.project.summary.trim()) {
+    handles.set("project.summary", recipe.project.summary);
+  }
+  const add = (prefix: string, values: unknown[], fallback: string) => {
+    if (!Array.isArray(values)) return;
+    values.forEach((value, index) => {
+      if (!value || typeof value !== "object") return;
+      const row = value as Record<string, unknown>;
+      const id = typeof row.id === "string" && row.id.trim() ? row.id : `${fallback}-${index + 1}`;
+      const handle = `${prefix}:${id}`;
+      handles.set(handle, typeof row.name === "string" ? row.name : typeof row.label === "string" ? row.label : JSON.stringify(row));
+    });
+  };
   add("character", recipe.selectedCharacters, "character");
   add("relationship", recipe.selectedRelationships, "relationship");
   add("theme", recipe.selectedThemeQuestions, "theme");
@@ -615,126 +626,159 @@ function errorResponse(
 }
 
 /**
- * PR6 (Fix the Shit cycle 6): reconstruct a valid StoryMaterialEnrichment
+ * PR8 (Fix the Shit cycle 8): reconstruct a valid StoryMaterialEnrichment
  * from the live canonical recipe, with every item carrying `source: "recipe"`
- * and a meaningful `sourceReference`. Used to recover the 41 persisted
- * suggestion runs whose original enrichment pre-dated provenance tracking
- * (or whose recipe hash no longer matches the live project). Pure JS: no
- * LLM call, no credit charge.
+ * and a CANONICAL `sourceReference` produced by recipeMaterialHandles(). The
+ * previous implementation emitted references like `selectedCharacters[<id>]`
+ * which never existed as canonical handles — the repaired material failed
+ * validateStoryMaterialEnrichment when anyone tried to re-validate it.
+ *
+ * Canonical handle → StoryMaterialEnrichment category mapping:
+ *   project.summary       → discoveries[0]
+ *   character:<id>        → characters
+ *   storySpark            → antagonisticForces[0]    (single object, not array)
+ *   relationship:<id>     → relationships
+ *   theme:<id>            → thematicPressures
+ *   motif:<id>            → thematicPressures       (no dedicated motif category)
+ *   aftertaste            → unresolvedQuestions[0]   (single object, not array)
+ *
+ * Self-validates via validateStoryMaterialEnrichment before returning; throws
+ * if the structural contract is violated. Call sites are responsible for
+ * running storyMaterialSufficiency and failing closed if the canonical
+ * recipe cannot satisfy sufficiency. Pure JS: no LLM call, no credit charge.
  */
 export function repairStoryMaterialFromRecipe(recipe: unknown, provenance: StoryMaterialProvenance): StoryMaterialEnrichment {
-  const r = (recipe ?? {}) as Record<string, unknown>;
-  const asArray = (v: unknown): unknown[] => Array.isArray(v) ? v : [];
-  const asString = (v: unknown, fallback = ""): string =>
-    typeof v === "string" && v.length > 0 ? v : fallback;
+  const r = (recipe ?? {}) as CanonicalRecipeEnvelope;
+  const handles = recipeMaterialHandles(r);
 
-  const characters = asArray(r.selectedCharacters).map((char, i) => {
-    const c = char as Record<string, unknown>;
-    const id = asString(c.id, `char-${i}`);
+  const handleValue = (handle: string): string => handles.get(handle) ?? "";
+
+  const parseValue = (value: string): Record<string, unknown> | string | null => {
+    if (!value) return null;
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      // value is a plain string (e.g., character name); keep as-is
+      return value;
+    }
+  };
+
+  const pickStr = (parsed: Record<string, unknown> | string | null, ...keys: string[]): string => {
+    if (typeof parsed === "string") return parsed.trim();
+    if (!parsed) return "";
+    for (const key of keys) {
+      const v = parsed[key];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    return "";
+  };
+
+  const itemFromHandle = (handle: string, label: string, description: string): StoryMaterialItem => {
+    // validateStoryMaterialEnrichment rejects label === sourceReference and
+    // description === sourceReference. For sparse recipes where the recipe
+    // field is missing, fall back to the id portion of the handle so the
+    // item is still structurally distinct from its sourceReference.
+    const idPortion = handle.replace(/^[a-zA-Z]+:/, "");
+    const safeLabel = label && label !== handle ? label : idPortion || handle;
+    const safeDescription = description && description !== handle && description !== safeLabel
+      ? description
+      : safeLabel;
     return {
-      id: `char-${id}`,
+      id: `recipe-${handle.replace(/[.:]/g, "-")}`,
       source: "recipe" as const,
-      sourceReference: `selectedCharacters[${id}]`,
-      label: asString(c.name, `Character ${i + 1}`),
-      description: asString(c.summary ?? c.description, asString(c.name, "")),
+      sourceReference: handle,
+      label: safeLabel,
+      description: safeDescription,
     };
-  });
+  };
 
-  const antagonisticForces = asArray(r.selectedStorySpark).map((spark, i) => {
-    const s = spark as Record<string, unknown>;
-    const id = asString(s.id, `spark-${i}`);
-    return {
-      id: `spark-${id}`,
-      source: "recipe" as const,
-      sourceReference: `selectedStorySpark[${id}]`,
-      label: asString(s.title ?? s.text, `Spark ${i + 1}`),
-      description: asString(s.description ?? s.summary, ""),
-    };
-  });
+  // project.summary → discoveries[0]
+  const discoveries: StoryMaterialItem[] = [];
+  if (handles.has("project.summary")) {
+    discoveries.push(itemFromHandle("project.summary", "Project Premise", handleValue("project.summary")));
+  }
 
-  const relationships = asArray(r.selectedRelationships).map((rel, i) => {
-    const relObj = rel as Record<string, unknown>;
-    const id = asString(relObj.id, `rel-${i}`);
-    return {
-      id: `rel-${id}`,
-      source: "recipe" as const,
-      sourceReference: `selectedRelationships[${id}]`,
-      label: asString(relObj.summary ?? relObj.label, `Relationship ${i + 1}`),
-      description: asString(relObj.description, ""),
-    };
-  });
+  // character:<id> → characters
+  const characters: StoryMaterialItem[] = [];
+  for (const handle of handles.keys()) {
+    if (!handle.startsWith("character:")) continue;
+    const parsed = parseValue(handleValue(handle));
+    const name = pickStr(parsed, "name", "label");
+    const summary = pickStr(parsed, "summary", "description");
+    characters.push(itemFromHandle(handle, name, summary));
+  }
 
-  const thematicPressures = [
-    ...asArray(r.selectedThemeQuestions).map((t, i) => {
-      const tObj = t as Record<string, unknown> | string;
-      const label = typeof tObj === "string"
-        ? tObj
-        : asString(tObj.question, `Theme ${i + 1}`);
-      return {
-        id: `theme-${i}`,
-        source: "recipe" as const,
-        sourceReference: `selectedThemeQuestions[${i}]`,
-        label,
-        description: typeof tObj === "object"
-          ? asString(tObj.description, asString(tObj.context, ""))
-          : "",
-      };
-    }),
-    ...asArray(r.selectedMotifs).map((m, i) => {
-      const mObj = m as Record<string, unknown> | string;
-      const label = typeof mObj === "string"
-        ? mObj
-        : asString(mObj.label, `Motif ${i + 1}`);
-      return {
-        id: `motif-${i}`,
-        source: "recipe" as const,
-        sourceReference: `selectedMotifs[${i}]`,
-        label,
-        description: typeof mObj === "object"
-          ? asString(mObj.description, "")
-          : "",
-      };
-    }),
-    ...asArray(r.selectedAftertaste).map((a, i) => {
-      const aObj = a as Record<string, unknown> | string;
-      const label = typeof aObj === "string"
-        ? aObj
-        : asString(aObj.title ?? aObj.text, `Aftertaste ${i + 1}`);
-      return {
-        id: `aftertaste-${i}`,
-        source: "recipe" as const,
-        sourceReference: `selectedAftertaste[${i}]`,
-        label,
-        description: typeof aObj === "object"
-          ? asString(aObj.description, "")
-          : "",
-      };
-    }),
-  ];
+  // storySpark → antagonisticForces[0] (single object, not array)
+  const antagonisticForces: StoryMaterialItem[] = [];
+  if (handles.has("storySpark")) {
+    const parsed = parseValue(handleValue("storySpark"));
+    const title = pickStr(parsed, "title", "text");
+    const description = pickStr(parsed, "description", "summary");
+    antagonisticForces.push(itemFromHandle("storySpark", title, description));
+  }
 
-  return {
+  // relationship:<id> → relationships
+  const relationships: StoryMaterialItem[] = [];
+  for (const handle of handles.keys()) {
+    if (!handle.startsWith("relationship:")) continue;
+    const parsed = parseValue(handleValue(handle));
+    const label = pickStr(parsed, "summary", "label");
+    const description = pickStr(parsed, "description", "summary");
+    relationships.push(itemFromHandle(handle, label, description));
+  }
+
+  // theme:<id> + motif:<id> → thematicPressures (no dedicated motif category)
+  const thematicPressures: StoryMaterialItem[] = [];
+  for (const handle of handles.keys()) {
+    if (!handle.startsWith("theme:") && !handle.startsWith("motif:")) continue;
+    const parsed = parseValue(handleValue(handle));
+    const label = pickStr(parsed, "question", "label", "name");
+    const description = pickStr(parsed, "description", "context", "summary");
+    thematicPressures.push(itemFromHandle(handle, label, description));
+  }
+
+  // aftertaste → unresolvedQuestions[0] (single object, not array)
+  const unresolvedQuestions: StoryMaterialItem[] = [];
+  if (handles.has("aftertaste")) {
+    const parsed = parseValue(handleValue("aftertaste"));
+    const title = pickStr(parsed, "title", "text");
+    const description = pickStr(parsed, "description", "summary");
+    unresolvedQuestions.push(itemFromHandle("aftertaste", title, description));
+  }
+
+  const material: StoryMaterialEnrichment = {
     schema: "cathedralos.story_material_enrichment",
     version: 2,
     format: "novel",
     rationale:
-      "Recovered from canonical recipe; legacy run pre-dates story-material provenance (PR6 of Fix the Shit).",
+      "Recovered from canonical recipe handles; legacy run pre-dates story-material provenance (PR8 of the recipe-to-acceptance recovery arc).",
     characters,
     antagonisticForces,
-    relationships,
-    thematicPressures,
     locations: [],
     institutionsAndGroups: [],
     conflictSources: [],
     escalationLadder: [],
     reversals: [],
     consequences: [],
-    discoveries: [],
-    unresolvedQuestions: [],
+    relationships,
+    discoveries,
+    unresolvedQuestions,
+    thematicPressures,
     sourceRecipeHash: provenance.sourceRecipeHash,
     sourceRecipeVersion: provenance.sourceRecipeVersion,
     sourcePromptPackID: provenance.sourcePromptPackID,
     sourcePromptPackName: provenance.sourcePromptPackName,
   };
+
+  // Self-validate: throw if the structural contract is violated. Call sites
+  // are responsible for running storyMaterialSufficiency and failing closed
+  // if the canonical recipe cannot satisfy sufficiency.
+  validateStoryMaterialEnrichment(material, { recipe: r });
+  return material;
 }
 
 export function validateRequest(req: unknown): string | null {
@@ -2418,10 +2462,11 @@ async function runSuggestionJob(
     }
     const resume = expansionResumeState(claimedRun);
     if (requestedStoryMaterialFormat(body) === "novel" && resume && claimedRun.story_material) {
-      let resumedMaterial: StoryMaterialEnrichment;
+      let resumedMaterial!: StoryMaterialEnrichment; // definite assignment: catch path is satisfied by the repair block below
       let priorCompatibility: boolean | undefined;
       let priorSufficiency: boolean | undefined;
       let priorValidationError: string | undefined;
+      let repairAudit: Record<string, unknown> | null = null;
       try {
         resumedMaterial = validateStoryMaterialEnrichment(
           claimedRun.story_material as StoryMaterialEnrichment,
@@ -2436,32 +2481,46 @@ async function runSuggestionJob(
         priorSufficiency = sufficiency.sufficient;
       } catch (error) {
         // Persisted material failed structural validation (legacy shape,
-        // wrong schema/version, or duplicate ids). Treat as incompatible.
+        // wrong schema/version, or duplicate ids). Treat as incompatible;
+        // the repair block below assigns resumedMaterial.
         priorValidationError = error instanceof Error ? error.message : "validation_failed";
         priorCompatibility = false;
         priorSufficiency = false;
-        resumedMaterial = repairStoryMaterialFromRecipe(body.recipe, provenance);
       }
       if (priorCompatibility === false || priorSufficiency === false) {
-        // PR6 (Fix the Shit cycle 6): repair instead of throwing. The 41
-        // persisted runs pre-date story-material provenance OR carry a stale
-        // recipe hash; re-derive from the live canonical recipe (no LLM,
-        // no charge) and persist the repair so future resumes can validate.
+        // PR8 (Fix the Shit cycle 8): repair via canonical recipe handles.
+        // repairStoryMaterialFromRecipe self-validates and throws on
+        // structural failure; this block also runs sufficiency on the
+        // repair output and fails closed if the canonical recipe cannot
+        // supply enough material for novel-scale planning.
         resumedMaterial = repairStoryMaterialFromRecipe(body.recipe, provenance);
-        diagnostics = {
-          ...diagnostics,
-          stage: "story_material_repaired",
+        const repairSufficiency = storyMaterialSufficiency(
+          resumedMaterial, body.recipe, requestedStoryMaterialFormat(body),
+        );
+        if (!repairSufficiency.sufficient) {
+          throw new StoryMaterialSufficiencyError(repairSufficiency.reasons);
+        }
+        repairAudit = {
           repairedAt: new Date().toISOString(),
           repairedFromRecipeHash: provenance.sourceRecipeHash,
           priorCompatibility,
           priorSufficiency,
           priorValidationError,
+          repairSufficiencyRecipeDerivedItemCount: repairSufficiency.recipeDerivedItemCount,
+          repairSufficiencyPlannerInventedItemCount: repairSufficiency.plannerInventedItemCount,
+          repairSufficiencyCounts: repairSufficiency.counts,
         };
       }
       body = { ...body, storyMaterialEnrichment: resumedMaterial };
       latestValidSuggestions = resume.suggestions;
+      // PR8: preserve the repair audit fields through the subsequent
+      // diagnostics assignment so they actually land in the persisted row.
+      // The previous shape wrote audit fields into diagnostics but the next
+      // spread (claimedRun.diagnostics) overwrote them — they never landed
+      // in the run row.
       diagnostics = {
         ...(claimedRun.diagnostics && typeof claimedRun.diagnostics === "object" ? claimedRun.diagnostics : {}),
+        ...(repairAudit ? { storyMaterialRepair: repairAudit } : {}),
         stage: "expansion_resume",
         resumedFromRound: resume.startRound,
       };
@@ -2502,6 +2561,9 @@ async function runSuggestionJob(
         credit_cost_charged: creditCostCharged,
         remaining_credits: remainingCredits,
         completed_at: new Date().toISOString(),
+        // PR8: persist the (possibly repaired) story_material so future
+        // resumes can validate without going through the repair path again.
+        story_material: resumedMaterial,
         diagnostics,
         lease_owner: null,
         lease_expires_at: null,

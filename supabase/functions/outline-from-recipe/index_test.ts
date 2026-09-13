@@ -1321,7 +1321,14 @@ function enrichmentFixture(): any {
 // StoryMaterialEnrichment from any canonical recipe. These tests guard
 // the contract that lets the 41 legacy persisted runs be resumed
 // without regeneration or re-billing.
-Deno.test("repairStoryMaterialFromRecipe: produces a valid enrichment from a sparse canonical recipe", () => {
+// PR8: the recovery path must produce a structurally-valid StoryMaterialEnrichment
+// from any canonical PromptPackExportPayload, using CANONICAL sourceReferences
+// from recipeMaterialHandles(). Previously these tests pinned the broken
+// references (selectedCharacters[<id>] etc.) — those references never existed as
+// canonical handles, so the repaired material failed validateStoryMaterialEnrichment
+// when anyone tried to re-validate it. PR8 replaces them with recipe:* / project:*
+// / character:* / relationship:* / theme:* / motif:* / storySpark / aftertaste.
+Deno.test("PR8 repairStoryMaterialFromRecipe: produces a structurally-valid enrichment from a canonical PromptPackExportPayload", () => {
   const provenance = {
     sourceRecipeHash: "deadbeef",
     sourceRecipeVersion: 1,
@@ -1330,23 +1337,27 @@ Deno.test("repairStoryMaterialFromRecipe: produces a valid enrichment from a spa
   };
   const recipe = {
     schema: "cathedralos.story_packet",
+    version: 1,
     project: { id: "proj-1", summary: "A brooding thriller" },
+    setting: { included: false },
     promptPack: { id: "pack-1", name: "Test Pack" },
     selectedCharacters: [
       { id: "c-1", name: "Mara", summary: "Disgraced detective" },
       { id: "c-2", name: "Vik", summary: "Rival fixer" },
     ],
-    selectedStorySpark: [
-      { id: "s-1", title: "Cold case reopen", description: "An old murder returns" },
-    ],
-    selectedAftertaste: [
-      { title: "Quiet dread", description: "The reader should feel watched" },
-    ],
+    selectedStorySpark: { id: "s-1", title: "Cold case reopen", description: "An old murder returns" },
+    selectedAftertaste: { title: "Quiet dread", description: "The reader should feel watched" },
     selectedRelationships: [
       { id: "r-1", summary: "Mara + Vik", description: "Ex-partners turned enemies" },
     ],
-    selectedThemeQuestions: ["Can the past be trusted?"],
-    selectedMotifs: ["mirrors", "smoke"],
+    selectedThemeQuestions: [
+      { question: "Can the past be trusted?", description: "Memory vs record" },
+      { question: "Is revenge justice?", description: "Cycle of violence" },
+    ],
+    selectedMotifs: [
+      { label: "Mirrors", description: "Reflections of identity" },
+      { label: "Smoke", description: "Obscured truth" },
+    ],
   };
   const repaired = repairStoryMaterialFromRecipe(recipe, provenance);
   // Schema + provenance fields
@@ -1357,32 +1368,263 @@ Deno.test("repairStoryMaterialFromRecipe: produces a valid enrichment from a spa
   assertEquals(repaired.sourceRecipeVersion, 1);
   assertEquals(repaired.sourcePromptPackID, "pack-1");
   assertEquals(repaired.sourcePromptPackName, "Test Pack");
-  // Every item carries source: "recipe" + sourceReference + label + description
+  // PR8: sourceReferences are canonical handles from recipeMaterialHandles —
+  // never the legacy "selectedCharacters[<id>]" / "selectedStorySpark[<id>]" etc.
+  assertEquals(repaired.characters.length, 2);
+  assertEquals(repaired.characters[0].sourceReference, "character:c-1");
+  assertEquals(repaired.characters[1].sourceReference, "character:c-2");
+  // PR8: storySpark is consumed as a single object → exactly one antagonisticForce
+  assertEquals(repaired.antagonisticForces.length, 1);
+  assertEquals(repaired.antagonisticForces[0].sourceReference, "storySpark");
+  assertEquals(repaired.relationships.length, 1);
+  assertEquals(repaired.relationships[0].sourceReference, "relationship:r-1");
+  // PR8: themes + motifs both go into thematicPressures; aftertaste lands in
+  // unresolvedQuestions (not thematicPressures — that was a pre-fix mixing bug).
+  assertEquals(repaired.thematicPressures.length, 4); // 2 themes + 2 motifs
+  assertEquals(repaired.unresolvedQuestions.length, 1);
+  assertEquals(repaired.unresolvedQuestions[0].sourceReference, "aftertaste");
+  // PR8: project.summary is preserved as a discovery item (per spec).
+  assertEquals(repaired.discoveries.length, 1);
+  assertEquals(repaired.discoveries[0].sourceReference, "project.summary");
+  // PR8: every recipe item has label + description distinct from sourceReference
+  // (validateStoryMaterialEnrichment requires both). Labels/descriptions come
+  // from real canonical recipe fields — never the handle itself.
   const allItems = [
     ...repaired.characters,
     ...repaired.antagonisticForces,
     ...repaired.relationships,
     ...repaired.thematicPressures,
+    ...repaired.unresolvedQuestions,
+    ...repaired.discoveries,
   ];
   for (const item of allItems) {
     assertEquals(item.source, "recipe");
     assertEquals(typeof item.sourceReference, "string");
-    assertEquals(item.sourceReference !== "", true);
-    assertEquals(item.label !== "", true);
+    assertEquals(item.sourceReference !== "", true, `${item.id}: sourceReference required`);
+    assertEquals(item.label !== "", true, `${item.id}: label required`);
+    assertEquals(item.description !== "", true, `${item.id}: description required`);
+    assertEquals(item.label !== item.sourceReference, true, `${item.id}: label must differ from sourceReference`);
+    assertEquals(item.description !== item.sourceReference, true, `${item.id}: description must differ from sourceReference`);
   }
-  // Mapping checks
-  assertEquals(repaired.characters.length, 2);
-  assertEquals(repaired.characters[0].id, "char-c-1");
-  assertEquals(repaired.characters[0].sourceReference, "selectedCharacters[c-1]");
-  assertEquals(repaired.antagonisticForces.length, 1);
-  assertEquals(repaired.antagonisticForces[0].sourceReference, "selectedStorySpark[s-1]");
-  assertEquals(repaired.relationships.length, 1);
-  assertEquals(repaired.relationships[0].sourceReference, "selectedRelationships[r-1]");
-  // Aftertaste is folded into thematicPressures
-  assertEquals(repaired.thematicPressures.length, 4); // 1 theme question + 2 motifs + 1 aftertaste
-  // Empty categories stay empty
+  // PR8: self-validate must pass — the repair function calls
+  // validateStoryMaterialEnrichment internally before returning, so any
+  // structural contract violation would have already thrown.
+  const validated = validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+  assertEquals(validated, repaired);
+  // Empty categories stay empty.
   assertEquals(repaired.locations.length, 0);
   assertEquals(repaired.escalationLadder.length, 0);
+});
+
+Deno.test("PR8 repairStoryMaterialFromRecipe: consumes selectedStorySpark and selectedAftertaste as single objects (object-or-null, not array)", () => {
+  const provenance = {
+    sourceRecipeHash: "single-object",
+    sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-so",
+    sourcePromptPackName: "SingleObject",
+  };
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-so", summary: "Single spark, single aftertaste" },
+    setting: { included: false },
+    promptPack: { id: "pack-so", name: "SingleObject" },
+    selectedCharacters: [{ id: "c-so", name: "Solo", summary: "Lone traveler" }],
+    selectedStorySpark: { title: "Letter arrives", description: "A stranger writes from the past" },
+    selectedAftertaste: { title: "Quiet grief", description: "Reader carries the weight" },
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe, provenance);
+  // PR8: exactly one antagonisticForce and one unresolvedQuestion — the
+  // canonical handles storySpark and aftertaste are single, not arrays.
+  assertEquals(repaired.antagonisticForces.length, 1);
+  assertEquals(repaired.antagonisticForces[0].sourceReference, "storySpark");
+  assertEquals(repaired.antagonisticForces[0].label, "Letter arrives");
+  assertEquals(repaired.unresolvedQuestions.length, 1);
+  assertEquals(repaired.unresolvedQuestions[0].sourceReference, "aftertaste");
+  assertEquals(repaired.unresolvedQuestions[0].label, "Quiet grief");
+});
+
+Deno.test("PR8 repairStoryMaterialFromRecipe: null selectedStorySpark and selectedAftertaste produce no antagonisticForce or unresolvedQuestion", () => {
+  const provenance = {
+    sourceRecipeHash: "null-spark",
+    sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-ns",
+    sourcePromptPackName: "NullSpark",
+  };
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-ns", summary: "Quiet story" },
+    setting: { included: false },
+    promptPack: { id: "pack-ns", name: "NullSpark" },
+    selectedCharacters: [{ id: "c-ns", name: "Solo", summary: "Lone traveler" }],
+    selectedStorySpark: null,
+    selectedAftertaste: null,
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe, provenance);
+  // PR8: null spark/aftertaste → handle is absent → no item produced.
+  assertEquals(repaired.antagonisticForces.length, 0);
+  assertEquals(repaired.unresolvedQuestions.length, 0);
+  // characters and project.summary still preserved.
+  assertEquals(repaired.characters.length, 1);
+  assertEquals(repaired.characters[0].sourceReference, "character:c-ns");
+  assertEquals(repaired.discoveries.length, 1);
+  assertEquals(repaired.discoveries[0].sourceReference, "project.summary");
+  // Self-validate passes (empty categories are valid).
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("PR8 repairStoryMaterialFromRecipe: themes and motifs both map to thematicPressures (no dedicated motif category)", () => {
+  const provenance = {
+    sourceRecipeHash: "tm",
+    sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-tm",
+    sourcePromptPackName: "TM",
+  };
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-tm", summary: "Themes and motifs" },
+    setting: { included: false },
+    promptPack: { id: "pack-tm", name: "TM" },
+    selectedCharacters: [],
+    selectedStorySpark: null,
+    selectedAftertaste: null,
+    selectedRelationships: [],
+    selectedThemeQuestions: [
+      { question: "Can the past be trusted?", description: "Memory vs record" },
+      { question: "What does justice cost?", description: "Personal cost of vengeance" },
+    ],
+    selectedMotifs: [
+      { label: "Mirrors", description: "Reflections of identity" },
+      { label: "Smoke", description: "Obscured truth" },
+      { label: "Rain", description: "Grief and cleansing" },
+    ],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe, provenance);
+  assertEquals(repaired.thematicPressures.length, 5); // 2 themes + 3 motifs
+  const refs = repaired.thematicPressures.map((item) => item.sourceReference).sort();
+  assertEquals(refs.includes("theme:theme-1"), true);
+  assertEquals(refs.includes("theme:theme-2"), true);
+  assertEquals(refs.includes("motif:motif-1"), true);
+  assertEquals(refs.includes("motif:motif-2"), true);
+  assertEquals(refs.includes("motif:motif-3"), true);
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("PR8 repairStoryMaterialFromRecipe: a sufficient canonical recipe yields a sufficiency-passing material", () => {
+  const provenance = {
+    sourceRecipeHash: "sufficient",
+    sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-sf",
+    sourcePromptPackName: "Sufficient",
+  };
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-sf", summary: "A complex investigation with a deep cast" },
+    setting: { included: false },
+    promptPack: { id: "pack-sf", name: "Sufficient" },
+    selectedCharacters: [
+      { id: "c-a", name: "Mara", summary: "Detective" },
+      { id: "c-b", name: "Vik", summary: "Rival" },
+      { id: "c-c", name: "Yara", summary: "Witness" },
+    ],
+    selectedStorySpark: { title: "Cold case reopen", description: "Old murder returns" },
+    selectedAftertaste: { title: "Quiet dread", description: "Reader feels watched" },
+    selectedRelationships: [
+      { id: "r-1", summary: "Mara + Vik", description: "Ex-partners" },
+      { id: "r-2", summary: "Mara + Yara", description: "Mentor" },
+      { id: "r-3", summary: "Vik + Yara", description: "Ally" },
+    ],
+    selectedThemeQuestions: [
+      { question: "Can the past be trusted?", description: "Memory vs record" },
+      { question: "What does justice cost?", description: "Personal cost of vengeance" },
+      { question: "Who gets to tell the story?", description: "Narrator reliability" },
+    ],
+    selectedMotifs: [
+      { label: "Mirrors", description: "Reflections of identity" },
+      { label: "Smoke", description: "Obscured truth" },
+      { label: "Rain", description: "Grief and cleansing" },
+      { label: "Keys", description: "Access and confinement" },
+    ],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe, provenance);
+  // PR8: shortStory sufficiency only requires characters + conflictSources +
+  // escalationLadder > 0 — achievable from canonical recipe. Novel requires
+  // escalationLadder ≥ 3 and reversals + consequences ≥ 2 which the canonical
+  // recipe cannot supply; that scenario is covered by the sparse/novel test
+  // below (the call site must fail closed via StoryMaterialSufficiencyError).
+  const sufficiency = storyMaterialSufficiency(repaired, recipe as any, "shortStory");
+  assertEquals(
+    sufficiency.sufficient,
+    true,
+    `recipe-derived repair should be sufficient for shortStory scale; reasons=${JSON.stringify(sufficiency.reasons)}`,
+  );
+  assertEquals(sufficiency.recipeDerivedItemCount > 0, true, "sufficiency should count at least one recipe-derived item");
+});
+
+Deno.test("PR8 repairStoryMaterialFromRecipe: a sparse canonical recipe yields insufficient material (call site must fail closed via StoryMaterialSufficiencyError)", () => {
+  const provenance = {
+    sourceRecipeHash: "sparse",
+    sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-sp",
+    sourcePromptPackName: "Sparse",
+  };
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-sp", summary: "A whisper" },
+    setting: { included: false },
+    promptPack: { id: "pack-sp", name: "Sparse" },
+    selectedCharacters: [],
+    selectedStorySpark: null,
+    selectedAftertaste: null,
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe, provenance);
+  // PR8: structural validation passes even with empty categories.
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+  // PR8: but semantic sufficiency fails — the resume call site must throw
+  // StoryMaterialSufficiencyError in this case (fail closed).
+  const sufficiency = storyMaterialSufficiency(repaired, recipe as any, "novel");
+  assertEquals(sufficiency.sufficient, false, "sparse recipe must NOT pass sufficiency");
+  assertEquals(sufficiency.reasons.length > 0, true);
+});
+
+Deno.test("PR8 resume call site: runs sufficiency after repair, persists story_material, preserves audit fields", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  // The resume block must run storyMaterialSufficiency on the repair output
+  // and fail closed if the canonical recipe cannot satisfy sufficiency.
+  const repairBlock = /if \(priorCompatibility === false \|\| priorSufficiency === false\)[\s\S]{0,2000}resumedMaterial = repairStoryMaterialFromRecipe[\s\S]{0,1500}storyMaterialSufficiency\(\s*resumedMaterial[\s\S]{0,500}throw new StoryMaterialSufficiencyError/;
+  assertEquals(
+    repairBlock.test(source),
+    true,
+    "Resume call site must run storyMaterialSufficiency on the repair output and throw StoryMaterialSufficiencyError when the repair cannot satisfy sufficiency",
+  );
+  // The resume path's final updateRun must include story_material so the
+  // repaired value persists for future resumes.
+  assertEquals(
+    /resume[\s\S]{0,3500}story_material:\s*resumedMaterial/.test(source),
+    true,
+    "Resume call site's final updateRun must include story_material: resumedMaterial",
+  );
+  // The repair audit fields must survive the subsequent diagnostics
+  // assignment (the previous shape wrote them and the next spread overwrote
+  // them, so they never landed in the run row).
+  assertEquals(
+    /storyMaterialRepair: repairAudit/.test(source),
+    true,
+    "Resume call site must preserve repair audit fields (repairedAt, repairedFromRecipeHash, priorCompatibility, priorSufficiency, priorValidationError, repairSufficiency*) under diagnostics.storyMaterialRepair so they actually land in the persisted run row",
+  );
 });
 
 Deno.test("repairStoryMaterialFromRecipe: handles an empty canonical recipe without throwing", () => {
