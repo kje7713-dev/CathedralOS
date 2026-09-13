@@ -304,7 +304,59 @@ final class RecipeReferenceReconcilerTests: XCTestCase {
         XCTAssertTrue(emptyPack.selectedThemeQuestionIDs.isEmpty)
         XCTAssertTrue(emptyPack.selectedMotifIDs.isEmpty)
     }
-}
+
+    // MARK: - Production-path wire-up (cross-project reaches validator)
+
+    /// Production-path regression for the cross-project preservation fix.
+    /// Pre-fix the reconciler treated any UUID not in the recipe's
+    /// project collection as stale and silently pruned it — including
+    /// cross-project IDs. That hid the irreconcilable condition from
+    /// `RecipeIntegrityValidator` and let the request ship with a
+    /// foreign UUID. This test mirrors the
+    /// `OutlineSectionsRegionView.loadSuggestions` production path
+    /// (reconcile -> makeRequest) and proves a cross-project ID
+    /// survives reconcile and is caught by the validator, blocking
+    /// Suggest Sections from submitting.
+    func testCrossProjectCharacterReachesValidatorViaReconcileAndBlocksSuggestSections() throws {
+        let otherProject = StoryProject(name: "Other Project")
+        context.insert(otherProject)
+        let otherCharacter = StoryCharacter(name: "Other Hero")
+        otherCharacter.project = otherProject
+        context.insert(otherCharacter)
+        try context.save()
+
+        // Recipe in `project` selects a character that lives in `otherProject`.
+        pack.selectedCharacterIDs = [otherCharacter.id]
+
+        // Reconcile first, mirroring `loadSuggestions`.
+        let removed = RecipeReferenceReconciler.reconcile(pack, in: context)
+        XCTAssertEqual(removed, 0,
+                       "Cross-project ID must not be pruned by the reconciler")
+        XCTAssertEqual(pack.selectedCharacterIDs, [otherCharacter.id],
+                       "Cross-project character ID must survive reconcile so the validator can fail closed")
+
+        // Exercise the full production path: validator -> makeRequest.
+        let arc = StoryArc()
+        arc.templateID = StoryArcTemplate.allTemplates.first?.id
+        arc.project = project
+        context.insert(arc)
+        try context.save()
+        let template = StoryArcTemplate.allTemplates.first!
+
+        XCTAssertThrowsError(
+            try OutlineSuggestionService().makeRequest(
+                recipe: pack, arc: arc, arcTemplate: template
+            )
+        ) { error in
+            guard case OutlineSuggestionError.recipeIntegrityMissing(let missing) = error else {
+                XCTFail("Expected .recipeIntegrityMissing, got \(error)")
+                return false
+            }
+            return missing.contains(where: {
+                $0.entityClass == .character && $0.id == otherCharacter.id
+            })
+        }
+    }
 
 // MARK: - Test helpers
 
