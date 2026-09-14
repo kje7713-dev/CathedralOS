@@ -1041,7 +1041,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             throw ProjectCloudSyncError.encodingError(error)
         }
 
-        _ = try await fetch([ProjectSnapshotWriteResponse].self, request: request)
+        _ = try await fetch(ProjectSnapshotWriteResponsePayload.self, request: request)
     }
 
     private func restoredProjectID(for row: ProjectSnapshotCloudRecord) -> UUID? {
@@ -2250,6 +2250,24 @@ private struct ProjectSnapshotWriteResponse: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case localProjectID = "local_project_id"
+    }
+}
+
+/// PostgREST returns a composite-row RPC result as an object, while some
+/// deployments/configurations represent the same result as a one-row array.
+/// Accept both shapes so a successful canonical snapshot write cannot surface
+/// as a client-side sync failure.
+private enum ProjectSnapshotWriteResponsePayload: Decodable {
+    case row(ProjectSnapshotWriteResponse)
+    case rows([ProjectSnapshotWriteResponse])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let rows = try? container.decode([ProjectSnapshotWriteResponse].self) {
+            self = .rows(rows)
+        } else {
+            self = .row(try container.decode(ProjectSnapshotWriteResponse.self))
+        }
     }
 }
 

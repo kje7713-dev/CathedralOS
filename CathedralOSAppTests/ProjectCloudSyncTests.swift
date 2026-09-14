@@ -211,6 +211,38 @@ final class ProjectCloudSyncTests: XCTestCase {
         try await service.syncProject(project)
     }
 
+    func testSyncProjectSnapshotAcceptsCanonicalRPCObjectResponse() async throws {
+        let session = makeSession()
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let (project, payload) = try buildFixturePayload(lineageID: UUID())
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/rest/v1/rpc/write_project_snapshot_canonical")
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data("{\"local_project_id\":\"\(project.id.uuidString)\"}".utf8))
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting(),
+            tombstoneService: MockProjectTombstoneService()
+        )
+        try await service.syncProjectSnapshot(
+            localProjectID: project.id.uuidString,
+            payload: payload
+        )
+    }
+
     func testDeleteSnapshotUsesAuthenticatedCaseInsensitiveStableIdentityAndVerifiesResponse() async throws {
         let session = makeSession()
         let userID = "11111111-1111-1111-1111-111111111111"
