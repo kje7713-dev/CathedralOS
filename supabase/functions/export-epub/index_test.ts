@@ -831,13 +831,14 @@ Deno.test("embed-section: canonicalizes body.project_id.toUpperCase() before out
   // Per PR-4100-D: embed-section/index.ts must canonicalize the local_project_id
   // it upserts to outlines so future lowercase callers do not hit the new
   // outlines_local_project_id_uppercase CHECK constraint.
+  // The upsert lives in the shared producer helper used by the Edge Function.
   const src = Deno.readTextFileSync(
-    new URL("../embed-section/index.ts", import.meta.url).pathname
+    new URL("../_shared/section-embedding.ts", import.meta.url).pathname
   );
-  if (!src.includes("local_project_id: body.project_id.toUpperCase()")) {
+  if (!src.includes("local_project_id: body.project_id!.toUpperCase()")) {
     throw new Error(
       "embed-section no longer canonicalizes local_project_id. " +
-      "File does not contain: local_project_id: body.project_id.toUpperCase()"
+      "Shared helper does not contain: local_project_id: body.project_id!.toUpperCase()"
     );
   }
   // Defensive: also assert the OLD non-canonicalized form is gone
