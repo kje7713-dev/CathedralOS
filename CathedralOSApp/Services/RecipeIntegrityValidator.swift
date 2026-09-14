@@ -59,60 +59,67 @@ struct RecipeIntegrityValidator {
         case invalid(missingIDs: [MissingID])
     }
 
-    /// Validate every selected ID against the recipe's project entities.
-    /// `validate(recipe:)` is `@MainActor` because `PromptPack` and its
-    /// `@Relationship` collections are SwiftData `@Model` types and require
-    /// the MainActor for read access; the caller is already on MainActor
-    /// (view code -> `OutlineSuggestionService.makeRequest`).
+    /// Validate every selected ID against the authoritative request-scoped
+    /// material resolved from ModelContext root fetches.
     @MainActor
-    static func validate(recipe: PromptPack) -> Result {
-        guard let project = recipe.project else {
-            // Defensive: makeRequest throws "Recipe has no project" before
-            // this branch can be reached, but if a future caller skips
-            // that guard the validator must still return a defined result.
+    static func validate(
+        recipe: PromptPack,
+        material: AuthoritativeProjectMaterial
+    ) -> Result {
+        guard recipe.project != nil else {
             return .invalid(missingIDs: [])
         }
 
         var missing: [MissingID] = []
 
         for id in recipe.selectedCharacterIDs {
-            // PR 2 review: enforce the EXACTLY-ONE contract. count != 1
-            // covers both "ID no longer resolves" (count == 0) and
-            // "two project entities share this UUID" (count == 2).
-            if project.characters.filter({ $0.id == id }).count != 1 {
+            if material.characters.filter({ $0.id == id }).count != 1 {
                 missing.append(MissingID(entityClass: .character, id: id))
             }
         }
 
         if let sparkID = recipe.selectedStorySparkID,
-           project.storySparks.filter({ $0.id == sparkID }).count != 1 {
+           material.storySparks.filter({ $0.id == sparkID }).count != 1 {
             missing.append(MissingID(entityClass: .storySpark, id: sparkID))
         }
 
         if let afterID = recipe.selectedAftertasteID,
-           project.aftertastes.filter({ $0.id == afterID }).count != 1 {
+           material.aftertastes.filter({ $0.id == afterID }).count != 1 {
             missing.append(MissingID(entityClass: .aftertaste, id: afterID))
         }
 
         for id in recipe.selectedRelationshipIDs {
-            if project.relationships.filter({ $0.id == id }).count != 1 {
+            if material.relationships.filter({ $0.id == id }).count != 1 {
                 missing.append(MissingID(entityClass: .relationship, id: id))
             }
         }
 
         for id in recipe.selectedThemeQuestionIDs {
-            if project.themeQuestions.filter({ $0.id == id }).count != 1 {
+            if material.themeQuestions.filter({ $0.id == id }).count != 1 {
                 missing.append(MissingID(entityClass: .themeQuestion, id: id))
             }
         }
 
         for id in recipe.selectedMotifIDs {
-            if project.motifs.filter({ $0.id == id }).count != 1 {
+            if material.motifs.filter({ $0.id == id }).count != 1 {
                 missing.append(MissingID(entityClass: .motif, id: id))
             }
         }
 
         return missing.isEmpty ? .valid : .invalid(missingIDs: missing)
+    }
+
+    /// Compatibility entry point for callers without a ModelContext. The
+    /// Suggest path always passes its root-fetched material explicitly.
+    @MainActor
+    static func validate(recipe: PromptPack) -> Result {
+        guard let project = recipe.project else {
+            return .invalid(missingIDs: [])
+        }
+        return validate(
+            recipe: recipe,
+            material: AuthoritativeProjectMaterial.fromRelationshipCollections(of: project)
+        )
     }
 
     /// Human-readable error string for surfacing to the user when the
