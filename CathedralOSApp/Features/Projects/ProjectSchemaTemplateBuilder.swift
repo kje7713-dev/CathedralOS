@@ -792,8 +792,9 @@ enum ProjectSchemaTemplateBuilder {
             )
         }
 
+        let projectID: UUID? = project.id
         let authoritativeOutlines = (try? modelContext.fetch(FetchDescriptor<Outline>(
-            predicate: #Predicate<Outline> { outline in outline.project?.id == project.id }
+            predicate: #Predicate<Outline> { outline in outline.project?.id == projectID }
         ))) ?? project.outlines
         let outlinePayloads = authoritativeOutlines.map { outline -> ProjectImportExportPayload.OutlinePayload in
             // Do not serialize outline.sections directly. SwiftData relationship
