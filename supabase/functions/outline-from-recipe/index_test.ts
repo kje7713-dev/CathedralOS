@@ -52,6 +52,7 @@ import {
   findDramaticDistinctnessIssues,
   findCausalScaleIssues,
   validateOutlinePlanningQuality,
+  collectAdvisoryOutlineQuality,
   plannedWordRangeForContainer,
   findUnusedStoryMaterial,
   validateStoryArcSemantics,
@@ -931,10 +932,9 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
   assertEquals(source.includes("maxItems: MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
-  assertEquals(source.includes("needsNovelExpansion(result.suggestions, body.existingSections ?? [])"), true);
-  assertEquals(source.includes("failed_under_target"), true);
-  assertEquals(source.includes("failed_expansion"), true);
-  assertEquals(source.includes("outline-expansion-"), true);
+  assertEquals(source.includes("collectAdvisoryOutlineQuality"), true);
+  assertEquals(source.includes("outline failed Story Arc semantic validation"), false);
+  assertEquals(source.includes("dramatic distinctness validation"), false);
   const outlinePrompt = buildPrompt(sparseRequest as any, new Map([
     ["beat-1", { minSections: 1, rationale: "setup" }],
     ["beat-2", { minSections: 1, rationale: "escalation" }],
@@ -967,6 +967,48 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(merged[0], original[0]);
 });
 
+
+Deno.test("semantic disagreement is advisory: a late apparent conflict still completes", () => {
+  const suggestions = [
+    semanticSection("climax", "The Decisive Battle", "The central confrontation ends the primary conflict.", "climax"),
+    semanticSection("fall", "The Freeze Order", "The leaders freeze the front and contain the remaining danger.", "consequence"),
+    semanticSection("den", "Wei Jian and Volkov Stand Down", "The rivals stand down and accept the new order.", "resolution"),
+  ];
+  const advisory = collectAdvisoryOutlineQuality(suggestions as any, undefined, "novel", {
+    name: "fixture",
+    beats: [
+      { id: "climax", label: "Climax" },
+      { id: "fall", label: "Falling Action" },
+      { id: "den", label: "Denouement" },
+    ],
+  } as any);
+  assertEquals(advisory.semanticArcIssues.length > 0, true);
+  assertEquals(suggestions.map((section) => section.title), [
+    "The Decisive Battle",
+    "The Freeze Order",
+    "Wei Jian and Volkov Stand Down",
+  ]);
+});
+
+Deno.test("malformed outline output remains a structural failure", () => {
+  let failure: unknown;
+  try {
+    validateSuggestions({}, new Set(["beat-1"]));
+  } catch (error) {
+    failure = error;
+  }
+  assertEquals((failure as Error).message, "response missing suggestions array");
+});
+
+Deno.test("optional repair failure keeps the original structurally valid outline", () => {
+  const original = [semanticSection("beat-1", "Original", "A usable section.", "consequence")];
+  const advisory = collectAdvisoryOutlineQuality(original as any, undefined, "novel", {
+    name: "fixture",
+    beats: [{ id: "beat-1", label: "Opening" }],
+  } as any);
+  assertEquals(advisory.advisoryValidationError ?? null, null);
+  assertEquals(original[0].title, "Original");
+});
 
 Deno.test("beat-local expansion visits canonical beats and isolates additions", async () => {
   const initial = sceneOutline(55).map((section, index) => ({
@@ -1123,7 +1165,8 @@ Deno.test("dynamic response contract removes model-owned beat IDs and target/max
   assertEquals(source.includes("firstPassParsedCounts"), true);
   assertEquals(source.includes("firstPassValidatedCounts"), true);
   assertEquals(source.includes("if (validateResponse) await validateResponse"), true);
-  assertEquals(source.includes("needsNovelExpansion(result.suggestions, body.existingSections ?? [])"), true);
+  assertEquals(source.includes("collectAdvisoryOutlineQuality"), true);
+  assertEquals(source.includes("outline failed Story Arc semantic validation"), false);
 });
 
 
