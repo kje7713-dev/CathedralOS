@@ -2133,7 +2133,12 @@ function semanticText(suggestion: Suggestion): string {
 }
 
 const PRIMARY_CONFLICT_SIGNALS = /\b(launch(?:es|ed)?|mount(?:s|ed)?|wage(?:s|d)?|invade(?:s|d)?|attack(?:s|ed)?|assault(?:s|ed)?|conquer(?:s|ed)?|take over|seize(?:s|d)?|overthrow(?:s|n)?|decisive assault|citywide takeover)\b/;
-const CLOSURE_SIGNALS = /\b(settle(?:s|d)?|stabiliz(?:e|es|ed)|new normal|aftermath|mourning|rebuild(?:s|ing)?|govern(?:s|ed|ance)|peace|accept(?:s|ed)?|remain(?:s|ing)?|legacy|closing image)\b/;
+const CLOSURE_SIGNALS = /\b(settle(?:s|d)?|stabiliz(?:e|es|ed)|new normal|aftermath|mourning|rebuild(?:s|ing)?|govern(?:s|ed|ance)|peace|accept(?:s|ed)?|legacy|closing image)\b/;
+// “Aftermath” describes what follows an ending; it does not itself answer
+// the central dramatic question. Required resolution beats therefore need a
+// concrete settling/answering action in the state-change fields, not merely a
+// final-looking label or the word “aftermath”.
+const RESOLUTION_ACTION_SIGNALS = /\b(?<!un)(?:resolve(?:s|d)?|answer(?:s|ed)?|settle(?:s|d)?|stabiliz(?:e|es|ed)|ends?|ended|defeat(?:s|ed)?|disarm(?:s|ed)?|dismantle(?:s|d)?|restore(?:s|d)?|rebuild(?:s|ing)?|govern(?:s|ed|ance)|make(?:s|d)? peace|new normal|accept(?:s|ed)?|legacy|closing image)\b/;
 
 function inferredFunction(suggestion: Suggestion): DramaticFunction | null {
   const text = semanticText(suggestion);
@@ -2180,8 +2185,13 @@ export function validateRequiredStoryArcFunctions(
     const sections = suggestions.filter((section) => section.storyArcBeatID === beat.id);
     const present = sections.map((section) => section.dramaticFunction ?? "(undeclared)").join(", ") || "(none)";
     for (const required of roleContract.requiredFunctions) {
-      if (!sections.some((section) => section.dramaticFunction === required)) {
+      const requiredSections = sections.filter((section) => section.dramaticFunction === required);
+      if (requiredSections.length === 0) {
         issues.push(`beat ${beat.label} (${beat.id}) is missing required dramatic function ${required}; present functions: ${present}`);
+      } else if (required === "resolution" && !requiredSections.some((section) =>
+        RESOLUTION_ACTION_SIGNALS.test(semanticText(section))
+      )) {
+        issues.push(`beat ${beat.label} (${beat.id}) declares resolution but does not materially resolve the central dramatic question or conflict`);
       }
     }
   }
@@ -2189,6 +2199,99 @@ export function validateRequiredStoryArcFunctions(
 }
 
 /** Validate both the declared function and the sequence-level macro-structure. */
+const REQUIRED_FUNCTION_REPAIR_SCHEMA = {
+  type: "object",
+  properties: {
+    section: SECTION_SCHEMA,
+  },
+  required: ["section"],
+  additionalProperties: false,
+} as const;
+
+/**
+ * Repair a required Story Arc function by rewriting one existing section.
+ * This is intentionally separate from macro beat reassignment: an aftermath
+ * section is in the correct Final Image beat, but it still needs a concrete
+ * resolution event and settled terminal state. The post-repair gate below
+ * rejects a cosmetic function relabel or another aftermath-only rewrite.
+ */
+export async function repairRequiredStoryArcFunctions(
+  suggestions: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+  billableCall: SuggestionLLMCall,
+  obligations: RecipeObligation[] = [],
+): Promise<{ suggestions: Suggestion[]; repaired: string[]; unresolved: string[] }> {
+  let result = suggestions.map((section) => ({ ...section }));
+  const repaired: string[] = [];
+  const unresolved: string[] = [];
+
+  for (const beat of template.beats) {
+    const roleContract = arcRoleContract(beat, template.name);
+    for (const required of roleContract.requiredFunctions) {
+      const currentIssues = validateRequiredStoryArcFunctions(result, { ...template, beats: [beat] });
+      const issue = currentIssues.find((item) => item.includes(`(${beat.id})`));
+      if (!issue) continue;
+      const beatSections = result.filter((section) => section.storyArcBeatID === beat.id);
+      const target = beatSections.find((section) => section.dramaticFunction !== required) ?? beatSections[0];
+      if (!target) {
+        unresolved.push(beat.label);
+        continue;
+      }
+      const system = `You are repairing one outline section for the ${template.name} Story Arc. Rewrite the supplied section in place; do not add a new section, change its beat, or invent a new primary conflict. The beat requires the dramatic function ${required}. For resolution, the resultingChange and terminalState must show the central dramatic question or conflict being answered and settled on the page. An aftermath, mood, memorial, or continuing residue alone is not a resolution. Return only JSON matching the required repair schema.`;
+      const user = JSON.stringify({
+        beat: { id: beat.id, role: beat.role, label: beat.label, contract: roleContract },
+        requiredFunction: required,
+        section: target,
+        instruction: "Preserve any applicable recipeRequirementIDs, but replace aftermath-only closure with a concrete resolution action and settled terminal state.",
+      }, null, 2);
+      let repairedSection: Suggestion | undefined;
+      try {
+        const raw = await billableCall(
+          system,
+          user,
+          4000,
+          { type: "json_schema", json_schema: { name: "outline_required_function_repair", strict: true, schema: REQUIRED_FUNCTION_REPAIR_SCHEMA } },
+          `outline-semantic-repair-${beat.id}-${required}`,
+          (content) => {
+            const parsed = JSON.parse(content);
+            if (!parsed?.section || typeof parsed.section !== "object") throw new Error("semantic repair response missing section");
+            const candidate = {
+              ...parsed.section,
+              storyArcBeatID: beat.id,
+              recipeRequirementIDs: target.recipeRequirementIDs ?? [],
+            };
+            const validated = validateSuggestions({ suggestions: [candidate] }, new Set([beat.id]), undefined, obligations, { ...template, beats: [beat] });
+            if (validated.suggestions.length !== 1) throw new Error("semantic repair response did not produce one valid section");
+            return validated.suggestions[0];
+          },
+        );
+        const parsed = JSON.parse(raw.content);
+        const candidate = {
+          ...parsed.section,
+          storyArcBeatID: beat.id,
+          recipeRequirementIDs: target.recipeRequirementIDs ?? [],
+        };
+        repairedSection = validateSuggestions({ suggestions: [candidate] }, new Set([beat.id]), undefined, obligations, { ...template, beats: [beat] }).suggestions[0];
+      } catch {
+        repairedSection = undefined;
+      }
+      if (!repairedSection) {
+        unresolved.push(target.title);
+        continue;
+      }
+      const targetIndex = result.indexOf(target);
+      result[targetIndex] = repairedSection;
+      const remainingIssue = validateRequiredStoryArcFunctions(result, { ...template, beats: [beat] }).find((item) => item.includes(`(${beat.id})`));
+      if (remainingIssue) {
+        unresolved.push(target.title);
+      } else {
+        repaired.push(`${target.title}: ${required}`);
+      }
+    }
+  }
+  return { suggestions: result, repaired, unresolved };
+}
+
 export function validateStoryArcSemantics(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats">,
@@ -2850,19 +2953,21 @@ async function runSuggestionJob(
 
     const initialRepair = repairStoryArcMacroStructure(result.suggestions, body.arcTemplate, allocation);
     result = { ...result, suggestions: initialRepair.suggestions };
+    const semanticRepair = await repairRequiredStoryArcFunctions(result.suggestions, body.arcTemplate, billableCall, recipeObligations);
+    result = { ...result, suggestions: semanticRepair.suggestions };
     const initialQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body), body.arcTemplate, allocation);
     diagnostics = {
       ...diagnostics,
       sectionContractValidated: true,
-      semanticArcRepairedSections: initialRepair.repaired,
-      semanticArcUnresolvedSections: initialRepair.unresolved,
+      semanticArcRepairedSections: [...initialRepair.repaired, ...semanticRepair.repaired],
+      semanticArcUnresolvedSections: [...initialRepair.unresolved, ...semanticRepair.unresolved],
       dramaticDistinctnessIssues: initialQuality.distinctnessIssues,
       semanticArcIssues: initialQuality.semanticArcIssues,
       causalScaleIssues: initialQuality.causalScaleIssues,
       unusedStoryMaterialItems: initialQuality.unusedStoryMaterialItems,
     };
-    if (initialQuality.semanticArcIssues.length > 0 || initialRepair.unresolved.length > 0) {
-      throw new Error(`outline failed Story Arc semantic validation: ${(initialQuality.semanticArcIssues[0] ?? initialRepair.unresolved[0])}`);
+    if (initialQuality.semanticArcIssues.length > 0 || initialRepair.unresolved.length > 0 || semanticRepair.unresolved.length > 0) {
+      throw new Error(`outline failed Story Arc semantic validation: ${(initialQuality.semanticArcIssues[0] ?? initialRepair.unresolved[0] ?? semanticRepair.unresolved[0])}`);
     }
     if (initialQuality.distinctnessIssues.length > 0) {
       throw new Error(`outline failed dramatic distinctness validation: ${initialQuality.distinctnessIssues[0]}`);
