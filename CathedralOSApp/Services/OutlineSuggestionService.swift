@@ -89,7 +89,8 @@ struct OutlineSuggestionService {
         outline: Outline? = nil,
         requestedFormat: String = "novel",
         hint: String? = nil,
-        existingSections: [OutlineSection] = []
+        existingSections: [OutlineSection] = [],
+        material: AuthoritativeProjectMaterial? = nil
     ) throws -> OutlineSuggestionRequest {
         guard let project = recipe.project else {
             throw OutlineSuggestionError.invalidResponse("Recipe has no project")
@@ -99,7 +100,13 @@ struct OutlineSuggestionService {
         // any selected ID is unresolved we do NOT call the edge function, do
         // NOT consume credits, do NOT silently prune the selection. We throw
         // a typed error so the view can name every missing class + UUID.
-        switch RecipeIntegrityValidator.validate(recipe: recipe) {
+        let validation: RecipeIntegrityValidator.Result
+        if let material {
+            validation = RecipeIntegrityValidator.validate(recipe: recipe, material: material)
+        } else {
+            validation = RecipeIntegrityValidator.validate(recipe: recipe)
+        }
+        switch validation {
         case .valid:
             break
         case .invalid(let missing):
@@ -108,7 +115,7 @@ struct OutlineSuggestionService {
         guard let templateID = arc.templateID, templateID == arcTemplate.id else {
             throw OutlineSuggestionError.invalidResponse("Arc template mismatch")
         }
-        let sourceRecipe = buildRecipeBlob(recipe: recipe, project: project)
+        let sourceRecipe = buildRecipeBlob(recipe: recipe, project: project, material: material)
         let arcBlob = buildArcTemplateBlob(arc: arc, template: arcTemplate)
         let existing = existingSections.isEmpty ? nil : buildExistingSectionBlobs(existingSections)
         // PR 4: canonical planning identity fields. The server validates
@@ -296,11 +303,18 @@ struct OutlineSuggestionService {
 
     // MARK: - Request body builders
 
-    private func buildRecipeBlob(recipe: PromptPack, project: StoryProject) -> PromptPackExportPayload {
+    private func buildRecipeBlob(
+        recipe: PromptPack,
+        project: StoryProject,
+        material: AuthoritativeProjectMaterial?
+    ) -> PromptPackExportPayload {
         // Use the same lossless, selection-aware payload sent to story generation.
         // Do not maintain a second abbreviated recipe schema here: it drops the
         // project premise, relationships, rich character fields, and settings.
-        PromptPackExportBuilder.build(pack: recipe, project: project)
+        if let material {
+            return PromptPackExportBuilder.build(pack: recipe, project: project, material: material)
+        }
+        return PromptPackExportBuilder.build(pack: recipe, project: project)
     }
 
     private func buildArcTemplateBlob(arc: StoryArc, template: StoryArcTemplate) -> ArcTemplateBlob {

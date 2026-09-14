@@ -12,6 +12,20 @@ enum PromptPackExportBuilder {
     static let schemaVersion = 1
 
     static func build(pack: PromptPack, project: StoryProject) -> PromptPackExportPayload {
+        build(
+            pack: pack,
+            project: project,
+            material: AuthoritativeProjectMaterial.fromRelationshipCollections(of: project)
+        )
+    }
+
+    /// Suggest Sections passes the single root-fetched material snapshot so
+    /// export cannot fall back to stale StoryProject inverse arrays.
+    static func build(
+        pack: PromptPack,
+        project: StoryProject,
+        material: AuthoritativeProjectMaterial
+    ) -> PromptPackExportPayload {
 
         // Setting — always present.
         let settingSource = pack.includeProjectSetting ? project.projectSetting : nil
@@ -40,7 +54,7 @@ enum PromptPackExportBuilder {
         )
 
         // Characters — filtered to selected IDs, sorted alphabetically
-        let characters = project.characters
+        let characters = material.characters
             .filter { pack.selectedCharacterIDs.contains($0.id) }
             .sorted { $0.name < $1.name }
             .map { c in
@@ -82,7 +96,7 @@ enum PromptPackExportBuilder {
         // Story Spark
         let sparkPayload: PromptPackExportPayload.StorySparkPayload?
         if let sparkID = pack.selectedStorySparkID,
-           let spark = project.storySparks.first(where: { $0.id == sparkID }) {
+           let spark = material.storySparks.first(where: { $0.id == sparkID }) {
             let title      = spark.title
             let situation  = spark.situation
             let stakes     = spark.stakes
@@ -119,7 +133,7 @@ enum PromptPackExportBuilder {
         // Aftertaste
         let aftertastePayload: PromptPackExportPayload.AftertastePayload?
         if let aftertasteID = pack.selectedAftertasteID,
-           let aftertaste = project.aftertastes.first(where: { $0.id == aftertasteID }) {
+           let aftertaste = material.aftertastes.first(where: { $0.id == aftertasteID }) {
             aftertastePayload = .init(
                 id:                      aftertaste.id,
                 label:                   aftertaste.label,
@@ -135,7 +149,7 @@ enum PromptPackExportBuilder {
         }
 
         // Relationships
-        let relationships = project.relationships
+        let relationships = material.relationships
             .filter { pack.selectedRelationshipIDs.contains($0.id) }
             .sorted { $0.name < $1.name }
             .map { r in
@@ -161,7 +175,7 @@ enum PromptPackExportBuilder {
             }
 
         // Theme Questions
-        let themeQuestions = project.themeQuestions
+        let themeQuestions = material.themeQuestions
             .filter { pack.selectedThemeQuestionIDs.contains($0.id) }
             .sorted { $0.question < $1.question }
             .map { t in
@@ -177,7 +191,7 @@ enum PromptPackExportBuilder {
             }
 
         // Motifs
-        let motifs = project.motifs
+        let motifs = material.motifs
             .filter { pack.selectedMotifIDs.contains($0.id) }
             .sorted { $0.label < $1.label }
             .map { m in

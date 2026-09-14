@@ -358,6 +358,86 @@ final class RecipeReferenceReconcilerTests: XCTestCase {
         }
     }
 
+    /// Reproduces the material-loss bug: the persisted recipe points at a
+    /// character and theme that exist by root fetch, while the project object
+    /// handed to Suggest has empty inverse arrays. The same authoritative
+    /// snapshot must carry those entities through reconcile -> validate ->
+    /// export, while deleted and cross-project IDs remain fail-closed.
+    func testSuggestRequestUsesAuthoritativeMaterialWhenInverseCachesAreEmpty() throws {
+        let persistedProjectID = project.id
+        let persistedCharacterID = character.id
+        let persistedThemeID = themeQuestion.id
+        let persistedPackID = pack.id
+        try context.save()
+
+        let staleProject = StoryProject(name: project.name)
+        staleProject.id = persistedProjectID
+        staleProject.characters = []
+        staleProject.themeQuestions = []
+        pack.project = staleProject
+
+        XCTAssertEqual(pack.id, persistedPackID)
+        XCTAssertEqual(character.id, persistedCharacterID)
+        XCTAssertEqual(themeQuestion.id, persistedThemeID)
+        XCTAssertTrue(staleProject.characters.isEmpty)
+        XCTAssertTrue(staleProject.themeQuestions.isEmpty)
+
+        let material = try AuthoritativeProjectMaterial.resolve(project: staleProject, in: context)
+        XCTAssertEqual(material.characters.map(\.id), [persistedCharacterID])
+        XCTAssertEqual(material.themeQuestions.map(\.id), [persistedThemeID])
+
+        let removed = RecipeReferenceReconciler.reconcile(pack, material: material, in: context)
+        XCTAssertEqual(removed, 0, "Valid root-fetched material must not be pruned")
+        XCTAssertEqual(pack.selectedCharacterIDs, [persistedCharacterID])
+        XCTAssertEqual(pack.selectedThemeQuestionIDs, [persistedThemeID])
+
+        let arc = StoryArc()
+        arc.templateID = StoryArcTemplate.allTemplates.first?.id
+        arc.project = project
+        context.insert(arc)
+        let template = StoryArcTemplate.allTemplates.first!
+        let request = try OutlineSuggestionService().makeRequest(
+            recipe: pack,
+            arc: arc,
+            arcTemplate: template,
+            material: material
+        )
+
+        XCTAssertEqual(request.recipe.selectedCharacters.map(\.id), [persistedCharacterID])
+        XCTAssertEqual(request.recipe.selectedThemeQuestions.map(\.id), [persistedThemeID])
+        XCTAssertEqual(RecipeIntegrityValidator.validate(recipe: pack, material: material), .valid)
+        pack.project = project
+
+        let deletedID = UUID()
+        pack.selectedCharacterIDs = [persistedCharacterID, deletedID]
+        XCTAssertEqual(
+            RecipeReferenceReconciler.reconcile(pack, material: material, in: context),
+            1,
+            "A genuinely deleted ID must still be pruned"
+        )
+        XCTAssertEqual(pack.selectedCharacterIDs, [persistedCharacterID])
+
+        let otherProject = StoryProject(name: "Other Project")
+        context.insert(otherProject)
+        let foreignCharacter = StoryCharacter(name: "Foreign")
+        foreignCharacter.project = otherProject
+        context.insert(foreignCharacter)
+        try context.save()
+        let allMaterial = try AuthoritativeProjectMaterial.resolve(project: staleProject, in: context)
+        pack.selectedCharacterIDs = [foreignCharacter.id]
+        XCTAssertEqual(
+            RecipeReferenceReconciler.reconcile(pack, material: allMaterial, in: context),
+            0,
+            "Cross-project IDs must survive reconciliation for validator failure"
+        )
+        switch RecipeIntegrityValidator.validate(recipe: pack, material: allMaterial) {
+        case .valid:
+            XCTFail("Cross-project selection must fail closed")
+        case .invalid(let missing):
+            XCTAssertTrue(missing.contains { $0.entityClass == .character && $0.id == foreignCharacter.id })
+        }
+    }
+
 // MARK: - Test helpers
 
 private func makeInMemoryContext() throws -> ModelContext {
@@ -370,6 +450,8 @@ private func makeInMemoryContext() throws -> ModelContext {
         StoryRelationship.self,
         ThemeQuestion.self,
         Motif.self,
+        StoryArc.self,
+        StoryArcBeat.self,
     ])
     let config = ModelConfiguration(isStoredInMemoryOnly: true)
     let container = try ModelContainer(for: schema, configurations: [config])

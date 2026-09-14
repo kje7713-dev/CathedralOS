@@ -591,14 +591,19 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         }
         // PR 4 rebased: outline/lineage/format identity feeds the key, so
         // a stale Outline reference (delete + restore, lineage drift) will
-        // produce a different hash and block exact-match resume.
+        // produce a different hash and block exact-match resume. Resolve the
+        // same authoritative material used by the live Suggest boundary.
+        guard let material = try? AuthoritativeProjectMaterial.resolve(project: project, in: modelContext) else {
+            return nil
+        }
         return try? OutlineSuggestionService().makeRequest(
             recipe: recipe,
             arc: arc,
             arcTemplate: template,
             outline: currentOutline,
             requestedFormat: "novel",
-            existingSections: currentOutline?.sections ?? []
+            existingSections: currentOutline?.sections ?? [],
+            material: material
         ).idempotencyKey
     }
 
@@ -622,6 +627,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         let projectID = project.id
         do {
             let service = OutlineSuggestionService()
+            guard let material = try? AuthoritativeProjectMaterial.resolve(project: project, in: modelContext) else {
+                recoverableSuggestions = nil
+                return
+            }
             // 2. build the current OutlineSuggestionRequest using the current
             //    recipe, arc, Outline, existing sections, format and canonical
             //    lineage. The idempotency key is derived from the full request
@@ -635,7 +644,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 arcTemplate: template,
                 outline: currentOutline,
                 requestedFormat: "novel",
-                existingSections: currentOutline?.sections ?? []
+                existingSections: currentOutline?.sections ?? [],
+                material: material
             )
             // 3 + 4. recover only a completed run whose idempotency key
             //    matches that exact request. `findRun` is best-effort and
@@ -686,9 +696,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             return
         }
         do {
-            // Reconcile legacy stale IDs before building the request.
-            // `makeRequest` is pure — the caller owns the persist step.
-            RecipeReferenceReconciler.reconcile(recipe, in: modelContext)
+            // Resolve once at the Suggest boundary. The same snapshot flows
+            // through reconcile, validation, and export so no stale inverse
+            // relationship can drop selected material.
+            let material = try AuthoritativeProjectMaterial.resolve(project: project, in: modelContext)
+            RecipeReferenceReconciler.reconcile(recipe, material: material, in: modelContext)
             let service = OutlineSuggestionService()
             // PR 4: pass current Outline (server validates ownership +
             // canonical lineage pre-billable) and explicit requestedFormat
@@ -700,7 +712,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 arcTemplate: template,
                 outline: currentOutline,
                 requestedFormat: "novel",
-                existingSections: currentOutline?.sections ?? []
+                existingSections: currentOutline?.sections ?? [],
+                material: material
             )
             suggestionsError = nil
             suggestionsNotice = nil

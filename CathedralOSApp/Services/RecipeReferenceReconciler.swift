@@ -30,6 +30,97 @@ import SwiftData
 // the call site (see `OutlineSectionsRegionView.loadSuggestions`).
 // `makeRequest` itself stays pure — no ModelContext argument, no
 // side effects on disk.
+/// One authoritative, request-scoped view of a project's selectable story
+/// material. Every collection is populated from a root ModelContext fetch;
+/// inverse relationship arrays on `StoryProject` are deliberately not used.
+/// The "other project" ID sets preserve cross-project references so the
+/// validator can fail closed instead of letting reconciliation hide them.
+struct AuthoritativeProjectMaterial {
+    let characters: [StoryCharacter]
+    let storySparks: [StorySpark]
+    let aftertastes: [Aftertaste]
+    let relationships: [StoryRelationship]
+    let themeQuestions: [ThemeQuestion]
+    let motifs: [Motif]
+
+    let otherCharacterIDs: Set<UUID>
+    let otherStorySparkIDs: Set<UUID>
+    let otherAftertasteIDs: Set<UUID>
+    let otherRelationshipIDs: Set<UUID>
+    let otherThemeQuestionIDs: Set<UUID>
+    let otherMotifIDs: Set<UUID>
+
+    @MainActor
+    static func resolve(project: StoryProject, in context: ModelContext) throws -> Self {
+        let allCharacters = try context.fetch(FetchDescriptor<StoryCharacter>())
+        let allSparks = try context.fetch(FetchDescriptor<StorySpark>())
+        let allAftertastes = try context.fetch(FetchDescriptor<Aftertaste>())
+        let allRelationships = try context.fetch(FetchDescriptor<StoryRelationship>())
+        let allThemeQuestions = try context.fetch(FetchDescriptor<ThemeQuestion>())
+        let allMotifs = try context.fetch(FetchDescriptor<Motif>())
+
+        let projectID = project.id
+        let characters = allCharacters.filter { $0.project?.id == projectID }
+        let sparks = allSparks.filter { $0.project?.id == projectID }
+        let aftertastes = allAftertastes.filter { $0.project?.id == projectID }
+        let relationships = allRelationships.filter { $0.project?.id == projectID }
+        let themeQuestions = allThemeQuestions.filter { $0.project?.id == projectID }
+        let motifs = allMotifs.filter { $0.project?.id == projectID }
+
+        return Self(
+            characters: characters,
+            storySparks: sparks,
+            aftertastes: aftertastes,
+            relationships: relationships,
+            themeQuestions: themeQuestions,
+            motifs: motifs,
+            otherCharacterIDs: Set(allCharacters.compactMap { entity in
+                guard let entityProjectID = entity.project?.id, entityProjectID != projectID else { return nil }
+                return entity.id
+            }),
+            otherStorySparkIDs: Set(allSparks.compactMap { entity in
+                guard let entityProjectID = entity.project?.id, entityProjectID != projectID else { return nil }
+                return entity.id
+            }),
+            otherAftertasteIDs: Set(allAftertastes.compactMap { entity in
+                guard let entityProjectID = entity.project?.id, entityProjectID != projectID else { return nil }
+                return entity.id
+            }),
+            otherRelationshipIDs: Set(allRelationships.compactMap { entity in
+                guard let entityProjectID = entity.project?.id, entityProjectID != projectID else { return nil }
+                return entity.id
+            }),
+            otherThemeQuestionIDs: Set(allThemeQuestions.compactMap { entity in
+                guard let entityProjectID = entity.project?.id, entityProjectID != projectID else { return nil }
+                return entity.id
+            }),
+            otherMotifIDs: Set(allMotifs.compactMap { entity in
+                guard let entityProjectID = entity.project?.id, entityProjectID != projectID else { return nil }
+                return entity.id
+            })
+        )
+    }
+
+    /// Compatibility snapshot for non-Suggest callers that do not have a
+    /// ModelContext. The Suggest boundary always uses `resolve(project:in:)`.
+    static func fromRelationshipCollections(of project: StoryProject) -> Self {
+        Self(
+            characters: project.characters,
+            storySparks: project.storySparks,
+            aftertastes: project.aftertastes,
+            relationships: project.relationships,
+            themeQuestions: project.themeQuestions,
+            motifs: project.motifs,
+            otherCharacterIDs: [],
+            otherStorySparkIDs: [],
+            otherAftertasteIDs: [],
+            otherRelationshipIDs: [],
+            otherThemeQuestionIDs: [],
+            otherMotifIDs: []
+        )
+    }
+}
+
 enum RecipeReferenceReconciler {
 
     /// Reconcile a recipe's selections against the project's current
@@ -44,89 +135,56 @@ enum RecipeReferenceReconciler {
     /// removed silently and the recipe continues. The validator still
     /// catches irreconcilable corruption (duplicate UUID,
     /// cross-project ID) and surfaces a typed error in that case.
+    /// Reconcile a recipe's selections against the request-scoped material.
+    /// Only IDs absent from both this project and every other project are
+    /// pruned. The prune is persisted once if any IDs were removed.
     @MainActor
-    static func reconcile(_ recipe: PromptPack, in context: ModelContext) -> Int {
-        guard let project = recipe.project else { return 0 }
-
-        // Bucket every entity of each class once: IDs in this project
-        // vs IDs in any other project. The "other" set is what lets us
-        // preserve cross-project references for the validator instead
-        // of pruning them as if they were stale. Each FetchDescriptor
-        // is concrete-typed so the compiler sees .project and .id.
-        let allCharacters = (try? context.fetch(FetchDescriptor<StoryCharacter>())) ?? []
-        let otherProjectCharacterIDs = Set(
-            allCharacters.filter { $0.project?.id != project.id }.map(\.id)
-        )
-        let allSparks = (try? context.fetch(FetchDescriptor<StorySpark>())) ?? []
-        let otherProjectSparkIDs = Set(
-            allSparks.filter { $0.project?.id != project.id }.map(\.id)
-        )
-        let allAftertastes = (try? context.fetch(FetchDescriptor<Aftertaste>())) ?? []
-        let otherProjectAftertasteIDs = Set(
-            allAftertastes.filter { $0.project?.id != project.id }.map(\.id)
-        )
-        let allRelationships = (try? context.fetch(FetchDescriptor<StoryRelationship>())) ?? []
-        let otherProjectRelationshipIDs = Set(
-            allRelationships.filter { $0.project?.id != project.id }.map(\.id)
-        )
-        let allThemes = (try? context.fetch(FetchDescriptor<ThemeQuestion>())) ?? []
-        let otherProjectThemeIDs = Set(
-            allThemes.filter { $0.project?.id != project.id }.map(\.id)
-        )
-        let allMotifs = (try? context.fetch(FetchDescriptor<Motif>())) ?? []
-        let otherProjectMotifIDs = Set(
-            allMotifs.filter { $0.project?.id != project.id }.map(\.id)
-        )
-
+    static func reconcile(
+        _ recipe: PromptPack,
+        material: AuthoritativeProjectMaterial,
+        in context: ModelContext
+    ) -> Int {
         var removedCount = 0
 
-        // Characters (array). `projectCharacterIDs` membership also
-        // covers count==2+ duplicates — those must NOT be pruned here;
-        // the validator surfaces them.
-        let projectCharacterIDs = Set(project.characters.map(\.id))
+        let projectCharacterIDs = Set(material.characters.map(\.id))
         let originalCharacters = recipe.selectedCharacterIDs
         recipe.selectedCharacterIDs = originalCharacters.filter { id in
-            projectCharacterIDs.contains(id) || otherProjectCharacterIDs.contains(id)
+            projectCharacterIDs.contains(id) || material.otherCharacterIDs.contains(id)
         }
         removedCount += originalCharacters.count - recipe.selectedCharacterIDs.count
 
-        // Story Spark (single optional).
         if let sparkID = recipe.selectedStorySparkID,
-           !project.storySparks.contains(where: { $0.id == sparkID }),
-           !otherProjectSparkIDs.contains(sparkID) {
+           !material.storySparks.contains(where: { $0.id == sparkID }),
+           !material.otherStorySparkIDs.contains(sparkID) {
             recipe.selectedStorySparkID = nil
             removedCount += 1
         }
 
-        // Aftertaste (single optional).
         if let afterID = recipe.selectedAftertasteID,
-           !project.aftertastes.contains(where: { $0.id == afterID }),
-           !otherProjectAftertasteIDs.contains(afterID) {
+           !material.aftertastes.contains(where: { $0.id == afterID }),
+           !material.otherAftertasteIDs.contains(afterID) {
             recipe.selectedAftertasteID = nil
             removedCount += 1
         }
 
-        // Relationships (array).
-        let projectRelationshipIDs = Set(project.relationships.map(\.id))
+        let projectRelationshipIDs = Set(material.relationships.map(\.id))
         let originalRelationships = recipe.selectedRelationshipIDs
         recipe.selectedRelationshipIDs = originalRelationships.filter { id in
-            projectRelationshipIDs.contains(id) || otherProjectRelationshipIDs.contains(id)
+            projectRelationshipIDs.contains(id) || material.otherRelationshipIDs.contains(id)
         }
         removedCount += originalRelationships.count - recipe.selectedRelationshipIDs.count
 
-        // Theme Questions (array).
-        let projectThemeIDs = Set(project.themeQuestions.map(\.id))
+        let projectThemeIDs = Set(material.themeQuestions.map(\.id))
         let originalThemes = recipe.selectedThemeQuestionIDs
         recipe.selectedThemeQuestionIDs = originalThemes.filter { id in
-            projectThemeIDs.contains(id) || otherProjectThemeIDs.contains(id)
+            projectThemeIDs.contains(id) || material.otherThemeQuestionIDs.contains(id)
         }
         removedCount += originalThemes.count - recipe.selectedThemeQuestionIDs.count
 
-        // Motifs (array).
-        let projectMotifIDs = Set(project.motifs.map(\.id))
+        let projectMotifIDs = Set(material.motifs.map(\.id))
         let originalMotifs = recipe.selectedMotifIDs
         recipe.selectedMotifIDs = originalMotifs.filter { id in
-            projectMotifIDs.contains(id) || otherProjectMotifIDs.contains(id)
+            projectMotifIDs.contains(id) || material.otherMotifIDs.contains(id)
         }
         removedCount += originalMotifs.count - recipe.selectedMotifIDs.count
 
@@ -134,14 +192,21 @@ enum RecipeReferenceReconciler {
             do {
                 try context.save()
             } catch {
-                // Best-effort persist. If save fails, the validator still
-                // runs against the in-memory pruned recipe and surfaces
-                // any remaining staleness as an error. Logged but not
-                // thrown — the user gets the validator error path if
-                // anything is wrong, not a save error from the reconciler.
                 print("[RecipeReferenceReconciler] save failed: \(error)")
             }
         }
         return removedCount
     }
+
+    /// Compatibility entry point for existing callers. The Suggest boundary
+    /// resolves once and passes the snapshot explicitly.
+    @MainActor
+    static func reconcile(_ recipe: PromptPack, in context: ModelContext) -> Int {
+        guard let project = recipe.project,
+              let material = try? AuthoritativeProjectMaterial.resolve(project: project, in: context) else {
+            return 0
+        }
+        return reconcile(recipe, material: material, in: context)
+    }
+
 }
