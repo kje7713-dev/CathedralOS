@@ -57,6 +57,7 @@ import {
   validateStoryArcSemantics,
   validatePostRepairBeatCoverage,
   validateRequiredStoryArcFunctions,
+  repairRequiredStoryArcFunctions,
   repairStoryArcMacroStructure,
   arcRoleContract,
   buildExpansionResponseSchema,
@@ -2245,6 +2246,56 @@ Deno.test("PR3 required dramatic functions are validated from final section func
   const resurrection = { name: "Hero's Journey", beats: [{ id: "r", role: "resurrection", label: "Resurrection" }] };
   assertEquals(validateStoryArcSemantics([semanticSection("r", "The Test", "The hero transforms.", "transformation")] as any, resurrection as any).some((issue) => issue.includes("required dramatic function climax")), true);
   assertEquals(validateStoryArcSemantics([semanticSection("r", "The Test", "The final confrontation turns.", "climax")] as any, resurrection as any), []);
+});
+
+Deno.test("PR3 Final Image aftermath-only content is repaired into an actual resolution", async () => {
+  const template = {
+    name: "Save the Cat!",
+    beats: [{ id: "final", role: "final_image", label: "Final Image" }],
+  };
+  const aftermathOnly: any = semanticSection(
+    "final",
+    "The Aftermath",
+    "The survivors mourn and remember what was lost.",
+    "aftermath",
+  );
+  aftermathOnly.resultingChange = "The aftermath continues.";
+  aftermathOnly.terminalState = "The aftermath remains unresolved.";
+  const before = validateStoryArcSemantics([aftermathOnly], template as any);
+  assertEquals(before.some((issue) => issue.includes("missing required dramatic function resolution")), true);
+  const mislabeledAftermath = { ...aftermathOnly, dramaticFunction: "resolution" };
+  assertEquals(validateStoryArcSemantics([mislabeledAftermath], template as any).some((issue) => issue.includes("does not materially resolve")), true);
+
+  const repaired = await repairRequiredStoryArcFunctions(
+    [aftermathOnly],
+    template as any,
+    async (
+      _system: string,
+      _user: string,
+      _maxOutputTokens: number,
+      _responseFormat: unknown,
+      _action: string,
+      validateResponse?: (content: string) => unknown | Promise<unknown>,
+    ) => {
+      const content = JSON.stringify({ section: {
+        ...aftermathOnly,
+        title: "The Conflict Is Settled",
+        summary: "The central conflict is finally settled and the survivors choose what comes next.",
+        dramaticEvent: "The survivors answer the central question by confronting the final consequence and making the binding choice that ends the conflict.",
+        resultingChange: "The central conflict is resolved; the survivors accept the settled cost and choose a new shared direction.",
+        terminalState: "The question is answered and the new normal holds without the former conflict continuing.",
+        dramaticFunction: "resolution",
+      } });
+      if (validateResponse) await validateResponse(content);
+      return { content, creditCostCharged: 0, remainingCredits: 10 };
+    },
+  );
+
+  assertEquals(repaired.unresolved, []);
+  assertEquals(repaired.repaired, ["The Aftermath: resolution"]);
+  assertEquals(validateStoryArcSemantics(repaired.suggestions, template as any), []);
+  assertEquals(repaired.suggestions[0].dramaticFunction, "resolution");
+  assertEquals(repaired.suggestions[0].terminalState?.includes("question is answered"), true);
 });
 
 Deno.test("PR3 expansion schema and parser enforce beat-local semantic functions", () => {
