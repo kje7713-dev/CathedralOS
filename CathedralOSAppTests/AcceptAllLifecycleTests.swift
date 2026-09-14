@@ -120,19 +120,20 @@ final class FakeAcceptAllService: SectionEmbedServicing {
     )
     private(set) var startCallCount = 0
     private(set) var statusCallCount = 0
-    private(set) var lastStartRequest: (edgeFunctionURL: URL, outlineID: UUID, projectID: UUID)?
+    private(set) var lastStartRequest: (edgeFunctionURL: URL, outlineID: UUID, projectID: UUID, projectLineageID: UUID?)?
 
     func startAcceptAll(
         edgeFunctionURL: URL,
         outlineID: UUID,
         projectID: UUID,
+        projectLineageID: UUID?,
         suggestions: [OutlineSuggestion],
         startingPosition: Int,
         idempotencyKey: String,
         sourceRecipe: PromptPackExportPayload
     ) async throws -> AcceptOutlineSectionsResult {
         startCallCount += 1
-        lastStartRequest = (edgeFunctionURL, outlineID, projectID)
+        lastStartRequest = (edgeFunctionURL, outlineID, projectID, projectLineageID)
         switch startResponse {
         case .success(let r): return r
         case .throwError(let e): throw e
@@ -199,12 +200,13 @@ final class AcceptAllLifecycleTests: XCTestCase {
         let context = try makeInMemoryContext()
         let outlineID = UUID()
         let projectID = UUID()
+        let canonicalLineageID = UUID()
 
         coordinator.beginAcceptAll(
             edgeFunctionURL: URL(string: "https://example.test/functions/v1/accept-outline-sections")!,
             outlineID: outlineID,
             projectID: projectID,
-            projectLineageID: projectID,
+            projectLineageID: canonicalLineageID,
             suggestions: [makeSuggestion()],
             startingPosition: 0,
             idempotencyKey: "key-1",
@@ -217,9 +219,12 @@ final class AcceptAllLifecycleTests: XCTestCase {
         try await Task.sleep(nanoseconds: 200_000_000)
 
         XCTAssertEqual(service.startCallCount, 1, "startAcceptAll must be invoked exactly once")
+        XCTAssertEqual(service.lastStartRequest?.projectID, projectID)
+        XCTAssertEqual(service.lastStartRequest?.projectLineageID, canonicalLineageID,
+                       "Accept All must send canonical lineage, never the local project UUID")
         XCTAssertNotNil(coordinator.activeAcceptRun, "activeAcceptRun must be set after POST")
         XCTAssertEqual(coordinator.activeAcceptRun?.outlineID, outlineID)
-        XCTAssertEqual(coordinator.activeAcceptRun?.projectLineageID, projectID)
+        XCTAssertEqual(coordinator.activeAcceptRun?.projectLineageID, canonicalLineageID)
         XCTAssertEqual(coordinator.activeAcceptRun?.runID, "11111111-1111-1111-1111-111111111111")
         XCTAssertFalse(coordinator.isAcceptRunInitiating,
                        "isAcceptRunInitiating must clear once the run ID is attached")
@@ -562,6 +567,7 @@ final class TransientThenOKService: SectionEmbedServicing {
         edgeFunctionURL: URL,
         outlineID: UUID,
         projectID: UUID,
+        projectLineageID: UUID?,
         suggestions: [OutlineSuggestion],
         startingPosition: Int,
         idempotencyKey: String,
@@ -571,6 +577,7 @@ final class TransientThenOKService: SectionEmbedServicing {
             edgeFunctionURL: edgeFunctionURL,
             outlineID: outlineID,
             projectID: projectID,
+            projectLineageID: projectLineageID,
             suggestions: suggestions,
             startingPosition: startingPosition,
             idempotencyKey: idempotencyKey,
