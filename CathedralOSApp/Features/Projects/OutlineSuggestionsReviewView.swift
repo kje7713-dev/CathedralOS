@@ -224,29 +224,19 @@ struct OutlineSuggestionsReviewView: View {
 
         Task { @MainActor in
             do {
-                // Resolve the canonical cloud lineage before syncing the Story Arc
-                // or posting Accept All. A project restored by an older build can
-                // still carry its local UUID here; targeted restore matches that
-                // local identity, then persists the server-owned lineage onto the
-                // live SwiftData object before the project is used.
-                do {
-                    _ = try await ProjectCloudSyncService.shared.restoreProject(
-                        localProjectID: projectID,
-                        projectLineageID: project.stableLineageID,
-                        into: modelContext,
-                        includeTombstoned: false
-                    )
-                } catch let error as ProjectCloudSyncError {
-                    // A genuinely new local project has no cloud snapshot yet;
-                    // keep its existing locally-created lineage. Any other cloud
-                    // identity failure must remain visible instead of risking a
-                    // request with the local UUID.
-                    if case .targetedSnapshotNotFound = error {
-                        // Expected for a new, not-yet-synced project.
-                    } else {
-                        throw error
-                    }
-                }
+                // Resolve the server-owned Outline lineage first. The local
+                // project can carry a stale lineage after restore, while the
+                // Outline row already identifies the canonical project snapshot.
+                // Use that authoritative lineage as the targeted-restore key;
+                // never use a stale local value to look up the snapshot.
+                let serverOutlineLineageID = try await ProjectCloudSyncService.shared
+                    .fetchCanonicalOutlineLineage(outlineID: outline.id)
+                _ = try await ProjectCloudSyncService.shared.restoreProject(
+                    localProjectID: projectID,
+                    projectLineageID: serverOutlineLineageID,
+                    into: modelContext,
+                    includeTombstoned: false
+                )
 
                 // The review sheet may still hold the pre-restore SwiftData
                 // object. Resolve the current managed object by stable local ID
@@ -256,6 +246,13 @@ struct OutlineSuggestionsReviewView: View {
                     in: modelContext
                 )
                 let canonicalLineageID = currentProject.stableLineageID
+                guard canonicalLineageID == serverOutlineLineageID else {
+                    throw ProjectCloudSyncError.outlineLineageMismatch(
+                        outlineID: outline.id.uuidString,
+                        projectLineageID: canonicalLineageID.uuidString,
+                        outlineLineageID: serverOutlineLineageID.uuidString
+                    )
+                }
                 // Keep the Story Arc relationship on the same freshly fetched
                 // project so its sync cannot read the stale captured object.
                 arc.project = currentProject

@@ -30,6 +30,12 @@ enum ProjectCloudSyncError: Error, LocalizedError {
     case missingCanonicalLineage(localProjectID: String)
     /// The local project disappeared while an Accept All restore was resolving.
     case localProjectNotFound(localProjectID: String)
+    /// The server-owned Outline identity could not be resolved before Accept All.
+    case outlineNotFound(outlineID: String)
+    /// The server-owned Outline exists but has no canonical lineage.
+    case outlineMissingCanonicalLineage(outlineID: String)
+    /// The restored local project still disagrees with the server-owned Outline lineage.
+    case outlineLineageMismatch(outlineID: String, projectLineageID: String, outlineLineageID: String)
 
     var errorDescription: String? {
         switch self {
@@ -67,6 +73,12 @@ enum ProjectCloudSyncError: Error, LocalizedError {
             return "Cloud restore stopped for project \(localProjectID): the snapshot has no canonical lineage identity. The local project was not restored."
         case .localProjectNotFound(let localProjectID):
             return "Accept All could not find the current local project \(localProjectID) after restore. Close and reopen the project, then try again."
+        case .outlineNotFound(let outlineID):
+            return "Accept All could not find the server outline \(outlineID). Start a fresh Suggest Sections run, then try again."
+        case .outlineMissingCanonicalLineage(let outlineID):
+            return "Accept All stopped because server outline \(outlineID) has no canonical project lineage. Start a fresh Suggest Sections run, then try again."
+        case .outlineLineageMismatch(let outlineID, let projectLineageID, let outlineLineageID):
+            return "Accept All stopped because the restored project lineage \(projectLineageID) still differs from outline \(outlineID)'s canonical lineage \(outlineLineageID)."
         }
     }
 }
@@ -778,6 +790,38 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                 scope: scope
             )
         }
+    }
+
+    /// Resolve the server-owned lineage for an Outline before an Accept All
+    /// request. A restored local project can carry a stale lineage, while the
+    /// Outline row already points at the canonical snapshot lineage. Accept All
+    /// must target that server identity rather than trusting the stale local
+    /// value as the restore lookup key.
+    func fetchCanonicalOutlineLineage(outlineID: UUID) async throws -> UUID {
+        let (client, _, accessToken) = try await validatedClientAndSession()
+        var components = URLComponents(
+            url: restURL(client: client, path: "outlines"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "id", value: "eq.\(outlineID.uuidString)"),
+            URLQueryItem(name: "select", value: "lineage_id"),
+            URLQueryItem(name: "limit", value: "1"),
+        ]
+        guard let url = components?.url else {
+            throw ProjectCloudSyncError.notConfigured
+        }
+
+        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
+        request.httpMethod = "GET"
+        let rows = try await fetch([OutlineCloudIdentityRecord].self, request: request)
+        guard let row = rows.first else {
+            throw ProjectCloudSyncError.outlineNotFound(outlineID: outlineID.uuidString)
+        }
+        guard let lineageID = row.lineageID else {
+            throw ProjectCloudSyncError.outlineMissingCanonicalLineage(outlineID: outlineID.uuidString)
+        }
+        return lineageID
     }
 
     @MainActor
@@ -2389,6 +2433,14 @@ private struct ProjectSnapshotPresenceRow: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case localProjectID = "local_project_id"
+    }
+}
+
+private struct OutlineCloudIdentityRecord: Decodable {
+    let lineageID: UUID?
+
+    enum CodingKeys: String, CodingKey {
+        case lineageID = "lineage_id"
     }
 }
 
