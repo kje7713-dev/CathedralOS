@@ -102,6 +102,7 @@ export type ReadinessOutline = {
   source_recipe_hash?: unknown;
   target_word_count_min?: unknown;
   projected_word_count?: unknown;
+  story_arc_id?: unknown;
 };
 
 export type ReadinessSection = {
@@ -130,6 +131,7 @@ export type RunOutlineRecord = {
   source_recipe_hash?: unknown;
   target_word_count_min?: unknown;
   projected_word_count?: unknown;
+  story_arc_id?: unknown;
 };
 
 type OutlineLookupKind = "query" | "not_found" | "missing_project_id";
@@ -172,7 +174,7 @@ export async function loadRunOutline(
 ): Promise<RunOutlineRecord> {
   const { data, error } = await (adminClient as any).from("outlines")
     .select(
-      "id, user_id, local_project_id, source_recipe_json, source_recipe_hash, target_word_count_min, projected_word_count",
+      "id, user_id, local_project_id, source_recipe_json, source_recipe_hash, target_word_count_min, projected_word_count, story_arc_id",
     )
     .eq("id", outlineId).maybeSingle();
   if (error) {
@@ -251,6 +253,9 @@ export function generationReadinessFailures(
   if (missingSections) failures.push("section_contract_incomplete");
   if (sections.some((section) => section.story_arc_beat_id == null)) {
     failures.push("section_missing_story_arc_beat");
+  }
+  if (sections.length > 0 && !String(outline.story_arc_id ?? "").trim()) {
+    failures.push("outline_missing_story_arc_linkage");
   }
   const contracts = sections.map((section) =>
     `${String(section.title ?? "").trim().toLowerCase()}\n${

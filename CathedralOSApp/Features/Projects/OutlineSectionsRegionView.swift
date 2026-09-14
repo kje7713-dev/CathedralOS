@@ -242,6 +242,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             ChapterReaderView(chapter: section, project: project)
         }
         .task {
+            await durabilityCoordinator.reconcilePersistedRunStatusIfNeeded(
+                for: project.stableLineageID,
+                outlineID: currentOutline?.id,
+                currentSectionCount: currentOutline?.sections.count ?? 0,
+                runOutlineService: RunOutlineService()
+            )
             // PR 1: resolve the explicit recipe selection before any other
             // path that needs it (suggestionsReady, loadSuggestions,
             // loadRecoverableSuggestions, the review-sheet source).

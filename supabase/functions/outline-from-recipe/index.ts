@@ -1550,11 +1550,11 @@ const ALLOCATION_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          beatID: { type: "string", minLength: 1 },
+          beatIndex: { type: "integer", minimum: 0 },
           minSections: { type: "integer", minimum: 0, maximum: 10 },
           rationale: { type: "string", minLength: 1, maxLength: 500 },
         },
-        required: ["beatID", "minSections", "rationale"],
+        required: ["beatIndex", "minSections", "rationale"],
         additionalProperties: false,
       },
     },
@@ -1642,21 +1642,24 @@ export function parseAndValidateAllocation(
     }
     const candidate = item as Record<string, unknown>;
     const unexpectedKeys = Object.keys(candidate).filter((key) =>
-      !["beatID", "minSections", "rationale"].includes(key)
+      !["beatIndex", "minSections", "rationale"].includes(key)
     );
     if (unexpectedKeys.length > 0) {
       throw new Error(
         `allocation contains unexpected field(s): ${unexpectedKeys.join(", ")}`,
       );
     }
-    const beatID = candidate.beatID;
+    const beatIndex = candidate.beatIndex;
     const minSections = candidate.minSections;
     const rationale = candidate.rationale;
-    if (typeof beatID !== "string" || !validBeatIDs.has(beatID)) {
-      throw new Error(`allocation contains unknown beatID: ${String(beatID)}`);
+    if (!Number.isInteger(beatIndex) || Number(beatIndex) < 0 || Number(beatIndex) >= beats.length) {
+      throw new Error(`allocation contains unknown beatIndex: ${String(beatIndex)}`);
     }
+    // The model returns only an ordinal. The server resolves it to the exact
+    // canonical supplied beat ID; UUID spelling is never model-authored.
+    const beatID = beats[Number(beatIndex)].id;
     if (seen.has(beatID)) {
-      throw new Error(`allocation contains duplicate beatID: ${beatID}`);
+      throw new Error(`allocation contains duplicate beatIndex: ${String(beatIndex)}`);
     }
     if (!Number.isInteger(minSections) || Number(minSections) < 0 || Number(minSections) > 10) {
       throw new Error(`allocation has invalid minSections for beat ${beatID}`);
@@ -1687,7 +1690,7 @@ export function buildAllocationPrompt(
 
 This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections. Use the supplied premise, characters, and arc to decide where density belongs.
 
-For every Story Arc beat, determine the minimum number of NEW dramatic sections still required to adequately realize that movement in a novel after considering the supplied existingSections. Output exactly one JSON object with beatID matching the supplied UUID exactly, minSections as an integer from 0 through 10, and a concise rationale. Include every beat exactly once. minSections represents the number of additional sections still required beyond existingSections — it is a floor, not a target or maximum. The later outline generator may create additional sections whenever the material supports them. A beat sufficiently covered by existing sections may use minSections 0 (existing coverage is already accounted for; do not include it in minSections). Do not output any other root key.
+For every Story Arc beat, determine the minimum number of NEW dramatic sections still required to adequately realize that movement in a novel after considering the supplied existingSections. Output exactly one allocation for every beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. minSections represents the number of additional sections still required beyond existingSections — it is a floor, not a target or maximum. The later outline generator may create additional sections whenever the material supports them. A beat sufficiently covered by existing sections may use minSections 0 (existing coverage is already accounted for; do not include it in minSections). Do not output any other root key.
 
 Output JSON only. No commentary, no prose.`;
 
@@ -1699,8 +1702,8 @@ Output JSON only. No commentary, no prose.`;
       arcTemplate: {
         id: req.arcTemplate.id,
         name: req.arcTemplate.name,
-        beats: req.arcTemplate.beats.map((b) => ({
-          id: b.id,
+        beats: req.arcTemplate.beats.map((b, beatIndex) => ({
+          beatIndex,
           label: b.label,
           description: b.description,
         })),
@@ -2425,6 +2428,9 @@ async function persistPlanningProvenance(db: any, body: OutlineFromRecipeRequest
     enrichment_source_recipe_hash: provenance.sourceRecipeHash,
     enrichment_run_id: runId,
     enrichment_planner_version: "story-material-v2",
+    // Replanning invalidates any prior generation-ready claim until the
+    // current canonical sections pass the readiness gate again.
+    planning_status: "validating",
   }).eq("id", body.outline_id);
   if (error) throw new Error(`Could not persist outline planning provenance: ${error.message}`);
 }
