@@ -211,6 +211,43 @@ final class ProjectCloudSyncTests: XCTestCase {
         try await service.syncProject(project)
     }
 
+    func testFetchCanonicalOutlineLineageUsesServerOutlineIdentity() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "user-lineage", email: "lineage@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting(
+                projectURL: URL(string: "https://example.supabase.co")!,
+                anonKey: "anon-key"
+            ),
+            tombstoneService: MockProjectTombstoneService()
+        )
+        let outlineID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        let lineageID = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/rest/v1/outlines")
+            let queryItems = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertEqual(queryItems.first(where: { $0.name == "id" })?.value, "eq.\(outlineID.uuidString)")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "select" })?.value, "lineage_id")
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data("[{\"lineage_id\":\"\(lineageID.uuidString)\"}]".utf8))
+        }
+
+        let resolved = try await service.fetchCanonicalOutlineLineage(outlineID: outlineID)
+        XCTAssertEqual(resolved, lineageID)
+    }
+
     func testSyncProjectSnapshotAcceptsCanonicalRPCObjectResponse() async throws {
         let session = makeSession()
         let userID = "11111111-1111-1111-1111-111111111111"
