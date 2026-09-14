@@ -209,15 +209,45 @@ struct OutlineSuggestionsReviewView: View {
         }
 
         Task { @MainActor in
-            // Checkpoint: story arc sync started.
-            NSLog("[accept_all] story_arc_sync_started outline=%@ project=%@", outline.id.uuidString, projectID.uuidString)
             do {
+                // Resolve the canonical cloud lineage before syncing the Story Arc
+                // or posting Accept All. A project restored by an older build can
+                // still carry its local UUID here; targeted restore matches that
+                // local identity, then persists the server-owned lineage onto the
+                // live SwiftData object before the project is used.
+                do {
+                    _ = try await ProjectCloudSyncService.shared.restoreProject(
+                        localProjectID: projectID,
+                        projectLineageID: project.stableLineageID,
+                        into: modelContext,
+                        includeTombstoned: false
+                    )
+                } catch let error as ProjectCloudSyncError {
+                    // A genuinely new local project has no cloud snapshot yet;
+                    // keep its existing locally-created lineage. Any other cloud
+                    // identity failure must remain visible instead of risking a
+                    // request with the local UUID.
+                    if case .targetedSnapshotNotFound = error {
+                        // Expected for a new, not-yet-synced project.
+                    } else {
+                        throw error
+                    }
+                }
+
+                guard let canonicalLineageID = project.lineageID else {
+                    throw ProjectCloudSyncError.missingCanonicalLineage(
+                        localProjectID: projectID.uuidString
+                    )
+                }
+
+                // Checkpoint: story arc sync started.
+                NSLog("[accept_all] story_arc_sync_started outline=%@ project=%@ lineage=%@", outline.id.uuidString, projectID.uuidString, canonicalLineageID.uuidString)
                 _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
                 // Checkpoint: story arc sync completed.
                 NSLog("[accept_all] story_arc_sync_completed outline=%@ project=%@", outline.id.uuidString, projectID.uuidString)
                 // Checkpoint: coordinator begin requested.
-                NSLog("[accept_all] coordinator_begin_requested outline=%@ project=%@", outline.id.uuidString, projectID.uuidString)
-                beginAccept(projectID: projectID, baseURL: baseURL)
+                NSLog("[accept_all] coordinator_begin_requested outline=%@ project=%@ lineage=%@", outline.id.uuidString, projectID.uuidString, canonicalLineageID.uuidString)
+                beginAccept(projectID: projectID, projectLineageID: canonicalLineageID, baseURL: baseURL)
             } catch {
                 NSLog("[accept_all] story_arc_sync_failed outline=%@ project=%@ error=%@", outline.id.uuidString, projectID.uuidString, error.localizedDescription)
                 durabilityCoordinator.reportAcceptRunError("Could not sync the Story Arc before acceptance: \(error.localizedDescription)")
@@ -225,13 +255,13 @@ struct OutlineSuggestionsReviewView: View {
         }
     }
 
-    private func beginAccept(projectID: UUID, baseURL: URL) {
+    private func beginAccept(projectID: UUID, projectLineageID: UUID, baseURL: URL) {
         let edgeURL = baseURL.appendingPathComponent("functions/v1/accept-outline-sections")
         durabilityCoordinator.beginAcceptAll(
             edgeFunctionURL: edgeURL,
             outlineID: outline.id,
             projectID: projectID,
-            projectLineageID: project.stableLineageID,
+            projectLineageID: projectLineageID,
             suggestions: suggestions,
             startingPosition: (outline.sections.map { $0.position }.max() ?? -1) + 1,
             idempotencyKey: acceptanceIdempotencyKey,
