@@ -42,6 +42,7 @@ import {
   buildEnrichmentPrompt,
   countStoryMaterialItems,
   repairStoryMaterialFromRecipe,
+  mergeCanonicalRecipeMaterial,
   resumeOrRepairStoryMaterial,
   validateStoryMaterialEnrichment,
   storyMaterialSufficiency,
@@ -1899,6 +1900,23 @@ Deno.test("repairStoryMaterialFromRecipe: handles an empty canonical recipe with
   assertEquals(repaired.characters.length, 0);
   assertEquals(repaired.thematicPressures.length, 0);
   assertEquals(repaired.sourceRecipeHash, "empty");
+});
+
+Deno.test("provider enrichment cannot erase canonical recipe material", async () => {
+  const recipe = brodyRecipe as any;
+  const provenance = await recipeProvenance(recipe);
+  const providerOnly = fixtureMaterial(recipe, false);
+  for (const category of ["characters", "antagonisticForces", "locations", "institutionsAndGroups", "conflictSources", "escalationLadder", "reversals", "consequences", "relationships", "discoveries", "unresolvedQuestions", "thematicPressures"]) {
+    providerOnly[category] = providerOnly[category].filter((item: any) => item.source === "planner");
+  }
+  const merged = mergeCanonicalRecipeMaterial(providerOnly, recipe, provenance, "novel");
+  const recipeItems = Object.values(merged)
+    .flatMap((value: any) => Array.isArray(value) ? value : [])
+    .filter((item: any) => item?.source === "recipe");
+  assertEquals(recipeItems.length > 0, true);
+  assertEquals(recipeItems.some((item: any) => item.sourceReference === "character:character-1"), true);
+  assertEquals(recipeItems.some((item: any) => item.sourceReference === "theme:theme-1"), true);
+  assertEquals(storyMaterialSufficiency(merged, recipe, "novel").recipeDerivedItemCount > 0, true);
 });
 
 Deno.test("story material enrichment validates provenance and remains inspectable for reuse", () => {

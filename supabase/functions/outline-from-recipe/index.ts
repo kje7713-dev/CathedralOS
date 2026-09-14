@@ -823,6 +823,39 @@ export function repairStoryMaterialFromRecipe(
 }
 
 /**
+ * Merge deterministic canonical recipe material into a provider response.
+ *
+ * The provider is allowed to invent planner material, but it is not allowed
+ * to erase authored recipe material. A model can satisfy the JSON schema while
+ * omitting every source=recipe item, which later fails novel sufficiency with
+ * the unhelpful "no canonical recipe material was preserved" error. The
+ * server already knows the canonical handles, so repair that omission before
+ * evaluating sufficiency. Sparse recipes still fail closed if the merged
+ * package cannot meet the format contract.
+ */
+export function mergeCanonicalRecipeMaterial(
+  candidate: StoryMaterialEnrichment,
+  recipe: CanonicalRecipeEnvelope,
+  provenance: StoryMaterialProvenance,
+  format: StoryMaterialFormat,
+): StoryMaterialEnrichment {
+  const canonical = repairStoryMaterialFromRecipe(recipe, provenance, format);
+  const canonicalIDs = new Set(
+    STORY_MATERIAL_CATEGORIES.flatMap((category) => (canonical[category] as StoryMaterialItem[]).map((item) => item.id)),
+  );
+  const merged = { ...candidate, ...provenance, version: 2, format } as StoryMaterialEnrichment;
+
+  for (const category of STORY_MATERIAL_CATEGORIES) {
+    const existing = (candidate[category] as StoryMaterialItem[]).filter((item) => !canonicalIDs.has(item.id));
+    const canonicalItems = (canonical[category] as StoryMaterialItem[]).filter((item) => item.source === "recipe");
+    (merged[category] as StoryMaterialItem[]) = [...existing, ...canonicalItems];
+  }
+
+  validateStoryMaterialEnrichment(merged, { recipe });
+  return merged;
+}
+
+/**
  * PR8 (revised): resume story material from a claimed run, repairing it
  * via the live canonical recipe if it fails validation or sufficiency.
  *
@@ -2708,7 +2741,16 @@ async function runSuggestionJob(
           (content) => {
             try {
               parsedMaterial = validateStoryMaterialEnrichment(JSON.parse(content), { allowMissingProvenance: true, recipe: body.recipe });
+              // Preserve canonical authored material even when the provider
+              // returns a schema-valid package with zero source=recipe items.
+              parsedMaterial = mergeCanonicalRecipeMaterial(
+                parsedMaterial,
+                body.recipe,
+                provenance,
+                requestedStoryMaterialFormat(body),
+              );
             } catch (error) {
+              if (error instanceof StoryMaterialSufficiencyError) throw error;
               throw new StoryMaterialValidationError(error instanceof Error ? error.message : String(error));
             }
             const sufficiency = storyMaterialSufficiency(parsedMaterial, body.recipe, requestedStoryMaterialFormat(body));
