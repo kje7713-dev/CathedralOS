@@ -265,7 +265,7 @@ struct PromptPackBuilderView: View {
         }
         .tint(CathedralTheme.Colors.accent)
         .interactiveDismissDisabled(isEditing || !name.trimmingCharacters(in: .whitespaces).isEmpty)
-        .alert("Could Not Save Story Pack", isPresented: Binding(
+        .alert("Recipe Saved Locally", isPresented: Binding(
             get: { saveErrorMessage != nil },
             set: { if !$0 { saveErrorMessage = nil } }
         )) {
@@ -332,8 +332,16 @@ struct PromptPackBuilderView: View {
             // Without this, the local save succeeds but the cloud sync is a
             // fire-and-forget Task that runs after `dismiss()`, and the captured
             // `modelContext` is invalidated mid-flight, so the sync silently drops.
-            _ = await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
-            dismiss()
+            let result = await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
+            switch result {
+            case .cloudSaved, .localOnly:
+                // Signed-out/offline saves remain legitimate local authoring.
+                dismiss()
+            case .localFallback(let errorMessage):
+                // Keep the editor open and make it explicit that the Recipe
+                // was not durably persisted to the cloud.
+                saveErrorMessage = "Recipe saved locally, but cloud save failed: \(errorMessage)"
+            }
         } catch {
             modelContext.rollback()
             saveErrorMessage = error.localizedDescription

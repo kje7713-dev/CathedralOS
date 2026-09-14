@@ -2121,6 +2121,59 @@ final class ProjectCloudSyncTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testSnapshotBuildRootFetchesRecipeArcAndOutlineWhenInverseCachesAreStale() throws {
+        let context = ModelContext(try makeProjectContainer())
+        let persistedProject = StoryProject(name: "Authoritative Snapshot Story")
+        context.insert(persistedProject)
+        try context.save()
+
+        let recipe = PromptPack(name: "Canonical Recipe")
+        recipe.project = persistedProject
+        context.insert(recipe)
+
+        let arc = StoryArc()
+        arc.templateID = StoryArcTemplate.saveTheCat.id
+        arc.project = persistedProject
+        context.insert(arc)
+        for (position, beatTemplate) in StoryArcTemplate.saveTheCat.beats.enumerated() {
+            let beat = StoryArcBeat(
+                position: position,
+                role: beatTemplate.role,
+                label: beatTemplate.label,
+                details: beatTemplate.description
+            )
+            beat.storyArc = arc
+            context.insert(beat)
+        }
+
+        let outline = Outline(name: "Canonical Outline")
+        outline.project = persistedProject
+        outline.storyArcID = arc.id
+        context.insert(outline)
+        try context.save()
+
+        // This detached project has the same persisted identity but empty
+        // inverse caches, simulating a stale SwiftData relationship graph.
+        let staleProject = StoryProject(name: persistedProject.name)
+        staleProject.id = persistedProject.id
+        staleProject.lineageID = persistedProject.lineageID
+        XCTAssertTrue(staleProject.promptPacks.isEmpty)
+        XCTAssertTrue(staleProject.storyArcs.isEmpty)
+        XCTAssertTrue(staleProject.outlines.isEmpty)
+
+        let payload = ProjectSchemaTemplateBuilder.build(
+            project: staleProject,
+            modelContext: context
+        )
+
+        XCTAssertEqual(payload.promptPacks.map(\.name), ["Canonical Recipe"])
+        XCTAssertEqual(payload.storyArcs.count, 1)
+        XCTAssertEqual(payload.storyArcs.first?.beats.count, 15)
+        XCTAssertEqual(payload.outlines.count, 1)
+        XCTAssertEqual(payload.outlines.first?.storyArcID, arc.id.uuidString)
+    }
+
     func testProjectSnapshotPayloadRoundTripsProjectNotes() {
         let project = StoryProject(name: "Notes Story")
         project.notes = "Round-trip me"
@@ -2713,6 +2766,8 @@ private final class ThrowingProjectBackupDeletionService: ProjectBackupDeletionS
             StorySpark.self,
             Aftertaste.self,
             PromptPack.self,
+            StoryArc.self,
+            StoryArcBeat.self,
             StoryRelationship.self,
             ThemeQuestion.self,
             Motif.self,
