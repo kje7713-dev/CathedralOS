@@ -514,9 +514,11 @@ struct StoryArcRegionView: View {
                 _ = try await StoryArcSyncService().syncArc(arc: arcToSync, modelContext: modelContext)
                 arcToSync.lastSyncedAt = Date()
                 try modelContext.save()
+                _ = await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
             } catch {
                 // Sync failed; lastSyncedAt stays nil so app-launch recovery
-                // retries this arc on the next launch.
+                // retries this arc on the next launch. Snapshot persistence is
+                // intentionally sequenced after a successful arc sync.
             }
         }
     }

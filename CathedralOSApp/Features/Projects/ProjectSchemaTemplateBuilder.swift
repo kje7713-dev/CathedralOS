@@ -552,6 +552,17 @@ enum ProjectSchemaTemplateBuilder {
     // MARK: - Build From Project
 
     static func build(project: StoryProject, modelContext: ModelContext) -> ProjectImportExportPayload {
+        let projectID: UUID? = project.id
+        let authoritativePromptPacks = (try? modelContext.fetch(FetchDescriptor<PromptPack>(
+            predicate: #Predicate<PromptPack> { pack in pack.project?.id == projectID }
+        ))) ?? []
+        let authoritativeStoryArcs = (try? modelContext.fetch(FetchDescriptor<StoryArc>(
+            predicate: #Predicate<StoryArc> { arc in arc.project?.id == projectID }
+        ))) ?? []
+        let authoritativeOutlines = (try? modelContext.fetch(FetchDescriptor<Outline>(
+            predicate: #Predicate<Outline> { outline in outline.project?.id == projectID }
+        ))) ?? []
+
         let settingPayload: ProjectImportExportPayload.SettingPayload?
         if let s = project.projectSetting {
             let historicalPressure: String = s.historicalPressure ?? ""
@@ -761,7 +772,7 @@ enum ProjectSchemaTemplateBuilder {
 
         // MARK: Novel-building payloads (StoryArc + Outline)
 
-        let storyArcPayloads = project.storyArcs.map { arc -> ProjectImportExportPayload.StoryArcPayload in
+        let storyArcPayloads = authoritativeStoryArcs.map { arc -> ProjectImportExportPayload.StoryArcPayload in
             // customizationsData is Data on the model — encode as UTF-8 string (JSON-encoded bytes).
             // Round-trip: nil/empty on the cloud decodes to nil on restore.
             let customizationsString: String? = arc.customizationsData.flatMap { data in
@@ -792,10 +803,6 @@ enum ProjectSchemaTemplateBuilder {
             )
         }
 
-        let projectID: UUID? = project.id
-        let authoritativeOutlines = (try? modelContext.fetch(FetchDescriptor<Outline>(
-            predicate: #Predicate<Outline> { outline in outline.project?.id == projectID }
-        ))) ?? project.outlines
         let outlinePayloads = authoritativeOutlines.map { outline -> ProjectImportExportPayload.OutlinePayload in
             // Do not serialize outline.sections directly. SwiftData relationship
             // collections can be incomplete/stale after background sync or a
@@ -864,17 +871,16 @@ enum ProjectSchemaTemplateBuilder {
                 id: outline.id.uuidString,
                 localProjectID: project.id.uuidString,
                 lineageID: project.stableLineageID.uuidString,
-                // Arc-first and outline-first flows converge on the same
-                // canonical linkage. Prefer the persisted outline value, but
-                // repair a stale SwiftData relationship cache from the single
-                // project StoryArc before serialization.
-                storyArcID: (outline.storyArcID ?? project.storyArcs.first?.id)?.uuidString,
+                // Serialize the persisted linkage exactly as stored on the
+                // authoritative Outline row. Never infer it from a cached
+                // project inverse relationship.
+                storyArcID: outline.storyArcID?.uuidString,
                 name: outline.name,
                 sections: sectionPayloads
             )
         }
 
-        let promptPackPayloads = project.promptPacks.map { pp -> ProjectImportExportPayload.PromptPackPayload in
+        let promptPackPayloads = authoritativePromptPacks.map { pp -> ProjectImportExportPayload.PromptPackPayload in
             ProjectImportExportPayload.PromptPackPayload(
                 id: pp.id.uuidString,
                 localProjectID: project.id.uuidString,
