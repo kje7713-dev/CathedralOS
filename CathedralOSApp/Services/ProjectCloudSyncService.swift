@@ -25,6 +25,9 @@ enum ProjectCloudSyncError: Error, LocalizedError {
     /// from a full restore returning zero results — Accept All just completed,
     /// so a missing snapshot means identity resolution actually failed.
     case targetedSnapshotNotFound(localProjectID: String, lineageID: String)
+    /// A cloud snapshot has no canonical lineage. Restoring it would make the
+    /// local project UUID masquerade as the stable cloud identity.
+    case missingCanonicalLineage(localProjectID: String)
 
     var errorDescription: String? {
         switch self {
@@ -58,6 +61,8 @@ enum ProjectCloudSyncError: Error, LocalizedError {
             return "Cloud deletion could not be confirmed. Your local project was kept."
         case .targetedSnapshotNotFound(let localProjectID, let lineageID):
             return "Could not find the cloud snapshot for project \(localProjectID) (lineage \(lineageID)). The Accept All job completed, but this device could not refresh that project from the cloud."
+        case .missingCanonicalLineage(let localProjectID):
+            return "Cloud restore stopped for project \(localProjectID): the snapshot has no canonical lineage identity. The local project was not restored."
         }
     }
 }
@@ -870,7 +875,17 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                 logger.warning("Skipping project snapshot without stable project id.")
                 continue
             }
-            let lineageID = row.lineageID ?? row.snapshotJSON.project.lineageID.flatMap(UUID.init(uuidString:)) ?? projectID
+            // A cloud-backed project must carry an explicit canonical lineage.
+            // Falling back to the local project UUID here makes a restored copy
+            // look like a new project and later causes Accept All's lineage
+            // contract to reject the request. Genuinely new local projects keep
+            // their existing `lineageID ?? id` behavior outside this restore path.
+            guard let lineageID = row.lineageID
+                ?? row.snapshotJSON.project.lineageID.flatMap(UUID.init(uuidString:)) else {
+                throw ProjectCloudSyncError.missingCanonicalLineage(
+                    localProjectID: projectID.uuidString
+                )
+            }
             if !includeTombstoned, tombstones.isTombstoned(lineageID: lineageID.uuidString) {
                 skippedTombstonedCount += 1
                 logger.log("Skipped tombstoned project \(projectID.uuidString, privacy: .public)")

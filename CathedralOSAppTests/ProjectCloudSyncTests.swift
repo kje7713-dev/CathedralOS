@@ -1776,6 +1776,103 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(storedProjects.first?.id, localProjectID)
     }
 
+    @MainActor
+    func testRestorePersistsCanonicalLineageWhenLocalProjectIDDiffers() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!
+        let canonicalLineageID = UUID(uuidString: "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB")!
+        let payloadProject = StoryProject(name: "Restored with canonical identity")
+        payloadProject.id = localProjectID
+        payloadProject.lineageID = localProjectID
+        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject)
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (localProjectID, canonicalLineageID, payload, "2026-09-14T14:00:00Z")
+        ])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+        let existing = StoryProject(name: "Stale local copy")
+        existing.id = localProjectID
+        existing.lineageID = nil
+        context.insert(existing)
+        try context.save()
+
+        let report = try await service.restoreAllProjects(into: context)
+        let restored = try XCTUnwrap(report.projects.first)
+        XCTAssertEqual(restored.id, localProjectID)
+        XCTAssertEqual(restored.lineageID, canonicalLineageID)
+        XCTAssertEqual(restored.stableLineageID, canonicalLineageID)
+
+        let persisted = try XCTUnwrap(
+            context.fetch(FetchDescriptor<StoryProject>()).first(where: { $0.id == localProjectID })
+        )
+        XCTAssertEqual(persisted.lineageID, canonicalLineageID)
+    }
+
+    @MainActor
+    func testRestoreRejectsCloudSnapshotWithoutCanonicalLineage() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let payloadProject = StoryProject(name: "Missing cloud lineage")
+        payloadProject.id = localProjectID
+        payloadProject.lineageID = nil
+        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject)
+        let responseData = try makeRestoreResponse(rows: [
+            (localProjectID, payload, "2026-09-14T14:00:00Z")
+        ])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        do {
+            _ = try await service.restoreAllProjects(into: context)
+            XCTFail("Expected cloud restore to reject a missing canonical lineage")
+        } catch let error as ProjectCloudSyncError {
+            guard case .missingCanonicalLineage(let id) = error else {
+                XCTFail("Expected missingCanonicalLineage, got \(error)")
+                return
+            }
+            XCTAssertEqual(id, localProjectID.uuidString)
+        }
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
+    }
+
     func testRestoreAllProjectsIsIdempotentAcrossRepeatedRuns() async throws {
         let session = makeSession()
         let authService = MockProjectCloudSyncAuthService(
