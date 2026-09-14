@@ -792,7 +792,10 @@ enum ProjectSchemaTemplateBuilder {
             )
         }
 
-        let outlinePayloads = project.outlines.map { outline -> ProjectImportExportPayload.OutlinePayload in
+        let authoritativeOutlines = (try? modelContext.fetch(FetchDescriptor<Outline>(
+            predicate: #Predicate<Outline> { outline in outline.project?.id == project.id }
+        ))) ?? project.outlines
+        let outlinePayloads = authoritativeOutlines.map { outline -> ProjectImportExportPayload.OutlinePayload in
             // Do not serialize outline.sections directly. SwiftData relationship
             // collections can be incomplete/stale after background sync or a
             // delete; the persisted root fetch is authoritative for the cloud
@@ -860,7 +863,11 @@ enum ProjectSchemaTemplateBuilder {
                 id: outline.id.uuidString,
                 localProjectID: project.id.uuidString,
                 lineageID: project.stableLineageID.uuidString,
-                storyArcID: outline.storyArcID?.uuidString,
+                // Arc-first and outline-first flows converge on the same
+                // canonical linkage. Prefer the persisted outline value, but
+                // repair a stale SwiftData relationship cache from the single
+                // project StoryArc before serialization.
+                storyArcID: (outline.storyArcID ?? project.storyArcs.first?.id)?.uuidString,
                 name: outline.name,
                 sections: sectionPayloads
             )

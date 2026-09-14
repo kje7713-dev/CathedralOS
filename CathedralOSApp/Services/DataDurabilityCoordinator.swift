@@ -1277,6 +1277,53 @@ final class DataDurabilityCoordinator: ObservableObject {
         )
     }
 
+    /// Reconcile persisted UI metadata with the authoritative server run before
+    /// rendering a project banner. A cached terminal result is not sufficient:
+    /// the run must still exist, belong to this outline, and have sections in
+    /// the current canonical outline.
+    func reconcilePersistedRunStatusIfNeeded(
+        for projectLineageID: UUID,
+        outlineID: UUID?,
+        currentSectionCount: Int,
+        runOutlineService: RunOutlineService
+    ) async {
+        guard let cached = runStatus(for: projectLineageID) else { return }
+        guard currentSectionCount > 0,
+              let outlineID,
+              cached.outline_id == outlineID.uuidString else {
+            clearPersistedRunStatus(for: projectLineageID)
+            if activeRunProjectLineageID == projectLineageID {
+                activeRunStatus = nil
+                activeRunProjectLineageID = nil
+            }
+            return
+        }
+        do {
+            let authoritative = try await runOutlineService.status(runID: cached.run_id)
+            let authoritativeOutlineMatches = authoritative.outline_id == outlineID.uuidString
+            let authoritativeSectionsMatch = (authoritative.sections_total ?? 0) == currentSectionCount
+            guard authoritativeOutlineMatches && authoritativeSectionsMatch else {
+                clearPersistedRunStatus(for: projectLineageID)
+                if activeRunProjectLineageID == projectLineageID { activeRunStatus = nil }
+                return
+            }
+            activeRunProjectLineageID = projectLineageID
+            activeRunStatus = authoritative
+            persistRunStatus(authoritative, for: projectLineageID)
+        } catch let error as RunOutlineError {
+            // Missing durable identity is definitive; transport/auth/provider
+            // failures are not. Keep a legitimate freshly-completed banner
+            // visible until the authoritative run can be checked again.
+            guard case .runNotFound = error else { return }
+            clearPersistedRunStatus(for: projectLineageID)
+            if activeRunProjectLineageID == projectLineageID { activeRunStatus = nil }
+        } catch {
+            // Unknown/transient failures must not globally hide a valid
+            // completed status. The next project load/poll will retry.
+            return
+        }
+    }
+
     /// The last persisted run status for a project, including terminal status.
     func runStatus(for projectLineageID: UUID) -> RunOutlineStatus? {
         guard let data = runStatusDefaults.data(forKey: Self.runStatusKey(for: projectLineageID)) else { return nil }

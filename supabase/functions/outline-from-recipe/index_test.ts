@@ -269,8 +269,9 @@ Deno.test("planner prompt passes empty existingSectionsByBeat when no existing s
     "planner prompt must explicitly state the residual-count contract",
   );
   const parsed = JSON.parse(user);
-  for (const beat of parsed.arcTemplate.beats) {
-    assertEquals(parsed.existingSectionsByBeat[beat.id], []);
+  for (const [beatIndex, beat] of parsed.arcTemplate.beats.entries()) {
+    assertEquals(beat.beatIndex, beatIndex);
+    assertEquals(parsed.existingSectionsByBeat[sparseRequest.arcTemplate.beats[beatIndex].id], []);
   }
   assertEquals(parsed.existingUnlinkedSections, []);
 });
@@ -385,8 +386,8 @@ Deno.test("planner→generation handoff: 2 existing + planner returns 3 → gene
   // minSections=3 for the NEW sections still required on beat-1.
   const plannerResponse = JSON.stringify({
     allocations: [
-      { beatID: "beat-1", minSections: 3, rationale: "needs 3 new beyond existing 2" },
-      { beatID: "beat-2", minSections: 2, rationale: "needs 2 new" },
+      { beatIndex: 0, minSections: 3, rationale: "needs 3 new beyond existing 2" },
+      { beatIndex: 1, minSections: 2, rationale: "needs 2 new" },
     ],
   });
   const calls: Array<{ action: string }> = [];
@@ -433,8 +434,8 @@ Deno.test("planner→generation handoff: planner returns 0 → generation receiv
   // returns minSections=0 for both.
   const plannerResponse = JSON.stringify({
     allocations: [
-      { beatID: "beat-1", minSections: 0, rationale: "fully covered by existing 1" },
-      { beatID: "beat-2", minSections: 0, rationale: "fully covered by existing 1" },
+      { beatIndex: 0, minSections: 0, rationale: "fully covered by existing 1" },
+      { beatIndex: 1, minSections: 0, rationale: "fully covered by existing 1" },
     ],
   });
   const billableCall: any = async () => ({
@@ -567,8 +568,8 @@ Deno.test("allocation parser preserves minimums and rejects malformed plans", ()
   const result = parseAndValidateAllocation(
     JSON.stringify({
       allocations: [
-        { beatID: "beat-1", minSections: 2, rationale: "setup" },
-        { beatID: "beat-2", minSections: 0, rationale: "escalation" },
+        { beatIndex: 0, minSections: 2, rationale: "setup" },
+        { beatIndex: 1, minSections: 0, rationale: "escalation" },
       ],
     }),
     beats,
@@ -587,7 +588,7 @@ Deno.test("allocation parser preserves minimums and rejects malformed plans", ()
   let missingError = "";
   try {
     parseAndValidateAllocation(
-      JSON.stringify({ allocations: [{ beatID: "beat-1", minSections: 1, rationale: "setup" }] }),
+      JSON.stringify({ allocations: [{ beatIndex: 0, minSections: 1, rationale: "setup" }] }),
       beats,
     );
   } catch (caught) {
@@ -598,28 +599,28 @@ Deno.test("allocation parser preserves minimums and rejects malformed plans", ()
   for (const invalid of [
     {
       allocations: [
-        { beatID: "beat-1", minSections: 1, rationale: "setup" },
-        { beatID: "beat-1", minSections: 1, rationale: "duplicate" },
-        { beatID: "beat-2", minSections: 1, rationale: "break" },
+        { beatIndex: 0, minSections: 1, rationale: "setup" },
+        { beatIndex: 0, minSections: 1, rationale: "duplicate" },
+        { beatIndex: 1, minSections: 1, rationale: "break" },
       ],
     },
     {
       allocations: [
-        { beatID: "unknown", minSections: 1, rationale: "unknown" },
-        { beatID: "beat-1", minSections: 1, rationale: "setup" },
-        { beatID: "beat-2", minSections: 1, rationale: "break" },
+        { beatIndex: 99, minSections: 1, rationale: "unknown" },
+        { beatIndex: 0, minSections: 1, rationale: "setup" },
+        { beatIndex: 1, minSections: 1, rationale: "break" },
       ],
     },
     {
       allocations: [
-        { beatID: "beat-1", minSections: 1.5, rationale: "not integer" },
-        { beatID: "beat-2", minSections: 1, rationale: "break" },
+        { beatIndex: 0, minSections: 1.5, rationale: "not integer" },
+        { beatIndex: 1, minSections: 1, rationale: "break" },
       ],
     },
     {
       allocations: [
-        { beatID: "beat-1", minSections: 1, targetSections: 2, rationale: "legacy target" },
-        { beatID: "beat-2", minSections: 1, rationale: "break" },
+        { beatIndex: 0, minSections: 1, targetSections: 2, rationale: "legacy target" },
+        { beatIndex: 1, minSections: 1, rationale: "break" },
       ],
     },
   ]) {
@@ -636,8 +637,8 @@ Deno.test("allocation parser preserves minimums and rejects malformed plans", ()
   // There is no allocation-total guard: the global response cap is separate.
   const largeMinimumPlan = parseAndValidateAllocation(
     JSON.stringify({ allocations: [
-      { beatID: "beat-1", minSections: 10, rationale: "dense" },
-      { beatID: "beat-2", minSections: 10, rationale: "dense" },
+      { beatIndex: 0, minSections: 10, rationale: "dense" },
+      { beatIndex: 1, minSections: 10, rationale: "dense" },
     ] }),
     beats,
   );
@@ -660,8 +661,8 @@ Deno.test("existing beat coverage allows zero allocation and emits no duplicate"
   const allocation = parseAndValidateAllocation(
     JSON.stringify({
       allocations: [
-        { beatID: "beat-1", minSections: 0, rationale: "already covered" },
-        { beatID: "beat-2", minSections: 1, rationale: "new escalation" },
+        { beatIndex: 0, minSections: 0, rationale: "already covered" },
+        { beatIndex: 1, minSections: 1, rationale: "new escalation" },
       ],
     }),
     requestWithExisting.arcTemplate.beats,
@@ -708,6 +709,29 @@ const repairAllocation = new Map([
 ]);
 const repairBeatOrder = ["beat-1", "beat-2", "beat-3"];
 const repairBeatIds = new Set(repairBeatOrder);
+
+
+Deno.test("allocation never accepts a stitched or model-authored beat UUID", () => {
+  const beats = [
+    { id: "80A38EE5-8187-4AE1-A82F-335959781679" },
+    { id: "10A90555-20C7-4D73-A17D-EA7967604AB0" },
+  ];
+  let error = "";
+  try {
+    parseAndValidateAllocation(JSON.stringify({ allocations: [
+      { beatID: "10A90555-8187-4AE1-A82F-335959781679", minSections: 1, rationale: "hallucinated" },
+      { beatIndex: 1, minSections: 1, rationale: "valid" },
+    ] }), beats);
+  } catch (caught) {
+    error = String(caught);
+  }
+  assertEquals(error.includes("unexpected field"), true);
+  const mapped = parseAndValidateAllocation(JSON.stringify({ allocations: [
+    { beatIndex: 0, minSections: 1, rationale: "midpoint" },
+    { beatIndex: 1, minSections: 1, rationale: "close in" },
+  ] }), beats);
+  assertEquals([...mapped.keys()], beats.map((beat) => beat.id));
+});
 
 function repairSuggestion(title: string, beatID: string): any {
   return {

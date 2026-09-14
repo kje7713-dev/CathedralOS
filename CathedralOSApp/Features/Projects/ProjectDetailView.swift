@@ -272,6 +272,12 @@ struct ProjectDetailView: View {
         .tint(CathedralTheme.Colors.accent)
         .task {
             durabilityCoordinator.resumeAcceptAllIfNeeded(context: modelContext)
+            await durabilityCoordinator.reconcilePersistedRunStatusIfNeeded(
+                for: project.stableLineageID,
+                outlineID: project.outlines.first?.id,
+                currentSectionCount: project.outlines.first?.sections.count ?? 0,
+                runOutlineService: RunOutlineService()
+            )
             durabilityCoordinator.resumePollingIfNeeded(
                 for: project.stableLineageID,
                 runOutlineService: RunOutlineService(),
