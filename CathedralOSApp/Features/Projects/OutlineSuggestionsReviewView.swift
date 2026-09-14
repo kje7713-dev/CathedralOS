@@ -3,6 +3,33 @@ import SwiftData
 
 /// Review sheet for AI-generated outline suggestions (Phase 2).
 ///
+@MainActor
+internal enum AcceptAllProjectResolver {
+    static func resolve(localProjectID: UUID, in context: ModelContext) throws -> StoryProject {
+        let descriptor = FetchDescriptor<StoryProject>(
+            predicate: #Predicate { project in
+                project.id == localProjectID
+            }
+        )
+        guard let currentProject = try context.fetch(descriptor).first else {
+            throw ProjectCloudSyncError.localProjectNotFound(
+                localProjectID: localProjectID.uuidString
+            )
+        }
+        return currentProject
+    }
+
+    static func resolveCanonical(localProjectID: UUID, in context: ModelContext) throws -> StoryProject {
+        let currentProject = try resolve(localProjectID: localProjectID, in: context)
+        guard currentProject.lineageID != nil else {
+            throw ProjectCloudSyncError.missingCanonicalLineage(
+                localProjectID: localProjectID.uuidString
+            )
+        }
+        return currentProject
+    }
+}
+
 /// Shown after the edge function returns 5-15 `OutlineSuggestion` payloads.
 /// Two actions:
 ///   - Accept All: create OutlineSection records for every suggestion AND
@@ -46,19 +73,6 @@ struct OutlineSuggestionsReviewView: View {
     }
     private var acceptErrorMessage: String? { activeAcceptRun == nil ? durabilityCoordinator.acceptRunError : nil }
     @State private var hasStartedAcceptance = false
-
-    private var acceptAllBuilder: AcceptAllRequestBuilder {
-        AcceptAllRequestBuilder(
-            projectID: project.id,
-            outlineID: outline.id,
-            suggestions: suggestions,
-            sourceRecipe: sourceRecipe
-        )
-    }
-
-    private var acceptanceIdempotencyKey: String {
-        acceptAllBuilder.idempotencyKey
-    }
 
     var body: some View {
         NavigationStack {
@@ -234,20 +248,26 @@ struct OutlineSuggestionsReviewView: View {
                     }
                 }
 
-                guard let canonicalLineageID = project.lineageID else {
-                    throw ProjectCloudSyncError.missingCanonicalLineage(
-                        localProjectID: projectID.uuidString
-                    )
-                }
+                // The review sheet may still hold the pre-restore SwiftData
+                // object. Resolve the current managed object by stable local ID
+                // before reading lineage or constructing the Accept All request.
+                let currentProject = try AcceptAllProjectResolver.resolveCanonical(
+                    localProjectID: projectID,
+                    in: modelContext
+                )
+                let canonicalLineageID = currentProject.stableLineageID
+                // Keep the Story Arc relationship on the same freshly fetched
+                // project so its sync cannot read the stale captured object.
+                arc.project = currentProject
 
                 // Checkpoint: story arc sync started.
-                NSLog("[accept_all] story_arc_sync_started outline=%@ project=%@ lineage=%@", outline.id.uuidString, projectID.uuidString, canonicalLineageID.uuidString)
+                NSLog("[accept_all] story_arc_sync_started outline=%@ project=%@ lineage=%@", outline.id.uuidString, currentProject.id.uuidString, canonicalLineageID.uuidString)
                 _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
                 // Checkpoint: story arc sync completed.
-                NSLog("[accept_all] story_arc_sync_completed outline=%@ project=%@", outline.id.uuidString, projectID.uuidString)
+                NSLog("[accept_all] story_arc_sync_completed outline=%@ project=%@", outline.id.uuidString, currentProject.id.uuidString)
                 // Checkpoint: coordinator begin requested.
-                NSLog("[accept_all] coordinator_begin_requested outline=%@ project=%@ lineage=%@", outline.id.uuidString, projectID.uuidString, canonicalLineageID.uuidString)
-                beginAccept(projectID: projectID, projectLineageID: canonicalLineageID, baseURL: baseURL)
+                NSLog("[accept_all] coordinator_begin_requested outline=%@ project=%@ lineage=%@", outline.id.uuidString, currentProject.id.uuidString, canonicalLineageID.uuidString)
+                beginAccept(project: currentProject, projectLineageID: canonicalLineageID, baseURL: baseURL)
             } catch {
                 NSLog("[accept_all] story_arc_sync_failed outline=%@ project=%@ error=%@", outline.id.uuidString, projectID.uuidString, error.localizedDescription)
                 durabilityCoordinator.reportAcceptRunError("Could not sync the Story Arc before acceptance: \(error.localizedDescription)")
@@ -255,16 +275,22 @@ struct OutlineSuggestionsReviewView: View {
         }
     }
 
-    private func beginAccept(projectID: UUID, projectLineageID: UUID, baseURL: URL) {
+    private func beginAccept(project: StoryProject, projectLineageID: UUID, baseURL: URL) {
         let edgeURL = baseURL.appendingPathComponent("functions/v1/accept-outline-sections")
+        let requestBuilder = AcceptAllRequestBuilder(
+            projectID: project.id,
+            outlineID: outline.id,
+            suggestions: suggestions,
+            sourceRecipe: sourceRecipe
+        )
         durabilityCoordinator.beginAcceptAll(
             edgeFunctionURL: edgeURL,
             outlineID: outline.id,
-            projectID: projectID,
+            projectID: project.id,
             projectLineageID: projectLineageID,
             suggestions: suggestions,
             startingPosition: (outline.sections.map { $0.position }.max() ?? -1) + 1,
-            idempotencyKey: acceptanceIdempotencyKey,
+            idempotencyKey: requestBuilder.idempotencyKey,
             sourceRecipe: sourceRecipe,
             context: modelContext
         )

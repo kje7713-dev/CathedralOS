@@ -230,7 +230,81 @@ final class AcceptAllLifecycleTests: XCTestCase {
                        "isAcceptRunInitiating must clear once the run ID is attached")
     }
 
-    // 2. Stale client run, server says 404: persisted/active stale run exists,
+    // 2. A restore can replace/update the managed project while the review
+    // sheet still holds an older object. Accept All must refetch by local ID
+    // and forward the canonical lineage from the current ModelContext object.
+    func testStaleCapturedProjectRefetchesCanonicalLineageBeforeAcceptRequest() async throws {
+        let coordinator = makeCoordinator()
+        let service = FakeAcceptAllService()
+        let context = try makeInMemoryContext()
+        let localProjectID = UUID(uuidString: "CF695226-5877-4F7D-B1AC-30F9B895BEDB")!
+        let canonicalLineageID = UUID(uuidString: "24e2e1fb-c467-49ab-b470-686e384cab23")!
+
+        // This is the stale reference held by the review sheet before restore.
+        let staleProject = StoryProject()
+        staleProject.id = localProjectID
+        staleProject.lineageID = localProjectID
+
+        // Simulate restore replacing the persisted object with the canonical
+        // cloud lineage. The resolver must not use staleProject.
+        let restoredProject = StoryProject()
+        restoredProject.id = localProjectID
+        restoredProject.lineageID = canonicalLineageID
+        context.insert(restoredProject)
+        try context.save()
+
+        let currentProject = try AcceptAllProjectResolver.resolveCanonical(
+            localProjectID: staleProject.id,
+            in: context
+        )
+        XCTAssertEqual(currentProject.lineageID, canonicalLineageID)
+        XCTAssertEqual(staleProject.stableLineageID, localProjectID)
+
+        let outlineID = UUID()
+        coordinator.beginAcceptAll(
+            edgeFunctionURL: URL(string: "https://example.test/functions/v1/accept-outline-sections")!,
+            outlineID: outlineID,
+            projectID: currentProject.id,
+            projectLineageID: currentProject.stableLineageID,
+            suggestions: [makeSuggestion()],
+            startingPosition: 0,
+            idempotencyKey: "key-refetched-lineage",
+            sourceRecipe: makeRecipe(),
+            context: context,
+            service: service
+        )
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(service.lastStartRequest?.projectID, localProjectID)
+        XCTAssertEqual(service.lastStartRequest?.projectLineageID, canonicalLineageID,
+                       "Accept All must send the refetched canonical lineage, never the stale local UUID")
+    }
+
+    // 3. A refetched cloud-backed project without lineage must fail locally;
+    // never fall back to its local UUID for Accept All.
+    func testRefetchedProjectWithoutCanonicalLineageFailsClosed() throws {
+        let context = try makeInMemoryContext()
+        let localProjectID = UUID()
+        let project = StoryProject()
+        project.id = localProjectID
+        project.lineageID = nil
+        context.insert(project)
+        try context.save()
+
+        XCTAssertThrowsError(
+            try AcceptAllProjectResolver.resolveCanonical(
+                localProjectID: localProjectID,
+                in: context
+            )
+        ) { error in
+            guard case ProjectCloudSyncError.missingCanonicalLineage(let actualID) = error else {
+                return XCTFail("Expected missingCanonicalLineage, got \(error)")
+            }
+            XCTAssertEqual(actualID, localProjectID.uuidString)
+        }
+    }
+
+    // 4. Stale client run, server says 404: persisted/active stale run exists,
     //    status lookup returns not found, stale state is cleared, subsequent
     //    Accept All can start, no permanent polling loop.
     func testStaleRun404_ClearsState() async throws {

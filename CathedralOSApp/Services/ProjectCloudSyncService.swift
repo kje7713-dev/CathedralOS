@@ -28,6 +28,8 @@ enum ProjectCloudSyncError: Error, LocalizedError {
     /// A cloud snapshot has no canonical lineage. Restoring it would make the
     /// local project UUID masquerade as the stable cloud identity.
     case missingCanonicalLineage(localProjectID: String)
+    /// The local project disappeared while an Accept All restore was resolving.
+    case localProjectNotFound(localProjectID: String)
 
     var errorDescription: String? {
         switch self {
@@ -63,6 +65,8 @@ enum ProjectCloudSyncError: Error, LocalizedError {
             return "Could not find the cloud snapshot for project \(localProjectID) (lineage \(lineageID)). The Accept All job completed, but this device could not refresh that project from the cloud."
         case .missingCanonicalLineage(let localProjectID):
             return "Cloud restore stopped for project \(localProjectID): the snapshot has no canonical lineage identity. The local project was not restored."
+        case .localProjectNotFound(let localProjectID):
+            return "Accept All could not find the current local project \(localProjectID) after restore. Close and reopen the project, then try again."
         }
     }
 }
