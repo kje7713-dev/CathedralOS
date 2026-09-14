@@ -2059,6 +2059,7 @@ export interface OutlineQualityDiagnostic {
   semanticArcIssues: string[];
   supportingEntities: string[];
   unusedStoryMaterialItems: number;
+  advisoryValidationError?: string;
 }
 
 function contractText(suggestion: Suggestion): string {
@@ -2458,6 +2459,33 @@ export function validateOutlinePlanningQuality(
   };
 }
 
+/**
+ * Semantic checks are diagnostics only. A provider can produce a perfectly
+ * usable outline that disagrees with a heuristic, and a heuristic itself can
+ * throw as its rules evolve. Neither case may invalidate the structural
+ * response or turn Suggest Sections into a server failure.
+ */
+export function collectAdvisoryOutlineQuality(
+  suggestions: Suggestion[],
+  storyMaterial?: StoryMaterialEnrichment,
+  format: StoryMaterialFormat = "novel",
+  template?: Pick<ArcTemplateBlob, "name" | "beats">,
+  allocation?: Map<string, Allocation>,
+): OutlineQualityDiagnostic {
+  try {
+    return validateOutlinePlanningQuality(suggestions, storyMaterial, format, template, allocation);
+  } catch (error) {
+    return {
+      distinctnessIssues: [],
+      causalScaleIssues: [],
+      semanticArcIssues: [],
+      supportingEntities: [],
+      unusedStoryMaterialItems: 0,
+      advisoryValidationError: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -2768,34 +2796,34 @@ async function runSuggestionJob(
         diagnostics,
       });
       const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
-      const expanded = await expandNovel(resume.suggestions, recipeObligations, resume.startRound, resume.priorDiagnostics);
-      const expandedQuality = validateOutlinePlanningQuality(expanded.suggestions, resumedMaterial, requestedStoryMaterialFormat(body), body.arcTemplate);
-      if (expandedQuality.semanticArcIssues.length > 0) {
-        throw new Error(`expanded outline failed Story Arc semantic validation: ${expandedQuality.semanticArcIssues[0]}`);
-      }
-      if (expandedQuality.distinctnessIssues.length > 0) {
-        throw new Error(`expanded outline failed dramatic distinctness validation: ${expandedQuality.distinctnessIssues[0]}`);
-      }
-      const coverage = obligationCoverage([...(body.existingSections ?? []), ...expanded.suggestions], recipeObligations);
-      if (coverage.missingRequired.length > 0) {
-        throw new RecipeObligationValidationError(
-          `required recipe obligations remain uncovered: ${coverage.missingRequired.map((obligation) => obligation.id).join(", ")}`,
+      let completedSuggestions = resume.suggestions;
+      let completionWarnings: string[] = [];
+      try {
+        const expanded = await expandNovel(resume.suggestions, recipeObligations, resume.startRound, resume.priorDiagnostics);
+        completedSuggestions = expanded.suggestions;
+        completionWarnings = expanded.warnings;
+        const advisoryQuality = collectAdvisoryOutlineQuality(
+          completedSuggestions,
+          resumedMaterial,
+          requestedStoryMaterialFormat(body),
+          body.arcTemplate,
         );
-      }
-      const finalScale = evaluateNovelScale(expanded.suggestions, body.existingSections ?? []);
-      diagnostics = {
-        ...diagnostics,
-        stage: "completed",
-        expansionRounds: expanded.diagnostics,
-        expansionCheckpoint: buildExpansionCheckpoint(expanded.suggestions, body.existingSections ?? [], expanded.diagnostics),
-        novelScale: finalScale,
-        finalSectionCounts: countSuggestionsByBeat(expanded.suggestions),
-      };
-      if (!finalScale.meetsMinimum) {
-        throw new NovelScalePlanningError(
-          "failed_under_target",
-          `Novel outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum at completion.`,
-        );
+        diagnostics = {
+          ...diagnostics,
+          advisoryQuality,
+          expansionRounds: expanded.diagnostics,
+          expansionCheckpoint: buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], expanded.diagnostics),
+          novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
+        };
+      } catch (error) {
+        // Expansion is an optional improvement. Keep the already persisted,
+        // structurally valid checkpoint rather than turning a semantic or
+        // expansion disagreement into a failed Suggest Sections run.
+        diagnostics = {
+          ...diagnostics,
+          expansionFallback: error instanceof Error ? error.message : String(error),
+          novelScale: evaluateNovelScale(resume.suggestions, body.existingSections ?? []),
+        };
       }
       // PR8 (revised): story_material was already persisted above (before
       // expandNovel) so future resumes can validate without re-repairing.
@@ -2803,12 +2831,12 @@ async function runSuggestionJob(
       // and standard completion fields.
       await updateRun({
         status: "completed",
-        suggestions: expanded.suggestions,
-        warnings: expanded.warnings,
+        suggestions: completedSuggestions,
+        warnings: completionWarnings,
         credit_cost_charged: creditCostCharged,
         remaining_credits: remainingCredits,
         completed_at: new Date().toISOString(),
-        diagnostics,
+        diagnostics: { ...diagnostics, stage: "completed", finalSectionCounts: countSuggestionsByBeat(completedSuggestions) },
         lease_owner: null,
         lease_expires_at: null,
       });
@@ -2951,99 +2979,40 @@ async function runSuggestionJob(
       }
     }
 
-    const initialRepair = repairStoryArcMacroStructure(result.suggestions, body.arcTemplate, allocation);
-    result = { ...result, suggestions: initialRepair.suggestions };
-    const semanticRepair = await repairRequiredStoryArcFunctions(result.suggestions, body.arcTemplate, billableCall, recipeObligations);
-    result = { ...result, suggestions: semanticRepair.suggestions };
-    const initialQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body), body.arcTemplate, allocation);
+    // Structural validation above is the completion gate. The following checks
+    // are intentionally advisory: literary heuristics must never reject a
+    // structurally usable outline or trigger another billable call.
+    latestValidSuggestions = result.suggestions;
+    const initialQuality = collectAdvisoryOutlineQuality(
+      result.suggestions,
+      storyMaterial,
+      requestedStoryMaterialFormat(body),
+      body.arcTemplate,
+      allocation,
+    );
     diagnostics = {
       ...diagnostics,
       sectionContractValidated: true,
-      semanticArcRepairedSections: [...initialRepair.repaired, ...semanticRepair.repaired],
-      semanticArcUnresolvedSections: [...initialRepair.unresolved, ...semanticRepair.unresolved],
+      semanticArcRepairedSections: [],
+      semanticArcUnresolvedSections: [],
       dramaticDistinctnessIssues: initialQuality.distinctnessIssues,
       semanticArcIssues: initialQuality.semanticArcIssues,
       causalScaleIssues: initialQuality.causalScaleIssues,
       unusedStoryMaterialItems: initialQuality.unusedStoryMaterialItems,
+      ...(initialQuality.advisoryValidationError
+        ? { advisoryValidationError: initialQuality.advisoryValidationError }
+        : {}),
     };
-    if (initialQuality.semanticArcIssues.length > 0 || initialRepair.unresolved.length > 0 || semanticRepair.unresolved.length > 0) {
-      throw new Error(`outline failed Story Arc semantic validation: ${(initialQuality.semanticArcIssues[0] ?? initialRepair.unresolved[0] ?? semanticRepair.unresolved[0])}`);
-    }
-    if (initialQuality.distinctnessIssues.length > 0) {
-      throw new Error(`outline failed dramatic distinctness validation: ${initialQuality.distinctnessIssues[0]}`);
-    }
 
-    let coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
+    // Recipe coverage and novel scale remain useful diagnostics for later
+    // review, but they are not semantic correctness gates for Suggest Sections.
+    const coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
     diagnostics = {
       ...diagnostics,
       recipeObligationCoverage: coverage.covered,
       missingRequiredRecipeObligations: coverage.missingRequired.map((obligation) => obligation.id),
+      novelScale: evaluateNovelScale(result.suggestions, body.existingSections ?? []),
     };
-    if (coverage.missingRequired.length > 0) {
-      result = {
-        ...result,
-        suggestions: await repairRecipeObligations(body, result.suggestions, beatIds, recipeObligations, billableCall),
-      };
-      coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
-      diagnostics = {
-        ...diagnostics,
-        recipeObligationCoverageAfterRepair: coverage.covered,
-        missingRequiredRecipeObligationsAfterRepair: coverage.missingRequired.map((obligation) => obligation.id),
-      };
-      if (coverage.missingRequired.length > 0) {
-        throw new RecipeObligationValidationError(
-          `required recipe obligations remain uncovered: ${coverage.missingRequired.map((obligation) => obligation.id).join(", ")}`,
-        );
-      }
-    }
-
-    // Expand progressively in bounded rounds. Every round is additive and starts
-    // from the complete valid outline produced so far. The checkpoint is written
-    // before the first expansion call and after every accepted round.
-    if (requestedStoryMaterialFormat(body) === "novel" && needsNovelExpansion(result.suggestions, body.existingSections ?? [])) {
-      latestValidSuggestions = result.suggestions;
-      const initialScale = evaluateNovelScale(result.suggestions, body.existingSections ?? []);
-      const initialCheckpoint = buildExpansionCheckpoint(result.suggestions, body.existingSections ?? [], []);
-      diagnostics = {
-        ...diagnostics,
-        stage: "expansion_checkpoint",
-        expansionRounds: [],
-        expansionCheckpoint: initialCheckpoint,
-        novelScale: initialScale,
-      };
-      await updateRun({ suggestions: result.suggestions, diagnostics });
-      const expanded = await expandNovel(result.suggestions, recipeObligations);
-      result = { suggestions: expanded.suggestions, warnings: [...result.warnings, ...expanded.warnings] };
-      const expandedRepair = repairStoryArcMacroStructure(result.suggestions, body.arcTemplate, allocation);
-      result = { ...result, suggestions: expandedRepair.suggestions };
-      const expandedQuality = validateOutlinePlanningQuality(result.suggestions, storyMaterial, requestedStoryMaterialFormat(body), body.arcTemplate, allocation);
-      diagnostics = { ...diagnostics, stage: "expansion_complete", expansionRounds: expanded.diagnostics, finalSectionCounts: countSuggestionsByBeat(result.suggestions), semanticArcRepairedSections: expandedRepair.repaired, semanticArcUnresolvedSections: expandedRepair.unresolved, dramaticDistinctnessIssues: expandedQuality.distinctnessIssues, semanticArcIssues: expandedQuality.semanticArcIssues, causalScaleIssues: expandedQuality.causalScaleIssues, unusedStoryMaterialItems: expandedQuality.unusedStoryMaterialItems, novelScale: evaluateNovelScale(result.suggestions, body.existingSections ?? []) };
-      if (expandedQuality.semanticArcIssues.length > 0 || expandedRepair.unresolved.length > 0) {
-        throw new Error(`expanded outline failed Story Arc semantic validation: ${(expandedQuality.semanticArcIssues[0] ?? expandedRepair.unresolved[0])}`);
-      }
-      if (expandedQuality.distinctnessIssues.length > 0) {
-        throw new Error(`expanded outline failed dramatic distinctness validation: ${expandedQuality.distinctnessIssues[0]}`);
-      }
-    }
-    coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
-    if (coverage.missingRequired.length > 0) {
-      throw new RecipeObligationValidationError(
-        `required recipe obligations remain uncovered: ${coverage.missingRequired.map((obligation) => obligation.id).join(", ")}`,
-      );
-    }
-    if (requestedStoryMaterialFormat(body) === "novel") {
-      const finalScale = evaluateNovelScale(result.suggestions, body.existingSections ?? []);
-      diagnostics = {
-        ...diagnostics,
-        novelScale: finalScale,
-      };
-      if (!finalScale.meetsMinimum) {
-        throw new NovelScalePlanningError(
-          "failed_under_target",
-          `Novel outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum at completion.`,
-        );
-      }
-    }
     await updateRun({
       status: "completed",
       suggestions: result.suggestions,
