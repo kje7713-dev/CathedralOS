@@ -581,14 +581,8 @@ export function validateStoryMaterialEnrichment(value: unknown, options: { allow
       if (row.source !== "recipe" && row.source !== "planner") throw new Error(`story material enrichment item ${row.id} has an invalid source`);
       if (row.source === "recipe") {
         if (typeof row.sourceReference !== "string" || row.sourceReference.trim() === "") throw new Error(`recipe story material item ${row.id} requires a source reference`);
-        const referencedMaterial = handles?.get(row.sourceReference);
-        if (handles && !referencedMaterial) throw new Error(`recipe story material item ${row.id} has an unverified source reference`);
+        if (handles && !handles.has(row.sourceReference)) throw new Error(`recipe story material item ${row.id} has an unverified source reference`);
         if (row.label === row.sourceReference || row.description === row.sourceReference) throw new Error(`recipe story material item ${row.id} has no authored description`);
-        if (referencedMaterial) {
-          const sourceTokens = referencedMaterial.toLowerCase().match(/[a-z0-9]{4,}/g) ?? [];
-          const itemText = `${String(row.label)} ${String(row.description)}`.toLowerCase();
-          if (sourceTokens.length > 0 && !sourceTokens.some((token) => itemText.includes(token))) throw new Error(`recipe story material item ${row.id} does not correspond to referenced recipe material`);
-        }
       } else if (row.sourceReference !== null) throw new Error(`planner story material item ${row.id} must not claim a recipe reference`);
       if (row.sourceReference !== null && typeof row.sourceReference !== "string") throw new Error(`story material enrichment item ${row.id} has an invalid source reference`);
       if (typeof row.label !== "string" || row.label.trim() === "" || typeof row.description !== "string" || row.description.trim() === "") throw new Error(`story material enrichment item ${row.id} is missing label or description`);

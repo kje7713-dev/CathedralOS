@@ -2064,9 +2064,10 @@ Deno.test("recipe provenance handles are server-verifiable and forged recipe cla
   try { validateStoryMaterialEnrichment(material, { recipe: brodyRecipe }); } catch (caught) { error = String(caught); }
   assertEquals(error.includes("no authored description"), true);
   material.antagonisticForces[0] = materialItem("unrelated", "recipe", "character:character-1");
-  error = "";
-  try { validateStoryMaterialEnrichment(material, { recipe: brodyRecipe }); } catch (caught) { error = String(caught); }
-  assertEquals(error.includes("does not correspond"), true);
+  // Exact canonical handles establish provenance; generated prose may explain
+  // the material through consequences or relationships without repeating its
+  // display-name tokens. Do not apply a brittle lexical correspondence test.
+  assertEquals(validateStoryMaterialEnrichment(material, { recipe: brodyRecipe }).antagonisticForces[0].source, "recipe");
   material.antagonisticForces[0] = materialItem("planner", "planner", null);
   assertEquals(validateStoryMaterialEnrichment(material, { recipe: brodyRecipe }).antagonisticForces[0].source, "planner");
 });
