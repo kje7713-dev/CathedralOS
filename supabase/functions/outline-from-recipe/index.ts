@@ -729,16 +729,14 @@ export function repairStoryMaterialFromRecipe(
   const idPortionOf = (handle: string): string => handle.replace(/^[a-zA-Z]+:/, "");
   const itemFromHandle = (handle: string, label: string, description: string): StoryMaterialItem => {
     // validateStoryMaterialEnrichment rejects label === sourceReference and
-    // description === sourceReference. For sparse recipes where the relevant
-    // recipe field is missing, fall back to a synthesized note so the item
-    // is structurally distinct from its sourceReference. Handles without a
-    // category prefix (e.g. `aftertaste`, `storySpark`) share their id
-    // portion with the handle, so the previous `idPortion || handle`
-    // fallback collapsed to the handle itself and still tripped the
-    // validator.
+    // description === sourceReference. Canonical extractors above guarantee
+    // both values are non-empty, so this fallback only fires when a recipe
+    // field literally repeats the handle (e.g. an aftertaste whose label is
+    // the string "aftertaste"). The synthesized fallback is a deterministic
+    // structural marker, not a content placeholder.
     const idPortion = idPortionOf(handle);
-    const fallbackNote = `${idPortion || handle} (recipe-derived)`;
-    const safeLabel = (label && label !== handle) ? label : fallbackNote;
+    const fallback = `${idPortion || handle} (recipe handle)`;
+    const safeLabel = (label && label !== handle) ? label : fallback;
     const safeDescription = (description && description !== handle) ? description : safeLabel;
     return {
       id: `recipe-${handle.replace(/[.:]/g, "-")}`,
@@ -758,6 +756,175 @@ export function repairStoryMaterialFromRecipe(
     return "";
   };
 
+  // Canonical recipe-field extractors. The PromptPackExportPayload schema
+  // (CathedralOSApp/Models/PromptPackExportPayload.swift) defines the
+  // authoritative authored fields per story-material category. Reading from
+  // the real schema preserves actual user content rather than collapsing to
+  // the recipe handle. Synthesized prose is reserved as a final structural
+  // fallback when a canonical row exists but every authored field is empty.
+  const asString = (value: unknown): string => {
+    if (typeof value !== "string") return "";
+    return value.trim();
+  };
+
+  const asStringArray = (value: unknown): string[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  };
+
+  // joinNonEmpty drops empty entries and appends a terminal period to any
+  // fragment that doesn't already end in terminal punctuation. Used by
+  // aftertasteText and storySparkText, which build their descriptions as a
+  // flat array of pre-formatted fragments rather than going through
+  // partsPush. Same readability contract as partsPush.
+  const joinNonEmpty = (parts: string[]): string => {
+    return parts
+      .filter((p) => p.length > 0)
+      .map((p) => /[.!?]$/.test(p) ? p : p + ".")
+      .join(" ");
+  };
+
+  const aftertasteText = (row: Record<string, unknown>): { label: string; description: string } => {
+    const label = asString(row.label);
+    const description = joinNonEmpty([
+      asString(row.note),
+      asString(row.emotionalResidue) && `Emotional residue: ${asString(row.emotionalResidue)}`,
+      asString(row.endingTexture) && `Ending texture: ${asString(row.endingTexture)}`,
+      asString(row.desiredAmbiguityLevel) && `Desired ambiguity: ${asString(row.desiredAmbiguityLevel)}`,
+      asString(row.readerQuestionLeftOpen) && `Reader question left open: ${asString(row.readerQuestionLeftOpen)}`,
+      asString(row.lastImageFeeling) && `Last image feeling: ${asString(row.lastImageFeeling)}`,
+    ]);
+    return {
+      label: label || "Aftertaste",
+      description: description || "Aftertaste with no authored content supplied",
+    };
+  };
+
+  const storySparkText = (row: Record<string, unknown>): { label: string; description: string } => {
+    const label = asString(row.title);
+    const description = joinNonEmpty([
+      asString(row.situation) && `Situation: ${asString(row.situation)}`,
+      asString(row.stakes) && `Stakes: ${asString(row.stakes)}`,
+      asString(row.twist) && `Twist: ${asString(row.twist)}`,
+      asString(row.urgency) && `Urgency: ${asString(row.urgency)}`,
+      asString(row.threat) && `Threat: ${asString(row.threat)}`,
+      asString(row.opportunity) && `Opportunity: ${asString(row.opportunity)}`,
+      asString(row.complication) && `Complication: ${asString(row.complication)}`,
+      asString(row.clock) && `Clock: ${asString(row.clock)}`,
+      asString(row.triggerEvent) && `Trigger event: ${asString(row.triggerEvent)}`,
+      asString(row.initialImbalance) && `Initial imbalance: ${asString(row.initialImbalance)}`,
+      asString(row.falseResolution) && `False resolution: ${asString(row.falseResolution)}`,
+      asString(row.reversalPotential) && `Reversal potential: ${asString(row.reversalPotential)}`,
+    ]);
+    return {
+      label: label || "Story Spark",
+      description: description || "Story spark with no authored content supplied",
+    };
+  };
+
+  const characterText = (row: Record<string, unknown>): { label: string; description: string } => {
+    const label = asString(row.name);
+    const parts: string[] = [];
+    const roles = asStringArray(row.roles); if (roles.length > 0) partsPush(parts, `Roles: ${roles.join(", ")}`);
+    const goals = asStringArray(row.goals); if (goals.length > 0) partsPush(parts, `Goals: ${goals.join(", ")}`);
+    const preferences = asStringArray(row.preferences); if (preferences.length > 0) partsPush(parts, `Preferences: ${preferences.join(", ")}`);
+    const resources = asStringArray(row.resources); if (resources.length > 0) partsPush(parts, `Resources: ${resources.join(", ")}`);
+    const failurePatterns = asStringArray(row.failurePatterns); if (failurePatterns.length > 0) partsPush(parts, `Failure patterns: ${failurePatterns.join(", ")}`);
+    const fears = asStringArray(row.fears); if (fears.length > 0) partsPush(parts, `Fears: ${fears.join(", ")}`);
+    const flaws = asStringArray(row.flaws); if (flaws.length > 0) partsPush(parts, `Flaws: ${flaws.join(", ")}`);
+    const secrets = asStringArray(row.secrets); if (secrets.length > 0) partsPush(parts, `Secrets: ${secrets.join(", ")}`);
+    const wounds = asStringArray(row.wounds); if (wounds.length > 0) partsPush(parts, `Wounds: ${wounds.join(", ")}`);
+    const contradictions = asStringArray(row.contradictions); if (contradictions.length > 0) partsPush(parts, `Contradictions: ${contradictions.join(", ")}`);
+    const needs = asStringArray(row.needs); if (needs.length > 0) partsPush(parts, `Needs: ${needs.join(", ")}`);
+    const obsessions = asStringArray(row.obsessions); if (obsessions.length > 0) partsPush(parts, `Obsessions: ${obsessions.join(", ")}`);
+    const attachments = asStringArray(row.attachments); if (attachments.length > 0) partsPush(parts, `Attachments: ${attachments.join(", ")}`);
+    const notes = asString(row.notes); if (notes) partsPush(parts, `Notes: ${notes}`);
+    const instructionBias = asString(row.instructionBias); if (instructionBias) partsPush(parts, `Instruction bias: ${instructionBias}`);
+    const selfDeceptions = asStringArray(row.selfDeceptions); if (selfDeceptions.length > 0) partsPush(parts, `Self-deceptions: ${selfDeceptions.join(", ")}`);
+    const identityConflicts = asStringArray(row.identityConflicts); if (identityConflicts.length > 0) partsPush(parts, `Identity conflicts: ${identityConflicts.join(", ")}`);
+    const moralLines = asStringArray(row.moralLines); if (moralLines.length > 0) partsPush(parts, `Moral lines: ${moralLines.join(", ")}`);
+    const breakingPoints = asStringArray(row.breakingPoints); if (breakingPoints.length > 0) partsPush(parts, `Breaking points: ${breakingPoints.join(", ")}`);
+    const virtues = asStringArray(row.virtues); if (virtues.length > 0) partsPush(parts, `Virtues: ${virtues.join(", ")}`);
+    const publicMask = asString(row.publicMask); if (publicMask) partsPush(parts, `Public mask: ${publicMask}`);
+    const privateLogic = asString(row.privateLogic); if (privateLogic) partsPush(parts, `Private logic: ${privateLogic}`);
+    const speechStyle = asString(row.speechStyle); if (speechStyle) partsPush(parts, `Speech style: ${speechStyle}`);
+    const arcStart = asString(row.arcStart); if (arcStart) partsPush(parts, `Arc start: ${arcStart}`);
+    const arcEnd = asString(row.arcEnd); if (arcEnd) partsPush(parts, `Arc end: ${arcEnd}`);
+    const coreLie = asString(row.coreLie); if (coreLie) partsPush(parts, `Core lie: ${coreLie}`);
+    const coreTruth = asString(row.coreTruth); if (coreTruth) partsPush(parts, `Core truth: ${coreTruth}`);
+    const reputation = asString(row.reputation); if (reputation) partsPush(parts, `Reputation: ${reputation}`);
+    const status = asString(row.status); if (status) partsPush(parts, `Status: ${status}`);
+    return {
+      label: label || "Character",
+      description: parts.length > 0 ? parts.join(" ") : "Character with no authored content supplied",
+    };
+  };
+
+  const relationshipText = (row: Record<string, unknown>): { label: string; description: string } => {
+    const label = asString(row.name);
+    const parts: string[] = [];
+    const relationshipType = asString(row.relationshipType); if (relationshipType) partsPush(parts, `Type: ${relationshipType}`);
+    const tension = asString(row.tension); if (tension) partsPush(parts, `Tension: ${tension}`);
+    const loyalty = asString(row.loyalty); if (loyalty) partsPush(parts, `Loyalty: ${loyalty}`);
+    const fear = asString(row.fear); if (fear) partsPush(parts, `Fear: ${fear}`);
+    const desire = asString(row.desire); if (desire) partsPush(parts, `Desire: ${desire}`);
+    const dependency = asString(row.dependency); if (dependency) partsPush(parts, `Dependency: ${dependency}`);
+    const history = asString(row.history); if (history) partsPush(parts, `History: ${history}`);
+    const powerBalance = asString(row.powerBalance); if (powerBalance) partsPush(parts, `Power balance: ${powerBalance}`);
+    const resentment = asString(row.resentment); if (resentment) partsPush(parts, `Resentment: ${resentment}`);
+    const misunderstanding = asString(row.misunderstanding); if (misunderstanding) partsPush(parts, `Misunderstanding: ${misunderstanding}`);
+    const unspokenTruth = asString(row.unspokenTruth); if (unspokenTruth) partsPush(parts, `Unspoken truth: ${unspokenTruth}`);
+    const whatEachWantsFromTheOther = asString(row.whatEachWantsFromTheOther); if (whatEachWantsFromTheOther) partsPush(parts, `What each wants from the other: ${whatEachWantsFromTheOther}`);
+    const whatWouldBreakIt = asString(row.whatWouldBreakIt); if (whatWouldBreakIt) partsPush(parts, `What would break it: ${whatWouldBreakIt}`);
+    const whatWouldTransformIt = asString(row.whatWouldTransformIt); if (whatWouldTransformIt) partsPush(parts, `What would transform it: ${whatWouldTransformIt}`);
+    const notes = asString(row.notes); if (notes) partsPush(parts, notes);
+    return {
+      label: label || "Relationship",
+      description: parts.length > 0 ? parts.join(" ") : "Relationship with no authored content supplied",
+    };
+  };
+
+  const themeText = (row: Record<string, unknown>): { label: string; description: string } => {
+    const label = asString(row.question);
+    const parts: string[] = [];
+    const coreTension = asString(row.coreTension); if (coreTension) partsPush(parts, `Core tension: ${coreTension}`);
+    const valueConflict = asString(row.valueConflict); if (valueConflict) partsPush(parts, `Value conflict: ${valueConflict}`);
+    const moralFaultLine = asString(row.moralFaultLine); if (moralFaultLine) partsPush(parts, `Moral fault line: ${moralFaultLine}`);
+    const endingTruth = asString(row.endingTruth); if (endingTruth) partsPush(parts, `Ending truth: ${endingTruth}`);
+    const notes = asString(row.notes); if (notes) partsPush(parts, notes);
+    return {
+      label: label || "Theme Question",
+      description: parts.length > 0 ? parts.join(" ") : "Theme question with no authored content supplied",
+    };
+  };
+
+  const motifText = (row: Record<string, unknown>): { label: string; description: string } => {
+    const label = asString(row.label);
+    const parts: string[] = [];
+    const category = asString(row.category); if (category) partsPush(parts, `Category: ${category}`);
+    const meaning = asString(row.meaning); if (meaning) partsPush(parts, `Meaning: ${meaning}`);
+    const examples = asStringArray(row.examples); if (examples.length > 0) partsPush(parts, `Examples: ${examples.join(", ")}`);
+    const notes = asString(row.notes); if (notes) partsPush(parts, `Notes: ${notes}`);
+    return {
+      label: label || "Motif",
+      description: parts.length > 0 ? parts.join(" ") : "Motif with no authored content supplied",
+    };
+  };
+
+  // Inline helper: only push non-empty fragments so description strings
+  // stay deterministic. Append a period when the value doesn't already end
+  // in terminal punctuation so joined output reads like a sequence of
+  // sentences (e.g. "Roles: detective. Notes: Disgraced detective ...")
+  // without doubling punctuation when the source text already ends a
+  // sentence.
+  const partsPush = (parts: string[], value: string): void => {
+    if (!value) return;
+    parts.push(/[.!?]$/.test(value) ? value : value + ".");
+  };
+
   const handleFor = (prefix: string, row: Record<string, unknown>, index: number): string | null => {
     const id = typeof row.id === "string" && row.id.trim()
       ? row.id.trim()
@@ -770,7 +937,11 @@ export function repairStoryMaterialFromRecipe(
     return handles.has(handle) ? handle : null;
   };
 
-  // characters: character:<id> → characters[i]
+  // characters: character:<id> → characters[i]. Reads canonical
+  // CharacterPayload fields (name + roles/goals/fears/flaws/etc.). The
+  // previous `pickStr(rowObj, "summary", "description")` produced an empty
+  // description for canonical rows — CharacterPayload has neither field —
+  // which collapsed to the handle and tripped the validator.
   const characters: StoryMaterialItem[] = [];
   if (Array.isArray(r.selectedCharacters)) {
     r.selectedCharacters.forEach((row, index) => {
@@ -778,13 +949,14 @@ export function repairStoryMaterialFromRecipe(
       const rowObj = row as Record<string, unknown>;
       const handle = handleFor("character", rowObj, index);
       if (!handle) return;
-      const label = pickStr(rowObj, "name", "label");
-      const description = pickStr(rowObj, "summary", "description");
-      characters.push(itemFromHandle(handle, label, description));
+      const text = characterText(rowObj);
+      characters.push(itemFromHandle(handle, text.label, text.description));
     });
   }
 
-  // relationships: relationship:<id> → relationships[i]
+  // relationships: relationship:<id> → relationships[i]. Reads canonical
+  // RelationshipPayload fields (name + relationshipType + tension/loyalty/
+  // fear/desire/dependency/history/powerBalance/etc.).
   const relationships: StoryMaterialItem[] = [];
   if (Array.isArray(r.selectedRelationships)) {
     r.selectedRelationships.forEach((row, index) => {
@@ -792,9 +964,8 @@ export function repairStoryMaterialFromRecipe(
       const rowObj = row as Record<string, unknown>;
       const handle = handleFor("relationship", rowObj, index);
       if (!handle) return;
-      const label = pickStr(rowObj, "summary", "label");
-      const description = pickStr(rowObj, "description", "summary");
-      relationships.push(itemFromHandle(handle, label, description));
+      const text = relationshipText(rowObj);
+      relationships.push(itemFromHandle(handle, text.label, text.description));
     });
   }
 
@@ -807,9 +978,8 @@ export function repairStoryMaterialFromRecipe(
       const rowObj = row as Record<string, unknown>;
       const handle = handleFor("theme", rowObj, index);
       if (!handle) return;
-      const label = pickStr(rowObj, "question", "label", "name");
-      const description = pickStr(rowObj, "description", "context", "summary");
-      thematicPressures.push(itemFromHandle(handle, label, description));
+      const text = themeText(rowObj);
+      thematicPressures.push(itemFromHandle(handle, text.label, text.description));
     });
   }
   if (Array.isArray(r.selectedMotifs)) {
@@ -819,9 +989,8 @@ export function repairStoryMaterialFromRecipe(
       const rowObj = row as Record<string, unknown>;
       const handle = handleFor("motif", rowObj, index);
       if (!handle) return;
-      const label = pickStr(rowObj, "label", "name");
-      const description = pickStr(rowObj, "description");
-      thematicPressures.push(itemFromHandle(handle, label, description));
+      const text = motifText(rowObj);
+      thematicPressures.push(itemFromHandle(handle, text.label, text.description));
     });
   }
 
@@ -831,22 +1000,24 @@ export function repairStoryMaterialFromRecipe(
     discoveries.push(itemFromHandle("project.summary", "Project Premise", r.project.summary.trim()));
   }
 
-  // antagonisticForces: storySpark → antagonisticForces[0] (single object)
+  // antagonisticForces: storySpark → antagonisticForces[0] (single object).
+  // Reads canonical StorySparkPayload fields (title + situation/stakes/twist/
+  // urgency/threat/opportunity/complication/clock/triggerEvent/etc.).
   const antagonisticForces: StoryMaterialItem[] = [];
   if (handles.has("storySpark") && r.selectedStorySpark && typeof r.selectedStorySpark === "object") {
     const spark = r.selectedStorySpark as Record<string, unknown>;
-    const title = pickStr(spark, "title", "text");
-    const description = pickStr(spark, "description", "summary");
-    antagonisticForces.push(itemFromHandle("storySpark", title, description));
+    const text = storySparkText(spark);
+    antagonisticForces.push(itemFromHandle("storySpark", text.label, text.description));
   }
 
-  // unresolvedQuestions: aftertaste → unresolvedQuestions[0] (single object)
+  // unresolvedQuestions: aftertaste → unresolvedQuestions[0] (single object).
+  // Reads canonical AftertastePayload fields (label + note/emotionalResidue/
+  // endingTexture/desiredAmbiguityLevel/readerQuestionLeftOpen/lastImageFeeling).
   const unresolvedQuestions: StoryMaterialItem[] = [];
   if (handles.has("aftertaste") && r.selectedAftertaste && typeof r.selectedAftertaste === "object") {
     const a = r.selectedAftertaste as Record<string, unknown>;
-    const title = pickStr(a, "title", "text");
-    const description = pickStr(a, "description", "summary");
-    unresolvedQuestions.push(itemFromHandle("aftertaste", title, description));
+    const text = aftertasteText(a);
+    unresolvedQuestions.push(itemFromHandle("aftertaste", text.label, text.description));
   }
 
   const material: StoryMaterialEnrichment = {
