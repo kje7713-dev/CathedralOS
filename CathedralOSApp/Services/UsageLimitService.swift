@@ -173,7 +173,7 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
             }
         }
         save(
-            availableCredits: state.availableCredits,
+            availableCredits: Int(state.availableCredits.rounded(.down)),
             monthlyCount: existing.monthlyGenerationCount,
             monthlyBudgetUsed: existing.monthlyOutputBudgetUsed,
             resetDate: resetDate,
@@ -307,7 +307,7 @@ final class StubUsageLimitService: UsageLimitServiceProtocol {
 
     func applyBackendCreditState(_ state: BackendCreditState) {
         currentState = GenerationCreditState(
-            availableCredits: state.availableCredits,
+            availableCredits: Int(state.availableCredits.rounded(.down)),
             monthlyGenerationCount: currentState.monthlyGenerationCount,
             monthlyOutputBudgetUsed: currentState.monthlyOutputBudgetUsed,
             resetDate: currentState.resetDate,

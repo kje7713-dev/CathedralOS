@@ -17,13 +17,13 @@ struct BackendCreditState: Codable, Equatable {
     // MARK: Credit balances
 
     /// Monthly credit allowance for the current period (replenishes monthly).
-    let monthlyCreditAllowance: Int
+    let monthlyCreditAllowance: Double
 
     /// Credits from purchased packs (do not expire until used).
-    let purchasedCreditBalance: Int
+    let purchasedCreditBalance: Double
 
     /// Total available credits = monthlyCreditAllowance + purchasedCreditBalance.
-    let availableCredits: Int
+    let availableCredits: Double
 
     /// Whether the signed-in user is allowed to use admin/dev grant tools.
     let isAdmin: Bool
@@ -41,7 +41,7 @@ struct BackendCreditState: Codable, Equatable {
 
     struct CreditLedgerEntry: Codable, Equatable {
         let id: String
-        let delta: Int
+        let delta: Double
         let reason: String
         let createdAt: String
 
@@ -67,9 +67,9 @@ struct BackendCreditState: Codable, Equatable {
     init(
         planName: String,
         isPro: Bool,
-        monthlyCreditAllowance: Int,
-        purchasedCreditBalance: Int,
-        availableCredits: Int,
+        monthlyCreditAllowance: Double,
+        purchasedCreditBalance: Double,
+        availableCredits: Double,
         isAdmin: Bool,
         currentPeriodEnd: String?,
         recentLedger: [CreditLedgerEntry]
@@ -88,9 +88,9 @@ struct BackendCreditState: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         planName = try container.decode(String.self, forKey: .planName)
         isPro = try container.decode(Bool.self, forKey: .isPro)
-        monthlyCreditAllowance = try container.decode(Int.self, forKey: .monthlyCreditAllowance)
-        purchasedCreditBalance = try container.decode(Int.self, forKey: .purchasedCreditBalance)
-        availableCredits = try container.decode(Int.self, forKey: .availableCredits)
+        monthlyCreditAllowance = try container.decode(Double.self, forKey: .monthlyCreditAllowance)
+        purchasedCreditBalance = try container.decode(Double.self, forKey: .purchasedCreditBalance)
+        availableCredits = try container.decode(Double.self, forKey: .availableCredits)
         isAdmin = try container.decodeIfPresent(Bool.self, forKey: .isAdmin) ?? false
         currentPeriodEnd = try container.decodeIfPresent(String.self, forKey: .currentPeriodEnd)
         recentLedger = try container.decodeIfPresent([CreditLedgerEntry].self, forKey: .recentLedger) ?? []
@@ -311,9 +311,9 @@ extension BackendCreditState {
     static func stub(
         planName: String = "free",
         isPro: Bool = false,
-        monthlyCreditAllowance: Int = 10,
-        purchasedCreditBalance: Int = 0,
-        availableCredits: Int = 10,
+        monthlyCreditAllowance: Double = 10,
+        purchasedCreditBalance: Double = 0,
+        availableCredits: Double = 10,
         isAdmin: Bool = false,
         currentPeriodEnd: String? = nil,
         recentLedger: [CreditLedgerEntry] = []
