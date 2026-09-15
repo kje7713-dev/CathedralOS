@@ -920,6 +920,19 @@ Deno.test("repair allocation locks satisfied beats to zero and requests only sho
   assertEquals(accepted.length, 7);
 });
 
+Deno.test("outline section contract assigns canonical plot decisions to the planner", () => {
+  const prompt = buildPrompt(sparseRequest as any, new Map([
+    ["beat-1", { minSections: 1, rationale: "setup" }],
+  ])).system;
+  assertEquals(prompt.includes("one canonical dramatic realization"), true);
+  assertEquals(prompt.includes("The outline planner owns plot decisions; the later prose generator owns execution"), true);
+  assertEquals(prompt.includes("choose the concrete location, participating characters, triggering action"), true);
+  assertEquals(prompt.includes("Do not leave those decisions as interchangeable possibilities"), true);
+  assertEquals(prompt.includes("Do not mechanically ban words such as"), true);
+  assertEquals(prompt.includes("two prose generators following the same section contract"), true);
+  assertEquals(prompt.includes("Make entryState, resultingChange, and terminalState similarly concrete"), true);
+});
+
 Deno.test("novel planning exposes container semantics and projected-size expansion", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
