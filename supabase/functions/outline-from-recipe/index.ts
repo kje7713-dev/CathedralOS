@@ -7,6 +7,15 @@ import {
   OpenAIProvider,
 } from "../generate-story/_provider.ts";
 import {
+  assertPromptWithinBudget,
+  buildCompactPlanningView,
+  compactExistingSections,
+  compactMaterial,
+  compactObligations,
+  compactRecipe,
+  stableJSONStringify,
+} from "./_prompt_context.ts";
+import {
   type RecipeObligation,
   deriveRecipeObligations,
   obligationCoverage,
@@ -1625,7 +1634,12 @@ export function buildExpansionPrompt(
 
 ## Recipe obligations
 ${renderRecipeObligations(obligations)}`,
-    user: JSON.stringify({ recipe: req.recipe, storyMaterialEnrichment: req.storyMaterialEnrichment ?? null, arcTemplate: req.arcTemplate, recipeObligations: obligations, existingSections: req.existingSections ?? [], currentSuggestions: current, beatLocalContext: beatContext ?? null, unusedStoryMaterial, expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens } }, null, 2),
+    user: JSON.stringify({
+      planningContext: buildCompactPlanningView(req, obligations, req.storyMaterialEnrichment),
+      targetBeat: beatContext ? { ...beatContext, currentSections: compactExistingSections(beatContext.currentSections ?? []) } : null,
+      unusedStoryMaterial: compactMaterial({ relevant: unusedStoryMaterial }),
+      expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens },
+    }, null, 2),
   };
 }
 
@@ -1757,9 +1771,8 @@ The expected ranges are literary targets; runtime/provider headroom is not a des
 The following obligations were derived from populated canonical recipe fields. Required obligations must be materially advanced by one or more sections. Supporting items are optional texture and must not be promoted into mandatory plot events. Each section may include zero or more applicable recipeRequirementIDs; attach only obligations materially advanced by that section.
 ${renderRecipeObligations(obligations)}
 
-## Story material enrichment
-${storyMaterial ? JSON.stringify(storyMaterial, null, 2) : "No enrichment package was supplied; preserve the complete recipe while planning."}
-Use this package to develop concrete events. Do not treat planner-invented material as authored recipe fact.
+## Compact planning context
+Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation.
 
 ## Use the minimum-only allocation
 
@@ -1791,17 +1804,8 @@ ${
         }\n\n`
         : ""
     }Respond with structured JSON matching the schema.`;
-  const user = JSON.stringify(
-    {
-      recipe: req.recipe,
-      arcTemplate: req.arcTemplate,
-      recipeObligations: obligations,
-      storyMaterialEnrichment: storyMaterial ?? null,
-      hint: req.hint ?? null,
-    },
-    null,
-    2,
-  );
+  const planningView = buildCompactPlanningView({ ...req, storyMaterialEnrichment: storyMaterial }, obligations, storyMaterial);
+  const user = JSON.stringify({ planningContext: planningView, allocation: Array.from(allocation.entries()), hint: req.hint ?? null }, null, 2);
 
   return { system, user };
 }
@@ -1953,48 +1957,38 @@ export function parseAndValidateAllocation(
 
 export function buildAllocationPrompt(
   req: OutlineFromRecipeRequest,
+  obligations: RecipeObligation[] = [],
 ): { system: string; user: string } {
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
 This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections. Use the supplied premise, characters, and arc to decide where density belongs.
 
+## Required recipe obligations
+${renderRecipeObligations(obligations)}
+
 For every Story Arc beat, determine the minimum number of NEW dramatic sections still required to adequately realize that movement in a novel after considering the supplied existingSections. Output exactly one allocation for every beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. minSections represents the number of additional sections still required beyond existingSections — it is a floor, not a target or maximum. The later outline generator may create additional sections whenever the material supports them. A beat sufficiently covered by existing sections may use minSections 0 (existing coverage is already accounted for; do not include it in minSections). Do not output any other root key.
 
 Output JSON only. No commentary, no prose.`;
 
-  const user = JSON.stringify(
-    {
-      requestedFormat: requestedStoryMaterialFormat(req),
-      recipe: req.recipe,
-      storyMaterialEnrichment: req.storyMaterialEnrichment ?? null,
-      arcTemplate: {
-        id: req.arcTemplate.id,
-        name: req.arcTemplate.name,
-        beats: req.arcTemplate.beats.map((b, beatIndex) => ({
-          beatIndex,
-          label: b.label,
-          description: b.description,
-        })),
-      },
-      existingSectionsByBeat: Object.fromEntries(
-        req.arcTemplate.beats.map((beat) => [
-          beat.id,
-          (req.existingSections ?? []).filter((section) =>
-            section.storyArcBeatID === beat.id
-          ),
-        ]),
-      ),
-      existingUnlinkedSections: (req.existingSections ?? []).filter((section) =>
-        !section.storyArcBeatID ||
-        !req.arcTemplate.beats.some((beat) =>
-          beat.id === section.storyArcBeatID
-        )
-      ),
-    },
-    null,
-    2,
-  );
+  const planningView = buildCompactPlanningView(req, obligations, req.storyMaterialEnrichment);
+  const user = JSON.stringify({
+    requestedFormat: requestedStoryMaterialFormat(req),
+    recipe: planningView.recipe,
+    arc: planningView.arc,
+    arcTemplate: planningView.arc,
+    obligations: planningView.obligations,
+    materialIndex: planningView.materialIndex,
+    existingOutline: planningView.existingOutline,
+    existingSectionsByBeat: Object.fromEntries(req.arcTemplate.beats.map((beat) => [
+      beat.id,
+      (req.existingSections ?? []).filter((section) => section.storyArcBeatID === beat.id).map((section) => ({
+        id: (section as any).id ?? null, title: section.title ?? null, summary: section.summary ?? null,
+        terminalState: (section as any).terminalState ?? section.terminalBeat ?? null, recipeRequirementIDs: section.recipeRequirementIDs ?? [],
+      })),
+    ])),
+    existingUnlinkedSections: (req.existingSections ?? []).filter((section) => !section.storyArcBeatID || !req.arcTemplate.beats.some((beat) => beat.id === section.storyArcBeatID)).map((section) => ({ title: section.title ?? null, summary: section.summary ?? null })),
+  }, null, 2);
   return { system, user };
 }
 
@@ -2002,8 +1996,9 @@ export async function planSectionAllocation(
   req: OutlineFromRecipeRequest,
   apiKey: string,
   billableCall?: SuggestionLLMCall,
+  obligations: RecipeObligation[] = [],
 ): Promise<Map<string, Allocation>> {
-  const { system, user } = buildAllocationPrompt(req);
+  const { system, user } = buildAllocationPrompt(req, obligations);
   const responseFormat = {
     type: "json_schema",
     json_schema: {
@@ -2922,6 +2917,29 @@ async function runSuggestionJob(
         { role: "system", content: system },
         { role: "user", content: user },
       ];
+      const stageFamily = action.startsWith("outline-expansion-")
+        ? "expansion"
+        : action.startsWith("story-material-enrichment")
+        ? "enrichment"
+        : action.startsWith("outline-plan")
+        ? "allocation"
+        : action.startsWith("outline-suggestions")
+        ? "suggestions"
+        : action;
+      const promptLimit = stageFamily === "suggestions" ? 35000 : stageFamily === "allocation" ? 20000 : stageFamily === "enrichment" ? 20000 : 30000;
+      const promptMetrics = assertPromptWithinBudget(stageFamily, messages, promptLimit, {
+        recipeBytes: new TextEncoder().encode(JSON.stringify(compactRecipe(body.recipe))).byteLength,
+        enrichmentBytes: new TextEncoder().encode(JSON.stringify(compactMaterial(body.storyMaterialEnrichment))).byteLength,
+        obligationCount: Array.isArray(body.storyMaterialEnrichment) ? 0 : undefined,
+        existingSectionCount: body.existingSections?.length ?? 0,
+        currentSuggestionCount: 0,
+        materialItemCount: compactMaterial(body.storyMaterialEnrichment).length,
+      });
+      diagnostics = { ...diagnostics, promptMetrics: { ...(diagnostics.promptMetrics as Record<string, unknown> ?? {}), [action]: promptMetrics } };
+      await updateRun({ diagnostics });
+      const stablePrefixHash = await sha256Hex(system);
+      const projectIdentity = body.recipe?.project?.id ?? body.outline_id ?? "unknown";
+      const promptCacheKey = `cath:outline:${projectIdentity}:${provenance.sourceRecipeHash}:${stageFamily}:v2`;
       await touchLease();
       const result = await runBillableLLM({
         userID: userId,
@@ -2930,11 +2948,21 @@ async function runSuggestionJob(
         model,
         messages,
         maxOutputTokens,
-        providerOptions: { responseFormat, temperature: 0.7 },
+        providerOptions: {
+          responseFormat,
+          temperature: 0.7,
+          cacheMode: model.cacheMode,
+          promptCacheKey: model.cacheMode === "none" ? undefined : promptCacheKey,
+        },
+        stablePrefixHash,
         usageContext: {
           generationLengthMode: "outline",
           outputBudget: maxOutputTokens,
           idempotencyKey: `${runId}:${action}`,
+          featureRunID: runId,
+          promptBytes: promptMetrics.promptBytes,
+          stablePrefixBytes: new TextEncoder().encode(system).byteLength,
+          volatileBytes: new TextEncoder().encode(user).byteLength,
         },
         onProviderSuccess: async (providerResult) => {
           if (validateResponse) await validateResponse(providerResult.content);
@@ -3181,10 +3209,25 @@ async function runSuggestionJob(
     body = { ...body, storyMaterialEnrichment: storyMaterial };
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
     const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
+    // Freeze the deterministic compact view on the durable run so a reclaimed
+    // worker cannot silently prompt against a materially different payload.
+    const planningContext = {
+      ...buildCompactPlanningView(body, recipeObligations, storyMaterial),
+      provenance: {
+        sourceRecipeHash: provenance.sourceRecipeHash,
+        sourceRecipeVersion: provenance.sourceRecipeVersion,
+        sourcePromptPackID: provenance.sourcePromptPackID,
+        projectID: body.recipe?.project?.id ?? null,
+        projectLineageID: body.project_lineage_id ?? null,
+      },
+    };
+    const planningContextHash = await sha256Hex(stableJSONStringify(planningContext));
+    await updateRun({ planning_context: planningContext, planning_context_hash: planningContextHash, planning_context_version: 1 });
     const plannedAllocation = await planSectionAllocation(
       body,
       openaiKey,
       billableCall,
+      recipeObligations,
     );
     // PR 5: plannedAllocation IS the residual count (existingSections already accounted for).
     // Previously we called adjustAllocationForExistingSections here, which double-subtracted

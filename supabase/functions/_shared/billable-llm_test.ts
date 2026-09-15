@@ -537,6 +537,20 @@ Deno.test("runBillableLLM: RPC failure throws credit_charge_failed (atomicity pr
   assertEquals(creditStore.chargeCalls.length, 0);
 });
 
+Deno.test("runBillableLLM: fractional customer charge survives settlement payload", async () => {
+  const admin = makeMockAdmin();
+  const provider = makeProvider(makeLLMResponse({ inputTokens: 123, cachedInputTokens: 0, outputTokens: 17 }));
+  const result = await runBillableLLM(makeRequest({ model: EXACT_BILLING_MODEL }), {
+    adminClient: admin,
+    provider,
+    creditStore: makeCreditStore(),
+  });
+  assertEquals(result.actualCharge, 1.57);
+  const settlement = admin.rpcCalls.find((call) => call.name === "settle_billable_usage");
+  assertExists(settlement);
+  assertEquals(settlement.params.p_charge_credits, 1.57);
+});
+
 Deno.test("runBillableLLM: cached tokens NOT double-counted — total=1500, cached=500 (PR-372: no customer cache discount)", async () => {
   // EXACT_BILLING_MODEL yields (after PR-372):
   //   inputCreditRatePer1k = 10  → ALL input tokens (uncached + cached +
