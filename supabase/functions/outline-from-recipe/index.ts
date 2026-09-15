@@ -2535,6 +2535,23 @@ export async function logicalSuggestionIdentity(body: OutlineFromRecipeRequest):
   return { key: body.idempotencyKey?.trim() || `legacy:${fingerprint}`, fingerprint };
 }
 
+/**
+ * Structural story-material failures happen before billing and are safe to
+ * retry under the same idempotency identity after the server is repaired.
+ * Other failed runs remain terminal so this cannot duplicate paid work.
+ */
+export function isRetryableStoryMaterialFailure(run: {
+  status?: unknown;
+  error?: unknown;
+  credit_cost_charged?: unknown;
+}): boolean {
+  return run.status === "failed" &&
+    Number(run.credit_cost_charged ?? 0) === 0 &&
+    typeof run.error === "string" &&
+    (run.error.startsWith("recipe story material item ") ||
+      run.error === "story material enrichment contains a duplicate or missing item id");
+}
+
 const SUGGESTION_LEASE_MS = 15 * 60 * 1000;
 
 function leaseExpiry(): string {
@@ -3254,6 +3271,42 @@ Deno.serve(async (req: Request) => {
         "idempotency_conflict",
         "The idempotency key is already bound to a different suggestion request",
         409,
+      );
+    }
+    if (isRetryableStoryMaterialFailure(existing)) {
+      // This exact request failed before billing. Requeue the same run under
+      // the same idempotency identity so the repaired server can retry it
+      // without creating a duplicate run or charging twice.
+      const { error: retryError } = await db.from("outline_suggestion_runs").update({
+        status: "pending",
+        error_code: null,
+        error: null,
+        completed_at: null,
+        lease_owner: null,
+        lease_expires_at: null,
+        attempt_count: (existing.attempt_count ?? 0) + 1,
+      }).eq("id", existing.id).eq("status", "failed").eq("credit_cost_charged", 0);
+      if (retryError) return errorResponse("db_error", retryError.message ?? "Could not retry failed suggestion run", 500);
+      // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, body, user.id, openaiKey, existing.attempt_count ?? 0));
+      return corsResponse(
+        JSON.stringify({
+          run_id: existing.id,
+          status: "pending",
+          suggestions: existing.suggestions,
+          warnings: existing.warnings,
+          errorCode: null,
+          error: null,
+          diagnostics: existing.diagnostics,
+          storyMaterialEnrichment: existing.story_material,
+          created_at: existing.created_at,
+          updated_at: new Date().toISOString(),
+          completed_at: null,
+          creditCostCharged: existing.credit_cost_charged,
+          remainingCredits: existing.remaining_credits,
+          sourceRecipe: existing.request_json?.recipe ?? null,
+        }),
+        { status: 200 },
       );
     }
     // Reconnect: return existing run status. Skip checkRateLimit + logRequest

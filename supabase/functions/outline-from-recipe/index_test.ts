@@ -66,6 +66,7 @@ import {
   planSectionAllocation,
   checkRateLimit,
   logRequest,
+  isRetryableStoryMaterialFailure,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -2428,6 +2429,30 @@ Deno.test("PR3 all seven built-in template families use explicit canonical role 
 
 
 // MARK: - PR 7: idempotency-safe planning rate limits
+
+Deno.test("zero-charge story-material structural failures are retryable, paid and unrelated failures are terminal", () => {
+  assertEquals(isRetryableStoryMaterialFailure({
+    status: "failed",
+    credit_cost_charged: 0,
+    error: "story material enrichment contains a duplicate or missing item id",
+  }), true);
+  assertEquals(isRetryableStoryMaterialFailure({
+    status: "failed",
+    credit_cost_charged: 0,
+    error: "recipe story material item recipe-character-x has an unverified source reference",
+  }), true);
+  assertEquals(isRetryableStoryMaterialFailure({
+    status: "failed",
+    credit_cost_charged: 1,
+    error: "story material enrichment contains a duplicate or missing item id",
+  }), false);
+  assertEquals(isRetryableStoryMaterialFailure({
+    status: "failed",
+    credit_cost_charged: 0,
+    error: "provider timeout",
+  }), false);
+});
+
 
 Deno.test("provider story material IDs are repaired when blank or duplicated across categories", () => {
   const material = {
