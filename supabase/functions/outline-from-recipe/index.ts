@@ -500,6 +500,39 @@ export function requestedStoryMaterialFormat(req: Pick<OutlineFromRecipeRequest,
   return req.requestedFormat ?? "novel";
 }
 
+/**
+ * Provider item IDs are package-local bookkeeping, not provenance. Models
+ * occasionally repeat an ID across categories or omit it entirely. Repair
+ * only those structural defects deterministically so one malformed response
+ * does not turn an otherwise usable enrichment into a 500; provenance remains
+ * guarded separately by the validator below.
+ */
+export function normalizeProviderStoryMaterialItemIDs(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const candidate = value as Record<string, unknown>;
+  const ids = new Set<string>();
+  const normalized: Record<string, unknown> = { ...candidate };
+  for (const category of STORY_MATERIAL_CATEGORIES) {
+    const items = candidate[category];
+    if (!Array.isArray(items)) continue;
+    normalized[category] = items.map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const row = item as Record<string, unknown>;
+      const originalID = typeof row.id === "string" ? row.id.trim() : "";
+      if (originalID && !ids.has(originalID)) {
+        ids.add(originalID);
+        return originalID === row.id ? item : { ...row, id: originalID };
+      }
+      let repairedID = `provider-${category}-${index + 1}`;
+      let suffix = 2;
+      while (ids.has(repairedID)) repairedID = `provider-${category}-${index + 1}-${suffix++}`;
+      ids.add(repairedID);
+      return { ...row, id: repairedID };
+    });
+  }
+  return normalized;
+}
+
 export function validateStoryMaterialEnrichment(value: unknown, options: { allowMissingProvenance?: boolean; recipe?: CanonicalRecipeEnvelope } = {}): StoryMaterialEnrichment {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("story material enrichment must be an object");
   const candidate = value as Record<string, unknown>;
@@ -2873,7 +2906,8 @@ async function runSuggestionJob(
           action,
           (content) => {
             try {
-              parsedMaterial = validateStoryMaterialEnrichment(JSON.parse(content), { allowMissingProvenance: true, recipe: body.recipe });
+              const normalizedProviderMaterial = normalizeProviderStoryMaterialItemIDs(JSON.parse(content));
+              parsedMaterial = validateStoryMaterialEnrichment(normalizedProviderMaterial, { allowMissingProvenance: true, recipe: body.recipe });
               // Preserve canonical authored material even when the provider
               // returns a schema-valid package with zero source=recipe items.
               parsedMaterial = mergeCanonicalRecipeMaterial(
