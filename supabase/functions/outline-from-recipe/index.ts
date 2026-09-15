@@ -507,6 +507,34 @@ export function requestedStoryMaterialFormat(req: Pick<OutlineFromRecipeRequest,
  * does not turn an otherwise usable enrichment into a 500; provenance remains
  * guarded separately by the validator below.
  */
+/**
+ * Legacy/provider material can mark an item as recipe-backed while carrying
+ * a local item id instead of a canonical recipe handle. Keep its authored
+ * prose, but downgrade the provenance claim before reuse validation.
+ */
+export function downgradeUnverifiedProviderRecipeReferences(
+  value: unknown,
+  recipe: CanonicalRecipeEnvelope,
+): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const candidate = value as Record<string, unknown>;
+  const handles = recipeMaterialHandles(recipe);
+  const normalized: Record<string, unknown> = { ...candidate };
+  for (const category of STORY_MATERIAL_CATEGORIES) {
+    const items = candidate[category];
+    if (!Array.isArray(items)) continue;
+    normalized[category] = items.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const row = item as Record<string, unknown>;
+      if (row.source === "recipe" && (typeof row.sourceReference !== "string" || !handles.has(row.sourceReference))) {
+        return { ...row, source: "planner", sourceReference: null };
+      }
+      return item;
+    });
+  }
+  return normalized;
+}
+
 export function normalizeProviderStoryMaterialItemIDs(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const candidate = value as Record<string, unknown>;
@@ -1014,7 +1042,9 @@ export function validateRequest(req: unknown): string | null {
   if (r.storyMaterialEnrichment) {
     try {
       validateStoryMaterialEnrichment(
-        normalizeProviderStoryMaterialItemIDs(r.storyMaterialEnrichment),
+        normalizeProviderStoryMaterialItemIDs(
+          downgradeUnverifiedProviderRecipeReferences(r.storyMaterialEnrichment, r.recipe as CanonicalRecipeEnvelope),
+        ),
         { allowMissingProvenance: true },
       );
     } catch (error) {
@@ -2810,7 +2840,12 @@ async function runSuggestionJob(
 
     const provenance = await recipeProvenance(body.recipe);
     if (!body.storyMaterialEnrichment && claimedRun.story_material) {
-      body = { ...body, storyMaterialEnrichment: claimedRun.story_material as StoryMaterialEnrichment };
+      body = {
+        ...body,
+        storyMaterialEnrichment: normalizeProviderStoryMaterialItemIDs(
+          downgradeUnverifiedProviderRecipeReferences(claimedRun.story_material, body.recipe),
+        ) as StoryMaterialEnrichment,
+      };
     }
     const resume = expansionResumeState(claimedRun);
     if (requestedStoryMaterialFormat(body) === "novel" && resume && claimedRun.story_material) {
@@ -2926,7 +2961,9 @@ async function runSuggestionJob(
           action,
           (content) => {
             try {
-              const normalizedProviderMaterial = normalizeProviderStoryMaterialItemIDs(JSON.parse(content));
+              const normalizedProviderMaterial = normalizeProviderStoryMaterialItemIDs(
+                downgradeUnverifiedProviderRecipeReferences(JSON.parse(content), body.recipe),
+              );
               parsedMaterial = validateStoryMaterialEnrichment(normalizedProviderMaterial, { allowMissingProvenance: true, recipe: body.recipe });
               // Preserve canonical authored material even when the provider
               // returns a schema-valid package with zero source=recipe items.
@@ -3208,7 +3245,9 @@ Deno.serve(async (req: Request) => {
   if (body.storyMaterialEnrichment) {
     body = {
       ...body,
-      storyMaterialEnrichment: normalizeProviderStoryMaterialItemIDs(body.storyMaterialEnrichment) as StoryMaterialEnrichment,
+      storyMaterialEnrichment: normalizeProviderStoryMaterialItemIDs(
+        downgradeUnverifiedProviderRecipeReferences(body.storyMaterialEnrichment, body.recipe),
+      ) as StoryMaterialEnrichment,
     };
   }
   const validationError = validateRequest(body);
