@@ -16,6 +16,11 @@ struct CathedralOSApp: App {
     // See docs/storekit-entitlements.md.
 
     init() {
+        // Register before any ModelContainer reads a Transformable attribute.
+        // SwiftData stores [String] as Transformable Data; the default
+        // NSSecureUnarchiveFromDataTransformer can segfault on iOS 26 when
+        // inner NSString items trigger a class registration miss.
+        SafeStringArrayTransformer.register()
         StoreKitEntitlementService.shared.startTransactionListener()
         persistenceBootstrap = PersistenceBootstrap.bootstrap()
         PersistenceLaunchDiagnosticsStore.shared.update(persistenceBootstrap.diagnostics)
