@@ -1769,6 +1769,48 @@ Deno.test("PR8 (revised) repairStoryMaterialFromRecipe: preserves authored chara
   validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
 });
 
+Deno.test("itemFromHandle: authored prose empty for `aftertaste` still produces label/description distinct from the handle", () => {
+  // Regression: handles without a category prefix (`aftertaste`,
+  // `storySpark`) share their id portion with the handle. The previous
+  // `idPortion || handle` fallback collapsed authored prose to the
+  // handle itself, tripping
+  // validateStoryMaterialEnrichment's `description === sourceReference`
+  // check with `recipe story material item recipe-aftertaste has no
+  // authored description`.
+  const provenance = {
+    sourceRecipeHash: "aftertaste-bare",
+    sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-aftertaste",
+    sourcePromptPackName: "Aftertaste Bare",
+  };
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-at", summary: "Bare aftertaste" },
+    setting: { included: false },
+    promptPack: { id: "pack-aftertaste", name: "Aftertaste Bare" },
+    selectedCharacters: [],
+    selectedStorySpark: null,
+    selectedAftertaste: { title: "Quiet dread" },
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, provenance);
+
+  const after = repaired.unresolvedQuestions.find((item) => item.sourceReference === "aftertaste");
+  assertEquals(after !== undefined, true);
+  // The validator's strict check is `label === sourceReference || description === sourceReference`.
+  // Both must differ from `aftertaste`; whether they differ from each other
+  // is irrelevant when only the title was authored.
+  assertEquals(after!.label !== "aftertaste", true);
+  assertEquals(after!.description !== "aftertaste", true);
+
+  // Critical: validation must now succeed (no `no authored description`
+  // rejection) on a bare aftertaste that previously caused HTTP 500.
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
 Deno.test("PR8 (revised) resumeOrRepairStoryMaterial: persists story_material + diagnostics.storyMaterialRepair BEFORE returning when a repair is required", async () => {
   const recipe = {
     schema: "cathedralos.story_packet",

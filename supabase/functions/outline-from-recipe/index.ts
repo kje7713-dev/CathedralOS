@@ -730,13 +730,16 @@ export function repairStoryMaterialFromRecipe(
   const itemFromHandle = (handle: string, label: string, description: string): StoryMaterialItem => {
     // validateStoryMaterialEnrichment rejects label === sourceReference and
     // description === sourceReference. For sparse recipes where the relevant
-    // recipe field is missing, fall back to the id portion of the handle so
-    // the item is still structurally distinct from its sourceReference.
+    // recipe field is missing, fall back to a synthesized note so the item
+    // is structurally distinct from its sourceReference. Handles without a
+    // category prefix (e.g. `aftertaste`, `storySpark`) share their id
+    // portion with the handle, so the previous `idPortion || handle`
+    // fallback collapsed to the handle itself and still tripped the
+    // validator.
     const idPortion = idPortionOf(handle);
-    const safeLabel = label && label !== handle ? label : idPortion || handle;
-    const safeDescription = description && description !== handle && description !== safeLabel
-      ? description
-      : safeLabel;
+    const fallbackNote = `${idPortion || handle} (recipe-derived)`;
+    const safeLabel = (label && label !== handle) ? label : fallbackNote;
+    const safeDescription = (description && description !== handle) ? description : safeLabel;
     return {
       id: `recipe-${handle.replace(/[.:]/g, "-")}`,
       source: "recipe" as const,
