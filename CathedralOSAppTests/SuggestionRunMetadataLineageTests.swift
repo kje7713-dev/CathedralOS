@@ -349,6 +349,35 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             "When expectedIdempotencyKey is nil, lineage entries must still surface (legacy callers)")
     }
 
+    func testSuggestionGenerationPersistsUntilNextExplicitReset() throws {
+        let suiteName = "SuggestionRunMetadataLineageTests.generation.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let coordinator = DataDurabilityCoordinator(defaults: defaults)
+        let lineageID = UUID()
+
+        XCTAssertNil(coordinator.suggestionGenerationID(for: lineageID))
+        let first = coordinator.beginNewSuggestionGeneration(for: lineageID)
+        XCTAssertEqual(coordinator.suggestionGenerationID(for: lineageID), first)
+
+        let second = coordinator.beginNewSuggestionGeneration(for: lineageID)
+        XCTAssertNotEqual(second, first)
+        XCTAssertEqual(coordinator.suggestionGenerationID(for: lineageID), second)
+    }
+
+    func testSuggestionGenerationIsScopedByLineage() throws {
+        let suiteName = "SuggestionRunMetadataLineageTests.generation-scope.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let coordinator = DataDurabilityCoordinator(defaults: defaults)
+        let firstLineage = UUID()
+        let secondLineage = UUID()
+
+        let first = coordinator.beginNewSuggestionGeneration(for: firstLineage)
+        XCTAssertNil(coordinator.suggestionGenerationID(for: secondLineage))
+        XCTAssertEqual(coordinator.suggestionGenerationID(for: firstLineage), first)
+    }
+
     func testLoadReturnsNilWhenNoEntriesExist() throws {
         let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }

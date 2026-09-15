@@ -108,6 +108,31 @@ final class OutlineSuggestionRecoveryTests: XCTestCase {
         OutlineSuggestionService.idempotencyKey(for: request)
     }
 
+    // MARK: - Explicit fresh generation identity
+
+    func testExplicitFreshGenerationChangesIdempotencyKey() {
+        let request = makeRequest()
+        let generationA = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
+        let generationB = UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")!
+
+        XCTAssertNotEqual(
+            OutlineSuggestionService.idempotencyKey(for: request, generationID: generationA),
+            OutlineSuggestionService.idempotencyKey(for: request, generationID: generationB),
+            "A deliberate Delete All generation must not reuse a prior completed run"
+        )
+    }
+
+    func testSameFreshGenerationRemainsIdempotent() {
+        let request = makeRequest()
+        let generationID = UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!
+
+        XCTAssertEqual(
+            OutlineSuggestionService.idempotencyKey(for: request, generationID: generationID),
+            OutlineSuggestionService.idempotencyKey(for: request, generationID: generationID),
+            "Reconnects and retries within one deliberate generation must reuse the same run"
+        )
+    }
+
     // MARK: - Same request → same key
 
     func testSameRequestProducesSameIdempotencyKey() {
