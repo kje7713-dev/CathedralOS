@@ -45,6 +45,7 @@ import {
   mergeCanonicalRecipeMaterial,
   resumeOrRepairStoryMaterial,
   normalizeProviderStoryMaterialItemIDs,
+  downgradeUnverifiedProviderRecipeReferences,
   validateStoryMaterialEnrichment,
   storyMaterialSufficiency,
   recipeProvenance,
@@ -2453,6 +2454,22 @@ Deno.test("zero-charge story-material structural failures are retryable, paid an
   }), false);
 });
 
+
+Deno.test("legacy recipe-local source references are downgraded before reuse", () => {
+  const material = {
+    schema: "cathedralos.story_material_enrichment", version: 2, format: "novel",
+    sourceRecipeHash: "pending", sourceRecipeVersion: 1, sourcePromptPackID: "pack-1", sourcePromptPackName: "Sparse recipe",
+    rationale: "legacy persisted material",
+    characters: [{ id: "brody", source: "recipe", sourceReference: "loc-hawkins-high-school", label: "Brody", description: "A concrete protagonist." }],
+    antagonisticForces: [], locations: [], institutionsAndGroups: [], conflictSources: [],
+    escalationLadder: [], reversals: [], consequences: [], relationships: [], discoveries: [],
+    unresolvedQuestions: [], thematicPressures: [],
+  };
+  const downgraded = downgradeUnverifiedProviderRecipeReferences(material, brodyRecipe) as any;
+  assertEquals(downgraded.characters[0].source, "planner");
+  assertEquals(downgraded.characters[0].sourceReference, null);
+  assertEquals(downgraded.characters[0].description, material.characters[0].description);
+});
 
 Deno.test("provider story material IDs are repaired when blank or duplicated across categories", () => {
   const material = {
