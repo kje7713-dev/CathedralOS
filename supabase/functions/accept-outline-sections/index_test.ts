@@ -6,6 +6,7 @@ import {
   computeRequestFingerprint,
   fetchLeafSectionTotals,
   hashCanonicalRecipe,
+  lineageMismatchResponse,
   mergeSectionsByCanonicalID,
   normalizeStoryArcBeatIDs,
   sectionRow,
@@ -520,6 +521,35 @@ Deno.test("PR13 validate(): rejects non-string project_lineage_id", () => {
   const err = validate(body as any);
   assertNotEquals(err, null);
   assertEquals(err?.includes("project_lineage_id"), true, "error should mention project_lineage_id");
+});
+
+Deno.test("PR13 lineage check: accepts uppercase request against lowercase DB UUID", async () => {
+  const result = lineageMismatchResponse(
+    "1E658A76-6132-427F-8301-221893DFC9A3",
+    "1e658a76-6132-427f-8301-221893dfc9a3",
+  );
+  assertEquals(result, null);
+});
+
+Deno.test("PR13 lineage check: accepts matching lowercase UUIDs", () => {
+  const result = lineageMismatchResponse(
+    "1e658a76-6132-427f-8301-221893dfc9a3",
+    "1e658a76-6132-427f-8301-221893dfc9a3",
+  );
+  assertEquals(result, null);
+});
+
+Deno.test("PR13 lineage check: rejects different UUIDs with 409 lineage_mismatch", async () => {
+  const result = lineageMismatchResponse(
+    "1e658a76-6132-427f-8301-221893dfc9a3",
+    "2e658a76-6132-427f-8301-221893dfc9a3",
+  );
+  assertNotEquals(result, null);
+  assertEquals(result?.status, 409);
+  assertEquals(await result?.json(), {
+    errorCode: "lineage_mismatch",
+    message: "project_lineage_id does not match outline.lineage_id",
+  });
 });
 
 Deno.test("PR13 validate(): rejects malformed UUID project_lineage_id", () => {

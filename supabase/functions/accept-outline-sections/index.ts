@@ -94,6 +94,24 @@ function response(body: unknown, status = 200) {
 function errorResponse(code: string, message: string, status: number) {
   return response({ errorCode: code, message }, status);
 }
+
+export function lineageMismatchResponse(
+  projectLineageID: string | null | undefined,
+  outlineLineageID: string | null | undefined,
+): Response | null {
+  if (
+    projectLineageID != null &&
+    outlineLineageID != null &&
+    canonicalUUID(projectLineageID) !== canonicalUUID(String(outlineLineageID))
+  ) {
+    return errorResponse(
+      "lineage_mismatch",
+      "project_lineage_id does not match outline.lineage_id",
+      409,
+    );
+  }
+  return null;
+}
 export function isUUID(value: unknown): value is string {
   return typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -690,16 +708,11 @@ Deno.serve(async (req) => {
     return errorResponse("not_found", "outline not found", 404);
   }
   // PR 13: lineage match (when both sides are present).
-  if (
-    body.project_lineage_id != null && ownedOutline.lineage_id != null &&
-    body.project_lineage_id !== ownedOutline.lineage_id
-  ) {
-    return errorResponse(
-      "lineage_mismatch",
-      "project_lineage_id does not match outline.lineage_id",
-      409,
-    );
-  }
+  const lineageMismatch = lineageMismatchResponse(
+    body.project_lineage_id,
+    ownedOutline.lineage_id,
+  );
+  if (lineageMismatch) return lineageMismatch;
   // PR 13: source_recipe_json.project.id must equal body.project_id.
   // CanonicalRecipe is a JSON object typed loosely; treat absent/invalid
   // project.id as a malformed request.
