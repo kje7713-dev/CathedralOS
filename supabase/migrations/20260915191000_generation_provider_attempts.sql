@@ -29,3 +29,27 @@ create index if not exists generation_provider_attempts_run_idx on public.genera
 alter table public.generation_provider_attempts enable row level security;
 revoke all on public.generation_provider_attempts from public, anon, authenticated;
 grant all on public.generation_provider_attempts to service_role;
+alter table public.generation_provider_attempts
+  add column if not exists logical_stage_key text,
+  add column if not exists attempt_ordinal integer;
+update public.generation_provider_attempts
+   set logical_stage_key = coalesce(logical_stage_key, billing_idempotency_key, attempt_key),
+       attempt_ordinal = coalesce(attempt_ordinal, 1)
+ where logical_stage_key is null or attempt_ordinal is null;
+alter table public.generation_provider_attempts
+  alter column logical_stage_key set not null,
+  alter column attempt_ordinal set not null;
+create unique index if not exists generation_provider_attempts_attempt_key_unique
+  on public.generation_provider_attempts(attempt_key);
+create unique index if not exists generation_provider_attempts_stage_ordinal_unique
+  on public.generation_provider_attempts(feature_run_id, logical_stage_key, attempt_ordinal)
+  where feature_run_id is not null;
+create or replace function public.reconcile_outline_provider_attempts(p_run_id uuid)
+returns void language sql security definer set search_path=public as $$
+  update public.outline_suggestion_runs r
+     set credit_cost_charged = coalesce((select sum(a.settled_charge_credits) from public.generation_provider_attempts a where a.feature_run_id = r.id and a.status in ('settled','feature_validation_failed')), 0),
+         remaining_credits = (select max(e.monthly_credit_allowance + e.purchased_credit_balance) from public.user_entitlements e where e.user_id = r.user_id)
+   where r.id = p_run_id;
+$$;
+revoke all on function public.reconcile_outline_provider_attempts(uuid) from public, anon, authenticated;
+grant execute on function public.reconcile_outline_provider_attempts(uuid) to service_role;

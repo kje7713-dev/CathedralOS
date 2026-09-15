@@ -14,14 +14,32 @@ export function stableJSONStringify(value: unknown): string {
 }
 
 function compactEntity(item: any): Record<string, unknown> {
-  return {
+  const out: Record<string, unknown> = {
     id: item?.id ?? null,
     name: compactText(item?.name ?? item?.label, 160),
     role: compactText(item?.role ?? item?.classification, 160),
     summary: compactText(item?.summary ?? item?.description ?? item?.notes, 600),
-    goals: Array.isArray(item?.goals) ? item.goals.map((x: unknown) => compactText(x, 180)).slice(0, 8) : undefined,
-    fears: Array.isArray(item?.fears) ? item.fears.map((x: unknown) => compactText(x, 180)).slice(0, 8) : undefined,
   };
+  // Preserve authored narrative semantics without embedding arbitrary raw JSON.
+  const fields = [
+    "roles", "goals", "needs", "fears", "wounds", "secrets", "contradictions",
+    "selfDeceptions", "identityConflicts", "moralLines", "breakingPoints",
+    "wants", "traits", "flaws", "obsessions", "attachments", "virtues",
+    "participants", "history", "powerBalance", "resentment", "misunderstanding",
+    "unspokenTruth", "whatEachWantsFromTheOther", "whatWouldBreakIt", "whatWouldTransformIt",
+    "arcStart", "arcEnd", "coreLie", "coreTruth", "publicMask", "privateLogic", "reputation", "status",
+    "relationshipType", "tension", "loyalty", "fear", "desire", "dependency", "meaning", "examples",
+  ];
+  for (const field of fields) {
+    const value = item?.[field];
+    if (Array.isArray(value)) {
+      const values = value.map((x: unknown) => compactText(x, 220)).filter(Boolean).slice(0, 12);
+      if (values.length) out[field] = values;
+    } else if (value != null && compactText(value, 700)) {
+      out[field] = compactText(value, 700);
+    }
+  }
+  return out;
 }
 
 export function compactRecipe(recipe: any): Record<string, unknown> {
@@ -43,7 +61,7 @@ export function compactRecipe(recipe: any): Record<string, unknown> {
 export function compactMaterial(material: any): unknown[] {
   if (!material || typeof material !== "object") return [];
   return Object.entries(material).flatMap(([category, values]) => Array.isArray(values)
-    ? values.map((item: any) => ({ id: item?.id ?? null, category, label: compactText(item?.label ?? item?.name, 180), description: compactText(item?.description ?? item?.summary, 650), source: item?.source === "recipe" ? "recipe" : "planner", sourceRefs: Array.isArray(item?.sourceRefs) ? item.sourceRefs.slice(0, 12) : Array.isArray(item?.sourceReferenceIDs) ? item.sourceReferenceIDs.slice(0, 12) : [], priority: item?.priority ?? null }))
+    ? values.map((item: any) => ({ id: item?.id ?? null, category, label: compactText(item?.label ?? item?.name, 180), description: compactText(item?.description ?? item?.summary, 650), source: item?.source === "recipe" ? "recipe" : "planner", sourceReference: item?.sourceReference ?? null, sourceRefs: Array.isArray(item?.sourceRefs) ? item.sourceRefs.slice(0, 12) : Array.isArray(item?.sourceReferenceIDs) ? item.sourceReferenceIDs.slice(0, 12) : [], priority: item?.priority ?? null }))
     : []);
 }
 

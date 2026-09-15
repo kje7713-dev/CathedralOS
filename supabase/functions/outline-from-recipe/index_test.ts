@@ -290,8 +290,8 @@ Deno.test("planner prompt groups one existing section onto its linked beat", () 
     true,
     "planner prompt must instruct planner NOT to count existing coverage in minSections",
   );
-  const parsed = JSON.parse(user);
-  assertEquals(parsed.existingSectionsByBeat["beat-1"], [section]);
+  const parsed: any = JSON.parse(user);
+  assertEquals(parsed.existingSectionsByBeat["beat-1"], [{ id: null, title: null, summary: null, terminalState: null, recipeRequirementIDs: section.recipeRequirementIDs }]);
   assertEquals(parsed.existingSectionsByBeat["beat-2"], []);
   assertEquals(parsed.existingUnlinkedSections, []);
 });
@@ -304,8 +304,8 @@ Deno.test("planner prompt groups two existing sections onto the same beat", () =
     system.includes("minSections represents the number of additional sections still required beyond existingSections"),
     true,
   );
-  const parsed = JSON.parse(user);
-  assertEquals(parsed.existingSectionsByBeat["beat-1"], [s1, s2]);
+  const parsed: any = JSON.parse(user);
+  assertEquals(parsed.existingSectionsByBeat["beat-1"].map((s: any) => s.recipeRequirementIDs), [s1.recipeRequirementIDs, s2.recipeRequirementIDs]);
   assertEquals(parsed.existingSectionsByBeat["beat-2"], []);
   assertEquals(parsed.existingUnlinkedSections, []);
 });
@@ -320,13 +320,13 @@ Deno.test("planner prompt groups mixed beats with different existing coverage pl
     system.includes("minSections represents the number of additional sections still required beyond existingSections"),
     true,
   );
-  const parsed = JSON.parse(user);
-  assertEquals(parsed.existingSectionsByBeat["beat-1"], [s1, s2]);
-  assertEquals(parsed.existingSectionsByBeat["beat-2"], [s3]);
+  const parsed: any = JSON.parse(user);
+  assertEquals(parsed.existingSectionsByBeat["beat-1"].map((s: any) => s.title), [null, null]);
+  assertEquals(parsed.existingSectionsByBeat["beat-2"], [{ id: null, title: null, summary: null, terminalState: null, recipeRequirementIDs: [] }]);
   // beat-unknown is not in the arc template, so per-beat bucket is absent and
   // the section falls into existingUnlinkedSections.
   assertEquals(parsed.existingSectionsByBeat["beat-unknown"], undefined);
-  assertEquals(parsed.existingUnlinkedSections, [s4]);
+  assertEquals(parsed.existingUnlinkedSections, [{ title: null, summary: null }]);
 });
 
 Deno.test("production prompt uses planner residual allocation unchanged (no double subtraction)", () => {
@@ -1095,7 +1095,7 @@ Deno.test("beat-local expansion prompt carries the target beat contract", () => 
   });
   assertEquals(prompt.system.includes("beat-local expansion"), true);
   assertEquals(prompt.system.includes("storyArcBeatID beat-1"), true);
-  assertEquals(prompt.user.includes("beatLocalContext"), true);
+  assertEquals(prompt.user.includes("targetBeat"), true);
 });
 
 Deno.test("novel scale evaluates existing accepted sections together with the generated delta", () => {

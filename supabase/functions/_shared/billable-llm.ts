@@ -62,6 +62,9 @@ export interface BillableUsageContext {
   promptBytes?: number | null;
   stablePrefixBytes?: number | null;
   volatileBytes?: number | null;
+  providerAttemptKey?: string | null;
+  logicalStageKey?: string | null;
+  attemptOrdinal?: number | null;
 }
 
 /** Provider-specific knobs. Coherence-check sets `responseFormat` to enable
@@ -187,16 +190,28 @@ async function updateProviderAttempt(adminClient: unknown, attemptID: string | n
   } catch (error) { console.error(`[billable-llm] provider-attempt update threw: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
+async function reconcileOutlineRun(adminClient: unknown, runID: string | null | undefined): Promise<void> {
+  if (!adminClient || !runID) return;
+  try {
+    const result = await (adminClient as any).rpc("reconcile_outline_provider_attempts", { p_run_id: runID });
+    if (result?.error) console.error(`[billable-llm] outline reconciliation failed: ${JSON.stringify(result.error)}`);
+  } catch (error) { console.error(`[billable-llm] outline reconciliation threw: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
 async function startProviderAttempt(adminClient: unknown, req: BillableLLMRequest<unknown>, attemptKey: string): Promise<string | null> {
   if (!adminClient) return null;
   try {
     const table = (adminClient as any).from("generation_provider_attempts");
     if (!table || typeof table.select !== "function") return null;
+    const prior = await table.select("id").eq("attempt_key", attemptKey).maybeSingle();
+    if (prior?.data?.id) return prior.data.id;
     const insertBuilder = table.insert({
       user_id: req.userID, purpose: req.purpose, action: req.action,
       feature_run_id: req.usageContext.featureRunID ?? null,
       billing_idempotency_key: req.usageContext.idempotencyKey ?? null,
-      attempt_key: attemptKey, model_name: req.model.provider_model, status: "started",
+      attempt_key: attemptKey, logical_stage_key: req.usageContext.logicalStageKey ?? req.usageContext.idempotencyKey ?? attemptKey,
+      attempt_ordinal: req.usageContext.attemptOrdinal ?? 1,
+      model_name: req.model.provider_model, status: "started",
       stable_prefix_hash: req.stablePrefixHash ?? null,
       prompt_bytes: req.usageContext.promptBytes ?? null,
       stable_prefix_bytes: req.usageContext.stablePrefixBytes ?? null,
@@ -233,7 +248,8 @@ export async function runBillableLLM<T>(
   deps: BillableLLMDependencies,
 ): Promise<BillableLLMResult<T>> {
   const pricing = snapshotPricing(req.model);
-  const attemptKey = `${req.usageContext.idempotencyKey ?? crypto.randomUUID()}:provider:${crypto.randomUUID()}`;
+  const attemptKey = req.usageContext.providerAttemptKey ??
+    `${req.usageContext.idempotencyKey ?? crypto.randomUUID()}:attempt:1`;
   let attemptID: string | null = null;
 
   // 1. Pre-flight credit check.
@@ -342,7 +358,9 @@ export async function runBillableLLM<T>(
           p_credit_value_usd: pricing.creditValueUsd,
         });
         if (settlement?.error) throw new Error(settlement.error.message ?? "validation-failure settlement failed");
-        await updateProviderAttempt(deps.adminClient, attemptID, { status: "feature_validation_failed", completed_at: new Date().toISOString(), feature_error_code: error instanceof Error ? error.name : "feature_error", calculated_charge_credits: preCallbackCharge, settled_charge_credits: preCallbackCharge });
+        const settledRow = settlement?.data?.[0] ?? {};
+        await updateProviderAttempt(deps.adminClient, attemptID, { status: "feature_validation_failed", completed_at: new Date().toISOString(), feature_error_code: error instanceof Error ? error.name : "feature_error", calculated_charge_credits: preCallbackCharge, settled_charge_credits: preCallbackCharge, usage_event_id: settledRow.usage_event_id ?? null, ledger_id: settledRow.ledger_id ?? null });
+        await reconcileOutlineRun(deps.adminClient, req.usageContext.featureRunID);
       } catch (settlementError) {
         await updateProviderAttempt(deps.adminClient, attemptID, { status: "settlement_failed", completed_at: new Date().toISOString(), feature_error_code: error instanceof Error ? error.name : "feature_error", calculated_charge_credits: preCallbackCharge });
         console.error(`[billable-llm] provider-complete outline validation settlement failed: ${settlementError instanceof Error ? settlementError.message : String(settlementError)}`);
@@ -492,6 +510,7 @@ export async function runBillableLLM<T>(
 
   if (row.settlement_status === "duplicate") {
     await updateProviderAttempt(deps.adminClient, attemptID, { status: "settled", completed_at: new Date().toISOString(), calculated_charge_credits: actualCharge, settled_charge_credits: 0, usage_event_id: row.usage_event_id });
+    await reconcileOutlineRun(deps.adminClient, req.usageContext.featureRunID);
     return {
       featureResult,
       providerResult,
@@ -507,6 +526,7 @@ export async function runBillableLLM<T>(
   }
 
   await updateProviderAttempt(deps.adminClient, attemptID, { status: "settled", completed_at: new Date().toISOString(), calculated_charge_credits: actualCharge, settled_charge_credits: actualCharge, usage_event_id: row.usage_event_id, ledger_id: row.ledger_id });
+  await reconcileOutlineRun(deps.adminClient, req.usageContext.featureRunID);
   return {
     featureResult,
     providerResult,

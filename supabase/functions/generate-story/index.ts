@@ -3379,15 +3379,6 @@ async function handler(
         adminClient,
         provider: llm,
         creditStore: store,
-        usageEventWriter: async (row) => {
-          const result = await persistence.insertUsageEvent(
-            row as unknown as GenerationUsageEventInsert,
-          );
-          return {
-            data: result.error ? null : { id: outputId },
-            error: result.error as { message?: string } | null,
-          };
-        },
       },
     );
   } catch (err) {
