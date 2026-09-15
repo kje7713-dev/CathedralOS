@@ -1526,9 +1526,9 @@ Deno.test("PR8 repairStoryMaterialFromRecipe: consumes selectedStorySpark and se
     project: { id: "proj-so", summary: "Single spark, single aftertaste" },
     setting: { included: false },
     promptPack: { id: "pack-so", name: "SingleObject" },
-    selectedCharacters: [{ id: "c-so", name: "Solo", summary: "Lone traveler" }],
-    selectedStorySpark: { title: "Letter arrives", description: "A stranger writes from the past" },
-    selectedAftertaste: { title: "Quiet grief", description: "Reader carries the weight" },
+    selectedCharacters: [{ id: "c-so", name: "Solo", roles: ["traveler"], notes: "Lone traveler" }],
+    selectedStorySpark: { id: "s-so", title: "Letter arrives", situation: "A stranger writes from the past" },
+    selectedAftertaste: { id: "at-so", label: "Quiet grief", note: "Reader carries the weight" },
     selectedRelationships: [],
     selectedThemeQuestions: [],
     selectedMotifs: [],
@@ -1711,20 +1711,20 @@ Deno.test("PR8 (revised) repairStoryMaterialFromRecipe: preserves authored chara
     setting: { included: false },
     promptPack: { id: "pack-pr", name: "Preserve" },
     selectedCharacters: [
-      { id: "c-1", name: "Mara", summary: "Disgraced detective returning to a cold case" },
-      { id: "c-2", name: "Vik", description: "Rival fixer with a long memory" },
+      { id: "c-1", name: "Mara", roles: ["detective"], notes: "Disgraced detective returning to a cold case" },
+      { id: "c-2", name: "Vik", roles: ["fixer"], notes: "Rival fixer with a long memory" },
     ],
-    selectedStorySpark: { title: "Cold case reopen", description: "An old murder returns with new evidence" },
-    selectedAftertaste: { title: "Quiet dread", description: "The reader should feel watched in the final scene" },
+    selectedStorySpark: { id: "s-1", title: "Cold case reopen", situation: "An old murder returns with new evidence", stakes: "The case implicates the victim's family" },
+    selectedAftertaste: { id: "at-1", label: "Quiet dread", note: "The reader should feel watched in the final scene", endingTexture: "Unresolved" },
     selectedRelationships: [
-      { id: "r-1", summary: "Mara + Vik", description: "Ex-partners turned enemies by a shared failure" },
+      { id: "r-1", name: "Mara + Vik", relationshipType: "former partners turned enemies", tension: "Ex-partners turned enemies by a shared failure" },
     ],
     selectedThemeQuestions: [
-      { question: "Can the past be trusted?", description: "Memory versus official record" },
+      { id: "tq-1", question: "Can the past be trusted?", coreTension: "Memory versus official record" },
     ],
     selectedMotifs: [
-      { label: "Mirrors", description: "Reflections of a fractured identity" },
-      { label: "Smoke" },
+      { id: "m-1", label: "Mirrors", category: "identity", meaning: "Reflections of a fractured identity" },
+      { id: "m-2", label: "Smoke", category: "obscuration" },
     ],
   };
   const repaired = repairStoryMaterialFromRecipe(recipe, provenance);
@@ -1734,38 +1734,81 @@ Deno.test("PR8 (revised) repairStoryMaterialFromRecipe: preserves authored chara
   // summary/description in favor of just `name`).
   const c1 = repaired.characters.find((item) => item.sourceReference === "character:c-1" as string);
   assertEquals(c1?.label, "Mara");
-  assertEquals(c1?.description, "Disgraced detective returning to a cold case");
+  assertEquals(c1?.description, "Roles: detective. Notes: Disgraced detective returning to a cold case.");
   const c2 = repaired.characters.find((item) => item.sourceReference === "character:c-2" as string);
   assertEquals(c2?.label, "Vik");
-  assertEquals(c2?.description, "Rival fixer with a long memory");
+  assertEquals(c2?.description, "Roles: fixer. Notes: Rival fixer with a long memory.");
 
   const r1 = repaired.relationships.find((item) => item.sourceReference === "relationship:r-1" as string);
   assertEquals(r1?.label, "Mara + Vik");
-  assertEquals(r1?.description, "Ex-partners turned enemies by a shared failure");
+  assertEquals(r1?.description, "Type: former partners turned enemies. Tension: Ex-partners turned enemies by a shared failure.");
 
   const spark = repaired.antagonisticForces.find((item) => item.sourceReference === "storySpark" as string);
   assertEquals(spark?.label, "Cold case reopen");
-  assertEquals(spark?.description, "An old murder returns with new evidence");
+  assertEquals(spark?.description, "Situation: An old murder returns with new evidence. Stakes: The case implicates the victim's family.");
 
   const after = repaired.unresolvedQuestions.find((item) => item.sourceReference === "aftertaste" as string);
   assertEquals(after?.label, "Quiet dread");
-  assertEquals(after?.description, "The reader should feel watched in the final scene");
+  assertEquals(after?.description, "The reader should feel watched in the final scene. Ending texture: Unresolved.");
 
   const themeItem = repaired.thematicPressures.find((item) => typeof item.sourceReference === "string" && item.sourceReference.startsWith("theme:"));
-  assertEquals(themeItem?.description, "Memory versus official record");
+  assertEquals(themeItem?.description, "Core tension: Memory versus official record.");
 
-  const mirror = repaired.thematicPressures.find((item) => item.sourceReference === "motif:motif-1" as string);
+  const mirror = repaired.thematicPressures.find((item) => item.sourceReference === "motif:m-1" as string);
   assertEquals(mirror?.label, "Mirrors");
-  assertEquals(mirror?.description, "Reflections of a fractured identity");
+  assertEquals(mirror?.description, "Category: identity. Meaning: Reflections of a fractured identity.");
 
-  // Smoke motif has no description — falls back to label, not to the handle.
-  const smoke = repaired.thematicPressures.find((item) => item.sourceReference === "motif:motif-2" as string);
+  // Smoke motif has only category — description combines the canonical
+  // Category field deterministically rather than collapsing to the handle.
+  const smoke = repaired.thematicPressures.find((item) => item.sourceReference === "motif:m-2" as string);
   assertEquals(smoke?.label, "Smoke");
-  assertEquals(smoke?.description, "Smoke");
+  assertEquals(smoke?.description, "Category: obscuration.");
 
   // Self-validate still passes — the validator checks label/description
   // structure; reading from actual recipe objects produces richer text
   // without breaking the sourceReference contract.
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("itemFromHandle: authored prose empty for `aftertaste` still produces label/description distinct from the handle", () => {
+  // Regression: handles without a category prefix (`aftertaste`,
+  // `storySpark`) share their id portion with the handle. The previous
+  // `idPortion || handle` fallback collapsed authored prose to the
+  // handle itself, tripping
+  // validateStoryMaterialEnrichment's `description === sourceReference`
+  // check with `recipe story material item recipe-aftertaste has no
+  // authored description`.
+  const provenance = {
+    sourceRecipeHash: "aftertaste-bare",
+    sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-aftertaste",
+    sourcePromptPackName: "Aftertaste Bare",
+  };
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-at", summary: "Bare aftertaste" },
+    setting: { included: false },
+    promptPack: { id: "pack-aftertaste", name: "Aftertaste Bare" },
+    selectedCharacters: [],
+    selectedStorySpark: null,
+    selectedAftertaste: { id: "at-bare", label: "Quiet dread" },
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, provenance);
+
+  const after = repaired.unresolvedQuestions.find((item) => item.sourceReference === "aftertaste");
+  assertEquals(after !== undefined, true);
+  // The validator's strict check is `label === sourceReference || description === sourceReference`.
+  // Both must differ from `aftertaste`; whether they differ from each other
+  // is irrelevant when only the title was authored.
+  assertEquals(after!.label !== "aftertaste", true);
+  assertEquals(after!.description !== "aftertaste", true);
+
+  // Critical: validation must now succeed (no `no authored description`
+  // rejection) on a bare aftertaste that previously caused HTTP 500.
   validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
 });
 
@@ -2719,3 +2762,551 @@ Deno.test("PR7-fix logRequest throws with non-empty message even when Supabase e
     "Thrown error must carry a non-empty message so log scrapers / on-call see something actionable");
 });
 
+
+// ============================================================================
+// PR #573 (revised): canonical recipe-field repair coverage.
+//
+// Every test below uses a payload shape that matches the actual
+// PromptPackExportPayload schema (CathedralOSApp/Models/PromptPackExportPayload.swift),
+// not a fabricated "title/description" object. The previous PR's fixture
+// (`selectedAftertaste: { title: "Quiet dread" }`) exercised a non-canonical
+// field and only proved that the placeholder fallback prevented the validator
+// from rejecting the handle; it did not prove that authored recipe content
+// reached Story Material.
+//
+// These tests assert the real contract: each canonical payload type populates
+// label and description from the fields the iOS export actually emits, and
+// only falls back to a synthesized structural note when every canonical field
+// is empty.
+// ============================================================================
+
+Deno.test("PR #573 canonical repair: Aftertaste with only basic fields (label + note)", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-at-basic", summary: "A short story about loss" },
+    setting: { included: false },
+    promptPack: { id: "pack-at-basic", name: "Aftertaste Basic" },
+    selectedCharacters: [],
+    selectedStorySpark: null,
+    selectedAftertaste: {
+      id: "at-basic",
+      label: "Quiet dread",
+      note: "The dread lingers long after the case closes",
+    },
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "at-basic", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-at-basic", sourcePromptPackName: "Aftertaste Basic",
+  });
+  const after = repaired.unresolvedQuestions.find((item) => item.sourceReference === "aftertaste");
+  assertEquals(after?.label, "Quiet dread");
+  assertEquals(after?.description, "The dread lingers long after the case closes.");
+  assertEquals(after?.source, "recipe");
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("PR #573 canonical repair: rich Aftertaste combines note + emotionalResidue + endingTexture + desiredAmbiguityLevel + readerQuestionLeftOpen + lastImageFeeling", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-at-rich", summary: "A novel about aftermath" },
+    setting: { included: false },
+    promptPack: { id: "pack-at-rich", name: "Aftertaste Rich" },
+    selectedCharacters: [],
+    selectedStorySpark: null,
+    selectedAftertaste: {
+      id: "at-rich",
+      label: "Quiet dread",
+      note: "The dread lingers long after the case closes",
+      emotionalResidue: "Uneasy vigilance",
+      endingTexture: "Unresolved",
+      desiredAmbiguityLevel: "High",
+      readerQuestionLeftOpen: "Who else knew?",
+      lastImageFeeling: "Empty courtroom",
+    },
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "at-rich", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-at-rich", sourcePromptPackName: "Aftertaste Rich",
+  });
+  const after = repaired.unresolvedQuestions.find((item) => item.sourceReference === "aftertaste");
+  assertEquals(after?.label, "Quiet dread");
+  assertEquals(
+    after?.description,
+    "The dread lingers long after the case closes. Emotional residue: Uneasy vigilance. Ending texture: Unresolved. Desired ambiguity: High. Reader question left open: Who else knew? Last image feeling: Empty courtroom.",
+  );
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("PR #573 canonical repair: StorySpark combines title + situation + stakes + twist + urgency + threat + opportunity + complication + clock + triggerEvent + initialImbalance + falseResolution + reversalPotential", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-spark", summary: "An old case returns" },
+    setting: { included: false },
+    promptPack: { id: "pack-spark", name: "Spark Canonical" },
+    selectedCharacters: [],
+    selectedStorySpark: {
+      id: "s-canonical",
+      title: "Cold case reopen",
+      situation: "A detective is assigned to a decades-old murder",
+      stakes: "The killer is still active",
+      twist: "The victim's family is complicit",
+      urgency: "A second body appears",
+      threat: "Evidence is being destroyed",
+      opportunity: "A surviving witness steps forward",
+      complication: "The witness is unreliable",
+      clock: "48 hours until the next murder",
+      triggerEvent: "New DNA evidence surfaces",
+      initialImbalance: "A powerful family with impunity",
+      falseResolution: "An obvious suspect is arrested",
+      reversalPotential: "The obvious suspect is innocent",
+    },
+    selectedAftertaste: null,
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "spark-canonical", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-spark", sourcePromptPackName: "Spark Canonical",
+  });
+  const spark = repaired.antagonisticForces.find((item) => item.sourceReference === "storySpark");
+  assertEquals(spark?.label, "Cold case reopen");
+  assertEquals(spark?.description?.startsWith("Situation: A detective is assigned to a decades-old murder."), true);
+  assertEquals(spark?.description?.includes("Stakes: The killer is still active."), true);
+  assertEquals(spark?.description?.includes("Twist: The victim's family is complicit."), true);
+  assertEquals(spark?.description?.includes("Urgency: A second body appears."), true);
+  assertEquals(spark?.description?.includes("Threat: Evidence is being destroyed."), true);
+  assertEquals(spark?.description?.includes("Opportunity: A surviving witness steps forward."), true);
+  assertEquals(spark?.description?.includes("Complication: The witness is unreliable."), true);
+  assertEquals(spark?.description?.includes("Clock: 48 hours until the next murder."), true);
+  assertEquals(spark?.description?.includes("Trigger event: New DNA evidence surfaces."), true);
+  assertEquals(spark?.description?.includes("Initial imbalance: A powerful family with impunity."), true);
+  assertEquals(spark?.description?.includes("False resolution: An obvious suspect is arrested."), true);
+  assertEquals(spark?.description?.includes("Reversal potential: The obvious suspect is innocent."), true);
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("PR #573 canonical repair: Character combines name + roles + goals + fears + flaws + secrets + wounds + contradictions + notes", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-char", summary: "A brooding protagonist" },
+    setting: { included: false },
+    promptPack: { id: "pack-char", name: "Character Canonical" },
+    selectedCharacters: [
+      {
+        id: "c-mara",
+        name: "Mara",
+        roles: ["detective", "protagonist"],
+        goals: ["solve the cold case", "restore her reputation"],
+        fears: ["losing control", "hurting an innocent"],
+        flaws: ["obsessive", "trusts no one"],
+        secrets: ["buried evidence from her first case"],
+        wounds: ["disbarred for planting evidence"],
+        contradictions: ["wants justice but bends rules"],
+        notes: "Disgraced detective returning to a cold case",
+      },
+    ],
+    selectedStorySpark: null,
+    selectedAftertaste: null,
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "char-canonical", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-char", sourcePromptPackName: "Character Canonical",
+  });
+  const c = repaired.characters.find((item) => item.sourceReference === "character:c-mara");
+  assertEquals(c?.label, "Mara");
+  assertEquals(c?.description?.startsWith("Roles: detective, protagonist."), true);
+  assertEquals(c?.description?.includes("Goals: solve the cold case, restore her reputation."), true);
+  assertEquals(c?.description?.includes("Fears: losing control, hurting an innocent."), true);
+  assertEquals(c?.description?.includes("Flaws: obsessive, trusts no one."), true);
+  assertEquals(c?.description?.includes("Secrets: buried evidence from her first case."), true);
+  assertEquals(c?.description?.includes("Wounds: disbarred for planting evidence."), true);
+  assertEquals(c?.description?.includes("Contradictions: wants justice but bends rules."), true);
+  assertEquals(c?.description?.includes("Notes: Disgraced detective returning to a cold case."), true);
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("PR #573 canonical repair: Relationship combines name + relationshipType + tension + loyalty + fear + desire + dependency + history + powerBalance + resentment + misunderstanding + unspokenTruth + whatEachWantsFromTheOther + whatWouldBreakIt + whatWouldTransformIt + notes", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-rel", summary: "A former partnership gone wrong" },
+    setting: { included: false },
+    promptPack: { id: "pack-rel", name: "Relationship Canonical" },
+    selectedCharacters: [],
+    selectedStorySpark: null,
+    selectedAftertaste: null,
+    selectedRelationships: [
+      {
+        id: "r-mara-vik",
+        name: "Mara + Vik",
+        relationshipType: "former partners turned enemies",
+        tension: "Mutual suspicion and unresolved betrayal",
+        loyalty: "None remaining",
+        fear: "Mara fears Vik's retaliation; Vik fears Mara's pursuit",
+        desire: "Mara wants closure; Vik wants silence",
+        dependency: "Vik depends on Mara's silence",
+        history: "Worked together on the original case",
+        powerBalance: "Vik has institutional power; Mara has the truth",
+        resentment: "Vik resents Mara's integrity",
+        misunderstanding: "Both believe the other betrayed them first",
+        unspokenTruth: "Vik planted the evidence that disbarred Mara",
+        whatEachWantsFromTheOther: "Mara wants an admission; Vik wants Mara to leave town",
+        whatWouldBreakIt: "Public disclosure of the planted evidence",
+        whatWouldTransformIt: "Vik admitting what he did before the case closes",
+        notes: "Their scenes should mirror the original partnership's warmth",
+      },
+    ],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "rel-canonical", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-rel", sourcePromptPackName: "Relationship Canonical",
+  });
+  const rel = repaired.relationships.find((item) => item.sourceReference === "relationship:r-mara-vik");
+  assertEquals(rel?.label, "Mara + Vik");
+  assertEquals(rel?.description?.startsWith("Type: former partners turned enemies."), true);
+  assertEquals(rel?.description?.includes("Tension: Mutual suspicion and unresolved betrayal."), true);
+  assertEquals(rel?.description?.includes("Fear: Mara fears Vik's retaliation; Vik fears Mara's pursuit."), true);
+  assertEquals(rel?.description?.includes("Desire: Mara wants closure; Vik wants silence."), true);
+  assertEquals(rel?.description?.includes("Dependency: Vik depends on Mara's silence."), true);
+  assertEquals(rel?.description?.includes("History: Worked together on the original case."), true);
+  assertEquals(rel?.description?.includes("Power balance: Vik has institutional power; Mara has the truth."), true);
+  assertEquals(rel?.description?.includes("Resentment: Vik resents Mara's integrity."), true);
+  assertEquals(rel?.description?.includes("Misunderstanding: Both believe the other betrayed them first."), true);
+  assertEquals(rel?.description?.includes("Unspoken truth: Vik planted the evidence that disbarred Mara."), true);
+  assertEquals(rel?.description?.includes("What each wants from the other: Mara wants an admission; Vik wants Mara to leave town."), true);
+  assertEquals(rel?.description?.includes("What would break it: Public disclosure of the planted evidence."), true);
+  assertEquals(rel?.description?.includes("What would transform it: Vik admitting what he did before the case closes."), true);
+  assertEquals(rel?.description?.includes("Their scenes should mirror the original partnership's warmth."), true);
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("PR #573 canonical repair: ThemeQuestion combines question + coreTension + valueConflict + moralFaultLine + endingTruth + notes", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-theme", summary: "Memory and justice" },
+    setting: { included: false },
+    promptPack: { id: "pack-theme", name: "Theme Canonical" },
+    selectedCharacters: [],
+    selectedStorySpark: null,
+    selectedAftertaste: null,
+    selectedRelationships: [],
+    selectedThemeQuestions: [
+      {
+        id: "tq-past",
+        question: "Can the past be trusted?",
+        coreTension: "Memory versus official record",
+        valueConflict: "Truth versus peace",
+        moralFaultLine: "Justice requires disturbing settled narratives",
+        endingTruth: "Memory is fallible but worth defending",
+        notes: "Surface the question in the courtroom scene",
+      },
+    ],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "theme-canonical", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-theme", sourcePromptPackName: "Theme Canonical",
+  });
+  const t = repaired.thematicPressures.find((item) => item.sourceReference === "theme:tq-past");
+  assertEquals(t?.label, "Can the past be trusted?");
+  assertEquals(t?.description?.startsWith("Core tension: Memory versus official record."), true);
+  assertEquals(t?.description?.includes("Value conflict: Truth versus peace."), true);
+  assertEquals(t?.description?.includes("Moral fault line: Justice requires disturbing settled narratives."), true);
+  assertEquals(t?.description?.includes("Ending truth: Memory is fallible but worth defending."), true);
+  assertEquals(t?.description?.includes("Surface the question in the courtroom scene."), true);
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("PR #573 canonical repair: Motif combines label + category + meaning + examples + notes", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-motif", summary: "Symbols of identity" },
+    setting: { included: false },
+    promptPack: { id: "pack-motif", name: "Motif Canonical" },
+    selectedCharacters: [],
+    selectedStorySpark: null,
+    selectedAftertaste: null,
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [
+      {
+        id: "m-mirror",
+        label: "Mirrors",
+        category: "Identity",
+        meaning: "Reflections of a fractured identity",
+        examples: ["Smashed mirror at crime scene", "Vik's sunglasses never off", "Mara's bathroom mirror has a crack"],
+        notes: "Each mirror moment reveals a character hiding from themselves",
+      },
+    ],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "motif-canonical", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-motif", sourcePromptPackName: "Motif Canonical",
+  });
+  const m = repaired.thematicPressures.find((item) => item.sourceReference === "motif:m-mirror");
+  assertEquals(m?.label, "Mirrors");
+  assertEquals(m?.description?.startsWith("Category: Identity."), true);
+  assertEquals(m?.description?.includes("Meaning: Reflections of a fractured identity."), true);
+  assertEquals(m?.description?.includes("Examples: Smashed mirror at crime scene, Vik's sunglasses never off, Mara's bathroom mirror has a crack."), true);
+  assertEquals(m?.description?.includes("Notes: Each mirror moment reveals a character hiding from themselves."), true);
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("PR #573 canonical repair: sparse-but-valid payload — every canonical row has only its required identifier + label; deterministic fallback for description", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-sparse", summary: "Minimal viable story" },
+    setting: { included: false },
+    promptPack: { id: "pack-sparse", name: "Sparse" },
+    selectedCharacters: [{ id: "c-sparse", name: "Mara" }],
+    selectedStorySpark: { id: "s-sparse", title: "A letter arrives" },
+    selectedAftertaste: { id: "at-sparse", label: "Quiet reflection" },
+    selectedRelationships: [{ id: "r-sparse", name: "Mara + the sender" }],
+    selectedThemeQuestions: [{ id: "tq-sparse", question: "What does the letter mean?" }],
+    selectedMotifs: [{ id: "m-sparse", label: "Letters" }],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "sparse", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-sparse", sourcePromptPackName: "Sparse",
+  });
+  assertEquals(repaired.characters.length, 1);
+  assertEquals(repaired.antagonisticForces.length, 1);
+  assertEquals(repaired.unresolvedQuestions.length, 1);
+  assertEquals(repaired.relationships.length, 1);
+  assertEquals(repaired.thematicPressures.length, 2);
+  assertEquals(repaired.discoveries.length, 1);
+  const allItems = [
+    ...repaired.characters,
+    ...repaired.antagonisticForces,
+    ...repaired.relationships,
+    ...repaired.thematicPressures,
+    ...repaired.unresolvedQuestions,
+    ...repaired.discoveries,
+  ];
+  for (const item of allItems) {
+    assertEquals(item.label !== item.sourceReference, true, `${item.id} label must differ from sourceReference`);
+    assertEquals(item.description !== item.sourceReference, true, `${item.id} description must differ from sourceReference`);
+    assertEquals(item.label.length > 0, true, `${item.id} label must be non-empty`);
+    assertEquals(item.description.length > 0, true, `${item.id} description must be non-empty`);
+  }
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("PR #573 canonical repair: truly empty authored fields produce deterministic category-specific fallback description", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-empty", summary: "Untold story" },
+    setting: { included: false },
+    promptPack: { id: "pack-empty", name: "Empty" },
+    selectedCharacters: [{ id: "c-empty", name: "" }],
+    selectedStorySpark: { id: "s-empty", title: "" },
+    selectedAftertaste: { id: "at-empty", label: "" },
+    selectedRelationships: [{ id: "r-empty", name: "" }],
+    selectedThemeQuestions: [{ id: "tq-empty", question: "" }],
+    selectedMotifs: [{ id: "m-empty", label: "" }],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "empty", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-empty", sourcePromptPackName: "Empty",
+  });
+  // Even with truly empty authored fields, repair must produce structurally
+  // valid material — the fallback is a deterministic category-specific
+  // diagnostic, NOT a handle-derived placeholder that re-trips the validator.
+  const c = repaired.characters[0];
+  assertEquals(c.label, "Character");
+  assertEquals(c.description, "Character with no authored content supplied");
+  const spark = repaired.antagonisticForces[0];
+  assertEquals(spark.label, "Story Spark");
+  assertEquals(spark.description, "Story spark with no authored content supplied");
+  const after = repaired.unresolvedQuestions[0];
+  assertEquals(after.label, "Aftertaste");
+  assertEquals(after.description, "Aftertaste with no authored content supplied");
+  const rel = repaired.relationships[0];
+  assertEquals(rel.label, "Relationship");
+  assertEquals(rel.description, "Relationship with no authored content supplied");
+  const t = repaired.thematicPressures.find((it) => it.sourceReference === "theme:tq-empty");
+  assertEquals(t?.label, "Theme Question");
+  assertEquals(t?.description, "Theme question with no authored content supplied");
+  const m = repaired.thematicPressures.find((it) => it.sourceReference === "motif:m-empty");
+  assertEquals(m?.label, "Motif");
+  assertEquals(m?.description, "Motif with no authored content supplied");
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+});
+
+Deno.test("PR #573 canonical repair: validateStoryMaterialEnrichment succeeds for a fully-populated canonical recipe", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-full", summary: "A fully-authored recipe" },
+    setting: { included: false },
+    promptPack: { id: "pack-full", name: "Full" },
+    selectedCharacters: [
+      { id: "c-mara", name: "Mara", roles: ["detective"], flaws: ["obsessive"], notes: "Returning to a cold case" },
+      { id: "c-vik", name: "Vik", roles: ["fixer"], notes: "Rival with a long memory" },
+    ],
+    selectedStorySpark: { id: "s-1", title: "Cold case reopen", situation: "An old murder returns", stakes: "The killer is still active" },
+    selectedAftertaste: { id: "at-1", label: "Quiet dread", note: "The dread lingers", endingTexture: "Unresolved" },
+    selectedRelationships: [{ id: "r-1", name: "Mara + Vik", relationshipType: "enemies", tension: "Mutual suspicion" }],
+    selectedThemeQuestions: [{ id: "tq-1", question: "Can the past be trusted?", coreTension: "Memory vs record" }],
+    selectedMotifs: [{ id: "m-1", label: "Mirrors", category: "Identity", meaning: "Reflections of self" }],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "full", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-full", sourcePromptPackName: "Full",
+  });
+  // Must not throw — proves the canonical repair output passes the same
+  // structural contract the validator enforces on planner output.
+  const validated = validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+  assertEquals(validated, repaired);
+});
+
+Deno.test("PR #573 canonical repair: every produced sourceReference is verified by recipeMaterialHandles", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-refs", summary: "Reference authority check" },
+    setting: { included: false },
+    promptPack: { id: "pack-refs", name: "Refs" },
+    selectedCharacters: [{ id: "c-1", name: "Mara", roles: ["detective"] }],
+    selectedStorySpark: { id: "s-1", title: "A letter arrives" },
+    selectedAftertaste: { id: "at-1", label: "Quiet dread" },
+    selectedRelationships: [{ id: "r-1", name: "Mara + Sender" }],
+    selectedThemeQuestions: [{ id: "tq-1", question: "What does the letter mean?" }],
+    selectedMotifs: [{ id: "m-1", label: "Letters" }],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "refs", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-refs", sourcePromptPackName: "Refs",
+  });
+  // recipeMaterialHandles is internal to index.ts, so verify the canonical
+  // handle shape directly via the prefix rules the validator relies on.
+  const allowedHandle = (ref: string): boolean =>
+    ref === "project.summary" || ref === "storySpark" || ref === "aftertaste" ||
+    ref.startsWith("character:") || ref.startsWith("relationship:") ||
+    ref.startsWith("theme:") || ref.startsWith("motif:");
+  const allItems = [
+    ...repaired.characters,
+    ...repaired.antagonisticForces,
+    ...repaired.relationships,
+    ...repaired.thematicPressures,
+    ...repaired.unresolvedQuestions,
+    ...repaired.discoveries,
+  ];
+  for (const item of allItems) {
+    assertEquals(typeof item.sourceReference, "string");
+    assertEquals(item.sourceReference !== null, true, `${item.id} sourceReference must not be null for recipe-sourced items`);
+    assertEquals((item.sourceReference as string).length > 0, true);
+    assertEquals(allowedHandle(item.sourceReference as string), true, `${item.id} (${item.sourceReference}) must be a canonical handle`);
+  }
+});
+
+Deno.test("PR #573 canonical repair: output is deterministic across repeated calls on the same input", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-det", summary: "Determinism check" },
+    setting: { included: false },
+    promptPack: { id: "pack-det", name: "Det" },
+    selectedCharacters: [{ id: "c-1", name: "Mara", roles: ["detective"], flaws: ["obsessive"] }],
+    selectedStorySpark: { id: "s-1", title: "Cold case reopen", situation: "An old murder returns" },
+    selectedAftertaste: { id: "at-1", label: "Quiet dread", note: "The dread lingers" },
+    selectedRelationships: [{ id: "r-1", name: "Mara + Vik", relationshipType: "enemies" }],
+    selectedThemeQuestions: [{ id: "tq-1", question: "Can the past be trusted?", coreTension: "Memory vs record" }],
+    selectedMotifs: [{ id: "m-1", label: "Mirrors", category: "Identity", meaning: "Reflections of self" }],
+  };
+  const provenance = {
+    sourceRecipeHash: "det", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-det", sourcePromptPackName: "Det",
+  };
+  const a = repairStoryMaterialFromRecipe(recipe as any, provenance);
+  const b = repairStoryMaterialFromRecipe(recipe as any, provenance);
+  assertEquals(a, b);
+  for (let i = 0; i < a.characters.length; i++) {
+    assertEquals(a.characters[i].description, b.characters[i].description);
+  }
+  for (let i = 0; i < a.thematicPressures.length; i++) {
+    assertEquals(a.thematicPressures[i].description, b.thematicPressures[i].description);
+  }
+});
+
+Deno.test("PR #573 canonical repair: re-running repair does not progressively mutate or degrade authored content", () => {
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-replay", summary: "Replay stability check" },
+    setting: { included: false },
+    promptPack: { id: "pack-replay", name: "Replay" },
+    selectedCharacters: [{ id: "c-mara", name: "Mara", roles: ["detective", "protagonist"], flaws: ["obsessive"], notes: "Disgraced detective returning to a cold case" }],
+    selectedStorySpark: { id: "s-1", title: "Cold case reopen", situation: "An old murder returns" },
+    selectedAftertaste: { id: "at-1", label: "Quiet dread", note: "The dread lingers" },
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const provenance = {
+    sourceRecipeHash: "replay", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-replay", sourcePromptPackName: "Replay",
+  };
+  let current = repairStoryMaterialFromRecipe(recipe as any, provenance);
+  for (let i = 0; i < 5; i++) {
+    const next = repairStoryMaterialFromRecipe(recipe as any, provenance);
+    assertEquals(next, current, `repair iteration ${i + 1} must match prior output byte-for-byte`);
+    current = next;
+  }
+  // Authored content survives every replay.
+  const c = current.characters.find((it) => it.sourceReference === "character:c-mara");
+  assertEquals(c?.description?.includes("Roles: detective, protagonist."), true);
+  assertEquals(c?.description?.includes("Flaws: obsessive."), true);
+  assertEquals(c?.description?.includes("Notes: Disgraced detective returning to a cold case."), true);
+});
+
+Deno.test("PR #573 canonical repair: sufficiency fails closed when canonical recipe is too sparse to support novel-scale development", () => {
+  // Sparse-but-valid: every category produced an item (so the structural
+  // validator passes), but the recipe lacks breadth for novel-scale
+  // sufficiency. The repair function must still fail closed at the
+  // sufficiency layer (which runs at call sites).
+  const recipe = {
+    schema: "cathedralos.story_packet",
+    version: 1,
+    project: { id: "proj-ss", summary: "Minimal viable story" },
+    setting: { included: false },
+    promptPack: { id: "pack-ss", name: "Sparse" },
+    selectedCharacters: [{ id: "c-ss", name: "Mara" }],
+    selectedStorySpark: { id: "s-ss", title: "A letter arrives" },
+    selectedAftertaste: { id: "at-ss", label: "Quiet reflection" },
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+  const repaired = repairStoryMaterialFromRecipe(recipe as any, {
+    sourceRecipeHash: "sparse-sufficient", sourceRecipeVersion: 1,
+    sourcePromptPackID: "pack-ss", sourcePromptPackName: "Sparse",
+  });
+  validateStoryMaterialEnrichment(repaired, { recipe: recipe as any });
+  const sufficiency = storyMaterialSufficiency(repaired, recipe as any, "novel");
+  assertEquals(sufficiency.sufficient, false, "sparse recipe must NOT pass novel sufficiency");
+  assertEquals(sufficiency.reasons.length > 0, true);
+  // No recipe-derived item was lost during repair.
+  assertEquals(repaired.characters.length, 1);
+  assertEquals(repaired.unresolvedQuestions.length, 1);
+});
