@@ -122,6 +122,17 @@ final class OutlineSuggestionRecoveryTests: XCTestCase {
         )
     }
 
+    func testLegacyRequestKeyDiffersFromExplicitFreshGenerationKey() {
+        let request = makeRequest()
+        let generationID = UUID(uuidString: "dddddddd-dddd-4ddd-8ddd-dddddddddddd")!
+
+        XCTAssertNotEqual(
+            OutlineSuggestionService.idempotencyKey(for: request),
+            OutlineSuggestionService.idempotencyKey(for: request, generationID: generationID),
+            "An explicit Suggest tap must escape a legacy completed run when no generation marker existed"
+        )
+    }
+
     func testSameFreshGenerationRemainsIdempotent() {
         let request = makeRequest()
         let generationID = UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!
