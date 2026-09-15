@@ -90,7 +90,8 @@ struct OutlineSuggestionService {
         requestedFormat: String = "novel",
         hint: String? = nil,
         existingSections: [OutlineSection] = [],
-        material: AuthoritativeProjectMaterial? = nil
+        material: AuthoritativeProjectMaterial? = nil,
+        requestGenerationID: UUID? = nil
     ) throws -> OutlineSuggestionRequest {
         guard let project = recipe.project else {
             throw OutlineSuggestionError.invalidResponse("Recipe has no project")
@@ -136,7 +137,7 @@ struct OutlineSuggestionService {
         )
         return OutlineSuggestionRequest(
             recipe: sourceRecipe, arcTemplate: arcBlob, hint: hint,
-            existingSections: existing, idempotencyKey: Self.idempotencyKey(for: identityRequest),
+            existingSections: existing, idempotencyKey: Self.idempotencyKey(for: identityRequest, generationID: requestGenerationID),
             outline_id: outlineID,
             project_lineage_id: lineageID,
             requestedFormat: requestedFormat
@@ -214,10 +215,13 @@ struct OutlineSuggestionService {
         return try decodeJob(data)
     }
 
-    static func idempotencyKey(for request: OutlineSuggestionRequest) -> String {
+    static func idempotencyKey(for request: OutlineSuggestionRequest, generationID: UUID? = nil) -> String {
         var encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let data = (try? encoder.encode(request)) ?? Data()
+        var data = (try? encoder.encode(request)) ?? Data()
+        if let generationID {
+            data.append(Data("\nrequest_generation_id=\(generationID.uuidString)".utf8))
+        }
         let digest = SHA256.hash(data: data)
         return "suggestion-" + digest.map { String(format: "%02x", $0) }.joined()
     }

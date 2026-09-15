@@ -581,6 +581,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     /// falls back to the legacy key-agnostic resume behaviour, which is
     /// safe because without a request there is nothing current to mismatch
     /// against.
+    private func currentSuggestionGenerationID() -> UUID? {
+        durabilityCoordinator.suggestionGenerationID(for: project.stableLineageID)
+    }
+
     private func currentSuggestionIdempotencyKey() -> String? {
         guard let recipe = recipeSelection?.selectedRecipe,
               let project = recipe.project,
@@ -603,7 +607,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             outline: currentOutline,
             requestedFormat: "novel",
             existingSections: currentOutline?.sections ?? [],
-            material: material
+            material: material,
+            requestGenerationID: currentSuggestionGenerationID()
         ).idempotencyKey
     }
 
@@ -645,7 +650,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 outline: currentOutline,
                 requestedFormat: "novel",
                 existingSections: currentOutline?.sections ?? [],
-                material: material
+                material: material,
+                requestGenerationID: currentSuggestionGenerationID()
             )
             // 3 + 4. recover only a completed run whose idempotency key
             //    matches that exact request. `findRun` is best-effort and
@@ -713,7 +719,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 outline: currentOutline,
                 requestedFormat: "novel",
                 existingSections: currentOutline?.sections ?? [],
-                material: material
+                material: material,
+                requestGenerationID: currentSuggestionGenerationID()
             )
             suggestionsError = nil
             suggestionsNotice = nil
@@ -995,6 +1002,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             }
             try? modelContext.save()
             syncSectionsOrder()
+            durabilityCoordinator.beginNewSuggestionGeneration(for: project.stableLineageID)
             await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
         }
     }

@@ -208,6 +208,10 @@ final class DataDurabilityCoordinator: ObservableObject {
     // PR 6: lineage-owned resume-state key. New writes go here; legacy
     // project-keyed entries are still read as a fallback during migration.
     private static let lineageRunPrefix = "cathedralos.outlineSuggestion.lineage."
+    // Explicit Delete All → Suggest actions advance this generation so a
+    // deliberately fresh empty-outline request cannot reuse an older
+    // completed run with the same recipe/arc identity.
+    private static let suggestionGenerationPrefix = "cathedralos.outlineSuggestion.generation."
 
     private static func suggestionRunKey(for projectID: UUID) -> String {
         "\(suggestionRunPrefix)\(projectID.uuidString)"
@@ -215,6 +219,10 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     private static func lineageRunKey(for lineageID: UUID) -> String {
         "\(lineageRunPrefix)\(lineageID.uuidString)"
+    }
+
+    private static func suggestionGenerationKey(for lineageID: UUID) -> String {
+        "\(suggestionGenerationPrefix)\(lineageID.uuidString)"
     }
 
     private static func runStatusKey(for projectLineageID: UUID) -> String {
@@ -772,6 +780,31 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func persistAcceptRun(_ metadata: AcceptRunMetadata) {
         guard let data = try? JSONEncoder().encode(metadata) else { return }
         acceptRunDefaults.set(data, forKey: Self.acceptRunKey)
+    }
+
+    // MARK: - Suggestion generation identity
+
+    /// Returns the persisted identity for the current deliberate suggestion
+    /// generation. Retries, reconnects, and view recreation must keep using
+    /// this value so they remain idempotent.
+    func suggestionGenerationID(for lineageID: UUID) -> UUID? {
+        guard let raw = suggestionRunDefaults.string(forKey: Self.suggestionGenerationKey(for: lineageID)) else {
+            return nil
+        }
+        return UUID(uuidString: raw)
+    }
+
+    /// Advances the deliberate suggestion generation after Delete All
+    /// completes. The marker is intentionally retained until the next
+    /// deliberate reset so relaunch/reconnect still resolves the same run.
+    @discardableResult
+    func beginNewSuggestionGeneration(for lineageID: UUID) -> UUID {
+        let generationID = UUID()
+        suggestionRunDefaults.set(
+            generationID.uuidString,
+            forKey: Self.suggestionGenerationKey(for: lineageID)
+        )
+        return generationID
     }
 
     // MARK: - Durable Suggest Sections polling
