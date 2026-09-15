@@ -2004,6 +2004,13 @@ Deno.test("request validation accepts a previously persisted enrichment package"
   assertEquals(validateRequest({ ...sparseRequest, storyMaterialEnrichment: enrichmentFixture() }), null);
 });
 
+Deno.test("request validation repairs duplicate or blank IDs in a reused enrichment package", () => {
+  const malformed = enrichmentFixture();
+  malformed.characters[0].id = "";
+  malformed.locations[0].id = malformed.antagonisticForces[0].id;
+  assertEquals(validateRequest({ ...sparseRequest, storyMaterialEnrichment: malformed }), null);
+});
+
 
 function materialItem(id: string, source: "recipe" | "planner", sourceReference: string | null = null): any {
   return { id, source, sourceReference, label: id.replaceAll("-", " "), description: `${id} creates a concrete pressure, choice, and consequence.` };

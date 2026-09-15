@@ -1013,7 +1013,10 @@ export function validateRequest(req: unknown): string | null {
   if (r.idempotencyKey !== undefined && (typeof r.idempotencyKey !== "string" || r.idempotencyKey.trim() === "" || r.idempotencyKey.length > 512)) return "idempotencyKey must be a non-empty string of at most 512 characters";
   if (r.storyMaterialEnrichment) {
     try {
-      validateStoryMaterialEnrichment(r.storyMaterialEnrichment, { allowMissingProvenance: true });
+      validateStoryMaterialEnrichment(
+        normalizeProviderStoryMaterialItemIDs(r.storyMaterialEnrichment),
+        { allowMissingProvenance: true },
+      );
     } catch (error) {
       return error instanceof Error ? error.message : "invalid story material enrichment";
     }
@@ -3184,6 +3187,12 @@ Deno.serve(async (req: Request) => {
     body = await req.json();
   } catch {
     return errorResponse("invalid_request", "Body must be JSON", 400);
+  }
+  if (body.storyMaterialEnrichment) {
+    body = {
+      ...body,
+      storyMaterialEnrichment: normalizeProviderStoryMaterialItemIDs(body.storyMaterialEnrichment) as StoryMaterialEnrichment,
+    };
   }
   const validationError = validateRequest(body);
   if (validationError) {
