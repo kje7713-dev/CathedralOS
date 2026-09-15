@@ -44,6 +44,7 @@ import {
   repairStoryMaterialFromRecipe,
   mergeCanonicalRecipeMaterial,
   resumeOrRepairStoryMaterial,
+  normalizeProviderStoryMaterialItemIDs,
   validateStoryMaterialEnrichment,
   storyMaterialSufficiency,
   recipeProvenance,
@@ -2420,6 +2421,30 @@ Deno.test("PR3 all seven built-in template families use explicit canonical role 
 
 
 // MARK: - PR 7: idempotency-safe planning rate limits
+
+Deno.test("provider story material IDs are repaired when blank or duplicated across categories", () => {
+  const material = {
+    schema: "cathedralos.story_material_enrichment",
+    version: 2,
+    format: "novel",
+    rationale: "provider output",
+    characters: [{ id: "same", source: "planner", sourceReference: null, label: "A", description: "A." }],
+    antagonisticForces: [{ id: "same", source: "planner", sourceReference: null, label: "B", description: "B." }],
+    locations: [{ id: "", source: "planner", sourceReference: null, label: "C", description: "C." }],
+    institutionsAndGroups: [], conflictSources: [], escalationLadder: [], reversals: [], consequences: [],
+    relationships: [], discoveries: [], unresolvedQuestions: [], thematicPressures: [],
+  };
+  const normalized = normalizeProviderStoryMaterialItemIDs(material) as Record<string, any>;
+  assertEquals(normalized.characters[0].id, "same");
+  assertEquals(normalized.antagonisticForces[0].id, "provider-antagonisticForces-1");
+  assertEquals(normalized.locations[0].id, "provider-locations-1");
+  const validated = validateStoryMaterialEnrichment(normalized, { allowMissingProvenance: true, recipe: sparseRequest.recipe as any });
+  assertEquals(new Set([
+    ...validated.characters,
+    ...validated.antagonisticForces,
+    ...validated.locations,
+  ].map((item) => item.id)).size, 3);
+});
 
 Deno.test("PR7 checkRateLimit returns allowed=true when no prior entries exist", async () => {
   const calls: string[] = [];
