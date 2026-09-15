@@ -688,6 +688,16 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 
     private func loadSuggestions() async {
         guard !suggestionRunActive else { return }
+        // Legacy projects can arrive here with no accepted sections and no
+        // generation marker because Delete All happened before PR #565. An
+        // explicit Suggest tap is the fresh-run intent in that state; advance
+        // the generation before building the request so the old recoverable
+        // run remains available only through Resume Suggestions.
+        if currentOutline?.sections.isEmpty == true,
+           currentSuggestionGenerationID() == nil {
+            durabilityCoordinator.beginNewSuggestionGeneration(for: project.stableLineageID)
+            recoverableSuggestions = nil
+        }
         // PR 1: explicit recipe selection. Use the same selected recipe as
         // loadRecoverableSuggestions and the review-sheet source.
         guard let recipe = recipeSelection?.selectedRecipe,
