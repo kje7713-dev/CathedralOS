@@ -229,18 +229,19 @@ async function beginOutlineProviderAttempt(
   return { id: String(row.attempt_id), key: String(row.attempt_key), ordinal: Number(row.attempt_ordinal) };
 }
 
-async function startProviderAttempt(adminClient: unknown, req: BillableLLMRequest<unknown>, attemptKey: string): Promise<string | null> {
+async function startProviderAttempt(adminClient: unknown, req: BillableLLMRequest<unknown>, billingAttemptKey: string): Promise<string | null> {
   if (!adminClient) return null;
   try {
     const table = (adminClient as any).from("generation_provider_attempts");
-    if (!table || typeof table.select !== "function") return null;
-    const prior = await table.select("id").eq("attempt_key", attemptKey).maybeSingle();
-    if (prior?.data?.id) return prior.data.id;
+    if (!table || typeof table.insert !== "function" || typeof table.select !== "function") return null;
+    // This key identifies one physical dispatch, not the customer settlement.
+    // Never query/reuse an existing row: a replay may call the provider again.
+    const physicalAttemptKey = `${billingAttemptKey}:dispatch:${crypto.randomUUID()}`;
     const insertBuilder = table.insert({
       user_id: req.userID, purpose: req.purpose, action: req.action,
       feature_run_id: req.usageContext.featureRunID ?? null,
       billing_idempotency_key: req.usageContext.idempotencyKey ?? null,
-      attempt_key: attemptKey, logical_stage_key: req.usageContext.logicalStageKey ?? req.usageContext.idempotencyKey ?? attemptKey,
+      attempt_key: physicalAttemptKey, logical_stage_key: req.usageContext.logicalStageKey ?? req.usageContext.idempotencyKey ?? billingAttemptKey,
       attempt_ordinal: req.usageContext.attemptOrdinal ?? 1,
       model_name: req.model.provider_model, status: "started",
       stable_prefix_hash: req.stablePrefixHash ?? null,

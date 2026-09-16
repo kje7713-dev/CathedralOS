@@ -47,7 +47,7 @@ create unique index if not exists generation_provider_attempts_stage_ordinal_uni
 create or replace function public.reconcile_outline_provider_attempts(p_run_id uuid)
 returns void language sql security definer set search_path=public as $$
   update public.outline_suggestion_runs r
-     set credit_cost_charged = coalesce((select sum(a.settled_charge_credits) from public.generation_provider_attempts a where a.feature_run_id = r.id and a.status in ('settled','feature_validation_failed')), 0),
+     set credit_cost_charged = coalesce((select sum(a.settled_charge_credits) from public.generation_provider_attempts a where a.feature_run_id = r.id and a.status in ('settled','feature_validation_failed','feature_persistence_failed')), 0),
          remaining_credits = (select max(e.monthly_credit_allowance + e.purchased_credit_balance) from public.user_entitlements e where e.user_id = r.user_id)
    where r.id = p_run_id;
 $$;

@@ -801,3 +801,177 @@ Deno.test("outline provider attempt allocation failure prevents provider dispatc
   await assertRejects(() => runBillableLLM(request, { adminClient: admin, provider: wrapped, creditStore: makeCreditStore() }), BillableLLMError, "allocator unavailable");
   assertEquals(providerCalls, 0);
 });
+
+Deno.test("non-outline replay creates one fresh provider-attempt row per dispatch while settlement stays idempotent", async () => {
+  const attempts: Array<Record<string, unknown>> = [];
+  const settlementCalls: Record<string, unknown>[] = [];
+  let ledgerDebits = 0;
+  let nextID = 1;
+  const admin = {
+    from: (table: string) => {
+      if (table !== "generation_provider_attempts") {
+        return { insert: (_row: unknown) => Promise.resolve({ data: null, error: null }) };
+      }
+      return {
+        select: (_columns: string) => ({}),
+        insert: (row: Record<string, unknown>) => {
+          const id = `attempt-${nextID++}`;
+          attempts.push({ ...row, id });
+          return {
+            select: (_columns: string) => ({
+              single: () => Promise.resolve({ data: { id }, error: null }),
+            }),
+          };
+        },
+        update: (patch: Record<string, unknown>) => ({
+          eq: (_column: string, id: string) => {
+            const row = attempts.find((candidate) => candidate.id === id);
+            if (row) Object.assign(row, patch);
+            return Promise.resolve({ data: null, error: null });
+          },
+        }),
+      };
+    },
+    rpc: (name: string, params: Record<string, unknown>) => {
+      if (name !== "settle_billable_usage") {
+        throw new Error(`unexpected RPC ${name}`);
+      }
+      settlementCalls.push(params);
+      const duplicate = settlementCalls.length > 1;
+      if (!duplicate) ledgerDebits++;
+      return Promise.resolve({
+        data: [{
+          settlement_status: duplicate ? "duplicate" : "settled",
+          usage_event_id: duplicate ? "usage-1" : "usage-2",
+          ledger_id: duplicate ? null : "ledger-1",
+          remaining_credits: duplicate ? 98 : 97,
+        }],
+        error: null,
+      });
+    },
+  };
+  let providerCalls = 0;
+  const provider: LLMProvider = {
+    complete: () => {
+      providerCalls++;
+      return Promise.resolve(makeLLMResponse({
+        inputTokens: providerCalls === 1 ? 111 : 222,
+        outputTokens: providerCalls === 1 ? 11 : 22,
+      }));
+    },
+  };
+  const deps: BillableLLMDependencies = {
+    adminClient: admin,
+    provider,
+    creditStore: makeCreditStore(),
+  };
+
+  const replayRequest = makeRequest({
+    usageContext: {
+      ...makeRequest().usageContext,
+      providerAttemptKey: "explicit-attempt",
+    },
+  });
+  await runBillableLLM(replayRequest, deps);
+  await runBillableLLM(replayRequest, deps);
+
+  assertEquals(providerCalls, 2);
+  assertEquals(attempts.length, 2);
+  assertEquals(new Set(attempts.map((row) => row.attempt_key)).size, 2);
+  assertEquals(String(attempts[0].attempt_key).startsWith("explicit-attempt:dispatch:"), true);
+  assertEquals(String(attempts[1].attempt_key).startsWith("explicit-attempt:dispatch:"), true);
+  assertEquals(attempts[0].billing_idempotency_key, "idem-1");
+  assertEquals(attempts[1].billing_idempotency_key, "idem-1");
+  assertEquals(attempts[0].input_tokens, 111);
+  assertEquals(attempts[1].input_tokens, 222);
+  assertEquals(attempts[0].output_tokens, 11);
+  assertEquals(attempts[1].output_tokens, 22);
+  assertEquals(attempts[0].ledger_id, "ledger-1");
+  assertEquals(attempts[1].ledger_id, undefined);
+  assertEquals(ledgerDebits, 1);
+  assertEquals(settlementCalls[0].p_idempotency_key, "idem-1");
+  assertEquals(settlementCalls[1].p_idempotency_key, "idem-1");
+});
+
+Deno.test("outline retry allocates a distinct ordinal and key for each physical dispatch", async () => {
+  const allocations: Record<string, unknown>[] = [];
+  const allocatedAttempts: Array<{ key: string; ordinal: number }> = [];
+  let allocationOrdinal = 0;
+  let providerCalls = 0;
+  const admin = {
+    rpc: (name: string, params: Record<string, unknown>) => {
+      if (name === "begin_outline_provider_attempt") {
+        allocationOrdinal++;
+        allocations.push(params);
+        const attempt = {
+          key: `stage:attempt:${allocationOrdinal}`,
+          ordinal: allocationOrdinal,
+        };
+        allocatedAttempts.push(attempt);
+        return Promise.resolve({
+          data: [{
+            attempt_id: `outline-attempt-${allocationOrdinal}`,
+            attempt_key: attempt.key,
+            attempt_ordinal: attempt.ordinal,
+          }],
+          error: null,
+        });
+      }
+      if (name === "settle_outline_provider_attempt") {
+        return Promise.resolve({
+          data: [{
+            settlement_status: "settled",
+            usage_event_id: `outline-usage-${allocationOrdinal}`,
+            ledger_id: `outline-ledger-${allocationOrdinal}`,
+            remaining_credits: 100,
+          }],
+          error: null,
+        });
+      }
+      if (name === "reconcile_outline_provider_attempts") {
+        return Promise.resolve({ data: null, error: null });
+      }
+      throw new Error(`unexpected RPC ${name}`);
+    },
+    from: (_table: string) => ({
+      update: (_patch: unknown) => ({
+        eq: (_column: string, _value: unknown) => Promise.resolve({ data: null, error: null }),
+      }),
+    }),
+  };
+  const provider: LLMProvider = {
+    complete: () => {
+      providerCalls++;
+      return Promise.resolve(makeLLMResponse());
+    },
+  };
+  const request = makeRequest({
+    purpose: "outline-suggestion",
+    action: "outline-suggestions-1",
+    usageContext: {
+      ...makeRequest().usageContext,
+      featureRunID: "00000000-0000-0000-0000-0000000000bb",
+      logicalStageKey: "stage",
+    },
+  });
+
+  await runBillableLLM(request, { adminClient: admin, provider, creditStore: makeCreditStore() });
+  await runBillableLLM(request, { adminClient: admin, provider, creditStore: makeCreditStore() });
+
+  assertEquals(providerCalls, 2);
+  assertEquals(allocations.length, 2);
+  assertEquals(allocatedAttempts.map((attempt) => attempt.key), ["stage:attempt:1", "stage:attempt:2"]);
+  assertEquals(allocatedAttempts.map((attempt) => attempt.ordinal), [1, 2]);
+  assertEquals(allocations[0].p_logical_stage_key, "stage");
+  assertEquals(allocations[1].p_logical_stage_key, "stage");
+});
+
+Deno.test("outline reconciliation includes every terminal billable provider-attempt status", async () => {
+  const migration = await Deno.readTextFile(
+    new URL("../../migrations/20260915191000_generation_provider_attempts.sql", import.meta.url),
+  );
+  assertStringIncludes(
+    migration,
+    "status in ('settled','feature_validation_failed','feature_persistence_failed')",
+  );
+});
