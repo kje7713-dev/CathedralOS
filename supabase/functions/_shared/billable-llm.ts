@@ -509,6 +509,10 @@ export async function runBillableLLM<T>(
     ledger_id: string | null;
     remaining_credits: number;
   };
+  // The outline-specific RPC uses p_attempt_key for settlement idempotency;
+  // p_idempotency_key belongs only to settle_billable_usage. Sending both
+  // names makes PostgREST reject the function lookup before PostgreSQL runs.
+  const { p_idempotency_key: _ignoredIdempotencyKey, ...outlineRpcPayload } = rpcPayload;
   const rpcResult = await (deps.adminClient as unknown as {
     rpc: (
       name: string,
@@ -517,7 +521,7 @@ export async function runBillableLLM<T>(
   }).rpc(
     req.purpose === "outline-suggestion" ? "settle_outline_provider_attempt" : "settle_billable_usage",
     req.purpose === "outline-suggestion"
-      ? { ...rpcPayload, p_feature_run_id: req.usageContext.featureRunID, p_attempt_key: attemptKey, p_attempt_outcome: "settled" }
+      ? { ...outlineRpcPayload, p_feature_run_id: req.usageContext.featureRunID, p_attempt_key: attemptKey, p_attempt_outcome: "settled" }
       : rpcPayload,
   );
 

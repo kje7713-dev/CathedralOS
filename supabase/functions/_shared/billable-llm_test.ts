@@ -895,6 +895,7 @@ Deno.test("non-outline replay creates one fresh provider-attempt row per dispatc
 
 Deno.test("outline retry allocates a distinct ordinal and key for each physical dispatch", async () => {
   const allocations: Record<string, unknown>[] = [];
+  const settlements: Record<string, unknown>[] = [];
   const allocatedAttempts: Array<{ key: string; ordinal: number }> = [];
   let allocationOrdinal = 0;
   let providerCalls = 0;
@@ -918,6 +919,7 @@ Deno.test("outline retry allocates a distinct ordinal and key for each physical 
         });
       }
       if (name === "settle_outline_provider_attempt") {
+        settlements.push(params);
         return Promise.resolve({
           data: [{
             settlement_status: "settled",
@@ -964,6 +966,9 @@ Deno.test("outline retry allocates a distinct ordinal and key for each physical 
   assertEquals(allocatedAttempts.map((attempt) => attempt.ordinal), [1, 2]);
   assertEquals(allocations[0].p_logical_stage_key, "stage");
   assertEquals(allocations[1].p_logical_stage_key, "stage");
+  assertEquals(settlements.length, 2);
+  assertEquals("p_idempotency_key" in settlements[0], false);
+  assertEquals(settlements[0].p_attempt_key, "stage:attempt:1");
 });
 
 Deno.test("outline reconciliation includes every terminal billable provider-attempt status", async () => {
