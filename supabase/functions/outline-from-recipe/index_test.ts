@@ -628,6 +628,16 @@ Deno.test("only semantic enrichment defects trigger bounded gap fill", () => {
   assertEquals(shouldGapFillEnrichmentError(new Error("database persistence failure")), false);
 });
 
+Deno.test("allocation planner propagates worker yield instead of converting it to validation failure", async () => {
+  const billable = async () => {
+    throw new SuggestionWorkerYield();
+  };
+  await assertRejects(
+    () => planSectionAllocation(sparseRequest as any, "test-key", billable as any),
+    SuggestionWorkerYield,
+  );
+});
+
 Deno.test("allocation parser preserves minimums and rejects malformed plans", () => {
   const beats = sparseRequest.arcTemplate.beats;
   const result = parseAndValidateAllocation(

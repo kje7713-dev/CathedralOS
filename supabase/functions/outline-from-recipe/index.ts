@@ -2210,6 +2210,7 @@ export async function planSectionAllocation(
         req.arcTemplate.beats,
       );
     } catch (error) {
+      if (error instanceof SuggestionWorkerYield) throw error;
       if (!(error instanceof Error)) throw error;
       firstError = error;
     }
