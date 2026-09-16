@@ -322,12 +322,9 @@ export async function runBillableLLM<T>(
   if (req.purpose === "outline-suggestion") {
     const prior = await loadOutlineStageTotals(deps.adminClient, req);
     const estimatedRaw = computeRawChargeCredits(preflightUsage, pricing);
-    const targetAfterPacket = Math.max(
-      pricing.minimumChargeCredits,
-      prior.rawChargeCredits + estimatedRaw,
-    );
-    // The stage minimum is a single logical-stage liability. Only the
-    // positive delta beyond prior settled debits must be affordable now.
+    const targetAfterPacket = prior.rawChargeCredits + estimatedRaw;
+    // Only the positive delta beyond prior settled debits must be affordable
+    // now; Suggest Sections has no product minimum.
     estimatedCharge = Math.max(0, targetAfterPacket - prior.settledChargeCredits);
   } else {
     estimatedCharge = computeMaxChargeCredits(preflightUsage, pricing);
@@ -430,7 +427,7 @@ export async function runBillableLLM<T>(
               p_user_id: req.userID, p_feature_run_id: req.usageContext.featureRunID,
               p_attempt_key: attemptKey, p_attempt_outcome: "feature_validation_failed",
               p_action: req.action, p_purpose: req.purpose, p_model_name: providerResult.modelName,
-              p_charge_credits: preCallbackCharge, p_minimum_charge_credits: pricing.minimumChargeCredits, p_input_tokens: providerResult.inputTokens,
+              p_charge_credits: preCallbackCharge, p_minimum_charge_credits: 0, p_input_tokens: providerResult.inputTokens,
               p_output_tokens: providerResult.outputTokens, p_generation_length_mode: req.usageContext.generationLengthMode ?? "short",
               p_output_budget: req.usageContext.outputBudget ?? req.maxOutputTokens,
               p_uncached_input_tokens: preCallbackUsage.uncachedInputTokens,
@@ -542,7 +539,7 @@ export async function runBillableLLM<T>(
     p_model_name: providerResult.modelName,
     p_idempotency_key: req.purpose === "outline-suggestion" ? attemptKey : (req.usageContext.idempotencyKey ?? null),
     p_charge_credits: actualCharge,
-    ...(req.purpose === "outline-suggestion" ? { p_minimum_charge_credits: pricing.minimumChargeCredits } : {}),
+    ...(req.purpose === "outline-suggestion" ? { p_minimum_charge_credits: 0 } : {}),
     p_input_tokens: providerResult.inputTokens,
     p_output_tokens: providerResult.outputTokens,
     p_generation_length_mode: req.usageContext.generationLengthMode ?? "short",
