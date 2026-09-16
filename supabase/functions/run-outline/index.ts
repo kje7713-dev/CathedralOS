@@ -1,3 +1,4 @@
+import { normalizeUserEntitlement } from "../generate-story/_credits.ts";
 // =============================================================================
 // run-outline Edge Function (Phase 8 per docs/multi-section-generation.md)
 //
@@ -636,7 +637,7 @@ async function handleEstimate(
 
   const { reservedCredits, check } = prepareCreditReservation(
     estimatedCost,
-    entitlement as UserEntitlement,
+    normalizeUserEntitlement(entitlement as Record<string, unknown>),
   );
   return corsResponse(
     JSON.stringify({
@@ -723,7 +724,7 @@ async function prepareRun(
   }
   const { reservedCredits, check } = prepareCreditReservation(
     estimatedCost,
-    entData as UserEntitlement,
+    normalizeUserEntitlement(entData as Record<string, unknown>),
   );
   if (!check.allowed) {
     await adminClient.from("chapter_runs").update({

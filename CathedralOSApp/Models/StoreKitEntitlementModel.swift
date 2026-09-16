@@ -11,7 +11,7 @@ enum StoreKitPlan: String, Equatable {
     var displayName: String { rawValue }
 
     /// Monthly credit allowance for this plan.
-    var monthlyCreditAllowance: Int {
+    var monthlyCreditAllowance: Double {
         switch self {
         case .free: return 10
         case .pro:  return 100
@@ -41,10 +41,10 @@ struct StoreKitEntitlementState: Equatable {
     let isPro: Bool
 
     /// Monthly generation credit allowance for the current plan.
-    let monthlyCreditAllowance: Int
+    let monthlyCreditAllowance: Double
 
     /// Credits purchased via one-time credit packs (non-expiring until consumed).
-    let purchasedCreditBalance: Int
+    let purchasedCreditBalance: Double
 
     /// When the active subscription expires, or `nil` for free / one-time purchases.
     let entitlementExpiresAt: Date?
@@ -55,7 +55,7 @@ struct StoreKitEntitlementState: Equatable {
     // MARK: Computed
 
     /// Total credits available: monthly allowance + purchased packs.
-    var totalAvailableCredits: Int {
+    var totalAvailableCredits: Double {
         monthlyCreditAllowance + purchasedCreditBalance
     }
 
@@ -81,7 +81,7 @@ struct StoreKitEntitlementState: Equatable {
     ///   - purchasedCredits: Any extra credits from one-time packs (default 0).
     static func proTier(
         expiresAt: Date,
-        purchasedCredits: Int = 0,
+        purchasedCredits: Double = 0,
         now: Date = Date()
     ) -> StoreKitEntitlementState {
         StoreKitEntitlementState(

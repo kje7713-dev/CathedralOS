@@ -255,9 +255,9 @@ struct GenerationResponse: Codable {
     ///                 | "unauthenticated" | "backend_config_missing" | "unknown"
     let errorCode: String?
     /// The number of credits required for this generation (present on insufficient_credits error).
-    let requiredCredits: Int?
+    let requiredCredits: Double?
     /// The number of credits available to the user (present on insufficient_credits error).
-    let availableCredits: Int?
+    let availableCredits: Double?
     /// The number of credits charged for this generation (present on success).
     let creditCostCharged: Double?
     /// The number of credits remaining after this generation (present on success).
@@ -291,8 +291,8 @@ struct GenerationResponse: Codable {
         localGenerationID   = try c.decodeIfPresent(String.self, forKey: .localGenerationID)
         cloudGenerationOutputID = try c.decodeIfPresent(String.self, forKey: .cloudGenerationOutputID)
         errorCode           = try c.decodeIfPresent(String.self, forKey: .errorCode)
-        requiredCredits     = try c.decodeIfPresent(Int.self, forKey: .requiredCredits)
-        availableCredits    = try c.decodeIfPresent(Int.self, forKey: .availableCredits)
+        requiredCredits     = try c.decodeIfPresent(Double.self, forKey: .requiredCredits)
+        availableCredits    = try c.decodeIfPresent(Double.self, forKey: .availableCredits)
         creditCostCharged   = try c.decodeIfPresent(Double.self, forKey: .creditCostCharged)
         remainingCredits    = try c.decodeIfPresent(Double.self, forKey: .remainingCredits)
         retryAfterSeconds   = try c.decodeIfPresent(Int.self, forKey: .retryAfterSeconds)
@@ -322,7 +322,7 @@ struct GenerationCostEstimate: Codable {
     /// Phase 3 pricing returns fractional credits (6-decimal precision), so this is Double.
     let estimatedCredits: Double
     /// Current available credits for the authenticated user.
-    let availableCredits: Int
+    let availableCredits: Double
     /// `true` if the user has enough credits to proceed with generation.
     let allowed: Bool
     /// Minimum charge enforced by the selected model regardless of actual token usage.

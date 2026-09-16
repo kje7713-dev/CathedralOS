@@ -7,6 +7,16 @@ import {
   OpenAIProvider,
 } from "../generate-story/_provider.ts";
 import {
+  assertPromptWithinBudget,
+  buildCompactPlanningView,
+  compactExistingSections,
+  compactText,
+  compactMaterial,
+  compactObligations,
+  compactRecipe,
+  stableJSONStringify,
+} from "./_prompt_context.ts";
+import {
   type RecipeObligation,
   deriveRecipeObligations,
   obligationCoverage,
@@ -1624,8 +1634,18 @@ export function buildExpansionPrompt(
     system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
-${renderRecipeObligations(obligations)}`,
-    user: JSON.stringify({ recipe: req.recipe, storyMaterialEnrichment: req.storyMaterialEnrichment ?? null, arcTemplate: req.arcTemplate, recipeObligations: obligations, existingSections: req.existingSections ?? [], currentSuggestions: current, beatLocalContext: beatContext ?? null, unusedStoryMaterial, expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens } }, null, 2),
+The JSON request contains the authoritative obligations exactly once.`,
+    user: JSON.stringify({
+      global: {
+        project: req.recipe?.project ? { id: req.recipe.project.id ?? null, name: compactText((req.recipe.project as any).name, 200), summary: compactText(req.recipe.project.summary, 1200) } : null,
+        recipe: { selectedStorySpark: compactRecipe(req.recipe).selectedStorySpark, selectedAftertaste: compactRecipe(req.recipe).selectedAftertaste },
+        arc: { name: req.arcTemplate.name, beats: req.arcTemplate.beats.map((b: any) => ({ id: b.id, label: compactText(b.label, 180), description: compactText(b.description, 500) })) },
+      },
+      targetBeat: beatContext ? { ...beatContext, currentSections: compactExistingSections(beatContext.currentSections ?? []), unmetObligations: compactObligations(obligations.filter((o) => o.required && !beatContext.currentSections?.some((s) => (s.recipeRequirementIDs ?? []).includes(o.id)))) } : null,
+      unusedStoryMaterial: compactMaterial({ relevant: unusedStoryMaterial }),
+      neighbors: { previous: [], next: [] },
+      expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens },
+    }, null, 2),
   };
 }
 
@@ -1753,13 +1773,10 @@ Choose a container for the scale of one dramatic unit, not to fake novel length:
 The expected ranges are literary targets; runtime/provider headroom is not a desired length.
 
 ## Recipe obligations
+The JSON planning context contains the authoritative obligations exactly once.
 
-The following obligations were derived from populated canonical recipe fields. Required obligations must be materially advanced by one or more sections. Supporting items are optional texture and must not be promoted into mandatory plot events. Each section may include zero or more applicable recipeRequirementIDs; attach only obligations materially advanced by that section.
-${renderRecipeObligations(obligations)}
-
-## Story material enrichment
-${storyMaterial ? JSON.stringify(storyMaterial, null, 2) : "No enrichment package was supplied; preserve the complete recipe while planning."}
-Use this package to develop concrete events. Do not treat planner-invented material as authored recipe fact.
+## Compact planning context
+Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation.
 
 ## Use the minimum-only allocation
 
@@ -1779,29 +1796,9 @@ ${allocationLines}
 ## Semantic Story Arc contracts
 ${contractLines}
 
-${
-      req.existingSections && req.existingSections.length > 0
-        ? `Existing sections already in this outline (do not duplicate; build forward from them where natural):
-${
-          req.existingSections.map((s) =>
-            `- "${s.title ?? "(untitled)"}" (${s.container ?? "scene"}, ${
-              s.pov ?? "thirdPersonLimited"
-            }): ${s.summary ?? ""} [recipeRequirementIDs: ${(s.recipeRequirementIDs ?? []).join(", ") || "none"}]`
-          ).join("\n")
-        }\n\n`
-        : ""
-    }Respond with structured JSON matching the schema.`;
-  const user = JSON.stringify(
-    {
-      recipe: req.recipe,
-      arcTemplate: req.arcTemplate,
-      recipeObligations: obligations,
-      storyMaterialEnrichment: storyMaterial ?? null,
-      hint: req.hint ?? null,
-    },
-    null,
-    2,
-  );
+Respond with structured JSON matching the schema.`;
+  const planningView = buildCompactPlanningView({ ...req, storyMaterialEnrichment: storyMaterial }, obligations, storyMaterial);
+  const user = JSON.stringify({ planningContext: planningView, allocation: Array.from(allocation.entries()), hint: req.hint ?? null }, null, 2);
 
   return { system, user };
 }
@@ -1953,48 +1950,36 @@ export function parseAndValidateAllocation(
 
 export function buildAllocationPrompt(
   req: OutlineFromRecipeRequest,
+  obligations: RecipeObligation[] = [],
 ): { system: string; user: string } {
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
 This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections. Use the supplied premise, characters, and arc to decide where density belongs.
 
+## Recipe obligations
+The JSON request contains the authoritative obligations exactly once.
+
 For every Story Arc beat, determine the minimum number of NEW dramatic sections still required to adequately realize that movement in a novel after considering the supplied existingSections. Output exactly one allocation for every beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. minSections represents the number of additional sections still required beyond existingSections — it is a floor, not a target or maximum. The later outline generator may create additional sections whenever the material supports them. A beat sufficiently covered by existing sections may use minSections 0 (existing coverage is already accounted for; do not include it in minSections). Do not output any other root key.
 
 Output JSON only. No commentary, no prose.`;
 
-  const user = JSON.stringify(
-    {
-      requestedFormat: requestedStoryMaterialFormat(req),
-      recipe: req.recipe,
-      storyMaterialEnrichment: req.storyMaterialEnrichment ?? null,
-      arcTemplate: {
-        id: req.arcTemplate.id,
-        name: req.arcTemplate.name,
-        beats: req.arcTemplate.beats.map((b, beatIndex) => ({
-          beatIndex,
-          label: b.label,
-          description: b.description,
-        })),
-      },
-      existingSectionsByBeat: Object.fromEntries(
-        req.arcTemplate.beats.map((beat) => [
-          beat.id,
-          (req.existingSections ?? []).filter((section) =>
-            section.storyArcBeatID === beat.id
-          ),
-        ]),
-      ),
-      existingUnlinkedSections: (req.existingSections ?? []).filter((section) =>
-        !section.storyArcBeatID ||
-        !req.arcTemplate.beats.some((beat) =>
-          beat.id === section.storyArcBeatID
-        )
-      ),
-    },
-    null,
-    2,
-  );
+  const planningView = buildCompactPlanningView(req, obligations, req.storyMaterialEnrichment);
+  const user = JSON.stringify({
+    requestedFormat: requestedStoryMaterialFormat(req),
+    recipe: planningView.recipe,
+    arcTemplate: planningView.arc,
+    obligations: planningView.obligations,
+    materialIndex: planningView.materialIndex,
+    existingSectionsByBeat: Object.fromEntries(req.arcTemplate.beats.map((beat) => [
+      beat.id,
+      (req.existingSections ?? []).filter((section) => section.storyArcBeatID === beat.id).map((section) => ({
+        id: (section as any).id ?? null, title: section.title ?? null, summary: section.summary ?? null,
+        terminalState: (section as any).terminalState ?? section.terminalBeat ?? null, recipeRequirementIDs: section.recipeRequirementIDs ?? [],
+      })),
+    ])),
+    existingUnlinkedSections: (req.existingSections ?? []).filter((section) => !section.storyArcBeatID || !req.arcTemplate.beats.some((beat) => beat.id === section.storyArcBeatID)).map((section) => ({ title: section.title ?? null, summary: section.summary ?? null })),
+  }, null, 2);
   return { system, user };
 }
 
@@ -2002,8 +1987,9 @@ export async function planSectionAllocation(
   req: OutlineFromRecipeRequest,
   apiKey: string,
   billableCall?: SuggestionLLMCall,
+  obligations: RecipeObligation[] = [],
 ): Promise<Map<string, Allocation>> {
-  const { system, user } = buildAllocationPrompt(req);
+  const { system, user } = buildAllocationPrompt(req, obligations);
   const responseFormat = {
     type: "json_schema",
     json_schema: {
@@ -2867,7 +2853,7 @@ async function runSuggestionJob(
     lease_expires_at: leaseExpiry(),
     attempt_count: priorAttemptCount + 1,
   }).eq("id", runId).eq("status", "pending")
-    .select("id, credit_cost_charged, remaining_credits, story_material, suggestions, diagnostics")
+    .select("id, credit_cost_charged, remaining_credits, story_material, suggestions, diagnostics, planning_context, planning_context_hash, planning_context_version")
     .maybeSingle();
   if (claim.error || !claim.data) return;
   const claimedRun: any = claim.data;
@@ -2893,22 +2879,10 @@ async function runSuggestionJob(
     // Reclaimed workers resume from persisted billing/material state. The
     // usage-event idempotency key is the final no-double-charge guard, while
     // reusing persisted enrichment avoids repeating a settled paid stage.
-    let creditCostCharged = Number(claimedRun.credit_cost_charged ?? 0);
-    let remainingCredits: number | null = claimedRun.remaining_credits ?? null;
-    const persistBilling = async (
-      result: {
-        actualCharge: number;
-        charged: boolean;
-        remainingCredits: number;
-      },
-    ) => {
-      if (result.charged) creditCostCharged += result.actualCharge;
-      remainingCredits = result.remainingCredits;
-      await updateRun({
-        credit_cost_charged: creditCostCharged,
-        remaining_credits: remainingCredits,
-        lease_expires_at: leaseExpiry(),
-      });
+    // Billing totals are database-authoritative. The settlement RPC reconciles
+    // the run from provider-attempt rows; this worker only renews its lease.
+    const persistBilling = async () => {
+      await updateRun({ lease_expires_at: leaseExpiry() });
     };
     const billableCall: SuggestionLLMCall = async (
       system,
@@ -2922,6 +2896,30 @@ async function runSuggestionJob(
         { role: "system", content: system },
         { role: "user", content: user },
       ];
+      const stageFamily = action.startsWith("outline-expansion-")
+        ? "expansion"
+        : action.startsWith("story-material-enrichment")
+        ? "enrichment"
+        : action.startsWith("outline-plan")
+        ? "allocation"
+        : action.startsWith("outline-suggestions")
+        ? "suggestions"
+        : action;
+      const promptLimit = stageFamily === "suggestions" ? 35000 : stageFamily === "allocation" ? 20000 : stageFamily === "enrichment" ? 20000 : 30000;
+      const promptMetrics = assertPromptWithinBudget(stageFamily, messages, promptLimit, {
+        recipeBytes: new TextEncoder().encode(JSON.stringify(compactRecipe(body.recipe))).byteLength,
+        enrichmentBytes: new TextEncoder().encode(JSON.stringify(compactMaterial(body.storyMaterialEnrichment))).byteLength,
+        obligationCount: Array.isArray(body.storyMaterialEnrichment) ? 0 : undefined,
+        existingSectionCount: body.existingSections?.length ?? 0,
+        currentSuggestionCount: 0,
+        materialItemCount: compactMaterial(body.storyMaterialEnrichment).length,
+      });
+      diagnostics = { ...diagnostics, promptMetrics: { ...(diagnostics.promptMetrics as Record<string, unknown> ?? {}), [action]: promptMetrics } };
+      await updateRun({ diagnostics });
+      const stablePrefixHash = await sha256Hex(system);
+      const projectIdentity = body.recipe?.project?.id ?? body.outline_id ?? "unknown";
+      const promptCacheKey = `cath:outline:${projectIdentity}:${provenance.sourceRecipeHash}:${stageFamily}:pcv1:promptv3`;
+      const promptCacheKeyHash = await sha256Hex(promptCacheKey);
       await touchLease();
       const result = await runBillableLLM({
         userID: userId,
@@ -2930,18 +2928,30 @@ async function runSuggestionJob(
         model,
         messages,
         maxOutputTokens,
-        providerOptions: { responseFormat, temperature: 0.7 },
+        providerOptions: {
+          responseFormat,
+          temperature: 0.7,
+          cacheMode: model.cacheMode,
+          promptCacheKey: model.cacheMode === "none" ? undefined : promptCacheKey,
+        },
+        stablePrefixHash,
         usageContext: {
           generationLengthMode: "outline",
           outputBudget: maxOutputTokens,
           idempotencyKey: `${runId}:${action}`,
+          featureRunID: runId,
+          promptBytes: promptMetrics.promptBytes,
+          stablePrefixBytes: new TextEncoder().encode(system).byteLength,
+          volatileBytes: new TextEncoder().encode(user).byteLength,
+          logicalStageKey: `${runId}:${action}`,
+          promptCacheKeyHash,
         },
         onProviderSuccess: async (providerResult) => {
           if (validateResponse) await validateResponse(providerResult.content);
           return providerResult.content;
         },
       }, { adminClient: db, provider, creditStore });
-      await persistBilling(result);
+      await persistBilling();
       return {
         content: result.featureResult,
         creditCostCharged: result.charged ? result.actualCharge : 0,
@@ -3091,8 +3101,6 @@ async function runSuggestionJob(
         status: "completed",
         suggestions: completedSuggestions,
         warnings: completionWarnings,
-        credit_cost_charged: creditCostCharged,
-        remaining_credits: remainingCredits,
         completed_at: new Date().toISOString(),
         diagnostics: { ...diagnostics, stage: "completed", finalSectionCounts: countSuggestionsByBeat(completedSuggestions) },
         lease_owner: null,
@@ -3181,10 +3189,28 @@ async function runSuggestionJob(
     body = { ...body, storyMaterialEnrichment: storyMaterial };
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
     const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
+    // Freeze the deterministic compact view on the durable run so a reclaimed
+    // worker cannot silently prompt against a materially different payload.
+    const planningContext = {
+      ...buildCompactPlanningView(body, recipeObligations, storyMaterial),
+      provenance: {
+        sourceRecipeHash: provenance.sourceRecipeHash,
+        sourceRecipeVersion: provenance.sourceRecipeVersion,
+        sourcePromptPackID: provenance.sourcePromptPackID,
+        projectID: body.recipe?.project?.id ?? null,
+        projectLineageID: body.project_lineage_id ?? null,
+      },
+    };
+    const planningContextHash = await sha256Hex(stableJSONStringify(planningContext));
+    if (claimedRun.planning_context && claimedRun.planning_context_version === 1 && claimedRun.planning_context_hash && claimedRun.planning_context_hash !== planningContextHash) {
+      throw new Error("persisted planning context conflicts with the reclaimed request; refusing to silently rebuild a paid outline stage");
+    }
+    await updateRun({ planning_context: claimedRun.planning_context ?? planningContext, planning_context_hash: claimedRun.planning_context_hash ?? planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1 });
     const plannedAllocation = await planSectionAllocation(
       body,
       openaiKey,
       billableCall,
+      recipeObligations,
     );
     // PR 5: plannedAllocation IS the residual count (existingSections already accounted for).
     // Previously we called adjustAllocationForExistingSections here, which double-subtracted
@@ -3278,8 +3304,6 @@ async function runSuggestionJob(
       status: "completed",
       suggestions: result.suggestions,
       warnings: result.warnings,
-      credit_cost_charged: creditCostCharged,
-      remaining_credits: remainingCredits,
       completed_at: new Date().toISOString(),
       diagnostics: { ...diagnostics, stage: "completed", finalSectionCounts: countSuggestionsByBeat(result.suggestions) },
       lease_owner: null,

@@ -72,6 +72,20 @@ export interface UserEntitlement {
   updated_at: string;
 }
 
+export function toFiniteNumber(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") { const parsed = Number(value); if (Number.isFinite(parsed)) return parsed; }
+  return fallback;
+}
+
+export function normalizeUserEntitlement(row: Record<string, unknown>): UserEntitlement {
+  return {
+    ...(row as Omit<UserEntitlement, "monthly_credit_allowance" | "purchased_credit_balance">),
+    monthly_credit_allowance: toFiniteNumber(row.monthly_credit_allowance),
+    purchased_credit_balance: toFiniteNumber(row.purchased_credit_balance),
+  } as UserEntitlement;
+}
+
 /** Computes the total available credits from an entitlement row. */
 export function availableCredits(e: UserEntitlement): number {
   return e.monthly_credit_allowance + e.purchased_credit_balance;
@@ -184,7 +198,7 @@ export class SupabaseCreditStore implements CreditStore {
       .single();
 
     if (!error && data) {
-      return data as UserEntitlement;
+      return normalizeUserEntitlement(data as Record<string, unknown>);
     }
 
     // No row or error — upsert a free-tier default.
@@ -214,7 +228,7 @@ export class SupabaseCreditStore implements CreditStore {
       };
     }
 
-    return upserted as UserEntitlement;
+    return normalizeUserEntitlement(upserted as Record<string, unknown>);
   }
 
   async charge(

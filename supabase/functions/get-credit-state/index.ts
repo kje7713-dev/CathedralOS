@@ -1,3 +1,4 @@
+import { normalizeUserEntitlement } from "../generate-story/_credits.ts";
 // =============================================================================
 // index.ts — get-credit-state Supabase Edge Function
 //
@@ -137,7 +138,7 @@ Deno.serve(async (req: Request) => {
   let entitlement: UserEntitlement;
 
   if (!loadError && existing) {
-    entitlement = existing as UserEntitlement;
+    entitlement = normalizeUserEntitlement(existing as Record<string, unknown>);
   } else {
     // New user — upsert a free-tier default.
     const defaultRow = {
@@ -165,7 +166,7 @@ Deno.serve(async (req: Request) => {
         updated_at: new Date().toISOString(),
       };
     } else {
-      entitlement = upserted as UserEntitlement;
+      entitlement = normalizeUserEntitlement(upserted as Record<string, unknown>);
     }
   }
 

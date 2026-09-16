@@ -51,6 +51,23 @@ final class GenerationResponseCreditFieldsTests: XCTestCase {
         XCTAssertEqual(response.availableCredits, 1)
     }
 
+    func testDecodesFractionalGenerationCreditFieldsWithoutTruncation() throws {
+        let json = """
+        {
+            "status": "complete",
+            "requiredCredits": 1.57,
+            "availableCredits": 1.25,
+            "creditCostCharged": 0.25,
+            "remainingCredits": 1.0
+        }
+        """
+        let response = try decode(json)
+        XCTAssertEqual(response.requiredCredits, 1.57, accuracy: 0.000001)
+        XCTAssertEqual(response.availableCredits, 1.25, accuracy: 0.000001)
+        XCTAssertEqual(response.creditCostCharged, 0.25, accuracy: 0.000001)
+        XCTAssertEqual(response.remainingCredits, 1.0, accuracy: 0.000001)
+    }
+
     // MARK: Successful generation response
 
     func testDecodesCreditCostChargedOnSuccess() throws {
@@ -108,6 +125,16 @@ final class GenerationResponseCreditFieldsTests: XCTestCase {
         XCTAssertEqual(response.creditCostCharged, 2)
         XCTAssertEqual(response.remainingCredits, 8)
         XCTAssertNil(response.errorCode)
+    }
+
+    func testBackendCreditStateDecodesFractionalBalancesAndLedgerDelta() throws {
+        let data = """        {"planName":"free","isPro":false,"monthlyCreditAllowance":90.72848,"purchasedCreditBalance":5.5,"availableCredits":96.22848,"isAdmin":false,"recentLedger":[{"id":"ledger-1","delta":-9.27152,"reason":"generation_charge","created_at":"2026-09-15T18:00:00Z"}]}
+        """.data(using: .utf8)!
+        let state = try JSONDecoder().decode(BackendCreditState.self, from: data)
+        XCTAssertEqual(state.monthlyCreditAllowance, 90.72848, accuracy: 0.000001)
+        XCTAssertEqual(state.purchasedCreditBalance, 5.5, accuracy: 0.000001)
+        XCTAssertEqual(state.availableCredits, 96.22848, accuracy: 0.000001)
+        XCTAssertEqual(state.recentLedger.first!.delta, -9.27152, accuracy: 0.000001)
     }
 
     // MARK: Helpers
@@ -318,6 +345,8 @@ final class BackendCreditStateStubTests: XCTestCase {
         }
     }
 }
+
+
 
 // MARK: - SupabaseConfiguration Credit Paths Tests
 
