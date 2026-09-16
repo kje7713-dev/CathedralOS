@@ -107,12 +107,6 @@ export function promptMetrics(messages: Array<{ role: string; content: unknown }
   return { promptBytes: new TextEncoder().encode(serialized).byteLength, promptChars: serialized.length, estimatedInputTokens: Math.ceil(serialized.length / 4), ...extra };
 }
 
-export function assertPromptWithinBudget(stage: string, messages: Array<{ role: string; content: unknown }>, maxEstimatedTokens: number, extra: Record<string, unknown> = {}) {
-  const metrics = promptMetrics(messages, { stage, ...extra });
-  if (metrics.estimatedInputTokens > maxEstimatedTokens) throw new Error(`${stage} prompt exceeds safety budget (${metrics.estimatedInputTokens} estimated input tokens; limit ${maxEstimatedTokens})`);
-  return metrics;
-}
-
 export async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
