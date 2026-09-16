@@ -780,3 +780,24 @@ function assertStringIncludes(actual: string, expected: string): void {
     );
   }
 }
+
+Deno.test("outline provider attempt allocation failure prevents provider dispatch", async () => {
+  let providerCalls = 0;
+  const admin = {
+    rpc: (_name: string) => Promise.resolve({ data: null, error: { message: "allocator unavailable" } }),
+    from: (_table: string) => ({ insert: (_row: unknown) => Promise.resolve({ data: null, error: null }) }),
+  };
+  const request = makeRequest({
+    purpose: "outline-suggestion",
+    action: "outline-suggestions-1",
+    usageContext: {
+      ...makeRequest().usageContext,
+      featureRunID: "00000000-0000-0000-0000-0000000000bb",
+      logicalStageKey: "run:stage",
+    },
+  });
+  const provider = makeProvider(makeLLMResponse());
+  const wrapped = { ...provider, complete: (...args: Parameters<typeof provider.complete>) => { providerCalls++; return provider.complete(...args); } };
+  await assertRejects(() => runBillableLLM(request, { adminClient: admin, provider: wrapped, creditStore: makeCreditStore() }), BillableLLMError, "allocator unavailable");
+  assertEquals(providerCalls, 0);
+});

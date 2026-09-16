@@ -172,13 +172,16 @@ alter table public.outline_suggestion_runs
   add column if not exists planning_context_version integer;
 
 
--- AI-cover remains whole-credit priced, but must not truncate an existing fractional balance.
-
+-- AI-cover reservations and settlements preserve fractional credit balances and costs.
+-- Remove both the live legacy four-argument overload and the prior
+-- nine-argument definition before creating the numeric-returning one.
+drop function if exists public.reserve_ai_cover_credits(uuid, uuid, integer, text);
 drop function if exists public.reserve_ai_cover_credits(uuid, uuid, integer, text, integer, integer, numeric, numeric, numeric);
+drop function if exists public.reserve_ai_cover_credits(uuid, uuid, numeric, text, integer, integer, numeric, numeric, numeric);
 create or replace function public.reserve_ai_cover_credits(
   p_user_id uuid,
   p_export_job_id uuid,
-  p_cost integer,
+  p_cost numeric,
   p_model_name text,
   p_input_tokens integer,
   p_output_tokens integer,
@@ -271,14 +274,15 @@ begin
 end;
 $$;
 
-revoke all on function public.reserve_ai_cover_credits(uuid, uuid, integer, text, integer, integer, numeric, numeric, numeric) from public, anon, authenticated;
-grant execute on function public.reserve_ai_cover_credits(uuid, uuid, integer, text, integer, integer, numeric, numeric, numeric) to service_role;
+revoke all on function public.reserve_ai_cover_credits(uuid, uuid, numeric, text, integer, integer, numeric, numeric, numeric) from public, anon, authenticated;
+grant execute on function public.reserve_ai_cover_credits(uuid, uuid, numeric, text, integer, integer, numeric, numeric, numeric) to service_role;
 
 drop function if exists public.settle_ai_cover_credits(uuid, uuid, integer, integer, integer, numeric, numeric, numeric);
+drop function if exists public.settle_ai_cover_credits(uuid, uuid, numeric, integer, integer, numeric, numeric, numeric);
 create or replace function public.settle_ai_cover_credits(
   p_user_id uuid,
   p_export_job_id uuid,
-  p_actual_cost integer,
+  p_actual_cost numeric,
   p_input_tokens integer,
   p_output_tokens integer,
   p_provider_cogs_cents numeric,
@@ -375,8 +379,8 @@ begin
 end;
 $$;
 
-revoke all on function public.settle_ai_cover_credits(uuid, uuid, integer, integer, integer, numeric, numeric, numeric) from public, anon, authenticated;
-grant execute on function public.settle_ai_cover_credits(uuid, uuid, integer, integer, integer, numeric, numeric, numeric) to service_role;
+revoke all on function public.settle_ai_cover_credits(uuid, uuid, numeric, integer, integer, numeric, numeric, numeric) from public, anon, authenticated;
+grant execute on function public.settle_ai_cover_credits(uuid, uuid, numeric, integer, integer, numeric, numeric, numeric) to service_role;
 
 drop function if exists public.refund_ai_cover_credits(uuid, uuid);
 create or replace function public.refund_ai_cover_credits(

@@ -48,7 +48,7 @@ struct DiagnosticsSnapshot {
     let isPro: Bool
 
     // MARK: Credits
-    let availableCredits: Int
+    let availableCredits: Double
     let creditPlanName: String
     let creditSource: String
     let backendConfirmedAdmin: Bool

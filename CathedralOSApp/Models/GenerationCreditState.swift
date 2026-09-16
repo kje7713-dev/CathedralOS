@@ -26,7 +26,7 @@ struct GenerationCreditState: Equatable {
     // MARK: Core fields
 
     /// Credits available for generation in the current period.
-    let availableCredits: Int
+    let availableCredits: Double
 
     /// Number of generation attempts recorded this calendar month.
     let monthlyGenerationCount: Int
@@ -88,7 +88,7 @@ struct GenerationCreditState: Equatable {
     /// Mock state for development and automated testing.
     /// Never display the mock badge in production UI.
     static func mock(
-        availableCredits: Int = 50,
+        availableCredits: Double = 50,
         monthlyGenerationCount: Int = 5,
         monthlyOutputBudgetUsed: Int = 12_000,
         resetDate: Date = Calendar.current.date(

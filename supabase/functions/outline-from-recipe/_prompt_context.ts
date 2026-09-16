@@ -13,6 +13,22 @@ export function stableJSONStringify(value: unknown): string {
   return JSON.stringify(sorted(value));
 }
 
+const STORY_SPARK_FIELDS = ["title", "situation", "stakes", "twist", "urgency", "threat", "opportunity", "complication", "clock", "triggerEvent", "initialImbalance", "falseResolution", "reversalPotential"] as const;
+const AFTERTASTE_FIELDS = ["label", "note", "emotionalResidue", "endingTexture", "desiredAmbiguityLevel", "readerQuestionLeftOpen", "lastImageFeeling"] as const;
+
+function compactTypedFields(item: any, fields: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = { id: item?.id ?? null };
+  for (const field of fields) {
+    const value = item?.[field];
+    if (Array.isArray(value)) { const values = value.map((x) => compactText(x, 700)).filter(Boolean).slice(0, 12); if (values.length) out[field] = values; }
+    else { const text = compactText(value, 900); if (text) out[field] = text; }
+  }
+  return out;
+}
+
+export function compactStorySparkForPlanning(item: any): Record<string, unknown> { return compactTypedFields(item, STORY_SPARK_FIELDS); }
+export function compactAftertasteForPlanning(item: any): Record<string, unknown> { return compactTypedFields(item, AFTERTASTE_FIELDS); }
+
 function compactEntity(item: any): Record<string, unknown> {
   const out: Record<string, unknown> = {
     id: item?.id ?? null,
@@ -52,8 +68,8 @@ export function compactRecipe(recipe: any): Record<string, unknown> {
     selectedRelationships: Array.isArray(recipe?.selectedRelationships) ? recipe.selectedRelationships.map(compactEntity) : [],
     selectedThemeQuestions: Array.isArray(recipe?.selectedThemeQuestions) ? recipe.selectedThemeQuestions.map(compactEntity) : [],
     selectedMotifs: Array.isArray(recipe?.selectedMotifs) ? recipe.selectedMotifs.map(compactEntity) : [],
-    selectedStorySpark: recipe?.selectedStorySpark ? compactEntity(recipe.selectedStorySpark) : null,
-    selectedAftertaste: recipe?.selectedAftertaste ? compactEntity(recipe.selectedAftertaste) : null,
+    selectedStorySpark: recipe?.selectedStorySpark ? compactStorySparkForPlanning(recipe.selectedStorySpark) : null,
+    selectedAftertaste: recipe?.selectedAftertaste ? compactAftertasteForPlanning(recipe.selectedAftertaste) : null,
     promptPack: recipe?.promptPack ? { id: recipe.promptPack.id ?? null, name: compactText(recipe.promptPack.name, 200), instructionBias: compactText(recipe.promptPack.instructionBias, 900) } : null,
   };
 }

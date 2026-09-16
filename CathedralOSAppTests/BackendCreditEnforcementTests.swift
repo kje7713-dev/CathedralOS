@@ -110,6 +110,16 @@ final class GenerationResponseCreditFieldsTests: XCTestCase {
         XCTAssertNil(response.errorCode)
     }
 
+    func testBackendCreditStateDecodesFractionalBalancesAndLedgerDelta() throws {
+        let data = """        {"planName":"free","isPro":false,"monthlyCreditAllowance":90.72848,"purchasedCreditBalance":5.5,"availableCredits":96.22848,"isAdmin":false,"recentLedger":[{"id":"ledger-1","delta":-9.27152,"reason":"generation_charge","created_at":"2026-09-15T18:00:00Z"}]}
+        """.data(using: .utf8)!
+        let state = try JSONDecoder().decode(BackendCreditState.self, from: data)
+        XCTAssertEqual(state.monthlyCreditAllowance, 90.72848, accuracy: 0.000001)
+        XCTAssertEqual(state.purchasedCreditBalance, 5.5, accuracy: 0.000001)
+        XCTAssertEqual(state.availableCredits, 96.22848, accuracy: 0.000001)
+        XCTAssertEqual(state.recentLedger.first!.delta, -9.27152, accuracy: 0.000001)
+    }
+
     // MARK: Helpers
 
     private func decode(_ jsonString: String) throws -> GenerationResponse {
@@ -320,15 +330,6 @@ final class BackendCreditStateStubTests: XCTestCase {
 }
 
 
-    func testBackendCreditStateDecodesFractionalBalancesAndLedgerDelta() throws {
-        let data = """        {"planName":"free","isPro":false,"monthlyCreditAllowance":90.72848,"purchasedCreditBalance":5.5,"availableCredits":96.22848,"isAdmin":false,"recentLedger":[{"id":"ledger-1","delta":-9.27152,"reason":"generation_charge","created_at":"2026-09-15T18:00:00Z"}]}
-        """.data(using: .utf8)!
-        let state = try JSONDecoder().decode(BackendCreditState.self, from: data)
-        XCTAssertEqual(state.monthlyCreditAllowance, 90.72848, accuracy: 0.000001)
-        XCTAssertEqual(state.purchasedCreditBalance, 5.5, accuracy: 0.000001)
-        XCTAssertEqual(state.availableCredits, 96.22848, accuracy: 0.000001)
-        XCTAssertEqual(state.recentLedger.first!.delta, -9.27152, accuracy: 0.000001)
-    }
 
 // MARK: - SupabaseConfiguration Credit Paths Tests
 

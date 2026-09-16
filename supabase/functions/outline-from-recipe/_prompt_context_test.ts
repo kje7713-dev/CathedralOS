@@ -1,5 +1,5 @@
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { buildCompactPlanningView, compactMaterial, stableJSONStringify, promptMetrics } from "./_prompt_context.ts";
+import { buildCompactPlanningView, compactMaterial, stableJSONStringify, promptMetrics, compactStorySparkForPlanning, compactAftertasteForPlanning } from "./_prompt_context.ts";
 
 const req = { recipe: { project: { id: "p", name: "A", summary: "A story" }, selectedCharacters: [{ id: "c", name: "Hero", summary: "A sentinel" }] }, arcTemplate: { id: "a", name: "Arc", beats: [{ id: "b", label: "Beat", description: "Turn" }] }, existingSections: [] };
 Deno.test("compact planning context is deterministic and carries provenance", () => {
@@ -16,4 +16,11 @@ Deno.test("prompt metrics estimate serialized input without retaining prompt tex
   const metrics = promptMetrics([{ role: "system", content: "x".repeat(400) }], { stage: "allocation" });
   assertEquals(metrics.estimatedInputTokens > 100, true);
   assertEquals("system" in metrics, false);
+});
+
+Deno.test("typed Story Spark and Aftertaste compaction preserves canonical semantics once", () => {
+  const spark = compactStorySparkForPlanning({ id: "spark", title: "S", situation: "SITUATION_SENTINEL", stakes: "STAKES_SENTINEL", twist: "TWIST_SENTINEL", urgency: "URGENCY_SENTINEL", clock: "CLOCK_SENTINEL", triggerEvent: "TRIGGER_SENTINEL", reversalPotential: "REVERSAL_SENTINEL" });
+  const aftertaste = compactAftertasteForPlanning({ id: "after", label: "A", emotionalResidue: "RESIDUE_SENTINEL", endingTexture: "TEXTURE_SENTINEL", desiredAmbiguityLevel: "AMBIGUITY_SENTINEL", readerQuestionLeftOpen: "QUESTION_SENTINEL", lastImageFeeling: "IMAGE_SENTINEL" });
+  for (const value of ["SITUATION_SENTINEL", "STAKES_SENTINEL", "TWIST_SENTINEL", "URGENCY_SENTINEL", "CLOCK_SENTINEL", "TRIGGER_SENTINEL", "REVERSAL_SENTINEL"]) assert(JSON.stringify(spark).includes(value));
+  for (const value of ["RESIDUE_SENTINEL", "TEXTURE_SENTINEL", "AMBIGUITY_SENTINEL", "QUESTION_SENTINEL", "IMAGE_SENTINEL"]) assert(JSON.stringify(aftertaste).includes(value));
 });

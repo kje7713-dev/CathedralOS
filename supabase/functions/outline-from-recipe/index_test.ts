@@ -3310,3 +3310,13 @@ Deno.test("PR #573 canonical repair: sufficiency fails closed when canonical rec
   assertEquals(repaired.characters.length, 1);
   assertEquals(repaired.unresolvedQuestions.length, 1);
 });
+
+Deno.test("expansion prompt stays bounded as global outline grows", () => {
+  const target = { beatID: "beat-1", beatLabel: "Opening", beatDescription: "Begin", projectedWords: 1200, currentSections: [{ id: "target", title: "Target", summary: "Current target", storyArcBeatID: "beat-1", container: "scene" }] };
+  const sizes = [10, 50, 100].map((count) => {
+    const current = Array.from({ length: count }, (_, i) => ({ id: `s-${i}`, title: `Section ${i}`, summary: `Summary ${i}`, storyArcBeatID: "beat-1", container: "scene" }));
+    const prompt = buildExpansionPrompt(sparseRequest as any, current as any, { round: 1, projectedTokens: 1200, projectedWords: 300, desiredWords: [70000, 90000], remainingDeficitTokens: 1000, beat: target as any }, []);
+    return JSON.stringify(prompt).length;
+  });
+  assertEquals(sizes[2] <= sizes[0] * 1.5, true);
+});

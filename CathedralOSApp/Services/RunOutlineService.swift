@@ -19,7 +19,7 @@ enum RunOutlineError: Error, LocalizedError {
     case notConfigured(reason: String)
     case notAuthenticated
     case alreadyRunning(runID: String)
-    case insufficientCredits(needed: Int, available: Int)
+    case insufficientCredits(needed: Int, available: Double)
     case rateLimited
     case providerError
     case invalidResponse(String)
@@ -55,8 +55,8 @@ enum RunOutlineError: Error, LocalizedError {
 /// Response from POST /functions/v1/run-outline (kickoff).
 /// The function queues the run and returns immediately with its durable ID.
 struct RunOutlineCostEstimate: Codable {
-    let estimatedCredits: Int
-    let availableCredits: Int
+    let estimatedCredits: Double
+    let availableCredits: Double
     let allowed: Bool
     let sectionCount: Int
     let model: String?

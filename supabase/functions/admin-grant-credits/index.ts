@@ -1,3 +1,4 @@
+import { normalizeUserEntitlement } from "../generate-story/_credits.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   FREE_TIER_MONTHLY_ALLOWANCE,
@@ -43,7 +44,8 @@ function isUUID(value: string): boolean {
 }
 
 async function loadOrCreateEntitlement(
-  adminClient: ReturnType<typeof createClient>,
+  // Supabase schema generics are unavailable in the Edge runtime; normalize at the boundary.
+  adminClient: any,
   userId: string,
 ): Promise<UserEntitlement> {
   const { data: existing, error: loadError } = await adminClient
@@ -53,7 +55,7 @@ async function loadOrCreateEntitlement(
     .single();
 
   if (!loadError && existing) {
-    return existing as UserEntitlement;
+    return normalizeUserEntitlement(existing as Record<string, unknown>);
   }
 
   const defaultRow = {
@@ -80,11 +82,11 @@ async function loadOrCreateEntitlement(
     );
   }
 
-  return upserted as UserEntitlement;
+  return normalizeUserEntitlement(upserted as Record<string, unknown>);
 }
 
 async function buildCreditStateResponse(
-  adminClient: ReturnType<typeof createClient>,
+  adminClient: any,
   entitlement: UserEntitlement,
   isAdmin: boolean,
 ): Promise<Response> {
@@ -266,7 +268,7 @@ export async function handler(req: Request): Promise<Response> {
 
   return await buildCreditStateResponse(
     adminClient,
-    updatedEntitlement as UserEntitlement,
+    normalizeUserEntitlement(updatedEntitlement as Record<string, unknown>),
     true,
   );
 }

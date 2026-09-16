@@ -45,9 +45,9 @@ struct StoreKitValidationResponse: Decodable, Equatable {
     // Entitlement state after the grant was applied.
     let planName: String
     let isPro: Bool
-    let monthlyCreditAllowance: Int
-    let purchasedCreditBalance: Int
-    let availableCredits: Int
+    let monthlyCreditAllowance: Double
+    let purchasedCreditBalance: Double
+    let availableCredits: Double
     let currentPeriodEnd: String?
 
     /// True when the response reflects a fresh grant (not a duplicate).
@@ -355,7 +355,7 @@ extension StoreKitValidationResponse {
         transactionId: String = "txn-stub-002",
         productId: String = "cathedralos.credits.small",
         alreadyApplied: Bool = false,
-        creditBalance: Int = 20
+        creditBalance: Double = 20
     ) -> StoreKitValidationResponse {
         StoreKitValidationResponse(
             status: alreadyApplied ? "already_applied" : "ok",

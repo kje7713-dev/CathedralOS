@@ -1,3 +1,4 @@
+import { normalizeUserEntitlement } from "../generate-story/_credits.ts";
 // =============================================================================
 // index.ts — sync-storekit-entitlement Supabase Edge Function
 //
@@ -429,7 +430,9 @@ async function applyGrant(params: ApplyGrantParams): Promise<UserEntitlement> {
     .eq("user_id", userId)
     .single();
 
-  const current: UserEntitlement = existing ?? {
+  const current: UserEntitlement = existing
+    ? normalizeUserEntitlement(existing as Record<string, unknown>)
+    : {
     user_id: userId,
     plan_name: "free",
     is_pro: false,
@@ -552,7 +555,7 @@ async function applyGrant(params: ApplyGrantParams): Promise<UserEntitlement> {
     console.error("app_store_transactions insert error:", txInsertError);
   }
 
-  return (upserted ?? upsertPayload) as UserEntitlement;
+  return normalizeUserEntitlement((upserted ?? upsertPayload) as Record<string, unknown>);
 }
 
 // ---------------------------------------------------------------------------
@@ -656,7 +659,7 @@ async function loadCurrentEntitlement(
     };
   }
 
-  return data as UserEntitlement;
+  return normalizeUserEntitlement(data as Record<string, unknown>);
 }
 
 function formatEntitlementResponse(
