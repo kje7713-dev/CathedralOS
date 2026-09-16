@@ -2055,15 +2055,7 @@ Output JSON only. No commentary, no prose.`;
     .filter((section) => !section.storyArcBeatID || !req.arcTemplate.beats.some((beat) => beat.id === section.storyArcBeatID))
     .map((section) => ({ title: section.title ?? null, summary: section.summary ?? null }));
   const user = JSON.stringify({
-    // Keep the reference shape: semantic planning context, plus explicit
-    // existing-section buckets used by the allocation contract.
     planningContext: planningView,
-    planningView: {
-      recipe: planningView.recipe,
-      arc: planningView.arc,
-      obligations: planningView.obligations,
-      materialIndex: planningView.materialIndex,
-    },
     existingSectionsByBeat,
     existingUnlinkedSections,
     allocation: "Return one minimum-only floor per canonical beat; additional sections remain legal.",

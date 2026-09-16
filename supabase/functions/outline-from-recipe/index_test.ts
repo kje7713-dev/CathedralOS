@@ -582,13 +582,15 @@ Deno.test("single-pass prompt accepts rich recipes beyond the former 20K stage b
     ...sparseRequest.recipe,
     project: {
       ...sparseRequest.recipe.project,
-      summary: "A rich authored premise " + "x".repeat(36_000),
+      summary: "ALLOCATION_UNIQUE_PREMISE " + "x".repeat(36_000),
     },
     selectedCharacters: Array.from({ length: 40 }, (_, index) => ({
       id: `character-${index}`,
       name: `Character ${index}`,
-      summary: "A fully authored character field " + "y".repeat(1_000),
+      summary: `ALLOCATION_UNIQUE_CHARACTER_${index} ` + "y".repeat(1_000),
     })),
+    selectedStorySpark: { id: "spark-rich", text: "The authored spark", title: "The authored spark", situation: "The premise begins under pressure.", stakes: "Everything important is at risk." },
+    selectedThemeQuestions: [{ id: "theme-rich", text: "What does survival cost?", question: "What does survival cost?" }],
   };
   const request = { ...sparseRequest, recipe: richRecipe } as any;
   const allocation = new Map<string, any>(request.arcTemplate.beats.map((beat: any) => [
@@ -596,11 +598,19 @@ Deno.test("single-pass prompt accepts rich recipes beyond the former 20K stage b
     { minSections: 0, rationale: "single-pass outline generation" },
   ]));
   const primary = buildPrompt(request, allocation);
-  const allocationPrompt = buildAllocationPrompt(request);
+  const allocationPrompt = buildAllocationPrompt(request, deriveRecipeObligations(request.recipe));
+  const parsedAllocation = JSON.parse(allocationPrompt.user);
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   assertEquals(allocationPrompt.user.length > 20_000, true);
-  assertEquals(primary.user.includes("A rich authored premise"), true);
-  assertEquals(allocationPrompt.user.includes("Character 39"), true);
+  assertEquals(primary.user.includes("ALLOCATION_UNIQUE_PREMISE"), true);
+  assertEquals(allocationPrompt.user.includes("ALLOCATION_UNIQUE_CHARACTER_39"), true);
+  assertEquals(allocationPrompt.user.split('"planningContext"').length - 1, 1);
+  assertEquals(parsedAllocation.planningView, undefined);
+  assertEquals(typeof parsedAllocation.planningContext.project.summary, "string");
+  assertEquals(parsedAllocation.planningContext.obligations.length > 0, true);
+  assertEquals(Array.isArray(parsedAllocation.planningContext.materialIndex), true);
+  assertEquals("existingSectionsByBeat" in parsedAllocation, true);
+  assertEquals("existingUnlinkedSections" in parsedAllocation, true);
   assertEquals(source.includes("assertPromptWithinBudget"), false);
   assertEquals(source.includes("const promptLimit"), false);
 });
