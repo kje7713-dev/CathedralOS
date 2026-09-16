@@ -19,7 +19,7 @@ enum RunOutlineError: Error, LocalizedError {
     case notConfigured(reason: String)
     case notAuthenticated
     case alreadyRunning(runID: String)
-    case insufficientCredits(needed: Int, available: Double)
+    case insufficientCredits(needed: Double, available: Double)
     case rateLimited
     case providerError
     case invalidResponse(String)
@@ -74,8 +74,8 @@ struct RunOutlineKickoffResponse: Codable {
     let run_id: String
     let status: String
     let sections: [RunOutlineSectionStatus]?
-    let credits_reserved: Int?
-    let credits_actual: Int?
+    let credits_reserved: Double?
+    let credits_actual: Double?
     let error: String?
     let created_at: String?
     let updated_at: String?
@@ -94,8 +94,8 @@ struct RunOutlineStatus: Codable {
     let current_section: RunOutlineCurrentSection?
     let sections: [RunOutlineSectionStatus]?
     let error: String?
-    let credits_reserved: Int?
-    let credits_actual: Int?
+    let credits_reserved: Double?
+    let credits_actual: Double?
     let created_at: String?
     let updated_at: String?
     let completed_at: String?

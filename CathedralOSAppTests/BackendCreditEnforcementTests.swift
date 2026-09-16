@@ -51,6 +51,23 @@ final class GenerationResponseCreditFieldsTests: XCTestCase {
         XCTAssertEqual(response.availableCredits, 1)
     }
 
+    func testDecodesFractionalGenerationCreditFieldsWithoutTruncation() throws {
+        let json = """
+        {
+            "status": "complete",
+            "requiredCredits": 1.57,
+            "availableCredits": 1.25,
+            "creditCostCharged": 0.25,
+            "remainingCredits": 1.0
+        }
+        """
+        let response = try decode(json)
+        XCTAssertEqual(response.requiredCredits, 1.57, accuracy: 0.000001)
+        XCTAssertEqual(response.availableCredits, 1.25, accuracy: 0.000001)
+        XCTAssertEqual(response.creditCostCharged, 0.25, accuracy: 0.000001)
+        XCTAssertEqual(response.remainingCredits, 1.0, accuracy: 0.000001)
+    }
+
     // MARK: Successful generation response
 
     func testDecodesCreditCostChargedOnSuccess() throws {
