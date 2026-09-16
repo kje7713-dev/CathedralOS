@@ -645,7 +645,7 @@ final class DiagnosticsViewModel: ObservableObject {
 
         // 3. Credits available?
         let creditState = usageLimitService.currentState
-        let shortCreditCost = GenerationLengthMode.short.creditCost
+        let shortCreditCost = Double(GenerationLengthMode.short.creditCost)
         let creditsOk = creditState.availableCredits >= shortCreditCost
         items.append(GenerationPreflightItem(
             label: "Credits available",
