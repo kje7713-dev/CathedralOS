@@ -19,6 +19,7 @@
 
 import {
   computeActualChargeCredits,
+  computeRawChargeCredits,
   computeMarginCents,
   computeMaxChargeCredits,
   computeProviderCogsCents,
@@ -155,7 +156,8 @@ export type BillableLLMErrorCode =
   | "usage_event_insert_failed"
   | "credit_charge_failed"
   | "idempotency_unique_violation"
-  | "provider_attempt_allocation_failed";
+  | "provider_attempt_allocation_failed"
+  | "outline_stage_state_failed";
 
 export class BillableLLMError extends Error {
   readonly code: BillableLLMErrorCode;
@@ -199,6 +201,35 @@ async function reconcileOutlineRun(adminClient: unknown, runID: string | null | 
     const result = await (adminClient as any).rpc("reconcile_outline_provider_attempts", { p_run_id: runID });
     if (result?.error) console.error(`[billable-llm] outline reconciliation failed: ${JSON.stringify(result.error)}`);
   } catch (error) { console.error(`[billable-llm] outline reconciliation threw: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+async function loadOutlineStageTotals(
+  adminClient: unknown,
+  req: BillableLLMRequest<unknown>,
+): Promise<{ rawChargeCredits: number; settledChargeCredits: number }> {
+  const featureRunID = req.usageContext.featureRunID;
+  const logicalStageKey = req.usageContext.logicalStageKey;
+  if (!featureRunID || !logicalStageKey) return { rawChargeCredits: 0, settledChargeCredits: 0 };
+  try {
+    const result = await (adminClient as any).rpc("get_outline_stage_totals", {
+      p_feature_run_id: featureRunID,
+      p_logical_stage_key: logicalStageKey,
+    });
+    const row = Array.isArray(result?.data) ? result.data[0] : result?.data;
+    if (result?.error || !row) {
+      throw new Error(result?.error?.message ?? "outline stage totals unavailable");
+    }
+    return {
+      rawChargeCredits: Number(row.raw_charge_credits ?? 0),
+      settledChargeCredits: Number(row.settled_charge_credits ?? 0),
+    };
+  } catch (error) {
+    throw new BillableLLMError(
+      "outline_stage_state_failed",
+      error instanceof Error ? error.message : "outline stage totals unavailable",
+      error,
+    );
+  }
 }
 
 async function beginOutlineProviderAttempt(
@@ -287,7 +318,20 @@ export async function runBillableLLM<T>(
   // 1. Pre-flight credit check.
   const preflightUsage = req.preflightUsageOverride ??
     defaultPreflightUsage(req.maxOutputTokens);
-  const estimatedCharge = computeMaxChargeCredits(preflightUsage, pricing);
+  let estimatedCharge: number;
+  if (req.purpose === "outline-suggestion") {
+    const prior = await loadOutlineStageTotals(deps.adminClient, req);
+    const estimatedRaw = computeRawChargeCredits(preflightUsage, pricing);
+    const targetAfterPacket = Math.max(
+      pricing.minimumChargeCredits,
+      prior.rawChargeCredits + estimatedRaw,
+    );
+    // The stage minimum is a single logical-stage liability. Only the
+    // positive delta beyond prior settled debits must be affordable now.
+    estimatedCharge = Math.max(0, targetAfterPacket - prior.settledChargeCredits);
+  } else {
+    estimatedCharge = computeMaxChargeCredits(preflightUsage, pricing);
+  }
   const entitlement = await deps.creditStore.loadOrDefault(req.userID);
   if (availableCredits(entitlement) < estimatedCharge) {
     throw new BillableLLMError(
@@ -366,7 +410,10 @@ export async function runBillableLLM<T>(
     outputTokens: Math.max(0, providerResult.outputTokens ?? 0),
     toolCostUsd: providerResult.toolCostUsd,
   };
-  const preCallbackCharge = computeActualChargeCredits(preCallbackUsage, pricing);
+  const preCallbackRawCharge = computeRawChargeCredits(preCallbackUsage, pricing);
+  const preCallbackCharge = req.purpose === "outline-suggestion"
+    ? preCallbackRawCharge
+    : computeActualChargeCredits(preCallbackUsage, pricing);
   const preCallbackMargin = computeMarginCents(preCallbackCharge, pricing, providerCogsSnapshot.providerCogsCents);
   let featureResult: T;
   try { featureResult = await req.onProviderSuccess(providerResult); }
@@ -383,7 +430,7 @@ export async function runBillableLLM<T>(
               p_user_id: req.userID, p_feature_run_id: req.usageContext.featureRunID,
               p_attempt_key: attemptKey, p_attempt_outcome: "feature_validation_failed",
               p_action: req.action, p_purpose: req.purpose, p_model_name: providerResult.modelName,
-              p_charge_credits: preCallbackCharge, p_input_tokens: providerResult.inputTokens,
+              p_charge_credits: preCallbackCharge, p_minimum_charge_credits: pricing.minimumChargeCredits, p_input_tokens: providerResult.inputTokens,
               p_output_tokens: providerResult.outputTokens, p_generation_length_mode: req.usageContext.generationLengthMode ?? "short",
               p_output_budget: req.usageContext.outputBudget ?? req.maxOutputTokens,
               p_uncached_input_tokens: preCallbackUsage.uncachedInputTokens,
@@ -413,7 +460,10 @@ export async function runBillableLLM<T>(
         );
         if (settlement?.error) throw new Error(settlement.error.message ?? "validation-failure settlement failed");
         const settledRow = settlement?.data?.[0] ?? {};
-        await updateProviderAttempt(deps.adminClient, attemptID, { status: "feature_validation_failed", completed_at: new Date().toISOString(), feature_error_code: error instanceof Error ? error.name : "feature_error", calculated_charge_credits: preCallbackCharge, settled_charge_credits: preCallbackCharge, usage_event_id: settledRow.usage_event_id ?? null, ledger_id: settledRow.ledger_id ?? null });
+        // The outline settlement RPC owns status, calculated charge, and the
+        // logical-stage settlement delta. Never rewrite settled_charge_credits
+        // here: the RPC may have debited only the positive stage delta.
+        await updateProviderAttempt(deps.adminClient, attemptID, { feature_error_code: error instanceof Error ? error.name : "feature_error", usage_event_id: settledRow.usage_event_id ?? null, ledger_id: settledRow.ledger_id ?? null });
         await reconcileOutlineRun(deps.adminClient, req.usageContext.featureRunID);
       } catch (settlementError) {
         await updateProviderAttempt(deps.adminClient, attemptID, { status: "settlement_failed", completed_at: new Date().toISOString(), feature_error_code: error instanceof Error ? error.name : "feature_error", calculated_charge_credits: preCallbackCharge });
@@ -462,7 +512,10 @@ export async function runBillableLLM<T>(
     outputTokens: Math.max(0, providerResult.outputTokens ?? 0),
     toolCostUsd: providerResult.toolCostUsd,
   };
-  const actualCharge = computeActualChargeCredits(actualUsage, pricing);
+  const rawCharge = computeRawChargeCredits(actualUsage, pricing);
+  const actualCharge = req.purpose === "outline-suggestion"
+    ? rawCharge
+    : computeActualChargeCredits(actualUsage, pricing);
   // PR-372: provider COGS (cents) + margin (cents) for telemetry.
   const providerCogs = computeProviderCogsCents(actualUsage, pricing);
   const marginInfo = computeMarginCents(
@@ -489,6 +542,7 @@ export async function runBillableLLM<T>(
     p_model_name: providerResult.modelName,
     p_idempotency_key: req.purpose === "outline-suggestion" ? attemptKey : (req.usageContext.idempotencyKey ?? null),
     p_charge_credits: actualCharge,
+    ...(req.purpose === "outline-suggestion" ? { p_minimum_charge_credits: pricing.minimumChargeCredits } : {}),
     p_input_tokens: providerResult.inputTokens,
     p_output_tokens: providerResult.outputTokens,
     p_generation_length_mode: req.usageContext.generationLengthMode ?? "short",
@@ -508,6 +562,7 @@ export async function runBillableLLM<T>(
     usage_event_id: string;
     ledger_id: string | null;
     remaining_credits: number;
+    settled_charge_credits?: number;
   };
   // The outline-specific RPC uses p_attempt_key for settlement idempotency;
   // p_idempotency_key belongs only to settle_billable_usage. Sending both
@@ -590,12 +645,14 @@ export async function runBillableLLM<T>(
     };
   }
 
-  await updateProviderAttempt(deps.adminClient, attemptID, { status: "settled", completed_at: new Date().toISOString(), calculated_charge_credits: actualCharge, settled_charge_credits: actualCharge, usage_event_id: row.usage_event_id, ledger_id: row.ledger_id });
+  if (req.purpose !== "outline-suggestion") {
+    await updateProviderAttempt(deps.adminClient, attemptID, { status: "settled", completed_at: new Date().toISOString(), calculated_charge_credits: actualCharge, settled_charge_credits: actualCharge, usage_event_id: row.usage_event_id, ledger_id: row.ledger_id });
+  }
   await reconcileOutlineRun(deps.adminClient, req.usageContext.featureRunID);
   return {
     featureResult,
     providerResult,
-    actualCharge,
+    actualCharge: req.purpose === "outline-suggestion" ? (row.settled_charge_credits ?? actualCharge) : actualCharge,
     charged: true,
     usageEventInserted: true,
     remainingCredits,

@@ -16,7 +16,9 @@ Deno.test("outline suggestion polling contract preserves structured failures and
 import {
   buildAllocationPrompt,
   buildExpansionPrompt,
+  outlineLogicalStageFamily,
   buildPrompt,
+  buildBeatLocalPrompt,
   buildSuggestionResponseSchema,
   STORY_MATERIAL_ENRICHMENT_SCHEMA,
   calculateRepairAllocation,
@@ -68,6 +70,9 @@ import {
   checkRateLimit,
   logRequest,
   isRetryableStoryMaterialFailure,
+  StoryMaterialSufficiencyError,
+  StoryMaterialValidationError,
+  shouldGapFillEnrichmentError,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -556,17 +561,64 @@ Deno.test("sparse recipe context is preserved for minimum-only allocation and ou
   const plannerPrompt = buildAllocationPrompt(sparseRequest as any);
   const plannerInput = plannerPrompt.user;
 
-  // Both planner and generator receive the same complete recipe object, not a
-  // character-name-derived summary.
-  assertEquals(plannerInput.includes("Monsters kill humans"), true);
+  // Allocation receives bounded summaries/counts, not full authored prose.
+  assertEquals(plannerInput.includes("Monsters kill humans"), false);
   assertEquals(plannerInput.includes('"name": "Douche"'), true);
-  assertEquals(user.includes("Monsters kill humans"), true);
-  assertEquals(user.includes("Douche"), true);
+  assertEquals(user.includes("Monsters kill humans"), false);
+  assertEquals(user.includes("Douche"), false);
   assertEquals(system.includes("30-60"), false);
   assertEquals(system.includes("Opening Image: minimum 1 section"), true);
   assertEquals(system.includes("Break into Two: minimum 1 section"), true);
   assertEquals(system.includes("targetSections"), false);
   assertEquals(system.includes("maxSections"), false);
+});
+
+
+Deno.test("all outline physical actions share explicit logical stage families", () => {
+  assertEquals(outlineLogicalStageFamily("outline-route-batch-001"), "routing");
+  assertEquals(outlineLogicalStageFamily("outline-route-batch-002"), "routing");
+  assertEquals(outlineLogicalStageFamily("outline-route-repair-001"), "routing");
+  assertEquals(outlineLogicalStageFamily("outline-obligation-repair-beat-001-part-001"), "coverage-repair");
+  assertEquals(outlineLogicalStageFamily("outline-obligation-repair-beat-004-part-002"), "coverage-repair");
+  assertEquals(outlineLogicalStageFamily("story-material-enrichment-001"), "enrichment");
+  assertEquals(outlineLogicalStageFamily("story-material-gapfill-characters-001"), "enrichment");
+  assertEquals(outlineLogicalStageFamily("outline-plan-001"), "allocation");
+  assertEquals(outlineLogicalStageFamily("outline-suggestions-beat-003-part-002"), "suggestions");
+  assertEquals(outlineLogicalStageFamily("outline-expansion-round-002"), "expansion");
+});
+
+Deno.test("beat packet carries only packet-local obligation chunks", () => {
+  const prompt = buildBeatLocalPrompt({
+    req: sparseRequest as any,
+    beat: sparseRequest.arcTemplate.beats[0],
+    beatIndex: 0,
+    allocation: { minSections: 1, rationale: "coverage" },
+    obligations: [
+      { id: "R7", classification: "plot", required: true, statement: "full R7" },
+      { id: "R8", classification: "plot", required: true, statement: "full R8" },
+    ] as any,
+    routing: { obligationIDs: ["R7", "R8"], evidenceIDs: [], materialIDs: [] },
+    evidenceAtoms: [],
+    obligationAtoms: [{ id: "R7:chunk:2", parentID: "R7", text: "R7 chunk two", chunkOrdinal: 2 }],
+    materialItems: [],
+    existingSections: [],
+    currentSections: [],
+    partOrdinal: 2,
+    partCount: 2,
+  });
+  assertEquals(prompt.user.includes("R7 chunk two"), true);
+  assertEquals(prompt.user.includes("full R7"), false);
+  assertEquals(prompt.user.includes("full R8"), false);
+  assertEquals(prompt.user.includes('"obligationID": "R7"'), true);
+  assertEquals(prompt.user.includes('"chunkOrdinal": 2'), true);
+});
+
+Deno.test("only semantic enrichment defects trigger bounded gap fill", () => {
+  assertEquals(shouldGapFillEnrichmentError(new StoryMaterialSufficiencyError(["missing"])), true);
+  assertEquals(shouldGapFillEnrichmentError(new StoryMaterialValidationError("invalid")), true);
+  assertEquals(shouldGapFillEnrichmentError(new Error("provider timeout")), false);
+  assertEquals(shouldGapFillEnrichmentError(new Error("insufficient credits")), false);
+  assertEquals(shouldGapFillEnrichmentError(new Error("database persistence failure")), false);
 });
 
 Deno.test("allocation parser preserves minimums and rejects malformed plans", () => {
@@ -944,6 +996,8 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(allocationPrompt.includes("floor, not a target or maximum"), true);
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);
+  assertEquals(source.includes("promptLimit"), false);
+  assertEquals(source.includes("assertPromptWithinBudget"), false);
   assertEquals(/\bsectionCount\b/.test(source), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
   assertEquals(source.includes("maxItems: MAX_PLANNED_SECTIONS"), true);
@@ -2039,7 +2093,7 @@ Deno.test("story material enrichment validates provenance and remains inspectabl
 Deno.test("enrichment prompt preserves sparse recipe facts and separates planner invention", () => {
   const prompt = buildEnrichmentPrompt(sparseRequest as any);
   assertEquals(prompt.system.includes("preserve, connect, and deepen supplied material"), true);
-  assertEquals(prompt.system.includes("source=recipe"), true);
+  assertEquals(prompt.system.includes("source=recipe"), false);
   assertEquals(prompt.system.includes("source=planner"), true);
   assertEquals(prompt.user.includes("Monsters kill humans"), true);
   assertEquals(prompt.user.includes("Douche"), true);
@@ -3319,4 +3373,12 @@ Deno.test("expansion prompt stays bounded as global outline grows", () => {
     return JSON.stringify(prompt).length;
   });
   assertEquals(sizes[2] <= sizes[0] * 1.5, true);
+});
+
+Deno.test("enrichment batches preserve paid material and rethrow non-semantic failures", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes("let batchedMaterial: StoryMaterialEnrichment | null = claimedRun.story_material"), true);
+  assertEquals(source.includes("if (!shouldGapFillEnrichmentError(error) || error instanceof BillableLLMError) throw error;"), true);
+  assertEquals(source.includes("const seed = batchedMaterial ??"), true);
+  assertEquals(source.includes("enrichmentBatchesCompleted"), true);
 });

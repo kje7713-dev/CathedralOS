@@ -13,6 +13,7 @@ import {
 
 import {
   computeActualChargeCredits,
+  computeRawChargeCredits,
   computeMarginCents,
   computeMaxChargeCredits,
   computeProviderCogsCents,
@@ -678,4 +679,16 @@ Deno.test("margin: improves on cache hit relative to no-cache baseline", () => {
     cacheHitCogs.providerCogsCents,
   );
   assertEquals(cacheHitMargin.marginCents > noCacheMargin.marginCents, true);
+});
+
+
+Deno.test("logical-stage minimum is applied once across tiny packets", () => {
+  const model = makeModel({ minimum_charge_credits: 3 });
+  const pricing = snapshotPricing(model);
+  const usage = { uncachedInputTokens: 1000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, toolCostUsd: 0 };
+  const raw = computeRawChargeCredits(usage, pricing);
+  const stageCharge = Math.max(pricing.minimumChargeCredits, raw + raw);
+  assertEquals(raw, 1);
+  assertEquals(stageCharge, 3);
+  assertEquals(Math.max(pricing.minimumChargeCredits, 2 + 2), 4);
 });
