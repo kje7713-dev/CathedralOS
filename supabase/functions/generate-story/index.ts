@@ -48,6 +48,7 @@
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { canonicalUUID } from "../_shared/uuid.ts";
 import { verifyRunOutlineToken } from "../_shared/run-outline-auth.ts";
 import {
   buildProviderFromEnv,
@@ -1171,7 +1172,7 @@ async function fetchProjectStateContext(
     if (sectionError) return "";
     const order = new Map<string, number>();
     for (const section of sections ?? []) {
-      if (section.outline_id === current.outline_id) {
+      if (canonicalUUID(String(section.outline_id)) === canonicalUUID(String(current.outline_id))) {
         order.set(String(section.id), Number(section.position ?? 0));
       }
     }

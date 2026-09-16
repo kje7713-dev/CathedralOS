@@ -738,7 +738,8 @@ Deno.serve(async (req) => {
   const submittedBeatIDs = Array.from(new Set(
     body.sections
       .map((s) => s.storyArcBeatID)
-      .filter((id): id is string => typeof id === "string" && id.length > 0),
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+      .map(canonicalUUID),
   ));
   if (submittedBeatIDs.length > 0) {
     if (!ownedOutline.story_arc_id) {
@@ -754,7 +755,7 @@ Deno.serve(async (req) => {
     if (arcBeatsError) {
       return errorResponse("db_error", arcBeatsError.message, 500);
     }
-    const arcBeatSet = new Set((arcBeats ?? []).map((b) => b.id));
+    const arcBeatSet = new Set((arcBeats ?? []).map((b) => canonicalUUID(String(b.id))));
     // Missing beats (already validated upstream as malformed UUIDs by
     // validate()).
     for (const id of submittedBeatIDs) {
@@ -769,10 +770,14 @@ Deno.serve(async (req) => {
     // Foreign-project beat guard: even if the beat UUID is well-formed and
     // exists in the global story_arc_beats table, it must belong to the
     // outline's story_arc_id. Reject any beat whose story_arc_id differs.
-    const arcBeatMap = new Map((arcBeats ?? []).map((b) => [b.id, b.story_arc_id]));
+    const arcBeatMap = new Map((arcBeats ?? []).map((b) => [
+      canonicalUUID(String(b.id)),
+      canonicalUUID(String(b.story_arc_id)),
+    ]));
+    const outlineStoryArcID = canonicalUUID(String(ownedOutline.story_arc_id));
     for (const id of submittedBeatIDs) {
       const beatArcID = arcBeatMap.get(id);
-      if (beatArcID && beatArcID !== ownedOutline.story_arc_id) {
+      if (beatArcID && beatArcID !== outlineStoryArcID) {
         return errorResponse(
           "beat_foreign_arc",
           `submitted beat ${id} belongs to a different StoryArc`,

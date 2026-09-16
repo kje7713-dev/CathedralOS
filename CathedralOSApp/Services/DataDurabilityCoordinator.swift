@@ -1323,7 +1323,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         guard let cached = runStatus(for: projectLineageID) else { return }
         guard currentSectionCount > 0,
               let outlineID,
-              cached.outline_id == outlineID.uuidString else {
+              cached.outline_id.caseInsensitiveCompare(outlineID.uuidString) == .orderedSame else {
             clearPersistedRunStatus(for: projectLineageID)
             if activeRunProjectLineageID == projectLineageID {
                 activeRunStatus = nil
@@ -1333,7 +1333,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
         do {
             let authoritative = try await runOutlineService.status(runID: cached.run_id)
-            let authoritativeOutlineMatches = authoritative.outline_id == outlineID.uuidString
+            let authoritativeOutlineMatches = authoritative.outline_id.caseInsensitiveCompare(outlineID.uuidString) == .orderedSame
             let authoritativeSectionsMatch = (authoritative.sections_total ?? 0) == currentSectionCount
             guard authoritativeOutlineMatches && authoritativeSectionsMatch else {
                 clearPersistedRunStatus(for: projectLineageID)
