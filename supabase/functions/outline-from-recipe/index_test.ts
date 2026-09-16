@@ -17,6 +17,7 @@ import {
   buildAllocationPrompt,
   buildExpansionPrompt,
   buildPrompt,
+  buildBeatLocalPrompt,
   buildSuggestionResponseSchema,
   STORY_MATERIAL_ENRICHMENT_SCHEMA,
   calculateRepairAllocation,
@@ -68,6 +69,9 @@ import {
   checkRateLimit,
   logRequest,
   isRetryableStoryMaterialFailure,
+  StoryMaterialSufficiencyError,
+  StoryMaterialValidationError,
+  shouldGapFillEnrichmentError,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -566,6 +570,40 @@ Deno.test("sparse recipe context is preserved for minimum-only allocation and ou
   assertEquals(system.includes("Break into Two: minimum 1 section"), true);
   assertEquals(system.includes("targetSections"), false);
   assertEquals(system.includes("maxSections"), false);
+});
+
+Deno.test("beat packet carries only packet-local obligation chunks", () => {
+  const prompt = buildBeatLocalPrompt({
+    req: sparseRequest as any,
+    beat: sparseRequest.arcTemplate.beats[0],
+    beatIndex: 0,
+    allocation: { minSections: 1, rationale: "coverage" },
+    obligations: [
+      { id: "R7", classification: "plot", required: true, statement: "full R7" },
+      { id: "R8", classification: "plot", required: true, statement: "full R8" },
+    ] as any,
+    routing: { obligationIDs: ["R7", "R8"], evidenceIDs: [], materialIDs: [] },
+    evidenceAtoms: [],
+    obligationAtoms: [{ id: "R7:chunk:2", parentID: "R7", text: "R7 chunk two", chunkOrdinal: 2 }],
+    materialItems: [],
+    existingSections: [],
+    currentSections: [],
+    partOrdinal: 2,
+    partCount: 2,
+  });
+  assertEquals(prompt.user.includes("R7 chunk two"), true);
+  assertEquals(prompt.user.includes("full R7"), false);
+  assertEquals(prompt.user.includes("full R8"), false);
+  assertEquals(prompt.user.includes('"obligationID": "R7"'), true);
+  assertEquals(prompt.user.includes('"chunkOrdinal": 2'), true);
+});
+
+Deno.test("only semantic enrichment defects trigger bounded gap fill", () => {
+  assertEquals(shouldGapFillEnrichmentError(new StoryMaterialSufficiencyError(["missing"])), true);
+  assertEquals(shouldGapFillEnrichmentError(new StoryMaterialValidationError("invalid")), true);
+  assertEquals(shouldGapFillEnrichmentError(new Error("provider timeout")), false);
+  assertEquals(shouldGapFillEnrichmentError(new Error("insufficient credits")), false);
+  assertEquals(shouldGapFillEnrichmentError(new Error("database persistence failure")), false);
 });
 
 Deno.test("allocation parser preserves minimums and rejects malformed plans", () => {
@@ -3320,4 +3358,12 @@ Deno.test("expansion prompt stays bounded as global outline grows", () => {
     return JSON.stringify(prompt).length;
   });
   assertEquals(sizes[2] <= sizes[0] * 1.5, true);
+});
+
+Deno.test("enrichment batches preserve paid material and rethrow non-semantic failures", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes("let batchedMaterial: StoryMaterialEnrichment | null = claimedRun.story_material"), true);
+  assertEquals(source.includes("if (!shouldGapFillEnrichmentError(error) || error instanceof BillableLLMError) throw error;"), true);
+  assertEquals(source.includes("const seed = batchedMaterial ??"), true);
+  assertEquals(source.includes("enrichmentBatchesCompleted"), true);
 });

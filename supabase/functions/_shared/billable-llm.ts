@@ -417,7 +417,10 @@ export async function runBillableLLM<T>(
         );
         if (settlement?.error) throw new Error(settlement.error.message ?? "validation-failure settlement failed");
         const settledRow = settlement?.data?.[0] ?? {};
-        await updateProviderAttempt(deps.adminClient, attemptID, { status: "feature_validation_failed", completed_at: new Date().toISOString(), feature_error_code: error instanceof Error ? error.name : "feature_error", calculated_charge_credits: preCallbackCharge, settled_charge_credits: preCallbackCharge, usage_event_id: settledRow.usage_event_id ?? null, ledger_id: settledRow.ledger_id ?? null });
+        // The outline settlement RPC owns status, calculated charge, and the
+        // logical-stage settlement delta. Never rewrite settled_charge_credits
+        // here: the RPC may have debited only the positive stage delta.
+        await updateProviderAttempt(deps.adminClient, attemptID, { feature_error_code: error instanceof Error ? error.name : "feature_error", usage_event_id: settledRow.usage_event_id ?? null, ledger_id: settledRow.ledger_id ?? null });
         await reconcileOutlineRun(deps.adminClient, req.usageContext.featureRunID);
       } catch (settlementError) {
         await updateProviderAttempt(deps.adminClient, attemptID, { status: "settlement_failed", completed_at: new Date().toISOString(), feature_error_code: error instanceof Error ? error.name : "feature_error", calculated_charge_credits: preCallbackCharge });
@@ -599,7 +602,9 @@ export async function runBillableLLM<T>(
     };
   }
 
-  await updateProviderAttempt(deps.adminClient, attemptID, { status: "settled", completed_at: new Date().toISOString(), calculated_charge_credits: actualCharge, settled_charge_credits: actualCharge, usage_event_id: row.usage_event_id, ledger_id: row.ledger_id });
+  if (req.purpose !== "outline-suggestion") {
+    await updateProviderAttempt(deps.adminClient, attemptID, { status: "settled", completed_at: new Date().toISOString(), calculated_charge_credits: actualCharge, settled_charge_credits: actualCharge, usage_event_id: row.usage_event_id, ledger_id: row.ledger_id });
+  }
   await reconcileOutlineRun(deps.adminClient, req.usageContext.featureRunID);
   return {
     featureResult,

@@ -86,7 +86,7 @@ begin
   return query select u.settlement_status, u.usage_event_id,
     (select gpa.ledger_id from public.generation_provider_attempts gpa where gpa.id = a.id),
     coalesce((select gpa.settled_charge_credits from public.generation_provider_attempts gpa where gpa.id = a.id), delta),
-    target_stage, u.remaining_credits;
+    target_stage, u.remaining_credits::numeric;
 end; $$;
 
 revoke all on function public.settle_outline_provider_attempt(uuid,uuid,text,text,text,text,text,numeric,integer,integer,text,integer,uuid,integer,integer,integer,numeric,numeric,numeric,text,numeric,numeric) from public, anon, authenticated;

@@ -980,3 +980,31 @@ Deno.test("outline reconciliation includes every terminal billable provider-atte
     "status in ('settled','feature_validation_failed','feature_persistence_failed')",
   );
 });
+
+Deno.test("outline settlement keeps RPC-authoritative logical-stage delta", async () => {
+  const updates: Record<string, unknown>[] = [];
+  const admin = {
+    rpc: (name: string, _params: Record<string, unknown>) => {
+      if (name === "begin_outline_provider_attempt") {
+        return Promise.resolve({ data: [{ attempt_id: "attempt-1", attempt_key: "stage:attempt:1", attempt_ordinal: 1 }], error: null });
+      }
+      if (name === "settle_outline_provider_attempt") {
+        return Promise.resolve({ data: [{ settlement_status: "settled", usage_event_id: "usage-1", ledger_id: "ledger-1", settled_charge_credits: 3, run_charge_credits: 3, remaining_credits: 97 }], error: null });
+      }
+      if (name === "reconcile_outline_provider_attempts") return Promise.resolve({ data: null, error: null });
+      throw new Error(`unexpected RPC ${name}`);
+    },
+    from: (_table: string) => ({
+      update: (patch: Record<string, unknown>) => ({
+        eq: (_column: string, _value: unknown) => { updates.push(patch); return Promise.resolve({ data: null, error: null }); },
+      }),
+    }),
+  };
+  const request = makeRequest({
+    purpose: "outline-suggestion",
+    action: "outline-suggestions-beat-000-part-001",
+    usageContext: { ...makeRequest().usageContext, featureRunID: "00000000-0000-0000-0000-0000000000bb", logicalStageKey: "stage" },
+  });
+  await runBillableLLM(request, { adminClient: admin, provider: { complete: () => Promise.resolve(makeLLMResponse()) }, creditStore: makeCreditStore() });
+  assertEquals(updates.some((patch) => Object.prototype.hasOwnProperty.call(patch, "settled_charge_credits")), false);
+});
