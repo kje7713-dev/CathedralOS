@@ -3739,6 +3739,30 @@ Deno.test("production checkpoint resume executes the single global outline call 
   assertEquals(scheduled.length, 0);
 });
 
+Deno.test("global outline completion preserves advisory quality and obligation audit diagnostics", async () => {
+  const body = await executableWorkerBody();
+  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const actions: string[] = [];
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: fakeWorkerBilling(actions) as any,
+    scheduleContinuation: async () => {},
+  });
+  assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(db.row.status, "completed");
+  const diagnostics = db.row.diagnostics;
+  assertEquals(Array.isArray(diagnostics.dramaticDistinctnessIssues), true);
+  assertEquals(Array.isArray(diagnostics.semanticArcIssues), true);
+  assertEquals(Array.isArray(diagnostics.causalScaleIssues), true);
+  assertEquals(typeof diagnostics.unusedStoryMaterialItems, "number");
+  assertEquals("advisoryValidationError" in diagnostics, false);
+  assertEquals(typeof diagnostics.recipeObligationCoverage, "object");
+  assertEquals(Array.isArray(diagnostics.missingRequiredRecipeObligations), true);
+});
+
 Deno.test("one physical provider call stops the second dispatch before provider execution", async () => {
   const slice = new SuggestionWorkerSlice();
   const providerCalls: string[] = [];
