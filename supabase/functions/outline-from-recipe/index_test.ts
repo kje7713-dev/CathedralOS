@@ -1,4 +1,4 @@
-import { assertEquals, assertThrows } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals, assertRejects, assertThrows } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { deriveRecipeObligations, obligationCoverage } from "./_recipe_obligations.ts";
 
 Deno.test("outline suggestion polling contract preserves structured failures and success", async () => {
@@ -74,7 +74,12 @@ import {
   StoryMaterialValidationError,
   shouldGapFillEnrichmentError,
   SuggestionWorkerYield,
+  SuggestionWorkerSlice,
   assertWorkerSliceCanDispatch,
+  reclaimExpiredSuggestionRun,
+  returnSuggestionRunToPending,
+  recoverPendingSuggestionRun,
+  runSuggestionJob,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -3386,67 +3391,326 @@ Deno.test("enrichment batches preserve paid material and rethrow non-semantic fa
 });
 
 
-Deno.test("worker slice allows exactly one provider dispatch and yields before the second", () => {
-  assertWorkerSliceCanDispatch(0);
-  assertThrows(() => assertWorkerSliceCanDispatch(1), SuggestionWorkerYield, "outline worker slice complete");
+
+class ExecutableRunDb {
+  row: any;
+  attempts: any[] = [];
+  cleanupCalls = 0;
+  claims = 0;
+  singleClaimOnly = false;
+  constructor(row: any, options: { singleClaimOnly?: boolean } = {}) {
+    this.row = structuredClone(row);
+    this.singleClaimOnly = options.singleClaimOnly ?? false;
+  }
+  from(table: string) {
+    const self = this;
+    let patch: Record<string, unknown> | null = null;
+    const filters: Array<[string, unknown]> = [];
+    const ranges: Array<[string, unknown]> = [];
+    let selected = false;
+    const query: any = {
+      update(value: Record<string, unknown>) { patch = value; return query; },
+      eq(column: string, value: unknown) { filters.push([column, value]); return query; },
+      lte(column: string, value: unknown) { ranges.push([column, value]); return query; },
+      select(_columns?: string) { selected = true; return query; },
+      maybeSingle() { return Promise.resolve(self.execute(table, patch, filters, ranges, selected)); },
+      then(resolve: (value: unknown) => unknown, reject: (error: unknown) => unknown) {
+        return Promise.resolve(self.execute(table, patch, filters, ranges, selected)).then(resolve, reject);
+      },
+    };
+    return query;
+  }
+  private matches(value: any, filters: Array<[string, unknown]>, ranges: Array<[string, unknown]>) {
+    return filters.every(([column, expected]) => value?.[column] === expected) &&
+      ranges.every(([column, expected]) => String(value?.[column] ?? "") <= String(expected));
+  }
+  private execute(table: string, patch: Record<string, unknown> | null, filters: Array<[string, unknown]>, ranges: Array<[string, unknown]>, selected: boolean) {
+    if (table === "outline_suggestion_runs") {
+      if (!this.matches(this.row, filters, ranges)) return { data: null, error: null };
+      if (patch?.status === "running" && this.singleClaimOnly && this.claims > 0) return { data: null, error: null };
+      if (patch?.status === "running") this.claims++;
+      if (patch) Object.assign(this.row, patch);
+      if (!selected) return { data: [this.row], error: null };
+      return { data: selected && filters.some(([column]) => column === "lease_expires_at") ? { id: this.row.id } : { ...this.row }, error: null };
+    }
+    if (table === "generation_provider_attempts") {
+      for (const attempt of this.attempts) {
+        if (this.matches(attempt, filters, ranges)) {
+          if (patch) Object.assign(attempt, patch);
+          this.cleanupCalls++;
+        }
+      }
+      return { data: null, error: null };
+    }
+    return { data: null, error: null };
+  }
+}
+
+function executableWorkerRecipe() {
+  return {
+    ...sparseRequest.recipe,
+    project: { ...sparseRequest.recipe.project, id: "worker-project", summary: "A durable worker fixture" },
+    promptPack: { ...sparseRequest.recipe.promptPack, id: "worker-pack" },
+    selectedCharacters: Array.from({ length: 60 }, (_, index) => ({
+      id: `character-${index + 1}`,
+      name: `Character ${index + 1}`,
+      roles: ["survivor"],
+      goals: [`Goal ${index} with a long durable evidence description ${"x".repeat(700)}`],
+      fears: [`Fear ${index} with a long durable evidence description ${"y".repeat(700)}`],
+    })),
+    selectedStorySpark: {
+      id: "spark-1",
+      title: "The route closes",
+      situation: `A route closes under pressure ${"z".repeat(700)}`,
+      stakes: "The survivors must choose who can cross.",
+    },
+    selectedAftertaste: { id: "aftertaste-1", label: "Uneasy survival", note: "The cost remains visible." },
+    selectedRelationships: [],
+    selectedThemeQuestions: [],
+    selectedMotifs: [],
+  };
+}
+
+async function executableWorkerBody() {
+  const recipe = executableWorkerRecipe();
+  const material = attachRecipeProvenance(
+    repairStoryMaterialFromRecipe(recipe as any, {
+      sourceRecipeHash: "worker-fixture",
+      sourceRecipeVersion: 1,
+      sourcePromptPackID: "worker-pack",
+      sourcePromptPackName: "Worker fixture",
+    }, "shortStory"),
+    await recipeProvenance(recipe as any),
+  );
+  return {
+    ...sparseRequest,
+    recipe,
+    requestedFormat: "shortStory" as const,
+    storyMaterialEnrichment: material,
+    arcTemplate: {
+      id: "worker-arc",
+      name: "Worker Arc",
+      beats: [
+        { id: "beat-1", role: "setup", label: "Setup", description: "Establish the route." },
+        { id: "beat-2", role: "resolution", label: "Resolution", description: "Show the cost." },
+      ],
+    },
+  };
+}
+
+function checkpointedWorkerRow(body: any) {
+  return {
+    id: "run-worker-fixture",
+    status: "pending",
+    credit_cost_charged: 0,
+    remaining_credits: 100,
+    story_material: body.storyMaterialEnrichment,
+    suggestions: [],
+    diagnostics: {},
+    planning_context: null,
+    planning_context_hash: null,
+    planning_context_version: null,
+    planning_state: {
+      version: 2,
+      enrichmentBatchesCompleted: [1, 2, 3, 4, 5],
+      routingBatchesCompleted: [1],
+      beatRouting: {
+        "beat-1": { obligationIDs: [], evidenceIDs: ["character:character-1"], materialIDs: [] },
+        "beat-2": { obligationIDs: [], evidenceIDs: [], materialIDs: [] },
+      },
+      allocationBatchesCompleted: ["outline-plan-001"],
+      mergedAllocation: {
+        "beat-1": { minSections: 1, rationale: "fixture" },
+        "beat-2": { minSections: 0, rationale: "fixture" },
+      },
+      generatedBeatPackets: [],
+      coverageRepairPacketsCompleted: [],
+    },
+    planning_state_version: 2,
+    attempt_count: 0,
+    request_json: body,
+  };
+}
+
+function fakeWorkerBilling(requestedActions: string[], providerCalls = requestedActions) {
+  return async (request: any) => {
+    requestedActions.push(request.action);
+    if (providerCalls !== requestedActions) providerCalls.push(request.action);
+    if (request.action.startsWith("outline-route-")) {
+      return { featureResult: JSON.stringify({ assignments: [] }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+    }
+    return { featureResult: JSON.stringify({ suggestions: [] }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+  };
+}
+
+Deno.test("production checkpoint resume executes route batch 002 once, preserves packet 1, then yields", async () => {
+  const body = await executableWorkerBody();
+  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const billableActions: string[] = [];
+  const providerCalls: string[] = [];
+  const scheduled: Array<{ body: any; auth: string }> = [];
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: fakeWorkerBilling(billableActions, providerCalls) as any,
+    scheduleContinuation: async (continuationBody, auth) => { scheduled.push({ body: continuationBody, auth }); },
+  });
+  assertEquals(providerCalls, ["outline-route-batch-002"]);
+  assertEquals(billableActions, ["outline-route-batch-002"]);
+  assertEquals(providerCalls.includes("story-material-enrichment-batch-001"), false);
+  assertEquals(providerCalls.includes("story-material-enrichment-batch-005"), false);
+  assertEquals(providerCalls.includes("outline-route-batch-001"), false);
+  assertEquals(db.row.planning_state.routingBatchesCompleted, [1, 2]);
+  assertEquals(db.row.planning_state.beatRouting["beat-1"].evidenceIDs, ["character:character-1"]);
+  assertEquals(db.row.status, "pending");
+  assertEquals(scheduled.length, 1);
 });
 
-Deno.test("worker lifecycle uses a three-minute lease and yields before billable side effects", async () => {
-  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  assertEquals(source.includes("const SUGGESTION_LEASE_MS = 3 * 60 * 1000;"), true);
-  const guard = source.indexOf("assertWorkerSliceCanDispatch(providerDispatchesThisInvocation);");
-  const promptMetricsCall = source.indexOf("promptMetrics(messages", guard);
-  const attemptIncrement = source.indexOf("providerDispatchesThisInvocation += 1;");
-  const providerCall = source.indexOf("runBillableLLM({", attemptIncrement);
-  assertEquals(guard > 0 && guard < promptMetricsCall, true);
-  assertEquals(attemptIncrement > 0 && attemptIncrement < providerCall, true);
-  assertEquals(source.includes("lastYieldReason: \"provider_dispatch_boundary\""), true);
-  assertEquals(source.includes("scheduleSuggestionContinuation(continuationBody, authHeader)"), true);
+Deno.test("one physical provider call stops the second dispatch before provider execution", async () => {
+  const slice = new SuggestionWorkerSlice();
+  const providerCalls: string[] = [];
+  const billable = async (action: string) => {
+    slice.beginDispatch();
+    providerCalls.push(action);
+    return action;
+  };
+  await billable("outline-route-batch-001");
+  await assertRejects(() => billable("outline-route-batch-002"), SuggestionWorkerYield);
+  assertEquals(providerCalls, ["outline-route-batch-001"]);
+  assertEquals(slice.dispatchCount, 1);
 });
 
-Deno.test("production-shaped resume consumes durable packet checkpoints without replay", async () => {
-  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  assertEquals(source.includes("completedEnrichment.has(packet.packetOrdinal)"), true);
-  assertEquals(source.includes("completedRouting.has(packet.packetOrdinal)"), true);
-  assertEquals(source.includes("completedBeatPackets.has(action)"), true);
-  assertEquals(source.includes("completedCoverageRepairs.has(action)"), true);
-  assertEquals(source.includes("outline-route-batch-"), true);
-  assertEquals(source.includes("packet.packetOrdinal.toString().padStart(3, \"0\")"), true);
-  assertEquals(source.includes("routingBatchesCompleted"), true);
-  assertEquals(source.includes("mergedAllocation"), true);
-  const routeLoop = source.indexOf("for (const packet of routingPackets)");
-  const routeSkip = source.indexOf("if (completedRouting.has(packet.packetOrdinal)) continue;", routeLoop);
-  assertEquals(routeLoop > 0 && routeSkip > routeLoop, true);
+Deno.test("voluntary yield transitions running to pending and schedules the same authenticated request once", async () => {
+  const body = { idempotencyKey: "same-key", recipe: { project: { id: "p" } } } as any;
+  const row: any = { status: "running", lease_owner: "worker-token", lease_expires_at: "future", completed_at: null, error_code: null, error: null };
+  const patches: any[] = [];
+  let scheduleCount = 0;
+  let scheduledBody: any;
+  let scheduledAuth = "";
+  await returnSuggestionRunToPending(
+    async (patch) => { patches.push(patch); Object.assign(row, patch); },
+    async (nextBody, auth) => { scheduleCount++; scheduledBody = nextBody; scheduledAuth = auth; },
+    body,
+    "Bearer original",
+    { stage: "routing", worker: { lastYieldReason: "provider_dispatch_boundary" } },
+  );
+  assertEquals(row.status, "pending");
+  assertEquals(row.lease_owner, null);
+  assertEquals(row.lease_expires_at, null);
+  assertEquals(row.completed_at, null);
+  assertEquals(row.error_code, null);
+  assertEquals(row.error, null);
+  assertEquals(scheduleCount, 1);
+  assertEquals(scheduledBody, body);
+  assertEquals(scheduledBody.idempotencyKey, "same-key");
+  assertEquals(scheduledAuth, "Bearer original");
+  assertEquals(patches.length, 1);
 });
 
-Deno.test("stale recovery is compare-and-set and cleans only orphaned started attempts", async () => {
-  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  assertEquals(source.includes(".eq(\"status\", \"running\")"), true);
-  assertEquals(source.includes(".eq(\"lease_expires_at\", observedLeaseExpiry)"), true);
-  assertEquals(source.includes('status: "provider_failed"'), true);
-  assertEquals(source.includes('provider_error_code: "worker_interrupted"'), true);
-  assertEquals(source.includes('.eq("status", "started")'), true);
-  assertEquals(source.includes('.lte("started_at", observedLeaseExpiry)'), true);
-  assertEquals(source.includes("scheduleSuggestionContinuation"), true);
+Deno.test("two continuation workers race on one pending claim and produce one provider call", async () => {
+  const body = await executableWorkerBody();
+  const db = new ExecutableRunDb(checkpointedWorkerRow(body), { singleClaimOnly: true });
+  const providerCalls: string[] = [];
+  const schedules: any[] = [];
+  await Promise.all([
+    runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+      db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+      billableLLM: fakeWorkerBilling(providerCalls) as any,
+      scheduleContinuation: async (nextBody, auth) => { schedules.push({ nextBody, auth }); },
+    }),
+    runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+      db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+      billableLLM: fakeWorkerBilling(providerCalls) as any,
+      scheduleContinuation: async (nextBody, auth) => { schedules.push({ nextBody, auth }); },
+    }),
+  ]);
+  assertEquals(providerCalls, ["outline-route-batch-002"]);
+  assertEquals(schedules.length, 1);
+  assertEquals(db.row.status, "pending");
 });
 
-Deno.test("GET and existing POST reconnects recover pending and expired runs without rate limiting", async () => {
-  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  const getRecovery = source.indexOf("GET polling is a recovery backstop");
-  const getRateLimit = source.indexOf("await checkRateLimit(userClient, user.id);");
-  const postResolve = source.indexOf("resolve an existing matching idempotent run first");
-  const postPending = source.indexOf('if (existing.status === "pending")');
-  assertEquals(getRecovery > 0, true);
-  assertEquals(getRecovery < getRateLimit, true);
-  assertEquals(postResolve < postPending, true);
-  assertEquals(source.includes("recoveredRun.request_json"), true);
-  assertEquals(source.includes("reclaimExpiredSuggestionRun(db, existing)"), true);
+Deno.test("stale reclaim is a compare-and-set race and only the winner cleans orphan attempts", async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb({ id: "run-stale", status: "running", lease_expires_at: expired, attempt_count: 4 });
+  db.attempts = [{ feature_run_id: "run-stale", status: "started", started_at: new Date(Date.now() - 2000).toISOString() }];
+  const run = { id: "run-stale", status: "running", lease_expires_at: expired, attempt_count: 4 };
+  const results = await Promise.all([reclaimExpiredSuggestionRun(db, run), reclaimExpiredSuggestionRun(db, run)]);
+  assertEquals(results, [true, false]);
+  assertEquals(db.row.status, "pending");
+  assertEquals(db.row.attempt_count, 5);
+  assertEquals(db.cleanupCalls, 1);
+  assertEquals(db.attempts[0].status, "provider_failed");
+  assertEquals(db.attempts[0].provider_error_code, "worker_interrupted");
+  assertEquals(db.attempts[0].completed_at !== null, true);
 });
 
-Deno.test("logical-stage billing identity remains continuous across worker slices", async () => {
-  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  assertEquals(source.includes("logicalStageKey: `${runId}:${stageFamily}`"), true);
-  assertEquals(source.includes("logicalStageKey: `${runId}:enrichment`"), false);
-  assertEquals(source.includes("attempt_count: priorAttemptCount + 1"), false);
-  assertEquals(source.includes("workerSliceCount"), true);
+Deno.test("active lease recovery is a no-op", async () => {
+  const future = new Date(Date.now() + 60_000).toISOString();
+  const db = new ExecutableRunDb({ id: "run-active", status: "running", lease_expires_at: future, attempt_count: 2 });
+  const result = await reclaimExpiredSuggestionRun(db, { id: "run-active", status: "running", lease_expires_at: future, attempt_count: 2 });
+  assertEquals(result, false);
+  assertEquals(db.row.status, "running");
+  assertEquals(db.row.lease_expires_at, future);
+  assertEquals(db.cleanupCalls, 0);
+});
+
+Deno.test("GET recovery starts the next pending slice after self-scheduling failure", async () => {
+  const body = { idempotencyKey: "same-key", recipe: { project: { id: "p" } } } as any;
+  const started: any[] = [];
+  const startedRecovery = await recoverPendingSuggestionRun(
+    { id: "run-recovery", status: "pending", request_json: body, attempt_count: 2 },
+    "user-recovery",
+    "openai-key",
+    "Bearer recovery",
+    async (...args) => { started.push(args); },
+  );
+  assertEquals(startedRecovery, true);
+  assertEquals(started.length, 1);
+  assertEquals(started[0][0], "run-recovery");
+  assertEquals(started[0][1], body);
+  assertEquals(started[0][5], "Bearer recovery");
+});
+
+Deno.test("self-scheduling failure leaves pending checkpoint recoverable", async () => {
+  const body = { idempotencyKey: "same-key", recipe: { project: { id: "p" } } } as any;
+  const row: any = { status: "running", lease_owner: "worker-token", lease_expires_at: "future", completed_at: null, error_code: null, error: null, checkpoint: "route-001" };
+  await returnSuggestionRunToPending(
+    async (patch) => Object.assign(row, patch),
+    async () => { throw new Error("scheduler unavailable"); },
+    body,
+    "Bearer original",
+    { stage: "routing", checkpoint: row.checkpoint },
+  );
+  assertEquals(row.status, "pending");
+  assertEquals(row.error_code, null);
+  assertEquals(row.error, null);
+  assertEquals(row.checkpoint, "route-001");
+});
+
+Deno.test("final provider packet completes the real worker without an extra continuation", async () => {
+  const body = await executableWorkerBody();
+  const row: any = checkpointedWorkerRow(body);
+  row.planning_state.routingRepairCompleted = true;
+  row.planning_state.routingBatchesCompleted = Array.from({ length: 11 }, (_, index) => index + 1);
+  row.planning_state.mergedAllocation = {
+    "beat-1": { minSections: 0, rationale: "final CPU-only fixture" },
+    "beat-2": { minSections: 0, rationale: "final CPU-only fixture" },
+  };
+  row.planning_state.generatedBeatPackets = [
+    "outline-suggestions-beat-000-part-001",
+    "outline-suggestions-beat-001-part-001",
+  ];
+  const db = new ExecutableRunDb(row);
+  const providerCalls: string[] = [];
+  let scheduleCount = 0;
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: fakeWorkerBilling(providerCalls) as any,
+    scheduleContinuation: async () => { scheduleCount++; },
+  });
+  assertEquals(providerCalls, ["outline-route-batch-012"]);
+  assertEquals(db.row.status, "completed", JSON.stringify({ providerCalls, planningState: db.row.planning_state, diagnostics: db.row.diagnostics }));
+  assertEquals(scheduleCount, 0);
 });

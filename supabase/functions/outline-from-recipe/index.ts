@@ -2926,6 +2926,19 @@ export function assertWorkerSliceCanDispatch(providerDispatchesThisInvocation: n
   if (providerDispatchesThisInvocation >= 1) throw new SuggestionWorkerYield();
 }
 
+export class SuggestionWorkerSlice {
+  private dispatches = 0;
+
+  get dispatchCount(): number {
+    return this.dispatches;
+  }
+
+  beginDispatch(): void {
+    assertWorkerSliceCanDispatch(this.dispatches);
+    this.dispatches += 1;
+  }
+}
+
 function leaseExpiry(): string {
   return new Date(Date.now() + SUGGESTION_LEASE_MS).toISOString();
 }
@@ -2962,7 +2975,7 @@ async function markInterruptedProviderAttempts(db: any, runId: string, observedL
   if (error) console.error("[outline-from-recipe] orphan provider-attempt cleanup failed", error);
 }
 
-async function reclaimExpiredSuggestionRun(db: any, run: {
+export async function reclaimExpiredSuggestionRun(db: any, run: {
   id: string;
   status?: string;
   lease_expires_at?: string | null;
@@ -3081,16 +3094,76 @@ async function persistPlanningProvenance(db: any, body: OutlineFromRecipeRequest
   if (error) throw new Error(`Could not persist outline planning provenance: ${error.message}`);
 }
 
-async function runSuggestionJob(
+export type SuggestionWorkerStarter = (
+  runId: string,
+  body: OutlineFromRecipeRequest,
+  userId: string,
+  openaiKey: string,
+  attemptCount: number,
+  authHeader: string,
+) => Promise<void>;
+
+export async function recoverPendingSuggestionRun(
+  run: any,
+  userId: string,
+  openaiKey: string | undefined,
+  authHeader: string,
+  startWorker: SuggestionWorkerStarter,
+): Promise<boolean> {
+  if (run?.status !== "pending" || !run.request_json || !openaiKey) return false;
+  await startWorker(
+    run.id,
+    run.request_json as OutlineFromRecipeRequest,
+    userId,
+    openaiKey,
+    run.attempt_count ?? 0,
+    authHeader,
+  );
+  return true;
+}
+
+export interface SuggestionWorkerDependencies {
+  db?: any;
+  model?: any;
+  provider?: any;
+  creditStore?: any;
+  billableLLM?: typeof runBillableLLM;
+  scheduleContinuation?: (body: OutlineFromRecipeRequest, authHeader: string) => Promise<void>;
+}
+
+export async function returnSuggestionRunToPending(
+  updateRun: (patch: Record<string, unknown>) => Promise<unknown>,
+  scheduleContinuation: (body: OutlineFromRecipeRequest, authHeader: string) => Promise<void>,
+  continuationBody: OutlineFromRecipeRequest,
+  authHeader: string,
+  diagnostics: Record<string, unknown>,
+): Promise<void> {
+  await updateRun({
+    status: "pending",
+    lease_owner: null,
+    lease_expires_at: null,
+    completed_at: null,
+    diagnostics,
+  });
+  try {
+    await scheduleContinuation(continuationBody, authHeader);
+  } catch (scheduleError) {
+    console.error("[outline-from-recipe] continuation scheduling failed; GET recovery remains available", scheduleError);
+  }
+}
+
+export async function runSuggestionJob(
   runId: string,
   body: OutlineFromRecipeRequest,
   userId: string,
   openaiKey: string,
   priorAttemptCount = 0,
   authHeader = "",
+  dependencies: SuggestionWorkerDependencies = {},
 ): Promise<void> {
   const continuationBody = body;
-  const db = admin();
+  const db = dependencies.db ?? admin();
+  const scheduleContinuation = dependencies.scheduleContinuation ?? scheduleSuggestionContinuation;
   const workerToken = crypto.randomUUID();
   const claim = await db.from("outline_suggestion_runs").update({
     status: "running",
@@ -3134,13 +3207,14 @@ async function runSuggestionJob(
     ? claimedRun.suggestions as Suggestion[]
     : [];
   try {
-    const modelStore = new SupabaseGenerationModelStore(db);
-    const model = await modelStore.getEnabledModelById(OPENAI_MODEL);
+    const modelStore = dependencies.model ? null : new SupabaseGenerationModelStore(db);
+    const model = dependencies.model ?? await modelStore!.getEnabledModelById(OPENAI_MODEL);
     if (!model) {
       throw new Error(`Enabled billing model not found: ${OPENAI_MODEL}`);
     }
-    const creditStore = new SupabaseCreditStore(db);
-    const provider = new OpenAIProvider(openaiKey, OPENAI_MODEL);
+    const creditStore = dependencies.creditStore ?? new SupabaseCreditStore(db);
+    const provider = dependencies.provider ?? new OpenAIProvider(openaiKey, OPENAI_MODEL);
+    const billableLLM = dependencies.billableLLM ?? runBillableLLM;
     // Reclaimed workers resume from persisted billing/material state. The
     // usage-event idempotency key is the final no-double-charge guard, while
     // reusing persisted enrichment avoids repeating a settled paid stage.
@@ -3149,7 +3223,7 @@ async function runSuggestionJob(
     const persistBilling = async () => {
       await updateRun({ lease_expires_at: leaseExpiry() });
     };
-    let providerDispatchesThisInvocation = 0;
+    const workerSlice = new SuggestionWorkerSlice();
     await updateRun({ diagnostics });
     const billableCall: SuggestionLLMCall = async (
       system,
@@ -3159,7 +3233,7 @@ async function runSuggestionJob(
       action,
       validateResponse,
     ) => {
-      assertWorkerSliceCanDispatch(providerDispatchesThisInvocation);
+      workerSlice.beginDispatch();
       const messages: LLMMessage[] = [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -3186,8 +3260,7 @@ async function runSuggestionJob(
       const promptCacheKey = `cath:outline:${projectIdentity}:${provenance.sourceRecipeHash}:${stageFamily}:pcv2:promptv4`;
       const promptCacheKeyHash = await sha256Hex(promptCacheKey);
       await touchLease();
-      providerDispatchesThisInvocation += 1;
-      const result = await runBillableLLM({
+      const result = await billableLLM({
         userID: userId,
         purpose: "outline-suggestion",
         action,
@@ -4025,18 +4098,13 @@ async function runSuggestionJob(
           nextAction: "resume persisted planning checkpoint",
         },
       };
-      await updateRun({
-        status: "pending",
-        lease_owner: null,
-        lease_expires_at: null,
-        completed_at: null,
+      await returnSuggestionRunToPending(
+        updateRun,
+        scheduleContinuation,
+        continuationBody,
+        authHeader,
         diagnostics,
-      });
-      try {
-        await scheduleSuggestionContinuation(continuationBody, authHeader);
-      } catch (scheduleError) {
-        console.error("[outline-from-recipe] continuation scheduling failed; GET recovery remains available", scheduleError);
-      }
+      );
       return;
     }
     const errorCode = err instanceof StoryMaterialSufficiencyError
@@ -4141,16 +4209,16 @@ Deno.serve(async (req: Request) => {
       if (reclaimed) recoveredRun = { ...run, status: "pending", lease_expires_at: null };
     }
     if (recoveredRun.status === "pending") {
-      const persistedBody = recoveredRun.request_json as OutlineFromRecipeRequest | null;
       const recoveryKey = Deno.env.get("OPENAI_API_KEY");
-      if (persistedBody && recoveryKey) {
-        // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-        EdgeRuntime.waitUntil(runSuggestionJob(recoveredRun.id, persistedBody, user.id, recoveryKey, recoveredRun.attempt_count ?? 0, authHeader));
-      } else if (!persistedBody) {
-        console.error("[outline-from-recipe] pending run has no persisted request_json", recoveredRun.id);
-      } else {
-        console.error("[outline-from-recipe] cannot recover pending run; OPENAI_API_KEY missing", recoveredRun.id);
-      }
+      // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+      EdgeRuntime.waitUntil(recoverPendingSuggestionRun(
+        recoveredRun,
+        user.id,
+        recoveryKey,
+        authHeader,
+        (recoveryRunID, recoveryBody, recoveryUserID, recoveryKeyValue, recoveryAttemptCount, recoveryAuthHeader) =>
+          runSuggestionJob(recoveryRunID, recoveryBody, recoveryUserID, recoveryKeyValue, recoveryAttemptCount, recoveryAuthHeader),
+      ));
       run = recoveredRun;
     }
     return corsResponse(
