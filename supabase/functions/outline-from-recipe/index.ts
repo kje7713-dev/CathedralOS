@@ -2913,7 +2913,18 @@ export function isRetryableStoryMaterialFailure(run: {
       run.error === "story material enrichment contains a duplicate or missing item id");
 }
 
-const SUGGESTION_LEASE_MS = 15 * 60 * 1000;
+const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
+
+export class SuggestionWorkerYield extends Error {
+  constructor() {
+    super("outline worker slice complete");
+    this.name = "SuggestionWorkerYield";
+  }
+}
+
+export function assertWorkerSliceCanDispatch(providerDispatchesThisInvocation: number): void {
+  if (providerDispatchesThisInvocation >= 1) throw new SuggestionWorkerYield();
+}
 
 function leaseExpiry(): string {
   return new Date(Date.now() + SUGGESTION_LEASE_MS).toISOString();
@@ -2938,6 +2949,56 @@ const admin = () =>
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     { auth: { persistSession: false } },
   );
+
+async function markInterruptedProviderAttempts(db: any, runId: string, observedLeaseExpiry: string): Promise<void> {
+  const { error } = await db.from("generation_provider_attempts").update({
+    status: "provider_failed",
+    provider_error_code: "worker_interrupted",
+    completed_at: new Date().toISOString(),
+  })
+    .eq("feature_run_id", runId)
+    .eq("status", "started")
+    .lte("started_at", observedLeaseExpiry);
+  if (error) console.error("[outline-from-recipe] orphan provider-attempt cleanup failed", error);
+}
+
+async function reclaimExpiredSuggestionRun(db: any, run: {
+  id: string;
+  status?: string;
+  lease_expires_at?: string | null;
+  attempt_count?: number | null;
+}): Promise<boolean> {
+  const observedLeaseExpiry = run.lease_expires_at;
+  if (run.status !== "running" || !observedLeaseExpiry || new Date(observedLeaseExpiry).getTime() >= Date.now()) return false;
+  const reclaimed = await db.from("outline_suggestion_runs").update({
+    status: "pending",
+    error_code: null,
+    error: null,
+    completed_at: null,
+    lease_owner: null,
+    lease_expires_at: null,
+    attempt_count: (run.attempt_count ?? 0) + 1,
+  })
+    .eq("id", run.id)
+    .eq("status", "running")
+    .eq("lease_expires_at", observedLeaseExpiry)
+    .select("id")
+    .maybeSingle();
+  if (reclaimed.error || !reclaimed.data) return false;
+  await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
+  return true;
+}
+
+async function scheduleSuggestionContinuation(body: OutlineFromRecipeRequest, authHeader: string): Promise<void> {
+  const url = Deno.env.get("SUPABASE_URL") ?? "";
+  const response = await fetch(`${url}/functions/v1/outline-from-recipe`, {
+    method: "POST",
+    headers: { Authorization: authHeader, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const responseText = await response.text();
+  if (!response.ok) throw new Error(`continuation scheduling failed (${response.status}): ${responseText.slice(0, 300)}`);
+}
 
 async function repairRecipeObligations(
   body: OutlineFromRecipeRequest,
@@ -3026,14 +3087,15 @@ async function runSuggestionJob(
   userId: string,
   openaiKey: string,
   priorAttemptCount = 0,
+  authHeader = "",
 ): Promise<void> {
+  const continuationBody = body;
   const db = admin();
   const workerToken = crypto.randomUUID();
   const claim = await db.from("outline_suggestion_runs").update({
     status: "running",
     lease_owner: workerToken,
     lease_expires_at: leaseExpiry(),
-    attempt_count: priorAttemptCount + 1,
   }).eq("id", runId).eq("status", "pending")
     .select("id, credit_cost_charged, remaining_credits, story_material, suggestions, diagnostics, planning_context, planning_context_hash, planning_context_version, planning_state, planning_state_version")
     .maybeSingle();
@@ -3042,6 +3104,24 @@ async function runSuggestionJob(
   let planningState: Record<string, unknown> = claimedRun.planning_state && typeof claimedRun.planning_state === "object"
     ? claimedRun.planning_state
     : { version: 2, enrichmentBatchesCompleted: [], routingBatchesCompleted: [], allocationBatchesCompleted: [], generatedBeatPackets: [], coverageRepairPacketsCompleted: [] };
+  const priorDiagnostics = claimedRun.diagnostics && typeof claimedRun.diagnostics === "object"
+    ? claimedRun.diagnostics as Record<string, unknown>
+    : {};
+  const priorWorker = priorDiagnostics.worker && typeof priorDiagnostics.worker === "object"
+    ? priorDiagnostics.worker as Record<string, unknown>
+    : {};
+  const workerSliceCount = Number(priorWorker.sliceCount ?? 0) + 1;
+  let diagnostics: Record<string, unknown> = {
+    ...priorDiagnostics,
+    stage: "starting",
+    worker: {
+      ...priorWorker,
+      sliceCount: workerSliceCount,
+      lastSliceStartedAt: new Date().toISOString(),
+      lastYieldReason: null,
+      nextAction: "resume persisted planning checkpoint",
+    },
+  };
   const touchLease = async () => {
     await db.from("outline_suggestion_runs").update({ lease_expires_at: leaseExpiry() }).eq("id", runId).eq("lease_owner", workerToken);
   };
@@ -3049,7 +3129,6 @@ async function runSuggestionJob(
     return await db.from("outline_suggestion_runs").update(patch).eq("id", runId).eq("lease_owner", workerToken);
   };
   let plannedMinimumSections: number | null = null;
-  let diagnostics: Record<string, unknown> = { stage: "starting" };
   let dispatchTelemetry: Record<string, unknown> = {};
   let latestValidSuggestions: Suggestion[] = Array.isArray(claimedRun.suggestions)
     ? claimedRun.suggestions as Suggestion[]
@@ -3070,6 +3149,8 @@ async function runSuggestionJob(
     const persistBilling = async () => {
       await updateRun({ lease_expires_at: leaseExpiry() });
     };
+    let providerDispatchesThisInvocation = 0;
+    await updateRun({ diagnostics });
     const billableCall: SuggestionLLMCall = async (
       system,
       user,
@@ -3078,6 +3159,7 @@ async function runSuggestionJob(
       action,
       validateResponse,
     ) => {
+      assertWorkerSliceCanDispatch(providerDispatchesThisInvocation);
       const messages: LLMMessage[] = [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -3104,6 +3186,7 @@ async function runSuggestionJob(
       const promptCacheKey = `cath:outline:${projectIdentity}:${provenance.sourceRecipeHash}:${stageFamily}:pcv2:promptv4`;
       const promptCacheKeyHash = await sha256Hex(promptCacheKey);
       await touchLease();
+      providerDispatchesThisInvocation += 1;
       const result = await runBillableLLM({
         userID: userId,
         purpose: "outline-suggestion",
@@ -3294,7 +3377,7 @@ async function runSuggestionJob(
         suggestions: completedSuggestions,
         warnings: completionWarnings,
         completed_at: new Date().toISOString(),
-        diagnostics: { ...diagnostics, stage: "completed", finalSectionCounts: countSuggestionsByBeat(completedSuggestions) },
+        diagnostics: { ...diagnostics, stage: "completed", worker: { ...(diagnostics.worker as Record<string, unknown>), lastSliceCompletedAt: new Date().toISOString(), lastCompletedAction: "outline-expansion", nextAction: null }, finalSectionCounts: countSuggestionsByBeat(completedSuggestions) },
         lease_owner: null,
         lease_expires_at: null,
       });
@@ -3925,11 +4008,37 @@ async function runSuggestionJob(
       suggestions: result.suggestions,
       warnings: result.warnings,
       completed_at: new Date().toISOString(),
-      diagnostics: { ...diagnostics, stage: "completed", finalSectionCounts: countSuggestionsByBeat(result.suggestions) },
+      diagnostics: { ...diagnostics, stage: "completed", worker: { ...(diagnostics.worker as Record<string, unknown>), lastSliceCompletedAt: new Date().toISOString(), lastCompletedAction: "outline-planning", nextAction: null }, finalSectionCounts: countSuggestionsByBeat(result.suggestions) },
       lease_owner: null,
       lease_expires_at: null,
     });
   } catch (err) {
+    if (err instanceof SuggestionWorkerYield) {
+      const yieldedAt = new Date().toISOString();
+      diagnostics = {
+        ...diagnostics,
+        worker: {
+          ...(diagnostics.worker as Record<string, unknown>),
+          lastSliceCompletedAt: yieldedAt,
+          lastYieldReason: "provider_dispatch_boundary",
+          lastCompletedAction: "checkpoint persisted before next provider call",
+          nextAction: "resume persisted planning checkpoint",
+        },
+      };
+      await updateRun({
+        status: "pending",
+        lease_owner: null,
+        lease_expires_at: null,
+        completed_at: null,
+        diagnostics,
+      });
+      try {
+        await scheduleSuggestionContinuation(continuationBody, authHeader);
+      } catch (scheduleError) {
+        console.error("[outline-from-recipe] continuation scheduling failed; GET recovery remains available", scheduleError);
+      }
+      return;
+    }
     const errorCode = err instanceof StoryMaterialSufficiencyError
       ? "insufficient_story_material"
       : err && typeof err === "object" && "code" in err
@@ -4023,6 +4132,27 @@ Deno.serve(async (req: Request) => {
       return errorResponse("db_error", "Could not read suggestion run", 500);
     }
     if (!run) return errorResponse("not_found", "run not found", 404);
+
+    // GET polling is a recovery backstop for suspended workers. The durable
+    // pending claim inside runSuggestionJob is the final race guard.
+    let recoveredRun = run;
+    if (run.status === "running") {
+      const reclaimed = await reclaimExpiredSuggestionRun(admin(), run);
+      if (reclaimed) recoveredRun = { ...run, status: "pending", lease_expires_at: null };
+    }
+    if (recoveredRun.status === "pending") {
+      const persistedBody = recoveredRun.request_json as OutlineFromRecipeRequest | null;
+      const recoveryKey = Deno.env.get("OPENAI_API_KEY");
+      if (persistedBody && recoveryKey) {
+        // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+        EdgeRuntime.waitUntil(runSuggestionJob(recoveredRun.id, persistedBody, user.id, recoveryKey, recoveredRun.attempt_count ?? 0, authHeader));
+      } else if (!persistedBody) {
+        console.error("[outline-from-recipe] pending run has no persisted request_json", recoveredRun.id);
+      } else {
+        console.error("[outline-from-recipe] cannot recover pending run; OPENAI_API_KEY missing", recoveredRun.id);
+      }
+      run = recoveredRun;
+    }
     return corsResponse(
       JSON.stringify({
         run_id: run.id,
@@ -4139,7 +4269,7 @@ Deno.serve(async (req: Request) => {
       }).eq("id", existing.id).eq("status", "failed").eq("credit_cost_charged", 0);
       if (retryError) return errorResponse("db_error", retryError.message ?? "Could not retry failed suggestion run", 500);
       // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, body, user.id, openaiKey, existing.attempt_count ?? 0));
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, body, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
       return corsResponse(
         JSON.stringify({
           run_id: existing.id,
@@ -4159,6 +4289,16 @@ Deno.serve(async (req: Request) => {
         }),
         { status: 200 },
       );
+    }
+    if (existing.status === "running") {
+      const reclaimed = await reclaimExpiredSuggestionRun(db, existing);
+      if (reclaimed) existing.status = "pending";
+    }
+    if (existing.status === "pending") {
+      // Reconnects and continuation POSTs do not consume another rate-limit
+      // slot or request-log entry. The pending claim makes this race-safe.
+      // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, body, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
     }
     // Reconnect: return existing run status. Skip checkRateLimit + logRequest
     // so a stray reconnect does NOT consume a rate-limit slot or produce
@@ -4234,8 +4374,10 @@ Deno.serve(async (req: Request) => {
     }
     const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
     const resumableExpansionFailure = run.status === "failed" && run.error_code === "failed_expansion" && expansionResumeState(run) !== null;
-    if (stale || resumableExpansionFailure) {
-      const reclaimQuery = db.from("outline_suggestion_runs").update({
+    if (stale) {
+      if (await reclaimExpiredSuggestionRun(db, run)) run.status = "pending";
+    } else if (resumableExpansionFailure) {
+      const reclaimed = await db.from("outline_suggestion_runs").update({
         status: "pending",
         error_code: null,
         error: null,
@@ -4243,10 +4385,7 @@ Deno.serve(async (req: Request) => {
         lease_owner: null,
         lease_expires_at: null,
         attempt_count: (run.attempt_count ?? 0) + 1,
-      }).eq("id", run.id).eq("status", run.status);
-      const reclaimed = stale
-        ? await reclaimQuery.eq("lease_expires_at", run.lease_expires_at)
-        : await reclaimQuery;
+      }).eq("id", run.id).eq("status", "failed");
       if (!reclaimed.error) run.status = "pending";
     }
   }
@@ -4271,7 +4410,7 @@ Deno.serve(async (req: Request) => {
   // suspension. The pending claim inside runSuggestionJob makes this race-safe.
   if (run.status === "pending") {
     // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-    EdgeRuntime.waitUntil(runSuggestionJob(run.id, body, user.id, openaiKey, run.attempt_count ?? 0));
+    EdgeRuntime.waitUntil(runSuggestionJob(run.id, body, user.id, openaiKey, run.attempt_count ?? 0, authHeader));
   }
   return corsResponse(
     JSON.stringify({

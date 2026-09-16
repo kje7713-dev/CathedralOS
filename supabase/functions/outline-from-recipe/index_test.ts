@@ -1,4 +1,4 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals, assertThrows } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { deriveRecipeObligations, obligationCoverage } from "./_recipe_obligations.ts";
 
 Deno.test("outline suggestion polling contract preserves structured failures and success", async () => {
@@ -73,6 +73,8 @@ import {
   StoryMaterialSufficiencyError,
   StoryMaterialValidationError,
   shouldGapFillEnrichmentError,
+  SuggestionWorkerYield,
+  assertWorkerSliceCanDispatch,
 } from "./index.ts";
 
 const sparseRequest = {
@@ -152,7 +154,7 @@ Deno.test("logical suggestion identity is stable and changes with request materi
 Deno.test("durable run source keeps lease and terminal ownership guards", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   assertEquals(source.includes('eq("lease_owner", workerToken)'), true);
-  assertEquals(source.includes('attempt_count: priorAttemptCount + 1'), true);
+  assertEquals(source.includes('workerSliceCount'), true);
   assertEquals(source.includes('status: "pending"'), true);
 });
 
@@ -3381,4 +3383,70 @@ Deno.test("enrichment batches preserve paid material and rethrow non-semantic fa
   assertEquals(source.includes("if (!shouldGapFillEnrichmentError(error) || error instanceof BillableLLMError) throw error;"), true);
   assertEquals(source.includes("const seed = batchedMaterial ??"), true);
   assertEquals(source.includes("enrichmentBatchesCompleted"), true);
+});
+
+
+Deno.test("worker slice allows exactly one provider dispatch and yields before the second", () => {
+  assertWorkerSliceCanDispatch(0);
+  assertThrows(() => assertWorkerSliceCanDispatch(1), SuggestionWorkerYield, "outline worker slice complete");
+});
+
+Deno.test("worker lifecycle uses a three-minute lease and yields before billable side effects", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes("const SUGGESTION_LEASE_MS = 3 * 60 * 1000;"), true);
+  const guard = source.indexOf("assertWorkerSliceCanDispatch(providerDispatchesThisInvocation);");
+  const promptMetricsCall = source.indexOf("promptMetrics(messages", guard);
+  const attemptIncrement = source.indexOf("providerDispatchesThisInvocation += 1;");
+  const providerCall = source.indexOf("runBillableLLM({", attemptIncrement);
+  assertEquals(guard > 0 && guard < promptMetricsCall, true);
+  assertEquals(attemptIncrement > 0 && attemptIncrement < providerCall, true);
+  assertEquals(source.includes("lastYieldReason: \"provider_dispatch_boundary\""), true);
+  assertEquals(source.includes("scheduleSuggestionContinuation(continuationBody, authHeader)"), true);
+});
+
+Deno.test("production-shaped resume consumes durable packet checkpoints without replay", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes("completedEnrichment.has(packet.packetOrdinal)"), true);
+  assertEquals(source.includes("completedRouting.has(packet.packetOrdinal)"), true);
+  assertEquals(source.includes("completedBeatPackets.has(action)"), true);
+  assertEquals(source.includes("completedCoverageRepairs.has(action)"), true);
+  assertEquals(source.includes("outline-route-batch-"), true);
+  assertEquals(source.includes("packet.packetOrdinal.toString().padStart(3, \"0\")"), true);
+  assertEquals(source.includes("routingBatchesCompleted"), true);
+  assertEquals(source.includes("mergedAllocation"), true);
+  const routeLoop = source.indexOf("for (const packet of routingPackets)");
+  const routeSkip = source.indexOf("if (completedRouting.has(packet.packetOrdinal)) continue;", routeLoop);
+  assertEquals(routeLoop > 0 && routeSkip > routeLoop, true);
+});
+
+Deno.test("stale recovery is compare-and-set and cleans only orphaned started attempts", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes(".eq(\"status\", \"running\")"), true);
+  assertEquals(source.includes(".eq(\"lease_expires_at\", observedLeaseExpiry)"), true);
+  assertEquals(source.includes('status: "provider_failed"'), true);
+  assertEquals(source.includes('provider_error_code: "worker_interrupted"'), true);
+  assertEquals(source.includes('.eq("status", "started")'), true);
+  assertEquals(source.includes('.lte("started_at", observedLeaseExpiry)'), true);
+  assertEquals(source.includes("scheduleSuggestionContinuation"), true);
+});
+
+Deno.test("GET and existing POST reconnects recover pending and expired runs without rate limiting", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  const getRecovery = source.indexOf("GET polling is a recovery backstop");
+  const getRateLimit = source.indexOf("await checkRateLimit(userClient, user.id);");
+  const postResolve = source.indexOf("resolve an existing matching idempotent run first");
+  const postPending = source.indexOf('if (existing.status === "pending")');
+  assertEquals(getRecovery > 0, true);
+  assertEquals(getRecovery < getRateLimit, true);
+  assertEquals(postResolve < postPending, true);
+  assertEquals(source.includes("recoveredRun.request_json"), true);
+  assertEquals(source.includes("reclaimExpiredSuggestionRun(db, existing)"), true);
+});
+
+Deno.test("logical-stage billing identity remains continuous across worker slices", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes("logicalStageKey: `${runId}:${stageFamily}`"), true);
+  assertEquals(source.includes("logicalStageKey: `${runId}:enrichment`"), false);
+  assertEquals(source.includes("attempt_count: priorAttemptCount + 1"), false);
+  assertEquals(source.includes("workerSliceCount"), true);
 });
