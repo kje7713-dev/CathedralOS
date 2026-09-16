@@ -643,7 +643,8 @@ export async function ensureMemoryPipelineVersion(
   );
   const ordered = prior.filter((row: any) => {
     const section = byId.get(String(row.outline_section_id));
-    return section && section.outline_id === current.outline_id &&
+    return section &&
+      canonicalUUID(String(section.outline_id)) === canonicalUUID(String(current.outline_id)) &&
       Number(section.position ?? 0) < Number(current.position ?? 0);
   }).sort((a: any, b: any) =>
     Number(byId.get(String(a.outline_section_id))?.position ?? 0) -
