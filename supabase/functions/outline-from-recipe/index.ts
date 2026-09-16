@@ -3666,6 +3666,11 @@ async function runSuggestionJob(
         const previousBeat = beatIndex > 0 ? body.arcTemplate.beats[beatIndex - 1] : undefined;
         const nextBeat = beatIndex + 1 < body.arcTemplate.beats.length ? body.arcTemplate.beats[beatIndex + 1] : undefined;
         const priorSuggestion = generatedSuggestions.filter((suggestion) => suggestion.storyArcBeatID === previousBeat?.id).at(-1);
+        const packetMaterialIDs = new Set(
+          packet.atoms
+            .filter((atom) => atom.sourcePath.startsWith("storyMaterial."))
+            .map((atom) => atom.parentID ?? atom.id),
+        );
         const prompt = buildBeatLocalPrompt({
           req: body,
           beat,
@@ -3673,8 +3678,8 @@ async function runSuggestionJob(
           allocation: plan,
           obligations: recipeObligations,
           routing: route,
-          evidenceAtoms: [...allEvidenceAtoms, ...allMaterialAtoms],
-          materialItems: allMaterialItems,
+          evidenceAtoms: packet.atoms,
+          materialItems: allMaterialItems.filter((item) => packetMaterialIDs.has(item.id)),
           existingSections: existingForBeat,
           currentSections: beatSuggestions,
           previousTerminalState: priorSuggestion?.terminalState ?? priorSuggestion?.terminalBeat ?? null,
