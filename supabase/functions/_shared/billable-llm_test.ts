@@ -1106,3 +1106,89 @@ Deno.test("outline settlement keeps RPC-authoritative logical-stage delta", asyn
   await runBillableLLM(request, { adminClient: admin, provider: { complete: () => Promise.resolve(makeLLMResponse()) }, creditStore: makeCreditStore() });
   assertEquals(updates.some((patch) => Object.prototype.hasOwnProperty.call(patch, "settled_charge_credits")), false);
 });
+
+Deno.test("billing across two real worker-slice dispatches settles one logical-stage minimum", async () => {
+  const allocations: Record<string, unknown>[] = [];
+  const settlements: Record<string, unknown>[] = [];
+  const providerAttempts: Record<string, unknown>[] = [];
+  let dispatchOrdinal = 0;
+  let providerCalls = 0;
+  let ledgerTotal = 0;
+  const admin = {
+    rpc: (name: string, params: Record<string, unknown>) => {
+      if (name === "get_outline_stage_totals") {
+        return Promise.resolve({
+          data: [{ raw_charge_credits: dispatchOrdinal === 0 ? 0 : 1, settled_charge_credits: ledgerTotal }],
+          error: null,
+        });
+      }
+      if (name === "begin_outline_provider_attempt") {
+        dispatchOrdinal++;
+        allocations.push(params);
+        const attempt = {
+          attempt_id: `attempt-${dispatchOrdinal}`,
+          attempt_key: `run-billing:routing:attempt:${dispatchOrdinal}`,
+          attempt_ordinal: dispatchOrdinal,
+        };
+        providerAttempts.push(attempt);
+        return Promise.resolve({ data: [attempt], error: null });
+      }
+      if (name === "settle_outline_provider_attempt") {
+        settlements.push(params);
+        ledgerTotal = 3;
+        return Promise.resolve({
+          data: [{
+            settlement_status: "settled",
+            usage_event_id: `usage-${dispatchOrdinal}`,
+            ledger_id: dispatchOrdinal === 1 ? "ledger-routing" : null,
+            settled_charge_credits: 3,
+            run_charge_credits: 3,
+            remaining_credits: 97,
+          }],
+          error: null,
+        });
+      }
+      if (name === "reconcile_outline_provider_attempts") return Promise.resolve({ data: null, error: null });
+      throw new Error(`unexpected RPC ${name}`);
+    },
+    from: (_table: string) => ({
+      update: (_patch: unknown) => ({
+        eq: (_column: string, _value: unknown) => Promise.resolve({ data: null, error: null }),
+      }),
+    }),
+  };
+  const provider: LLMProvider = {
+    complete: () => {
+      providerCalls++;
+      return Promise.resolve(makeLLMResponse({ inputTokens: 1, outputTokens: 0 }));
+    },
+  };
+  const request = makeRequest({
+    model: { ...TEST_MODEL, minimum_charge_credits: 3 },
+    purpose: "outline-suggestion",
+    action: "outline-route-batch-001",
+    maxOutputTokens: 0,
+    preflightUsageOverride: { uncachedInputTokens: 1, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, toolCostUsd: 0 },
+    usageContext: {
+      ...makeRequest().usageContext,
+      featureRunID: "00000000-0000-0000-0000-0000000000cc",
+      logicalStageKey: "00000000-0000-0000-0000-0000000000cc:routing",
+    },
+  });
+  const deps = { adminClient: admin, provider, creditStore: makeCreditStore({ availableCredits: 3 }) };
+  await runBillableLLM(request, deps);
+  await runBillableLLM({ ...request, action: "outline-route-batch-002" }, deps);
+
+  assertEquals(providerCalls, 2);
+  assertEquals(providerAttempts.length, 2);
+  assertEquals(allocations.map((row) => row.p_logical_stage_key), [
+    "00000000-0000-0000-0000-0000000000cc:routing",
+    "00000000-0000-0000-0000-0000000000cc:routing",
+  ]);
+  assertEquals(settlements.length, 2);
+  assertEquals(ledgerTotal, 3);
+  assertEquals(settlements.map((row) => row.p_attempt_key), [
+    "run-billing:routing:attempt:1",
+    "run-billing:routing:attempt:2",
+  ]);
+});

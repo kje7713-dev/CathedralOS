@@ -7,6 +7,7 @@ on:
       - 'supabase/functions/generate-story/**'
       - 'supabase/functions/embed-section/**'
       - 'supabase/functions/run-outline/**'
+      - 'supabase/functions/outline-from-recipe/**'
       - 'supabase/migrations/20260909215722_scene_memory_stage_ledger_and_run_lineage.sql'
       - 'supabase/tests/database/scene_memory_stage_ledger.test.sql'
       - '.github/workflows/pr-521-ci.yml'
@@ -59,3 +60,8 @@ jobs:
           supabase/functions/_shared/memory-lifecycle_test.ts
           supabase/functions/_shared/memory-pipeline_test.ts
           supabase/functions/run-outline/index_test.ts
+
+      - name: Test outline worker lifecycle and checkpoint recovery
+        run: >-
+          deno test --no-check -A
+          supabase/functions/outline-from-recipe/index_test.ts
