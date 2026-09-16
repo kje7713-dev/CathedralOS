@@ -285,7 +285,7 @@ Deno.test("planner prompt passes empty existingSectionsByBeat when no existing s
     "planner prompt must explicitly state the residual-count contract",
   );
   const parsed = JSON.parse(user);
-  for (const [beatIndex, beat] of parsed.arcTemplate.beats.entries()) {
+  for (const [beatIndex, beat] of parsed.planningContext.arc.beats.entries()) {
     assertEquals(beat.beatIndex, beatIndex);
     assertEquals(parsed.existingSectionsByBeat[sparseRequest.arcTemplate.beats[beatIndex].id], []);
   }
@@ -524,7 +524,7 @@ Deno.test("runSuggestionJob handoff does not subtract existing sections a second
 
   // 3. The PR 5 comment must remain in place so future readers understand why
   //    plannedAllocation is used directly.
-  assertEquals(source.includes("const allocation = persistedAllocation"), true);
+  assertEquals(source.includes("const persistedAllocation = Array.isArray(planningState.allocationEntries)"), true);
   assertEquals(source.includes("buildPrompt(body, allocation"), true);
   assertEquals(source.includes("planSectionAllocation"), true);
 });
@@ -564,14 +564,14 @@ Deno.test("sparse recipe context is preserved for the single comprehensive outli
   const plannerPrompt = buildAllocationPrompt(sparseRequest as any);
   const plannerInput = plannerPrompt.user;
 
-  // Allocation receives bounded summaries/counts, not full authored prose.
-  assertEquals(plannerInput.includes("Monsters kill humans"), false);
+  // Allocation receives the compact semantic planning view, including authored recipe context.
+  assertEquals(plannerInput.includes("Monsters kill humans"), true);
   assertEquals(plannerInput.includes('"name": "Douche"'), true);
   assertEquals(user.includes("Monsters kill humans"), true);
   assertEquals(user.includes("Douche"), true);
   assertEquals(system.includes("30-60"), false);
-  assertEquals(system.includes("complete outline of 5-15 distinct sections"), true);
-  assertEquals(system.includes("Cover every supplied Story Arc beat"), true);
+  assertEquals(system.includes("5-15"), false);
+  assertEquals(system.includes("minimum is a floor for dramatic coverage, not a target or maximum"), true);
   assertEquals(system.includes("targetSections"), false);
   assertEquals(system.includes("maxSections"), false);
 });
@@ -584,7 +584,7 @@ Deno.test("single-pass prompt accepts rich recipes beyond the former 20K stage b
       ...sparseRequest.recipe.project,
       summary: "A rich authored premise " + "x".repeat(36_000),
     },
-    selectedCharacters: Array.from({ length: 12 }, (_, index) => ({
+    selectedCharacters: Array.from({ length: 40 }, (_, index) => ({
       id: `character-${index}`,
       name: `Character ${index}`,
       summary: "A fully authored character field " + "y".repeat(1_000),
@@ -595,13 +595,24 @@ Deno.test("single-pass prompt accepts rich recipes beyond the former 20K stage b
     beat.id,
     { minSections: 0, rationale: "single-pass outline generation" },
   ]));
-  const { user } = buildPrompt(request, allocation);
+  const primary = buildPrompt(request, allocation);
+  const allocationPrompt = buildAllocationPrompt(request);
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  assertEquals(user.length > 35_000, true);
-  assertEquals(user.includes("A rich authored premise"), true);
-  assertEquals(user.includes("Character 11"), true);
+  assertEquals(allocationPrompt.user.length > 20_000, true);
+  assertEquals(primary.user.includes("A rich authored premise"), true);
+  assertEquals(allocationPrompt.user.includes("Character 39"), true);
   assertEquals(source.includes("assertPromptWithinBudget"), false);
   assertEquals(source.includes("const promptLimit"), false);
+});
+
+Deno.test("primary outline prompt has no arbitrary section-count instruction", () => {
+  const prompt = buildPrompt(sparseRequest as any, new Map([
+    ["beat-1", { minSections: 0, rationale: "covered" }],
+    ["beat-2", { minSections: 1, rationale: "closure" }],
+  ])).system;
+  assertEquals(/\b\d+[-–]\d+\s+distinct sections\b/i.test(prompt), false);
+  assertEquals(prompt.includes("minimum is a floor for dramatic coverage, not a target or maximum"), true);
+  assertEquals(prompt.includes("MAX_PLANNED_SECTIONS"), false);
 });
 
 Deno.test("all outline physical actions share explicit logical stage families", () => {
@@ -714,7 +725,13 @@ Deno.test("existing beat coverage allows zero allocation and emits no duplicate"
   };
   const plannerPrompt = buildAllocationPrompt(requestWithExisting as any);
   assertEquals(plannerPrompt.user.includes("Already accepted"), true);
-  assertEquals(plannerPrompt.user.includes("existingSectionsByBeat"), true);
+  const parsedPlanning = JSON.parse(plannerPrompt.user);
+  assertEquals(typeof parsedPlanning.planningContext.recipe, "object");
+  assertEquals(parsedPlanning.planningContext.arc.beats[0].id, "beat-1");
+  assertEquals(Array.isArray(parsedPlanning.planningContext.materialIndex), true);
+  assertEquals(Array.isArray(parsedPlanning.planningContext.obligations), true);
+  assertEquals(parsedPlanning.existingSectionsByBeat["beat-1"][0].title, "Already accepted");
+  assertEquals(parsedPlanning.existingUnlinkedSections, []);
 
   const allocation = parseAndValidateAllocation(
     JSON.stringify({
@@ -1238,7 +1255,7 @@ Deno.test("dynamic response contract removes model-owned beat IDs and target/max
 
 
 function expansionSection(title: string, container = "scene", beat = "beat-1", insertAfterTitle: string | null = null): any {
-  return { title, summary: `${title} summary`, container, pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, insertAfterTitle };
+  return { title, summary: `${title} summary`, container, pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: [], insertAfterTitle };
 }
 
 function sceneOutline(count: number): any[] {
@@ -3552,6 +3569,118 @@ function fakeWorkerBilling(requestedActions: string[], providerCalls = requested
   };
 }
 
+function validatedWorkerBilling(actions: string[], responseFor: (action: string) => string | unknown) {
+  return async (request: any) => {
+    actions.push(request.action);
+    const content = responseFor(request.action);
+    if (request.onProviderSuccess) {
+      await request.onProviderSuccess({ content: typeof content === "string" ? content : JSON.stringify(content) });
+    }
+    return { featureResult: typeof content === "string" ? content : JSON.stringify(content), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+  };
+}
+
+Deno.test("enrichment semantic failure checkpoints one repair without repeating the first call", async () => {
+  const fullBody = await executableWorkerBody();
+  const body = { ...fullBody, storyMaterialEnrichment: undefined } as any;
+  const row: any = {
+    ...checkpointedWorkerRow(body),
+    story_material: null,
+    planning_state: { version: 2, phase: "start" },
+    request_json: body,
+  };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const billable = validatedWorkerBilling(actions, (action) => action === "story-material-enrichment" ? {} : fullBody.storyMaterialEnrichment);
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any,
+    scheduleContinuation: async () => {},
+  });
+  await run();
+  assertEquals(actions, ["story-material-enrichment"]);
+  assertEquals(db.row.planning_state.nextAction, "story-material-enrichment-repair");
+  await run();
+  assertEquals(actions, ["story-material-enrichment", "story-material-enrichment-repair"]);
+  assertEquals(db.row.planning_state.phase, "enrichment_complete");
+  assertEquals(db.row.attempt_count, 0);
+});
+
+Deno.test("allocation semantic failure checkpoints one retry without repeating the first plan", async () => {
+  const body = await executableWorkerBody();
+  const row: any = {
+    ...checkpointedWorkerRow(body),
+    planning_state: { version: 2, phase: "enrichment_complete", nextAction: "outline-plan" },
+    request_json: body,
+  };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const valid = { allocations: [
+    { beatIndex: 0, minSections: 1, rationale: "setup" },
+    { beatIndex: 1, minSections: 1, rationale: "closure" },
+  ] };
+  const billable = validatedWorkerBilling(actions, (action) => action === "outline-plan" ? { allocations: [] } : valid);
+  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any,
+    scheduleContinuation: async () => {},
+  });
+  await run();
+  assertEquals(actions, ["outline-plan"]);
+  assertEquals(db.row.planning_state.nextAction, "outline-plan-retry");
+  await run();
+  assertEquals(actions, ["outline-plan", "outline-plan-retry"]);
+  assertEquals(db.row.planning_state.phase, "allocation_complete");
+  assertEquals(db.row.attempt_count, 0);
+});
+
+Deno.test("multi-beat expansion checkpoints beat one before the one-dispatch yield", async () => {
+  const fullBody = await executableWorkerBody();
+  const recipe = fullBody.recipe;
+  const plannerItem = (id: string, label: string) => ({ id, label, description: `${label} description`, source: "planner", sourceReference: null });
+  const material = {
+    ...fullBody.storyMaterialEnrichment,
+    format: "novel",
+    escalationLadder: [
+      ...fullBody.storyMaterialEnrichment.escalationLadder,
+      plannerItem("worker-escalation-1", "First escalation"),
+      plannerItem("worker-escalation-2", "Second escalation"),
+      plannerItem("worker-escalation-3", "Third escalation"),
+    ],
+    reversals: [plannerItem("worker-reversal-1", "First reversal"), plannerItem("worker-reversal-2", "Second reversal")],
+    consequences: [plannerItem("worker-consequence-1", "First consequence")],
+  } as any;
+  const body = { ...fullBody, requestedFormat: "novel", storyMaterialEnrichment: material } as any;
+  const row: any = checkpointedWorkerRow(body);
+  row.story_material = material;
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const baseSection = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: [], entryState: "Prior state", dramaticEvent: `${title} happens`, resultingChange: `${title} changes the pressure`, terminalState: `${title} hands forward pressure` });
+  const billable = validatedWorkerBilling(actions, (action) => {
+    if (action === "outline-suggestions") return { beats: { "beat-1": [baseSection("beat-1", "Opening")], "beat-2": [baseSection("beat-2", "Closing")] } };
+    const beat = action.endsWith("beat-1") ? "beat-1" : "beat-2";
+    const count = beat === "beat-1" ? 7 : 2;
+    return { suggestions: Array.from({ length: count }, (_, index) => expansionSection(`${action}-${index}`, "episode", beat)) };
+  });
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any,
+    scheduleContinuation: async () => {},
+  });
+  await run();
+  assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(db.row.planning_state.phase, "expansion");
+  await run();
+  assertEquals(actions, ["outline-suggestions", "outline-expansion-1-beat-1"]);
+  assertEquals(db.row.planning_state.expansionCheckpoint.nextRound, 1);
+  assertEquals(db.row.planning_state.expansionCheckpoint.nextBeatIndex, 1);
+  assertEquals(db.row.suggestions.some((section: any) => section.title.includes("beat-1-0")), true);
+  await run();
+  assertEquals(actions, ["outline-suggestions", "outline-expansion-1-beat-1", "outline-expansion-1-beat-2"]);
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.attempt_count, 0);
+});
+
 Deno.test("fresh novel worker sequence is enrichment then allocation then one global outline call", async () => {
   const fullBody = await executableWorkerBody();
   const body = { ...fullBody, storyMaterialEnrichment: undefined } as any;
@@ -3582,6 +3711,7 @@ Deno.test("fresh novel worker sequence is enrichment then allocation then one gl
   await run();
   await run();
   assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions"]);
+  assertEquals(db.row.attempt_count, 0);
   assertEquals(actions.some((action) => action.startsWith("outline-route-")), false);
   assertEquals(actions.some((action) => action.startsWith("outline-suggestions-beat-")), false);
   assertEquals(db.row.status, "completed");

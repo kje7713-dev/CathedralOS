@@ -1441,13 +1441,21 @@ export interface ExpansionBeatContext {
 export interface ProgressiveExpansionOptions {
   existingSections?: PlannedSectionLike[];
   startRound?: number;
+  startBeatIndex?: number;
   priorDiagnostics?: ExpansionRoundDiagnostic[];
   beats?: Array<{ id: string; label?: string; description?: string }>;
+  onBeat?: (
+    round: number,
+    nextBeatIndex: number,
+    current: Suggestion[],
+    diagnostics: ExpansionRoundDiagnostic[],
+  ) => Promise<void> | void;
 }
 
 export interface ExpansionCheckpoint {
   stage: "expansion";
   nextRound: number;
+  nextBeatIndex: number;
   scale: NovelScaleEvaluation;
   expansionRounds: ExpansionRoundDiagnostic[];
 }
@@ -1456,6 +1464,7 @@ export function buildExpansionCheckpoint(
   suggestions: Suggestion[],
   existingSections: PlannedSectionLike[],
   expansionRounds: ExpansionRoundDiagnostic[],
+  cursor: { nextRound?: number; nextBeatIndex?: number } = {},
 ): ExpansionCheckpoint {
   const completedRounds = expansionRounds
     .filter((diagnostic) => diagnostic.status === "completed")
@@ -1465,7 +1474,8 @@ export function buildExpansionCheckpoint(
     : 0;
   return {
     stage: "expansion",
-    nextRound: Math.max(1, lastCompletedRound + 1),
+    nextRound: cursor.nextRound ?? Math.max(1, lastCompletedRound + 1),
+    nextBeatIndex: cursor.nextBeatIndex ?? 0,
     scale: evaluateNovelScale(suggestions, existingSections),
     expansionRounds,
   };
@@ -1474,6 +1484,7 @@ export function buildExpansionCheckpoint(
 export interface ExpansionResumeState {
   suggestions: Suggestion[];
   startRound: number;
+  startBeatIndex: number;
   priorDiagnostics: ExpansionRoundDiagnostic[];
 }
 
@@ -1498,6 +1509,9 @@ export function expansionResumeState(run: {
   return {
     suggestions: run.suggestions as Suggestion[],
     startRound,
+    startBeatIndex: Number.isInteger(Number((checkpoint as { nextBeatIndex?: unknown }).nextBeatIndex))
+      ? Math.max(0, Number((checkpoint as { nextBeatIndex?: unknown }).nextBeatIndex))
+      : 0,
     priorDiagnostics,
   };
 }
@@ -1530,7 +1544,9 @@ export async function progressivelyExpandOutline(
       let roundSuggestions = suggestions;
       let additionsReturned = 0;
       let hitCap = false;
-      for (const beat of targetBeats) {
+      const firstBeatIndex = round === startRound ? Math.max(0, options.startBeatIndex ?? 0) : 0;
+      for (let beatIndex = firstBeatIndex; beatIndex < targetBeats.length; beatIndex++) {
+        const beat = targetBeats[beatIndex];
         if (!needsNovelExpansion(roundSuggestions, existingSections)) break;
         const beatContext = beat
           ? {
@@ -1558,6 +1574,7 @@ export async function progressivelyExpandOutline(
         }
         roundSuggestions = merged;
         additionsReturned += additions.length;
+        await options.onBeat?.(round, beatIndex + 1, roundSuggestions, diagnostics);
       }
       const overCap = hitCap || roundSuggestions.length > MAX_PLANNED_SECTIONS;
       const accepted = overCap ? suggestions : roundSuggestions;
@@ -1818,9 +1835,9 @@ The JSON planning context contains the authoritative obligations exactly once.
 ## Compact planning context
 Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation.
 
-## Complete outline coverage
+## Use the minimum-only allocation
 
-Generate a complete outline of 5-15 distinct sections. Cover every supplied Story Arc beat at least once, using the beat UUID in each section. Use existing sections as context, not as a reason to omit required dramatic coverage. Never pad with paraphrases.
+For each beat, generate at least the stated minimum number of distinct sections. The minimum is a floor for dramatic coverage, not a target or maximum: generate additional sections whenever the material supports distinct events, consequences, decisions, or revelations. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.
 
 ## Novel-ready section titles
 
@@ -1837,23 +1854,14 @@ ${allocationLines}
 ${contractLines}
 
 Respond with structured JSON matching the schema. This is the only provider call for Suggest Sections; do not return a plan for another model or defer plot decisions.`;
+  const planningView = buildCompactPlanningView(
+    { ...req, storyMaterialEnrichment: storyMaterial },
+    obligations,
+    storyMaterial,
+  );
   const user = JSON.stringify({
-    // Keep the full canonical payload in the one provider request. The
-    // simplification removes lossy stage-local payloads rather than hiding
-    // authored recipe fields behind another planner.
-    recipe: req.recipe,
-    storyMaterialEnrichment: storyMaterial ?? null,
-    existingSections: req.existingSections ?? [],
-    globalSpine: {
-      projectID: (req.recipe.project as any)?.id ?? null,
-      format: requestedStoryMaterialFormat(req),
-      arcID: req.arcTemplate.id,
-      arcName: req.arcTemplate.name,
-    },
-    beats: req.arcTemplate.beats.map((beat, beatIndex) => ({ beatIndex, id: beat.id, role: beat.role, label: beat.label })),
+    planningContext: planningView,
     allocation: Array.from(allocation.entries()),
-    obligations: obligations.map((obligation) => ({ id: obligation.id, required: obligation.required })),
-    existingSectionCount: req.existingSections?.length ?? 0,
     hint: req.hint ?? null,
   }, null, 2);
 
@@ -1890,6 +1898,13 @@ type Allocation = {
   minSections: number;
   rationale: string;
 };
+
+export class AllocationRetryRequired extends Error {
+  constructor(public readonly reason: string) {
+    super(`allocation planner requires one bounded retry: ${reason}`);
+    this.name = "AllocationRetryRequired";
+  }
+}
 
 export function suggestionContractFingerprint(suggestion: Suggestion): string {
   return `${suggestion.title}|${suggestion.summary}|${suggestion.storyArcBeatID}`;
@@ -2021,47 +2036,38 @@ For every Story Arc beat, determine the minimum number of NEW dramatic sections 
 
 Output JSON only. No commentary, no prose.`;
 
-  const materialIndex = compactMaterial(req.storyMaterialEnrichment) as Array<Record<string, unknown>>;
-  const recipe = req.recipe as any;
-  const recipeSpine = {
-    project: recipe.project ? { id: recipe.project.id ?? null, name: recipe.project.name ?? null } : null,
-    selectedCharacters: (recipe.selectedCharacters ?? []).map((item: any) => ({ id: item?.id ?? null, name: item?.name ?? item?.label ?? null })),
-    selectedRelationships: (recipe.selectedRelationships ?? []).map((item: any) => ({ id: item?.id ?? null, name: item?.name ?? item?.label ?? null })),
-    selectedThemeQuestions: (recipe.selectedThemeQuestions ?? []).map((item: any) => ({ id: item?.id ?? null, name: item?.name ?? item?.label ?? null })),
-    selectedMotifs: (recipe.selectedMotifs ?? []).map((item: any) => ({ id: item?.id ?? null, name: item?.name ?? item?.label ?? null })),
-  };
-  const requiredObligationIDs = obligations.filter((obligation) => obligation.required).map((obligation) => obligation.id);
-  const beatSummaries = req.arcTemplate.beats.map((beat, beatIndex) => {
-    const existing = (req.existingSections ?? []).filter((section) => section.storyArcBeatID === beat.id);
-    const required = obligations.filter((obligation) => obligation.required);
-    return {
-      beatIndex,
-      beat: { id: beat.id, role: beat.role, label: beat.label, description: beat.description ?? null },
-      existingSectionCount: existing.length,
-      existingRecipeRequirementIDs: existing.flatMap((section) => section.recipeRequirementIDs ?? []),
-      requiredObligationIDs: required.map((obligation) => obligation.id),
-      requiredObligationClasses: Object.fromEntries(required.reduce((counts, obligation) => {
-        const key = (obligation as any).category ?? (obligation as any).kind ?? "other";
-        counts.set(key, (counts.get(key) ?? 0) + 1);
-        return counts;
-      }, new Map<string, number>())),
-      materialCounts: Object.fromEntries(STORY_MATERIAL_CATEGORIES.map((category) => [category, materialIndex.filter((item) => item.category === category).length])),
-    };
-  });
+  const planningView = buildCompactPlanningView(
+    { ...req, storyMaterialEnrichment: req.storyMaterialEnrichment },
+    obligations,
+    req.storyMaterialEnrichment,
+  );
+  const existingSectionsByBeat = Object.fromEntries(req.arcTemplate.beats.map((beat) => [
+    beat.id,
+    (req.existingSections ?? []).filter((section) => section.storyArcBeatID === beat.id).map((section) => ({
+      id: (section as any).id ?? null,
+      title: section.title ?? null,
+      summary: section.summary ?? null,
+      terminalState: (section as any).terminalState ?? section.terminalBeat ?? null,
+      recipeRequirementIDs: section.recipeRequirementIDs ?? [],
+    })),
+  ]));
+  const existingUnlinkedSections = (req.existingSections ?? [])
+    .filter((section) => !section.storyArcBeatID || !req.arcTemplate.beats.some((beat) => beat.id === section.storyArcBeatID))
+    .map((section) => ({ title: section.title ?? null, summary: section.summary ?? null }));
   const user = JSON.stringify({
-    requestedFormat: requestedStoryMaterialFormat(req),
-    globalSpine: recipeSpine,
-    arcTemplate: { id: req.arcTemplate.id, name: req.arcTemplate.name, beats: req.arcTemplate.beats.map((beat, beatIndex) => ({ beatIndex, role: beat.role, label: beat.label, description: beat.description ?? null })) },
-    beatSummaries,
-    scale: { totalRequiredObligations: requiredObligationIDs.length, totalEvidenceItems: materialIndex.length, totalMaterialItems: materialIndex.length },
-    existingSectionsByBeat: Object.fromEntries(req.arcTemplate.beats.map((beat) => [
-      beat.id,
-      (req.existingSections ?? []).filter((section) => section.storyArcBeatID === beat.id).map((section) => ({
-        id: (section as any).id ?? null, title: section.title ?? null, summary: section.summary ?? null,
-        terminalState: (section as any).terminalState ?? section.terminalBeat ?? null, recipeRequirementIDs: section.recipeRequirementIDs ?? [],
-      })),
-    ])),
-    existingUnlinkedSections: (req.existingSections ?? []).filter((section) => !section.storyArcBeatID || !req.arcTemplate.beats.some((beat) => beat.id === section.storyArcBeatID)).map((section) => ({ title: section.title ?? null, summary: section.summary ?? null })),
+    // Keep the reference shape: semantic planning context, plus explicit
+    // existing-section buckets used by the allocation contract.
+    planningContext: planningView,
+    planningView: {
+      recipe: planningView.recipe,
+      arc: planningView.arc,
+      obligations: planningView.obligations,
+      materialIndex: planningView.materialIndex,
+    },
+    existingSectionsByBeat,
+    existingUnlinkedSections,
+    allocation: "Return one minimum-only floor per canonical beat; additional sections remain legal.",
+    hint: req.hint ?? null,
   }, null, 2);
   return { system, user };
 }
@@ -2071,6 +2077,7 @@ export async function planSectionAllocation(
   apiKey: string,
   billableCall?: SuggestionLLMCall,
   obligations: RecipeObligation[] = [],
+  options: { retryOnly?: boolean; deferRetry?: boolean } = {},
 ): Promise<Map<string, Allocation>> {
   const { system, user } = buildAllocationPrompt(req, obligations);
   const responseFormat = {
@@ -2109,7 +2116,8 @@ export async function planSectionAllocation(
   };
 
   let firstError: Error | undefined;
-  for (const correction of [false, true]) {
+  const corrections = options.retryOnly ? [true] : [false, true];
+  for (const correction of corrections) {
     try {
       return parseAndValidateAllocation(
         await call(correction),
@@ -2119,6 +2127,7 @@ export async function planSectionAllocation(
       if (error instanceof SuggestionWorkerYield) throw error;
       if (!(error instanceof Error)) throw error;
       firstError = error;
+      if (!correction && options.deferRetry) throw new AllocationRetryRequired(error.message);
     }
   }
   throw new Error(
@@ -3031,7 +3040,6 @@ export async function runSuggestionJob(
     status: "running",
     lease_owner: workerToken,
     lease_expires_at: leaseExpiry(),
-    attempt_count: priorAttemptCount + 1,
   }).eq("id", runId).eq("status", "pending")
     .select("id, credit_cost_charged, remaining_credits, story_material, suggestions, diagnostics, planning_context, planning_context_hash, planning_context_version, planning_state, planning_state_version")
     .maybeSingle();
@@ -3166,6 +3174,7 @@ export async function runSuggestionJob(
       initialSuggestions: Suggestion[],
       recipeObligations: RecipeObligation[],
       startRound = 1,
+      startBeatIndex = 0,
       priorDiagnostics: ExpansionRoundDiagnostic[] = [],
     ): Promise<ProgressiveExpansionResult> => {
       diagnostics = {
@@ -3208,17 +3217,37 @@ export async function runSuggestionJob(
             expansionCheckpoint: checkpoint,
             novelScale: checkpoint.scale,
           };
+          const expansionCheckpoint = buildExpansionCheckpoint(current, body.existingSections ?? [], allDiagnostics);
+          planningState = { ...planningState, phase: "expansion", expansionCheckpoint };
           await updateRun({
             suggestions: current,
-            planning_state: { ...planningState, phase: "expansion" },
-            diagnostics,
+            planning_state: planningState,
+            diagnostics: { ...diagnostics, expansionCheckpoint },
           });
         },
         {
           existingSections: body.existingSections ?? [],
           startRound,
+          startBeatIndex,
           priorDiagnostics,
           beats: body.arcTemplate.beats,
+          onBeat: async (round, nextBeatIndex, current, allDiagnostics) => {
+            const expansionCheckpoint = buildExpansionCheckpoint(
+              current,
+              body.existingSections ?? [],
+              allDiagnostics,
+              { nextRound: round, nextBeatIndex },
+            );
+            planningState = { ...planningState, phase: "expansion", expansionCheckpoint };
+            diagnostics = {
+              ...diagnostics,
+              stage: "expansion_beat_checkpoint",
+              expansionCheckpoint,
+              expansionRounds: allDiagnostics,
+              novelScale: expansionCheckpoint.scale,
+            };
+            await updateRun({ suggestions: current, planning_state: planningState, diagnostics });
+          },
         },
       );
     };
@@ -3274,7 +3303,7 @@ export async function runSuggestionJob(
       let completedSuggestions = resume.suggestions;
       let completionWarnings: string[] = [];
       try {
-        const expanded = await expandNovel(resume.suggestions, recipeObligations, resume.startRound, resume.priorDiagnostics);
+        const expanded = await expandNovel(resume.suggestions, recipeObligations, resume.startRound, resume.startBeatIndex, resume.priorDiagnostics);
         completedSuggestions = expanded.suggestions;
         completionWarnings = expanded.warnings;
         const advisoryQuality = collectAdvisoryOutlineQuality(
@@ -3375,23 +3404,48 @@ export async function runSuggestionJob(
         return { material: attachRecipeProvenance(material, provenance), result: enrichmentResult };
       };
       let generated: { material: StoryMaterialEnrichment; result: SuggestionLLMResult };
-      try {
-        generated = await generateEnrichment("story-material-enrichment");
-      } catch (error) {
-        if (error instanceof StoryMaterialSufficiencyError) {
-          enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassSufficiencyReasons: error.reasons };
-          generated = await generateEnrichment("story-material-enrichment-repair");
-        } else if (error instanceof StoryMaterialValidationError) {
-          enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassValidationError: error.message };
-          generated = await generateEnrichment("story-material-enrichment-repair", undefined, error.message);
-        } else {
+      const repairPending = planningState.nextAction === "story-material-enrichment-repair";
+      if (repairPending) {
+        generated = await generateEnrichment(
+          "story-material-enrichment-repair",
+          undefined,
+          String(planningState.enrichmentRepairReason ?? "The first enrichment package failed semantic validation."),
+        );
+      } else {
+        try {
+          generated = await generateEnrichment("story-material-enrichment");
+        } catch (error) {
+          if (error instanceof StoryMaterialSufficiencyError || error instanceof StoryMaterialValidationError) {
+            const repairReason = error instanceof StoryMaterialSufficiencyError
+              ? error.reasons.join("; ")
+              : error.message;
+            enrichmentDiagnostics = {
+              ...enrichmentDiagnostics,
+              repairPending: true,
+              firstPassRepairReason: repairReason,
+            };
+            planningState = {
+              ...planningState,
+              phase: "enrichment_repair_pending",
+              nextAction: "story-material-enrichment-repair",
+              enrichmentRepairReason: repairReason,
+            };
+            await updateRun({ planning_state: planningState, diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "enrichment_repair_pending" } });
+            throw new SuggestionWorkerYield();
+          }
           throw error;
         }
       }
       storyMaterial = generated.material;
       const sufficiency = storyMaterialSufficiency(storyMaterial, body.recipe, requestedStoryMaterialFormat(body));
       enrichmentDiagnostics = { ...enrichmentDiagnostics, generatedOrReused: "generated", enrichmentCreditCostCharged: generated.result.creditCostCharged, schemaVersion: storyMaterial.version, sufficiency: sufficiency.sufficient ? "sufficient" : "insufficient", sufficiencyReasons: sufficiency.reasons, itemCountsByCategory: sufficiency.counts, recipeDerivedItemCount: sufficiency.recipeDerivedItemCount, plannerInventedItemCount: sufficiency.plannerInventedItemCount };
-      await updateRun({ story_material: storyMaterial, diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" } });
+      planningState = {
+        ...planningState,
+        phase: "enrichment_complete",
+        nextAction: "outline-plan",
+        enrichmentRepairReason: undefined,
+      };
+      await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" } });
     }
     if (!storyMaterial) throw new Error("story material enrichment was not produced");
     await updateRun({
@@ -3425,14 +3479,38 @@ export async function runSuggestionJob(
     const persistedAllocation = Array.isArray(planningState.allocationEntries)
       ? planningState.allocationEntries as Array<[string, Allocation]>
       : null;
-    const allocation = persistedAllocation
-      ? new Map<string, Allocation>(persistedAllocation)
-      : await planSectionAllocation(body, openaiKey, billableCall, recipeObligations);
-    if (!persistedAllocation) {
+    let allocation: Map<string, Allocation>;
+    if (persistedAllocation) {
+      allocation = new Map<string, Allocation>(persistedAllocation);
+    } else {
+      const retryOnly = planningState.nextAction === "outline-plan-retry";
+      try {
+        allocation = await planSectionAllocation(
+          body,
+          openaiKey,
+          billableCall,
+          recipeObligations,
+          { retryOnly, deferRetry: !retryOnly },
+        );
+      } catch (error) {
+        if (error instanceof AllocationRetryRequired) {
+          planningState = {
+            ...planningState,
+            phase: "allocation_retry_pending",
+            nextAction: "outline-plan-retry",
+            allocationRetryReason: error.reason,
+          };
+          await updateRun({ planning_state: planningState, diagnostics: { ...diagnostics, stage: "allocation_retry_pending", allocationRetryReason: error.reason } });
+          throw new SuggestionWorkerYield();
+        }
+        throw error;
+      }
       planningState = {
         ...planningState,
         phase: "allocation_complete",
+        nextAction: "outline-suggestions",
         allocationEntries: Array.from(allocation.entries()),
+        allocationRetryReason: undefined,
       };
       await updateRun({ planning_state: planningState });
     }
@@ -3518,27 +3596,34 @@ export async function runSuggestionJob(
     };
     let completedSuggestions = result.suggestions;
     let completionWarnings = result.warnings;
-    if (requestedStoryMaterialFormat(body) === "novel" && needsNovelExpansion(completedSuggestions, body.existingSections ?? [])) {
+    const outlineNeedsExpansion = requestedStoryMaterialFormat(body) === "novel" &&
+      needsNovelExpansion(completedSuggestions, body.existingSections ?? []);
+    planningState = {
+      ...planningState,
+      phase: "outline_complete",
+      nextAction: outlineNeedsExpansion ? "expansion" : "completed",
+    };
+    await updateRun({
+      suggestions: completedSuggestions,
+      planning_state: planningState,
+      diagnostics,
+    });
+    if (outlineNeedsExpansion) {
       planningState = {
         ...planningState,
         phase: "expansion",
         expansionStartRound: 1,
         expansionDiagnostics: [],
       };
+      const expansionCheckpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], []);
+      planningState = { ...planningState, phase: "expansion", expansionCheckpoint };
+      diagnostics = { ...diagnostics, stage: "expansion_pending", expansionCheckpoint };
       await updateRun({
         suggestions: completedSuggestions,
-        planning_state: {
-          ...planningState,
-          phase: "expansion",
-          expansionStartRound: 1,
-        },
-        diagnostics: {
-          ...diagnostics,
-          stage: "expansion_pending",
-          expansionCheckpoint: buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], []),
-        },
+        planning_state: planningState,
+        diagnostics,
       });
-      const expanded = await expandNovel(completedSuggestions, recipeObligations, 1, []);
+      const expanded = await expandNovel(completedSuggestions, recipeObligations, 1, 0, []);
       completedSuggestions = expanded.suggestions;
       completionWarnings = [...completionWarnings, ...expanded.warnings];
       diagnostics = {
