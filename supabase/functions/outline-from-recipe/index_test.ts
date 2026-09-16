@@ -527,9 +527,10 @@ Deno.test("runSuggestionJob handoff does not subtract existing sections a second
   // 3. The PR 5 comment must remain in place so future readers understand why
   //    plannedAllocation is used directly.
   assertEquals(
-    source.includes("PR 5") && source.includes("plannedAllocation IS the residual count"),
+    source.includes("architecture: \"single_comprehensive_pass\"") &&
+      source.includes("const prompt = buildPrompt(body, zeroAllocation"),
     true,
-    "PR 5 explanatory comment must remain at the handoff site",
+    "single-pass worker must build one comprehensive prompt directly",
   );
 });
 
@@ -559,7 +560,7 @@ Deno.test("recipe obligation coverage reports missing required items without pro
   assertEquals(richCoverage.missingRequired.map((item) => item.id), ["R2"]);
 });
 
-Deno.test("sparse recipe context is preserved for minimum-only allocation and outline prompts", () => {
+Deno.test("sparse recipe context is preserved for the single comprehensive outline prompt", () => {
   const allocation = new Map([
     ["beat-1", { minSections: 1, rationale: "A concise setup." }],
     ["beat-2", { minSections: 1, rationale: "The conflict needs room to escalate." }],
@@ -571,15 +572,42 @@ Deno.test("sparse recipe context is preserved for minimum-only allocation and ou
   // Allocation receives bounded summaries/counts, not full authored prose.
   assertEquals(plannerInput.includes("Monsters kill humans"), false);
   assertEquals(plannerInput.includes('"name": "Douche"'), true);
-  assertEquals(user.includes("Monsters kill humans"), false);
-  assertEquals(user.includes("Douche"), false);
+  assertEquals(user.includes("Monsters kill humans"), true);
+  assertEquals(user.includes("Douche"), true);
   assertEquals(system.includes("30-60"), false);
-  assertEquals(system.includes("Opening Image: minimum 1 section"), true);
-  assertEquals(system.includes("Break into Two: minimum 1 section"), true);
+  assertEquals(system.includes("complete outline of 5-15 distinct sections"), true);
+  assertEquals(system.includes("Cover every supplied Story Arc beat"), true);
   assertEquals(system.includes("targetSections"), false);
   assertEquals(system.includes("maxSections"), false);
 });
 
+
+Deno.test("single-pass prompt accepts rich recipes beyond the former 20K stage budget", async () => {
+  const richRecipe = {
+    ...sparseRequest.recipe,
+    project: {
+      ...sparseRequest.recipe.project,
+      summary: "A rich authored premise " + "x".repeat(36_000),
+    },
+    selectedCharacters: Array.from({ length: 12 }, (_, index) => ({
+      id: `character-${index}`,
+      name: `Character ${index}`,
+      summary: "A fully authored character field " + "y".repeat(1_000),
+    })),
+  };
+  const request = { ...sparseRequest, recipe: richRecipe } as any;
+  const allocation = new Map<string, any>(request.arcTemplate.beats.map((beat: any) => [
+    beat.id,
+    { minSections: 0, rationale: "single-pass outline generation" },
+  ]));
+  const { user } = buildPrompt(request, allocation);
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(user.length > 35_000, true);
+  assertEquals(user.includes("A rich authored premise"), true);
+  assertEquals(user.includes("Character 11"), true);
+  assertEquals(source.includes("assertPromptWithinBudget"), false);
+  assertEquals(source.includes("const promptLimit"), false);
+});
 
 Deno.test("all outline physical actions share explicit logical stage families", () => {
   assertEquals(outlineLogicalStageFamily("outline-route-batch-001"), "routing");
@@ -1015,7 +1043,6 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(source.includes("maxSections"), false);
   assertEquals(source.includes("promptLimit"), false);
   assertEquals(source.includes("assertPromptWithinBudget"), false);
-  assertEquals(/\bsectionCount\b/.test(source), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
   assertEquals(source.includes("maxItems: MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
@@ -1243,16 +1270,12 @@ Deno.test("dynamic response contract removes model-owned beat IDs and target/max
   assertEquals(schema.properties.beats.properties["beat-1"].items.properties.storyArcBeatID, undefined);
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);
-  assertEquals(/\bsectionCount\b/.test(source), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
-  assertEquals(source.includes("result.suggestions.length > MAX_PLANNED_SECTIONS"), true);
-  assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
   assertEquals(source.includes("diagnostics:"), true);
-  assertEquals(source.includes("plannerAllocationValidatedCountsByBeat"), true);
-  assertEquals(source.includes("firstPassParsedCounts"), true);
-  assertEquals(source.includes("firstPassValidatedCounts"), true);
+  assertEquals(source.includes("architecture: \"single_comprehensive_pass\""), true);
+  assertEquals(source.includes("providerCalls: 1"), true);
+  assertEquals(source.includes("outline-suggestions-single-pass"), true);
   assertEquals(source.includes("if (validateResponse) await validateResponse"), true);
-  assertEquals(source.includes("collectAdvisoryOutlineQuality"), true);
   assertEquals(source.includes("outline failed Story Arc semantic validation"), false);
 });
 
@@ -3392,12 +3415,12 @@ Deno.test("expansion prompt stays bounded as global outline grows", () => {
   assertEquals(sizes[2] <= sizes[0] * 1.5, true);
 });
 
-Deno.test("enrichment batches preserve paid material and rethrow non-semantic failures", async () => {
+Deno.test("single-pass outline removes enrichment batches and gap-fill stages", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  assertEquals(source.includes("let batchedMaterial: StoryMaterialEnrichment | null = claimedRun.story_material"), true);
-  assertEquals(source.includes("if (!shouldGapFillEnrichmentError(error) || error instanceof BillableLLMError) throw error;"), true);
-  assertEquals(source.includes("const seed = batchedMaterial ??"), true);
-  assertEquals(source.includes("enrichmentBatchesCompleted"), true);
+  assertEquals(source.includes("let batchedMaterial: StoryMaterialEnrichment | null = claimedRun.story_material"), false);
+  assertEquals(source.includes("story-material-enrichment-batch-"), false);
+  assertEquals(source.includes("architecture: \"single_comprehensive_pass\""), true);
+  assertEquals(source.includes("outline-suggestions-single-pass"), true);
 });
 
 
@@ -3546,6 +3569,9 @@ function fakeWorkerBilling(requestedActions: string[], providerCalls = requested
   return async (request: any) => {
     requestedActions.push(request.action);
     if (providerCalls !== requestedActions) providerCalls.push(request.action);
+    if (request.action === "outline-suggestions-single-pass") {
+      return { featureResult: JSON.stringify({ beats: { "beat-1": [], "beat-2": [] } }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+    }
     if (request.action.startsWith("outline-route-")) {
       return { featureResult: JSON.stringify({ assignments: [] }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
     }
@@ -3567,15 +3593,13 @@ Deno.test("production checkpoint resume executes route batch 002 once, preserves
     billableLLM: fakeWorkerBilling(billableActions, providerCalls) as any,
     scheduleContinuation: async (continuationBody, auth) => { scheduled.push({ body: continuationBody, auth }); },
   });
-  assertEquals(providerCalls, ["outline-route-batch-002"]);
-  assertEquals(billableActions, ["outline-route-batch-002"]);
+  assertEquals(providerCalls, ["outline-suggestions-single-pass"]);
+  assertEquals(billableActions, ["outline-suggestions-single-pass"]);
   assertEquals(providerCalls.includes("story-material-enrichment-batch-001"), false);
   assertEquals(providerCalls.includes("story-material-enrichment-batch-005"), false);
   assertEquals(providerCalls.includes("outline-route-batch-001"), false);
-  assertEquals(db.row.planning_state.routingBatchesCompleted, [1, 2]);
-  assertEquals(db.row.planning_state.beatRouting["beat-1"].evidenceIDs, ["character:character-1"]);
-  assertEquals(db.row.status, "pending");
-  assertEquals(scheduled.length, 1);
+  assertEquals(db.row.status, "completed");
+  assertEquals(scheduled.length, 0);
 });
 
 Deno.test("one physical provider call stops the second dispatch before provider execution", async () => {
@@ -3636,9 +3660,9 @@ Deno.test("two continuation workers race on one pending claim and produce one pr
       scheduleContinuation: async (nextBody, auth) => { schedules.push({ nextBody, auth }); },
     }),
   ]);
-  assertEquals(providerCalls, ["outline-route-batch-002"]);
-  assertEquals(schedules.length, 1);
-  assertEquals(db.row.status, "pending");
+  assertEquals(providerCalls, ["outline-suggestions-single-pass"]);
+  assertEquals(schedules.length, 0);
+  assertEquals(db.row.status, "completed");
 });
 
 Deno.test("stale reclaim is a compare-and-set race and only the winner cleans orphan attempts", async () => {
@@ -3720,7 +3744,7 @@ Deno.test("final provider packet completes the real worker without an extra cont
     billableLLM: fakeWorkerBilling(providerCalls) as any,
     scheduleContinuation: async () => { scheduleCount++; },
   });
-  assertEquals(providerCalls, ["outline-route-batch-012"]);
+  assertEquals(providerCalls, ["outline-suggestions-single-pass"]);
   assertEquals(db.row.status, "completed", JSON.stringify({ providerCalls, planningState: db.row.planning_state, diagnostics: db.row.diagnostics }));
   assertEquals(scheduleCount, 0);
 });

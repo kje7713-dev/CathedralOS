@@ -976,11 +976,11 @@ Deno.test("outline retry allocates a distinct ordinal and key for each physical 
   assertEquals(settlements[0].p_attempt_key, "stage:attempt:1");
 });
 
-Deno.test("outline preflight charges only incremental logical-stage liability", async () => {
+Deno.test("outline preflight charges only incremental actual-usage liability without a floor", async () => {
   const cases = [
     { name: "A", priorRaw: 1, priorSettled: 3, available: 0.5, allowed: true, expected: 0, inputTokens: 500 },
     { name: "B", priorRaw: 1, priorSettled: 3, available: 1, allowed: true, expected: 1, inputTokens: 3000 },
-    { name: "C", priorRaw: 0, priorSettled: 0, available: 2.99, allowed: false, expected: 3, inputTokens: 1000 },
+    { name: "C", priorRaw: 0, priorSettled: 0, available: 0.99, allowed: false, expected: 1, inputTokens: 1000 },
   ];
   for (const testCase of cases) {
     let providerCalls = 0;
