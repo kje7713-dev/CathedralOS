@@ -9,8 +9,22 @@ export interface PlanningEvidenceAtom {
   source: EvidenceSource;
   required: boolean;
   entityID?: string;
+  parentID?: string;
   text: string;
   chunkOrdinal?: number;
+}
+
+export interface BeatRoutingEntry {
+  obligationIDs: string[];
+  evidenceIDs: string[];
+  materialIDs: string[];
+}
+
+export type BeatRouting = Record<string, BeatRoutingEntry>;
+
+export interface RoutingAssignment {
+  evidenceID: string;
+  beatIndexes: number[];
 }
 
 export interface PlanningEvidencePacket {
@@ -87,6 +101,7 @@ function addObjectAtoms(
   prefix: string,
   value: unknown,
   required = false,
+  parentID?: string,
 ): void {
   if (!value || typeof value !== "object") return;
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
@@ -100,6 +115,7 @@ function addObjectAtoms(
         kind: Array.isArray(raw) ? "list" : "field",
         source,
         required,
+        ...(parentID ? { parentID } : {}),
       }, text),
     );
   }
@@ -122,6 +138,28 @@ export function compilePlanningContextV2(input: {
   const recipe = input.recipe ?? {};
   addObjectAtoms(evidence, "recipe", "recipe.project", recipe.project, true);
   addObjectAtoms(evidence, "recipe", "recipe.setting", recipe.setting, false);
+  for (
+    const key of [
+      "selectedStorySpark",
+      "selectedAftertaste",
+      "promptPack",
+      "instructionBias",
+    ]
+  ) {
+    if (
+      recipe[key] && typeof recipe[key] === "object" &&
+      !Array.isArray(recipe[key])
+    ) {
+      addObjectAtoms(
+        evidence,
+        "recipe",
+        `recipe.${key}`,
+        recipe[key],
+        true,
+        key,
+      );
+    }
+  }
   for (const [category, values] of Object.entries(recipe)) {
     if (!Array.isArray(values)) continue;
     values.forEach((value, index) =>
@@ -148,6 +186,7 @@ export function compilePlanningContextV2(input: {
         kind: "recipe-obligation",
         source: "obligation",
         required: Boolean(obligation.required),
+        parentID: id,
       }, statement),
     );
   }
@@ -170,6 +209,7 @@ export function compilePlanningContextV2(input: {
           source,
           required: source === "recipe",
           entityID: id,
+          parentID: id,
         }, text),
       );
     }
@@ -189,9 +229,16 @@ export function compilePlanningContextV2(input: {
     version: 2,
     provenance: input.provenance ?? {},
     globalSpine: {
-      project: recipe.project ?? null,
-      storySpark: recipe.selectedStorySpark ?? null,
-      aftertaste: recipe.selectedAftertaste ?? null,
+      projectID: (recipe.project as Record<string, unknown> | undefined)?.id ??
+        null,
+      projectName:
+        (recipe.project as Record<string, unknown> | undefined)?.name ?? null,
+      format: (recipe as Record<string, unknown>).format ?? null,
+      promptPackID:
+        (recipe.promptPack as Record<string, unknown> | undefined)?.id ?? null,
+      promptPackName:
+        (recipe.promptPack as Record<string, unknown> | undefined)?.name ??
+          null,
     },
     arc: {
       id: input.arcTemplate.id ?? null,
@@ -204,6 +251,82 @@ export function compilePlanningContextV2(input: {
     materialByID,
     existingOutline: input.existingSections ?? [],
   };
+}
+
+export function emptyBeatRouting(beatIDs: string[]): BeatRouting {
+  return Object.fromEntries(
+    beatIDs.map((
+      beatID,
+    ) => [beatID, { obligationIDs: [], evidenceIDs: [], materialIDs: [] }]),
+  );
+}
+
+export function mergeRoutingAssignments(input: {
+  beatIDs: string[];
+  assignments: RoutingAssignment[];
+  existing?: BeatRouting;
+  evidenceByID: Record<string, PlanningEvidenceAtom>;
+  materialByID: Record<string, PlanningEvidenceAtom>;
+  obligationIDs: Set<string>;
+}): BeatRouting {
+  const routing = Object.fromEntries(input.beatIDs.map((beatID) => {
+    const prior = input.existing?.[beatID];
+    return [beatID, {
+      obligationIDs: [...(prior?.obligationIDs ?? [])],
+      evidenceIDs: [...(prior?.evidenceIDs ?? [])],
+      materialIDs: [...(prior?.materialIDs ?? [])],
+    }];
+  }));
+  for (const assignment of input.assignments) {
+    const atom = input.evidenceByID[assignment.evidenceID] ??
+      input.materialByID[assignment.evidenceID] ??
+      Object.values(input.evidenceByID).find((candidate) =>
+        candidate.parentID === assignment.evidenceID
+      ) ??
+      Object.values(input.materialByID).find((candidate) =>
+        candidate.parentID === assignment.evidenceID
+      );
+    if (!atom) {
+      throw new Error(
+        `routing references unknown evidenceID ${assignment.evidenceID}`,
+      );
+    }
+    for (const beatIndex of assignment.beatIndexes) {
+      if (
+        !Number.isInteger(beatIndex) || beatIndex < 0 ||
+        beatIndex >= input.beatIDs.length
+      ) {
+        throw new Error(
+          `routing references unknown beatIndex ${String(beatIndex)}`,
+        );
+      }
+      const beat = routing[input.beatIDs[beatIndex]];
+      const target = atom.source === "obligation" ||
+          input.obligationIDs.has(atom.parentID ?? atom.id)
+        ? beat.obligationIDs
+        : atom.sourcePath.startsWith("storyMaterial.")
+        ? beat.materialIDs
+        : beat.evidenceIDs;
+      const id = atom.parentID ?? atom.id;
+      if (!target.includes(id)) target.push(id);
+    }
+  }
+  for (const beat of Object.values(routing)) {
+    beat.obligationIDs.sort();
+    beat.evidenceIDs.sort();
+    beat.materialIDs.sort();
+  }
+  return routing;
+}
+
+export function requiredRoutingGaps(
+  routing: BeatRouting,
+  requiredIDs: string[],
+): string[] {
+  const routed = new Set(
+    Object.values(routing).flatMap((entry) => entry.obligationIDs),
+  );
+  return requiredIDs.filter((id) => !routed.has(id));
 }
 
 export function packetizeAtoms(
@@ -256,6 +379,7 @@ export function allocationBeatSummary(input: {
   existingSectionCount: number;
   existingRecipeRequirementIDs?: string[];
   requiredObligationIDs: string[];
+  requiredObligationClasses?: Record<string, number>;
   routedEvidenceCount: number;
   routedMaterialCounts: Record<string, number>;
 }): Record<string, unknown> {
@@ -267,6 +391,7 @@ export function allocationBeatSummary(input: {
     existingSectionCount: input.existingSectionCount,
     existingRecipeRequirementIDs: input.existingRecipeRequirementIDs ?? [],
     requiredObligationIDs: input.requiredObligationIDs,
+    requiredObligationClasses: input.requiredObligationClasses ?? {},
     routedEvidenceCount: input.routedEvidenceCount,
     routedMaterialCounts: input.routedMaterialCounts,
   };
@@ -287,4 +412,101 @@ export function mergeMaterialBatches<
     }
   }
   return merged;
+}
+
+export const ROUTING_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    assignments: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          evidenceID: { type: "string", minLength: 1 },
+          beatIndexes: {
+            type: "array",
+            items: { type: "integer", minimum: 0 },
+            minItems: 1,
+          },
+        },
+        required: ["evidenceID", "beatIndexes"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["assignments"],
+  additionalProperties: false,
+} as const;
+
+export function buildRoutingPrompt(input: {
+  beats: Array<Record<string, unknown>>;
+  packet: PlanningEvidencePacket;
+}): { system: string; user: string } {
+  return {
+    system:
+      "Route each supplied evidence atom to every canonical Story Arc beat where it materially belongs. Use beatIndexes only; an atom may route to multiple beats. Do not invent evidence, obligations, or beat indexes. Return JSON only.",
+    user: JSON.stringify(
+      {
+        beats: input.beats.map((beat, beatIndex) => ({
+          beatIndex,
+          id: beat.id ?? null,
+          role: beat.role ?? null,
+          label: beat.label ?? null,
+          description: beat.description ?? null,
+        })),
+        packet: input.packet,
+      },
+      null,
+      2,
+    ),
+  };
+}
+
+export function parseRoutingResponse(
+  raw: string,
+  beatCount: number,
+  knownIDs: Set<string>,
+): RoutingAssignment[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("routing provider returned invalid JSON");
+  }
+  const assignments =
+    parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as { assignments?: unknown }).assignments
+      : undefined;
+  if (!Array.isArray(assignments)) {
+    throw new Error("routing response missing assignments array");
+  }
+  const seen = new Set<string>();
+  return assignments.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("routing assignment malformed");
+    }
+    const evidenceID = String((item as any).evidenceID ?? "");
+    const beatIndexes = (item as any).beatIndexes;
+    if (!knownIDs.has(evidenceID)) {
+      throw new Error(`routing references unknown evidenceID ${evidenceID}`);
+    }
+    if (
+      !Array.isArray(beatIndexes) || beatIndexes.length === 0 ||
+      beatIndexes.some((index: unknown) =>
+        !Number.isInteger(index) || Number(index) < 0 ||
+        Number(index) >= beatCount
+      )
+    ) {
+      throw new Error(`routing has invalid beatIndexes for ${evidenceID}`);
+    }
+    const normalized = [...new Set(beatIndexes.map(Number))].sort((a, b) =>
+      a - b
+    );
+    const key = `${evidenceID}:${normalized.join(",")}`;
+    if (seen.has(key)) {
+      throw new Error(`routing contains duplicate assignment ${key}`);
+    }
+    seen.add(key);
+    return { evidenceID, beatIndexes: normalized };
+  });
 }

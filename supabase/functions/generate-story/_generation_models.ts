@@ -349,7 +349,7 @@ export function snapshotPricing(
  * 6-decimal precision. Does NOT ceil per-component — fractional credits are
  * preserved so cheap models and short requests aren't materially overcharged.
  */
-export function computeActualChargeCredits(
+export function computeRawChargeCredits(
   usage: GenerationUsage,
   pricing: PricingSnapshot,
 ): number {
@@ -366,12 +366,18 @@ export function computeActualChargeCredits(
     ? usage.toolCostUsd / pricing.creditValueUsd
     : 0;
   const providerCostCredits = inputCredits + outputCredits + toolCredits;
-  const charge = Math.max(
-    pricing.minimumChargeCredits,
-    providerCostCredits,
-  );
   // Round to 6 decimal places for storage. Do NOT ceil.
-  return Math.round(charge * 1_000_000) / 1_000_000;
+  return Math.round(providerCostCredits * 1_000_000) / 1_000_000;
+}
+
+export function computeActualChargeCredits(
+  usage: GenerationUsage,
+  pricing: PricingSnapshot,
+): number {
+  return Math.max(
+    pricing.minimumChargeCredits,
+    computeRawChargeCredits(usage, pricing),
+  );
 }
 
 /**

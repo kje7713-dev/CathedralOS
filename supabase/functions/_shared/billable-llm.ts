@@ -19,6 +19,7 @@
 
 import {
   computeActualChargeCredits,
+  computeRawChargeCredits,
   computeMarginCents,
   computeMaxChargeCredits,
   computeProviderCogsCents,
@@ -366,7 +367,10 @@ export async function runBillableLLM<T>(
     outputTokens: Math.max(0, providerResult.outputTokens ?? 0),
     toolCostUsd: providerResult.toolCostUsd,
   };
-  const preCallbackCharge = computeActualChargeCredits(preCallbackUsage, pricing);
+  const preCallbackRawCharge = computeRawChargeCredits(preCallbackUsage, pricing);
+  const preCallbackCharge = req.purpose === "outline-suggestion"
+    ? preCallbackRawCharge
+    : computeActualChargeCredits(preCallbackUsage, pricing);
   const preCallbackMargin = computeMarginCents(preCallbackCharge, pricing, providerCogsSnapshot.providerCogsCents);
   let featureResult: T;
   try { featureResult = await req.onProviderSuccess(providerResult); }
@@ -383,7 +387,7 @@ export async function runBillableLLM<T>(
               p_user_id: req.userID, p_feature_run_id: req.usageContext.featureRunID,
               p_attempt_key: attemptKey, p_attempt_outcome: "feature_validation_failed",
               p_action: req.action, p_purpose: req.purpose, p_model_name: providerResult.modelName,
-              p_charge_credits: preCallbackCharge, p_input_tokens: providerResult.inputTokens,
+              p_charge_credits: preCallbackCharge, p_minimum_charge_credits: pricing.minimumChargeCredits, p_input_tokens: providerResult.inputTokens,
               p_output_tokens: providerResult.outputTokens, p_generation_length_mode: req.usageContext.generationLengthMode ?? "short",
               p_output_budget: req.usageContext.outputBudget ?? req.maxOutputTokens,
               p_uncached_input_tokens: preCallbackUsage.uncachedInputTokens,
@@ -462,7 +466,10 @@ export async function runBillableLLM<T>(
     outputTokens: Math.max(0, providerResult.outputTokens ?? 0),
     toolCostUsd: providerResult.toolCostUsd,
   };
-  const actualCharge = computeActualChargeCredits(actualUsage, pricing);
+  const rawCharge = computeRawChargeCredits(actualUsage, pricing);
+  const actualCharge = req.purpose === "outline-suggestion"
+    ? rawCharge
+    : computeActualChargeCredits(actualUsage, pricing);
   // PR-372: provider COGS (cents) + margin (cents) for telemetry.
   const providerCogs = computeProviderCogsCents(actualUsage, pricing);
   const marginInfo = computeMarginCents(
@@ -489,6 +496,7 @@ export async function runBillableLLM<T>(
     p_model_name: providerResult.modelName,
     p_idempotency_key: req.purpose === "outline-suggestion" ? attemptKey : (req.usageContext.idempotencyKey ?? null),
     p_charge_credits: actualCharge,
+    ...(req.purpose === "outline-suggestion" ? { p_minimum_charge_credits: pricing.minimumChargeCredits } : {}),
     p_input_tokens: providerResult.inputTokens,
     p_output_tokens: providerResult.outputTokens,
     p_generation_length_mode: req.usageContext.generationLengthMode ?? "short",
@@ -508,6 +516,7 @@ export async function runBillableLLM<T>(
     usage_event_id: string;
     ledger_id: string | null;
     remaining_credits: number;
+    settled_charge_credits?: number;
   };
   // The outline-specific RPC uses p_attempt_key for settlement idempotency;
   // p_idempotency_key belongs only to settle_billable_usage. Sending both
@@ -595,7 +604,7 @@ export async function runBillableLLM<T>(
   return {
     featureResult,
     providerResult,
-    actualCharge,
+    actualCharge: req.purpose === "outline-suggestion" ? (row.settled_charge_credits ?? actualCharge) : actualCharge,
     charged: true,
     usageEventInserted: true,
     remainingCredits,

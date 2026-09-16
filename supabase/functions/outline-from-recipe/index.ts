@@ -7,7 +7,6 @@ import {
   OpenAIProvider,
 } from "../generate-story/_provider.ts";
 import {
-  buildCompactPlanningView,
   compactExistingSections,
   compactText,
   compactMaterial,
@@ -18,10 +17,17 @@ import {
 } from "./_prompt_context.ts";
 import {
   allocationBeatSummary,
+  buildRoutingPrompt,
+  emptyBeatRouting,
   compilePlanningContextV2,
   dedupeMaterialBySourceReference,
   mergeMaterialBatches,
+  mergeRoutingAssignments,
   packetizeAtoms,
+  parseRoutingResponse,
+  requiredRoutingGaps,
+  ROUTING_RESPONSE_SCHEMA,
+  type BeatRouting,
   type PlanningEvidencePacket,
 } from "./_planning_pipeline.ts";
 import {
@@ -644,22 +650,22 @@ export function buildEnrichmentPrompt(
 ): { system: string; user: string } {
   const format = requestedStoryMaterialFormat(req);
   const repairInstruction = repairReason
-    ? `\n\nThe previous enrichment response was rejected: ${repairReason}. Repair it by using source=recipe only with an exact handle from recipeMaterialHandles. Never copy an item id into sourceReference, invent a handle, or use a human-readable label as a handle. Use source=planner with sourceReference null for anything that cannot be tied to an exact handle.`
+    ? `\n\nThe previous planner delta was rejected: ${repairReason}. Return only a corrected planner delta for the requested bounded evidence packet.`
     : "";
   return {
-    system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Use source=recipe only with one of the server-provided recipe handles; use source=planner for all connective or newly invented material and use null sourceReference. The server, not you, owns recipe provenance. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
+    system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
     user: JSON.stringify(packet
       ? {
         globalSpine: {
-          project: req.recipe.project,
-          storySpark: req.recipe.selectedStorySpark,
-          aftertaste: req.recipe.selectedAftertaste,
+          projectID: (req.recipe.project as any)?.id ?? null,
+          projectName: (req.recipe.project as any)?.name ?? null,
+          promptPackID: (req.recipe.promptPack as any)?.id ?? null,
           requestedFormat: format,
+          arcID: req.arcTemplate.id ?? null,
+          arcName: req.arcTemplate.name ?? null,
           beats: req.arcTemplate.beats.map((beat, beatIndex) => ({ beatIndex, id: beat.id, role: beat.role, label: beat.label })),
         },
-        recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)),
         planningEvidencePacket: packet,
-        priorEnrichment: candidate ?? null,
         hint: req.hint ?? null,
       }
       : { recipe: req.recipe, recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)), priorEnrichment: candidate ?? null, arcTemplate: req.arcTemplate, hint: req.hint ?? null, requestedFormat: format }, null, 2),
@@ -1624,16 +1630,18 @@ export function plannedWordRangeForContainer(container: string): { minWords: num
 export function findUnusedStoryMaterial(
   current: Suggestion[],
   storyMaterial?: StoryMaterialEnrichment,
+  materialIDs?: string[],
 ): StoryMaterialItem[] {
   if (!storyMaterial) return [];
   const usedText = current.map(contractText).join(" ");
+  const allowed = materialIDs ? new Set(materialIDs) : null;
   return STORY_MATERIAL_CATEGORIES.flatMap((category) => storyMaterial[category])
     .filter((item) => {
+      if (allowed && !allowed.has(item.id)) return false;
       const labelTokens = contentTokens(item.label);
       if (labelTokens.size === 0) return true;
       return !Array.from(labelTokens).some((token) => usedText.includes(token));
-    })
-    .slice(0, 60);
+    });
 }
 
 export function buildExpansionPrompt(
@@ -1641,6 +1649,7 @@ export function buildExpansionPrompt(
   current: Suggestion[],
   context?: ExpansionPromptContext,
   obligations: RecipeObligation[] = [],
+  routing?: BeatRouting,
 ): { system: string; user: string } {
   const projectedTokens = context?.projectedTokens ?? projectedExpectedTokens(current);
   const projectedWords = context?.projectedWords ?? projectedTokens / TOKENS_PER_WORD;
@@ -1649,7 +1658,11 @@ export function buildExpansionPrompt(
     NOVEL_MIN_PROJECTED_TOKENS - projectedTokens,
   );
   const round = context?.round ?? 1;
-  const unusedStoryMaterial = findUnusedStoryMaterial(current, req.storyMaterialEnrichment);
+  const unusedStoryMaterial = findUnusedStoryMaterial(
+    current,
+    req.storyMaterialEnrichment,
+    context?.beat && routing ? routing[context.beat.beatID]?.materialIDs : undefined,
+  );
   const beatContext = context?.beat;
   const targetBeat = beatContext ? req.arcTemplate.beats.find((beat) => beat.id === beatContext.beatID) : undefined;
   const targetContract = targetBeat ? arcRoleContract(targetBeat, req.arcTemplate.name) : undefined;
@@ -1827,10 +1840,86 @@ ${allocationLines}
 ${contractLines}
 
 Respond with structured JSON matching the schema.`;
-  const planningView = buildCompactPlanningView({ ...req, storyMaterialEnrichment: storyMaterial }, obligations, storyMaterial);
-  const user = JSON.stringify({ planningContext: planningView, allocation: Array.from(allocation.entries()), hint: req.hint ?? null }, null, 2);
+  const user = JSON.stringify({
+    globalSpine: {
+      projectID: (req.recipe.project as any)?.id ?? null,
+      format: requestedStoryMaterialFormat(req),
+      arcID: req.arcTemplate.id,
+      arcName: req.arcTemplate.name,
+    },
+    beats: req.arcTemplate.beats.map((beat, beatIndex) => ({ beatIndex, id: beat.id, role: beat.role, label: beat.label })),
+    allocation: Array.from(allocation.entries()),
+    obligations: obligations.map((obligation) => ({ id: obligation.id, required: obligation.required })),
+    existingSectionCount: req.existingSections?.length ?? 0,
+    hint: req.hint ?? null,
+  }, null, 2);
 
   return { system, user };
+}
+
+export function buildBeatLocalPrompt(input: {
+  req: OutlineFromRecipeRequest;
+  beat: { id: string; role?: string; label?: string; description?: string };
+  beatIndex: number;
+  allocation: Allocation;
+  obligations: RecipeObligation[];
+  routing: { obligationIDs: string[]; evidenceIDs: string[]; materialIDs: string[] };
+  evidenceAtoms: Array<{ id: string; parentID?: string; sourcePath: string; text: string }>;
+  materialItems: StoryMaterialItem[];
+  existingSections: PlannedSectionLike[];
+  currentSections: Suggestion[];
+  previousTerminalState?: string | null;
+  nextBeat?: { id: string; label?: string; role?: string };
+  partOrdinal: number;
+  partCount: number;
+}): { system: string; user: string } {
+  const contract = arcRoleContract(input.beat, input.req.arcTemplate.name);
+  const routedObligations = input.obligations.filter((obligation) => input.routing.obligationIDs.includes(obligation.id));
+  const required = input.partOrdinal === 1 ? input.allocation.minSections : 0;
+  const prior = input.currentSections.map((section) => ({
+    title: section.title,
+    summary: section.summary,
+    terminalState: section.terminalState ?? section.terminalBeat,
+  }));
+  const evidence = input.evidenceAtoms.filter((atom) => input.routing.evidenceIDs.includes(atom.parentID ?? atom.id));
+  const material = input.materialItems.filter((item) => input.routing.materialIDs.includes(item.id)).map((item) => ({
+    id: item.id,
+    category: (item as any).category ?? null,
+    label: item.label,
+    description: item.description,
+  }));
+  return {
+    system: `You are the beat-local ${requestedStoryMaterialFormat(input.req)} outline planner. Generate only sections for canonical beat ${input.beat.id}. Part ${input.partOrdinal} of ${input.partCount}: part 1 must create at least ${required} sections; later parts may add only distinct sections required by the supplied evidence. Never return sections for another beat, never invent authored facts, and never reproduce recipe prose that is not supplied in this packet. Every section must be generation-ready with entryState, dramaticEvent, resultingChange, terminalState, and a valid dramaticFunction. Allowed functions: ${contract.allowedFunctions.join(", ")}. Return JSON matching the supplied one-beat schema.`,
+    user: JSON.stringify({
+      globalSpine: {
+        projectID: input.req.recipe.project?.id ?? null,
+        format: requestedStoryMaterialFormat(input.req),
+        arcID: input.req.arcTemplate.id,
+        arcName: input.req.arcTemplate.name,
+      },
+      beat: {
+        beatIndex: input.beatIndex,
+        id: input.beat.id,
+        role: input.beat.role,
+        label: input.beat.label,
+        description: input.beat.description,
+        semanticContract: contract,
+      },
+      allocation: { minSections: input.allocation.minSections, partOrdinal: input.partOrdinal, partCount: input.partCount },
+      obligations: routedObligations.map((obligation) => ({ id: obligation.id, statement: obligation.statement, required: obligation.required })),
+      evidence,
+      material,
+      existingSections: input.existingSections,
+      currentBeatSections: prior,
+      continuity: {
+        previousTerminalState: input.previousTerminalState ?? null,
+        nextBeat: input.nextBeat ?? null,
+      },
+      instruction: input.partOrdinal === 1
+        ? "Create the base sections for this beat."
+        : "Add only distinct sections that use remaining evidence; do not repeat current beat sections.",
+    }, null, 2),
+  };
 }
 
 // Stage 1: planner. Decides how many sections each arc beat deserves
@@ -1981,6 +2070,7 @@ export function parseAndValidateAllocation(
 export function buildAllocationPrompt(
   req: OutlineFromRecipeRequest,
   obligations: RecipeObligation[] = [],
+  beatRouting?: BeatRouting,
 ): { system: string; user: string } {
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
@@ -1997,7 +2087,7 @@ Output JSON only. No commentary, no prose.`;
   const materialIndex = compactMaterial(req.storyMaterialEnrichment) as Array<Record<string, unknown>>;
   const recipe = req.recipe as any;
   const recipeSpine = {
-    project: recipe.project ? { id: recipe.project.id ?? null, summary: recipe.project.summary ?? null } : null,
+    project: recipe.project ? { id: recipe.project.id ?? null, name: recipe.project.name ?? null } : null,
     selectedCharacters: (recipe.selectedCharacters ?? []).map((item: any) => ({ id: item?.id ?? null, name: item?.name ?? item?.label ?? null })),
     selectedRelationships: (recipe.selectedRelationships ?? []).map((item: any) => ({ id: item?.id ?? null, name: item?.name ?? item?.label ?? null })),
     selectedThemeQuestions: (recipe.selectedThemeQuestions ?? []).map((item: any) => ({ id: item?.id ?? null, name: item?.name ?? item?.label ?? null })),
@@ -2006,14 +2096,22 @@ Output JSON only. No commentary, no prose.`;
   const requiredObligationIDs = obligations.filter((obligation) => obligation.required).map((obligation) => obligation.id);
   const beatSummaries = req.arcTemplate.beats.map((beat, beatIndex) => {
     const existing = (req.existingSections ?? []).filter((section) => section.storyArcBeatID === beat.id);
+    const route = beatRouting?.[beat.id] ?? { obligationIDs: requiredObligationIDs, evidenceIDs: [], materialIDs: [] };
+    const routedRequired = obligations.filter((obligation) => obligation.required && route.obligationIDs.includes(obligation.id));
+    const routedMaterial = materialIndex.filter((item) => route.materialIDs.includes(String(item.id)));
     return allocationBeatSummary({
       beatIndex,
       beat,
       existingSectionCount: existing.length,
       existingRecipeRequirementIDs: existing.flatMap((section) => section.recipeRequirementIDs ?? []),
-      requiredObligationIDs,
-      routedEvidenceCount: 0,
-      routedMaterialCounts: Object.fromEntries(STORY_MATERIAL_CATEGORIES.map((category) => [category, materialIndex.filter((item) => item.category === category).length])),
+      requiredObligationIDs: routedRequired.map((obligation) => obligation.id),
+      requiredObligationClasses: Object.fromEntries(routedRequired.reduce((counts, obligation) => {
+        const key = (obligation as any).category ?? (obligation as any).kind ?? "other";
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+        return counts;
+      }, new Map<string, number>())),
+      routedEvidenceCount: route.evidenceIDs.length,
+      routedMaterialCounts: Object.fromEntries(STORY_MATERIAL_CATEGORIES.map((category) => [category, routedMaterial.filter((item) => item.category === category).length])),
     });
   });
   const user = JSON.stringify({
@@ -2039,8 +2137,9 @@ export async function planSectionAllocation(
   apiKey: string,
   billableCall?: SuggestionLLMCall,
   obligations: RecipeObligation[] = [],
+  beatRouting?: BeatRouting,
 ): Promise<Map<string, Allocation>> {
-  const { system, user } = buildAllocationPrompt(req, obligations);
+  const { system, user } = buildAllocationPrompt(req, obligations, beatRouting);
   const responseFormat = {
     type: "json_schema",
     json_schema: {
@@ -2919,6 +3018,7 @@ async function runSuggestionJob(
   };
   let plannedMinimumSections: number | null = null;
   let diagnostics: Record<string, unknown> = { stage: "starting" };
+  let dispatchTelemetry: Record<string, unknown> = {};
   let latestValidSuggestions: Suggestion[] = Array.isArray(claimedRun.suggestions)
     ? claimedRun.suggestions as Suggestion[]
     : [];
@@ -2962,20 +3062,22 @@ async function runSuggestionJob(
       // Prompt targets guide packetization; they are not product failure switches.
       // A large request must be split or routed locally, never rejected merely
       // because aggregate authored evidence is large.
-      const measuredPrompt = promptMetrics(messages, {
-        recipeBytes: new TextEncoder().encode(JSON.stringify(compactRecipe(body.recipe))).byteLength,
-        enrichmentBytes: new TextEncoder().encode(JSON.stringify(compactMaterial(body.storyMaterialEnrichment))).byteLength,
-        obligationCount: Array.isArray(body.storyMaterialEnrichment) ? 0 : undefined,
-        existingSectionCount: body.existingSections?.length ?? 0,
-        currentSuggestionCount: 0,
-        materialItemCount: compactMaterial(body.storyMaterialEnrichment).length,
-        packetized: action.includes("batch") || action.includes("beat-") || action.includes("repair"),
-      });
+      const measuredPrompt = {
+        ...promptMetrics(messages, {
+          recipeBytes: new TextEncoder().encode(JSON.stringify(compactRecipe(body.recipe))).byteLength,
+          enrichmentBytes: new TextEncoder().encode(JSON.stringify(compactMaterial(body.storyMaterialEnrichment))).byteLength,
+          existingSectionCount: body.existingSections?.length ?? 0,
+          packetized: action.includes("batch") || action.includes("beat-") || action.includes("repair"),
+        }),
+        stageFamily,
+        action,
+        ...dispatchTelemetry,
+      };
       diagnostics = { ...diagnostics, promptMetrics: { ...(diagnostics.promptMetrics as Record<string, unknown> ?? {}), [action]: measuredPrompt } };
       await updateRun({ diagnostics });
       const stablePrefixHash = await sha256Hex(system);
       const projectIdentity = body.recipe?.project?.id ?? body.outline_id ?? "unknown";
-      const promptCacheKey = `cath:outline:${projectIdentity}:${provenance.sourceRecipeHash}:${stageFamily}:pcv1:promptv3`;
+      const promptCacheKey = `cath:outline:${projectIdentity}:${provenance.sourceRecipeHash}:${stageFamily}:pcv2:promptv4`;
       const promptCacheKeyHash = await sha256Hex(promptCacheKey);
       await touchLease();
       const result = await runBillableLLM({
@@ -3000,7 +3102,7 @@ async function runSuggestionJob(
           promptBytes: measuredPrompt.promptBytes,
           stablePrefixBytes: new TextEncoder().encode(system).byteLength,
           volatileBytes: new TextEncoder().encode(user).byteLength,
-          logicalStageKey: `${runId}:${action}`,
+          logicalStageKey: `${runId}:${stageFamily}`,
           promptCacheKeyHash,
         },
         onProviderSuccess: async (providerResult) => {
@@ -3032,7 +3134,16 @@ async function runSuggestionJob(
         new Set(body.arcTemplate.beats.map((beat) => beat.id)),
         async (current, context, beat) => {
           const expansionContext = beat ? { ...context, beat } : context;
-          const expansion = buildExpansionPrompt(body, current, expansionContext, recipeObligations);
+          dispatchTelemetry = {
+            packetOrdinal: context.round, packetCount: 1,
+            beatIndexes: beat ? [body.arcTemplate.beats.findIndex((candidate) => candidate.id === beat.beatID)] : body.arcTemplate.beats.map((_, index) => index),
+            beatIDs: beat ? [beat.beatID] : beatIDs,
+            evidenceItemCount: beat ? (beatRouting[beat.beatID]?.evidenceIDs.length ?? 0) : Object.keys(planningContext.evidenceByID).length,
+            requiredObligationCount: beat ? (beatRouting[beat.beatID]?.obligationIDs.length ?? 0) : recipeObligations.length,
+            materialItemCount: beat ? (beatRouting[beat.beatID]?.materialIDs.length ?? 0) : Object.keys(planningContext.materialByID).length,
+            existingSectionCount: body.existingSections?.length ?? 0, currentSuggestionCount: current.length, packetized: Boolean(beat),
+          };
+          const expansion = buildExpansionPrompt(body, current, expansionContext, recipeObligations, beatRouting);
           const expandedRaw = await billableCall(
             expansion.system,
             expansion.user,
@@ -3196,15 +3307,11 @@ async function runSuggestionJob(
             try {
               const parsedProviderMaterial = JSON.parse(content) as Record<string, unknown>;
               for (const category of STORY_MATERIAL_CATEGORIES) {
-                if (Array.isArray(parsedProviderMaterial[category])) {
-                  parsedProviderMaterial[category] = parsedProviderMaterial[category].map((item: any) =>
-                    item?.source === "recipe" ? { ...item, source: "planner", sourceReference: null } : item
-                  );
+                if (Array.isArray(parsedProviderMaterial[category]) && parsedProviderMaterial[category].some((item: any) => item?.source === "recipe")) {
+                  throw new StoryMaterialValidationError("provider returned source=recipe; enrichment batches must emit planner-only deltas");
                 }
               }
-              const normalizedProviderMaterial = normalizeProviderStoryMaterialItemIDs(
-                downgradeUnverifiedProviderRecipeReferences(parsedProviderMaterial, body.recipe),
-              );
+              const normalizedProviderMaterial = normalizeProviderStoryMaterialItemIDs(parsedProviderMaterial);
               parsedMaterial = validateStoryMaterialEnrichment(normalizedProviderMaterial, { allowMissingProvenance: true, recipe: body.recipe });
               // Preserve canonical authored material even when the provider
               // returns a schema-valid package with zero source=recipe items.
@@ -3235,50 +3342,119 @@ async function runSuggestionJob(
           existingSections: body.existingSections ?? [],
         });
         const enrichmentPackets = packetizeAtoms(Object.values(evidenceContext.evidenceByID), 9000);
-        const batchMaterials: StoryMaterialEnrichment[] = [];
+        const completedEnrichment = new Set<number>(
+          Array.isArray((planningState as any).enrichmentBatchesCompleted)
+            ? (planningState as any).enrichmentBatchesCompleted.map(Number)
+            : [],
+        );
+        let batchedMaterial: StoryMaterialEnrichment | null = claimedRun.story_material
+          ? normalizeProviderStoryMaterialItemIDs(
+            downgradeUnverifiedProviderRecipeReferences(claimedRun.story_material, body.recipe),
+          ) as StoryMaterialEnrichment
+          : null;
         let totalCreditCost = 0;
         for (const packet of enrichmentPackets) {
+          if (completedEnrichment.has(packet.packetOrdinal)) continue;
+          dispatchTelemetry = {
+            packetOrdinal: packet.packetOrdinal, packetCount: packet.packetCount,
+            beatIndexes: body.arcTemplate.beats.map((_, index) => index),
+            beatIDs: body.arcTemplate.beats.map((beat) => beat.id),
+            evidenceItemCount: packet.atoms.length,
+            requiredObligationCount: packet.atoms.filter((atom) => atom.source === "obligation").length,
+            materialItemCount: 0, existingSectionCount: body.existingSections?.length ?? 0,
+            currentSuggestionCount: 0, packetized: true,
+          };
           const batch = await generateEnrichment(
             `story-material-enrichment-batch-${packet.packetOrdinal.toString().padStart(3, "0")}`,
-            batchMaterials.at(-1),
+            undefined,
             undefined,
             packet,
           );
-          batchMaterials.push(batch.material);
+          const mergedBatch = { ...batch.material } as StoryMaterialEnrichment;
+          if (batchedMaterial) {
+            for (const category of STORY_MATERIAL_CATEGORIES) {
+              (mergedBatch[category] as StoryMaterialItem[]) = mergeMaterialBatches([
+                batchedMaterial[category] as StoryMaterialItem[],
+                batch.material[category] as StoryMaterialItem[],
+              ]);
+            }
+            batchedMaterial = mergeCanonicalRecipeMaterial(
+              mergedBatch, body.recipe, provenance, requestedStoryMaterialFormat(body),
+            );
+          } else {
+            batchedMaterial = mergedBatch;
+          }
           totalCreditCost += batch.result.creditCostCharged;
-          const priorState = planningState;
-          planningState = { ...priorState, version: 2, enrichmentBatchesCompleted: [...((priorState as any).enrichmentBatchesCompleted ?? []), packet.packetOrdinal], enrichmentPacketCount: packet.packetCount };
+          planningState = {
+            ...planningState, version: 2,
+            enrichmentBatchesCompleted: [
+              ...((planningState as any).enrichmentBatchesCompleted ?? []),
+              packet.packetOrdinal,
+            ],
+            enrichmentPacketCount: packet.packetCount,
+          };
           await updateRun({
-            story_material: batch.material,
-            planning_state: planningState,
+            story_material: batchedMaterial, planning_state: planningState,
             diagnostics: { ...diagnostics, enrichmentPacket: packet.packetOrdinal, enrichmentPacketCount: packet.packetCount },
           });
         }
-        const mergedBatches = { ...(batchMaterials[0] ?? {}) } as StoryMaterialEnrichment;
-        for (const category of STORY_MATERIAL_CATEGORIES) {
-          (mergedBatches[category] as StoryMaterialItem[]) = mergeMaterialBatches(
-            batchMaterials.map((batch) => batch[category] as StoryMaterialItem[]),
-          );
-        }
-        const batchedMaterial = mergeCanonicalRecipeMaterial(
-          mergedBatches,
-          body.recipe,
-          provenance,
-          requestedStoryMaterialFormat(body),
+        if (!batchedMaterial) throw new Error("story material enrichment was not produced");
+        const finalMaterial = mergeCanonicalRecipeMaterial(
+          batchedMaterial, body.recipe, provenance, requestedStoryMaterialFormat(body),
         );
-        const finalSufficiency = storyMaterialSufficiency(batchedMaterial, body.recipe, requestedStoryMaterialFormat(body));
+        const finalSufficiency = storyMaterialSufficiency(finalMaterial, body.recipe, requestedStoryMaterialFormat(body));
         if (!finalSufficiency.sufficient) throw new StoryMaterialSufficiencyError(finalSufficiency.reasons);
-        generated = { material: batchedMaterial, result: { content: "", creditCostCharged: totalCreditCost, remainingCredits: 0 } };
+        generated = { material: finalMaterial, result: { content: "", creditCostCharged: totalCreditCost, remainingCredits: 0 } };
       } catch (error) {
-        if (error instanceof StoryMaterialSufficiencyError) {
-          enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassSufficiencyReasons: error.reasons };
-          generated = await generateEnrichment("story-material-enrichment-repair");
-        } else if (error instanceof StoryMaterialValidationError) {
-          enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassValidationError: error.message };
-          generated = await generateEnrichment("story-material-enrichment-repair", undefined, error.message);
-        } else {
-          throw error;
+        const reason = error instanceof Error ? error.message : String(error);
+        enrichmentDiagnostics = {
+          ...enrichmentDiagnostics,
+          repairAttempted: true,
+          gapFillReason: reason,
+        };
+        const seed = body.storyMaterialEnrichment
+          ? validateStoryMaterialEnrichment(body.storyMaterialEnrichment, { recipe: body.recipe })
+          : repairStoryMaterialFromRecipe(body.recipe, provenance, requestedStoryMaterialFormat(body));
+        let gapMaterial = seed;
+        const gapCategories = STORY_MATERIAL_CATEGORIES.filter((category) =>
+          storyMaterialSufficiency(gapMaterial, body.recipe, requestedStoryMaterialFormat(body)).reasons.some((message) => message.toLowerCase().includes(category.toLowerCase().replace(/([A-Z])/g, " $1")))
+        );
+        const categoriesToFill = gapCategories.length > 0 ? gapCategories : ["conflictSources", "escalationLadder"];
+        const gapContext = compilePlanningContextV2({
+          recipe: body.recipe as unknown as Record<string, unknown>,
+          arcTemplate: body.arcTemplate,
+          material: gapMaterial as unknown as Record<string, unknown>,
+          existingSections: body.existingSections ?? [],
+        });
+        let gapCost = 0;
+        for (const category of categoriesToFill) {
+          const relevantAtoms = Object.values(gapContext.evidenceByID).filter((atom) =>
+            atom.sourcePath.toLowerCase().includes(category.toLowerCase()) || atom.sourcePath.startsWith("recipe.selected"),
+          );
+          const gapPacket: PlanningEvidencePacket = {
+            packetOrdinal: 1, packetCount: 1, atoms: relevantAtoms,
+            estimatedInputTokens: Math.ceil(JSON.stringify(relevantAtoms).length / 4),
+            promptBytes: new TextEncoder().encode(JSON.stringify(relevantAtoms)).byteLength,
+          };
+          const fill = await generateEnrichment(
+            `story-material-gapfill-${category}-001`,
+            undefined,
+            `fill only ${category}; ${reason}`,
+            gapPacket,
+          );
+          const merged = { ...gapMaterial } as StoryMaterialEnrichment;
+          for (const existingCategory of STORY_MATERIAL_CATEGORIES) {
+            (merged[existingCategory] as StoryMaterialItem[]) = mergeMaterialBatches([
+              gapMaterial[existingCategory] as StoryMaterialItem[],
+              fill.material[existingCategory] as StoryMaterialItem[],
+            ]);
+          }
+          gapMaterial = mergeCanonicalRecipeMaterial(
+            merged, body.recipe, provenance, requestedStoryMaterialFormat(body),
+          );
+          gapCost += fill.result.creditCostCharged;
         }
+        generated = { material: gapMaterial, result: { content: "", creditCostCharged: gapCost, remainingCredits: 0 } };
       }
       storyMaterial = generated.material;
       const sufficiency = storyMaterialSufficiency(storyMaterial, body.recipe, requestedStoryMaterialFormat(body));
@@ -3318,15 +3494,120 @@ async function runSuggestionJob(
       planning_context: claimedRun.planning_context ?? planningContext,
       planning_context_hash: claimedRun.planning_context_hash ?? planningContextHash,
       planning_context_version: claimedRun.planning_context_version ?? 2,
-      planning_state: claimedRun.planning_state ?? { version: 2, enrichmentBatchesCompleted: [], routingBatchesCompleted: [], allocationBatchesCompleted: [], generatedBeatPackets: [], coverageRepairPacketsCompleted: [] },
-      planning_state_version: claimedRun.planning_state_version ?? 2,
+      planning_state: planningState,
+      planning_state_version: 2,
     });
-    const plannedAllocation = await planSectionAllocation(
-      body,
-      openaiKey,
-      billableCall,
-      recipeObligations,
+    const beatIDs = body.arcTemplate.beats.map((beat) => beat.id);
+    const routingAtoms = [
+      ...Object.values(planningContext.evidenceByID),
+      ...Object.values(planningContext.materialByID),
+    ];
+    const routingPackets = packetizeAtoms(routingAtoms, 7000);
+    const routeKnownIDs = new Set(routingAtoms.flatMap((atom) => [atom.id, atom.parentID].filter(Boolean) as string[]));
+    let beatRouting: BeatRouting = (planningState as any).beatRouting && typeof (planningState as any).beatRouting === "object"
+      ? (planningState as any).beatRouting
+      : emptyBeatRouting(beatIDs);
+    const completedRouting = new Set<number>(
+      Array.isArray((planningState as any).routingBatchesCompleted)
+        ? (planningState as any).routingBatchesCompleted.map(Number)
+        : [],
     );
+    for (const packet of routingPackets) {
+      if (completedRouting.has(packet.packetOrdinal)) continue;
+      dispatchTelemetry = {
+        packetOrdinal: packet.packetOrdinal, packetCount: packet.packetCount,
+        beatIndexes: body.arcTemplate.beats.map((_, index) => index),
+        beatIDs, evidenceItemCount: packet.atoms.length,
+        requiredObligationCount: packet.atoms.filter((atom) => atom.source === "obligation").length,
+        materialItemCount: packet.atoms.filter((atom) => atom.sourcePath.startsWith("storyMaterial.")).length,
+        existingSectionCount: body.existingSections?.length ?? 0, currentSuggestionCount: 0, packetized: true,
+      };
+      const routingPrompt = buildRoutingPrompt({
+        beats: body.arcTemplate.beats as unknown as Array<Record<string, unknown>>,
+        packet,
+      });
+      const routingResult = await billableCall(
+        routingPrompt.system,
+        routingPrompt.user,
+        4096,
+        { type: "json_schema", json_schema: { name: "outline_evidence_routing", strict: true, schema: ROUTING_RESPONSE_SCHEMA } },
+        `outline-route-batch-${packet.packetOrdinal.toString().padStart(3, "0")}`,
+        (content) => parseRoutingResponse(content, body.arcTemplate.beats.length, routeKnownIDs),
+      );
+      const assignments = parseRoutingResponse(routingResult.content, body.arcTemplate.beats.length, routeKnownIDs);
+      beatRouting = mergeRoutingAssignments({
+        beatIDs, existing: beatRouting, assignments, evidenceByID: planningContext.evidenceByID,
+        materialByID: planningContext.materialByID,
+        obligationIDs: new Set(recipeObligations.map((obligation) => obligation.id)),
+      }) as BeatRouting;
+      planningState = {
+        ...planningState, version: 2, beatRouting,
+        routingBatchesCompleted: [
+          ...((planningState as any).routingBatchesCompleted ?? []), packet.packetOrdinal,
+        ],
+        routingPacketCount: packet.packetCount,
+      };
+      await updateRun({ planning_state: planningState });
+    }
+    const requiredIDs = recipeObligations.filter((obligation) => obligation.required).map((obligation) => obligation.id);
+    const routingGaps = requiredRoutingGaps(beatRouting, requiredIDs);
+    if (routingGaps.length > 0 && !(planningState as any).routingRepairCompleted) {
+      const repairAtoms = routingAtoms.filter((atom) => routingGaps.includes(atom.parentID ?? atom.id));
+      const repairPacket: PlanningEvidencePacket = {
+        packetOrdinal: 1, packetCount: 1, atoms: repairAtoms,
+        estimatedInputTokens: Math.ceil(JSON.stringify(repairAtoms).length / 4),
+        promptBytes: new TextEncoder().encode(JSON.stringify(repairAtoms)).byteLength,
+      };
+      const repairPrompt = buildRoutingPrompt({
+        beats: body.arcTemplate.beats as unknown as Array<Record<string, unknown>>,
+        packet: repairPacket,
+      });
+      const repairResult = await billableCall(
+        `${repairPrompt.system} Route every missing required obligation at least once.`,
+        repairPrompt.user,
+        4096,
+        { type: "json_schema", json_schema: { name: "outline_evidence_routing_repair", strict: true, schema: ROUTING_RESPONSE_SCHEMA } },
+        "outline-route-repair-001",
+        (content) => parseRoutingResponse(content, body.arcTemplate.beats.length, routeKnownIDs),
+      );
+      beatRouting = mergeRoutingAssignments({
+        beatIDs, existing: beatRouting, assignments: parseRoutingResponse(repairResult.content, body.arcTemplate.beats.length, routeKnownIDs),
+        evidenceByID: planningContext.evidenceByID, materialByID: planningContext.materialByID,
+        obligationIDs: new Set(recipeObligations.map((obligation) => obligation.id)),
+      }) as BeatRouting;
+      planningState = {
+        ...planningState, version: 2, beatRouting,
+        routingRepairCompleted: true,
+        routingBatchesCompleted: [
+          ...((planningState as any).routingBatchesCompleted ?? []),
+          "outline-route-repair-001",
+        ],
+      };
+      await updateRun({ planning_state: planningState });
+    }
+    dispatchTelemetry = {
+      packetOrdinal: 1, packetCount: 1,
+      beatIndexes: body.arcTemplate.beats.map((_, index) => index),
+      beatIDs: body.arcTemplate.beats.map((beat) => beat.id),
+      evidenceItemCount: Object.keys(planningContext.evidenceByID).length,
+      requiredObligationCount: recipeObligations.filter((obligation) => obligation.required).length,
+      materialItemCount: Object.keys(planningContext.materialByID).length,
+      existingSectionCount: body.existingSections?.length ?? 0, currentSuggestionCount: 0, packetized: false,
+    };
+    const allocationCompleted = Array.isArray((planningState as any).allocationBatchesCompleted) &&
+      (planningState as any).allocationBatchesCompleted.includes("outline-plan-001");
+    const persistedAllocation = (planningState as any).mergedAllocation && typeof (planningState as any).mergedAllocation === "object"
+      ? new Map(Object.entries((planningState as any).mergedAllocation) as Array<[string, Allocation]>)
+      : null;
+    const plannedAllocation = allocationCompleted && persistedAllocation
+      ? persistedAllocation
+      : await planSectionAllocation(
+        body,
+        openaiKey,
+        billableCall,
+        recipeObligations,
+        beatRouting,
+      );
     // PR 5: plannedAllocation IS the residual count (existingSections already accounted for).
     // Previously we called adjustAllocationForExistingSections here, which double-subtracted
     // existing-section counts because the planner was already instructed (via
@@ -3351,48 +3632,120 @@ async function runSuggestionJob(
       plannerAllocationValidatedCountsByBeat: allocationCountsByBeat,
       recipeObligations,
     };
-    const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial);
-    const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations, body.arcTemplate.name);
-    const responseFormat = {
-      type: "json_schema",
-      json_schema: { name: "outline_suggestions_by_beat", strict: true, schema: responseSchema },
-    };
     let result: { suggestions: Suggestion[]; warnings: string[] } = { suggestions: [], warnings: [] };
-    plannedMinimumSections = Array.from(allocation.values())
-      .reduce((sum, plan) => sum + plan.minSections, 0);
+    plannedMinimumSections = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
     diagnostics = { ...diagnostics, stage: "outline_generation", plannedMinimumSections };
-    if (plannedMinimumSections > 0) {
-      const rawResponse = await billableCall(
-        system,
-        userPrompt,
-        16000,
-        responseFormat,
-        "outline-suggestions",
-        (content) => {
-          const flattened = flattenSuggestionResponse(JSON.parse(content), body.arcTemplate.beats);
-          diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
-          const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
-          const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []);
-          if (merged.length > MAX_PLANNED_SECTIONS) {
-            throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
-          }
-          return validated;
-        },
-      );
-      const flattened = flattenSuggestionResponse(JSON.parse(rawResponse.content), body.arcTemplate.beats);
-      const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
-      result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []), warnings: validated.warnings };
-      diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions) };
-      await updateRun({
-        planning_state: planningState = {
+    const beatOrder = body.arcTemplate.beats.map((beat) => beat.id);
+    let generatedSuggestions: Suggestion[] = Array.isArray(claimedRun.suggestions)
+      ? claimedRun.suggestions as Suggestion[]
+      : [];
+    const completedBeatPackets = new Set<string>(
+      Array.isArray((planningState as any).generatedBeatPackets)
+        ? (planningState as any).generatedBeatPackets.map(String)
+        : [],
+    );
+    const allEvidenceAtoms = Object.values(planningContext.evidenceByID);
+    const allMaterialAtoms = Object.values(planningContext.materialByID);
+    const allMaterialItems = STORY_MATERIAL_CATEGORIES.flatMap((category) =>
+      (storyMaterial![category] as StoryMaterialItem[]).map((item) => ({ ...item, category } as StoryMaterialItem & { category: string }))
+    );
+    for (let beatIndex = 0; beatIndex < body.arcTemplate.beats.length; beatIndex++) {
+      const beat = body.arcTemplate.beats[beatIndex];
+      const plan = allocation.get(beat.id) ?? { minSections: 0, rationale: "no allocation" };
+      const route = beatRouting[beat.id] ?? { obligationIDs: [], evidenceIDs: [], materialIDs: [] };
+      const routeIDs = new Set([...route.evidenceIDs, ...route.materialIDs]);
+      const routedAtoms = [...allEvidenceAtoms, ...allMaterialAtoms].filter((atom) => routeIDs.has(atom.id) || (atom.parentID && routeIDs.has(atom.parentID)));
+      const packets = packetizeAtoms(routedAtoms, 7000);
+      const beatPackets = packets.length > 0 ? packets : [{ packetOrdinal: 1, packetCount: 1, atoms: [], estimatedInputTokens: 0, promptBytes: 0 }];
+      const existingForBeat = (body.existingSections ?? []).filter((section) => section.storyArcBeatID === beat.id);
+      let beatSuggestions = generatedSuggestions.filter((suggestion) => suggestion.storyArcBeatID === beat.id);
+      for (const packet of beatPackets) {
+        const action = `outline-suggestions-beat-${beatIndex.toString().padStart(3, "0")}-part-${packet.packetOrdinal.toString().padStart(3, "0")}`;
+        if (completedBeatPackets.has(action)) continue;
+        const partAllocation = packet.packetOrdinal === 1 ? plan : { ...plan, minSections: 0 };
+        const previousBeat = beatIndex > 0 ? body.arcTemplate.beats[beatIndex - 1] : undefined;
+        const nextBeat = beatIndex + 1 < body.arcTemplate.beats.length ? body.arcTemplate.beats[beatIndex + 1] : undefined;
+        const priorSuggestion = generatedSuggestions.filter((suggestion) => suggestion.storyArcBeatID === previousBeat?.id).at(-1);
+        const prompt = buildBeatLocalPrompt({
+          req: body,
+          beat,
+          beatIndex,
+          allocation: plan,
+          obligations: recipeObligations,
+          routing: route,
+          evidenceAtoms: [...allEvidenceAtoms, ...allMaterialAtoms],
+          materialItems: allMaterialItems,
+          existingSections: existingForBeat,
+          currentSections: beatSuggestions,
+          previousTerminalState: priorSuggestion?.terminalState ?? priorSuggestion?.terminalBeat ?? null,
+          nextBeat: nextBeat ? { id: nextBeat.id, label: nextBeat.label, role: nextBeat.role } : undefined,
+          partOrdinal: packet.packetOrdinal,
+          partCount: beatPackets.length,
+        });
+        dispatchTelemetry = {
+          packetOrdinal: packet.packetOrdinal,
+          packetCount: beatPackets.length,
+          beatIndexes: [beatIndex],
+          beatIDs: [beat.id],
+          evidenceItemCount: route.evidenceIDs.length,
+          requiredObligationCount: route.obligationIDs.length,
+          materialItemCount: route.materialIDs.length,
+          existingSectionCount: existingForBeat.length,
+          currentSuggestionCount: beatSuggestions.length,
+          packetized: beatPackets.length > 1,
+        };
+        const responseSchema = buildSuggestionResponseSchema([beat], new Map([[beat.id, partAllocation]]), recipeObligations, body.arcTemplate.name);
+        const rawResponse = await billableCall(
+          prompt.system,
+          prompt.user,
+          16000,
+          { type: "json_schema", json_schema: { name: `outline_suggestions_beat_${beatIndex}`, strict: true, schema: responseSchema } },
+          action,
+          (content) => {
+            const flattened = flattenSuggestionResponse(JSON.parse(content), [beat]);
+            return validateSuggestions(flattened, new Set([beat.id]), new Map([[beat.id, partAllocation]]), recipeObligations, body.arcTemplate);
+          },
+        );
+        const flattened = flattenSuggestionResponse(JSON.parse(rawResponse.content), [beat]);
+        const validated = validateSuggestions(flattened, new Set([beat.id]), new Map([[beat.id, partAllocation]]), recipeObligations, body.arcTemplate);
+        beatSuggestions = mergeSuggestionsByBeatOrder([beat.id], beatSuggestions, validated.suggestions);
+        generatedSuggestions = mergeSuggestionsByBeatOrder(beatOrder, generatedSuggestions.filter((suggestion) => suggestion.storyArcBeatID !== beat.id), beatSuggestions);
+        latestValidSuggestions = generatedSuggestions;
+        planningState = {
           ...planningState,
           version: 2,
-          generatedBeatPackets: body.arcTemplate.beats.map((beat) => `${beat.id}:part-001`),
-        },
-      });
-      if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
-        throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
+          generatedBeatPackets: [...((planningState as any).generatedBeatPackets ?? []), action],
+        };
+        await updateRun({ suggestions: generatedSuggestions, planning_state: planningState });
       }
+      const finalBeatValidation = validateSuggestions(
+        { suggestions: beatSuggestions },
+        new Set([beat.id]),
+        new Map([[beat.id, plan]]),
+        recipeObligations,
+        body.arcTemplate,
+      );
+      beatSuggestions = finalBeatValidation.suggestions;
+    }
+    const finalValidated = validateSuggestions(
+      { suggestions: generatedSuggestions },
+      beatIds,
+      allocation,
+      recipeObligations,
+      body.arcTemplate,
+    );
+    result = {
+      suggestions: mergeSuggestionsByBeatOrder(beatOrder, finalValidated.suggestions, []),
+      warnings: finalValidated.warnings,
+    };
+    diagnostics = {
+      ...diagnostics,
+      stage: "outline_validated",
+      firstPassParsedCounts: countSuggestionsByBeat(result.suggestions),
+      firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions),
+    };
+    if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
+      throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
     }
 
     // Structural validation above is the completion gate. The following checks
@@ -3420,15 +3773,99 @@ async function runSuggestionJob(
         : {}),
     };
 
-    // Recipe coverage and novel scale remain useful diagnostics for later
-    // review, but they are not semantic correctness gates for Suggest Sections.
-    const coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
+    // Coverage repair is a real targeted stage, not a global expansion fallback.
+    let coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
+    const completedCoverageRepairs = new Set<string>(
+      Array.isArray((planningState as any).coverageRepairPacketsCompleted)
+        ? (planningState as any).coverageRepairPacketsCompleted.map(String)
+        : [],
+    );
+    for (const beat of body.arcTemplate.beats) {
+      const missingForBeat = coverage.missingRequired.filter((obligation) =>
+        (beatRouting[beat.id]?.obligationIDs ?? []).includes(obligation.id)
+      );
+      if (missingForBeat.length === 0) continue;
+      const action = `outline-obligation-repair-beat-${body.arcTemplate.beats.indexOf(beat).toString().padStart(3, "0")}-part-001`;
+      if (completedCoverageRepairs.has(action)) continue;
+      const route = beatRouting[beat.id] ?? { obligationIDs: [], evidenceIDs: [], materialIDs: [] };
+      const repairRoute = {
+        ...route,
+        obligationIDs: missingForBeat.map((obligation) => obligation.id),
+      };
+      const repairPrompt = buildBeatLocalPrompt({
+        req: body,
+        beat,
+        beatIndex: body.arcTemplate.beats.indexOf(beat),
+        allocation: { minSections: 0, rationale: "targeted obligation repair" },
+        obligations: missingForBeat,
+        routing: repairRoute,
+        evidenceAtoms: [...allEvidenceAtoms, ...allMaterialAtoms],
+        materialItems: allMaterialItems,
+        existingSections: (body.existingSections ?? []).filter((section) => section.storyArcBeatID === beat.id),
+        currentSections: result.suggestions.filter((suggestion) => suggestion.storyArcBeatID === beat.id),
+        previousTerminalState: null,
+        nextBeat: undefined,
+        partOrdinal: 1,
+        partCount: 1,
+      });
+      dispatchTelemetry = {
+        packetOrdinal: 1,
+        packetCount: 1,
+        beatIndexes: [body.arcTemplate.beats.indexOf(beat)],
+        beatIDs: [beat.id],
+        evidenceItemCount: repairRoute.evidenceIDs.length,
+        requiredObligationCount: missingForBeat.length,
+        materialItemCount: repairRoute.materialIDs.length,
+        existingSectionCount: (body.existingSections ?? []).filter((section) => section.storyArcBeatID === beat.id).length,
+        currentSuggestionCount: result.suggestions.filter((suggestion) => suggestion.storyArcBeatID === beat.id).length,
+        packetized: false,
+      };
+      const repairSchema = buildSuggestionResponseSchema(
+        [beat], new Map([[beat.id, { minSections: 0, rationale: "targeted repair" }]]),
+        missingForBeat, body.arcTemplate.name,
+      );
+      const repairResponse = await billableCall(
+        `${repairPrompt.system}\nRepair only these missing required obligations: ${missingForBeat.map((obligation) => `${obligation.id}: ${obligation.statement}`).join(" | ")}`,
+        repairPrompt.user,
+        12000,
+        { type: "json_schema", json_schema: { name: `outline_obligation_repair_beat_${body.arcTemplate.beats.indexOf(beat)}`, strict: true, schema: repairSchema } },
+        action,
+        (content) => {
+          const flattened = flattenSuggestionResponse(JSON.parse(content), [beat]);
+          return validateSuggestions(flattened, new Set([beat.id]), new Map([[beat.id, { minSections: 0, rationale: "targeted repair" }]]), recipeObligations, body.arcTemplate);
+        },
+      );
+      const additions = validateSuggestions(
+        flattenSuggestionResponse(JSON.parse(repairResponse.content), [beat]),
+        new Set([beat.id]),
+        new Map([[beat.id, { minSections: 0, rationale: "targeted repair" }]]),
+        recipeObligations,
+        body.arcTemplate,
+      ).suggestions;
+      result.suggestions = mergeSuggestionsByBeatOrder(beatOrder, result.suggestions, additions);
+      planningState = {
+        ...planningState,
+        version: 2,
+        coverageRepairPacketsCompleted: [
+          ...((planningState as any).coverageRepairPacketsCompleted ?? []), action,
+        ],
+      };
+      await updateRun({ suggestions: result.suggestions, planning_state: planningState });
+      coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
+    }
+    coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
     diagnostics = {
       ...diagnostics,
       recipeObligationCoverage: coverage.covered,
       missingRequiredRecipeObligations: coverage.missingRequired.map((obligation) => obligation.id),
       novelScale: evaluateNovelScale(result.suggestions, body.existingSections ?? []),
     };
+    if (coverage.missingRequired.length > 0) {
+      result.warnings = [...new Set([
+        ...result.warnings,
+        `Unresolved required recipe obligations after bounded repair: ${coverage.missingRequired.map((obligation) => obligation.id).join(", ")}`,
+      ])];
+    }
     await updateRun({
       status: "completed",
       suggestions: result.suggestions,

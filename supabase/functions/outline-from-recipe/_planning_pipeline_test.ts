@@ -2,7 +2,10 @@ import {
   allocationBeatSummary,
   compilePlanningContextV2,
   dedupeMaterialBySourceReference,
+  mergeRoutingAssignments,
   packetizeAtoms,
+  parseRoutingResponse,
+  requiredRoutingGaps,
   splitLosslessText,
 } from "./_planning_pipeline.ts";
 import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
@@ -166,4 +169,47 @@ Deno.test("allocation summaries carry counts instead of full evidence prose", ()
   assertEquals(summary.routedEvidenceCount, 12);
   assertEquals("fullRecipe" in summary, false);
   assertNotEquals(summary, undefined);
+});
+
+Deno.test("Spark and Aftertaste are lossless evidence atoms, not unbounded spine fields", () => {
+  const context = compilePlanningContextV2(fixture());
+  const atomText = Object.values(context.evidenceByID).map((atom) => atom.text)
+    .join("\n");
+  assert(atomText.includes("The spark."));
+  assert(atomText.includes("The ending."));
+  assertEquals(context.globalSpine.storySpark, undefined);
+  assertEquals(context.globalSpine.aftertaste, undefined);
+});
+
+Deno.test("routing supports multi-beat assignments and required-obligation gaps", () => {
+  const context = compilePlanningContextV2(fixture());
+  const atoms = Object.values(context.evidenceByID);
+  const routing = mergeRoutingAssignments({
+    beatIDs: ["beat-0", "beat-1", "beat-2"],
+    assignments: [
+      { evidenceID: "R1", beatIndexes: [0, 2] },
+      {
+        evidenceID: atoms.find((atom) =>
+          atom.sourcePath.includes("selectedStorySpark")
+        )!.id,
+        beatIndexes: [1],
+      },
+    ],
+    evidenceByID: context.evidenceByID,
+    materialByID: context.materialByID,
+    obligationIDs: new Set(["R1", "R2"]),
+  });
+  assertEquals(routing["beat-0"].obligationIDs, ["R1"]);
+  assertEquals(routing["beat-2"].obligationIDs, ["R1"]);
+  assertEquals(requiredRoutingGaps(routing, ["R1", "R2"]), ["R2"]);
+  assertEquals(
+    parseRoutingResponse(
+      JSON.stringify({
+        assignments: [{ evidenceID: "R1", beatIndexes: [0, 2] }],
+      }),
+      3,
+      new Set(["R1"]),
+    ),
+    [{ evidenceID: "R1", beatIndexes: [0, 2] }],
+  );
 });

@@ -556,12 +556,11 @@ Deno.test("sparse recipe context is preserved for minimum-only allocation and ou
   const plannerPrompt = buildAllocationPrompt(sparseRequest as any);
   const plannerInput = plannerPrompt.user;
 
-  // Both planner and generator receive the same complete recipe object, not a
-  // character-name-derived summary.
-  assertEquals(plannerInput.includes("Monsters kill humans"), true);
+  // Allocation receives bounded summaries/counts, not full authored prose.
+  assertEquals(plannerInput.includes("Monsters kill humans"), false);
   assertEquals(plannerInput.includes('"name": "Douche"'), true);
-  assertEquals(user.includes("Monsters kill humans"), true);
-  assertEquals(user.includes("Douche"), true);
+  assertEquals(user.includes("Monsters kill humans"), false);
+  assertEquals(user.includes("Douche"), false);
   assertEquals(system.includes("30-60"), false);
   assertEquals(system.includes("Opening Image: minimum 1 section"), true);
   assertEquals(system.includes("Break into Two: minimum 1 section"), true);
@@ -2041,7 +2040,7 @@ Deno.test("story material enrichment validates provenance and remains inspectabl
 Deno.test("enrichment prompt preserves sparse recipe facts and separates planner invention", () => {
   const prompt = buildEnrichmentPrompt(sparseRequest as any);
   assertEquals(prompt.system.includes("preserve, connect, and deepen supplied material"), true);
-  assertEquals(prompt.system.includes("source=recipe"), true);
+  assertEquals(prompt.system.includes("source=recipe"), false);
   assertEquals(prompt.system.includes("source=planner"), true);
   assertEquals(prompt.user.includes("Monsters kill humans"), true);
   assertEquals(prompt.user.includes("Douche"), true);
