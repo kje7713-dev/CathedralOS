@@ -156,7 +156,8 @@ export type BillableLLMErrorCode =
   | "usage_event_insert_failed"
   | "credit_charge_failed"
   | "idempotency_unique_violation"
-  | "provider_attempt_allocation_failed";
+  | "provider_attempt_allocation_failed"
+  | "outline_stage_state_failed";
 
 export class BillableLLMError extends Error {
   readonly code: BillableLLMErrorCode;
@@ -200,6 +201,35 @@ async function reconcileOutlineRun(adminClient: unknown, runID: string | null | 
     const result = await (adminClient as any).rpc("reconcile_outline_provider_attempts", { p_run_id: runID });
     if (result?.error) console.error(`[billable-llm] outline reconciliation failed: ${JSON.stringify(result.error)}`);
   } catch (error) { console.error(`[billable-llm] outline reconciliation threw: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+async function loadOutlineStageTotals(
+  adminClient: unknown,
+  req: BillableLLMRequest<unknown>,
+): Promise<{ rawChargeCredits: number; settledChargeCredits: number }> {
+  const featureRunID = req.usageContext.featureRunID;
+  const logicalStageKey = req.usageContext.logicalStageKey;
+  if (!featureRunID || !logicalStageKey) return { rawChargeCredits: 0, settledChargeCredits: 0 };
+  try {
+    const result = await (adminClient as any).rpc("get_outline_stage_totals", {
+      p_feature_run_id: featureRunID,
+      p_logical_stage_key: logicalStageKey,
+    });
+    const row = Array.isArray(result?.data) ? result.data[0] : result?.data;
+    if (result?.error || !row) {
+      throw new Error(result?.error?.message ?? "outline stage totals unavailable");
+    }
+    return {
+      rawChargeCredits: Number(row.raw_charge_credits ?? 0),
+      settledChargeCredits: Number(row.settled_charge_credits ?? 0),
+    };
+  } catch (error) {
+    throw new BillableLLMError(
+      "outline_stage_state_failed",
+      error instanceof Error ? error.message : "outline stage totals unavailable",
+      error,
+    );
+  }
 }
 
 async function beginOutlineProviderAttempt(
@@ -288,7 +318,20 @@ export async function runBillableLLM<T>(
   // 1. Pre-flight credit check.
   const preflightUsage = req.preflightUsageOverride ??
     defaultPreflightUsage(req.maxOutputTokens);
-  const estimatedCharge = computeMaxChargeCredits(preflightUsage, pricing);
+  let estimatedCharge: number;
+  if (req.purpose === "outline-suggestion") {
+    const prior = await loadOutlineStageTotals(deps.adminClient, req);
+    const estimatedRaw = computeRawChargeCredits(preflightUsage, pricing);
+    const targetAfterPacket = Math.max(
+      pricing.minimumChargeCredits,
+      prior.rawChargeCredits + estimatedRaw,
+    );
+    // The stage minimum is a single logical-stage liability. Only the
+    // positive delta beyond prior settled debits must be affordable now.
+    estimatedCharge = Math.max(0, targetAfterPacket - prior.settledChargeCredits);
+  } else {
+    estimatedCharge = computeMaxChargeCredits(preflightUsage, pricing);
+  }
   const entitlement = await deps.creditStore.loadOrDefault(req.userID);
   if (availableCredits(entitlement) < estimatedCharge) {
     throw new BillableLLMError(

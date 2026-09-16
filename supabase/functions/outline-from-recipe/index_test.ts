@@ -16,6 +16,7 @@ Deno.test("outline suggestion polling contract preserves structured failures and
 import {
   buildAllocationPrompt,
   buildExpansionPrompt,
+  outlineLogicalStageFamily,
   buildPrompt,
   buildBeatLocalPrompt,
   buildSuggestionResponseSchema,
@@ -570,6 +571,20 @@ Deno.test("sparse recipe context is preserved for minimum-only allocation and ou
   assertEquals(system.includes("Break into Two: minimum 1 section"), true);
   assertEquals(system.includes("targetSections"), false);
   assertEquals(system.includes("maxSections"), false);
+});
+
+
+Deno.test("all outline physical actions share explicit logical stage families", () => {
+  assertEquals(outlineLogicalStageFamily("outline-route-batch-001"), "routing");
+  assertEquals(outlineLogicalStageFamily("outline-route-batch-002"), "routing");
+  assertEquals(outlineLogicalStageFamily("outline-route-repair-001"), "routing");
+  assertEquals(outlineLogicalStageFamily("outline-obligation-repair-beat-001-part-001"), "coverage-repair");
+  assertEquals(outlineLogicalStageFamily("outline-obligation-repair-beat-004-part-002"), "coverage-repair");
+  assertEquals(outlineLogicalStageFamily("story-material-enrichment-001"), "enrichment");
+  assertEquals(outlineLogicalStageFamily("story-material-gapfill-characters-001"), "enrichment");
+  assertEquals(outlineLogicalStageFamily("outline-plan-001"), "allocation");
+  assertEquals(outlineLogicalStageFamily("outline-suggestions-beat-003-part-002"), "suggestions");
+  assertEquals(outlineLogicalStageFamily("outline-expansion-round-002"), "expansion");
 });
 
 Deno.test("beat packet carries only packet-local obligation chunks", () => {

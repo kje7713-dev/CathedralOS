@@ -78,6 +78,18 @@ import {
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-5.6-luna";
 
+/** Maps every physical outline action to one logical billing/cache stage. */
+export function outlineLogicalStageFamily(action: string): string {
+  if (action.startsWith("story-material-enrichment-")) return "enrichment";
+  if (action.startsWith("story-material-gapfill-")) return "enrichment";
+  if (action.startsWith("outline-route-")) return "routing";
+  if (action.startsWith("outline-plan-")) return "allocation";
+  if (action.startsWith("outline-suggestions-")) return "suggestions";
+  if (action.startsWith("outline-obligation-repair-")) return "coverage-repair";
+  if (action.startsWith("outline-expansion-")) return "expansion";
+  return action;
+}
+
 export const DRAMATIC_FUNCTIONS = [
   "setup", "incitement", "commitment", "escalation", "complication",
   "reversal", "crisis", "climax", "consequence", "resolution",
@@ -3070,15 +3082,7 @@ async function runSuggestionJob(
         { role: "system", content: system },
         { role: "user", content: user },
       ];
-      const stageFamily = action.startsWith("outline-expansion-")
-        ? "expansion"
-        : action.startsWith("story-material-enrichment")
-        ? "enrichment"
-        : action.startsWith("outline-plan")
-        ? "allocation"
-        : action.startsWith("outline-suggestions")
-        ? "suggestions"
-        : action;
+      const stageFamily = outlineLogicalStageFamily(action);
       // Prompt targets guide packetization; they are not product failure switches.
       // A large request must be split or routed locally, never rejected merely
       // because aggregate authored evidence is large.
