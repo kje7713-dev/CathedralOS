@@ -7,7 +7,6 @@ import {
   OpenAIProvider,
 } from "../generate-story/_provider.ts";
 import {
-  assertPromptWithinBudget,
   buildCompactPlanningView,
   compactExistingSections,
   compactText,
@@ -15,7 +14,16 @@ import {
   compactObligations,
   compactRecipe,
   stableJSONStringify,
+  promptMetrics,
 } from "./_prompt_context.ts";
+import {
+  allocationBeatSummary,
+  compilePlanningContextV2,
+  dedupeMaterialBySourceReference,
+  mergeMaterialBatches,
+  packetizeAtoms,
+  type PlanningEvidencePacket,
+} from "./_planning_pipeline.ts";
 import {
   type RecipeObligation,
   deriveRecipeObligations,
@@ -628,14 +636,33 @@ export function isCompatibleStoryMaterialEnrichment(material: StoryMaterialEnric
   return material.sourceRecipeHash === provenance.sourceRecipeHash && material.sourceRecipeVersion === provenance.sourceRecipeVersion && material.sourcePromptPackID === provenance.sourcePromptPackID && material.sourcePromptPackName === provenance.sourcePromptPackName && material.format === format;
 }
 
-export function buildEnrichmentPrompt(req: OutlineFromRecipeRequest, candidate?: StoryMaterialEnrichment, repairReason?: string): { system: string; user: string } {
+export function buildEnrichmentPrompt(
+  req: OutlineFromRecipeRequest,
+  candidate?: StoryMaterialEnrichment,
+  repairReason?: string,
+  packet?: PlanningEvidencePacket,
+): { system: string; user: string } {
   const format = requestedStoryMaterialFormat(req);
   const repairInstruction = repairReason
     ? `\n\nThe previous enrichment response was rejected: ${repairReason}. Repair it by using source=recipe only with an exact handle from recipeMaterialHandles. Never copy an item id into sourceReference, invent a handle, or use a human-readable label as a handle. Use source=planner with sourceReference null for anything that cannot be tied to an exact handle.`
     : "";
   return {
     system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Use source=recipe only with one of the server-provided recipe handles; use source=planner for all connective or newly invented material and use null sourceReference. The server, not you, owns recipe provenance. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
-    user: JSON.stringify({ recipe: req.recipe, recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)), priorEnrichment: candidate ?? null, arcTemplate: req.arcTemplate, hint: req.hint ?? null, requestedFormat: format }, null, 2),
+    user: JSON.stringify(packet
+      ? {
+        globalSpine: {
+          project: req.recipe.project,
+          storySpark: req.recipe.selectedStorySpark,
+          aftertaste: req.recipe.selectedAftertaste,
+          requestedFormat: format,
+          beats: req.arcTemplate.beats.map((beat, beatIndex) => ({ beatIndex, id: beat.id, role: beat.role, label: beat.label })),
+        },
+        recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)),
+        planningEvidencePacket: packet,
+        priorEnrichment: candidate ?? null,
+        hint: req.hint ?? null,
+      }
+      : { recipe: req.recipe, recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)), priorEnrichment: candidate ?? null, arcTemplate: req.arcTemplate, hint: req.hint ?? null, requestedFormat: format }, null, 2),
   };
 }
 
@@ -1087,7 +1114,10 @@ export function mergeCanonicalRecipeMaterial(
   for (const category of STORY_MATERIAL_CATEGORIES) {
     const existing = (candidate[category] as StoryMaterialItem[]).filter((item) => !canonicalIDs.has(item.id));
     const canonicalItems = (canonical[category] as StoryMaterialItem[]).filter((item) => item.source === "recipe");
-    (merged[category] as StoryMaterialItem[]) = [...existing, ...canonicalItems];
+    (merged[category] as StoryMaterialItem[]) = dedupeMaterialBySourceReference([
+      ...existing,
+      ...canonicalItems,
+    ]);
   }
 
   validateStoryMaterialEnrichment(merged, { recipe });
@@ -1964,13 +1994,34 @@ For every Story Arc beat, determine the minimum number of NEW dramatic sections 
 
 Output JSON only. No commentary, no prose.`;
 
-  const planningView = buildCompactPlanningView(req, obligations, req.storyMaterialEnrichment);
+  const materialIndex = compactMaterial(req.storyMaterialEnrichment) as Array<Record<string, unknown>>;
+  const recipe = req.recipe as any;
+  const recipeSpine = {
+    project: recipe.project ? { id: recipe.project.id ?? null, summary: recipe.project.summary ?? null } : null,
+    selectedCharacters: (recipe.selectedCharacters ?? []).map((item: any) => ({ id: item?.id ?? null, name: item?.name ?? item?.label ?? null })),
+    selectedRelationships: (recipe.selectedRelationships ?? []).map((item: any) => ({ id: item?.id ?? null, name: item?.name ?? item?.label ?? null })),
+    selectedThemeQuestions: (recipe.selectedThemeQuestions ?? []).map((item: any) => ({ id: item?.id ?? null, name: item?.name ?? item?.label ?? null })),
+    selectedMotifs: (recipe.selectedMotifs ?? []).map((item: any) => ({ id: item?.id ?? null, name: item?.name ?? item?.label ?? null })),
+  };
+  const requiredObligationIDs = obligations.filter((obligation) => obligation.required).map((obligation) => obligation.id);
+  const beatSummaries = req.arcTemplate.beats.map((beat, beatIndex) => {
+    const existing = (req.existingSections ?? []).filter((section) => section.storyArcBeatID === beat.id);
+    return allocationBeatSummary({
+      beatIndex,
+      beat,
+      existingSectionCount: existing.length,
+      existingRecipeRequirementIDs: existing.flatMap((section) => section.recipeRequirementIDs ?? []),
+      requiredObligationIDs,
+      routedEvidenceCount: 0,
+      routedMaterialCounts: Object.fromEntries(STORY_MATERIAL_CATEGORIES.map((category) => [category, materialIndex.filter((item) => item.category === category).length])),
+    });
+  });
   const user = JSON.stringify({
     requestedFormat: requestedStoryMaterialFormat(req),
-    recipe: planningView.recipe,
-    arcTemplate: planningView.arc,
-    obligations: planningView.obligations,
-    materialIndex: planningView.materialIndex,
+    globalSpine: recipeSpine,
+    arcTemplate: { id: req.arcTemplate.id, name: req.arcTemplate.name, beats: req.arcTemplate.beats.map((beat, beatIndex) => ({ beatIndex, role: beat.role, label: beat.label, description: beat.description ?? null })) },
+    beatSummaries,
+    scale: { totalRequiredObligations: requiredObligationIDs.length, totalEvidenceItems: materialIndex.length, totalMaterialItems: materialIndex.length },
     existingSectionsByBeat: Object.fromEntries(req.arcTemplate.beats.map((beat) => [
       beat.id,
       (req.existingSections ?? []).filter((section) => section.storyArcBeatID === beat.id).map((section) => ({
@@ -2853,10 +2904,13 @@ async function runSuggestionJob(
     lease_expires_at: leaseExpiry(),
     attempt_count: priorAttemptCount + 1,
   }).eq("id", runId).eq("status", "pending")
-    .select("id, credit_cost_charged, remaining_credits, story_material, suggestions, diagnostics, planning_context, planning_context_hash, planning_context_version")
+    .select("id, credit_cost_charged, remaining_credits, story_material, suggestions, diagnostics, planning_context, planning_context_hash, planning_context_version, planning_state, planning_state_version")
     .maybeSingle();
   if (claim.error || !claim.data) return;
   const claimedRun: any = claim.data;
+  let planningState: Record<string, unknown> = claimedRun.planning_state && typeof claimedRun.planning_state === "object"
+    ? claimedRun.planning_state
+    : { version: 2, enrichmentBatchesCompleted: [], routingBatchesCompleted: [], allocationBatchesCompleted: [], generatedBeatPackets: [], coverageRepairPacketsCompleted: [] };
   const touchLease = async () => {
     await db.from("outline_suggestion_runs").update({ lease_expires_at: leaseExpiry() }).eq("id", runId).eq("lease_owner", workerToken);
   };
@@ -2905,16 +2959,19 @@ async function runSuggestionJob(
         : action.startsWith("outline-suggestions")
         ? "suggestions"
         : action;
-      const promptLimit = stageFamily === "suggestions" ? 35000 : stageFamily === "allocation" ? 20000 : stageFamily === "enrichment" ? 20000 : 30000;
-      const promptMetrics = assertPromptWithinBudget(stageFamily, messages, promptLimit, {
+      // Prompt targets guide packetization; they are not product failure switches.
+      // A large request must be split or routed locally, never rejected merely
+      // because aggregate authored evidence is large.
+      const measuredPrompt = promptMetrics(messages, {
         recipeBytes: new TextEncoder().encode(JSON.stringify(compactRecipe(body.recipe))).byteLength,
         enrichmentBytes: new TextEncoder().encode(JSON.stringify(compactMaterial(body.storyMaterialEnrichment))).byteLength,
         obligationCount: Array.isArray(body.storyMaterialEnrichment) ? 0 : undefined,
         existingSectionCount: body.existingSections?.length ?? 0,
         currentSuggestionCount: 0,
         materialItemCount: compactMaterial(body.storyMaterialEnrichment).length,
+        packetized: action.includes("batch") || action.includes("beat-") || action.includes("repair"),
       });
-      diagnostics = { ...diagnostics, promptMetrics: { ...(diagnostics.promptMetrics as Record<string, unknown> ?? {}), [action]: promptMetrics } };
+      diagnostics = { ...diagnostics, promptMetrics: { ...(diagnostics.promptMetrics as Record<string, unknown> ?? {}), [action]: measuredPrompt } };
       await updateRun({ diagnostics });
       const stablePrefixHash = await sha256Hex(system);
       const projectIdentity = body.recipe?.project?.id ?? body.outline_id ?? "unknown";
@@ -2940,7 +2997,7 @@ async function runSuggestionJob(
           outputBudget: maxOutputTokens,
           idempotencyKey: `${runId}:${action}`,
           featureRunID: runId,
-          promptBytes: promptMetrics.promptBytes,
+          promptBytes: measuredPrompt.promptBytes,
           stablePrefixBytes: new TextEncoder().encode(system).byteLength,
           volatileBytes: new TextEncoder().encode(user).byteLength,
           logicalStageKey: `${runId}:${action}`,
@@ -3126,8 +3183,8 @@ async function runSuggestionJob(
       }
     }
     if (!storyMaterial) {
-      const generateEnrichment = async (action: string, prior?: StoryMaterialEnrichment, repairReason?: string) => {
-        const enrichmentPrompt = buildEnrichmentPrompt(body, prior, repairReason);
+      const generateEnrichment = async (action: string, prior?: StoryMaterialEnrichment, repairReason?: string, packet?: PlanningEvidencePacket) => {
+        const enrichmentPrompt = buildEnrichmentPrompt(body, prior, repairReason, packet);
         let parsedMaterial: StoryMaterialEnrichment | null = null;
         const enrichmentResult = await billableCall(
           enrichmentPrompt.system,
@@ -3137,8 +3194,16 @@ async function runSuggestionJob(
           action,
           (content) => {
             try {
+              const parsedProviderMaterial = JSON.parse(content) as Record<string, unknown>;
+              for (const category of STORY_MATERIAL_CATEGORIES) {
+                if (Array.isArray(parsedProviderMaterial[category])) {
+                  parsedProviderMaterial[category] = parsedProviderMaterial[category].map((item: any) =>
+                    item?.source === "recipe" ? { ...item, source: "planner", sourceReference: null } : item
+                  );
+                }
+              }
               const normalizedProviderMaterial = normalizeProviderStoryMaterialItemIDs(
-                downgradeUnverifiedProviderRecipeReferences(JSON.parse(content), body.recipe),
+                downgradeUnverifiedProviderRecipeReferences(parsedProviderMaterial, body.recipe),
               );
               parsedMaterial = validateStoryMaterialEnrichment(normalizedProviderMaterial, { allowMissingProvenance: true, recipe: body.recipe });
               // Preserve canonical authored material even when the provider
@@ -3154,7 +3219,7 @@ async function runSuggestionJob(
               throw new StoryMaterialValidationError(error instanceof Error ? error.message : String(error));
             }
             const sufficiency = storyMaterialSufficiency(parsedMaterial, body.recipe, requestedStoryMaterialFormat(body));
-            if (!sufficiency.sufficient) throw new StoryMaterialSufficiencyError(sufficiency.reasons);
+            if (!packet && !sufficiency.sufficient) throw new StoryMaterialSufficiencyError(sufficiency.reasons);
             return parsedMaterial;
           },
         );
@@ -3163,7 +3228,47 @@ async function runSuggestionJob(
       };
       let generated: { material: StoryMaterialEnrichment; result: SuggestionLLMResult };
       try {
-        generated = await generateEnrichment("story-material-enrichment");
+        const evidenceContext = compilePlanningContextV2({
+          recipe: body.recipe as unknown as Record<string, unknown>,
+          arcTemplate: body.arcTemplate,
+          material: {},
+          existingSections: body.existingSections ?? [],
+        });
+        const enrichmentPackets = packetizeAtoms(Object.values(evidenceContext.evidenceByID), 9000);
+        const batchMaterials: StoryMaterialEnrichment[] = [];
+        let totalCreditCost = 0;
+        for (const packet of enrichmentPackets) {
+          const batch = await generateEnrichment(
+            `story-material-enrichment-batch-${packet.packetOrdinal.toString().padStart(3, "0")}`,
+            batchMaterials.at(-1),
+            undefined,
+            packet,
+          );
+          batchMaterials.push(batch.material);
+          totalCreditCost += batch.result.creditCostCharged;
+          const priorState = planningState;
+          planningState = { ...priorState, version: 2, enrichmentBatchesCompleted: [...((priorState as any).enrichmentBatchesCompleted ?? []), packet.packetOrdinal], enrichmentPacketCount: packet.packetCount };
+          await updateRun({
+            story_material: batch.material,
+            planning_state: planningState,
+            diagnostics: { ...diagnostics, enrichmentPacket: packet.packetOrdinal, enrichmentPacketCount: packet.packetCount },
+          });
+        }
+        const mergedBatches = { ...(batchMaterials[0] ?? {}) } as StoryMaterialEnrichment;
+        for (const category of STORY_MATERIAL_CATEGORIES) {
+          (mergedBatches[category] as StoryMaterialItem[]) = mergeMaterialBatches(
+            batchMaterials.map((batch) => batch[category] as StoryMaterialItem[]),
+          );
+        }
+        const batchedMaterial = mergeCanonicalRecipeMaterial(
+          mergedBatches,
+          body.recipe,
+          provenance,
+          requestedStoryMaterialFormat(body),
+        );
+        const finalSufficiency = storyMaterialSufficiency(batchedMaterial, body.recipe, requestedStoryMaterialFormat(body));
+        if (!finalSufficiency.sufficient) throw new StoryMaterialSufficiencyError(finalSufficiency.reasons);
+        generated = { material: batchedMaterial, result: { content: "", creditCostCharged: totalCreditCost, remainingCredits: 0 } };
       } catch (error) {
         if (error instanceof StoryMaterialSufficiencyError) {
           enrichmentDiagnostics = { ...enrichmentDiagnostics, repairAttempted: true, firstPassSufficiencyReasons: error.reasons };
@@ -3191,8 +3296,12 @@ async function runSuggestionJob(
     const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
     // Freeze the deterministic compact view on the durable run so a reclaimed
     // worker cannot silently prompt against a materially different payload.
-    const planningContext = {
-      ...buildCompactPlanningView(body, recipeObligations, storyMaterial),
+    const planningContext = compilePlanningContextV2({
+      recipe: body.recipe as unknown as Record<string, unknown>,
+      arcTemplate: body.arcTemplate,
+      obligations: recipeObligations as unknown as Array<Record<string, unknown>>,
+      material: storyMaterial as unknown as Record<string, unknown>,
+      existingSections: body.existingSections ?? [],
       provenance: {
         sourceRecipeHash: provenance.sourceRecipeHash,
         sourceRecipeVersion: provenance.sourceRecipeVersion,
@@ -3200,12 +3309,18 @@ async function runSuggestionJob(
         projectID: body.recipe?.project?.id ?? null,
         projectLineageID: body.project_lineage_id ?? null,
       },
-    };
+    });
     const planningContextHash = await sha256Hex(stableJSONStringify(planningContext));
     if (claimedRun.planning_context && claimedRun.planning_context_version === 1 && claimedRun.planning_context_hash && claimedRun.planning_context_hash !== planningContextHash) {
       throw new Error("persisted planning context conflicts with the reclaimed request; refusing to silently rebuild a paid outline stage");
     }
-    await updateRun({ planning_context: claimedRun.planning_context ?? planningContext, planning_context_hash: claimedRun.planning_context_hash ?? planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1 });
+    await updateRun({
+      planning_context: claimedRun.planning_context ?? planningContext,
+      planning_context_hash: claimedRun.planning_context_hash ?? planningContextHash,
+      planning_context_version: claimedRun.planning_context_version ?? 2,
+      planning_state: claimedRun.planning_state ?? { version: 2, enrichmentBatchesCompleted: [], routingBatchesCompleted: [], allocationBatchesCompleted: [], generatedBeatPackets: [], coverageRepairPacketsCompleted: [] },
+      planning_state_version: claimedRun.planning_state_version ?? 2,
+    });
     const plannedAllocation = await planSectionAllocation(
       body,
       openaiKey,
@@ -3218,6 +3333,13 @@ async function runSuggestionJob(
     // buildAllocationPrompt) to return minSections as the number of NEW sections still
     // required after considering existingSections.
     const allocation = plannedAllocation;
+    planningState = {
+      ...planningState,
+      version: 2,
+      allocationBatchesCompleted: ["outline-plan-001"],
+      mergedAllocation: Object.fromEntries(allocation),
+    };
+    await updateRun({ planning_state: planningState });
     const allocationCountsByBeat = Object.fromEntries(
       Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections]),
     );
@@ -3261,6 +3383,13 @@ async function runSuggestionJob(
       const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []), warnings: validated.warnings };
       diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions) };
+      await updateRun({
+        planning_state: planningState = {
+          ...planningState,
+          version: 2,
+          generatedBeatPackets: body.arcTemplate.beats.map((beat) => `${beat.id}:part-001`),
+        },
+      });
       if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
         throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
       }

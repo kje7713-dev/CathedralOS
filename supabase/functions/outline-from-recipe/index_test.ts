@@ -944,6 +944,8 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(allocationPrompt.includes("floor, not a target or maximum"), true);
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);
+  assertEquals(source.includes("promptLimit"), false);
+  assertEquals(source.includes("assertPromptWithinBudget"), false);
   assertEquals(/\bsectionCount\b/.test(source), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
   assertEquals(source.includes("maxItems: MAX_PLANNED_SECTIONS"), true);
