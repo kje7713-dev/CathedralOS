@@ -1820,10 +1820,6 @@ export function buildPrompt(
   const system =
     `You are an expert ${requestedStoryMaterialFormat(req)} outliner. Use the complete canonical recipe/project payload below, including its premise, selected characters and their populated fields, selected relationships, themes, motifs, story spark, aftertaste, recipe instructions, and included setting. Treat supplied facts as authoritative; do not infer personality traits from a character name alone. Given the story arc, produce one complete section-by-section outline in this single pass.
 
-Every section must commit to one canonical event. Never use unresolved alternatives such as "X or Y", "someone", "a friend", "somewhere", or multiple possible versions of the event. Choose the specific person, place, object, and action.
-
-Each section must produce a materially new resulting state. Do not create another section merely to restate or reconfirm a relationship change, realization, warning, or trust shift already achieved. Revisit an arc only when a new event escalates, reverses, costs, or transforms it.
-
 ## Container semantics for planning
 
 Choose a container for the scale of one dramatic unit, not to fake novel length:
@@ -1838,7 +1834,7 @@ The expected ranges are literary targets; runtime/provider headroom is not a des
 The JSON planning context contains the authoritative obligations exactly once.
 
 ## Compact planning context
-Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation. When the planning context supplies a concrete location, clue, institution, object, threat mechanism, or consequence, use it rather than generic phrases such as "damaged site", "weak point", "psychic pressure", or "thin place".
+Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation.
 
 ## Use the minimum-only allocation
 
@@ -1846,7 +1842,7 @@ For each beat, generate at least the stated minimum number of distinct sections.
 
 ## Novel-ready section titles
 
-Write concise, evocative section titles suitable for a finished ${requestedStoryMaterialFormat(req)} outline. Prefer a concrete image, location, object, threat, line of tension, or memorable event. Do not summarize the section’s character arc or emotional conclusion in the title. Avoid explanatory constructions such as “X finally…”, “X learns…”, “X chooses…”, “X admits…”, or “X is accepted…”. Do not reveal the resultingChange. Aim for roughly 2–7 words unless a longer title is unusually strong.
+Write each section title as a concise, specific, evocative working title suitable for a ${requestedStoryMaterialFormat(req)} outline or ${requestedStoryMaterialFormat(req)}-ready table of contents. The title should name the concrete dramatic event, decision, reversal, discovery, confrontation, or consequence that this section actually dramatizes. Titles should read like evocative fiction headings, not outline summaries. Prefer images, objects, locations, threats, fragments, or memorable phrases. Avoid the repeated “Character + verb + outcome” construction and stock phrases such as “takes the hit,” “draws the line,” “holds the line,” “finally,” “chooses,” or “is accepted.” Use a character’s name only when it makes the title stronger. Do not restate or lightly rephrase the premise, Story Arc beat label, terminal beat, or section summary. Avoid generic placeholders such as "Setup," "Conflict," "Events," or "Scene"; each title must distinguish its section from the others in the same beat.
 
 ## Generation-ready section contract
 For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. Also return exactly one server-validated dramaticFunction from the allowed functions for that beat; the function must agree with the event and resulting change, not merely repeat the beat label. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields. Do not provide plannedWordRange; the server derives it deterministically from container; it never overrides the Section Contract, container, or natural stopping point.
@@ -1857,8 +1853,6 @@ ${allocationLines}
 
 ## Semantic Story Arc contracts
 ${contractLines}
-
-The Resurrection must not replay the Ordeal at greater scale. The Ordeal must create a cost, revelation, failure, or changed condition that materially alters how the final confrontation works.
 
 Respond with structured JSON matching the schema. This is the only provider call for Suggest Sections; do not return a plan for another model or defer plot decisions.`;
   const planningView = buildCompactPlanningView(

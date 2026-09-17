@@ -52,6 +52,7 @@ private final class StubAuthSignedInForLifecycle: AuthService {
 /// method as a no-op returning sensible defaults; the Accept All lifecycle
 /// tests never trigger a real cloud sync.
 private final class StubProjectSyncServiceForLifecycle: ProjectCloudSyncServiceProtocol {
+    var restoredProject: StoryProject?
     @MainActor func syncProject(_ project: StoryProject, modelContext: ModelContext) async throws {}
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {}
     @MainActor func syncAllProjects(in context: ModelContext) async throws {}
@@ -63,6 +64,24 @@ private final class StubProjectSyncServiceForLifecycle: ProjectCloudSyncServiceP
     @MainActor func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
         ProjectRestoreReport(projects: [], localProjectCountBefore: 0, cloudProjectCountBefore: 0,
                              insertedCount: 0, updatedCount: 0, skippedTombstonedCount: 0, duplicateWarnings: [])
+    }
+    @MainActor func restoreProject(
+        localProjectID: UUID,
+        projectLineageID: UUID,
+        into context: ModelContext,
+        includeTombstoned: Bool
+    ) async throws -> ProjectRestoreReport {
+        if let restoredProject {
+            context.insert(restoredProject)
+            try context.save()
+            return ProjectRestoreReport(
+                projects: [restoredProject], localProjectCountBefore: 0,
+                cloudProjectCountBefore: 1, insertedCount: 1, updatedCount: 0,
+                skippedTombstonedCount: 0, duplicateWarnings: []
+            )
+        }
+        return ProjectRestoreReport(projects: [], localProjectCountBefore: 0, cloudProjectCountBefore: 0,
+                                     insertedCount: 0, updatedCount: 0, skippedTombstonedCount: 0, duplicateWarnings: [])
     }
     @MainActor func reconcileLocalProjectsAgainstTombstones(
         tombstones: SyncTombstoneSet,
@@ -430,6 +449,58 @@ final class AcceptAllLifecycleTests: XCTestCase {
                              "Cross-outline refusal must bump acceptRunRevision so the UI refreshes")
         XCTAssertEqual(coordinator.activeAcceptRun?.outlineID, outlineA,
                        "Coordinator must continue to own the in-flight outline-A run, not silently swap")
+    }
+
+    // 4. A completed server accept must refresh the active project reference
+    // after targeted restore, so the section view immediately sees the restored
+    // canonical outline instead of the pre-restore object graph.
+    func testCompletedAccept_TargetedRestoreRefreshesSectionViewReference() async throws {
+        let projectSync = StubProjectSyncServiceForLifecycle()
+        let restored = StoryProject(name: "Restored")
+        let outline = Outline(name: "Restored Outline")
+        restored.outlines.append(outline)
+        outline.project = restored
+        for index in 0..<56 {
+            let section = OutlineSection(position: index, title: "Section \(index + 1)", summary: "Summary")
+            section.outline = outline
+            outline.sections.append(section)
+        }
+        restored.id = UUID()
+        restored.lineageID = UUID()
+        projectSync.restoredProject = restored
+
+        let defaults = UserDefaults(suiteName: "AcceptAllRefreshTests.\(UUID().uuidString)")!
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedInForLifecycle(),
+            projectSyncService: projectSync,
+            outputSyncService: StubOutputSyncServiceForLifecycle(),
+            defaults: defaults
+        )
+        let service = FakeAcceptAllService()
+        service.statusResponse = .success(AcceptOutlineSectionsResult(
+            runID: "66666666-6666-6666-6666-666666666666", status: "completed",
+            sectionsTotal: 56, sectionsDone: 56, sectionsFailed: 0, error: nil
+        ))
+        let context = try makeInMemoryContext()
+        var refreshedProject: StoryProject?
+
+        coordinator.beginAcceptAll(
+            edgeFunctionURL: URL(string: "https://example.test/functions/v1/accept-outline-sections")!,
+            outlineID: outline.id, projectID: restored.id,
+            projectLineageID: restored.stableLineageID, suggestions: [makeSuggestion()],
+            startingPosition: 0, idempotencyKey: "key-refresh-56", sourceRecipe: makeRecipe(),
+            context: context, service: service,
+            onProjectRefreshed: { localID, lineageID in
+                refreshedProject = try? context.fetch(FetchDescriptor<StoryProject>()).first(where: {
+                    $0.stableLineageID == lineageID || $0.id == localID
+                })
+            }
+        )
+        try await Task.sleep(nanoseconds: 400_000_000)
+
+        XCTAssertEqual(refreshedProject?.outlines.first?.sections.count, 56,
+                       "The section view must see all 56 restored sections immediately.")
+        XCTAssertNil(coordinator.activeAcceptRun)
     }
 
     // 4. Terminal persisted run: terminal state must reconcile/clear and must

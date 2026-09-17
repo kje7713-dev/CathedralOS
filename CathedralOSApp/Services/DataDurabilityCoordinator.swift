@@ -508,7 +508,8 @@ final class DataDurabilityCoordinator: ObservableObject {
         idempotencyKey: String,
         sourceRecipe: PromptPackExportPayload,
         context: ModelContext,
-        service: any SectionEmbedServicing = SectionEmbedService()
+        service: any SectionEmbedServicing = SectionEmbedService(),
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
     ) {
         // Checkpoint 1: Accept All tapped.
         logger.log("accept_all: tapped outline=\(outlineID.uuidString, privacy: .public) project=\(projectID.uuidString, privacy: .public)")
@@ -598,7 +599,11 @@ final class DataDurabilityCoordinator: ObservableObject {
                 self.activeAcceptRun = metadata
                 self.isAcceptRunInitiating = false
                 self.persistAcceptRun(metadata)
-                await self.pollAcceptRun(context: context, service: service)
+                await self.pollAcceptRun(
+                    context: context,
+                    service: service,
+                    onProjectRefreshed: onProjectRefreshed
+                )
             } catch {
                 // Checkpoint 4: POST or run attach failed.
                 logger.error("accept_all: POST failed error=\(error.localizedDescription, privacy: .public)")
@@ -628,7 +633,11 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// project navigation. Terminal completed jobs are reconciled immediately
     /// (and their state cleared so the next Accept All tap can proceed without
     /// the prior run's terminal state blocking).
-    func resumeAcceptAllIfNeeded(context: ModelContext, service: any SectionEmbedServicing = SectionEmbedService()) {
+    func resumeAcceptAllIfNeeded(
+        context: ModelContext,
+        service: any SectionEmbedServicing = SectionEmbedService(),
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+    ) {
         guard isRecoveryReadyForUploads else { return }
         guard acceptPollingTask == nil else { return }
         guard let data = acceptRunDefaults.data(forKey: Self.acceptRunKey),
@@ -642,7 +651,11 @@ final class DataDurabilityCoordinator: ObservableObject {
             logger.log("accept_all_resume: reconciling persisted terminal run=\(metadata.runID, privacy: .public) status=\(metadata.status, privacy: .public)")
             acceptPollingTask = Task { @MainActor [weak self] in
                 guard let self else { return }
-                await self.finishAcceptRun(metadata, context: context)
+                await self.finishAcceptRun(
+                    metadata,
+                    context: context,
+                    onProjectRefreshed: onProjectRefreshed
+                )
                 // finishAcceptRun already clears state; ensure no stale
                 // marker remains.
                 acceptRunDefaults.removeObject(forKey: Self.acceptRunKey)
@@ -651,12 +664,20 @@ final class DataDurabilityCoordinator: ObservableObject {
             logger.log("accept_all_resume: reattaching polling for run=\(metadata.runID, privacy: .public)")
             acceptPollingTask = Task { @MainActor [weak self] in
                 guard let self else { return }
-                await self.pollAcceptRun(context: context, service: service)
+                await self.pollAcceptRun(
+                    context: context,
+                    service: service,
+                    onProjectRefreshed: onProjectRefreshed
+                )
             }
         }
     }
 
-    private func pollAcceptRun(context: ModelContext, service: any SectionEmbedServicing) async {
+    private func pollAcceptRun(
+        context: ModelContext,
+        service: any SectionEmbedServicing,
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+    ) async {
         guard var metadata = activeAcceptRun else { return }
         while !Task.isCancelled {
             do {
@@ -670,7 +691,11 @@ final class DataDurabilityCoordinator: ObservableObject {
                 persistAcceptRun(metadata)
                 acceptRunError = nil
                 if metadata.isTerminal {
-                    await finishAcceptRun(metadata, context: context)
+                    await finishAcceptRun(
+                        metadata,
+                        context: context,
+                        onProjectRefreshed: onProjectRefreshed
+                    )
                     return
                 }
             } catch is CancellationError {
@@ -732,7 +757,11 @@ final class DataDurabilityCoordinator: ObservableObject {
         return false
     }
 
-    private func finishAcceptRun(_ metadata: AcceptRunMetadata, context: ModelContext) async {
+    private func finishAcceptRun(
+        _ metadata: AcceptRunMetadata,
+        context: ModelContext,
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+    ) async {
         if metadata.typedStatus == .completed && metadata.sectionsFailed == 0 && metadata.error == nil {
             do {
                 // Pass both the local project id and the canonical lineage id so
@@ -748,6 +777,11 @@ final class DataDurabilityCoordinator: ObservableObject {
                     includeTombstoned: false
                 )
                 logger.log("Accept All targeted restore complete: \(report.summaryMessage, privacy: .public)")
+                // The targeted restore may insert a new canonical StoryProject
+                // when the local reference was stale. Let the active project
+                // screen replace its object reference immediately, rather than
+                // continuing to render the pre-restore SwiftData object.
+                onProjectRefreshed?(metadata.projectID, metadata.projectLineageID)
             } catch {
                 acceptRunError = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
             }

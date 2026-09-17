@@ -12,17 +12,20 @@ struct OutlineTabView: View {
     @Binding var generationLaunch: OutlineGenerationLaunch?
     @Binding var isGenerationStarting: Bool
     let onGenerationCompleted: (() -> Void)?
+    let onProjectRefreshed: ((UUID, UUID?) -> Void)?
 
     init(
         project: StoryProject,
         generationLaunch: Binding<OutlineGenerationLaunch?>,
         isGenerationStarting: Binding<Bool> = .constant(false),
-        onGenerationCompleted: (() -> Void)? = nil
+        onGenerationCompleted: (() -> Void)? = nil,
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
     ) {
         self.project = project
         self._generationLaunch = generationLaunch
         self._isGenerationStarting = isGenerationStarting
         self.onGenerationCompleted = onGenerationCompleted
+        self.onProjectRefreshed = onProjectRefreshed
     }
 
     var body: some View {
@@ -34,7 +37,8 @@ struct OutlineTabView: View {
                     modelContext: modelContext,
                     generationLaunch: $generationLaunch,
                     isGenerationStarting: $isGenerationStarting,
-                    onGenerationCompleted: onGenerationCompleted
+                    onGenerationCompleted: onGenerationCompleted,
+                    onProjectRefreshed: onProjectRefreshed
                 )
             }
             .padding(.vertical, CathedralTheme.Spacing.base)

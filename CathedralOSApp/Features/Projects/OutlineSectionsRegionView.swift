@@ -66,19 +66,22 @@ struct OutlineSectionsRegionView: View {
     @Binding var generationLaunch: OutlineGenerationLaunch?
     @Binding var isGenerationStarting: Bool
     let onGenerationCompleted: (() -> Void)?
+    let onProjectRefreshed: ((UUID, UUID?) -> Void)?
 
     init(
         project: StoryProject,
         modelContext: ModelContext,
         generationLaunch: Binding<OutlineGenerationLaunch?> = .constant(nil),
         isGenerationStarting: Binding<Bool> = .constant(false),
-        onGenerationCompleted: (() -> Void)? = nil
+        onGenerationCompleted: (() -> Void)? = nil,
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
     ) {
         self.project = project
         self.modelContext = modelContext
         self._generationLaunch = generationLaunch
         self._isGenerationStarting = isGenerationStarting
         self.onGenerationCompleted = onGenerationCompleted
+        self.onProjectRefreshed = onProjectRefreshed
     }
 
     // PR #338: observe DataDurabilityCoordinator so the @Published flips from
@@ -407,15 +410,35 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             Text("This will permanently delete all \(sectionsOrder.count) section\(sectionsOrder.count == 1 ? "" : "s") from the server. This cannot be undone.")
         }
         .sheet(isPresented: $showingSuggestionSheet) {
-            if let outline = currentOutline, let sourceRecipe = suggestionSourceRecipe {
-                OutlineSuggestionsReviewView(
-                    outline: outline,
-                    suggestions: suggestions,
-                    sourceRecipe: sourceRecipe,
-                    project: project,
-                    modelContext: modelContext
-                )
-            }
+            suggestionReviewContent(
+                outline: currentOutline,
+                suggestions: suggestions,
+                sourceRecipe: suggestionSourceRecipe,
+                project: project,
+                modelContext: modelContext,
+                onProjectRefreshed: onProjectRefreshed
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func suggestionReviewContent(
+        outline: Outline?,
+        suggestions: [OutlineSuggestion],
+        sourceRecipe: PromptPackExportPayload?,
+        project: StoryProject,
+        modelContext: ModelContext,
+        onProjectRefreshed: ((UUID, UUID?) -> Void)?
+    ) -> some View {
+        if let outline, let sourceRecipe {
+            OutlineSuggestionsReviewView(
+                outline: outline,
+                suggestions: suggestions,
+                sourceRecipe: sourceRecipe,
+                project: project,
+                modelContext: modelContext,
+                onProjectRefreshed: onProjectRefreshed
+            )
         }
     }
 
