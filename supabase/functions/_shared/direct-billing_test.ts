@@ -95,3 +95,17 @@ Deno.test("direct billing: 270001 estimated input is rejected before entitlement
   );
   assertEquals(rpcCalls.length, 0);
 });
+
+Deno.test("direct billing: provider usage over 270K still settles after dispatch", async () => {
+  const { context, rpcCalls } = makeContext();
+  const charge = await settleDirectUsage(
+    context,
+    "scene-memory-embedding",
+    "text-embedding-3-small",
+    270_001,
+    0,
+    "embedding",
+  );
+  assertEquals(charge, 1.080004);
+  assertEquals(rpcCalls, ["settle_scene_memory_stage"]);
+});

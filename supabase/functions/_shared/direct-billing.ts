@@ -112,9 +112,12 @@ export async function settleDirectUsage(
 ): Promise<number> {
   const inputLimit = inputTokenLimitDetails(inputTokens);
   if (inputLimit) {
-    throw new Error(
-      `input_token_limit_exceeded: actual input is ${inputLimit.estimatedInputTokens} tokens; ` +
-        `Cathedral's hard limit is ${inputLimit.limit} tokens`,
+    // The 270K limit is a pre-dispatch economics guard. Once the provider has
+    // completed, actual usage must still be recorded and charged; otherwise
+    // Cathedral would absorb provider COGS while discarding its usage event.
+    console.warn(
+      `[billing] provider-reported input exceeded preflight limit: ` +
+        `${inputLimit.estimatedInputTokens} > ${inputLimit.limit}; settling actual usage`,
     );
   }
   if (!context.outputID) {

@@ -42,7 +42,10 @@ import {
   settleDirectUsage,
 } from "./direct-billing.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
-import { estimateTokensFromText } from "../generate-story/_generation_models.ts";
+import {
+  estimateTokensFromMessages,
+  estimateTokensFromText,
+} from "../generate-story/_generation_models.ts";
 import {
   normalizeSceneMemory,
   SCENE_MEMORY_GENERATION_INSTRUCTIONS,
@@ -283,14 +286,19 @@ export async function processSectionMemory(
   } else {
     // PR-XXX-A: track LLM call duration for llm_prompts log
     const extractStartMs = Date.now();
-    const extractionInput = body.prior_context
-      ? `${body.prior_context}\n${body.raw_text ?? ""}`
-      : (body.raw_text ?? "");
+    const extractionSystem = SCENE_MEMORY_GENERATION_INSTRUCTIONS;
+    const extractionUser = body.prior_context
+      ? `Prior context (what the model already knows about prior sections — use this to inform what to add/update/supersede in the structured state):\n${body.prior_context}\n\nNow, from the current section's raw_text below, extract structured state:\n${body.raw_text ?? ""}`
+      : body.raw_text ?? "";
+    const extractionMessages = [
+      { content: extractionSystem },
+      { content: extractionUser },
+    ];
     if (billing) {
       await preflightDirectUsage(
         billing,
         OPENAI_MODEL_DEFAULT,
-        estimateTokensFromText(extractionInput),
+        estimateTokensFromMessages(extractionMessages),
         8192,
       );
     }
@@ -306,16 +314,8 @@ export async function processSectionMemory(
         body: JSON.stringify({
           model: OPENAI_MODEL_DEFAULT,
           messages: [
-            {
-              role: "system",
-              content: SCENE_MEMORY_GENERATION_INSTRUCTIONS,
-            },
-            {
-              role: "user",
-              content: body.prior_context
-                ? `Prior context (what the model already knows about prior sections — use this to inform what to add/update/supersede in the structured state):\n${body.prior_context}\n\nNow, from the current section's raw_text below, extract structured state:\n${body.raw_text}`
-                : body.raw_text,
-            },
+            { role: "system", content: extractionSystem },
+            { role: "user", content: extractionUser },
           ],
           max_completion_tokens: 8192,
           temperature: 0.2,
@@ -333,7 +333,7 @@ export async function processSectionMemory(
       }
       const data = await r.json();
       extractionInputTokens = data.usage?.prompt_tokens ??
-        Math.ceil(extractionInput.length / 4);
+        estimateTokensFromMessages(extractionMessages);
       extractionOutputTokens = data.usage?.completion_tokens ?? 0;
       if (data.choices?.[0]?.finish_reason === "length") {
         throw new SectionEmbeddingError(
