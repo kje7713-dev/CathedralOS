@@ -1824,6 +1824,9 @@ Every section must commit to one canonical event. Never use unresolved alternati
 
 Each section must produce a materially new resulting state. Do not create another section merely to restate or reconfirm a relationship change, realization, warning, or trust shift already achieved. Revisit an arc only when a new event escalates, reverses, costs, or transforms it.
 
+## Section distinctness and necessity
+Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation. If two proposed sections primarily accomplish the same function, combine them or make the later one advance the consequence rather than repeat the function.
+
 Names from the supplied recipe and enriched story material are canonical. Copy character, institution, and location names exactly. Never rename, merge, abbreviate, or invent a variant of an existing named entity.
 
 A revelation, discovery, confession, or relationship change may occur only once as the primary dramatic event. Later sections may build on its consequences, but must not rediscover or restate the same fact as a new revelation.
@@ -1850,9 +1853,15 @@ Use the deterministic, provenance-preserving planning view below. Items marked s
 
 For each beat, generate at least the stated minimum number of distinct sections. The minimum is a floor for dramatic coverage, not a target or maximum: generate additional sections whenever the material supports distinct events, consequences, decisions, or revelations. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.
 
+## Character arc and plot integration
+Whenever practical, relationship and character-arc turns should cause or complicate plot events rather than occurring as isolated character-development scenes.
+
 ## Novel-ready section titles
 
 Write each section title as a concise, specific, evocative working title suitable for a ${requestedStoryMaterialFormat(req)} outline or ${requestedStoryMaterialFormat(req)}-ready table of contents. The title should name the concrete dramatic event, decision, reversal, discovery, confrontation, or consequence that this section actually dramatizes. Titles should read like evocative fiction headings, not outline summaries. Prefer images, objects, locations, threats, fragments, or memorable phrases. Avoid the repeated “Character + verb + outcome” construction and stock phrases such as “takes the hit,” “draws the line,” “holds the line,” “finally,” “chooses,” or “is accepted.” Use a character’s name only when it makes the title stronger. Do not restate or lightly rephrase the premise, Story Arc beat label, terminal beat, or section summary. Avoid generic placeholders such as "Setup," "Conflict," "Events," or "Scene"; each title must distinguish its section from the others in the same beat.
+
+## Memorable event and title quality
+Favor specific, memorable events and evocative section titles over functional briefing, regrouping, mapping, or explanatory scenes. Titles should suggest image, tension, place, or dramatic irony rather than summarize the section's purpose.
 
 ## Generation-ready section contract
 For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. Also return exactly one server-validated dramaticFunction from the allowed functions for that beat; the function must agree with the event and resulting change, not merely repeat the beat label. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields. Do not provide plannedWordRange; the server derives it deterministically from container; it never overrides the Section Contract, container, or natural stopping point.
