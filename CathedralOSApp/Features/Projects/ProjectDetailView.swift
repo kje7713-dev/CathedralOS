@@ -118,6 +118,18 @@ struct ProjectDetailView: View {
     @State private var estimateTask: Task<Void, Never>?
     @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator = .shared
 
+    /// Replace the view's project reference after targeted restore. Restore
+    /// can insert the canonical project when the pre-restore local ID was an
+    /// alias, so resolve lineage first and local ID second.
+    private func refreshProjectReference(localProjectID: UUID, lineageID: UUID?) {
+        guard let refreshed = (try? modelContext.fetch(FetchDescriptor<StoryProject>()))?.first(where: { candidate in
+            if let lineageID { return candidate.stableLineageID == lineageID }
+            return candidate.id == localProjectID
+            return candidate.id == project.id || candidate.stableLineageID == project.stableLineageID
+        }) else { return }
+        project = refreshed
+    }
+
     private func markFirstGenerateCompleted() {
         guard !firstGenerateCompleted else { return }
         firstGenerateCompleted = true
@@ -183,6 +195,7 @@ struct ProjectDetailView: View {
                     OutlineTabView(
                         project: project,
                         generationLaunch: $pendingOutlineGeneration,
+                        onProjectRefreshed: refreshProjectReference,
                         isGenerationStarting: $isRunAllStarting,
                         onGenerationCompleted: {
                             advancedMode = false
@@ -211,6 +224,7 @@ struct ProjectDetailView: View {
                         OutlineTabView(
                             project: project,
                             generationLaunch: $pendingOutlineGeneration,
+                            onProjectRefreshed: refreshProjectReference,
                             onGenerationCompleted: {
                                 advancedMode = false
                                 storyEditorModeRaw = StoryEditorMode.output.rawValue
@@ -235,6 +249,7 @@ struct ProjectDetailView: View {
                     project: project,
                     generationLaunch: $pendingOutlineGeneration,
                     isGenerationStarting: $isRunAllStarting,
+                    onProjectRefreshed: refreshProjectReference,
                     onGenerationCompleted: {
                         advancedMode = false
                         storyEditorModeRaw = StoryEditorMode.output.rawValue
@@ -271,7 +286,10 @@ struct ProjectDetailView: View {
         }
         .tint(CathedralTheme.Colors.accent)
         .task {
-            durabilityCoordinator.resumeAcceptAllIfNeeded(context: modelContext)
+            durabilityCoordinator.resumeAcceptAllIfNeeded(
+                context: modelContext,
+                onProjectRefreshed: refreshProjectReference
+            )
             await durabilityCoordinator.reconcilePersistedRunStatusIfNeeded(
                 for: project.stableLineageID,
                 outlineID: project.outlines.first?.id,

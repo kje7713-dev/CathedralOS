@@ -48,6 +48,7 @@ struct OutlineSuggestionsReviewView: View {
     let sourceRecipe: PromptPackExportPayload
     let project: StoryProject
     let modelContext: ModelContext
+    let onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
 
     private var activeAcceptRun: DataDurabilityCoordinator.AcceptRunMetadata? {
         guard let run = durabilityCoordinator.activeAcceptRun,
@@ -134,7 +135,10 @@ struct OutlineSuggestionsReviewView: View {
             }
         }
         .task {
-            durabilityCoordinator.resumeAcceptAllIfNeeded(context: modelContext)
+            durabilityCoordinator.resumeAcceptAllIfNeeded(
+                context: modelContext,
+                onProjectRefreshed: onProjectRefreshed
+            )
             hasStartedAcceptance = activeAcceptRun != nil
         }
         .onChange(of: durabilityCoordinator.acceptRunRevision) { _, _ in
@@ -289,7 +293,8 @@ struct OutlineSuggestionsReviewView: View {
             startingPosition: (outline.sections.map { $0.position }.max() ?? -1) + 1,
             idempotencyKey: requestBuilder.idempotencyKey,
             sourceRecipe: sourceRecipe,
-            context: modelContext
+            context: modelContext,
+            onProjectRefreshed: onProjectRefreshed
         )
     }
 

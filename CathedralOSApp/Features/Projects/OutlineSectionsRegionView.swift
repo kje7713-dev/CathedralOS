@@ -66,19 +66,22 @@ struct OutlineSectionsRegionView: View {
     @Binding var generationLaunch: OutlineGenerationLaunch?
     @Binding var isGenerationStarting: Bool
     let onGenerationCompleted: (() -> Void)?
+    let onProjectRefreshed: ((UUID, UUID?) -> Void)?
 
     init(
         project: StoryProject,
         modelContext: ModelContext,
         generationLaunch: Binding<OutlineGenerationLaunch?> = .constant(nil),
         isGenerationStarting: Binding<Bool> = .constant(false),
-        onGenerationCompleted: (() -> Void)? = nil
+        onGenerationCompleted: (() -> Void)? = nil,
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
     ) {
         self.project = project
         self.modelContext = modelContext
         self._generationLaunch = generationLaunch
         self._isGenerationStarting = isGenerationStarting
         self.onGenerationCompleted = onGenerationCompleted
+        self.onProjectRefreshed = onProjectRefreshed
     }
 
     // PR #338: observe DataDurabilityCoordinator so the @Published flips from
@@ -413,7 +416,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     suggestions: suggestions,
                     sourceRecipe: sourceRecipe,
                     project: project,
-                    modelContext: modelContext
+                    modelContext: modelContext,
+                    onProjectRefreshed: onProjectRefreshed
                 )
             }
         }
