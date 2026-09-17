@@ -122,7 +122,7 @@ struct ProjectDetailView: View {
     /// can insert the canonical project when the pre-restore local ID was an
     /// alias, so resolve lineage first and local ID second.
     private var refreshProjectReferenceHandler: ((UUID, UUID?) -> Void) {
-        let projectBinding = $project
+        var projectBinding = $project
         let context = modelContext
         return { localProjectID, lineageID in
             guard let projects = try? context.fetch(FetchDescriptor<StoryProject>()) else { return }
