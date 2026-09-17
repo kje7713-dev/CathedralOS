@@ -42,6 +42,7 @@ import {
   settleDirectUsage,
 } from "./direct-billing.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
+import { estimateTokensFromText } from "../generate-story/_generation_models.ts";
 import {
   normalizeSceneMemory,
   SCENE_MEMORY_GENERATION_INSTRUCTIONS,
@@ -289,7 +290,7 @@ export async function processSectionMemory(
       await preflightDirectUsage(
         billing,
         OPENAI_MODEL_DEFAULT,
-        Math.ceil(extractionInput.length / 4),
+        estimateTokensFromText(extractionInput),
         8192,
       );
     }
@@ -437,8 +438,9 @@ export async function processSectionMemory(
     await preflightDirectUsage(
       billing,
       OPENAI_EMBED_MODEL,
-      Math.ceil(compressedMemory.length / 4),
+      estimateTokensFromText(compressedMemory),
       0,
+      "embedding",
     );
   }
   if (!existingEmbedding) {
@@ -563,6 +565,7 @@ export async function processSectionMemory(
       OPENAI_MODEL_DEFAULT,
       extractionInputTokens,
       extractionOutputTokens,
+      "text_generation",
     );
   }
   if (billing && !embeddingAlreadySettled) {
@@ -572,6 +575,7 @@ export async function processSectionMemory(
       OPENAI_EMBED_MODEL,
       embeddingInputTokens,
       0,
+      "embedding",
     );
   }
   console.log(

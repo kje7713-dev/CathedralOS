@@ -1,7 +1,11 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { BillableLLMError, runBillableLLM } from "../_shared/billable-llm.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
-import { SupabaseGenerationModelStore } from "../generate-story/_generation_models.ts";
+import {
+  inputTokenLimitDetails,
+  estimateTokensFromMessages,
+  SupabaseGenerationModelStore,
+} from "../generate-story/_generation_models.ts";
 import {
   type LLMMessage,
   OpenAIProvider,
@@ -2226,6 +2230,18 @@ async function callOpenAI(
     jsonSchema?: Record<string, unknown>;
   },
 ): Promise<string> {
+  const inputLimit = inputTokenLimitDetails(
+    estimateTokensFromMessages([
+      { content: system },
+      { content: user },
+    ]),
+  );
+  if (inputLimit) {
+    throw new Error(
+      `input_token_limit_exceeded: estimated input is ${inputLimit.estimatedInputTokens} tokens; ` +
+        `Cathedral's hard limit is ${inputLimit.limit} tokens`,
+    );
+  }
   const ac = new AbortController();
   const timeout = setTimeout(() => ac.abort(), 115_000);
   try {

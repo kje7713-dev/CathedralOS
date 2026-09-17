@@ -32,11 +32,10 @@ alter table public.generation_models
     check (cache_mode in ('none', 'implicit', 'explicit'));
 
 -- Preserve operator enablement and classify every existing catalog row. These
--- values were rechecked against the official model pages on 2026-09-17.
--- Long-context modifiers are unreachable on Cathedral's customer generation
--- paths: sourcePayloadJSON is capped at 50,000 chars and previous output at
--- 20,000 chars, keeping constructed prompts below OpenAI's 272K threshold.
--- We therefore retain ordinary token pricing without a generic rules engine.
+-- Values were rechecked against the official model pages on 2026-09-17.
+-- Cathedral's canonical provider-economics guard is the 270,000 input-token
+-- ceiling in the shared billing/direct-billing paths; long-context tier
+-- modifiers are intentionally not modeled in PR 1.
 update public.generation_models
 set
   provider_first_seen_at = coalesce(provider_first_seen_at, created_at),
@@ -74,10 +73,37 @@ set
   pricing_source_url = 'https://developers.openai.com/api/docs/models/' || provider_model,
   pricing_source_hash = null,
   pricing_parser_version = null,
+  pricing_effective_at = TIMESTAMPTZ '2026-09-17 23:00:00+00',
   -- Replace obsolete model-tier floors with the small product floor.
   minimum_charge_credits = 0.25,
   updated_at = now()
-where provider = 'openai';
+where provider = 'openai'
+  and provider_model in (
+    'gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4.1',
+    'gpt-5.4-nano', 'gpt-5.4-mini', 'gpt-5.4', 'gpt-5.5',
+    'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol',
+    'text-embedding-3-small'
+  );
+
+-- Unknown OpenAI rows remain fail-closed. Their existing rate columns are
+-- intentionally untouched; a later catalog verification PR must audit them.
+update public.generation_models
+set
+  provider_available = false,
+  model_kind = 'unknown',
+  pricing_state = 'unverified',
+  pricing_verified_at = null,
+  pricing_source_url = null,
+  pricing_source_hash = null,
+  pricing_parser_version = null,
+  updated_at = now()
+where provider = 'openai'
+  and provider_model not in (
+    'gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4.1',
+    'gpt-5.4-nano', 'gpt-5.4-mini', 'gpt-5.4', 'gpt-5.5',
+    'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol',
+    'text-embedding-3-small'
+  );
 
 -- Direct table reads must apply the same defense-in-depth boundary as the
 -- Edge Functions. Service-role clients are unaffected by this policy.

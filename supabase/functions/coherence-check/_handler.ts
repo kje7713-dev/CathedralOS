@@ -400,6 +400,17 @@ export async function handleCoherenceCheck(
     }
     // BillableLLMError codes.
     if (err instanceof BillableLLMError) {
+      if (err.code === "input_token_limit_exceeded") {
+        const details = err.details && typeof err.details === "object"
+          ? err.details as Record<string, unknown>
+          : {};
+        return errorResponse(
+          err.code,
+          `${err.message} (estimated=${details.estimatedInputTokens ?? "unknown"}, ` +
+            `limit=${details.limit ?? "unknown"})`,
+          413,
+        );
+      }
       if (err.code === "insufficient_credits") {
         return errorResponse("insufficient_credits", err.message, 402);
       }

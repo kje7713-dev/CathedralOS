@@ -1192,3 +1192,48 @@ Deno.test("billing across two real worker-slice dispatches settles one logical-s
     "run-billing:routing:attempt:2",
   ]);
 });
+
+Deno.test("runBillableLLM: hard input ceiling allows 269999 and 270000, rejects 270001 before all side effects", async () => {
+  const providerCalls: number[] = [];
+  const provider: LLMProvider = {
+    complete: () => {
+      providerCalls.push(1);
+      return Promise.resolve(makeLLMResponse());
+    },
+  };
+  for (const inputTokens of [269_999, 270_000]) {
+    const admin = makeMockAdmin();
+    const creditStore = makeCreditStore();
+    await runBillableLLM(makeRequest({
+      preflightUsageOverride: {
+        uncachedInputTokens: inputTokens,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 0,
+        toolCostUsd: 0,
+      },
+    }), { adminClient: admin, provider, creditStore });
+    // Settlement is atomic through the RPC; the local CreditStore is not
+    // mutated by this shared runner.
+    assertEquals(creditStore.chargeCalls.length, 0);
+    assertEquals(admin.rpcCalls.length, 1);
+  }
+  const admin = makeMockAdmin();
+  const creditStore = makeCreditStore();
+  const error = await assertRejects(
+    () => runBillableLLM(makeRequest({
+      preflightUsageOverride: {
+        uncachedInputTokens: 270_001,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 0,
+        toolCostUsd: 0,
+      },
+    }), { adminClient: admin, provider, creditStore }),
+    BillableLLMError,
+  );
+  assertEquals(error.code, "input_token_limit_exceeded");
+  assertEquals(providerCalls.length, 2);
+  assertEquals(creditStore.chargeCalls.length, 0);
+  assertEquals(admin.rpcCalls.length, 0);
+});

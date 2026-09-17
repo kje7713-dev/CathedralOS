@@ -4,7 +4,8 @@ import {
   computeMaxChargeCredits,
   computeProviderCogsCents,
   type GenerationUsage,
-  getEnabledModelByProviderModel,
+  getEnabledPricedModelByProviderModel,
+  inputTokenLimitDetails,
   snapshotPricing,
 } from "../generate-story/_generation_models.ts";
 import {
@@ -28,10 +29,19 @@ export async function preflightDirectUsage(
   modelName: string,
   inputTokens: number,
   outputBudget: number,
+  modelKind: "text_generation" | "embedding" = "text_generation",
 ): Promise<void> {
-  const model = await getEnabledModelByProviderModel(
+  const inputLimit = inputTokenLimitDetails(inputTokens);
+  if (inputLimit) {
+    throw new Error(
+      `input_token_limit_exceeded: estimated input is ${inputLimit.estimatedInputTokens} tokens; ` +
+        `Cathedral's hard limit is ${inputLimit.limit} tokens`,
+    );
+  }
+  const model = await getEnabledPricedModelByProviderModel(
     context.adminClient,
     modelName,
+    modelKind,
   );
   if (!model) throw new Error(`billing model unavailable: ${modelName}`);
   const pricing = snapshotPricing(model);
@@ -98,13 +108,22 @@ export async function settleDirectUsage(
   modelName: string,
   inputTokens: number,
   outputTokens: number,
+  modelKind: "text_generation" | "embedding" = "text_generation",
 ): Promise<number> {
+  const inputLimit = inputTokenLimitDetails(inputTokens);
+  if (inputLimit) {
+    throw new Error(
+      `input_token_limit_exceeded: actual input is ${inputLimit.estimatedInputTokens} tokens; ` +
+        `Cathedral's hard limit is ${inputLimit.limit} tokens`,
+    );
+  }
   if (!context.outputID) {
     throw new Error(`stable output identity required for ${stage}`);
   }
-  const model = await getEnabledModelByProviderModel(
+  const model = await getEnabledPricedModelByProviderModel(
     context.adminClient,
     modelName,
+    modelKind,
   );
   if (!model) throw new Error(`billing model unavailable: ${modelName}`);
   const pricing = snapshotPricing(model);

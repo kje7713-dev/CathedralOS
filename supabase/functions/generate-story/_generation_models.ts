@@ -1,6 +1,8 @@
 import { getCreditCost, type LengthMode } from "./_credits.ts";
 
 export const DEFAULT_GENERATION_MODEL_ID = "gpt-4o-mini";
+/** Provider-economics ceiling: Cathedral stays below OpenAI's long-context tier. */
+export const MAX_BILLABLE_INPUT_TOKENS = 270_000;
 
 export interface GenerationModel {
   id: string;
@@ -286,6 +288,38 @@ export function estimateTokensFromText(text: string): number {
   // to a provider-specific tokenizer if exact preflight estimates are required.
   const baseEstimate = Math.ceil(text.length / 3);
   return Math.max(1, Math.ceil(baseEstimate * 1.25));
+}
+
+function textFromMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((block) => {
+    if (typeof block === "string") return block;
+    if (!block || typeof block !== "object") return "";
+    const record = block as Record<string, unknown>;
+    return typeof record.text === "string" ? record.text : "";
+  }).join("\n");
+}
+
+export function estimateTokensFromMessages(
+  messages: readonly { content: unknown }[],
+): number {
+  return messages.reduce(
+    (total, message) => total + estimateTokensFromText(
+      textFromMessageContent(message.content),
+    ),
+    0,
+  );
+}
+
+export function inputTokenLimitDetails(estimatedInputTokens: number): {
+  estimatedInputTokens: number;
+  limit: number;
+} | null {
+  const estimated = Math.max(0, Math.ceil(estimatedInputTokens));
+  return estimated > MAX_BILLABLE_INPUT_TOKENS
+    ? { estimatedInputTokens: estimated, limit: MAX_BILLABLE_INPUT_TOKENS }
+    : null;
 }
 
 export function computeGenerationCreditCharge(

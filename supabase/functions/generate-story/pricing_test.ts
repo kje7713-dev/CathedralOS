@@ -18,6 +18,7 @@ import {
   computeMaxChargeCredits,
   computeProviderCogsCents,
   DEFAULT_PRICING,
+  getEnabledPricedModelByProviderModel,
   mapModelRow,
   snapshotPricing,
 } from "./_generation_models.ts";
@@ -735,4 +736,47 @@ Deno.test("pricing safety: only verified available text models are billable", as
   assertEquals(isBillableGenerationModel({ ...eligible, pricing_state: "unverified" }), false);
   assertEquals(isBillableGenerationModel({ ...eligible, model_kind: "embedding" }), false);
   assertEquals(isBillableGenerationModel({ ...eligible, provider_input_usd_per_1m: null }), false);
+});
+
+Deno.test("pricing safety: embedding resolver accepts only priced embeddings, not text resolver", async () => {
+  const embedding = makeModel({
+    id: "text-embedding-3-small",
+    provider_model: "text-embedding-3-small",
+    provider_input_usd_per_1m: 0.02,
+    provider_cached_input_usd_per_1m: 0.02,
+    provider_cache_write_usd_per_1m: null,
+    provider_output_usd_per_1m: 0,
+    model_kind: "embedding",
+    provider_available: true,
+    pricing_state: "verified",
+    pricing_verified_at: "2026-09-17T00:00:00Z",
+    cache_write_pricing_required: false,
+  });
+  const db = {
+    from: () => ({
+      select: () => ({
+        eq: (_column: string, _value: unknown) => ({
+          eq: () => ({
+            maybeSingle: () => Promise.resolve({ data: embedding, error: null }),
+          }),
+          maybeSingle: () => Promise.resolve({ data: embedding, error: null }),
+        }),
+      }),
+    }),
+  };
+  assertEquals(
+    await getEnabledPricedModelByProviderModel(
+      db,
+      "text-embedding-3-small",
+      "text_generation",
+    ),
+    null,
+  );
+  const resolved = await getEnabledPricedModelByProviderModel(
+    db,
+    "text-embedding-3-small",
+    "embedding",
+  );
+  assertEquals(resolved?.model_kind, "embedding");
+  assertEquals(snapshotPricing(resolved!).providerInputUsdPer1m, 0.02);
 });

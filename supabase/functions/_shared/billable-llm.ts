@@ -23,6 +23,8 @@ import {
   computeMarginCents,
   computeMaxChargeCredits,
   computeProviderCogsCents,
+  estimateTokensFromMessages,
+  inputTokenLimitDetails,
   type GenerationModel,
   type GenerationUsage,
   snapshotPricing,
@@ -157,7 +159,8 @@ export type BillableLLMErrorCode =
   | "credit_charge_failed"
   | "idempotency_unique_violation"
   | "provider_attempt_allocation_failed"
-  | "outline_stage_state_failed";
+  | "outline_stage_state_failed"
+  | "input_token_limit_exceeded";
 
 export class BillableLLMError extends Error {
   readonly code: BillableLLMErrorCode;
@@ -310,14 +313,28 @@ export async function runBillableLLM<T>(
   req: BillableLLMRequest<T>,
   deps: BillableLLMDependencies,
 ): Promise<BillableLLMResult<T>> {
+  const preflightUsage = req.preflightUsageOverride ??
+    defaultPreflightUsage(req.maxOutputTokens);
+  const estimatedInputTokens = req.preflightUsageOverride
+    ? Math.max(0, preflightUsage.uncachedInputTokens) +
+      Math.max(0, preflightUsage.cachedInputTokens) +
+      Math.max(0, preflightUsage.cacheWriteInputTokens)
+    : estimateTokensFromMessages(req.messages);
+  const inputLimit = inputTokenLimitDetails(estimatedInputTokens);
+  if (inputLimit) {
+    throw new BillableLLMError(
+      "input_token_limit_exceeded",
+      `Estimated input is ${inputLimit.estimatedInputTokens} tokens; ` +
+        `Cathedral's hard limit is ${inputLimit.limit} tokens.`,
+      inputLimit,
+    );
+  }
   const pricing = snapshotPricing(req.model);
   let attemptKey = req.usageContext.providerAttemptKey ??
     `${req.usageContext.idempotencyKey ?? crypto.randomUUID()}:attempt:1`;
   let attemptID: string | null = null;
 
   // 1. Pre-flight credit check.
-  const preflightUsage = req.preflightUsageOverride ??
-    defaultPreflightUsage(req.maxOutputTokens);
   let estimatedCharge: number;
   if (req.purpose === "outline-suggestion") {
     const prior = await loadOutlineStageTotals(deps.adminClient, req);

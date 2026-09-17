@@ -259,6 +259,11 @@ function makeMockGenerationModelStore(
         minimum_charge_credits: row.minimum_charge_credits ?? 1,
         max_output_tokens: row.max_output_tokens ?? null,
         enabled: true,
+        provider_available: true,
+        model_kind: "text_generation",
+        pricing_state: "verified",
+        pricing_verified_at: "2026-09-17T00:00:00Z",
+        cache_write_pricing_required: false,
         // PR-372: cache fields (mock returns sane defaults).
         provider_cache_write_usd_per_1m: 0,
         cacheMode: "implicit",

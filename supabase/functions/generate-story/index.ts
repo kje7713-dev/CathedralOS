@@ -3394,6 +3394,34 @@ async function handler(
     );
   } catch (err) {
     const isBillableError = err instanceof BillableLLMError;
+    if (isBillableError && err.code === "input_token_limit_exceeded") {
+      const details = err.details && typeof err.details === "object"
+        ? err.details as Record<string, unknown>
+        : {};
+      await limiter.recordRequest(userId, {
+        requestId,
+        action: generationAction,
+        generationLengthMode,
+        outputBudget: maxCompletionTokens,
+        selectedModelId,
+        providerModel: selectedModel.provider_model,
+        maxCompletionTokens,
+        status: "rejected",
+        errorCode: err.code,
+        errorMessage: err.message,
+        durationMs: Date.now() - requestStartMs,
+      });
+      return corsResponse(
+        JSON.stringify({
+          status: "failed",
+          errorCode: err.code,
+          errorMessage: err.message,
+          estimatedInputTokens: details.estimatedInputTokens ?? null,
+          inputTokenLimit: details.limit ?? null,
+        }),
+        { status: 413 },
+      );
+    }
     if (isBillableError && err.code === "insufficient_credits") {
       const details = err.details && typeof err.details === "object"
         ? err.details as Record<string, unknown>
