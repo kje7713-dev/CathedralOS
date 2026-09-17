@@ -48,7 +48,23 @@ struct OutlineSuggestionsReviewView: View {
     let sourceRecipe: PromptPackExportPayload
     let project: StoryProject
     let modelContext: ModelContext
-    let onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+    let onProjectRefreshed: ((UUID, UUID?) -> Void)?
+
+    init(
+        outline: Outline,
+        suggestions: [OutlineSuggestion],
+        sourceRecipe: PromptPackExportPayload,
+        project: StoryProject,
+        modelContext: ModelContext,
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+    ) {
+        self.outline = outline
+        self.suggestions = suggestions
+        self.sourceRecipe = sourceRecipe
+        self.project = project
+        self.modelContext = modelContext
+        self.onProjectRefreshed = onProjectRefreshed
+    }
 
     private var activeAcceptRun: DataDurabilityCoordinator.AcceptRunMetadata? {
         guard let run = durabilityCoordinator.activeAcceptRun,
