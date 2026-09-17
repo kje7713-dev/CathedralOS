@@ -685,6 +685,14 @@ Deno.test("allocation planner propagates worker yield instead of converting it t
   );
 });
 
+Deno.test("global buildPrompt includes the requested concrete-event guardrails", () => {
+  const { system } = buildPrompt(sparseRequest as any, new Map());
+  assertEquals(system.includes("Every section must commit to one canonical event."), true);
+  assertEquals(system.includes("Each section must produce a materially new resulting state."), true);
+  assertEquals(system.includes("The Resurrection must not replay the Ordeal at greater scale."), true);
+  assertEquals(system.includes("When the planning context supplies a concrete location, clue, institution, object, threat mechanism, or consequence"), true);
+});
+
 Deno.test("allocation parser preserves minimums and rejects malformed plans", () => {
   const beats = sparseRequest.arcTemplate.beats;
   const result = parseAndValidateAllocation(
