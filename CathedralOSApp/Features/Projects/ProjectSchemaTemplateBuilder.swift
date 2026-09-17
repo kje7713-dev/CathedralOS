@@ -552,6 +552,17 @@ enum ProjectSchemaTemplateBuilder {
     // MARK: - Build From Project
 
     static func build(project: StoryProject, modelContext: ModelContext) -> ProjectImportExportPayload {
+        let projectID: UUID? = project.id
+        let authoritativePromptPacks = (try? modelContext.fetch(FetchDescriptor<PromptPack>(
+            predicate: #Predicate<PromptPack> { pack in pack.project?.id == projectID }
+        ))) ?? []
+        let authoritativeStoryArcs = (try? modelContext.fetch(FetchDescriptor<StoryArc>(
+            predicate: #Predicate<StoryArc> { arc in arc.project?.id == projectID }
+        ))) ?? []
+        let authoritativeOutlines = (try? modelContext.fetch(FetchDescriptor<Outline>(
+            predicate: #Predicate<Outline> { outline in outline.project?.id == projectID }
+        ))) ?? []
+
         let settingPayload: ProjectImportExportPayload.SettingPayload?
         if let s = project.projectSetting {
             let historicalPressure: String = s.historicalPressure ?? ""
@@ -761,7 +772,7 @@ enum ProjectSchemaTemplateBuilder {
 
         // MARK: Novel-building payloads (StoryArc + Outline)
 
-        let storyArcPayloads = project.storyArcs.map { arc -> ProjectImportExportPayload.StoryArcPayload in
+        let storyArcPayloads = authoritativeStoryArcs.map { arc -> ProjectImportExportPayload.StoryArcPayload in
             // customizationsData is Data on the model — encode as UTF-8 string (JSON-encoded bytes).
             // Round-trip: nil/empty on the cloud decodes to nil on restore.
             let customizationsString: String? = arc.customizationsData.flatMap { data in
@@ -792,7 +803,7 @@ enum ProjectSchemaTemplateBuilder {
             )
         }
 
-        let outlinePayloads = project.outlines.map { outline -> ProjectImportExportPayload.OutlinePayload in
+        let outlinePayloads = authoritativeOutlines.map { outline -> ProjectImportExportPayload.OutlinePayload in
             // Do not serialize outline.sections directly. SwiftData relationship
             // collections can be incomplete/stale after background sync or a
             // delete; the persisted root fetch is authoritative for the cloud
@@ -800,14 +811,39 @@ enum ProjectSchemaTemplateBuilder {
             // a project to whichever section the relationship cache happens to
             // contain.
             let outlineID = outline.id
+            // Fetch ALL sections for this outline (including child sections) so the
+            // Section Contract fields on grouped sub-sections survive the cloud
+            // round-trip. PR #537 (fix the shit arc, PR3) closed the prior
+            // "grouping is a follow-up" deferral; grouping is now first-class.
             let descriptor = FetchDescriptor<OutlineSection>(
                 predicate: #Predicate<OutlineSection> { section in
-                    section.outline?.id == outlineID && section.parent == nil
-                },
-                sortBy: [SortDescriptor(\.position)]
+                    section.outline?.id == outlineID
+                }
             )
             let authoritativeSections = (try? modelContext.fetch(descriptor)) ?? []
-            let sectionPayloads: [ProjectImportExportPayload.OutlineSectionPayload] = authoritativeSections
+            // Stable deterministic ordering: top-level sections first (by
+            // position, then UUID as tie-breaker), then child sections grouped
+            // by parent (by parent-UUID, position, UUID). Identical project
+            // state must produce identical snapshots to avoid snapshot churn —
+            // child groups commonly reuse positions such as 0, 1, 2, so the
+            // UUID tie-breaker is required for a fully deterministic order.
+            // NOTE: the import mapper does NOT depend on this order — its
+            // two-pass reconciliation handles child-before-parent payloads
+            // by creating every section in the first pass and resolving
+            // parent references in the second pass.
+            let topLevel = authoritativeSections.filter { $0.parent == nil }.sorted { lhs, rhs in
+                if lhs.position != rhs.position { return lhs.position < rhs.position }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            let children = authoritativeSections.filter { $0.parent != nil }.sorted { lhs, rhs in
+                let lhsParent = lhs.parent?.id.uuidString ?? ""
+                let rhsParent = rhs.parent?.id.uuidString ?? ""
+                if lhsParent != rhsParent { return lhsParent < rhsParent }
+                if lhs.position != rhs.position { return lhs.position < rhs.position }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            let sortedSections = topLevel + children
+            let sectionPayloads: [ProjectImportExportPayload.OutlineSectionPayload] = sortedSections
                 .map { section in
                     ProjectImportExportPayload.OutlineSectionPayload(
                         id: section.id.uuidString,
@@ -835,13 +871,16 @@ enum ProjectSchemaTemplateBuilder {
                 id: outline.id.uuidString,
                 localProjectID: project.id.uuidString,
                 lineageID: project.stableLineageID.uuidString,
+                // Serialize the persisted linkage exactly as stored on the
+                // authoritative Outline row. Never infer it from a cached
+                // project inverse relationship.
                 storyArcID: outline.storyArcID?.uuidString,
                 name: outline.name,
                 sections: sectionPayloads
             )
         }
 
-        let promptPackPayloads = project.promptPacks.map { pp -> ProjectImportExportPayload.PromptPackPayload in
+        let promptPackPayloads = authoritativePromptPacks.map { pp -> ProjectImportExportPayload.PromptPackPayload in
             ProjectImportExportPayload.PromptPackPayload(
                 id: pp.id.uuidString,
                 localProjectID: project.id.uuidString,

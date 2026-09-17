@@ -60,6 +60,14 @@ export interface GenerationModelStore {
   listEnabledModels(): Promise<PublicGenerationModel[]>;
 }
 
+function round6(value: number): number {
+  // 6-decimal half-up round. Matches computeActualChargeCredits precision
+  // so the DB-row -> GenerationModel mapping never under-prices fractional
+  // credits. PR4 (Fix the Shit cycle 4) replaced the legacy
+  // Math.max(1, Math.round(...)) clamp with this helper.
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
 function toNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -69,7 +77,7 @@ function toNumber(value: unknown, fallback = 0): number {
   return fallback;
 }
 
-function mapModelRow(row: Record<string, unknown>): GenerationModel {
+export function mapModelRow(row: Record<string, unknown>): GenerationModel {
   // Phase 3 default multiplier is 2.0 (50% gross margin). Older rows that
   // pre-date the migration won't have the column populated; toNumber's
   // fallback handles that.
@@ -101,9 +109,13 @@ function mapModelRow(row: Record<string, unknown>): GenerationModel {
     description: row.description == null ? null : String(row.description),
     input_credit_rate: toNumber(row.input_credit_rate, 1),
     output_credit_rate: toNumber(row.output_credit_rate, 1),
-    minimum_charge_credits: Math.max(
-      0,
-      Math.round(toNumber(row.minimum_charge_credits, 1)),
+    // Phase 3 fractional floor: preserve whatever fractional value the DB
+    // stores (NUMERIC(18,6) per migration 20260912100000). The legacy
+    // `Math.max(1, Math.round(...))` clamp forced integer 1 and overrode the
+    // canonical 0.25 product floor. Round to 6 decimals so the snapshot
+    // path matches computeActualChargeCredits precision.
+    minimum_charge_credits: round6(
+      toNumber(row.minimum_charge_credits, DEFAULT_PRICING.minimumChargeCredits),
     ),
     max_output_tokens: row.max_output_tokens == null
       ? null
@@ -337,7 +349,7 @@ export function snapshotPricing(
  * 6-decimal precision. Does NOT ceil per-component — fractional credits are
  * preserved so cheap models and short requests aren't materially overcharged.
  */
-export function computeActualChargeCredits(
+export function computeRawChargeCredits(
   usage: GenerationUsage,
   pricing: PricingSnapshot,
 ): number {
@@ -354,12 +366,18 @@ export function computeActualChargeCredits(
     ? usage.toolCostUsd / pricing.creditValueUsd
     : 0;
   const providerCostCredits = inputCredits + outputCredits + toolCredits;
-  const charge = Math.max(
-    pricing.minimumChargeCredits,
-    providerCostCredits,
-  );
   // Round to 6 decimal places for storage. Do NOT ceil.
-  return Math.round(charge * 1_000_000) / 1_000_000;
+  return Math.round(providerCostCredits * 1_000_000) / 1_000_000;
+}
+
+export function computeActualChargeCredits(
+  usage: GenerationUsage,
+  pricing: PricingSnapshot,
+): number {
+  return Math.max(
+    pricing.minimumChargeCredits,
+    computeRawChargeCredits(usage, pricing),
+  );
 }
 
 /**

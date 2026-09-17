@@ -49,6 +49,12 @@ enum AcceptRunStatus: String, Codable, Equatable {
 
 struct SuggestionRunMetadata: Codable {
     let projectID: UUID
+    // PR 6: canonical stableLineageID owns resume-state identity so that local
+    // project UUID drift (delete + recreate, restore from backup, sync race)
+    // does not orphan an in-flight or resumable suggestion run. Optional in
+    // JSON for backward-compat decode of metadata written before PR 6; new
+    // writes always include it.
+    let lineageID: UUID?
     let request: OutlineSuggestionRequest
     let idempotencyKey: String
     var runID: String?
@@ -199,9 +205,24 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var suggestionRunRevision: UInt = 0
 
     private static let suggestionRunPrefix = "cathedralos.outlineSuggestion.run."
+    // PR 6: lineage-owned resume-state key. New writes go here; legacy
+    // project-keyed entries are still read as a fallback during migration.
+    private static let lineageRunPrefix = "cathedralos.outlineSuggestion.lineage."
+    // Explicit Delete All → Suggest actions advance this generation so a
+    // deliberately fresh empty-outline request cannot reuse an older
+    // completed run with the same recipe/arc identity.
+    private static let suggestionGenerationPrefix = "cathedralos.outlineSuggestion.generation."
 
     private static func suggestionRunKey(for projectID: UUID) -> String {
         "\(suggestionRunPrefix)\(projectID.uuidString)"
+    }
+
+    private static func lineageRunKey(for lineageID: UUID) -> String {
+        "\(lineageRunPrefix)\(lineageID.uuidString)"
+    }
+
+    private static func suggestionGenerationKey(for lineageID: UUID) -> String {
+        "\(suggestionGenerationPrefix)\(lineageID.uuidString)"
     }
 
     private static func runStatusKey(for projectLineageID: UUID) -> String {
@@ -452,12 +473,31 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var activeAcceptRun: AcceptRunMetadata?
     @Published private(set) var acceptRunError: String?
     @Published private(set) var acceptRunRevision: UInt = 0
+    /// Bumped immediately when Accept All is tapped so the UI can show a busy
+    /// state during syncArc()/POST before the server returns a run ID. Pair
+    /// with `acceptRunError` to render pre-POST failure instead of a silent
+    /// dead button.
+    @Published private(set) var acceptRunInitiationRevision: UInt = 0
+    /// True from the moment Accept All is tapped until the coordinator either
+    /// owns a live server run or surfaces a refusal/error. Prevents duplicate
+    /// taps from creating concurrent jobs.
+    @Published private(set) var isAcceptRunInitiating: Bool = false
     private var acceptPollingTask: Task<Void, Never>?
     private static let acceptRunKey = "cathedralos.acceptOutline.activeRun"
 
     /// Starts the server-owned Accept All job. The task and all completion work
     /// belong to this coordinator, so dismissing the review sheet cannot cancel
-    /// reconciliation. A second call while a run is active is ignored.
+    /// reconciliation.
+    ///
+    /// Refuses never silently. If a same-outline run is already terminal/stale
+    /// it is reconciled first and the requested run is allowed to proceed.
+    /// If a different outline/project run is active, the refusal is surfaced
+    /// with full diagnostics so the UI can show the user exactly why their
+    /// tap did not start a new server job.
+    ///
+    /// Pre-PR-540 behaviour preserved for valid (no-conflict) requests:
+    /// `acceptPollingTask` owns the lifecycle; the review sheet cannot cancel
+    /// reconciliation by dismissing.
     func beginAcceptAll(
         edgeFunctionURL: URL,
         outlineID: UUID,
@@ -468,27 +508,82 @@ final class DataDurabilityCoordinator: ObservableObject {
         idempotencyKey: String,
         sourceRecipe: PromptPackExportPayload,
         context: ModelContext,
-        service: SectionEmbedService = SectionEmbedService()
+        service: any SectionEmbedServicing = SectionEmbedService()
     ) {
-        guard acceptPollingTask == nil, activeAcceptRun == nil else { return }
-        guard isRecoveryReadyForUploads else {
-            acceptRunError = "Recovery must finish before Accept All can sync."
-            acceptRunRevision &+= 1
+        // Checkpoint 1: Accept All tapped.
+        logger.log("accept_all: tapped outline=\(outlineID.uuidString, privacy: .public) project=\(projectID.uuidString, privacy: .public)")
+
+        // Cross-outline / cross-project guard. If the coordinator already owns
+        // an active run for a DIFFERENT project or outline, refuse explicitly
+        // with diagnostics rather than silently returning.
+        if let existing = activeAcceptRun, existing.isActive,
+           existing.projectLineageID != projectLineageID || existing.outlineID != outlineID {
+            logger.error("accept_all: refused due to in-flight run existing_run=\(existing.runID, privacy: .public) existing_status=\(existing.status, privacy: .public) existing_project=\(existing.projectLineageID.uuidString, privacy: .public) existing_outline=\(existing.outlineID.uuidString, privacy: .public) requested_project=\(projectLineageID.uuidString, privacy: .public) requested_outline=\(outlineID.uuidString, privacy: .public)")
+            reportAcceptRunError("Another Accept All is in progress. Wait for it to finish, or restart the app to clear it.")
             return
         }
+        // Same-project/outline guard: if there is an active run for the same
+        // outline, refuse explicitly. The user can dismiss the active run
+        // first via resumeAcceptAllIfNeeded reconciliation, but a fresh tap
+        // must never silently no-op.
+        if let existing = activeAcceptRun, existing.isActive,
+           existing.projectLineageID == projectLineageID, existing.outlineID == outlineID {
+            logger.log("accept_all: refused due to same-outline active run run=\(existing.runID, privacy: .public) status=\(existing.status, privacy: .public)")
+            reportAcceptRunError("Accept All is already in progress for this outline.")
+            return
+        }
+        // Stale-state reconciliation: if a terminal run is held in memory or
+        // persisted defaults, clear it so the new request can proceed. This
+        // prevents a previous run's terminal state from permanently blocking
+        // the next Accept All.
+        if let existing = activeAcceptRun, existing.isTerminal {
+            logger.log("accept_all: reconciling prior terminal run=\(existing.runID, privacy: .public) status=\(existing.status, privacy: .public)")
+            clearAcceptRunState(reason: "reconciled prior terminal run")
+        } else if acceptPollingTask != nil {
+            // Polling task present but activeAcceptRun was nil (resumed state):
+            // a previous request is still attached. Cancel and reconcile.
+            logger.log("accept_all: cancelling stale polling task before fresh request")
+            acceptPollingTask?.cancel()
+            acceptPollingTask = nil
+            acceptRunDefaults.removeObject(forKey: Self.acceptRunKey)
+        }
+
+        guard isRecoveryReadyForUploads else {
+            logger.error("accept_all: refused due to recovery not ready")
+            reportAcceptRunError("Recovery must finish before Accept All can sync.")
+            return
+        }
+
+        // Mark initiation state immediately so the UI can show busy before
+        // server POST. This eliminates the dead-button window between tap
+        // and run-ID.
         acceptRunError = nil
+        isAcceptRunInitiating = true
+        acceptRunInitiationRevision &+= 1
+        logger.log("accept_all: initiation started")
         acceptPollingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
+                // Checkpoint 2: POST starting.
+                logger.log("accept_all: POST starting outline=\(outlineID.uuidString, privacy: .public)")
                 let queued = try await service.startAcceptAll(
                     edgeFunctionURL: edgeFunctionURL,
                     outlineID: outlineID,
                     projectID: projectID,
+                    // PR 13 (recipe-to-acceptance recovery arc): forward the
+                    // canonical stableLineageID so the server can validate
+                    // it matches outline.lineage_id (rejects 409
+                    // lineage_mismatch when both sides are present and
+                    // differ). Backward-compat: older callers omit this and
+                    // the server logs the gap and skips the lineage check.
+                    projectLineageID: projectLineageID,
                     suggestions: suggestions,
                     startingPosition: startingPosition,
                     idempotencyKey: idempotencyKey,
                     sourceRecipe: sourceRecipe
                 )
+                // Checkpoint 3: run ID received.
+                logger.log("accept_all: run_id received run=\(queued.runID, privacy: .public) status=\(queued.status, privacy: .public)")
                 var metadata = AcceptRunMetadata(
                     runID: queued.runID,
                     projectID: projectID,
@@ -501,20 +596,39 @@ final class DataDurabilityCoordinator: ObservableObject {
                     error: queued.error
                 )
                 self.activeAcceptRun = metadata
+                self.isAcceptRunInitiating = false
                 self.persistAcceptRun(metadata)
                 await self.pollAcceptRun(context: context, service: service)
             } catch {
+                // Checkpoint 4: POST or run attach failed.
+                logger.error("accept_all: POST failed error=\(error.localizedDescription, privacy: .public)")
                 self.acceptPollingTask = nil
                 self.activeAcceptRun = nil
+                self.isAcceptRunInitiating = false
                 self.acceptRunError = error.localizedDescription
                 self.acceptRunRevision &+= 1
             }
         }
     }
 
+    /// Clears in-memory and persisted Accept All run state. Called when the
+    /// server tells us the run is gone (404), or when reconciling a terminal
+    /// prior run before starting a fresh request.
+    private func clearAcceptRunState(reason: String) {
+        logger.log("accept_all: clearing state reason=\(reason, privacy: .public)")
+        acceptPollingTask?.cancel()
+        acceptPollingTask = nil
+        activeAcceptRun = nil
+        isAcceptRunInitiating = false
+        acceptRunDefaults.removeObject(forKey: Self.acceptRunKey)
+        acceptRunInitiationRevision &+= 1
+    }
+
     /// Reattaches the live coordinator to a persisted job after app launch or
-    /// project navigation. Terminal completed jobs are reconciled immediately.
-    func resumeAcceptAllIfNeeded(context: ModelContext, service: SectionEmbedService = SectionEmbedService()) {
+    /// project navigation. Terminal completed jobs are reconciled immediately
+    /// (and their state cleared so the next Accept All tap can proceed without
+    /// the prior run's terminal state blocking).
+    func resumeAcceptAllIfNeeded(context: ModelContext, service: any SectionEmbedServicing = SectionEmbedService()) {
         guard isRecoveryReadyForUploads else { return }
         guard acceptPollingTask == nil else { return }
         guard let data = acceptRunDefaults.data(forKey: Self.acceptRunKey),
@@ -523,11 +637,18 @@ final class DataDurabilityCoordinator: ObservableObject {
         activeAcceptRun = metadata
         acceptRunError = metadata.error
         if metadata.isTerminal {
+            // Persisted terminal run: reconcile immediately and clear so the
+            // next tap is not blocked by the prior terminal state.
+            logger.log("accept_all_resume: reconciling persisted terminal run=\(metadata.runID, privacy: .public) status=\(metadata.status, privacy: .public)")
             acceptPollingTask = Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.finishAcceptRun(metadata, context: context)
+                // finishAcceptRun already clears state; ensure no stale
+                // marker remains.
+                acceptRunDefaults.removeObject(forKey: Self.acceptRunKey)
             }
         } else {
+            logger.log("accept_all_resume: reattaching polling for run=\(metadata.runID, privacy: .public)")
             acceptPollingTask = Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.pollAcceptRun(context: context, service: service)
@@ -535,7 +656,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
     }
 
-    private func pollAcceptRun(context: ModelContext, service: SectionEmbedService) async {
+    private func pollAcceptRun(context: ModelContext, service: any SectionEmbedServicing) async {
         guard var metadata = activeAcceptRun else { return }
         while !Task.isCancelled {
             do {
@@ -555,10 +676,21 @@ final class DataDurabilityCoordinator: ObservableObject {
             } catch is CancellationError {
                 break
             } catch {
-                // Keep the persisted running metadata and continue retrying.
-                // A later project/app reopen can also reattach if the process
-                // was suspended or terminated; a transient poll failure must
-                // never orphan the server-owned job.
+                // Distinguish permanent from transient poll failures. A
+                // permanently missing server run must NOT keep this client
+                // stuck forever in an active state, because that would
+                // silently block every future Accept All tap.
+                if Self.isPermanentAcceptPollFailure(error) {
+                    logger.error("accept_all_poll: permanent failure run=\(metadata.runID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                    acceptRunError = "Accept All server run is no longer available. The local state has been cleared so you can try again."
+                    acceptRunRevision &+= 1
+                    clearAcceptRunState(reason: "server reported run not found or permanent failure")
+                    return
+                }
+                // Transient (network, timeout, 5xx). Keep the persisted
+                // running metadata and continue retrying; a later project/app
+                // reopen can also reattach if the process was suspended or
+                // terminated.
                 acceptRunError = error.localizedDescription
             }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
@@ -566,11 +698,58 @@ final class DataDurabilityCoordinator: ObservableObject {
         acceptPollingTask = nil
     }
 
+    /// True when a polling failure is permanent and the server will never
+    /// recover the run. Used by `pollAcceptRun` to decide whether to clear
+    /// stale state instead of retrying forever.
+    ///
+    /// - HTTP 404 / "accept run not found": server has no such run.
+    /// - Malformed run UUID: client-side data corruption.
+    /// - Invalid response body that cannot be a transient network blip.
+    static func isPermanentAcceptPollFailure(_ error: Error) -> Bool {
+        // SectionEmbedError wraps the HTTP status from accept-outline-sections.
+        if let server = error as? SectionEmbedError {
+            switch server {
+            case .serverError(let status, _):
+                // 404 / 410 = server has no such run.
+                if status == 404 || status == 410 { return true }
+                // Other 4xx (except 401 re-auth and 429 rate-limit) are
+                // permanent: the request will never succeed for this run id.
+                if (400...499).contains(status) && status != 401 && status != 429 { return true }
+                return false
+            case .invalidResponse:
+                // Persistent invalid-response for the same run id is permanent.
+                // Without this branch, a permanently bad server response would
+                // loop forever and block every future Accept All tap.
+                return true
+            case .notConfigured, .notAuthenticated, .rateLimited, .providerError, .networkError:
+                return false
+            }
+        }
+        // Unrecognised error types (URLSession transport, NSURLError*, etc.)
+        // are treated as transient so a server-owned job is not lost to a
+        // transient transport blip. CancellationError is handled separately
+        // by the poll loop's `catch is CancellationError`.
+        return false
+    }
+
     private func finishAcceptRun(_ metadata: AcceptRunMetadata, context: ModelContext) async {
         if metadata.typedStatus == .completed && metadata.sectionsFailed == 0 && metadata.error == nil {
-            let result = await performCloudRestore(context: context)
-            if let error = result.errorMessage {
-                acceptRunError = error
+            do {
+                // Pass both the local project id and the canonical lineage id so
+                // the targeted restore can resolve a drifted/historical
+                // `local_project_id` for the same lineage instead of silently
+                // fetching zero rows. Identity-resolution failures surface here
+                // without relabeling the Accept All job as failed: the server
+                // job completed successfully, only this device's refresh failed.
+                let report = try await projectSyncService.restoreProject(
+                    localProjectID: metadata.projectID,
+                    projectLineageID: metadata.projectLineageID,
+                    into: context,
+                    includeTombstoned: false
+                )
+                logger.log("Accept All targeted restore complete: \(report.summaryMessage, privacy: .public)")
+            } catch {
+                acceptRunError = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
             }
         } else {
             acceptRunError = metadata.error ??
@@ -579,6 +758,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         acceptRunDefaults.removeObject(forKey: Self.acceptRunKey)
         activeAcceptRun = nil
         acceptPollingTask = nil
+        isAcceptRunInitiating = false
         acceptRunRevision &+= 1
         outputRefreshRevision &+= 1
         NotificationCenter.default.post(name: .cathedralOSGenerationOutputsChanged, object: nil)
@@ -602,6 +782,31 @@ final class DataDurabilityCoordinator: ObservableObject {
         acceptRunDefaults.set(data, forKey: Self.acceptRunKey)
     }
 
+    // MARK: - Suggestion generation identity
+
+    /// Returns the persisted identity for the current deliberate suggestion
+    /// generation. Retries, reconnects, and view recreation must keep using
+    /// this value so they remain idempotent.
+    func suggestionGenerationID(for lineageID: UUID) -> UUID? {
+        guard let raw = suggestionRunDefaults.string(forKey: Self.suggestionGenerationKey(for: lineageID)) else {
+            return nil
+        }
+        return UUID(uuidString: raw)
+    }
+
+    /// Advances the deliberate suggestion generation after Delete All
+    /// completes. The marker is intentionally retained until the next
+    /// deliberate reset so relaunch/reconnect still resolves the same run.
+    @discardableResult
+    func beginNewSuggestionGeneration(for lineageID: UUID) -> UUID {
+        let generationID = UUID()
+        suggestionRunDefaults.set(
+            generationID.uuidString,
+            forKey: Self.suggestionGenerationKey(for: lineageID)
+        )
+        return generationID
+    }
+
     // MARK: - Durable Suggest Sections polling
 
     func activeSuggestionRun(for projectID: UUID) -> SuggestionRunMetadata? {
@@ -610,15 +815,26 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     func beginSuggestionRun(
         projectID: UUID,
+        lineageID: UUID,
         request: OutlineSuggestionRequest,
         service: OutlineSuggestionService = OutlineSuggestionService()
     ) {
         if let existing = activeSuggestionRuns[projectID], existing.isActive {
-            attachSuggestionTask(existing, service: service)
-            return
+            // PR 6 refactor: exact-match check. An existing active run whose
+            // idempotency key matches the new request represents the same
+            // logical planning identity — re-attach and let it complete. A
+            // mismatched key means the user changed the recipe/arc/sections
+            // between kicks; cancel the prior run and start fresh.
+            if existing.idempotencyKey == request.idempotencyKey {
+                attachSuggestionTask(existing, service: service)
+                return
+            }
+            suggestionPollingTasks[projectID]?.cancel()
+            clearSuggestionRun(for: projectID)
         }
         let metadata = SuggestionRunMetadata(
             projectID: projectID,
+            lineageID: lineageID,
             request: request,
             idempotencyKey: request.idempotencyKey,
             runID: nil,
@@ -632,25 +848,91 @@ final class DataDurabilityCoordinator: ObservableObject {
         attachSuggestionTask(metadata, service: service)
     }
 
+    /// Legacy entry point used by callers that do not yet know the canonical
+    /// lineage. Persists under the project-keyed legacy slot only; resume
+    /// from legacy will be re-migrated to the lineage key on the next begin.
+    func beginSuggestionRun(
+        projectID: UUID,
+        request: OutlineSuggestionRequest,
+        service: OutlineSuggestionService = OutlineSuggestionService()
+    ) {
+        beginSuggestionRun(
+            projectID: projectID,
+            lineageID: projectID,
+            request: request,
+            service: service
+        )
+    }
+
+    /// PR 6: resume-state is keyed by canonical lineage. The active-run
+    /// dictionary stays keyed by local projectID for backward compatibility
+    /// with all existing view lookups; the resume path reads from the
+    /// lineage-owned UserDefaults slot, falling back to the legacy
+    /// project-keyed slot for metadata written before PR 6.
+    ///
+    /// `currentIdempotencyKey` enables exact-match resume. When the caller
+    /// has already built the current `OutlineSuggestionRequest`, any
+    /// persisted or active run whose stored key differs is discarded rather
+    /// than reattached. This blocks stale in-flight runs (the user edited the
+    /// recipe, arc beats, or existing sections between launch and resume)
+    /// from completing against the user's changed planning identity. Pass
+    /// nil to skip the check (legacy / external callers that have not yet
+    /// been migrated to lineage-aware resume).
     func resumeSuggestionRunIfNeeded(
         projectID: UUID,
+        lineageID: UUID,
+        currentIdempotencyKey: String? = nil,
         service: OutlineSuggestionService = OutlineSuggestionService()
     ) {
         guard suggestionPollingTasks[projectID] == nil else { return }
         if let active = activeSuggestionRuns[projectID] {
-            attachSuggestionTask(active, service: service)
-            return
+            // PR 6 refactor: surface guard at the active-run layer. If the
+            // active run was queued under a different planning identity, do
+            // not reattach its polling task — the user has changed the
+            // request and the active run no longer represents their intent.
+            if let currentIdempotencyKey,
+               active.idempotencyKey != currentIdempotencyKey {
+                clearSuggestionRun(for: projectID)
+            } else {
+                attachSuggestionTask(active, service: service)
+                return
+            }
         }
-        guard let data = suggestionRunDefaults.data(forKey: Self.suggestionRunKey(for: projectID)),
-              let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else { return }
-        activeSuggestionRuns[projectID] = metadata
-        attachSuggestionTask(metadata, service: service)
+        if let metadata = loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID,
+            expectedIdempotencyKey: currentIdempotencyKey
+        ) {
+            activeSuggestionRuns[projectID] = metadata
+            attachSuggestionTask(metadata, service: service)
+        }
+    }
+
+    /// Legacy entry point. Reads from the legacy project-keyed slot only;
+    /// callers should migrate to the lineage-aware overload.
+    func resumeSuggestionRunIfNeeded(
+        projectID: UUID,
+        service: OutlineSuggestionService = OutlineSuggestionService()
+    ) {
+        resumeSuggestionRunIfNeeded(
+            projectID: projectID,
+            lineageID: projectID,
+            service: service
+        )
     }
 
     func resumeAllSuggestionRuns(service: OutlineSuggestionService = OutlineSuggestionService()) {
-        for key in suggestionRunDefaults.dictionaryRepresentation().keys where key.hasPrefix(Self.suggestionRunPrefix) {
+        // PR 6: iterate both legacy project-keyed and lineage-keyed slots.
+        // Lineage slots take precedence; legacy slots are migrated on next
+        // begin/persist. De-dupe by projectID so a legacy entry cannot double-
+        // resume a run that has already been migrated to the lineage key.
+        var seen = Set<UUID>()
+        for key in suggestionRunDefaults.dictionaryRepresentation().keys
+            where key.hasPrefix(Self.lineageRunPrefix) || key.hasPrefix(Self.suggestionRunPrefix) {
             guard let data = suggestionRunDefaults.data(forKey: key),
                   let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else { continue }
+            if seen.contains(metadata.projectID) { continue }
+            seen.insert(metadata.projectID)
             activeSuggestionRuns[metadata.projectID] = metadata
             attachSuggestionTask(metadata, service: service)
         }
@@ -678,6 +960,8 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     private func runSuggestion(_ initial: SuggestionRunMetadata, service: OutlineSuggestionService) async {
         var metadata = initial
+        var reconnectMisses = 0
+        let maxReconnectMisses = 3
         while !Task.isCancelled {
             do {
                 let job: OutlineSuggestionJob
@@ -693,8 +977,18 @@ final class DataDurabilityCoordinator: ObservableObject {
                         let recovered: OutlineSuggestionJob?
                         do { recovered = try await service.findRun(projectID: metadata.projectID, idempotencyKey: metadata.idempotencyKey) } catch { recovered = nil }
                         if let recovered {
+                            reconnectMisses = 0
                             job = recovered
                         } else {
+                            reconnectMisses += 1
+                            if reconnectMisses >= maxReconnectMisses {
+                                failSuggestionRun(
+                                    metadata.projectID,
+                                    message: error.localizedDescription
+                                )
+                                suggestionPollingTasks[metadata.projectID] = nil
+                                return
+                            }
                             metadata.status = "reconnecting"
                             metadata.updatedAt = Date()
                             activeSuggestionRuns[metadata.projectID] = metadata
@@ -713,6 +1007,19 @@ final class DataDurabilityCoordinator: ObservableObject {
 
                 switch job.status {
                 case "completed":
+                    // PR 6 refactor: surface guard. If a newer request has
+                    // superseded this run while it was in flight (the user
+                    // edited recipe/arc/sections and kicked a new begin),
+                    // the active slot now holds the newer metadata under a
+                    // different idempotency key. Do not surface this stale
+                    // result — the newer run owns completion; the view will
+                    // surface that one through its own completed event.
+                    if let currentActive = activeSuggestionRuns[metadata.projectID],
+                       currentActive.idempotencyKey != metadata.idempotencyKey {
+                        clearSuggestionRun(for: metadata.projectID)
+                        suggestionPollingTasks[metadata.projectID] = nil
+                        return
+                    }
                     let result = OutlineSuggestionResult(
                         suggestions: job.suggestions ?? [],
                         warnings: job.warnings ?? [],
@@ -769,14 +1076,72 @@ final class DataDurabilityCoordinator: ObservableObject {
         suggestionPollingTasks[metadata.projectID] = nil
     }
 
+
+    /// PR 6: read durable suggestion-run metadata using the canonical lineage
+    /// as the primary key. Falls back to the legacy project-keyed slot for
+    /// metadata written before PR 6; if the legacy entry's lineageID (when
+    /// present) does not match the supplied canonical lineage, the entry is
+    /// discarded rather than resumed, preventing stale runs from resurfacing
+    /// under the wrong project.
+    ///
+    /// `expectedIdempotencyKey` enables exact-match resume: when the caller has
+    /// already built the current `OutlineSuggestionRequest`, the persisted
+    /// entry is only surfaced if its `idempotencyKey` matches. This blocks
+    /// stale active/in-flight runs (recipe/arc/section edits under the same
+    /// project UUID) from being reattached or completed against the user's
+    /// changed planning identity. Pass nil to skip the exact-match check
+    /// (legacy / external callers).
+    ///
+    /// Internal (not private) so regression tests in
+    /// `SuggestionRunMetadataLineageTests` can exercise both the lineage and
+    /// idempotency-key guards without spinning up the full polling path.
+    func loadSuggestionRunMetadata(
+        lineageID: UUID,
+        projectID: UUID,
+        expectedIdempotencyKey: String? = nil
+    ) -> SuggestionRunMetadata? {
+        if let data = suggestionRunDefaults.data(forKey: Self.lineageRunKey(for: lineageID)),
+           let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) {
+            if let expectedIdempotencyKey,
+               metadata.idempotencyKey != expectedIdempotencyKey {
+                return nil
+            }
+            return metadata
+        }
+        guard let data = suggestionRunDefaults.data(forKey: Self.suggestionRunKey(for: projectID)),
+              let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else {
+            return nil
+        }
+        if let storedLineage = metadata.lineageID, storedLineage != lineageID {
+            return nil
+        }
+        // PR 6 refactor: legacy project-keyed entries must also match the
+        // current request identity. A mismatched legacy entry is the classic
+        // recipe-edit-under-stable-PromptPack-UUID case and must not surface.
+        if let expectedIdempotencyKey,
+           metadata.idempotencyKey != expectedIdempotencyKey {
+            return nil
+        }
+        return metadata
+    }
+
     private func persistSuggestionRun(_ metadata: SuggestionRunMetadata) {
         guard let data = try? JSONEncoder().encode(metadata) else { return }
-        suggestionRunDefaults.set(data, forKey: Self.suggestionRunKey(for: metadata.projectID))
+        // PR 6: write to the lineage-owned key; remove the legacy project key
+        // so a subsequent resume reads the canonical slot.
+        suggestionRunDefaults.set(data, forKey: Self.lineageRunKey(for: metadata.lineageID ?? metadata.projectID))
+        suggestionRunDefaults.removeObject(forKey: Self.suggestionRunKey(for: metadata.projectID))
     }
 
     private func clearSuggestionRun(for projectID: UUID) {
+        // PR 6: capture the lineage before nil-ing the active-run slot so we
+        // can remove the lineage-owned UserDefaults entry too.
+        let lineageID = activeSuggestionRuns[projectID]?.lineageID
         activeSuggestionRuns[projectID] = nil
         suggestionRunDefaults.removeObject(forKey: Self.suggestionRunKey(for: projectID))
+        if let lineageID {
+            suggestionRunDefaults.removeObject(forKey: Self.lineageRunKey(for: lineageID))
+        }
     }
 
     private func failSuggestionRun(_ projectID: UUID, message: String) {
@@ -943,6 +1308,53 @@ final class DataDurabilityCoordinator: ObservableObject {
             context: context,
             onSyncCompleted: onSyncCompleted
         )
+    }
+
+    /// Reconcile persisted UI metadata with the authoritative server run before
+    /// rendering a project banner. A cached terminal result is not sufficient:
+    /// the run must still exist, belong to this outline, and have sections in
+    /// the current canonical outline.
+    func reconcilePersistedRunStatusIfNeeded(
+        for projectLineageID: UUID,
+        outlineID: UUID?,
+        currentSectionCount: Int,
+        runOutlineService: RunOutlineService
+    ) async {
+        guard let cached = runStatus(for: projectLineageID) else { return }
+        guard currentSectionCount > 0,
+              let outlineID,
+              cached.outline_id.map { $0.caseInsensitiveCompare(outlineID.uuidString) == .orderedSame } == true else {
+            clearPersistedRunStatus(for: projectLineageID)
+            if activeRunProjectLineageID == projectLineageID {
+                activeRunStatus = nil
+                activeRunProjectLineageID = nil
+            }
+            return
+        }
+        do {
+            let authoritative = try await runOutlineService.status(runID: cached.run_id)
+            let authoritativeOutlineMatches = authoritative.outline_id.map { $0.caseInsensitiveCompare(outlineID.uuidString) == .orderedSame } == true
+            let authoritativeSectionsMatch = (authoritative.sections_total ?? 0) == currentSectionCount
+            guard authoritativeOutlineMatches && authoritativeSectionsMatch else {
+                clearPersistedRunStatus(for: projectLineageID)
+                if activeRunProjectLineageID == projectLineageID { activeRunStatus = nil }
+                return
+            }
+            activeRunProjectLineageID = projectLineageID
+            activeRunStatus = authoritative
+            persistRunStatus(authoritative, for: projectLineageID)
+        } catch let error as RunOutlineError {
+            // Missing durable identity is definitive; transport/auth/provider
+            // failures are not. Keep a legitimate freshly-completed banner
+            // visible until the authoritative run can be checked again.
+            guard case .runNotFound = error else { return }
+            clearPersistedRunStatus(for: projectLineageID)
+            if activeRunProjectLineageID == projectLineageID { activeRunStatus = nil }
+        } catch {
+            // Unknown/transient failures must not globally hide a valid
+            // completed status. The next project load/poll will retry.
+            return
+        }
     }
 
     /// The last persisted run status for a project, including terminal status.

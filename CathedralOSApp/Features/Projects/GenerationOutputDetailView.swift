@@ -218,8 +218,8 @@ struct GenerationOutputDetailView: View {
         usageLimitService.currentState
     }
 
-    private var selectedCreditCost: Int {
-        selectedLengthMode.creditCost
+    private var selectedCreditCost: Double {
+        Double(selectedLengthMode.creditCost)
     }
 
     private var hasSufficientCredits: Bool {

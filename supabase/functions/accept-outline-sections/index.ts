@@ -77,6 +77,12 @@ type CanonicalRecipe = Record<string, unknown>;
 type RequestBody = {
   outline_id: string;
   project_id: string;
+  // PR 13 (recipe-to-acceptance recovery arc): canonical stableLineageID
+  // of the project owning this outline. Optional for backward compat with
+  // clients that have not yet migrated; when present, the server validates
+  // that it matches the Outline's persisted lineage. When absent, the
+  // server logs the gap and skips the lineage-match check.
+  project_lineage_id?: string | null;
   idempotency_key: string;
   source_recipe_json: CanonicalRecipe;
   sections: Section[];
@@ -87,6 +93,24 @@ function response(body: unknown, status = 200) {
 }
 function errorResponse(code: string, message: string, status: number) {
   return response({ errorCode: code, message }, status);
+}
+
+export function lineageMismatchResponse(
+  projectLineageID: string | null | undefined,
+  outlineLineageID: string | null | undefined,
+): Response | null {
+  if (
+    projectLineageID != null &&
+    outlineLineageID != null &&
+    canonicalUUID(projectLineageID) !== canonicalUUID(String(outlineLineageID))
+  ) {
+    return errorResponse(
+      "lineage_mismatch",
+      "project_lineage_id does not match outline.lineage_id",
+      409,
+    );
+  }
+  return null;
 }
 export function isUUID(value: unknown): value is string {
   return typeof value === "string" &&
@@ -131,6 +155,27 @@ export async function hashCanonicalRecipe(
 ): Promise<string> {
   const bytes = new TextEncoder().encode(
     JSON.stringify(canonicalizeJSON(recipe)),
+  );
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+/**
+ * PR 12 (recipe-to-acceptance recovery arc): canonical server-side request
+ * fingerprint for Accept All idempotency. Stable canonical JSON serialization
+ * of the immutable request body, with `idempotency_key` excluded so the
+ * fingerprint itself does not include the key used to look up its row.
+ *
+ * Identical inputs → identical fingerprint. Different inputs (any field,
+ * key order, or recipe content) → different fingerprint.
+ */
+export async function computeRequestFingerprint(body: RequestBody): Promise<string> {
+  const { idempotency_key: _ignored, ...rest } = body;
+  const bytes = new TextEncoder().encode(
+    JSON.stringify(canonicalizeJSON(rest)),
   );
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(
@@ -193,6 +238,10 @@ export function validate(body: RequestBody): string | null {
     !body || !isUUID(body.outline_id) || typeof body.project_id !== "string" ||
     body.project_id.length === 0
   ) return "outline_id and project_id are required";
+  if (
+    body.project_lineage_id != null &&
+    typeof body.project_lineage_id !== "string"
+  ) return "project_lineage_id must be a string when present";
   if (
     typeof body.idempotency_key !== "string" ||
     body.idempotency_key.length < 1 || body.idempotency_key.length > 1000
@@ -265,6 +314,51 @@ export interface LengthContract {
   target_word_count_min: number;
   target_word_count_max: number;
   projected_word_count: number;
+}
+
+/**
+ * PR 14 (recipe-to-acceptance recovery arc): recompute the Outline-level
+ * projected_word_count from the resulting complete generation-bearing
+ * Outline. Counts leaves only (sections that have no children) so grouping
+ * parents like chapters are not double-counted against their scenes.
+ *
+ * Retry safety: re-running this against the same set of section ids does
+ * not inflate the total (the leaves are a property of the stored rows,
+ * not of the in-flight batch).
+ */
+export async function fetchLeafSectionTotals(
+  db: ReturnType<typeof admin>,
+  outlineID: string,
+): Promise<{
+  projectedWordCount: number;
+  targetWordCountMin: number;
+  targetWordCountMax: number;
+}> {
+  // Leaves = sections with no children referencing them as parent_id.
+  // We project target_words / target_words_min / target_words_max so the
+  // per-leaf container-derived numbers sum into the Outline-level totals.
+  const { data, error } = await db.from("outline_sections")
+    .select("id,parent_id,target_words,target_words_min,target_words_max,status")
+    .eq("outline_id", outlineID)
+    .not("status", "eq", "deleted");
+  if (error) {
+    throw new Error(`Could not read outline sections for length recompute: ${error.message}`);
+  }
+  const rows = data ?? [];
+  const childIDs = new Set<string>();
+  for (const row of rows) {
+    if (row.parent_id) childIDs.add(row.parent_id);
+  }
+  let projected = 0;
+  let min = 0;
+  let max = 0;
+  for (const row of rows) {
+    if (childIDs.has(row.id)) continue; // skip grouping parents
+    projected += Number(row.target_words ?? 0);
+    min += Number(row.target_words_min ?? 0);
+    max += Number(row.target_words_max ?? 0);
+  }
+  return { projectedWordCount: projected, targetWordCountMin: min, targetWordCountMax: max };
 }
 
 export function buildLengthContract(
@@ -400,8 +494,12 @@ async function mergeSectionsIntoSnapshot(
     container: row.container,
     pov: row.pov,
     terminalBeat: row.terminal_beat,
+    entryState: row.entry_state,
+    dramaticEvent: row.dramatic_event,
+    resultingChange: row.resulting_change,
+    terminalState: row.terminal_state,
     status: row.status,
-    parentID: row.parent_id,
+    parentID: row.parent_id == null ? null : canonicalUUID(String(row.parent_id)),
     storyArcBeatID: row.story_arc_beat_id == null
       ? null
       : canonicalUUID(String(row.story_arc_beat_id)),
@@ -443,71 +541,69 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       id: canonicalUUID(section.id),
     }));
     const normalizedRequest = { ...request, sections: normalizedSections };
-    await freezeOutlineRecipe(
-      db,
-      normalizedRequest.outline_id,
-      normalizedRequest.source_recipe_json,
+
+    // PR 15 (recipe-to-acceptance recovery arc): delegate the
+    // authoritative writes (recipe provenance freeze + section upsert +
+    // outline length recompute + run-completion mark) to one
+    // PostgreSQL transaction via commit_outline_accept_run(...). If any
+    // step raises inside the RPC, the transaction rolls back and the
+    // function returns status="failed". Retries of the same run/request
+    // are idempotent because position assignment reads max(existing)+1
+    // and the section upsert is ON CONFLICT DO UPDATE.
+    // PR 15: compute recipe hash + extract provenance fields inline
+    // (this file has hashCanonicalRecipe but no recipeProvenance helper).
+    const recipeObj = normalizedRequest.source_recipe_json as unknown as {
+      version?: number;
+      promptPack?: { id?: string; name?: string };
+    };
+    const recipeHash = await hashCanonicalRecipe(
+      normalizedRequest.source_recipe_json as CanonicalRecipe,
     );
-    const sectionIDs = normalizedSections.map((s) => s.id);
-    await db.from("outline_accept_runs").update({
-      sections_total: normalizedSections.length,
-      section_ids: sectionIDs,
-    }).eq("id", runID);
-    const { data: positions, error: positionError } = await db.from(
-      "outline_sections",
-    )
-      .select("position")
-      .eq("outline_id", normalizedRequest.outline_id)
-      .order("position", { ascending: false })
-      .limit(1);
-    if (positionError) {
+    const sectionsPayload = normalizedSections.map((s) => ({
+      id: s.id,
+      title: s.title,
+      summary: s.summary,
+      container: s.container,
+      pov: s.pov,
+      terminal_beat: s.terminalBeat,
+      entry_state: s.entryState,
+      dramatic_event: s.dramaticEvent,
+      resulting_change: s.resultingChange,
+      terminal_state: s.terminalState,
+      story_arc_beat_id: s.storyArcBeatID,
+      recipe_requirement_ids: s.recipeRequirementIDs ?? [],
+    }));
+    const { data: commitResult, error: commitError } = await db.rpc(
+      "commit_outline_accept_run",
+      {
+        p_run_id: runID,
+        p_user_id: userID,
+        p_outline_id: normalizedRequest.outline_id,
+        p_recipe_hash: recipeHash,
+        p_recipe_version: Number(recipeObj.version ?? 0),
+        p_recipe_prompt_pack_id: String(recipeObj.promptPack?.id ?? ""),
+        p_recipe_prompt_pack_name: String(recipeObj.promptPack?.name ?? ""),
+        p_source_recipe_json: normalizedRequest.source_recipe_json,
+        p_sections: sectionsPayload,
+      },
+    );
+    if (commitError) {
       throw new Error(
-        `Could not read outline position: ${positionError.message}`,
+        `Atomic Accept All commit failed: ${commitError.message}`,
       );
     }
-    const basePosition = (positions?.[0]?.position ?? -1) + 1;
-    const lengthContract = buildLengthContract(normalizedSections);
-    const { error: insertError } = await db.from("outline_sections").upsert(
-      normalizedSections.map((s, index) =>
-        sectionRow(
-          { ...s, ...lengthContract.sections[index] },
-          normalizedRequest.outline_id,
-          basePosition + index,
-        )
-      ),
-      { onConflict: "id" },
-    );
-    if (insertError) {
-      throw new Error(`Could not create sections: ${insertError.message}`);
-    }
-    const { error: outlineContractError } = await db.from("outlines")
-      .update(lengthContract.outline)
-      .eq("id", normalizedRequest.outline_id);
-    if (outlineContractError) {
+    const commit = (Array.isArray(commitResult) ? commitResult[0] : commitResult) ?? {};
+    if (commit.status === "failed") {
       throw new Error(
-        `Could not persist outline length contract: ${outlineContractError.message}`,
+        `Atomic Accept All commit failed server-side: ${commit.error ?? "unknown"}`,
       );
     }
-    // Accept All stores outline planning metadata only. Outline suggestions
-    // are not generated prose and must not create RAG embeddings or provider
-    // charges; generated prose is embedded later by generate-story.
-    const { error: acceptedError } = await db.from("outline_sections")
-      .update({ status: "accepted" })
-      .eq("outline_id", normalizedRequest.outline_id)
-      .in("id", normalizedSections.map((section) => section.id));
-    if (acceptedError) {
-      throw new Error(`Could not accept sections: ${acceptedError.message}`);
-    }
-    const done = normalizedSections.length;
-    const failed = 0;
-    await db.from("outline_accept_runs").update({
-      sections_done: done,
-      sections_failed: failed,
-    }).eq("id", runID);
-    // The project snapshot is the source restored by iOS. Keep it in sync
-    // with the relational rows before reporting the job as terminal; otherwise
-    // a successful Accept All is immediately erased by the next cloud restore.
-    // A merge error must remain a failed job even after all sections persist.
+    // PR 15 (continued): the project snapshot is a derived view of the
+    // relational rows. Run the snapshot merge AFTER the atomic commit
+    // succeeds — if it fails, the run is marked failed but the
+    // authoritative section writes (already committed) remain. A retry of
+    // the same run/request will reconcile the snapshot without losing
+    // positions (commit_outline_accept_run is idempotent).
     let snapshotError: string | null = null;
     try {
       await mergeSectionsIntoSnapshot(db, normalizedRequest, userID);
@@ -515,18 +611,28 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       snapshotError = err instanceof Error ? err.message : String(err);
       console.error("[accept-outline-sections] snapshot merge failed", err);
     }
-    const outcome = acceptRunTerminalOutcome(
-      failed,
-      snapshotError,
-      null,
-    );
-    await db.from("outline_accept_runs").update({
-      status: outcome.status,
-      sections_done: done,
-      sections_failed: failed,
-      error: outcome.error,
-      completed_at: new Date().toISOString(),
-    }).eq("id", runID);
+    const committedDone = Number(commit.sections_done ?? normalizedSections.length);
+    if (snapshotError) {
+      // Relational Accept All is already committed. Keep the durable run
+      // retryable rather than reporting a terminal failure for a derived-view
+      // repair; the next worker invocation re-runs the idempotent snapshot RPC.
+      await db.from("outline_accept_runs").update({
+        status: "pending", sections_done: committedDone, sections_failed: 0,
+        error: `snapshot_repair_pending: ${snapshotError}`.slice(0, 2000),
+        completed_at: null,
+      }).eq("id", runID);
+      // A pending row is not a retry by itself. Re-enter the worker after the
+      // state transition; claim_outline_accept_run will atomically claim it
+      // and rerun the idempotent snapshot reconciliation.
+      // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime.
+      EdgeRuntime.waitUntil(runJob(runID, authHeader, userID));
+    } else {
+      const outcome = acceptRunTerminalOutcome(0, null, null);
+      await db.from("outline_accept_runs").update({
+        status: outcome.status, sections_done: committedDone, sections_failed: 0,
+        error: outcome.error, completed_at: new Date().toISOString(),
+      }).eq("id", runID);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await db.from("outline_accept_runs").update({
@@ -580,31 +686,176 @@ Deno.serve(async (req) => {
   if (validationError) {
     return errorResponse("invalid_request", validationError, 400);
   }
-  const { data: ownedOutline } = await db.from("outlines")
-    .select("id")
+  // PR 13: complete ownership-graph validation in a single pass.
+  //   - outline.user_id == auth.uid()
+  //   - outline exists
+  //   - outline.lineage_id (when set) == body.project_lineage_id (when set)
+  //   - outline.story_arc_id (when set) owns every non-null section.storyArcBeatID
+  //   - source_recipe_json.project.id == body.project_id
+  // The pre-existing section UUID collision check (every submitted id may
+  // only already belong to THIS same Outline/user) is performed inside
+  // runJob() against the live outline_sections table because the user's
+  // request body is JSON-only and we cannot trust a pre-checked client.
+  const { data: ownedOutline, error: ownedError } = await db.from("outlines")
+    .select("id,user_id,lineage_id,story_arc_id")
     .eq("id", body.outline_id)
     .eq("user_id", identity.user.id)
     .maybeSingle();
+  if (ownedError) {
+    return errorResponse("db_error", ownedError.message, 500);
+  }
   if (!ownedOutline) {
     return errorResponse("not_found", "outline not found", 404);
   }
+  // PR 13: lineage match (when both sides are present).
+  const lineageMismatch = lineageMismatchResponse(
+    body.project_lineage_id,
+    ownedOutline.lineage_id,
+  );
+  if (lineageMismatch) return lineageMismatch;
+  // PR 13: source_recipe_json.project.id must equal body.project_id.
+  // CanonicalRecipe is a JSON object typed loosely; treat absent/invalid
+  // project.id as a malformed request.
+  const recipeProjectId = (body.source_recipe_json as { project?: { id?: unknown } })
+    ?.project?.id;
+  if (typeof recipeProjectId !== "string" || recipeProjectId.length === 0) {
+    return errorResponse(
+      "invalid_request",
+      "source_recipe_json.project.id is required",
+      400,
+    );
+  }
+  if (recipeProjectId !== body.project_id) {
+    return errorResponse(
+      "recipe_project_mismatch",
+      "source_recipe_json.project.id does not match body.project_id",
+      409,
+    );
+  }
+  // PR 13: every non-null submitted beat must belong to the outline's
+  // linked StoryArc. Outline with no story_arc_id cannot accept beat-tagged
+  // sections; outline with story_arc_id must own every submitted beat.
+  const submittedBeatIDs = Array.from(new Set(
+    body.sections
+      .map((s) => s.storyArcBeatID)
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+      .map(canonicalUUID),
+  ));
+  if (submittedBeatIDs.length > 0) {
+    if (!ownedOutline.story_arc_id) {
+      return errorResponse(
+        "beat_without_arc",
+        "submitted beats reference a Story Arc but the outline has no story_arc_id",
+        409,
+      );
+    }
+    const { data: arcBeats, error: arcBeatsError } = await db.from("story_arc_beats")
+      .select("id,story_arc_id")
+      .in("id", submittedBeatIDs);
+    if (arcBeatsError) {
+      return errorResponse("db_error", arcBeatsError.message, 500);
+    }
+    const arcBeatSet = new Set((arcBeats ?? []).map((b) => canonicalUUID(String(b.id))));
+    // Missing beats (already validated upstream as malformed UUIDs by
+    // validate()).
+    for (const id of submittedBeatIDs) {
+      if (!arcBeatSet.has(id)) {
+        return errorResponse(
+          "beat_not_in_arc",
+          `submitted beat ${id} does not belong to the outline's StoryArc`,
+          409,
+        );
+      }
+    }
+    // Foreign-project beat guard: even if the beat UUID is well-formed and
+    // exists in the global story_arc_beats table, it must belong to the
+    // outline's story_arc_id. Reject any beat whose story_arc_id differs.
+    const arcBeatMap = new Map((arcBeats ?? []).map((b) => [
+      canonicalUUID(String(b.id)),
+      canonicalUUID(String(b.story_arc_id)),
+    ]));
+    const outlineStoryArcID = canonicalUUID(String(ownedOutline.story_arc_id));
+    for (const id of submittedBeatIDs) {
+      const beatArcID = arcBeatMap.get(id);
+      if (beatArcID && beatArcID !== outlineStoryArcID) {
+        return errorResponse(
+          "beat_foreign_arc",
+          `submitted beat ${id} belongs to a different StoryArc`,
+          409,
+        );
+      }
+    }
+  }
+  // PR 12: compute the canonical server-side request fingerprint BEFORE
+  // insert. Used to detect idempotency-key reuse with a different request
+  // body (HTTP 409 idempotency_conflict) and to bind legacy rows on first
+  // matching POST after the migration.
+  const fingerprint = await computeRequestFingerprint(body);
+
   let { data: run, error } = await db.from("outline_accept_runs").insert({
     user_id: identity.user.id,
     outline_id: body.outline_id,
     project_id: body.project_id,
     idempotency_key: body.idempotency_key,
+    request_fingerprint: fingerprint,
     request_json: body,
     sections_total: body.sections.length,
-  }).select("id,status,created_at,updated_at").single();
+  }).select(
+    "id,status,created_at,updated_at,request_fingerprint,request_json",
+  ).single();
   if (error) {
+    // Duplicate (user_id, idempotency_key). Fetch the existing row's
+    // fingerprint + stored body to compare against the new request.
     const existing = await db.from("outline_accept_runs").select(
-      "id,status,created_at,updated_at",
+      "id,status,created_at,updated_at,request_fingerprint,request_json",
     ).eq("user_id", identity.user.id).eq(
       "idempotency_key",
       body.idempotency_key,
     ).single();
     if (!existing.data) return errorResponse("db_error", error.message, 500);
-    run = existing.data;
+    const existingRow = existing.data;
+
+    // PR 12: three-way comparison.
+    //   1. Same key + same fingerprint → resolve existing run, do not rebind.
+    //   2. Same key + null fingerprint (legacy row) → hash stored body, bind
+    //      the fingerprint if it matches the new request, else 409 conflict.
+    //   3. Same key + different fingerprint → 409 idempotency_conflict.
+    if (existingRow.request_fingerprint === fingerprint) {
+      run = existingRow;
+    } else if (existingRow.request_fingerprint === null) {
+      let legacyFingerprint: string;
+      try {
+        legacyFingerprint = await computeRequestFingerprint(
+          existingRow.request_json as RequestBody,
+        );
+      } catch (_) {
+        // Stored body is malformed or missing fields. Treat as conflict
+        // rather than silently rebinding.
+        return errorResponse(
+          "idempotency_conflict",
+          "Idempotency key already used with a different request body",
+          409,
+        );
+      }
+      if (legacyFingerprint !== fingerprint) {
+        return errorResponse(
+          "idempotency_conflict",
+          "Idempotency key already used with a different request body",
+          409,
+        );
+      }
+      // Bind the fingerprint to the legacy row and resolve.
+      await db.from("outline_accept_runs").update({
+        request_fingerprint: fingerprint,
+      }).eq("id", existingRow.id);
+      run = { ...existingRow, request_fingerprint: fingerprint };
+    } else {
+      return errorResponse(
+        "idempotency_conflict",
+        "Idempotency key already used with a different request body",
+        409,
+      );
+    }
   }
   const resolvedRun = run;
   if (!resolvedRun) {

@@ -109,6 +109,24 @@ private final class SpyProjectCloudSyncService: ProjectCloudSyncServiceProtocol 
             duplicateWarnings: []
         )
     }
+
+    @MainActor
+    func restoreProject(
+        localProjectID: UUID,
+        projectLineageID: UUID,
+        into context: ModelContext,
+        includeTombstoned: Bool
+    ) async throws -> ProjectRestoreReport {
+        ProjectRestoreReport(
+            projects: [],
+            localProjectCountBefore: 0,
+            cloudProjectCountBefore: 0,
+            insertedCount: 0,
+            updatedCount: 0,
+            skippedTombstonedCount: 0,
+            duplicateWarnings: []
+        )
+    }
 }
 
 private final class NoOpProjectOutputSyncService: GenerationOutputSyncServiceProtocol {
@@ -191,6 +209,75 @@ final class ProjectCloudSyncTests: XCTestCase {
         }
 
         try await service.syncProject(project)
+    }
+
+    func testFetchCanonicalOutlineLineageUsesServerOutlineIdentity() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "user-lineage", email: "lineage@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting(
+                projectURL: URL(string: "https://example.supabase.co")!,
+                anonKey: "anon-key"
+            ),
+            tombstoneService: MockProjectTombstoneService()
+        )
+        let outlineID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        let lineageID = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/rest/v1/outlines")
+            let queryItems = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertEqual(queryItems.first(where: { $0.name == "id" })?.value, "eq.\(outlineID.uuidString)")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "select" })?.value, "lineage_id")
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data("[{\"lineage_id\":\"\(lineageID.uuidString)\"}]".utf8))
+        }
+
+        let resolved = try await service.fetchCanonicalOutlineLineage(outlineID: outlineID)
+        XCTAssertEqual(resolved, lineageID)
+    }
+
+    func testSyncProjectSnapshotAcceptsCanonicalRPCObjectResponse() async throws {
+        let session = makeSession()
+        let userID = "11111111-1111-1111-1111-111111111111"
+        let (project, payload) = try buildFixturePayload(lineageID: UUID())
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/rest/v1/rpc/write_project_snapshot_canonical")
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data("{\"local_project_id\":\"\(project.id.uuidString)\"}".utf8))
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting(),
+            tombstoneService: MockProjectTombstoneService()
+        )
+        try await service.syncProjectSnapshot(
+            localProjectID: project.id.uuidString,
+            payload: payload
+        )
     }
 
     func testDeleteSnapshotUsesAuthenticatedCaseInsensitiveStableIdentityAndVerifiesResponse() async throws {
@@ -649,7 +736,1035 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(uploadRequestCount, 1, "Bulk sync must send the active project upload.")
     }
 
-    func testRestoreAllProjectsReusesCloudLocalProjectIDAndProjectNotes() async throws {
+    func testRestoreProjectUsesCanonicalLineageOrFilter() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let project = StoryProject(name: "Targeted Restore")
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let queryItems = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems)
+            // Targeted restore must identify the project by canonical lineage OR
+            // the known local id so a drifted/historical `local_project_id` for
+            // the same lineage still resolves the correct row.
+            let orFilter = queryItems.first(where: { $0.name == "or" })?.value
+            XCTAssertNotNil(orFilter, "Targeted restore must send an OR filter covering local_project_id and lineage_id.")
+            XCTAssertTrue(orFilter?.contains("local_project_id.eq.\(localProjectID.uuidString)") ?? false,
+                           "OR filter must include the known local_project_id so drifted rows match.")
+            XCTAssertTrue(orFilter?.contains("lineage_id.eq.\(localProjectID.uuidString)") ?? false,
+                           "OR filter must include the canonical lineage_id so current rows match.")
+            XCTAssertNil(queryItems.first(where: { $0.name == "local_project_id" }),
+                         "Targeted restore must not duplicate the local_project_id filter outside the OR; it would defeat the lineage alias match.")
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+        let report = try await service.restoreProject(localProjectID: localProjectID, into: context)
+
+        XCTAssertEqual(report.projects.map(\.id), [localProjectID])
+        XCTAssertEqual(report.cloudProjectCountBefore, 1)
+    }
+
+    func testRestoreProjectReconcilesDriftedLocalProjectIDViaCanonicalLineage() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let currentLocalID = UUID()
+        let driftedLocalID = UUID()
+        let canonicalLineageID = UUID()
+        let project = StoryProject(name: "Drifted Restore")
+        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        // Cloud row carries the drifted local_project_id; canonical lineage is
+        // preserved so the Accept All refresh can still reconcile the project
+        // even when the local id has drifted.
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (driftedLocalID, canonicalLineageID, payload, "2026-09-11T14:00:00Z")
+        ])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+        // The Accept All caller passes the canonical lineage id plus its known
+        // local id. The cloud row's local_project_id is drifted; the lineage
+        // filter is what allows the restore to fetch it.
+        let report = try await service.restoreProject(
+            localProjectID: currentLocalID,
+            projectLineageID: canonicalLineageID,
+            into: context,
+            includeTombstoned: false
+        )
+
+        XCTAssertEqual(report.projects.count, 1, "Drifted cloud row must still reconcile the canonical project.")
+        XCTAssertEqual(report.projects.first?.id, driftedLocalID, "Restored local id must follow the canonical cloud identity, not the caller's currently-known local id.")
+        XCTAssertEqual(report.projects.first?.lineageID, canonicalLineageID)
+    }
+
+    func testRestoreProjectDoesNotRestoreUnrelatedCloudRows() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let targetedLocalID = UUID()
+        let targetedLineageID = UUID()
+        let unrelatedLocalID = UUID()
+        let unrelatedLineageID = UUID()
+        let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Target"))
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (targetedLocalID, targetedLineageID, payload, "2026-09-11T14:00:00Z"),
+            (unrelatedLocalID, unrelatedLineageID, payload, "2026-09-11T14:00:00Z")
+        ])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+        // Note: with the OR filter, only the targeted lineage row would be
+        // fetched server-side. To prove the client refuses leaked rows anyway,
+        // we manually inject an unrelated row and assert it is rejected.
+        do {
+            _ = try await service.restoreProject(
+                localProjectID: targetedLocalID,
+                projectLineageID: targetedLineageID,
+                into: context,
+                includeTombstoned: false
+            )
+            XCTFail("Targeted restore must reject cloud rows belonging to a different lineage.")
+        } catch ProjectCloudSyncError.ambiguousSnapshotIdentity {
+            // Expected: the unrelated row belongs to a different canonical lineage.
+        } catch {
+            XCTFail("Expected ambiguousSnapshotIdentity, got \(error)")
+        }
+    }
+
+    func testRestoreProjectDoesNotMutateUnrelatedLocalProjects() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let targetedLocalID = UUID()
+        let targetedLineageID = UUID()
+        let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Targeted"))
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (targetedLocalID, targetedLineageID, payload, "2026-09-11T14:00:00Z")
+        ])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+        // Seed two unrelated local projects; a targeted restore must not touch them.
+        let unrelatedA = StoryProject(name: "Unrelated A")
+        let unrelatedB = StoryProject(name: "Unrelated B")
+        unrelatedA.notes = "keep me"
+        unrelatedB.notes = "keep me too"
+        context.insert(unrelatedA)
+        context.insert(unrelatedB)
+        try context.save()
+
+        let report = try await service.restoreProject(
+            localProjectID: targetedLocalID,
+            projectLineageID: targetedLineageID,
+            into: context,
+            includeTombstoned: false
+        )
+
+        XCTAssertEqual(report.insertedCount, 1)
+        let allProjects = try context.fetch(FetchDescriptor<StoryProject>())
+        XCTAssertEqual(allProjects.count, 3, "Targeted restore must not delete or merge unrelated local projects.")
+        XCTAssertTrue(allProjects.contains(where: { $0.id == unrelatedA.id && $0.notes == "keep me" }))
+        XCTAssertTrue(allProjects.contains(where: { $0.id == unrelatedB.id && $0.notes == "keep me too" }))
+    }
+
+    func testRestoreProjectThrowsTargetedSnapshotNotFoundWhenCanonicalProjectMissing() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let targetedLocalID = UUID()
+        let targetedLineageID = UUID()
+        // Empty cloud response: the canonical project should exist after Accept
+        // All completes. A silent empty restore would mislabel the refresh as
+        // successful, so this must throw explicitly.
+        let responseData = try makeRestoreResponse(rowsWithLineage: [])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        do {
+            _ = try await service.restoreProject(
+                localProjectID: targetedLocalID,
+                projectLineageID: targetedLineageID,
+                into: context,
+                includeTombstoned: false
+            )
+            XCTFail("Targeted restore must throw when the canonical project is missing from cloud.")
+        } catch let error as ProjectCloudSyncError {
+            if case let .targetedSnapshotNotFound(reportedLocal, reportedLineage) = error {
+                XCTAssertEqual(reportedLocal, targetedLocalID.uuidString.lowercased())
+                XCTAssertEqual(reportedLineage, targetedLineageID.uuidString.lowercased())
+            } else {
+                XCTFail("Expected targetedSnapshotNotFound, got \(error)")
+            }
+        }
+    }
+
+    func testRestoreProjectThrowsAmbiguousWhenCloudRowBelongsToDifferentLineage() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let targetedLocalID = UUID()
+        let targetedLineageID = UUID()
+        let impostorLineageID = UUID()
+        let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Impostor"))
+        // Cloud row matches the targeted local id but carries a different
+        // lineage. The identity pre-flight must reject this row so a future
+        // ambiguous upstream read cannot leak a different project's snapshot.
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (targetedLocalID, impostorLineageID, payload, "2026-09-11T14:00:00Z")
+        ])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        do {
+            _ = try await service.restoreProject(
+                localProjectID: targetedLocalID,
+                projectLineageID: targetedLineageID,
+                into: context,
+                includeTombstoned: false
+            )
+            XCTFail("Targeted restore must reject rows whose lineage does not match the requested canonical lineage.")
+        } catch let error as ProjectCloudSyncError {
+            if case .ambiguousSnapshotIdentity = error {
+                // Expected.
+            } else {
+                XCTFail("Expected ambiguousSnapshotIdentity, got \(error)")
+            }
+        }
+    }
+
+    // MARK: - ProjectRestoreOperationGate (scope-aware coalescing)
+
+    @MainActor
+    func testRestoreOperationGateCoalescesIdenticalTargetedScopes() async throws {
+        let gate = ProjectRestoreOperationGate()
+        let scope = ProjectRestoreScope.project(localProjectID: UUID(), lineageID: UUID())
+        let state = GateTestState()
+        let firstReport = ProjectRestoreReport(
+            projects: [],
+            localProjectCountBefore: 0,
+            cloudProjectCountBefore: 0,
+            insertedCount: 0,
+            updatedCount: 0,
+            skippedTombstonedCount: 0,
+            duplicateWarnings: []
+        )
+        let firstStarted = expectation(description: "first op started")
+        let secondReturned = expectation(description: "second task returned")
+
+        let firstTask = Task { @MainActor in
+            try await gate.run(scope: scope) {
+                state.recordInvocation()
+                firstStarted.fulfill()
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    state.installResume { continuation.resume() }
+                }
+                return firstReport
+            }
+        }
+
+        await fulfillment(of: [firstStarted], timeout: 1.0)
+        XCTAssertEqual(state.invocationCount, 1)
+
+        let secondTask = Task { @MainActor in
+            let report = try await gate.run(scope: scope) {
+                state.recordInvocation()
+                return ProjectRestoreReport(
+                    projects: [],
+                    localProjectCountBefore: 0,
+                    cloudProjectCountBefore: 0,
+                    insertedCount: 0,
+                    updatedCount: 0,
+                    skippedTombstonedCount: 0,
+                    duplicateWarnings: []
+                )
+            }
+            secondReturned.fulfill()
+            return report
+        }
+
+        // Wait for second task to enter the gate and (correctly) coalesce.
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(state.invocationCount, 1, "Second invocation with identical scope must coalesce, not re-run.")
+
+        state.callResume()
+
+        let result1 = try await firstTask.value
+        let result2 = try await secondTask.value
+        await fulfillment(of: [secondReturned], timeout: 1.0)
+        XCTAssertEqual(result1.projects.count, 0)
+        XCTAssertEqual(result2.projects.count, 0)
+    }
+
+    @MainActor
+    func testRestoreOperationGateDoesNotCoalesceDistinctTargetedScopes() async throws {
+        let gate = ProjectRestoreOperationGate()
+        let scopeA = ProjectRestoreScope.project(localProjectID: UUID(), lineageID: UUID())
+        let scopeB = ProjectRestoreScope.project(localProjectID: UUID(), lineageID: UUID())
+        XCTAssertNotEqual(scopeA, scopeB, "Distinct lineage ids must produce distinct scopes.")
+        let state = GateTestState()
+        let firstStarted = expectation(description: "op A started")
+        let secondStarted = expectation(description: "op B started")
+
+        let taskA = Task { @MainActor in
+            try await gate.run(scope: scopeA) {
+                state.recordInvocation()
+                firstStarted.fulfill()
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    state.installResume { continuation.resume() }
+                }
+                return ProjectRestoreReport(
+                    projects: [],
+                    localProjectCountBefore: 0,
+                    cloudProjectCountBefore: 0,
+                    insertedCount: 0,
+                    updatedCount: 0,
+                    skippedTombstonedCount: 0,
+                    duplicateWarnings: []
+                )
+            }
+        }
+
+        await fulfillment(of: [firstStarted], timeout: 1.0)
+        XCTAssertEqual(state.invocationCount, 1)
+
+        let taskB = Task { @MainActor in
+            try await gate.run(scope: scopeB) {
+                state.recordInvocation()
+                secondStarted.fulfill()
+                return ProjectRestoreReport(
+                    projects: [],
+                    localProjectCountBefore: 0,
+                    cloudProjectCountBefore: 0,
+                    insertedCount: 0,
+                    updatedCount: 0,
+                    skippedTombstonedCount: 0,
+                    duplicateWarnings: []
+                )
+            }
+        }
+
+        await fulfillment(of: [secondStarted], timeout: 1.0)
+        XCTAssertEqual(state.invocationCount, 2, "Distinct targeted scopes must run independently — neither must piggyback on the other.")
+
+        state.callResume()
+        _ = try await taskA.value
+        _ = try await taskB.value
+    }
+
+    @MainActor
+    func testRestoreOperationGateDoesNotCoalesceTargetedAndFullScopes() async throws {
+        // Order: targeted-then-full. The full restore must not piggyback on
+        // the targeted scope and falsely report success without running.
+        let gate = ProjectRestoreOperationGate()
+        let targeted = ProjectRestoreScope.project(localProjectID: UUID(), lineageID: UUID())
+        let state = GateTestState()
+        let targetedStarted = expectation(description: "targeted started")
+        let fullStarted = expectation(description: "full started")
+
+        let targetedTask = Task { @MainActor in
+            try await gate.run(scope: targeted) {
+                state.recordInvocation()
+                targetedStarted.fulfill()
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    state.installResume { continuation.resume() }
+                }
+                return ProjectRestoreReport(
+                    projects: [],
+                    localProjectCountBefore: 0,
+                    cloudProjectCountBefore: 0,
+                    insertedCount: 0,
+                    updatedCount: 0,
+                    skippedTombstonedCount: 0,
+                    duplicateWarnings: []
+                )
+            }
+        }
+
+        await fulfillment(of: [targetedStarted], timeout: 1.0)
+        XCTAssertEqual(state.invocationCount, 1)
+
+        let fullTask = Task { @MainActor in
+            try await gate.run(scope: .allProjects) {
+                state.recordInvocation()
+                fullStarted.fulfill()
+                return ProjectRestoreReport(
+                    projects: [],
+                    localProjectCountBefore: 0,
+                    cloudProjectCountBefore: 0,
+                    insertedCount: 0,
+                    updatedCount: 0,
+                    skippedTombstonedCount: 0,
+                    duplicateWarnings: []
+                )
+            }
+        }
+
+        await fulfillment(of: [fullStarted], timeout: 1.0)
+        XCTAssertEqual(state.invocationCount, 2, "Full restore must not piggyback on an in-flight targeted scope and falsely succeed.")
+
+        state.callResume()
+        _ = try await targetedTask.value
+        _ = try await fullTask.value
+    }
+
+    @MainActor
+    func testRestoreOperationGateDoesNotCoalesceFullAndTargetedScopes() async throws {
+        // Reverse order: full-then-targeted. The targeted restore must not
+        // piggyback on the full restore scope.
+        let gate = ProjectRestoreOperationGate()
+        let targeted = ProjectRestoreScope.project(localProjectID: UUID(), lineageID: UUID())
+        let state = GateTestState()
+        let fullStarted = expectation(description: "full started first")
+        let targetedStarted = expectation(description: "targeted started second")
+
+        let fullTask = Task { @MainActor in
+            try await gate.run(scope: .allProjects) {
+                state.recordInvocation()
+                fullStarted.fulfill()
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    state.installResume { continuation.resume() }
+                }
+                return ProjectRestoreReport(
+                    projects: [],
+                    localProjectCountBefore: 0,
+                    cloudProjectCountBefore: 0,
+                    insertedCount: 0,
+                    updatedCount: 0,
+                    skippedTombstonedCount: 0,
+                    duplicateWarnings: []
+                )
+            }
+        }
+
+        await fulfillment(of: [fullStarted], timeout: 1.0)
+        XCTAssertEqual(state.invocationCount, 1)
+
+        let targetedTask = Task { @MainActor in
+            try await gate.run(scope: targeted) {
+                state.recordInvocation()
+                targetedStarted.fulfill()
+                return ProjectRestoreReport(
+                    projects: [],
+                    localProjectCountBefore: 0,
+                    cloudProjectCountBefore: 0,
+                    insertedCount: 0,
+                    updatedCount: 0,
+                    skippedTombstonedCount: 0,
+                    duplicateWarnings: []
+                )
+            }
+        }
+
+        await fulfillment(of: [targetedStarted], timeout: 1.0)
+        XCTAssertEqual(state.invocationCount, 2, "Targeted restore must not piggyback on an in-flight full restore and falsely succeed.")
+
+        state.callResume()
+        _ = try await fullTask.value
+        _ = try await targetedTask.value
+    }
+
+    // MARK: - Section Contract round-trip + parent reconciliation (Fix the Shit PR3)
+
+    // MARK: - Helper assertions for the 16-field canonical Section Contract surface
+
+    /// Assert all 16 canonical Section Contract metadata fields on a SwiftData
+    /// `OutlineSection` after restore. The payload→section conversion must
+    /// preserve every field without loss.
+    private func assertRestoredSectionContract(
+        _ section: OutlineSection,
+        expectedEntry: String,
+        expectedEvent: String,
+        expectedChange: String,
+        expectedTerminal: String,
+        expectedArcBeatID: UUID?,
+        expectedRecipeIDs: [String],
+        expectedTitle: String,
+        expectedSummary: String,
+        expectedPosition: Int
+    ) {
+        XCTAssertEqual(section.entryState, expectedEntry)
+        XCTAssertEqual(section.dramaticEvent, expectedEvent)
+        XCTAssertEqual(section.resultingChange, expectedChange)
+        XCTAssertEqual(section.terminalState, expectedTerminal)
+        XCTAssertEqual(section.targetWords, 1200)
+        XCTAssertEqual(section.targetWordsMin, 900)
+        XCTAssertEqual(section.targetWordsMax, 1500)
+        XCTAssertEqual(section.storyArcBeatID, expectedArcBeatID)
+        XCTAssertEqual(section.recipeRequirementIDs, expectedRecipeIDs)
+        XCTAssertEqual(section.container, "scene")
+        XCTAssertEqual(section.pov, "thirdPersonLimited")
+        XCTAssertEqual(section.terminalBeat, "the door closes")
+        XCTAssertEqual(section.status, "draft")
+        XCTAssertEqual(section.position, expectedPosition)
+        XCTAssertEqual(section.title, expectedTitle)
+        XCTAssertEqual(section.summary, expectedSummary)
+    }
+
+    /// Assert all 16 canonical Section Contract metadata fields on a
+    /// `ProjectImportExportPayload.OutlineSectionPayload` after re-encode.
+    private func assertReEncodedSectionContract(
+        _ payload: ProjectImportExportPayload.OutlineSectionPayload,
+        expectedEntry: String,
+        expectedEvent: String,
+        expectedChange: String,
+        expectedTerminal: String,
+        expectedArcBeatID: String?,
+        expectedRecipeIDs: [String],
+        expectedTitle: String,
+        expectedSummary: String,
+        expectedPosition: Int
+    ) {
+        XCTAssertEqual(payload.entryState, expectedEntry)
+        XCTAssertEqual(payload.dramaticEvent, expectedEvent)
+        XCTAssertEqual(payload.resultingChange, expectedChange)
+        XCTAssertEqual(payload.terminalState, expectedTerminal)
+        XCTAssertEqual(payload.targetWords, 1200)
+        XCTAssertEqual(payload.targetWordsMin, 900)
+        XCTAssertEqual(payload.targetWordsMax, 1500)
+        XCTAssertEqual(payload.storyArcBeatID, expectedArcBeatID.uuidString)
+        XCTAssertEqual(payload.recipeRequirementIDs, expectedRecipeIDs)
+        XCTAssertEqual(payload.container, "scene")
+        XCTAssertEqual(payload.pov, "thirdPersonLimited")
+        XCTAssertEqual(payload.terminalBeat, "the door closes")
+        XCTAssertEqual(payload.status, "draft")
+        XCTAssertEqual(payload.position, expectedPosition)
+        XCTAssertEqual(payload.title, expectedTitle)
+        XCTAssertEqual(payload.summary, expectedSummary)
+    }
+
+    /// Build a populated `OutlineSection` with the canonical 16-field Section
+    /// Contract surface. Used as a building block for round-trip fixtures.
+    private func makeFixtureSection(
+        position: Int,
+        title: String,
+        summary: String = "Default summary"
+    ) -> OutlineSection {
+        let section = OutlineSection(position: position, title: title, summary: summary)
+        section.container = "scene"
+        section.pov = "thirdPersonLimited"
+        section.terminalBeat = "the door closes"
+        section.status = "draft"
+        section.entryState = "at the gate"
+        section.dramaticEvent = "the messenger arrives"
+        section.resultingChange = "the gate is opened"
+        section.terminalState = "the hero steps through"
+        section.targetWords = 1200
+        section.targetWordsMin = 900
+        section.targetWordsMax = 1500
+        section.storyArcBeatID = UUID()
+        section.recipeRequirementIDs = ["req-1", "req-2", "req-3"]
+        return section
+    }
+
+    /// Build a `StoryProject` + `Outline` + `OutlineSection` fixture in a fresh
+    /// SwiftData context and return the serialized payload. The serialization
+    /// path uses the production builder signature `build(project:modelContext:)`.
+    private func buildFixturePayload(
+        lineageID: UUID,
+        includeLegacyNilContract: Bool = false,
+        builder: (ModelContext, StoryProject, Outline) throws -> Void = { _, _, _ in }
+    ) throws -> (StoryProject, ProjectImportExportPayload) {
+        let context = ModelContext(try makeProjectContainer())
+        let project = StoryProject(name: "Round Trip Project")
+        project.lineageID = lineageID
+        context.insert(project)
+        let outline = Outline(name: "Main Outline")
+        outline.project = project
+        context.insert(outline)
+        try builder(context, project, outline)
+        if includeLegacyNilContract {
+            // No-op: caller chose not to populate Section Contract fields.
+        }
+        try context.save()
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        return (project, payload)
+    }
+
+    /// Round-trip a payload through the production restore path into a fresh
+    /// SwiftData context and return the restored project so the caller can
+    /// assert on every field.
+    private func roundTripRestore(
+        payload: ProjectImportExportPayload,
+        localProjectID: UUID,
+        lineageID: UUID
+    ) async throws -> (ProjectRestoreReport, StoryProject?) {
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (localProjectID, lineageID, payload, "2026-09-11T19:00:00Z")
+        ])
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, responseData)
+        }
+        let service = ProjectCloudSyncService(
+            authService: MockProjectCloudSyncAuthService(
+                authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+                accessToken: "user-jwt-token"
+            ),
+            session: makeSession(),
+            configuration: .makeForTesting(),
+            tombstoneService: MockProjectTombstoneService()
+        )
+        let restoreContext = ModelContext(try makeProjectContainer())
+        let report = try await service.restoreProject(
+            localProjectID: localProjectID,
+            projectLineageID: lineageID,
+            into: restoreContext,
+            includeTombstoned: false
+        )
+        let restoredProject = restoreContext.fetch(FetchDescriptor<StoryProject>()).first
+        return (report, restoredProject)
+    }
+
+    /// Build a payload whose child section's `parentID` is rewritten (set to a
+    /// new UUID string or cleared to NSNull). Round-trips through JSON because
+    /// `OutlineSectionPayload` is immutable.
+    private func rewriteSectionParentID(
+        payload: ProjectImportExportPayload,
+        sectionTitle: String,
+        newParentID: String?
+    ) throws -> ProjectImportExportPayload {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(payload)
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var outlines = try XCTUnwrap(root["outlines"] as? [[String: Any]])
+        for i in outlines.indices {
+            var sections = try XCTUnwrap(outlines[i]["sections"] as? [[String: Any]])
+            for j in sections.indices {
+                if (sections[j]["title"] as? String) == sectionTitle {
+                    sections[j]["parentID"] = newParentID ?? NSNull()
+                }
+            }
+            outlines[i]["sections"] = sections
+        }
+        root["outlines"] = outlines
+        let modifiedData = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        return try JSONDecoder().decode(ProjectImportExportPayload.self, from: modifiedData)
+    }
+
+    /// Reverse the section order within every outline in the payload. Used to
+    /// prove the import mapper's two-pass reconciliation does not depend on the
+    /// sync builder placing parents before children.
+    private func reverseSectionOrder(
+        payload: ProjectImportExportPayload
+    ) throws -> ProjectImportExportPayload {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(payload)
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var outlines = try XCTUnwrap(root["outlines"] as? [[String: Any]])
+        for i in outlines.indices {
+            var sections = try XCTUnwrap(outlines[i]["sections"] as? [[String: Any]])
+            sections.reverse()
+            outlines[i]["sections"] = sections
+        }
+        root["outlines"] = outlines
+        let modifiedData = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        return try JSONDecoder().decode(ProjectImportExportPayload.self, from: modifiedData)
+    }
+
+    // MARK: - End-to-end Section Contract round-trip
+
+    /// A populated Section Contract must survive a complete
+    /// encode → restore → re-encode round trip without loss. Covers the
+    /// four state/change fields, the three length fields, the arc beat id,
+    /// the recipe obligation ids, the parent id, the container/pov/terminal
+    /// metadata, status, position, title, and summary — every canonical
+    /// Section Contract metadata surface that current `origin/main` already
+    /// carries. Built on real SwiftData fixtures (insert StoryProject,
+    /// Outline, OutlineSection rows; attach relationships; save).
+    func testSectionContractRoundTripPreservesAllFields() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let section = makeFixtureSection(position: 0, title: "Section 1", summary: "Opens the arc")
+            section.outline = outline
+            context.insert(section)
+        }
+        let arcBeatIDString = try XCTUnwrap(payload.outlines.first?.sections.first?.storyArcBeatID)
+        let expectedArcBeatID = UUID(uuidString: arcBeatIDString)
+        let expectedRecipeIDs = try XCTUnwrap(payload.outlines.first?.sections.first?.recipeRequirementIDs)
+
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: payload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 1)
+        let restored = try XCTUnwrap(restoredProject?.outlines.first?.sections.first)
+        assertRestoredSectionContract(
+            restored,
+            expectedEntry: "at the gate",
+            expectedEvent: "the messenger arrives",
+            expectedChange: "the gate is opened",
+            expectedTerminal: "the hero steps through",
+            expectedArcBeatID: expectedArcBeatID,
+            expectedRecipeIDs: expectedRecipeIDs,
+            expectedTitle: "Section 1",
+            expectedSummary: "Opens the arc",
+            expectedPosition: 0
+        )
+        XCTAssertNil(restored.parent, "Top-level section must have no parent.")
+        // OutlineSection does not own a direct project property; the canonical
+        // relationship chain is section.outline?.project. Assert the chain is
+        // wired through restore.
+        XCTAssertIdentical(restored.outline?.project, restoredProject)
+
+        // Re-encode the restored graph and verify every Section Contract field
+        // survives the second encode pass (round trip).
+        let restoreContext = ModelContext(try makeProjectContainer())
+        // We need to re-insert the restored project into the re-encode context
+        // because each makeProjectContainer() builds an isolated in-memory store.
+        // Build the re-encode context by reusing the restored project's model.
+        let reEncodedProject = try XCTUnwrap(restoredProject)
+        let reEncoded = ProjectSchemaTemplateBuilder.build(project: reEncodedProject, modelContext: ModelContext(try makeProjectContainer()))
+        let reSection = try XCTUnwrap(reEncoded.outlines.first?.sections.first)
+        assertReEncodedSectionContract(
+            reSection,
+            expectedEntry: restored.entryState ?? "",
+            expectedEvent: restored.dramaticEvent ?? "",
+            expectedChange: restored.resultingChange ?? "",
+            expectedTerminal: restored.terminalState ?? "",
+            expectedArcBeatID: reSection.storyArcBeatID,
+            expectedRecipeIDs: restored.recipeRequirementIDs,
+            expectedTitle: restored.title,
+            expectedSummary: restored.summary,
+            expectedPosition: restored.position
+        )
+        XCTAssertNil(reSection.parentID, "Top-level section's parentID must be nil.")
+    }
+
+    /// Legacy outlines predate the Section Contract migration. All four
+    /// state/change fields and the three length fields are nil on those rows
+    /// and must restore cleanly without crashing the import mapper.
+    func testLegacyNullSectionContractRestores() async throws {
+        let lineageID = UUID()
+        // Build a project with a section that has NO Section Contract fields
+        // populated, simulating a pre-PR-#528 legacy outline.
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let section = OutlineSection(position: 0, title: "Legacy Section", summary: "Pre-528")
+            section.container = "scene"
+            section.pov = "thirdPersonLimited"
+            section.status = "draft"
+            section.recipeRequirementIDs = []
+            section.outline = outline
+            context.insert(section)
+        }
+
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: payload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 1)
+        let restored = try XCTUnwrap(restoredProject?.outlines.first?.sections.first)
+        XCTAssertNil(restored.entryState)
+        XCTAssertNil(restored.dramaticEvent)
+        XCTAssertNil(restored.resultingChange)
+        XCTAssertNil(restored.terminalState)
+        XCTAssertNil(restored.targetWords)
+        XCTAssertNil(restored.targetWordsMin)
+        XCTAssertNil(restored.targetWordsMax)
+        XCTAssertNil(restored.storyArcBeatID)
+        XCTAssertEqual(restored.recipeRequirementIDs, [])
+        XCTAssertEqual(restored.container, "scene")
+        XCTAssertEqual(restored.pov, "thirdPersonLimited")
+        XCTAssertEqual(restored.status, "draft")
+        XCTAssertEqual(restored.position, 0)
+        XCTAssertEqual(restored.title, "Legacy Section")
+        XCTAssertEqual(restored.summary, "Pre-528")
+    }
+
+    /// Child sections (parent != nil) must survive the same round trip as
+    /// top-level sections. PR3 closed the prior "grouping is a follow-up"
+    /// deferral; both the sync builder (serialize all sections) and the
+    /// import mapper (two-pass: create all, then set parents) now handle
+    /// grouped sub-sections. A child with its own populated Section Contract
+    /// must restore, retain its parent, and re-encode with the contract intact.
+    func testChildSectionRoundTripPreservesContract() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parentSection = makeFixtureSection(position: 0, title: "Chapter 1", summary: "Opens the arc")
+            parentSection.recipeRequirementIDs = ["req-parent"]
+            parentSection.outline = outline
+            context.insert(parentSection)
+            let childSection = makeFixtureSection(position: 0, title: "Scene 1", summary: "The arrival")
+            childSection.recipeRequirementIDs = ["req-child-1", "req-child-2"]
+            childSection.parent = parentSection
+            childSection.outline = outline
+            context.insert(childSection)
+        }
+        let childPayload = try XCTUnwrap(payload.outlines.first?.sections.first(where: { $0.title == "Scene 1" }))
+        let expectedArcBeatID = UUID(uuidString: try XCTUnwrap(childPayload.storyArcBeatID))
+        let expectedRecipeIDs = childPayload.recipeRequirementIDs
+        let parentIDString = try XCTUnwrap(payload.outlines.first?.sections.first(where: { $0.title == "Chapter 1" })).id
+
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: payload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 2, "Both parent and child must be restored.")
+        let sections = try XCTUnwrap(restoredProject?.outlines.first?.sections)
+        let restoredChild = try XCTUnwrap(sections.first(where: { $0.title == "Scene 1" }))
+        assertRestoredSectionContract(
+            restoredChild,
+            expectedEntry: "at the gate",
+            expectedEvent: "the messenger arrives",
+            expectedChange: "the gate is opened",
+            expectedTerminal: "the hero steps through",
+            expectedArcBeatID: expectedArcBeatID,
+            expectedRecipeIDs: expectedRecipeIDs,
+            expectedTitle: "Scene 1",
+            expectedSummary: "The arrival",
+            expectedPosition: 0
+        )
+        XCTAssertNotNil(restoredChild.parent, "Child must retain its parent pointer.")
+        XCTAssertEqual(restoredChild.parent?.id.uuidString, parentIDString, "Child's parent must point to the original parent section.")
+    }
+
+    // MARK: - Parent reconciliation regressions (Fix the Shit PR3)
+
+    /// A child section whose payload `parentID` is nil must clear any stale
+    /// parent that was attached before the restore. Without authoritative
+    /// reconciliation, an existing child would keep its old parent even though
+    /// the payload reclassifies it as top-level.
+    func testChildBecomesTopLevelWhenParentIDNil() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parentSection = makeFixtureSection(position: 0, title: "Chapter", summary: "Parent")
+            parentSection.recipeRequirementIDs = []
+            parentSection.outline = outline
+            context.insert(parentSection)
+            let childSection = makeFixtureSection(position: 0, title: "Scene", summary: "Child")
+            childSection.parent = parentSection
+            childSection.outline = outline
+            context.insert(childSection)
+        }
+        // Rewrite the payload so the child's parentID is nil (top-level).
+        let modifiedPayload = try rewriteSectionParentID(
+            payload: payload, sectionTitle: "Scene", newParentID: nil
+        )
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 2)
+        let restoredScene = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Scene" }))
+        XCTAssertNil(restoredScene.parent, "parentID = nil must clear the stale parent.")
+    }
+
+    /// Reparenting a child from parent A to parent B must work correctly.
+    /// The import mapper assigns the new parent based on the payload's
+    /// parentID, even if the child was previously attached to a different
+    /// parent locally.
+    func testChildReparentsToDifferentParent() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parentA = makeFixtureSection(position: 0, title: "Parent A", summary: "First parent")
+            parentA.recipeRequirementIDs = []
+            parentA.outline = outline
+            context.insert(parentA)
+            let parentB = makeFixtureSection(position: 1, title: "Parent B", summary: "Second parent")
+            parentB.recipeRequirementIDs = []
+            parentB.outline = outline
+            context.insert(parentB)
+            let child = makeFixtureSection(position: 0, title: "Child", summary: "Reparented")
+            child.parent = parentA
+            child.outline = outline
+            context.insert(child)
+        }
+        let parentBID = try XCTUnwrap(payload.outlines.first?.sections.first(where: { $0.title == "Parent B" })).id
+        let modifiedPayload = try rewriteSectionParentID(
+            payload: payload, sectionTitle: "Child", newParentID: parentBID
+        )
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 3)
+        let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
+        XCTAssertNotNil(restoredChild.parent)
+        XCTAssertEqual(restoredChild.parent?.id.uuidString, parentBID, "Child must be reparented to Parent B.")
+        XCTAssertNotEqual(restoredChild.parent?.title, "Parent A", "Child must no longer be attached to Parent A.")
+    }
+
+    /// A child whose payload `parentID` points to a parent absent from the
+    /// restored outline must be orphaned (parent = nil) rather than retaining a
+    /// stale local parent. This is the "missing/unresolvable parent" branch
+    /// of the authoritative reconciliation.
+    func testChildBecomesOrphanedWhenParentMissing() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parent = makeFixtureSection(position: 0, title: "Parent", summary: "Parent")
+            parent.recipeRequirementIDs = []
+            parent.outline = outline
+            context.insert(parent)
+            let child = makeFixtureSection(position: 0, title: "Child", summary: "Will orphan")
+            child.parent = parent
+            child.outline = outline
+            context.insert(child)
+        }
+        let nonExistentParentID = UUID().uuidString
+        let modifiedPayload = try rewriteSectionParentID(
+            payload: payload, sectionTitle: "Child", newParentID: nonExistentParentID
+        )
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 2)
+        let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
+        XCTAssertNil(restoredChild.parent, "Missing parent must result in orphan (parent = nil).")
+    }
+
+    /// The import mapper's two-pass reconciliation must not depend on the sync
+    /// builder placing parents before children. Payload order child-before-
+    /// parent must resolve identically to the canonical parent-before-child
+    /// order.
+    func testChildBeforeParentOrderStillResolves() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parent = makeFixtureSection(position: 0, title: "Parent", summary: "Parent")
+            parent.recipeRequirementIDs = []
+            parent.outline = outline
+            context.insert(parent)
+            let child = makeFixtureSection(position: 0, title: "Child", summary: "Reordered")
+            child.parent = parent
+            child.outline = outline
+            context.insert(child)
+        }
+        let parentID = try XCTUnwrap(payload.outlines.first?.sections.first(where: { $0.title == "Parent" })).id
+        let reorderedPayload = try reverseSectionOrder(payload: payload)
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: reorderedPayload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 2)
+        let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
+        XCTAssertNotNil(restoredChild.parent, "Child must resolve its parent even when the payload delivers child-before-parent.")
+        XCTAssertEqual(restoredChild.parent?.id.uuidString, parentID, "Child must point to the correct parent.")
+    }
+
+    /// Nested parent/child/grandchild relationships must survive restore with
+    /// every level of the hierarchy intact.
+    func testGrandchildRelationshipSurvivesRestore() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let parent = makeFixtureSection(position: 0, title: "Parent", summary: "Outer")
+            parent.recipeRequirementIDs = []
+            parent.outline = outline
+            context.insert(parent)
+            let child = makeFixtureSection(position: 0, title: "Child", summary: "Middle")
+            child.parent = parent
+            child.recipeRequirementIDs = ["req-mid"]
+            child.outline = outline
+            context.insert(child)
+            let grandchild = makeFixtureSection(position: 0, title: "Grandchild", summary: "Inner")
+            grandchild.parent = child
+            grandchild.recipeRequirementIDs = ["req-inner"]
+            grandchild.outline = outline
+            context.insert(grandchild)
+        }
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: payload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 3, "All three levels must be restored.")
+        let sections = try XCTUnwrap(restoredProject?.outlines.first?.sections)
+        let restoredParent = try XCTUnwrap(sections.first(where: { $0.title == "Parent" }))
+        let restoredChild = try XCTUnwrap(sections.first(where: { $0.title == "Child" }))
+        let restoredGrandchild = try XCTUnwrap(sections.first(where: { $0.title == "Grandchild" }))
+        XCTAssertNil(restoredParent.parent, "Parent is top-level.")
+        XCTAssertNotNil(restoredChild.parent)
+        XCTAssertEqual(restoredChild.parent?.id, restoredParent.id)
+        XCTAssertNotNil(restoredGrandchild.parent)
+        XCTAssertEqual(restoredGrandchild.parent?.id, restoredChild.id)
+    }
+
+    // MARK: - Self-parent rejection
+
+    /// A payload whose `parentID` equals the section's own id is a corrupt
+    /// hierarchy. The authoritative reconciliation must reject this by
+    /// clearing the parent rather than creating a self-referencing section.
+    func testSelfParentIsRejected() async throws {
+        let lineageID = UUID()
+        let (project, payload) = try buildFixturePayload(lineageID: lineageID) { context, project, outline in
+            let section = makeFixtureSection(position: 0, title: "Self Parent", summary: "Self-referencing")
+            section.recipeRequirementIDs = []
+            section.outline = outline
+            context.insert(section)
+        }
+        let selfID = try XCTUnwrap(payload.outlines.first?.sections.first).id
+        let modifiedPayload = try rewriteSectionParentID(
+            payload: payload, sectionTitle: "Self Parent", newParentID: selfID
+        )
+        let (report, restoredProject) = try await roundTripRestore(
+            payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
+        )
+        XCTAssertEqual(report.insertedCount, 1)
+        let restored = try XCTUnwrap(restoredProject?.outlines.first?.sections.first)
+        XCTAssertNil(restored.parent, "Self-parent must be rejected (parent = nil).")
+    }
+
+        func testRestoreAllProjectsReusesCloudLocalProjectIDAndProjectNotes() async throws {
         let session = makeSession()
         let userID = "11111111-1111-1111-1111-111111111111"
         let authService = MockProjectCloudSyncAuthService(
@@ -696,6 +1811,103 @@ final class ProjectCloudSyncTests: XCTestCase {
         let storedProjects = try context.fetch(FetchDescriptor<StoryProject>())
         XCTAssertEqual(storedProjects.count, 1)
         XCTAssertEqual(storedProjects.first?.id, localProjectID)
+    }
+
+    @MainActor
+    func testRestorePersistsCanonicalLineageWhenLocalProjectIDDiffers() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!
+        let canonicalLineageID = UUID(uuidString: "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB")!
+        let payloadProject = StoryProject(name: "Restored with canonical identity")
+        payloadProject.id = localProjectID
+        payloadProject.lineageID = localProjectID
+        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject)
+        let responseData = try makeRestoreResponse(rowsWithLineage: [
+            (localProjectID, canonicalLineageID, payload, "2026-09-14T14:00:00Z")
+        ])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+        let existing = StoryProject(name: "Stale local copy")
+        existing.id = localProjectID
+        existing.lineageID = nil
+        context.insert(existing)
+        try context.save()
+
+        let report = try await service.restoreAllProjects(into: context)
+        let restored = try XCTUnwrap(report.projects.first)
+        XCTAssertEqual(restored.id, localProjectID)
+        XCTAssertEqual(restored.lineageID, canonicalLineageID)
+        XCTAssertEqual(restored.stableLineageID, canonicalLineageID)
+
+        let persisted = try XCTUnwrap(
+            context.fetch(FetchDescriptor<StoryProject>()).first(where: { $0.id == localProjectID })
+        )
+        XCTAssertEqual(persisted.lineageID, canonicalLineageID)
+    }
+
+    @MainActor
+    func testRestoreRejectsCloudSnapshotWithoutCanonicalLineage() async throws {
+        let session = makeSession()
+        let authService = MockProjectCloudSyncAuthService(
+            authState: .signedIn(AuthUser(id: "11111111-1111-1111-1111-111111111111", email: "test@example.com")),
+            accessToken: "user-jwt-token"
+        )
+        let localProjectID = UUID()
+        let payloadProject = StoryProject(name: "Missing cloud lineage")
+        payloadProject.id = localProjectID
+        payloadProject.lineageID = nil
+        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject)
+        let responseData = try makeRestoreResponse(rows: [
+            (localProjectID, payload, "2026-09-14T14:00:00Z")
+        ])
+
+        ProjectCloudSyncURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, responseData)
+        }
+
+        let service = ProjectCloudSyncService(
+            authService: authService,
+            session: session,
+            configuration: .makeForTesting()
+        )
+        let context = ModelContext(try makeProjectContainer())
+
+        do {
+            _ = try await service.restoreAllProjects(into: context)
+            XCTFail("Expected cloud restore to reject a missing canonical lineage")
+        } catch let error as ProjectCloudSyncError {
+            guard case .missingCanonicalLineage(let id) = error else {
+                XCTFail("Expected missingCanonicalLineage, got \(error)")
+                return
+            }
+            XCTAssertEqual(id, localProjectID.uuidString)
+        }
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
     }
 
     func testRestoreAllProjectsIsIdempotentAcrossRepeatedRuns() async throws {
@@ -1073,6 +2285,59 @@ final class ProjectCloudSyncTests: XCTestCase {
         } catch {
             XCTFail("Expected ProjectCloudSyncError, got \(error)")
         }
+    }
+
+    @MainActor
+    func testSnapshotBuildRootFetchesRecipeArcAndOutlineWhenInverseCachesAreStale() throws {
+        let context = ModelContext(try makeProjectContainer())
+        let persistedProject = StoryProject(name: "Authoritative Snapshot Story")
+        context.insert(persistedProject)
+        try context.save()
+
+        let recipe = PromptPack(name: "Canonical Recipe")
+        recipe.project = persistedProject
+        context.insert(recipe)
+
+        let arc = StoryArc()
+        arc.templateID = StoryArcTemplate.saveTheCat.id
+        arc.project = persistedProject
+        context.insert(arc)
+        for (position, beatTemplate) in StoryArcTemplate.saveTheCat.beats.enumerated() {
+            let beat = StoryArcBeat(
+                position: position,
+                role: beatTemplate.role,
+                label: beatTemplate.label,
+                details: beatTemplate.description
+            )
+            beat.storyArc = arc
+            context.insert(beat)
+        }
+
+        let outline = Outline(name: "Canonical Outline")
+        outline.project = persistedProject
+        outline.storyArcID = arc.id
+        context.insert(outline)
+        try context.save()
+
+        // This detached project has the same persisted identity but empty
+        // inverse caches, simulating a stale SwiftData relationship graph.
+        let staleProject = StoryProject(name: persistedProject.name)
+        staleProject.id = persistedProject.id
+        staleProject.lineageID = persistedProject.lineageID
+        XCTAssertTrue(staleProject.promptPacks.isEmpty)
+        XCTAssertTrue(staleProject.storyArcs.isEmpty)
+        XCTAssertTrue(staleProject.outlines.isEmpty)
+
+        let payload = ProjectSchemaTemplateBuilder.build(
+            project: staleProject,
+            modelContext: context
+        )
+
+        XCTAssertEqual(payload.promptPacks.map(\.name), ["Canonical Recipe"])
+        XCTAssertEqual(payload.storyArcs.count, 1)
+        XCTAssertEqual(payload.storyArcs.first?.beats.count, 15)
+        XCTAssertEqual(payload.outlines.count, 1)
+        XCTAssertEqual(payload.outlines.first?.storyArcID, arc.id.uuidString)
     }
 
     func testProjectSnapshotPayloadRoundTripsProjectNotes() {
@@ -1641,7 +2906,23 @@ private final class ThrowingProjectBackupDeletionService: ProjectBackupDeletionS
         return SyncTombstoneSet(records: [record])
     }
 
-    private func makeProjectContainer() throws -> ModelContainer {
+    /// Mutable state used by the gate coalescing tests so the operation
+    /// closure can record its invocation count and the test can resume a
+    /// paused first operation.
+    @MainActor
+    private final class GateTestState {
+        private(set) var invocationCount = 0
+        private var resumeClosure: (() -> Void)?
+
+        func recordInvocation() { invocationCount += 1 }
+        func installResume(_ closure: @escaping () -> Void) { resumeClosure = closure }
+        func callResume() {
+            resumeClosure?()
+            resumeClosure = nil
+        }
+    }
+
+        private func makeProjectContainer() throws -> ModelContainer {
         let schema = Schema([
             StoryProject.self,
             Outline.self,
@@ -1651,6 +2932,8 @@ private final class ThrowingProjectBackupDeletionService: ProjectBackupDeletionS
             StorySpark.self,
             Aftertaste.self,
             PromptPack.self,
+            StoryArc.self,
+            StoryArcBeat.self,
             StoryRelationship.self,
             ThemeQuestion.self,
             Motif.self,

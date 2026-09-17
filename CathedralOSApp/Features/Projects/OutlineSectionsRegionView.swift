@@ -176,6 +176,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestionSourceRecipe: PromptPackExportPayload?
     @State private var suggestionsLoading = false
     @State private var recoverableSuggestions: OutlineSuggestionResult?
+    @State private var recipeSelectionService = RecipeSelectionService()
+    @State private var recipeSelection: RecipeSelectionResult?
     @State private var suggestionsError: String?
     @State private var suggestionsNotice: String?
     @State private var suggestionsFeedback: String?
@@ -240,11 +242,34 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             ChapterReaderView(chapter: section, project: project)
         }
         .task {
+            await durabilityCoordinator.reconcilePersistedRunStatusIfNeeded(
+                for: project.stableLineageID,
+                outlineID: currentOutline?.id,
+                currentSectionCount: currentOutline?.sections.count ?? 0,
+                runOutlineService: RunOutlineService()
+            )
+            // PR 1: resolve the explicit recipe selection before any other
+            // path that needs it (suggestionsReady, loadSuggestions,
+            // loadRecoverableSuggestions, the review-sheet source).
+            recipeSelection = recipeSelectionService.resolve(for: project)
             ensureOutline()
             syncSectionsOrder()
             refreshAllOutputs()
             consumeGenerationLaunch()
-            durabilityCoordinator.resumeSuggestionRunIfNeeded(projectID: project.id)
+            // PR 6 refactor: build the current request identity BEFORE
+            // resuming any persisted/active run. Stale runs (recipe/arc/
+            // section edits under the same project UUID) must not be
+            // reattached or surfaced. The coordinator's exact-match guard
+            // will discard any persisted/active entry whose idempotency key
+            // differs from the freshly built current key.
+            let currentKey = currentSuggestionIdempotencyKey()
+            // PR 6: pass canonical stableLineageID so resume-state survives
+            // local project UUID drift (delete + recreate, restore from backup).
+            durabilityCoordinator.resumeSuggestionRunIfNeeded(
+                projectID: project.id,
+                lineageID: project.stableLineageID,
+                currentIdempotencyKey: currentKey
+            )
             suggestionsLoading = durabilityCoordinator.activeSuggestionRun(for: project.id)?.isActive == true
             consumeSuggestionCoordinatorEvent()
             await loadRecoverableSuggestions()
@@ -254,6 +279,24 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         }
         .onChange(of: generationLaunch?.id) { _, _ in
             consumeGenerationLaunch()
+        }
+        // PR 1: re-resolve recipe selection whenever the project's promptPacks
+        // set changes (edit, import, sync, restore), or whenever the
+        // selection state mutates. The chooser Menu and Suggest Sections
+        // button both consume `recipeSelection` so this keeps them in sync.
+        .onChange(of: recipeSelectionKey) { _, _ in
+            let prior = recipeSelection?.selectedRecipe?.id
+            // A `.autoSelected -> .pending` transition happens when a 2nd
+            // recipe is added; preserve recoverable suggestions so re-picking
+            // the original recipe re-surfaces them. Only an EXPLICIT prior
+            // selection that has now changed should clear recoverable.
+            let priorWasExplicit = recipeSelection?.kind == .selected
+            recipeSelection = recipeSelectionService.resolve(for: project)
+            if priorWasExplicit,
+               let priorID = prior,
+               priorID != recipeSelection?.selectedRecipe?.id {
+                recoverableSuggestions = nil
+            }
         }
         // PR #342: observe the cathedralOSGenerationOutputsChanged notification
         // posted by DataDurabilityCoordinator.runOperation after any sync (manual
@@ -322,10 +365,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         } message: {
             Text("Suggest Sections makes paid AI calls. Credits are charged from actual usage, and the final charge may vary.")
         }
-        .alert("Suggestions Ready", isPresented: Binding(
-            get: { suggestionsFeedback != nil },
-            set: { if !$0 { suggestionsFeedback = nil } }
-        )) {
+        .alert("Suggestions Ready", isPresented: suggestionsFeedbackPresented) {
             Button("Review Suggestions") {
                 suggestionsFeedback = nil
                 showingSuggestionSheet = true
@@ -342,10 +382,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         } message: {
             Text(suggestionsAlertMessage)
         }
-        .alert("Could Not Accept Section", isPresented: Binding(
-            get: { embedError != nil },
-            set: { if !$0 { embedError = nil } }
-        )) {
+        .alert("Could Not Accept Section", isPresented: embedErrorPresented) {
             Button("OK", role: .cancel) { embedError = nil }
         } message: {
             Text(embedError ?? "An unknown error occurred.")
@@ -353,18 +390,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // Accept All runs outside this view, so its terminal error must also
         // be rendered here. The review sheet can disappear during reconciliation;
         // without this fallback the shared coordinator's error is silent.
-        .alert("Accept All Failed", isPresented: Binding(
-            get: { durabilityCoordinator.activeAcceptRun == nil && durabilityCoordinator.acceptRunError != nil },
-            set: { if !$0 { durabilityCoordinator.dismissAcceptRunError() } }
-        )) {
+        .alert("Accept All Failed", isPresented: acceptAllFailurePresented) {
             Button("OK", role: .cancel) { durabilityCoordinator.dismissAcceptRunError() }
         } message: {
             Text(durabilityCoordinator.acceptRunError ?? "Accept All failed.")
         }
-        .alert("Delete Error", isPresented: Binding(
-            get: { deleteError != nil },
-            set: { if !$0 { deleteError = nil } }
-        )) {
+        .alert("Delete Error", isPresented: deleteErrorPresented) {
             Button("OK") { deleteError = nil }
         } message: {
             Text(deleteError ?? "")
@@ -396,6 +427,54 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             .map { $0.id }
     }
 
+    /// Stable key covering both the project's prompt-pack IDs AND the current
+    /// stored selection. When ANY of these change (recipe edit, restore, store
+    /// write), the `.onChange` re-resolves `recipeSelection` so the chooser
+    /// and the Suggest Sections button stay aligned with the current state.
+    private var recipeSelectionKey: [String] {
+        let lineag = project.stableLineageID.uuidString
+        let packIDs = project.promptPacks.map { $0.id.uuidString }.sorted()
+        let stored = recipeSelectionService
+            .storedSelectedRecipeID(for: project)?.uuidString ?? ""
+        return [lineag] + packIDs + [stored]
+    }
+
+    // MARK: - Hoisted alert Bindings (type-checker workaround)
+    //
+    // Swift's type-checker times out when `Binding(get:set:)` is inlined
+    // inside an `.alert(...)` while the surrounding view body already has
+    // many modifiers (other alerts, sheets, computed properties, etc).
+    // PR 542 fix: each hoisted property below replaces an inline
+    // `isPresented: Binding(get:set:)` so the type-checker doesn't have
+    // to re-derive the closure inline.
+    private var suggestionsFeedbackPresented: Binding<Bool> {
+        Binding(
+            get: { self.suggestionsFeedback != nil },
+            set: { if !$0 { self.suggestionsFeedback = nil } }
+        )
+    }
+    private var embedErrorPresented: Binding<Bool> {
+        Binding(
+            get: { self.embedError != nil },
+            set: { if !$0 { self.embedError = nil } }
+        )
+    }
+    private var acceptAllFailurePresented: Binding<Bool> {
+        Binding(
+            get: {
+                self.durabilityCoordinator.activeAcceptRun == nil
+                    && self.durabilityCoordinator.acceptRunError != nil
+            },
+            set: { if !$0 { self.durabilityCoordinator.dismissAcceptRunError() } }
+        )
+    }
+    private var deleteErrorPresented: Binding<Bool> {
+        Binding(
+            get: { self.deleteError != nil },
+            set: { if !$0 { self.deleteError = nil } }
+        )
+    }
+
     private func syncSectionsOrder() {
         guard let outline = currentOutline else {
             sectionsOrder = []
@@ -423,8 +502,16 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     /// Auto-create the project's outline if missing. PR #2c keeps it
     /// single-outline-per-project (mirrors `StoryArc`'s at-most-one rule).
     private func ensureOutline() {
-        guard project.outlines.isEmpty else { return }
+        let currentArcID = project.storyArcs.first?.id
+        if let existing = project.outlines.first {
+            if existing.storyArcID != currentArcID {
+                existing.storyArcID = currentArcID
+                try? modelContext.save()
+            }
+            return
+        }
         let outline = Outline(name: "Outline")
+        outline.storyArcID = currentArcID
         modelContext.insert(outline)
         outline.project = project
         try? modelContext.save()
@@ -451,7 +538,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private var suggestionsReady: Bool {
-        guard project.promptPacks.first != nil else { return false }
+        // PR 1: explicit recipe selection. Never fall back to promptPacks.first.
+        guard recipeSelection?.isReadyForSuggestSections == true else { return false }
+        guard recipeSelection?.selectedRecipe != nil else { return false }
         guard let arc = project.storyArcs.first else { return false }
         guard arc.templateID != nil else { return false }
         return StoryArcTemplate.allTemplates.contains { $0.id == arc.templateID }
@@ -482,19 +571,108 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         }
     }
 
+    /// PR 6 refactor: build the current `OutlineSuggestionRequest`
+    /// idempotency key from the live recipe/arc/template/sections snapshot.
+    /// The view computes this BEFORE calling `resumeSuggestionRunIfNeeded`
+    /// so the coordinator's exact-match guard can discard any persisted or
+    /// active run whose stored key no longer represents the user's current
+    /// planning identity. Returns nil when any required input is missing
+    /// (no recipe selected, no arc, no template) — in that case the caller
+    /// falls back to the legacy key-agnostic resume behaviour, which is
+    /// safe because without a request there is nothing current to mismatch
+    /// against.
+    private func currentSuggestionGenerationID() -> UUID? {
+        durabilityCoordinator.suggestionGenerationID(for: project.stableLineageID)
+    }
+
+    private func currentSuggestionIdempotencyKey() -> String? {
+        guard let recipe = recipeSelection?.selectedRecipe,
+              let project = recipe.project,
+              let arc = project.storyArcs.first,
+              let templateID = arc.templateID,
+              let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
+            return nil
+        }
+        // PR 4 rebased: outline/lineage/format identity feeds the key, so
+        // a stale Outline reference (delete + restore, lineage drift) will
+        // produce a different hash and block exact-match resume. Resolve the
+        // same authoritative material used by the live Suggest boundary.
+        guard let material = try? AuthoritativeProjectMaterial.resolve(project: project, in: modelContext) else {
+            return nil
+        }
+        return try? OutlineSuggestionService().makeRequest(
+            recipe: recipe,
+            arc: arc,
+            arcTemplate: template,
+            outline: currentOutline,
+            requestedFormat: "novel",
+            existingSections: currentOutline?.sections ?? [],
+            material: material,
+            requestGenerationID: currentSuggestionGenerationID()
+        ).idempotencyKey
+    }
+
     private func loadRecoverableSuggestions() async {
-        guard let recipe = project.promptPacks.first,
-              let projectID = recipe.project?.id else { return }
+        // PR 6: recover by exact planning identity, NOT by latest completed
+        // project run. The previous implementation surfaced stale suggestions
+        // whenever the recipe content, arc beats, or existing section
+        // contracts changed under the same PromptPack/project UUID pair.
+        //
+        // 1. resolve the explicitly selected recipe (already established in PR 1)
+        guard let recipe = recipeSelection?.selectedRecipe,
+              let project = recipe.project,
+              let arc = project.storyArcs.first,
+              let templateID = arc.templateID,
+              let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
+            return
+        }
+        // PR 6 refactor: project.id is non-optional, so it cannot live in a
+        // guard-let chain. Bind after the guard exits; the binding is required
+        // because the findRun call below uses `projectID` as a named argument.
+        let projectID = project.id
         do {
-            let result = try await OutlineSuggestionService().latestCompletedRun(projectID: projectID)
-            guard let result,
-                  result.sourceRecipe.project.id == projectID,
-                  result.sourceRecipe.promptPack.id == recipe.id,
-                  !result.suggestions.isEmpty else {
+            let service = OutlineSuggestionService()
+            guard let material = try? AuthoritativeProjectMaterial.resolve(project: project, in: modelContext) else {
                 recoverableSuggestions = nil
                 return
             }
-            recoverableSuggestions = result
+            // 2. build the current OutlineSuggestionRequest using the current
+            //    recipe, arc, Outline, existing sections, format and canonical
+            //    lineage. The idempotency key is derived from the full request
+            //    so any change to recipe content, arc beats, or section
+            //    contracts produces a different key.
+            // PR 4 rebased: pass current Outline + explicit requestedFormat
+            // so outline/lineage/format identity feeds the exact-match key.
+            let request = try service.makeRequest(
+                recipe: recipe,
+                arc: arc,
+                arcTemplate: template,
+                outline: currentOutline,
+                requestedFormat: "novel",
+                existingSections: currentOutline?.sections ?? [],
+                material: material,
+                requestGenerationID: currentSuggestionGenerationID()
+            )
+            // 3 + 4. recover only a completed run whose idempotency key
+            //    matches that exact request. `findRun` is best-effort and
+            //    returns nil when no match exists.
+            guard let job = try await service.findRun(
+                projectID: projectID,
+                idempotencyKey: request.idempotencyKey
+            ),
+            job.status == "completed",
+            let suggestions = job.suggestions, !suggestions.isEmpty,
+            let sourceRecipe = job.sourceRecipe else {
+                recoverableSuggestions = nil
+                return
+            }
+            recoverableSuggestions = OutlineSuggestionResult(
+                suggestions: suggestions,
+                warnings: job.warnings ?? [],
+                creditCostCharged: job.creditCostCharged,
+                remainingCredits: job.remainingCredits,
+                sourceRecipe: sourceRecipe
+            )
         } catch {
             // Recovery is best-effort and must not block the normal Suggest flow.
             recoverableSuggestions = nil
@@ -510,7 +688,15 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 
     private func loadSuggestions() async {
         guard !suggestionRunActive else { return }
-        guard let recipe = project.promptPacks.first,
+        // Suggest Sections is an explicit fresh-run intent. Advance the
+        // generation before building the request so a completed run from an
+        // earlier tap is available only through Resume Suggestions, rather
+        // than being returned as the new result with the old charge.
+        durabilityCoordinator.beginNewSuggestionGeneration(for: project.stableLineageID)
+        recoverableSuggestions = nil
+        // PR 1: explicit recipe selection. Use the same selected recipe as
+        // loadRecoverableSuggestions and the review-sheet source.
+        guard let recipe = recipeSelection?.selectedRecipe,
               let arc = project.storyArcs.first,
               let templateID = arc.templateID,
               let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
@@ -522,18 +708,34 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             return
         }
         do {
+            // Resolve once at the Suggest boundary. The same snapshot flows
+            // through reconcile, validation, and export so no stale inverse
+            // relationship can drop selected material.
+            let material = try AuthoritativeProjectMaterial.resolve(project: project, in: modelContext)
+            RecipeReferenceReconciler.reconcile(recipe, material: material, in: modelContext)
             let service = OutlineSuggestionService()
+            // PR 4: pass current Outline (server validates ownership +
+            // canonical lineage pre-billable) and explicit requestedFormat
+            // so enrichment provenance is persisted to this outline and
+            // the server does not fall back to implicit "novel".
             let request = try service.makeRequest(
                 recipe: recipe,
                 arc: arc,
                 arcTemplate: template,
-                existingSections: currentOutline?.sections ?? []
+                outline: currentOutline,
+                requestedFormat: "novel",
+                existingSections: currentOutline?.sections ?? [],
+                material: material,
+                requestGenerationID: currentSuggestionGenerationID()
             )
             suggestionsError = nil
             suggestionsNotice = nil
             suggestionsLoading = true
+            // PR 6: pass canonical stableLineageID so the durable run key
+            // survives local project UUID drift.
             durabilityCoordinator.beginSuggestionRun(
                 projectID: project.id,
+                lineageID: project.stableLineageID,
                 request: request,
                 service: service
             )
@@ -564,6 +766,37 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     } label: {
                         Label("Resume Suggestions", systemImage: "arrow.uturn.backward.circle")
                             .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    }
+                }
+                // PR 1: the recipe chooser is visible whenever the project has
+                // multiple recipes, not only when pending. Pending -> show
+                // "Choose Recipe"; selected -> show the current recipe name so
+                // the user can switch via the same menu.
+                if let recipes = recipeSelection?.recipes, recipes.count >= 2 {
+                    let chosenName = recipes
+                        .first(where: { $0.id == recipeSelection?.selectedRecipe?.id })?
+                        .name
+                    Menu {
+                        ForEach(recipes, id: \.id) { pack in
+                            Button(pack.name) {
+                                recipeSelectionService.setSelectedRecipe(id: pack.id, for: project)
+                                recipeSelection = recipeSelectionService.resolve(for: project)
+                                // Clear any stale recoverable suggestions from a prior recipe.
+                                if let prior = recoverableSuggestions,
+                                   prior.sourceRecipe.promptPack.id != pack.id {
+                                    recoverableSuggestions = nil
+                                }
+                            }
+                        }
+                    } label: {
+                        if let chosenName {
+                            Label("Recipe: \(chosenName)", systemImage: "book.closed")
+                                .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                                .lineLimit(1)
+                        } else {
+                            Label("Choose Recipe", systemImage: "book.closed")
+                                .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                        }
                     }
                 }
                 Button {
@@ -775,6 +1008,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             }
             try? modelContext.save()
             syncSectionsOrder()
+            durabilityCoordinator.beginNewSuggestionGeneration(for: project.stableLineageID)
             await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
         }
     }
@@ -792,45 +1026,93 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         return availableBeats.first { $0.id == id }?.label
     }
 
-    /// Accept an OutlineSection: call embed-section edge function, then flip
-    /// status to "accepted" on success. Phase 3 of novel-building per
-    /// docs/novel-building.md — makes the section indexable for later
-    /// retrieval-augmented generation. Re-accepting an already-accepted
-    /// section is not allowed by the UI (button hidden), but the backend
-    /// UPSERTs on outline_section_id so future re-embed flows will overwrite.
+    /// Accept an OutlineSection. Planning acceptance is now DECOUPLED from
+    /// scene-memory extraction:
+    ///
+    /// 1. The section is marked "accepted" synchronously and the SwiftData
+    ///    save + durability save fire. This must NOT depend on the
+    ///    embed-section call succeeding.
+    ///
+    /// 2. Scene-memory extraction (`embed-section` → LLM extract + embed +
+    ///    section_embeddings UPSERT) is fired fire-and-forget only when
+    ///    real prose exists — i.e. the section has at least one
+    ///    GenerationOutput. A manual / blank New Section (no outputs)
+    ///    accepts with NO LLM call and NO section_embeddings row.
+    ///
+    /// 3. If the embed call fails for a generated section, the failure is
+    ///    surfaced as `embedError` (non-blocking warning) but the planning
+    ///    acceptance is preserved.
+    ///
+    /// This change does NOT broaden to Accept All — that flow goes through
+    /// the `accept-outline-sections` Deno worker, unchanged. Scene-memory
+    /// extraction for the Accept All path remains server-owned.
     private func acceptSection(_ section: OutlineSection) async {
         guard acceptingSectionID == nil else { return }
         acceptingSectionID = section.id
         defer { acceptingSectionID = nil }
 
+        // (1) Planning acceptance: synchronous, unconditional on the embed
+        // call. A manual / blank New Section accepts here with no LLM call.
+        guard let outlineID = section.outline?.id ?? currentOutline?.id else {
+            embedError = "Section has no outline. Refresh the project and try again."
+            return
+        }
+        section.status = "accepted"
+        do {
+            try modelContext.save()
+        } catch {
+            embedError = "Could not save section status: \(error.localizedDescription)"
+            return
+        }
+        print("[OutlineSections] accepted: section=\(section.id.uuidString.prefix(8))")
+        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+
+        // (2) Scene-memory extraction: fire only when real prose exists.
+        // Manual sections skip this entirely. Generated sections get a
+        // fire-and-forget embed call tagged with the latest output's id
+        // so the backend can link section_embeddings to the originating
+        // generation.
+        let sectionOutputs = outputsBySection[section.id] ?? []
+        guard !sectionOutputs.isEmpty else { return }
+        let latestOutputID = sectionOutputs.first?.id.uuidString
+        Task {
+            await self.fireSceneMemoryExtraction(
+                section: section,
+                outlineID: outlineID,
+                outputID: latestOutputID,
+            )
+        }
+    }
+
+    /// Fire-and-forget scene-memory extraction for a generated section.
+    /// Failures are surfaced as `embedError` (non-blocking) but do NOT
+    /// roll back the planning acceptance — status remains "accepted".
+    private func fireSceneMemoryExtraction(
+        section: OutlineSection,
+        outlineID: UUID,
+        outputID: String?,
+    ) async {
         guard let baseURL = SupabaseConfiguration.projectURL else {
-            embedError = "Backend not configured."
+            embedError = "Section accepted; scene memory extract skipped (backend not configured)."
             return
         }
         let embedURL = baseURL
             .appendingPathComponent("functions/v1")
             .appendingPathComponent(SupabaseConfiguration.embedSectionEdgeFunctionPath)
-
-        guard let outlineID = section.outline?.id ?? currentOutline?.id else {
-            embedError = "Section has no outline. Refresh the project and try again."
-            return
-        }
         let service = SectionEmbedService()
         do {
             let response = try await service.embedSection(
                 edgeFunctionURL: embedURL,
                 projectID: project.id,
                 outlineID: outlineID,
-                section: section
+                section: section,
+                outputID: outputID,
             )
-            section.status = "accepted"
-            try modelContext.save()
             print("[OutlineSections] Embed OK: section=\(section.id.uuidString.prefix(8)) dim=\(response.embedding_dim) summary.len=\(response.extracted_summary.count)")
-            Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
         } catch let error as SectionEmbedError {
-            embedError = error.localizedDescription
+            embedError = "Section accepted; scene memory extract failed: \(error.localizedDescription)"
         } catch {
-            embedError = error.localizedDescription
+            embedError = "Section accepted; scene memory extract failed: \(error.localizedDescription)"
         }
     }
     // MARK: - Day 4 generation wiring

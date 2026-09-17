@@ -20,6 +20,22 @@ enum ProjectCloudSyncError: Error, LocalizedError {
     case ambiguousSnapshotIdentity(localProjectID: String)
     /// Supabase accepted the DELETE request but did not report the resolved row as deleted.
     case snapshotDeletionNotConfirmed(localProjectID: String)
+    /// A targeted restore could not find a cloud snapshot matching either the
+    /// supplied local project id or the canonical lineage id. This is distinct
+    /// from a full restore returning zero results — Accept All just completed,
+    /// so a missing snapshot means identity resolution actually failed.
+    case targetedSnapshotNotFound(localProjectID: String, lineageID: String)
+    /// A cloud snapshot has no canonical lineage. Restoring it would make the
+    /// local project UUID masquerade as the stable cloud identity.
+    case missingCanonicalLineage(localProjectID: String)
+    /// The local project disappeared while an Accept All restore was resolving.
+    case localProjectNotFound(localProjectID: String)
+    /// The server-owned Outline identity could not be resolved before Accept All.
+    case outlineNotFound(outlineID: String)
+    /// The server-owned Outline exists but has no canonical lineage.
+    case outlineMissingCanonicalLineage(outlineID: String)
+    /// The restored local project still disagrees with the server-owned Outline lineage.
+    case outlineLineageMismatch(outlineID: String, projectLineageID: String, outlineLineageID: String)
 
     var errorDescription: String? {
         switch self {
@@ -51,6 +67,18 @@ enum ProjectCloudSyncError: Error, LocalizedError {
             return "Cloud deletion found multiple snapshots for project \(localProjectID). Sync or restore your projects, then try again. Your local project was kept."
         case .snapshotDeletionNotConfirmed:
             return "Cloud deletion could not be confirmed. Your local project was kept."
+        case .targetedSnapshotNotFound(let localProjectID, let lineageID):
+            return "Could not find the cloud snapshot for project \(localProjectID) (lineage \(lineageID)). The Accept All job completed, but this device could not refresh that project from the cloud."
+        case .missingCanonicalLineage(let localProjectID):
+            return "Cloud restore stopped for project \(localProjectID): the snapshot has no canonical lineage identity. The local project was not restored."
+        case .localProjectNotFound(let localProjectID):
+            return "Accept All could not find the current local project \(localProjectID) after restore. Close and reopen the project, then try again."
+        case .outlineNotFound(let outlineID):
+            return "Accept All could not find the server outline \(outlineID). Start a fresh Suggest Sections run, then try again."
+        case .outlineMissingCanonicalLineage(let outlineID):
+            return "Accept All stopped because server outline \(outlineID) has no canonical project lineage. Start a fresh Suggest Sections run, then try again."
+        case .outlineLineageMismatch(let outlineID, let projectLineageID, let outlineLineageID):
+            return "Accept All stopped because the restored project lineage \(projectLineageID) still differs from outline \(outlineID)'s canonical lineage \(outlineLineageID)."
         }
     }
 }
@@ -99,6 +127,22 @@ protocol ProjectCloudSyncServiceProtocol {
     func fetchCloudProjectSnapshotCount() async throws -> Int
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport
+    /// Restore only one project snapshot, scoped to its canonical lineage. Used by
+    /// project-scoped flows such as Accept All so completion cannot reconcile
+    /// unrelated projects. The cloud snapshot is identified by EITHER the local
+    /// project id OR the canonical lineage id, so a drifted/historical
+    /// `local_project_id` for the same lineage still reconciles the correct
+    /// project. Returns `targetedSnapshotNotFound` if no row matches and
+    /// `ambiguousSnapshotIdentity` if any returned row belongs to a different
+    /// lineage; both failures are explicit so callers never see a successful
+    /// empty restore when the requested canonical project should exist.
+    @MainActor
+    func restoreProject(
+        localProjectID: UUID,
+        projectLineageID: UUID,
+        into context: ModelContext,
+        includeTombstoned: Bool
+    ) async throws -> ProjectRestoreReport
     /// Reconcile local SwiftData projects against a tombstone set BEFORE upload.
     /// Matching projects (by local id OR lineage id) are deleted from the context,
     /// their local JSON backups are removed, and the context is saved. Returns a
@@ -138,6 +182,24 @@ extension ProjectCloudSyncServiceProtocol {
     @MainActor
     func restoreAllProjects(into context: ModelContext) async throws -> ProjectRestoreReport {
         try await restoreAllProjects(into: context, includeTombstoned: false)
+    }
+
+    /// Default-lineage convenience for non-Accept-All callers that already
+    /// canonicalize via `localProjectID`. Prefer the explicit
+    /// `restoreProject(localProjectID:projectLineageID:...)` overload whenever
+    /// the caller has access to the canonical lineage id (e.g. Accept All).
+    @MainActor
+    func restoreProject(
+        localProjectID: UUID,
+        into context: ModelContext,
+        includeTombstoned: Bool = false
+    ) async throws -> ProjectRestoreReport {
+        try await restoreProject(
+            localProjectID: localProjectID,
+            projectLineageID: localProjectID,
+            into: context,
+            includeTombstoned: includeTombstoned
+        )
     }
 
     /// Default no-op reconciliation. Concrete services should override this to
@@ -203,27 +265,44 @@ struct ProjectReconciliationReport {
     }
 }
 
-/// Single-flight gate for project restores. Concurrent callers await the same task
-/// and receive the same report instead of treating overlap as a failure.
+/// Identifies the scope of a project restore. Distinct scopes must never coalesce:
+/// a full restore and a targeted restore run as independent operations, even if
+/// they reach the network concurrently. Two targeted restores for the SAME
+/// (localProjectID, lineageID) pair MAY coalesce so an Accept All completion and
+/// a concurrent explicit refresh do not double-fetch.
+enum ProjectRestoreScope: Hashable {
+    case allProjects
+    case project(localProjectID: UUID, lineageID: UUID)
+}
+
+/// Single-flight gate for project restores. Each distinct scope coalesces its
+/// own in-flight task; concurrent callers with identical scopes share one fetch
+/// and receive the same report, while callers with different scopes run
+/// independently and never piggyback on an unrelated operation. Different
+/// scopes that race are serialized through independent tasks rather than
+/// conflated — a full restore cannot satisfy a targeted restore and a
+/// targeted restore for project A cannot satisfy a targeted restore for
+/// project B.
 @MainActor
 final class ProjectRestoreOperationGate {
-    private var activeTask: Task<ProjectRestoreReport, Error>?
+    private var activeTasks: [ProjectRestoreScope: Task<ProjectRestoreReport, Error>] = [:]
 
     func run(
+        scope: ProjectRestoreScope,
         _ operation: @escaping @MainActor () async throws -> ProjectRestoreReport
     ) async throws -> ProjectRestoreReport {
-        if let activeTask {
+        if let activeTask = activeTasks[scope] {
             return try await activeTask.value
         }
 
         let task = Task { @MainActor in try await operation() }
-        activeTask = task
+        activeTasks[scope] = task
         do {
             let report = try await task.value
-            activeTask = nil
+            activeTasks[scope] = nil
             return report
         } catch {
-            activeTask = nil
+            activeTasks[scope] = nil
             throw error
         }
     }
@@ -691,13 +770,66 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
 
     @MainActor
     func restoreAllProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
-        try await restoreOperationGate.run {
-            try await self.restoreProjects(into: context, includeTombstoned: includeTombstoned)
+        try await restoreOperationGate.run(scope: .allProjects) {
+            try await self.restoreProjects(into: context, includeTombstoned: includeTombstoned, scope: .allProjects)
         }
     }
 
     @MainActor
-    private func restoreProjects(into context: ModelContext, includeTombstoned: Bool) async throws -> ProjectRestoreReport {
+    func restoreProject(
+        localProjectID: UUID,
+        projectLineageID: UUID,
+        into context: ModelContext,
+        includeTombstoned: Bool
+    ) async throws -> ProjectRestoreReport {
+        let scope = ProjectRestoreScope.project(localProjectID: localProjectID, lineageID: projectLineageID)
+        return try await restoreOperationGate.run(scope: scope) {
+            try await self.restoreProjects(
+                into: context,
+                includeTombstoned: includeTombstoned,
+                scope: scope
+            )
+        }
+    }
+
+    /// Resolve the server-owned lineage for an Outline before an Accept All
+    /// request. A restored local project can carry a stale lineage, while the
+    /// Outline row already points at the canonical snapshot lineage. Accept All
+    /// must target that server identity rather than trusting the stale local
+    /// value as the restore lookup key.
+    func fetchCanonicalOutlineLineage(outlineID: UUID) async throws -> UUID {
+        let (client, _, accessToken) = try await validatedClientAndSession()
+        var components = URLComponents(
+            url: restURL(client: client, path: "outlines"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "id", value: "eq.\(outlineID.uuidString)"),
+            URLQueryItem(name: "select", value: "lineage_id"),
+            URLQueryItem(name: "limit", value: "1"),
+        ]
+        guard let url = components?.url else {
+            throw ProjectCloudSyncError.notConfigured
+        }
+
+        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
+        request.httpMethod = "GET"
+        let rows = try await fetch([OutlineCloudIdentityRecord].self, request: request)
+        guard let row = rows.first else {
+            throw ProjectCloudSyncError.outlineNotFound(outlineID: outlineID.uuidString)
+        }
+        guard let lineageID = row.lineageID else {
+            throw ProjectCloudSyncError.outlineMissingCanonicalLineage(outlineID: outlineID.uuidString)
+        }
+        return lineageID
+    }
+
+    @MainActor
+    private func restoreProjects(
+        into context: ModelContext,
+        includeTombstoned: Bool,
+        scope: ProjectRestoreScope
+    ) async throws -> ProjectRestoreReport {
 
         // Phase A: fetch and decode cloud payloads into plain DTOs.
         let (client, _, accessToken) = try await validatedClientAndSession()
@@ -706,6 +838,16 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             URLQueryItem(name: "select", value: "local_project_id,lineage_id,snapshot_json,updated_at"),
             URLQueryItem(name: "order", value: "updated_at.desc")
         ]
+
+        // Targeted scopes fetch by canonical lineage OR the known local id/alias.
+        // The OR filter preserves the canonical-lineage semantics used elsewhere
+        // in project sync while still resolving a historical/drifted
+        // `local_project_id` for the same lineage. A single-column filter would
+        // silently fetch zero rows when only the lineage column matches.
+        if case let .project(localProjectID, lineageID) = scope {
+            let orValue = "(local_project_id.eq.\(localProjectID.uuidString),lineage_id.eq.\(lineageID.uuidString))"
+            components?.queryItems?.append(URLQueryItem(name: "or", value: orValue))
+        }
         guard let url = components?.url else {
             throw ProjectCloudSyncError.notConfigured
         }
@@ -715,13 +857,51 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
 
         let rows = try await fetch([ProjectSnapshotCloudRecord].self, request: request)
 
-        // Phase B: reconcile DTOs into SwiftData.
+        // Phase B: targeted identity pre-flight.
+        // Accept All completion means the canonical project should exist on the
+        // server; silently returning an empty report on a missing row would
+        // mislabel the refresh as successful. Verify every returned row belongs
+        // to the requested canonical lineage (either via `lineage_id`, the known
+        // local id, or a `snapshot_json.project.id` alias). Fail closed on
+        // mismatched rows so an ambiguous upstream read cannot leak a different
+        // project's snapshot into this project.
+        if case let .project(targetedLocalID, targetedLineageID) = scope {
+            let canonicalLocal = targetedLocalID.uuidString.lowercased()
+            let canonicalLineage = targetedLineageID.uuidString.lowercased()
+            if let mismatch = rows.first(where: { row in
+                let rowLineage = row.lineageID?.uuidString.lowercased()
+                let identities = self.claimedIdentities(for: row)
+                let lineageMatches = rowLineage == canonicalLineage
+                let localMatches = identities.contains(canonicalLocal)
+                return !(lineageMatches || localMatches)
+            }) {
+                throw ProjectCloudSyncError.ambiguousSnapshotIdentity(
+                    localProjectID: mismatch.localProjectID
+                )
+            }
+            if rows.isEmpty {
+                throw ProjectCloudSyncError.targetedSnapshotNotFound(
+                    localProjectID: canonicalLocal,
+                    lineageID: canonicalLineage
+                )
+            }
+        }
+
+        // Phase C: reconcile DTOs into SwiftData.
         let localProjectCountBefore = try context.fetchCount(FetchDescriptor<StoryProject>())
         logger.log(
-            "Restore starting: local_before=\(localProjectCountBefore, privacy: .public) cloud_fetched=\(rows.count, privacy: .public)"
+            "Restore starting: scope=\(self.scopeDescription(scope), privacy: .public) local_before=\(localProjectCountBefore, privacy: .public) cloud_fetched=\(rows.count, privacy: .public)"
         )
 
-        let dedupeWarnings = try deduplicateLocalProjects(in: context)
+        // Targeted restores must not inspect or mutate unrelated local projects.
+        // The full restore path retains its existing duplicate repair behavior.
+        let dedupeWarnings: [String]
+        switch scope {
+        case .allProjects:
+            dedupeWarnings = try deduplicateLocalProjects(in: context)
+        case .project:
+            dedupeWarnings = []
+        }
         let cloudWarnings = duplicateWarnings(in: rows)
         let duplicateWarnings = dedupeWarnings + cloudWarnings
 
@@ -743,7 +923,17 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                 logger.warning("Skipping project snapshot without stable project id.")
                 continue
             }
-            let lineageID = row.lineageID ?? row.snapshotJSON.project.lineageID.flatMap(UUID.init(uuidString:)) ?? projectID
+            // A cloud-backed project must carry an explicit canonical lineage.
+            // Falling back to the local project UUID here makes a restored copy
+            // look like a new project and later causes Accept All's lineage
+            // contract to reject the request. Genuinely new local projects keep
+            // their existing `lineageID ?? id` behavior outside this restore path.
+            guard let lineageID = row.lineageID
+                ?? row.snapshotJSON.project.lineageID.flatMap(UUID.init(uuidString:)) else {
+                throw ProjectCloudSyncError.missingCanonicalLineage(
+                    localProjectID: projectID.uuidString
+                )
+            }
             if !includeTombstoned, tombstones.isTombstoned(lineageID: lineageID.uuidString) {
                 skippedTombstonedCount += 1
                 logger.log("Skipped tombstoned project \(projectID.uuidString, privacy: .public)")
@@ -844,38 +1034,58 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
     private func syncSnapshots(_ snapshots: [ProjectSnapshotSyncInput]) async throws {
         guard !snapshots.isEmpty else { return }
         let (client, user, accessToken) = try await validatedClientAndSession()
-        var components = URLComponents(url: restURL(client: client, path: "project_snapshots"), resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "on_conflict", value: "user_id,local_project_id")
-        ]
-        guard let url = components?.url else {
-            throw ProjectCloudSyncError.notConfigured
-        }
+        // PR 10 (recipe-to-acceptance recovery arc): call the canonical
+        // write path RPC instead of a blind PostgREST upsert so a stale
+        // client payload can no longer erase server-authoritative Outline
+        // sections by omission. The RPC reconciles the incoming snapshot
+        // with relational outline_sections and retains server sections
+        // absent from client unless explicit delete intent exists.
+        // restURL returns non-optional URL (matches the pattern used by
+        // 7 other call sites in this file). No guard let needed.
+        let resolvedURL = restURL(client: client, path: "rpc/write_project_snapshot_canonical")
 
-        var request = client.authorizedRequest(for: url, userAccessToken: accessToken)
+        var request = client.authorizedRequest(for: resolvedURL, userAccessToken: accessToken)
         request.httpMethod = "POST"
-        request.setValue("resolution=merge-duplicates,return=representation", forHTTPHeaderField: "Prefer")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         do {
-            request.httpBody = try encoder.encode(
-                snapshots.map { snapshot in
-                    ProjectSnapshotUpsertRequest(
-                        userID: user.id,
-                        localProjectID: snapshot.localProjectID,
-                        lineageID: snapshot.payload.project.lineageID ?? snapshot.localProjectID,
-                        schema: snapshot.payload.schema,
-                        version: snapshot.payload.version,
-                        snapshotJSON: snapshot.payload
+            // The RPC accepts an array of canonical-write arguments, one
+            // per snapshot. iOS does not currently surface an explicit
+            // section-delete intent at the snapshot layer (deletions flow
+            // through OutlineSuggestionsReviewView / SectionEmbedService),
+            // so p_deleted_section_ids is an empty array per call.
+            // Encode the Codable snapshot payload first, then bridge its
+            // JSON object into the mixed-type RPC dictionary.
+            let payload: [[String: Any]] = try snapshots.map { snapshot in
+                let snapshotData = try encoder.encode(snapshot.payload)
+                guard let snapshotJSON = try JSONSerialization.jsonObject(
+                    with: snapshotData,
+                    options: [.fragmentsAllowed]
+                ) as? [String: Any] else {
+                    throw ProjectCloudSyncError.encodingError(
+                        NSError(domain: "ProjectCloudSync", code: 1)
                     )
                 }
+                return [
+                    "p_user_id": user.id,
+                    "p_local_project_id": snapshot.localProjectID,
+                    "p_schema": snapshot.payload.schema,
+                    "p_version": snapshot.payload.version,
+                    "p_snapshot_json": snapshotJSON,
+                    "p_deleted_section_ids": [] as [String],
+                ]
+            }
+            request.httpBody = try JSONSerialization.data(
+                withJSONObject: payload,
+                options: [.sortedKeys]
             )
         } catch {
             throw ProjectCloudSyncError.encodingError(error)
         }
 
-        _ = try await fetch([ProjectSnapshotWriteResponse].self, request: request)
+        _ = try await fetch(ProjectSnapshotWriteResponsePayload.self, request: request)
     }
 
     private func restoredProjectID(for row: ProjectSnapshotCloudRecord) -> UUID? {
@@ -943,6 +1153,35 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             predicate: #Predicate { $0.id == projectID }
         )
         return try? context.fetch(descriptor).first
+    }
+
+    /// Returns the set of canonical identities a cloud restore row claims:
+    /// its `local_project_id` plus the nested `snapshot_json.project.id`. Shared
+    /// shape with `ProjectSnapshotIdentityRow.claimedIdentities` so restore and
+    /// delete identity checks normalize UUIDs identically.
+    private func claimedIdentities(for row: ProjectSnapshotCloudRecord) -> Set<String> {
+        var identities = Set<String>()
+        let local = row.localProjectID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !local.isEmpty {
+            identities.insert(UUID(uuidString: local)?.uuidString.lowercased() ?? local.lowercased())
+        }
+        if let nested = row.snapshotJSON.project.id?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !nested.isEmpty {
+            identities.insert(UUID(uuidString: nested)?.uuidString.lowercased() ?? nested.lowercased())
+        }
+        return identities
+    }
+
+    /// Stable, log-safe description of a restore scope. Targeted scopes include
+    /// the local id and lineage id so the diagnostics line is unambiguous when
+    /// reviewing concurrent restore activity.
+    private func scopeDescription(_ scope: ProjectRestoreScope) -> String {
+        switch scope {
+        case .allProjects:
+            return "all"
+        case .project(let localProjectID, let lineageID):
+            return "project(local=\(localProjectID.uuidString),lineage=\(lineageID.uuidString))"
+        }
     }
 
     private func deduplicateLocalProjects(in context: ModelContext) throws -> [String] {
@@ -1696,11 +1935,22 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         for outline: Outline,
         in context: ModelContext
     ) {
-        // Top-level sections only (parent == nil). Grouped sections (parent_id != nil) deferred to a follow-up.
+        // Reconcile ALL sections (parents and children) so the Section Contract
+        // fields on grouped sub-sections survive the cloud round-trip. PR #537
+        // (fix the shit arc, PR3) closed the prior "grouping is a follow-up"
+        // deferral; grouping is now first-class.
         var existingByID = Dictionary(
-            outline.sections.filter { $0.parent == nil }.map { ($0.id, $0) },
+            outline.sections.map { ($0.id, $0) },
             uniquingKeysWith: { _, later in later }
         )
+        // First pass: create or update every section. Collect a parent
+        // reference for EVERY payload (including nil parentID) so the second
+        // pass can authoritatively clear stale parents on sections the payload
+        // reclassifies as top-level. The two-pass design does NOT depend on
+        // the sync builder placing parents before children — every section
+        // exists in `outline.sections` after this pass regardless of input
+        // order.
+        var parentMappings: [(OutlineSection, UUID?)] = []
         for payload in payloads {
             let parsedID = payload.id.flatMap(UUID.init(uuidString:))
             let section: OutlineSection
@@ -1737,10 +1987,32 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                 section.storyArcBeatID = nil
             }
             section.recipeRequirementIDs = payload.recipeRequirementIDs
-            // parentID deferred (grouping is a follow-up).
             section.outline = outline
             if !outline.sections.contains(where: { $0.id == section.id }) {
                 outline.sections.append(section)
+            }
+            // nil parentID means "should be top-level" — still recorded so the
+            // second pass can clear any stale parent that was attached before
+            // this restore.
+            let parentID = payload.parentID.flatMap(UUID.init(uuidString:))
+            parentMappings.append((section, parentID))
+        }
+        // Second pass: authoritatively reconcile the parent relationship for
+        // every section that appeared in the payload. Every case is handled
+        // deterministically so the restore is the single source of truth:
+        //   - valid parent ID matching an existing section → assign that parent
+        //   - nil parent ID → clear any stale parent (section becomes top-level)
+        //   - parent ID not resolvable → clear any stale parent (child orphaned)
+        //   - parent ID matching the section itself → clear (reject self-parent)
+        // Reparenting A → B falls out of the same logic — the second pass
+        // simply assigns the new parent.
+        for (section, parentID) in parentMappings {
+            if let parentID,
+               let parent = outline.sections.first(where: { $0.id == parentID }),
+               parent.id != section.id {
+                section.parent = parent
+            } else {
+                section.parent = nil
             }
         }
     }
@@ -2025,6 +2297,24 @@ private struct ProjectSnapshotWriteResponse: Decodable {
     }
 }
 
+/// PostgREST returns a composite-row RPC result as an object, while some
+/// deployments/configurations represent the same result as a one-row array.
+/// Accept both shapes so a successful canonical snapshot write cannot surface
+/// as a client-side sync failure.
+private enum ProjectSnapshotWriteResponsePayload: Decodable {
+    case row(ProjectSnapshotWriteResponse)
+    case rows([ProjectSnapshotWriteResponse])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let rows = try? container.decode([ProjectSnapshotWriteResponse].self) {
+            self = .rows(rows)
+        } else {
+            self = .row(try container.decode(ProjectSnapshotWriteResponse.self))
+        }
+    }
+}
+
 private struct ProjectSnapshotDeleteResponse: Decodable {
     let id: String
 
@@ -2143,6 +2433,14 @@ private struct ProjectSnapshotPresenceRow: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case localProjectID = "local_project_id"
+    }
+}
+
+private struct OutlineCloudIdentityRecord: Decodable {
+    let lineageID: UUID?
+
+    enum CodingKeys: String, CodingKey {
+        case lineageID = "lineage_id"
     }
 }
 

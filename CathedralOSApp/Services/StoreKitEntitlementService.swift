@@ -258,7 +258,7 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
     func refreshEntitlement() async {
         var hasActiveSubscription = false
         var subscriptionExpiresAt: Date? = nil
-        var purchasedCreditBalance = 0
+        var purchasedCreditBalance: Double = 0
 
         for await result in Transaction.currentEntitlements {
             guard case .verified(let transaction) = result else {
@@ -279,7 +279,7 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
                     }
                 }
             } else if StoreKitProductIDs.creditPackIDs.contains(transaction.productID) {
-                purchasedCreditBalance += StoreKitProductIDs.creditAmount(for: transaction.productID)
+                purchasedCreditBalance += Double(StoreKitProductIDs.creditAmount(for: transaction.productID))
             }
         }
 

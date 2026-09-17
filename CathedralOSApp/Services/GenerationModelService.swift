@@ -6,7 +6,7 @@ struct GenerationModelOption: Codable, Equatable, Identifiable {
     let description: String?
     let inputCreditRate: Double
     let outputCreditRate: Double
-    let minimumChargeCredits: Int
+    let minimumChargeCredits: Double
     let maxOutputTokens: Int?
     let sortOrder: Int
 

@@ -253,6 +253,21 @@ Deno.test("generation readiness rejects incomplete or undersized outlines", () =
   );
   assertEquals(failures.includes("projected_length_below_minimum"), true);
   assertEquals(failures.includes("section_budgets_below_minimum"), true);
+  assertEquals(failures.includes("outline_missing_story_arc_linkage"), true);
+
+  const linkedFailures = generationReadinessFailures(
+    {
+      source_recipe_json: {}, source_recipe_hash: "hash",
+      target_word_count_min: 1, projected_word_count: 100,
+      story_arc_id: "arc-1",
+    },
+    [{
+      id: "s1", title: "One", summary: "Same", container: "scene",
+      pov: "firstPerson", terminal_beat: "End", target_words: 100,
+      story_arc_beat_id: "beat", recipe_requirement_ids: [],
+    }],
+  );
+  assertEquals(linkedFailures.includes("outline_missing_story_arc_linkage"), false);
 });
 
 Deno.test("uses cloudGenerationOutputID as the output handoff", () => {

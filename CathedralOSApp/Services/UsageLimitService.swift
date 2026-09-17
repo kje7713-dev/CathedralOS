@@ -8,7 +8,7 @@ enum PreflightResult: Equatable {
     /// Generation is permitted and the required credits are available.
     case allowed
     /// Not enough credits remain in the current period.
-    case insufficientCredits(available: Int, required: Int)
+    case insufficientCredits(available: Double, required: Double)
     /// Cloud generation requires a signed-in account but none is present.
     case signedOut
     /// Supabase / backend is not configured; cannot validate server-side.
@@ -129,7 +129,7 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
         }
 
         let state = currentState
-        let required = lengthMode.creditCost
+        let required = Double(lengthMode.creditCost)
         guard state.availableCredits >= required else {
             return .insufficientCredits(available: state.availableCredits, required: required)
         }
@@ -140,7 +140,7 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
         resetIfNeeded()
         let state = load()
 
-        let newCredits  = max(0, state.availableCredits - Int(creditCost.rounded(.down)))
+        let newCredits  = max(0, state.availableCredits - creditCost)
         let newCount    = state.monthlyGenerationCount + 1
         let newBudget   = state.monthlyOutputBudgetUsed + lengthMode.outputBudget
 
@@ -234,7 +234,7 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
 
     private func load() -> GenerationCreditState {
         let now = Date()
-        let credits     = defaults.integer(forKey: Key.availableCredits)
+        let credits     = defaults.object(forKey: Key.availableCredits) as? Double ?? Double(defaults.integer(forKey: Key.availableCredits))
         let count       = defaults.integer(forKey: Key.monthlyCount)
         let budget      = defaults.integer(forKey: Key.monthlyBudgetUsed)
         let resetDate   = defaults.object(forKey: Key.resetDate) as? Date ?? now
@@ -255,7 +255,7 @@ final class LocalUsageLimitService: UsageLimitServiceProtocol {
     }
 
     private func save(
-        availableCredits: Int,
+        availableCredits: Double,
         monthlyCount: Int,
         monthlyBudgetUsed: Int,
         resetDate: Date,

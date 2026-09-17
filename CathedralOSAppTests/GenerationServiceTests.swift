@@ -555,6 +555,11 @@ final class OutlineSuggestionTransportContractTests: XCTestCase {
         XCTAssertFalse(OutlineSuggestionService.isReconnectable(.invalidResponse("bad payload")))
         XCTAssertFalse(OutlineSuggestionService.isReconnectable(.serverError(statusCode: 400)))
         XCTAssertFalse(OutlineSuggestionService.isReconnectable(.insufficientCredits(needed: 4, available: 2, message: "no")))
+        // PR 2 review: recipe-integrity failures are permanent. The recipe
+        // references deleted/missing material; re-running makeRequest with
+        // the same recipe produces the same failure. Coordinator must NOT
+        // reconnect; user must edit the recipe.
+        XCTAssertFalse(OutlineSuggestionService.isReconnectable(.recipeIntegrityMissing(missingIDs: [])))
     }
 }
 

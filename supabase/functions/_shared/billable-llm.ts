@@ -19,6 +19,7 @@
 
 import {
   computeActualChargeCredits,
+  computeRawChargeCredits,
   computeMarginCents,
   computeMaxChargeCredits,
   computeProviderCogsCents,
@@ -58,6 +59,14 @@ export interface BillableUsageContext {
   generationLengthMode?: string | null;
   outputBudget?: number | null;
   idempotencyKey?: string | null;
+  featureRunID?: string | null;
+  promptBytes?: number | null;
+  stablePrefixBytes?: number | null;
+  volatileBytes?: number | null;
+  providerAttemptKey?: string | null;
+  logicalStageKey?: string | null;
+  attemptOrdinal?: number | null;
+  promptCacheKeyHash?: string | null;
 }
 
 /** Provider-specific knobs. Coherence-check sets `responseFormat` to enable
@@ -112,8 +121,9 @@ export interface BillableLLMRequest<T> {
 export interface BillableLLMResult<T> {
   featureResult: T;
   providerResult: BillableProviderResult;
-  /** Credits charged (0 if charge failed, idempotency conflict, or
-   * feature-validation failure). */
+  /** Credits charged. For outline-suggestion, provider-complete feature
+   * validation failures are billed because provider usage incurred COGS;
+   * generate/coherence retain their established failure semantics. */
   actualCharge: number;
   /** True iff creditStore.charge() succeeded for this call. */
   charged: boolean;
@@ -135,27 +145,19 @@ export interface BillableLLMResult<T> {
   marginCents: number;
 }
 
-export interface BillableUsageEventWriteResult {
-  data: { id: string } | null;
-  error: { message?: string; [key: string]: unknown } | null;
-}
-
 export interface BillableLLMDependencies {
   adminClient: unknown;
   provider: LLMProvider;
   creditStore: CreditStore;
-  /** Optional feature-specific writer. Generate-story supplies its existing
-   * persistence store here so margin telemetry and test seams remain intact. */
-  usageEventWriter?: (
-    row: Record<string, unknown>,
-  ) => Promise<BillableUsageEventWriteResult>;
 }
 
 export type BillableLLMErrorCode =
   | "insufficient_credits"
   | "usage_event_insert_failed"
   | "credit_charge_failed"
-  | "idempotency_unique_violation";
+  | "idempotency_unique_violation"
+  | "provider_attempt_allocation_failed"
+  | "outline_stage_state_failed";
 
 export class BillableLLMError extends Error {
   readonly code: BillableLLMErrorCode;
@@ -183,6 +185,111 @@ export interface FailedUsageEventInput {
   outputTokens?: number | null;
 }
 
+// Provider-attempt telemetry is best effort: it must never mask the
+// provider or settlement result, but it records usage before feature parsing.
+async function updateProviderAttempt(adminClient: unknown, attemptID: string | null, patch: Record<string, unknown>): Promise<void> {
+  if (!adminClient || !attemptID) return;
+  try {
+    const result = await (adminClient as any).from("generation_provider_attempts").update(patch).eq("id", attemptID);
+    if (result?.error) console.error(`[billable-llm] provider-attempt update failed: ${JSON.stringify(result.error)}`);
+  } catch (error) { console.error(`[billable-llm] provider-attempt update threw: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+async function reconcileOutlineRun(adminClient: unknown, runID: string | null | undefined): Promise<void> {
+  if (!adminClient || !runID) return;
+  try {
+    const result = await (adminClient as any).rpc("reconcile_outline_provider_attempts", { p_run_id: runID });
+    if (result?.error) console.error(`[billable-llm] outline reconciliation failed: ${JSON.stringify(result.error)}`);
+  } catch (error) { console.error(`[billable-llm] outline reconciliation threw: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+async function loadOutlineStageTotals(
+  adminClient: unknown,
+  req: BillableLLMRequest<unknown>,
+): Promise<{ rawChargeCredits: number; settledChargeCredits: number }> {
+  const featureRunID = req.usageContext.featureRunID;
+  const logicalStageKey = req.usageContext.logicalStageKey;
+  if (!featureRunID || !logicalStageKey) return { rawChargeCredits: 0, settledChargeCredits: 0 };
+  try {
+    const result = await (adminClient as any).rpc("get_outline_stage_totals", {
+      p_feature_run_id: featureRunID,
+      p_logical_stage_key: logicalStageKey,
+    });
+    const row = Array.isArray(result?.data) ? result.data[0] : result?.data;
+    if (result?.error || !row) {
+      throw new Error(result?.error?.message ?? "outline stage totals unavailable");
+    }
+    return {
+      rawChargeCredits: Number(row.raw_charge_credits ?? 0),
+      settledChargeCredits: Number(row.settled_charge_credits ?? 0),
+    };
+  } catch (error) {
+    throw new BillableLLMError(
+      "outline_stage_state_failed",
+      error instanceof Error ? error.message : "outline stage totals unavailable",
+      error,
+    );
+  }
+}
+
+async function beginOutlineProviderAttempt(
+  adminClient: unknown,
+  req: BillableLLMRequest<unknown>,
+): Promise<{ id: string; key: string; ordinal: number }> {
+  if (!adminClient) throw new BillableLLMError("provider_attempt_allocation_failed", "outline provider attempt allocation requires an admin database client");
+  const logicalStageKey = req.usageContext.logicalStageKey ?? req.usageContext.idempotencyKey;
+  if (!logicalStageKey) throw new BillableLLMError("provider_attempt_allocation_failed", "outline provider attempt requires a logical stage key");
+  const result = await (adminClient as any).rpc("begin_outline_provider_attempt", {
+    p_user_id: req.userID,
+    p_feature_run_id: req.usageContext.featureRunID ?? null,
+    p_purpose: req.purpose,
+    p_action: req.action,
+    p_logical_stage_key: logicalStageKey,
+    p_model_name: req.model.provider_model,
+    p_billing_idempotency_key: req.usageContext.idempotencyKey ?? null,
+    p_stable_prefix_hash: req.stablePrefixHash ?? null,
+    p_prompt_cache_key_hash: req.usageContext.promptCacheKeyHash ?? null,
+    p_prompt_bytes: req.usageContext.promptBytes ?? null,
+    p_stable_prefix_bytes: req.usageContext.stablePrefixBytes ?? null,
+    p_volatile_bytes: req.usageContext.volatileBytes ?? null,
+  });
+  const row = Array.isArray(result?.data) ? result.data[0] : result?.data;
+  if (result?.error || !row?.attempt_id || !row?.attempt_key || !row?.attempt_ordinal) {
+    throw new BillableLLMError("provider_attempt_allocation_failed", result?.error?.message ?? "could not allocate durable outline provider attempt", result?.error ?? undefined);
+  }
+  return { id: String(row.attempt_id), key: String(row.attempt_key), ordinal: Number(row.attempt_ordinal) };
+}
+
+async function startProviderAttempt(adminClient: unknown, req: BillableLLMRequest<unknown>, billingAttemptKey: string): Promise<string | null> {
+  if (!adminClient) return null;
+  try {
+    const table = (adminClient as any).from("generation_provider_attempts");
+    if (!table || typeof table.insert !== "function" || typeof table.select !== "function") return null;
+    // This key identifies one physical dispatch, not the customer settlement.
+    // Never query/reuse an existing row: a replay may call the provider again.
+    const physicalAttemptKey = `${billingAttemptKey}:dispatch:${crypto.randomUUID()}`;
+    const insertBuilder = table.insert({
+      user_id: req.userID, purpose: req.purpose, action: req.action,
+      feature_run_id: req.usageContext.featureRunID ?? null,
+      billing_idempotency_key: req.usageContext.idempotencyKey ?? null,
+      attempt_key: physicalAttemptKey, logical_stage_key: req.usageContext.logicalStageKey ?? req.usageContext.idempotencyKey ?? billingAttemptKey,
+      attempt_ordinal: req.usageContext.attemptOrdinal ?? 1,
+      model_name: req.model.provider_model, status: "started",
+      stable_prefix_hash: req.stablePrefixHash ?? null,
+      prompt_bytes: req.usageContext.promptBytes ?? null,
+      stable_prefix_bytes: req.usageContext.stablePrefixBytes ?? null,
+      volatile_bytes: req.usageContext.volatileBytes ?? null,
+    });
+    // The production Supabase builder supports select().single(). Tiny unit
+    // test doubles often return a Promise directly; do not add an extra audit
+    // write to those doubles or mask the feature's own failure assertions.
+    if (!insertBuilder || typeof insertBuilder.select !== "function") return null;
+    const result = await insertBuilder.select("id").single();
+    if (result?.error) { console.error(`[billable-llm] provider-attempt insert failed: ${JSON.stringify(result.error)}`); return null; }
+    return result?.data?.id ?? null;
+  } catch (error) { console.error(`[billable-llm] provider-attempt insert threw: ${error instanceof Error ? error.message : String(error)}`); return null; }
+}
+
 // ---------------------------------------------------------------------------
 // runBillableLLM
 // ---------------------------------------------------------------------------
@@ -199,25 +306,29 @@ function defaultPreflightUsage(maxOutputTokens: number): GenerationUsage {
   };
 }
 
-/** Detect a Postgres unique_violation from a Supabase / PostgREST error
- * shape. We only treat `code === "23505"` as a confirmed idempotency
- * conflict; any other error code is treated as a generic failure. */
-function isUniqueViolation(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const e = error as Record<string, unknown>;
-  return e.code === "23505";
-}
-
 export async function runBillableLLM<T>(
   req: BillableLLMRequest<T>,
   deps: BillableLLMDependencies,
 ): Promise<BillableLLMResult<T>> {
   const pricing = snapshotPricing(req.model);
+  let attemptKey = req.usageContext.providerAttemptKey ??
+    `${req.usageContext.idempotencyKey ?? crypto.randomUUID()}:attempt:1`;
+  let attemptID: string | null = null;
 
   // 1. Pre-flight credit check.
   const preflightUsage = req.preflightUsageOverride ??
     defaultPreflightUsage(req.maxOutputTokens);
-  const estimatedCharge = computeMaxChargeCredits(preflightUsage, pricing);
+  let estimatedCharge: number;
+  if (req.purpose === "outline-suggestion") {
+    const prior = await loadOutlineStageTotals(deps.adminClient, req);
+    const estimatedRaw = computeRawChargeCredits(preflightUsage, pricing);
+    const targetAfterPacket = prior.rawChargeCredits + estimatedRaw;
+    // Only the positive delta beyond prior settled debits must be affordable
+    // now; Suggest Sections has no product minimum.
+    estimatedCharge = Math.max(0, targetAfterPacket - prior.settledChargeCredits);
+  } else {
+    estimatedCharge = computeMaxChargeCredits(preflightUsage, pricing);
+  }
   const entitlement = await deps.creditStore.loadOrDefault(req.userID);
   if (availableCredits(entitlement) < estimatedCharge) {
     throw new BillableLLMError(
@@ -230,6 +341,14 @@ export async function runBillableLLM<T>(
         purpose: req.purpose,
       },
     );
+  }
+
+  if (req.purpose === "outline-suggestion") {
+    const allocated = await beginOutlineProviderAttempt(deps.adminClient, req);
+    attemptID = allocated.id;
+    attemptKey = allocated.key;
+  } else {
+    attemptID = await startProviderAttempt(deps.adminClient, req, attemptKey);
   }
 
   // 2. Provider call. MUST forward req.providerOptions — the OpenAIProvider
@@ -247,6 +366,7 @@ export async function runBillableLLM<T>(
       req.providerOptions,
     );
   } catch (err) {
+    await updateProviderAttempt(deps.adminClient, attemptID, { status: "provider_failed", completed_at: new Date().toISOString(), provider_error_code: err instanceof Error ? err.name : "provider_error" });
     if (req.recordProviderFailureUsage !== false) {
       await recordFailedUsageEvent(deps.adminClient, {
         userID: req.userID,
@@ -260,14 +380,10 @@ export async function runBillableLLM<T>(
     throw err;
   }
 
-  // 3. Feature-specific persistence callback. The callback may throw on
-  //    validation / persistence failure. The runner does NOT auto-record a
-  //    "failed" event here — generate-story's persistence-failure path
-  //    historically does NOT record one (only a rate_limiter entry), so we
-  //    preserve that behavior. The callback MAY itself call
-  //    recordFailedUsageEvent() to log a status="failed" row before
-  //    throwing — that is the supported pattern for feature-validation
-  //    failures (e.g., empty content, invalid JSON).
+  // 3. Feature-specific persistence callback. Generate/coherence preserve
+  //    their historical failure semantics. Outline provider-complete
+  //    validation failures are settled below using the durable provider
+  //    attempt key because the provider already incurred usage/COGS.
   const providerResult: BillableProviderResult = {
     content: llmResponse.content,
     modelName: llmResponse.modelName,
@@ -279,7 +395,82 @@ export async function runBillableLLM<T>(
     finishReason: llmResponse.finishReason,
     toolCostUsd: llmResponse.toolCostUsd ?? 0,
   };
-  const featureResult = await req.onProviderSuccess(providerResult);
+  const totalProviderInput = Math.max(0, providerResult.inputTokens ?? 0);
+  const providerCached = Math.max(0, providerResult.cachedInputTokens ?? 0);
+  const providerCacheWrite = Math.max(0, providerResult.cacheWriteInputTokens ?? 0);
+  const providerCogsSnapshot = computeProviderCogsCents({ uncachedInputTokens: Math.max(0, totalProviderInput - providerCached - providerCacheWrite), cachedInputTokens: providerCached, cacheWriteInputTokens: providerCacheWrite, outputTokens: Math.max(0, providerResult.outputTokens ?? 0), toolCostUsd: providerResult.toolCostUsd }, pricing);
+  await updateProviderAttempt(deps.adminClient, attemptID, { status: "provider_succeeded", provider_completed_at: new Date().toISOString(), model_name: providerResult.modelName, input_tokens: providerResult.inputTokens, output_tokens: providerResult.outputTokens, cached_input_tokens: providerResult.cachedInputTokens, cache_write_input_tokens: providerResult.cacheWriteInputTokens, provider_cogs_cents: providerCogsSnapshot.providerCogsCents });
+  const preCallbackUsage: GenerationUsage = {
+    uncachedInputTokens: Math.max(0, totalProviderInput - providerCached - providerCacheWrite),
+    cachedInputTokens: providerCached,
+    cacheWriteInputTokens: providerCacheWrite,
+    outputTokens: Math.max(0, providerResult.outputTokens ?? 0),
+    toolCostUsd: providerResult.toolCostUsd,
+  };
+  const preCallbackRawCharge = computeRawChargeCredits(preCallbackUsage, pricing);
+  const preCallbackCharge = req.purpose === "outline-suggestion"
+    ? preCallbackRawCharge
+    : computeActualChargeCredits(preCallbackUsage, pricing);
+  const preCallbackMargin = computeMarginCents(preCallbackCharge, pricing, providerCogsSnapshot.providerCogsCents);
+  let featureResult: T;
+  try { featureResult = await req.onProviderSuccess(providerResult); }
+  catch (error) {
+    // Outline provider responses with real usage are billable even when the
+    // feature rejects malformed JSON/contracts. This prevents retry storms
+    // from hiding provider COGS; the attempt key makes the debit idempotent.
+    if (req.purpose === "outline-suggestion" && (totalProviderInput > 0 || (providerResult.outputTokens ?? 0) > 0)) {
+      try {
+        const settlement = await (deps.adminClient as any).rpc(
+          req.purpose === "outline-suggestion" ? "settle_outline_provider_attempt" : "settle_billable_usage",
+          req.purpose === "outline-suggestion"
+            ? {
+              p_user_id: req.userID, p_feature_run_id: req.usageContext.featureRunID,
+              p_attempt_key: attemptKey, p_attempt_outcome: "feature_validation_failed",
+              p_action: req.action, p_purpose: req.purpose, p_model_name: providerResult.modelName,
+              p_charge_credits: preCallbackCharge, p_minimum_charge_credits: 0, p_input_tokens: providerResult.inputTokens,
+              p_output_tokens: providerResult.outputTokens, p_generation_length_mode: req.usageContext.generationLengthMode ?? "short",
+              p_output_budget: req.usageContext.outputBudget ?? req.maxOutputTokens,
+              p_uncached_input_tokens: preCallbackUsage.uncachedInputTokens,
+              p_cached_input_tokens: preCallbackUsage.cachedInputTokens,
+              p_cache_write_input_tokens: preCallbackUsage.cacheWriteInputTokens,
+              p_provider_cogs_cents: providerCogsSnapshot.providerCogsCents,
+              p_customer_revenue_cents: preCallbackMargin.customerRevenueCents,
+              p_margin_cents: preCallbackMargin.marginCents,
+              p_stable_prefix_hash: req.stablePrefixHash ?? null,
+              p_credit_value_usd: pricing.creditValueUsd,
+            }
+            : {
+              p_user_id: req.userID, p_action: req.action, p_purpose: req.purpose,
+              p_model_name: providerResult.modelName, p_idempotency_key: attemptKey,
+              p_charge_credits: preCallbackCharge, p_input_tokens: providerResult.inputTokens,
+              p_output_tokens: providerResult.outputTokens, p_generation_length_mode: req.usageContext.generationLengthMode ?? "short",
+              p_output_budget: req.usageContext.outputBudget ?? req.maxOutputTokens,
+              p_uncached_input_tokens: preCallbackUsage.uncachedInputTokens,
+              p_cached_input_tokens: preCallbackUsage.cachedInputTokens,
+              p_cache_write_input_tokens: preCallbackUsage.cacheWriteInputTokens,
+              p_provider_cogs_cents: providerCogsSnapshot.providerCogsCents,
+              p_customer_revenue_cents: preCallbackMargin.customerRevenueCents,
+              p_margin_cents: preCallbackMargin.marginCents,
+              p_stable_prefix_hash: req.stablePrefixHash ?? null,
+              p_credit_value_usd: pricing.creditValueUsd,
+            },
+        );
+        if (settlement?.error) throw new Error(settlement.error.message ?? "validation-failure settlement failed");
+        const settledRow = settlement?.data?.[0] ?? {};
+        // The outline settlement RPC owns status, calculated charge, and the
+        // logical-stage settlement delta. Never rewrite settled_charge_credits
+        // here: the RPC may have debited only the positive stage delta.
+        await updateProviderAttempt(deps.adminClient, attemptID, { feature_error_code: error instanceof Error ? error.name : "feature_error", usage_event_id: settledRow.usage_event_id ?? null, ledger_id: settledRow.ledger_id ?? null });
+        await reconcileOutlineRun(deps.adminClient, req.usageContext.featureRunID);
+      } catch (settlementError) {
+        await updateProviderAttempt(deps.adminClient, attemptID, { status: "settlement_failed", completed_at: new Date().toISOString(), feature_error_code: error instanceof Error ? error.name : "feature_error", calculated_charge_credits: preCallbackCharge });
+        console.error(`[billable-llm] provider-complete outline validation settlement failed: ${settlementError instanceof Error ? settlementError.message : String(settlementError)}`);
+      }
+    } else {
+      await updateProviderAttempt(deps.adminClient, attemptID, { status: "feature_validation_failed", completed_at: new Date().toISOString(), feature_error_code: error instanceof Error ? error.name : "feature_error" });
+    }
+    throw error;
+  }
 
   // 4. PR-372 corrected token accounting + provider COGS math.
   //
@@ -318,9 +509,10 @@ export async function runBillableLLM<T>(
     outputTokens: Math.max(0, providerResult.outputTokens ?? 0),
     toolCostUsd: providerResult.toolCostUsd,
   };
-  const actualCharge = computeActualChargeCredits(actualUsage, pricing);
-  // Keep credit_revenue_usd (legacy column) in sync with customer charge.
-  const creditRevenueUsd = actualCharge * pricing.creditValueUsd;
+  const rawCharge = computeRawChargeCredits(actualUsage, pricing);
+  const actualCharge = req.purpose === "outline-suggestion"
+    ? rawCharge
+    : computeActualChargeCredits(actualUsage, pricing);
   // PR-372: provider COGS (cents) + margin (cents) for telemetry.
   const providerCogs = computeProviderCogsCents(actualUsage, pricing);
   const marginInfo = computeMarginCents(
@@ -329,144 +521,138 @@ export async function runBillableLLM<T>(
     providerCogs.providerCogsCents,
   );
 
-  // 5. INSERT generation_usage_events. Partial unique index on
-  //    (user_id, idempotency_key) WHERE purpose='coherence-check'
-  //    deduplicates identical repeat calls within the same minute.
-  const usageEventRow: Record<string, unknown> = {
-    user_id: req.userID,
-    generation_output_id: req.usageContext.generationOutputID ?? null,
-    action: req.action,
-    purpose: req.purpose,
-    model_name: providerResult.modelName,
-    input_tokens: providerResult.inputTokens,
-    output_tokens: providerResult.outputTokens,
-    generation_length_mode: req.usageContext.generationLengthMode ?? "short",
-    output_budget: req.usageContext.outputBudget ?? req.maxOutputTokens,
-    status: "complete",
-    credit_revenue_usd: creditRevenueUsd,
-    idempotency_key: req.usageContext.idempotencyKey ?? null,
-    // PR-372 cache economics telemetry (migration 20260824220000).
-    uncached_input_tokens: ordinaryUncachedInputTokens,
-    cached_input_tokens: cachedInputTokens,
-    cache_write_input_tokens: cacheWriteInputTokens,
-    provider_cogs_cents: providerCogs.providerCogsCents,
-    customer_revenue_cents: marginInfo.customerRevenueCents,
-    margin_cents: marginInfo.marginCents,
-    stable_prefix_hash: req.stablePrefixHash ?? null,
+  // 5. PR5 atomic billable settlement. The previous INSERT-then-charge
+  //    sequence left three failure windows open:
+  //      - usage_event INSERT succeeded, credit charge failed -> free-output
+  //        audit escape hatch.
+  //      - entitlement UPDATE succeeded, ledger INSERT failed -> silent
+  //        COGS leakage.
+  //      - ledger UPDATE/INSERT race on concurrent calls.
+  //    settle_billable_usage (migration 20260912110000) locks the
+  //    entitlement, dedupes by idempotency_key, and writes all three rows
+  //    in one transaction. The "duplicate" branch preserves the existing
+  //    idempotent-replay contract (charged=false, no double-charge).
+  const rpcPayload = {
+    p_user_id: req.userID,
+    p_action: req.action,
+    p_purpose: req.purpose,
+    p_model_name: providerResult.modelName,
+    p_idempotency_key: req.purpose === "outline-suggestion" ? attemptKey : (req.usageContext.idempotencyKey ?? null),
+    p_charge_credits: actualCharge,
+    ...(req.purpose === "outline-suggestion" ? { p_minimum_charge_credits: 0 } : {}),
+    p_input_tokens: providerResult.inputTokens,
+    p_output_tokens: providerResult.outputTokens,
+    p_generation_length_mode: req.usageContext.generationLengthMode ?? "short",
+    p_output_budget: req.usageContext.outputBudget ?? req.maxOutputTokens,
+    p_generation_output_id: req.usageContext.generationOutputID ?? null,
+    p_uncached_input_tokens: ordinaryUncachedInputTokens,
+    p_cached_input_tokens: cachedInputTokens,
+    p_cache_write_input_tokens: cacheWriteInputTokens,
+    p_provider_cogs_cents: providerCogs.providerCogsCents,
+    p_customer_revenue_cents: marginInfo.customerRevenueCents,
+    p_margin_cents: marginInfo.marginCents,
+    p_stable_prefix_hash: req.stablePrefixHash ?? null,
+    p_credit_value_usd: pricing.creditValueUsd,
   };
+  type RpcRow = {
+    settlement_status: "settled" | "duplicate";
+    usage_event_id: string;
+    ledger_id: string | null;
+    remaining_credits: number;
+    settled_charge_credits?: number;
+  };
+  // The outline-specific RPC uses p_attempt_key for settlement idempotency;
+  // p_idempotency_key belongs only to settle_billable_usage. Sending both
+  // names makes PostgREST reject the function lookup before PostgreSQL runs.
+  const { p_idempotency_key: _ignoredIdempotencyKey, ...outlineRpcPayload } = rpcPayload;
+  const rpcResult = await (deps.adminClient as unknown as {
+    rpc: (
+      name: string,
+      params: Record<string, unknown>,
+    ) => Promise<{ data: RpcRow[] | null; error: { message?: string } | null }>;
+  }).rpc(
+    req.purpose === "outline-suggestion" ? "settle_outline_provider_attempt" : "settle_billable_usage",
+    req.purpose === "outline-suggestion"
+      ? { ...outlineRpcPayload, p_feature_run_id: req.usageContext.featureRunID, p_attempt_key: attemptKey, p_attempt_outcome: "settled" }
+      : rpcPayload,
+  );
 
-  const insertResult = deps.usageEventWriter
-    ? await deps.usageEventWriter(usageEventRow)
-    : (await (deps.adminClient as unknown as {
-      from: (t: string) => {
-        insert: (r: unknown) => {
-          select: (c?: string) => {
-            maybeSingle: () => Promise<BillableUsageEventWriteResult>;
-          };
-        };
-      };
-    })
-      .from("generation_usage_events")
-      .insert(usageEventRow)
-      .select("id")
-      .maybeSingle());
+  if (rpcResult?.error) {
+    const msg = rpcResult.error.message ?? "";
+    // Race-loss insufficient credits (pre-flight passed but atomic settle
+    // observes the post-charge entitlement). Map to insufficient_credits so
+    // callers get a non-2xx and no audit row is ever written.
+    if (msg.includes("insufficient credits")) {
+      throw new BillableLLMError(
+        "insufficient_credits",
+        `Billable LLM call requires ${actualCharge.toFixed(2)} credits; ` +
+          `entitlement drained concurrently.`,
+        { requiredCredits: actualCharge, purpose: req.purpose },
+      );
+    }
+    if (msg.includes("idempotency_key parameters do not match")) {
+      throw new BillableLLMError(
+        "usage_event_insert_failed",
+        `idempotency_key reused with mismatched parameters: ${msg}`,
+        rpcResult.error,
+      );
+    }
+    console.error(
+      `[billable-llm] settle_billable_usage RPC failed: ` +
+        JSON.stringify(rpcResult.error),
+    );
+    await updateProviderAttempt(deps.adminClient, attemptID, { status: "settlement_failed", completed_at: new Date().toISOString(), calculated_charge_credits: actualCharge });
+    throw new BillableLLMError(
+      "credit_charge_failed",
+      `settle_billable_usage failed for purpose=${req.purpose}, ` +
+        `action=${req.action}: ${msg}`,
+      rpcResult.error,
+    );
+  }
 
-  // 6. Confirmed uniqueness conflict (idempotency hit) — no charge.
-  if (insertResult?.error && isUniqueViolation(insertResult.error)) {
+  const row = rpcResult?.data?.[0];
+  if (!row) {
+    await updateProviderAttempt(deps.adminClient, attemptID, { status: "settlement_failed", completed_at: new Date().toISOString(), calculated_charge_credits: actualCharge });
+    throw new BillableLLMError(
+      "usage_event_insert_failed",
+      `settle_billable_usage returned no row for purpose=${req.purpose}, ` +
+        `action=${req.action}.`,
+      { rpcResult },
+    );
+  }
+
+  const remainingCredits = row.remaining_credits ?? 0;
+
+  if (row.settlement_status === "duplicate") {
+    if (req.purpose !== "outline-suggestion") {
+      await updateProviderAttempt(deps.adminClient, attemptID, { status: "settled", completed_at: new Date().toISOString(), calculated_charge_credits: actualCharge });
+    }
+    await reconcileOutlineRun(deps.adminClient, req.usageContext.featureRunID);
     return {
       featureResult,
       providerResult,
       actualCharge,
+      // Idempotent replay: no new charge, no new usage row.
       charged: false,
       usageEventInserted: false,
-      remainingCredits: entitlement.monthly_credit_allowance +
-        entitlement.purchased_credit_balance,
-      // PR-372: COGS/margin still reported even when charge skipped
-      // (idempotency replay is a successful LLM call, not a free one).
+      remainingCredits,
       providerCogsCents: providerCogs.providerCogsCents,
       customerRevenueCents: marginInfo.customerRevenueCents,
       marginCents: marginInfo.marginCents,
     };
   }
 
-  // 7. Any insert error that is NOT a unique-violation — log + throw so
-  //    the caller can follow the existing diagnostic conventions. We do NOT
-  //    silently treat this as a duplicate (the prior "return charged:false"
-  //    path was unsafe).
-  if (insertResult?.error) {
-    console.error(
-      `[billable-llm] generation_usage_events insert failed: ` +
-        JSON.stringify(insertResult.error),
-    );
-    throw new BillableLLMError(
-      "usage_event_insert_failed",
-      `Failed to insert generation_usage_events for purpose=${req.purpose}, ` +
-        `action=${req.action}: ` +
-        (insertResult.error.message ?? "unknown error"),
-      insertResult.error,
-    );
+  if (req.purpose !== "outline-suggestion") {
+    await updateProviderAttempt(deps.adminClient, attemptID, { status: "settled", completed_at: new Date().toISOString(), calculated_charge_credits: actualCharge, settled_charge_credits: actualCharge, usage_event_id: row.usage_event_id, ledger_id: row.ledger_id });
   }
-
-  // 8. Insert returned neither an error nor data — Supabase/PostgREST
-  //    usually returns the inserted row via .select("id").maybeSingle().
-  //    Missing data is a contract violation: we must NOT proceed to
-  //    charging as if persistence succeeded.
-  if (!insertResult?.data) {
-    console.error(
-      `[billable-llm] generation_usage_events insert returned no data row ` +
-        `(purpose=${req.purpose}, action=${req.action})`,
-    );
-    throw new BillableLLMError(
-      "usage_event_insert_failed",
-      `generation_usage_events insert returned no data row for purpose=` +
-        `${req.purpose}, action=${req.action}.`,
-      { insertResult },
-    );
-  }
-
-  // 9. Charge credits via the same path generate-story uses. If this
-  //    throws, surface as credit_charge_failed so the caller maps it to a
-  //    non-2xx response. We DO NOT silently swallow the error (the prior
-  //    "return charged:false" path created a free-output escape hatch).
-  //    The usage_event row is already inserted; the spec's follow-up
-  //    (atomic billing) covers reconciliation for that audit row.
-  let remainingCredits = 0;
-  try {
-    // Feature callbacks may perform auxiliary billable calls before the
-    // primary charge (for example scene-memory extraction/embedding). Reload
-    // so those charges are not overwritten by the original preflight snapshot.
-    const currentEntitlement = await deps.creditStore.loadOrDefault(req.userID);
-    const updatedEntitlement = await deps.creditStore.charge(
-      req.userID,
-      actualCharge,
-      currentEntitlement,
-      req.usageContext.generationOutputID ?? null,
-    );
-    remainingCredits = updatedEntitlement.monthly_credit_allowance +
-      updatedEntitlement.purchased_credit_balance;
-  } catch (err) {
-    console.error(
-      `[billable-llm] credit charge failed (usage event already inserted at ` +
-        `row ${insertResult.data?.id ?? "?"}, no rollback): ` +
-        (err instanceof Error ? err.message : String(err)),
-    );
-    throw new BillableLLMError(
-      "credit_charge_failed",
-      `creditStore.charge failed for purpose=${req.purpose}, ` +
-        `action=${req.action}: ` +
-        (err instanceof Error ? err.message : String(err)),
-      err,
-    );
-  }
-
+  await reconcileOutlineRun(deps.adminClient, req.usageContext.featureRunID);
   return {
     featureResult,
     providerResult,
-    actualCharge,
+    actualCharge: req.purpose === "outline-suggestion" ? (row.settled_charge_credits ?? actualCharge) : actualCharge,
     charged: true,
     usageEventInserted: true,
     remainingCredits,
-    // PR-372 cache economics telemetry.
     providerCogsCents: providerCogs.providerCogsCents,
     customerRevenueCents: marginInfo.customerRevenueCents,
     marginCents: marginInfo.marginCents,

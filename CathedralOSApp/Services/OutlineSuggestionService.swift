@@ -21,6 +21,23 @@ enum OutlineSuggestionError: Error, LocalizedError {
     case serverError(statusCode: Int, body: String? = nil)
     case networkError(String)
     case cancelled
+    // PR 2: per the recipe-selection integrity validator. Surfaced when
+    // `makeRequest` finds a stored selectedCharacterID / selectedStorySparkID /
+    // selectedAftertasteID / selectedRelationshipID / selectedThemeQuestionID /
+    // selectedMotifID that no longer resolves to a current entity belonging
+    // to the same project. Per spec the edge function is NOT called and
+    // no credits are consumed when this case fires.
+    case recipeIntegrityMissing(missingIDs: [RecipeIntegrityValidator.MissingID])
+    // PR 9 (recipe-to-acceptance recovery arc): the outline already has a
+    // frozen recipe hash that does not match the supplied recipe, AND the
+    // outline has at least one persisted section. We refuse the billable
+    // planning call and surface a clear, user-facing message rather than
+    // letting the LLM run and fail later at Accept All time.
+    case recipeProvenanceConflict(
+        frozenRecipeHash: String,
+        currentRecipeHash: String,
+        sectionCount: Int,
+    )
 
     var errorDescription: String? {
         switch self {
@@ -37,6 +54,10 @@ enum OutlineSuggestionError: Error, LocalizedError {
             return "Server error \(c)."
         case .networkError(let m):   return "Network error: \(m)"
         case .cancelled:              return "The suggestion run continues on the server. You can leave this screen and resume it later."
+        case .recipeIntegrityMissing(let missing):
+            return RecipeIntegrityValidator.errorMessage(for: missing)
+        case .recipeProvenanceConflict(_, _, let count):
+            return "This outline was planned against a different recipe (\(count) section\(count == 1 ? "" : "s") already accepted). Edit the outline to start fresh, or open the recipe to confirm it matches before re-planning."
         }
     }
 }
@@ -60,29 +81,66 @@ struct OutlineSuggestionService {
         self.session = session
     }
 
+    @MainActor
     func makeRequest(
         recipe: PromptPack,
         arc: StoryArc,
         arcTemplate: StoryArcTemplate,
+        outline: Outline? = nil,
+        requestedFormat: String = "novel",
         hint: String? = nil,
-        existingSections: [OutlineSection] = []
+        existingSections: [OutlineSection] = [],
+        material: AuthoritativeProjectMaterial? = nil,
+        requestGenerationID: UUID? = nil
     ) throws -> OutlineSuggestionRequest {
         guard let project = recipe.project else {
             throw OutlineSuggestionError.invalidResponse("Recipe has no project")
         }
+        // PR 2: recipe-selection integrity check BEFORE the recipe blob is
+        // built and BEFORE the edge function would be called. Per spec, when
+        // any selected ID is unresolved we do NOT call the edge function, do
+        // NOT consume credits, do NOT silently prune the selection. We throw
+        // a typed error so the view can name every missing class + UUID.
+        let validation: RecipeIntegrityValidator.Result
+        if let material {
+            validation = RecipeIntegrityValidator.validate(recipe: recipe, material: material)
+        } else {
+            validation = RecipeIntegrityValidator.validate(recipe: recipe)
+        }
+        switch validation {
+        case .valid:
+            break
+        case .invalid(let missing):
+            throw OutlineSuggestionError.recipeIntegrityMissing(missingIDs: missing)
+        }
         guard let templateID = arc.templateID, templateID == arcTemplate.id else {
             throw OutlineSuggestionError.invalidResponse("Arc template mismatch")
         }
-        let sourceRecipe = buildRecipeBlob(recipe: recipe, project: project)
+        let sourceRecipe = buildRecipeBlob(recipe: recipe, project: project, material: material)
         let arcBlob = buildArcTemplateBlob(arc: arc, template: arcTemplate)
         let existing = existingSections.isEmpty ? nil : buildExistingSectionBlobs(existingSections)
+        // PR 4: canonical planning identity fields. The server validates
+        // outline_id ownership (user_id + project_id + canonical lineage)
+        // BEFORE any billable LLM call; when outline_id is nil the server
+        // skips enrichment provenance persistence (legacy callers).
+        // project_lineage_id is canonical stableLineageID; server uses it
+        // to detect lineage drift between local project UUID and canonical
+        // identity (delete + restore from backup case).
+        let outlineID = outline?.id
+        let lineageID = project.stableLineageID
         let identityRequest = OutlineSuggestionRequest(
             recipe: sourceRecipe, arcTemplate: arcBlob, hint: hint,
-            existingSections: existing, idempotencyKey: ""
+            existingSections: existing, idempotencyKey: "",
+            outline_id: outlineID,
+            project_lineage_id: lineageID,
+            requestedFormat: requestedFormat
         )
         return OutlineSuggestionRequest(
             recipe: sourceRecipe, arcTemplate: arcBlob, hint: hint,
-            existingSections: existing, idempotencyKey: Self.idempotencyKey(for: identityRequest)
+            existingSections: existing, idempotencyKey: Self.idempotencyKey(for: identityRequest, generationID: requestGenerationID),
+            outline_id: outlineID,
+            project_lineage_id: lineageID,
+            requestedFormat: requestedFormat
         )
     }
 
@@ -93,6 +151,7 @@ struct OutlineSuggestionService {
         do { client = try SupabaseBackendClient() }
         catch { throw OutlineSuggestionError.notConfigured(reason: String(describing: error)) }
         let userAccessToken = try await validAccessToken()
+
         var urlRequest = client.authorizedRequest(
             for: client.edgeFunctionURL(path: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath),
             userAccessToken: userAccessToken
@@ -156,10 +215,13 @@ struct OutlineSuggestionService {
         return try decodeJob(data)
     }
 
-    static func idempotencyKey(for request: OutlineSuggestionRequest) -> String {
+    static func idempotencyKey(for request: OutlineSuggestionRequest, generationID: UUID? = nil) -> String {
         var encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let data = (try? encoder.encode(request)) ?? Data()
+        var data = (try? encoder.encode(request)) ?? Data()
+        if let generationID {
+            data.append(Data("\nrequest_generation_id=\(generationID.uuidString)".utf8))
+        }
         let digest = SHA256.hash(data: data)
         return "suggestion-" + digest.map { String(format: "%02x", $0) }.joined()
     }
@@ -209,7 +271,10 @@ struct OutlineSuggestionService {
             return true
         case .serverError(let statusCode, _):
             return statusCode == 408 || statusCode == 425 || statusCode == 429 || (500...599).contains(statusCode)
-        case .notConfigured, .providerError, .insufficientCredits, .invalidResponse:
+        // PR 9: recipe_provenance_conflict is not auto-retryable — the
+        // outline has persisted sections from a previous recipe hash, so the
+        // user must edit the recipe or start a fresh outline.
+        case .notConfigured, .providerError, .insufficientCredits, .invalidResponse, .recipeIntegrityMissing, .recipeProvenanceConflict:
             return false
         }
     }
@@ -242,11 +307,18 @@ struct OutlineSuggestionService {
 
     // MARK: - Request body builders
 
-    private func buildRecipeBlob(recipe: PromptPack, project: StoryProject) -> PromptPackExportPayload {
+    private func buildRecipeBlob(
+        recipe: PromptPack,
+        project: StoryProject,
+        material: AuthoritativeProjectMaterial?
+    ) -> PromptPackExportPayload {
         // Use the same lossless, selection-aware payload sent to story generation.
         // Do not maintain a second abbreviated recipe schema here: it drops the
         // project premise, relationships, rich character fields, and settings.
-        PromptPackExportBuilder.build(pack: recipe, project: project)
+        if let material {
+            return PromptPackExportBuilder.build(pack: recipe, project: project, material: material)
+        }
+        return PromptPackExportBuilder.build(pack: recipe, project: project)
     }
 
     private func buildArcTemplateBlob(arc: StoryArc, template: StoryArcTemplate) -> ArcTemplateBlob {

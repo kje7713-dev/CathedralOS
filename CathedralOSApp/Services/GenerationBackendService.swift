@@ -113,7 +113,7 @@ enum GenerationBackendServiceError: Error, LocalizedError {
     /// The backend rejected the request because the user has insufficient generation credits.
     /// `required` is the credit cost for the requested generation; `available` is the user's
     /// current balance as reported by the backend.
-    case insufficientCredits(required: Int, available: Int)
+    case insufficientCredits(required: Double, available: Double)
     /// The backend rejected the request because the user has sent too many requests recently.
     /// `retryAfterSeconds` is the suggested wait time before retrying, when provided.
     case rateLimited(retryAfterSeconds: Int?)

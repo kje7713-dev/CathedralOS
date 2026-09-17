@@ -121,9 +121,8 @@ export async function settleDirectUsage(
   const stageIdentity =
     `${context.outputID}:${CURRENT_MEMORY_PIPELINE_VERSION}:${stage}`;
   // The SQL RPC locks the entitlement and writes the usage event + ledger debit
-  // in one transaction. Integer credit storage is legacy, so charge the
-  // conservative whole-credit amount while retaining the real provider tokens.
-  const chargeCredits = Math.max(0, Math.ceil(charge));
+  // in one transaction. Preserve exact fractional credits end-to-end.
+  const chargeCredits = Math.max(0, charge);
   const { data, error } = await context.adminClient.rpc(
     "settle_scene_memory_stage",
     {
