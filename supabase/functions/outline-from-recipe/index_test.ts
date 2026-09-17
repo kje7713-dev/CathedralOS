@@ -691,6 +691,9 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Each section must produce a materially new resulting state."), true);
   assertEquals(system.includes("The Resurrection must not replay the Ordeal at greater scale."), true);
   assertEquals(system.includes("When the planning context supplies a concrete location, clue, institution, object, threat mechanism, or consequence"), true);
+  assertEquals(system.includes("Names from the supplied recipe and enriched story material are canonical."), true);
+  assertEquals(system.includes("A revelation, discovery, confession, or relationship change may occur only once as the primary dramatic event."), true);
+  assertEquals(system.includes("Maintain the established narrative POV mode across the outline unless the supplied recipe explicitly requires a POV change."), true);
 });
 
 Deno.test("allocation parser preserves minimums and rejects malformed plans", () => {

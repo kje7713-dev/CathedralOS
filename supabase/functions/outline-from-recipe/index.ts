@@ -1824,6 +1824,12 @@ Every section must commit to one canonical event. Never use unresolved alternati
 
 Each section must produce a materially new resulting state. Do not create another section merely to restate or reconfirm a relationship change, realization, warning, or trust shift already achieved. Revisit an arc only when a new event escalates, reverses, costs, or transforms it.
 
+Names from the supplied recipe and enriched story material are canonical. Copy character, institution, and location names exactly. Never rename, merge, abbreviate, or invent a variant of an existing named entity.
+
+A revelation, discovery, confession, or relationship change may occur only once as the primary dramatic event. Later sections may build on its consequences, but must not rediscover or restate the same fact as a new revelation.
+
+Maintain the established narrative POV mode across the outline unless the supplied recipe explicitly requires a POV change. Do not switch between first person and third person as a stylistic experiment.
+
 ## Container semantics for planning
 
 Choose a container for the scale of one dramatic unit, not to fake novel length:
