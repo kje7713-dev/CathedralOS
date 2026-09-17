@@ -3727,6 +3727,52 @@ Deno.test("fresh novel worker sequence is enrichment then allocation then one gl
   assertEquals(db.row.status, "completed");
 });
 
+Deno.test("reclaimed worker trusts an intact persisted planning checkpoint after JSON normalization", async () => {
+  const fullBody = await executableWorkerBody();
+  const body = { ...fullBody, storyMaterialEnrichment: undefined } as any;
+  const row = {
+    ...checkpointedWorkerRow(body),
+    story_material: null,
+    suggestions: [],
+    diagnostics: {},
+    planning_state: { version: 2, phase: "start" },
+    request_json: body,
+  };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const materialJSON = JSON.stringify(fullBody.storyMaterialEnrichment);
+  const billable = async (request: any) => {
+    actions.push(request.action);
+    if (request.action === "story-material-enrichment") {
+      return { featureResult: materialJSON, charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+    }
+    return fakeWorkerBilling([])(request);
+  };
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any,
+    scheduleContinuation: async () => {},
+  });
+  await run();
+  assertEquals(actions, ["story-material-enrichment"]);
+  const persistedPlanningContext = { ...db.row.planning_context, reclaimedAfterJSONRoundTrip: true };
+  db.row.planning_context = persistedPlanningContext;
+  db.row.planning_context_hash = await (async (value) => {
+    const stable = (candidate: any): any => Array.isArray(candidate)
+      ? candidate.map(stable)
+      : candidate && typeof candidate === "object"
+      ? Object.fromEntries(Object.keys(candidate).sort().map((key) => [key, stable(candidate[key])]))
+      : candidate;
+    const bytes = new TextEncoder().encode(JSON.stringify(stable(value)));
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  })(persistedPlanningContext);
+  await run();
+  await run();
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions"]);
+  assertEquals(db.row.status, "completed");
+});
+
 Deno.test("production checkpoint resume executes the single global outline call once", async () => {
   const body = await executableWorkerBody();
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));

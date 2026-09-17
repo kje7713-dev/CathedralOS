@@ -3450,7 +3450,7 @@ export async function runSuggestionJob(
     const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
     // Freeze the deterministic compact view on the durable run so a reclaimed
     // worker cannot silently prompt against a materially different payload.
-    const planningContext = {
+    const computedPlanningContext = {
       ...buildCompactPlanningView(body, recipeObligations, storyMaterial),
       provenance: {
         sourceRecipeHash: provenance.sourceRecipeHash,
@@ -3460,11 +3460,27 @@ export async function runSuggestionJob(
         projectLineageID: body.project_lineage_id ?? null,
       },
     };
-    const planningContextHash = await sha256Hex(stableJSONStringify(planningContext));
-    if (claimedRun.planning_context && claimedRun.planning_context_version === 1 && claimedRun.planning_context_hash && claimedRun.planning_context_hash !== planningContextHash) {
-      throw new Error("persisted planning context conflicts with the reclaimed request; refusing to silently rebuild a paid outline stage");
+    // A reclaimed worker receives the original request JSON but reconstructs
+    // story material from the persisted JSON column. That round trip can
+    // normalize harmless representation details even when the request is the
+    // same logical/idempotent request. The frozen checkpoint is authoritative;
+    // verify its own hash, then reuse it instead of comparing two
+    // representation-sensitive reconstructions and falsely failing before the
+    // next paid stage. New runs still compute and persist the checkpoint here.
+    let planningContext: Record<string, unknown> = computedPlanningContext;
+    let planningContextHash = await sha256Hex(stableJSONStringify(computedPlanningContext));
+    const persistedPlanningContext = claimedRun.planning_context && typeof claimedRun.planning_context === "object"
+      ? claimedRun.planning_context as Record<string, unknown>
+      : null;
+    if (persistedPlanningContext && claimedRun.planning_context_version === 1 && claimedRun.planning_context_hash) {
+      const persistedHash = await sha256Hex(stableJSONStringify(persistedPlanningContext));
+      if (persistedHash !== claimedRun.planning_context_hash) {
+        throw new Error("persisted planning context checkpoint is corrupted; refusing to resume the paid outline stage");
+      }
+      planningContext = persistedPlanningContext;
+      planningContextHash = claimedRun.planning_context_hash;
     }
-    await updateRun({ planning_context: claimedRun.planning_context ?? planningContext, planning_context_hash: claimedRun.planning_context_hash ?? planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1 });
+    await updateRun({ planning_context: planningContext, planning_context_hash: planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1 });
     // PR 5: allocation counts are residual NEW sections. Persist the validated
     // plan before the next provider boundary so continuation does not rerun a
     // settled allocation call or double-subtract existing coverage.
