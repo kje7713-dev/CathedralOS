@@ -38,6 +38,7 @@ import {
   computeMaxChargeCredits,
   estimateTokensFromText,
   snapshotPricing,
+  isBillableGenerationModel,
 } from "../generate-story/_generation_models.ts";
 
 // ---------------------------------------------------------------------------
@@ -296,6 +297,16 @@ export async function handleCoherenceCheck(
       .maybeSingle();
   const model: GenerationModel = (modelRow?.data as GenerationModel | null) ??
     config.fallbackModel;
+  if (!isBillableGenerationModel(model)) {
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "model_unavailable_or_unpriced",
+        errorMessage: "Selected model is unavailable or has unverified pricing.",
+      }),
+      { status: 400 },
+    );
+  }
 
   // 2. Build messages. Estimate uses the exact same prompt shape as the
   // billable call, but never invokes the provider or writes usage rows.

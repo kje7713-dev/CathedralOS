@@ -18,8 +18,13 @@ export interface GenerationModel {
   // Read by snapshotPricing() to derive the per-1K credit rate snapshot.
   // Supabase JS returns NUMERIC as a string; mapModelRow coerces via toNumber.
   billing_multiplier: number;
-  provider_input_usd_per_1m: number;
-  provider_cached_input_usd_per_1m: number;
+  provider_available?: boolean;
+  model_kind?: string;
+  pricing_state?: string;
+  pricing_verified_at?: string | null;
+  cache_write_pricing_required?: boolean;
+  provider_input_usd_per_1m: number | null;
+  provider_cached_input_usd_per_1m: number | null;
   /**
    * PR-372: provider's USD rate per 1M cache-write input tokens. OpenAI
    * charges 1.25x the standard input rate on GPT-5.6+ when a prefix is
@@ -28,8 +33,8 @@ export interface GenerationModel {
    * that don't report cache_write_tokens because the COGS math only reads
    * this when cache_write_input_tokens > 0).
    */
-  provider_cache_write_usd_per_1m: number;
-  provider_output_usd_per_1m: number;
+  provider_cache_write_usd_per_1m: number | null;
+  provider_output_usd_per_1m: number | null;
   pricing_effective_at: string;
   /**
    * PR-372: cache capability enum. Replaces the planned `cache_supported`
@@ -77,20 +82,58 @@ function toNumber(value: unknown, fallback = 0): number {
   return fallback;
 }
 
+function toNullableNumber(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+export function isBillableGenerationModel(model: GenerationModel): boolean {
+  return model.enabled === true &&
+    model.provider_available === true &&
+    model.model_kind === "text_generation" &&
+    model.pricing_state === "verified" &&
+    model.pricing_verified_at != null &&
+    model.provider_model.trim().length > 0 &&
+    Number.isFinite(model.billing_multiplier) && model.billing_multiplier > 0 &&
+    model.provider_input_usd_per_1m != null &&
+    model.provider_cached_input_usd_per_1m != null &&
+    model.provider_output_usd_per_1m != null &&
+    (!model.cache_write_pricing_required ||
+      model.provider_cache_write_usd_per_1m != null);
+}
+
+export function isPricedModel(model: GenerationModel): boolean {
+  return model.enabled === true &&
+    model.provider_available === true &&
+    model.pricing_state === "verified" &&
+    model.pricing_verified_at != null &&
+    model.provider_model.trim().length > 0 &&
+    Number.isFinite(model.billing_multiplier) && model.billing_multiplier > 0 &&
+    model.provider_input_usd_per_1m != null &&
+    model.provider_cached_input_usd_per_1m != null &&
+    model.provider_output_usd_per_1m != null &&
+    (!model.cache_write_pricing_required ||
+      model.provider_cache_write_usd_per_1m != null);
+}
+
 export function mapModelRow(row: Record<string, unknown>): GenerationModel {
   // Phase 3 default multiplier is 2.0 (50% gross margin). Older rows that
   // pre-date the migration won't have the column populated; toNumber's
   // fallback handles that.
-  const providerInput = toNumber(row.provider_input_usd_per_1m, 0);
-  const providerCached = toNumber(row.provider_cached_input_usd_per_1m, 0);
-  const providerOutput = toNumber(row.provider_output_usd_per_1m, 0);
+  const providerInput = toNullableNumber(row.provider_input_usd_per_1m);
+  const providerCached = toNullableNumber(row.provider_cached_input_usd_per_1m);
+  const providerOutput = toNullableNumber(row.provider_output_usd_per_1m);
   const multiplier = toNumber(row.billing_multiplier, 2.0);
   // PR-372 cache write rate: default to standard input rate × 1.25 (OpenAI
   // GPT-5.6+ cache-write multiplier). Older rows won't have the column;
   // computed fallback matches the documented provider contract.
-  const providerCacheWrite = toNumber(
+  const providerCacheWrite = toNullableNumber(
     row.provider_cache_write_usd_per_1m,
-    providerInput * 1.25,
   );
   // PR-372 cache mode: default "implicit" (automatic prefix matching with
   // prompt_cache_key). Models that don't support caching at all will still
@@ -121,6 +164,19 @@ export function mapModelRow(row: Record<string, unknown>): GenerationModel {
       ? null
       : Math.max(1, Math.round(toNumber(row.max_output_tokens, 1))),
     enabled: Boolean(row.enabled),
+    provider_available: row.provider_available == null
+      ? undefined
+      : Boolean(row.provider_available),
+    model_kind: row.model_kind == null ? undefined : String(row.model_kind),
+    pricing_state: row.pricing_state == null
+      ? undefined
+      : String(row.pricing_state),
+    pricing_verified_at: row.pricing_verified_at == null
+      ? null
+      : String(row.pricing_verified_at),
+    cache_write_pricing_required: row.cache_write_pricing_required == null
+      ? undefined
+      : Boolean(row.cache_write_pricing_required),
     sort_order: Math.round(toNumber(row.sort_order, 0)),
     // Phase 3 pricing fields — populated by migration 20260803194600.
     billing_multiplier: multiplier,
@@ -135,18 +191,47 @@ export function mapModelRow(row: Record<string, unknown>): GenerationModel {
   };
 }
 
+async function queryEnabledPricedModelByProviderModel(
+  db: any,
+  providerModel: string,
+  modelKind?: string,
+): Promise<GenerationModel | null> {
+  let query = db.from("generation_models").select("*")
+    .eq("provider_model", providerModel)
+    .eq("enabled", true)
+    .eq("provider_available", true)
+    .eq("pricing_state", "verified")
+    .not("pricing_verified_at", "is", null)
+    .not("provider_input_usd_per_1m", "is", null)
+    .not("provider_cached_input_usd_per_1m", "is", null)
+    .not("provider_output_usd_per_1m", "is", null)
+    .gt("billing_multiplier", 0)
+    .or("cache_write_pricing_required.eq.false,provider_cache_write_usd_per_1m.not.is.null");
+  if (modelKind) query = query.eq("model_kind", modelKind);
+  const { data, error } = await query.maybeSingle();
+  if (error || !data) return null;
+  const model = mapModelRow(data as Record<string, unknown>);
+  return isPricedModel(model) ? model : null;
+}
+
 export async function getEnabledModelByProviderModel(
   db: any,
   providerModel: string,
 ): Promise<GenerationModel | null> {
-  const { data, error } = await db
-    .from("generation_models")
-    .select("*")
-    .eq("provider_model", providerModel)
-    .eq("enabled", true)
-    .maybeSingle();
-  if (error || !data) return null;
-  return mapModelRow(data as Record<string, unknown>);
+  const model = await getEnabledPricedModelByProviderModel(
+    db,
+    providerModel,
+    "text_generation",
+  );
+  return model && isBillableGenerationModel(model) ? model : null;
+}
+
+export async function getEnabledPricedModelByProviderModel(
+  db: any,
+  providerModel: string,
+  modelKind: string,
+): Promise<GenerationModel | null> {
+  return queryEnabledPricedModelByProviderModel(db, providerModel, modelKind);
 }
 
 export class SupabaseGenerationModelStore implements GenerationModelStore {
@@ -159,10 +244,20 @@ export class SupabaseGenerationModelStore implements GenerationModelStore {
       .select("*")
       .eq("id", modelId)
       .eq("enabled", true)
+      .eq("provider_available", true)
+      .eq("model_kind", "text_generation")
+      .eq("pricing_state", "verified")
+      .not("pricing_verified_at", "is", null)
+      .not("provider_input_usd_per_1m", "is", null)
+      .not("provider_cached_input_usd_per_1m", "is", null)
+      .not("provider_output_usd_per_1m", "is", null)
+      .gt("billing_multiplier", 0)
+      .or("cache_write_pricing_required.eq.false,provider_cache_write_usd_per_1m.not.is.null")
       .single();
 
     if (error || !data) return null;
-    return mapModelRow(data as Record<string, unknown>);
+    const model = mapModelRow(data as Record<string, unknown>);
+    return isBillableGenerationModel(model) ? model : null;
   }
 
   async listEnabledModels(): Promise<PublicGenerationModel[]> {
@@ -172,6 +267,14 @@ export class SupabaseGenerationModelStore implements GenerationModelStore {
         "id, display_name, description, input_credit_rate, output_credit_rate, minimum_charge_credits, max_output_tokens, sort_order",
       )
       .eq("enabled", true)
+      .eq("provider_available", true)
+      .eq("model_kind", "text_generation")
+      .eq("pricing_state", "verified")
+      .not("pricing_verified_at", "is", null)
+      .not("provider_input_usd_per_1m", "is", null)
+      .not("provider_cached_input_usd_per_1m", "is", null)
+      .not("provider_output_usd_per_1m", "is", null)
+      .or("cache_write_pricing_required.eq.false,provider_cache_write_usd_per_1m.not.is.null")
       .order("sort_order", { ascending: true })
       .order("id", { ascending: true });
 
@@ -182,6 +285,14 @@ export class SupabaseGenerationModelStore implements GenerationModelStore {
         provider: "openai",
         provider_model: "",
         enabled: true,
+        provider_available: true,
+        model_kind: "text_generation",
+        pricing_state: "verified",
+        pricing_verified_at: new Date().toISOString(),
+        provider_input_usd_per_1m: 1,
+        provider_cached_input_usd_per_1m: 1,
+        provider_output_usd_per_1m: 1,
+        billing_multiplier: 1,
       });
       return {
         id: mapped.id,
@@ -267,7 +378,7 @@ export interface PricingSnapshot {
   /** Provider's USD per 1M cache-read input tokens (0.1× on GPT-5.6+). */
   providerCachedInputUsdPer1m: number;
   /** Provider's USD per 1M cache-write input tokens (1.25× on GPT-5.6+). */
-  providerCacheWriteUsdPer1m: number;
+  providerCacheWriteUsdPer1m: number | null;
   /** Provider's USD per 1M output tokens. */
   providerOutputUsdPer1m: number;
 }
@@ -313,11 +424,19 @@ export function snapshotPricing(
   defaults: PricingDefaults = DEFAULT_PRICING,
 ): PricingSnapshot {
   const multiplier = model.billing_multiplier;
+  if (!Number.isFinite(multiplier) || multiplier <= 0 ||
+    model.provider_input_usd_per_1m == null ||
+    model.provider_cached_input_usd_per_1m == null ||
+    model.provider_output_usd_per_1m == null ||
+    (model.cache_write_pricing_required &&
+      model.provider_cache_write_usd_per_1m == null)) {
+    throw new Error("model pricing is incomplete or unusable");
+  }
   return {
     // Customer-facing rates (with markup)
-    inputCreditRatePer1k: (model.provider_input_usd_per_1m ?? 0) * multiplier /
+    inputCreditRatePer1k: model.provider_input_usd_per_1m * multiplier /
       10,
-    outputCreditRatePer1k: (model.provider_output_usd_per_1m ?? 0) *
+    outputCreditRatePer1k: model.provider_output_usd_per_1m *
       multiplier / 10,
     billingMultiplier: multiplier,
     minimumChargeCredits: model.minimum_charge_credits ??
@@ -325,10 +444,10 @@ export function snapshotPricing(
     creditValueUsd: defaults.creditValueUsd,
     effectiveAt: model.pricing_effective_at,
     // PR-372 provider-facing rates for COGS math
-    providerInputUsdPer1m: model.provider_input_usd_per_1m ?? 0,
-    providerCachedInputUsdPer1m: model.provider_cached_input_usd_per_1m ?? 0,
-    providerCacheWriteUsdPer1m: model.provider_cache_write_usd_per_1m ?? 0,
-    providerOutputUsdPer1m: model.provider_output_usd_per_1m ?? 0,
+    providerInputUsdPer1m: model.provider_input_usd_per_1m,
+    providerCachedInputUsdPer1m: model.provider_cached_input_usd_per_1m,
+    providerCacheWriteUsdPer1m: model.provider_cache_write_usd_per_1m,
+    providerOutputUsdPer1m: model.provider_output_usd_per_1m,
   };
 }
 
@@ -466,12 +585,16 @@ export function computeProviderCogsCents(
   const output = Math.max(0, usage.outputTokens);
   const tool = Math.max(0, usage.toolCostUsd);
   const ordinaryUncached = anomaly ? 0 : totalInput - cached - cacheWrite;
+  if (cacheWrite > 0 && pricing.providerCacheWriteUsdPer1m == null) {
+    throw new Error("cache-write pricing is unavailable for reported usage");
+  }
   // USD per 1M tokens × tokens / 1_000_000 = USD. × 100 = cents.
   const ordinaryUncachedCents =
     (ordinaryUncached * pricing.providerInputUsdPer1m) / 1_000_000 * 100;
   const cachedCents = (cached * pricing.providerCachedInputUsdPer1m) /
     1_000_000 * 100;
-  const cacheWriteCents = (cacheWrite * pricing.providerCacheWriteUsdPer1m) /
+  const cacheWriteCents =
+    (cacheWrite * (pricing.providerCacheWriteUsdPer1m ?? 0)) /
     1_000_000 * 100;
   const outputCents = (output * pricing.providerOutputUsdPer1m) / 1_000_000 *
     100;

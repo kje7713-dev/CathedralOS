@@ -2679,15 +2679,15 @@ async function handler(
       outputBudget,
       selectedModelId,
       status: "failed",
-      errorCode: "invalid_model",
-      errorMessage: "Selected model is invalid or disabled.",
+      errorCode: "model_unavailable_or_unpriced",
+      errorMessage: "Selected model is unavailable or has unverified pricing.",
       durationMs: Date.now() - requestStartMs,
     });
     return corsResponse(
       JSON.stringify({
         status: "failed",
-        errorCode: "invalid_model",
-        errorMessage: "Selected model is invalid or disabled.",
+        errorCode: "model_unavailable_or_unpriced",
+        errorMessage: "Selected model is unavailable or has unverified pricing.",
       }),
       { status: 400 },
     );

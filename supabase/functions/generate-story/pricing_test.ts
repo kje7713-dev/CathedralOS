@@ -692,3 +692,47 @@ Deno.test("logical-stage minimum is applied once across tiny packets", () => {
   assertEquals(stageCharge, 3);
   assertEquals(Math.max(pricing.minimumChargeCredits, 2 + 2), 4);
 });
+
+Deno.test("pricing safety: mapModelRow preserves unknown provider rates as null", () => {
+  const model = mapModelRow({
+    id: "unpriced",
+    provider_model: "unpriced",
+    enabled: true,
+    billing_multiplier: 2,
+    provider_input_usd_per_1m: null,
+    provider_cached_input_usd_per_1m: null,
+    provider_output_usd_per_1m: null,
+    provider_cache_write_usd_per_1m: null,
+  });
+  assertEquals(model.provider_input_usd_per_1m, null);
+  assertEquals(model.provider_cached_input_usd_per_1m, null);
+  assertEquals(model.provider_output_usd_per_1m, null);
+  assertEquals(model.provider_cache_write_usd_per_1m, null);
+});
+
+Deno.test("pricing safety: incomplete pricing cannot produce a snapshot", () => {
+  const model = makeModel({ provider_output_usd_per_1m: null });
+  let threw = false;
+  try {
+    snapshotPricing(model);
+  } catch {
+    threw = true;
+  }
+  assertEquals(threw, true);
+});
+
+Deno.test("pricing safety: only verified available text models are billable", async () => {
+  const { isBillableGenerationModel } = await import("./_generation_models.ts");
+  const eligible = makeModel({
+    provider_available: true,
+    model_kind: "text_generation",
+    pricing_state: "verified",
+    pricing_verified_at: "2026-09-17T00:00:00Z",
+    cache_write_pricing_required: false,
+  });
+  assertEquals(isBillableGenerationModel(eligible), true);
+  assertEquals(isBillableGenerationModel({ ...eligible, enabled: false }), false);
+  assertEquals(isBillableGenerationModel({ ...eligible, pricing_state: "unverified" }), false);
+  assertEquals(isBillableGenerationModel({ ...eligible, model_kind: "embedding" }), false);
+  assertEquals(isBillableGenerationModel({ ...eligible, provider_input_usd_per_1m: null }), false);
+});
