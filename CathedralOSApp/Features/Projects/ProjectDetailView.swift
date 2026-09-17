@@ -126,12 +126,29 @@ struct ProjectDetailView: View {
 
         if let lineageID,
            let canonical = projects.first(where: { $0.stableLineageID == lineageID }) {
-            project = canonical
+            $project.wrappedValue = canonical
             return
         }
 
         if let local = projects.first(where: { $0.id == localProjectID }) {
-            project = local
+            $project.wrappedValue = local
+        }
+    }
+
+    @ViewBuilder
+    private var hiddenOutlineTab: some View {
+        if storyEditorMode != .outline && !advancedMode {
+            OutlineTabView(
+                project: project,
+                generationLaunch: $pendingOutlineGeneration,
+                isGenerationStarting: $isRunAllStarting,
+                onProjectRefreshed: refreshProjectReference,
+                onGenerationCompleted: {
+                    advancedMode = false
+                    storyEditorModeRaw = StoryEditorMode.output.rawValue
+                }
+            )
+            .hidden()
         }
     }
 
@@ -249,19 +266,7 @@ struct ProjectDetailView: View {
         // Keep the existing confirmation and kickoff flow alive while the user
         // remains on Novel Workspace instead of switching to Outline.
         .background {
-            if storyEditorMode != .outline && !advancedMode {
-                OutlineTabView(
-                    project: project,
-                    generationLaunch: $pendingOutlineGeneration,
-                    isGenerationStarting: $isRunAllStarting,
-                    onProjectRefreshed: refreshProjectReference,
-                    onGenerationCompleted: {
-                        advancedMode = false
-                        storyEditorModeRaw = StoryEditorMode.output.rawValue
-                    }
-                )
-                .hidden()
-            }
+            hiddenOutlineTab
         }
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.large)
