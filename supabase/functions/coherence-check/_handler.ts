@@ -84,7 +84,7 @@ export interface CoherenceRuntimeDeps {
 
 export interface CoherenceConfig {
   openaiModelDefault: string;
-  fallbackModel: GenerationModel;
+  fallbackModel?: GenerationModel;
   maxCompletionTokens: number;
   temperature: number;
 }
@@ -261,7 +261,7 @@ const errorResponse = (
  *   - parsed + validated the request body via validateRequest()
  *
  * Flow:
- *   1. Resolve the GenerationModel (admin lookup + FALLBACK_MODEL fallback).
+ *   1. Resolve the GenerationModel (admin lookup through the canonical catalog).
  *   2. Build messages + idempotency key.
  *   3. Capture startMs for the duration metric.
  *   4. Call runBillableLLM with onProviderSuccess callback. The callback
@@ -295,9 +295,8 @@ export async function handleCoherenceCheck(
     ? await modelTable.eq("id", request.selected_model_id).maybeSingle()
     : await modelTable.eq("provider_model", config.openaiModelDefault)
       .maybeSingle();
-  const model: GenerationModel = (modelRow?.data as GenerationModel | null) ??
-    config.fallbackModel;
-  if (!isBillableGenerationModel(model)) {
+  const model = modelRow?.data as GenerationModel | null;
+  if (!model || !isBillableGenerationModel(model)) {
     return corsResponse(
       JSON.stringify({
         status: "failed",

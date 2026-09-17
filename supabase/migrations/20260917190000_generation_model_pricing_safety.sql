@@ -31,20 +31,53 @@ alter table public.generation_models
   add constraint generation_models_cache_mode_check
     check (cache_mode in ('none', 'implicit', 'explicit'));
 
--- Preserve operator enablement, but classify the known catalog and only mark
--- rates verified where the official model pages were rechecked for this PR.
+-- Preserve operator enablement and classify every existing catalog row. These
+-- values were rechecked against the official model pages on 2026-09-17.
+-- Long-context modifiers are unreachable on Cathedral's customer generation
+-- paths: sourcePayloadJSON is capped at 50,000 chars and previous output at
+-- 20,000 chars, keeping constructed prompts below OpenAI's 272K threshold.
+-- We therefore retain ordinary token pricing without a generic rules engine.
 update public.generation_models
 set
   provider_first_seen_at = coalesce(provider_first_seen_at, created_at),
-  provider_last_seen_at = coalesce(provider_last_seen_at, now()),
+  provider_last_seen_at = now(),
+  provider_available = true,
   model_kind = case when provider_model = 'text-embedding-3-small' then 'embedding'
                     else 'text_generation' end,
-  pricing_state = case when provider_model in ('gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5.5')
-                       then 'verified' else 'unverified' end,
-  pricing_verified_at = case when provider_model in ('gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5.5')
-                             then coalesce(pricing_verified_at, now()) else null end,
-  cache_write_pricing_required = false,
-  updated_at = now();
+  provider_input_usd_per_1m = case provider_model
+    when 'gpt-4o-mini' then 0.15 when 'gpt-4.1-mini' then 0.40
+    when 'gpt-4.1' then 2.00 when 'gpt-5.4-nano' then 0.20
+    when 'gpt-5.4-mini' then 0.75 when 'gpt-5.4' then 2.50
+    when 'gpt-5.5' then 5.00 when 'gpt-5.6-luna' then 0.20
+    when 'gpt-5.6-terra' then 2.00 when 'gpt-5.6-sol' then 4.00
+    when 'text-embedding-3-small' then 0.02 else provider_input_usd_per_1m end,
+  provider_cached_input_usd_per_1m = case provider_model
+    when 'gpt-4o-mini' then 0.075 when 'gpt-4.1-mini' then 0.10
+    when 'gpt-4.1' then 0.50 when 'gpt-5.4-nano' then 0.02
+    when 'gpt-5.4-mini' then 0.075 when 'gpt-5.4' then 0.25
+    when 'gpt-5.5' then 0.50 when 'gpt-5.6-luna' then 0.02
+    when 'gpt-5.6-terra' then 0.20 when 'gpt-5.6-sol' then 0.40
+    when 'text-embedding-3-small' then 0.02 else provider_cached_input_usd_per_1m end,
+  provider_output_usd_per_1m = case provider_model
+    when 'gpt-4o-mini' then 0.60 when 'gpt-4.1-mini' then 1.60
+    when 'gpt-4.1' then 8.00 when 'gpt-5.4-nano' then 1.25
+    when 'gpt-5.4-mini' then 4.50 when 'gpt-5.4' then 15.00
+    when 'gpt-5.5' then 30.00 when 'gpt-5.6-luna' then 1.20
+    when 'gpt-5.6-terra' then 12.00 when 'gpt-5.6-sol' then 20.00
+    when 'text-embedding-3-small' then 0.00 else provider_output_usd_per_1m end,
+  provider_cache_write_usd_per_1m = case provider_model
+    when 'gpt-5.6-luna' then 0.25 when 'gpt-5.6-terra' then 2.50
+    when 'gpt-5.6-sol' then 5.00 else provider_cache_write_usd_per_1m end,
+  cache_write_pricing_required = provider_model in ('gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'),
+  pricing_state = 'verified',
+  pricing_verified_at = now(),
+  pricing_source_url = 'https://developers.openai.com/api/docs/models/' || provider_model,
+  pricing_source_hash = null,
+  pricing_parser_version = null,
+  -- Replace obsolete model-tier floors with the small product floor.
+  minimum_charge_credits = 0.25,
+  updated_at = now()
+where provider = 'openai';
 
 -- Direct table reads must apply the same defense-in-depth boundary as the
 -- Edge Functions. Service-role clients are unaffected by this policy.
