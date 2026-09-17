@@ -567,11 +567,21 @@ class SupabaseGenerationPersistenceStore implements GenerationPersistenceStore {
       .maybeSingle();
     if (error || !data) return null;
     const r = data as Record<string, unknown>;
+    const inputRate = Number(r.input_per_1k_usd);
+    const outputRate = Number(r.output_per_1k_usd);
+    const markup = Number(r.premium_markup_pct);
+    if (!Number.isFinite(inputRate) || inputRate < 0 ||
+      !Number.isFinite(outputRate) || outputRate < 0 ||
+      !Number.isFinite(markup) || markup < 0) return null;
+    const tier = r.tier;
+    if (tier !== "cheap" && tier !== "standard" && tier !== "premium") {
+      return null;
+    }
     return {
-      input_per_1k_usd: Number(r.input_per_1k_usd) || 0,
-      output_per_1k_usd: Number(r.output_per_1k_usd) || 0,
-      premium_markup_pct: Number(r.premium_markup_pct) || 0,
-      tier: (r.tier as ModelRateRow["tier"]) || "cheap",
+      input_per_1k_usd: inputRate,
+      output_per_1k_usd: outputRate,
+      premium_markup_pct: markup,
+      tier,
     };
   }
 }
