@@ -693,6 +693,15 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("When the planning context supplies a concrete location, clue, institution, object, threat mechanism, or consequence"), true);
 });
 
+Deno.test("global buildPrompt guides finished-outline section titles", () => {
+  const { system } = buildPrompt(sparseRequest as any, new Map());
+  assertEquals(system.includes("Prefer a concrete image, location, object, threat, line of tension, or memorable event."), true);
+  assertEquals(system.includes("Do not summarize the section’s character arc or emotional conclusion in the title."), true);
+  assertEquals(system.includes("Avoid explanatory constructions such as"), true);
+  assertEquals(system.includes("Do not reveal the resultingChange."), true);
+  assertEquals(system.includes("Aim for roughly 2–7 words unless a longer title is unusually strong."), true);
+});
+
 Deno.test("allocation parser preserves minimums and rejects malformed plans", () => {
   const beats = sparseRequest.arcTemplate.beats;
   const result = parseAndValidateAllocation(
@@ -1088,8 +1097,8 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   ])).system;
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
   assertEquals(outlinePrompt.includes("Novel-ready section titles"), true);
-  assertEquals(outlinePrompt.includes("Do not restate or lightly rephrase"), true);
-  assertEquals(outlinePrompt.includes("suitable for a novel outline or novel-ready table of contents"), true);
+  assertEquals(outlinePrompt.includes("finished novel outline"), true);
+  assertEquals(outlinePrompt.includes("Prefer a concrete image, location, object, threat"), true);
   assertEquals(projectedTokenRange([
     { container: "scene" }, { container: "developedScene" },
   ]), [2300, 4800]);
