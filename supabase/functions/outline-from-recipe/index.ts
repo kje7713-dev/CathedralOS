@@ -11,6 +11,7 @@ import {
   compactExistingSections,
   compactText,
   compactMaterial,
+  compactMaterialForOutline,
   compactObligations,
   compactRecipe,
   stableJSONStringify,
@@ -1859,6 +1860,7 @@ Respond with structured JSON matching the schema. This is the only provider call
     obligations,
     storyMaterial,
   );
+  planningView.materialIndex = compactMaterialForOutline(storyMaterial);
   const user = JSON.stringify({
     planningContext: planningView,
     allocation: Array.from(allocation.entries()),
@@ -2204,7 +2206,7 @@ async function callOpenAI(
   },
 ): Promise<string> {
   const ac = new AbortController();
-  const timeout = setTimeout(() => ac.abort(), 90_000);
+  const timeout = setTimeout(() => ac.abort(), 115_000);
   try {
     const response = await fetch(OPENAI_API_URL, {
       method: "POST",
