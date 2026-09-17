@@ -437,8 +437,30 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 sourceRecipe: sourceRecipe,
                 project: project,
                 modelContext: modelContext,
-                onProjectRefreshed: onProjectRefreshed
+                onProjectRefreshed: handleProjectRefreshed
             )
+        }
+    }
+
+    /// Accept All restores the canonical project in the shared SwiftData context,
+    /// but this view may still hold the pre-restore relationship cache. Refresh
+    /// the rendered section state from a root fetch and consume the completed
+    /// suggestion result so the UI does not offer Resume after acceptance.
+    private func handleProjectRefreshed(_ localProjectID: UUID, _ lineageID: UUID?) {
+        let outlineID = currentOutline?.id
+        onProjectRefreshed?(localProjectID, lineageID)
+        recoverableSuggestions = nil
+        suggestions = []
+        suggestionSourceRecipe = nil
+
+        if let outlineID,
+           let outlines = try? modelContext.fetch(FetchDescriptor<Outline>()),
+           let refreshedOutline = outlines.first(where: { $0.id == outlineID }) {
+            sectionsOrder = refreshedOutline.sections
+                .filter { $0.parent == nil }
+                .sorted(by: { $0.position < $1.position })
+        } else {
+            syncSectionsOrder()
         }
     }
 
