@@ -235,6 +235,18 @@ Deno.test("sparse recipe context is preserved for minimum-only allocation and ou
   assertEquals(system.includes("maxSections"), false);
 });
 
+Deno.test("outline buildPrompt enforces concrete distinct arc events", () => {
+  const { system } = buildPrompt(sparseRequest as any, new Map([
+    ["beat-1", { minSections: 1, rationale: "setup" }],
+    ["beat-2", { minSections: 1, rationale: "escalation" }],
+  ]));
+  assertEquals(system.includes("Every section must commit to one canonical event."), true);
+  assertEquals(system.includes("Each section must produce a materially new resulting state."), true);
+  assertEquals(system.includes("The Resurrection must not replay the Ordeal at greater scale."), true);
+  assertEquals(system.includes("When the planning context supplies a concrete location, clue, institution, object, threat mechanism, or consequence"), true);
+  assertEquals(system.includes('generic phrases such as "damaged site", "weak point", "psychic pressure", or "thin place"'), true);
+});
+
 Deno.test("allocation parser preserves minimums and rejects malformed plans", () => {
   const beats = sparseRequest.arcTemplate.beats;
   const result = parseAndValidateAllocation(

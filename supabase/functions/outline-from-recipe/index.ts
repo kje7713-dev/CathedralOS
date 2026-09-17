@@ -962,6 +962,14 @@ export function buildPrompt(
   const system =
     `You are an expert ${requestedStoryMaterialFormat(req)} outliner. Use the complete canonical recipe/project payload below, including its premise, selected characters and their populated fields, selected relationships, themes, motifs, story spark, aftertaste, recipe instructions, and included setting. Treat supplied facts as authoritative; do not infer personality traits from a character name alone. Given the story arc and per-beat allocation plan, produce the section-by-section outline.
 
+Every section must commit to one canonical event. Never use unresolved alternatives such as "X or Y", "someone", "a friend", "somewhere", or multiple possible versions of the event. Choose the specific person, place, object, and action.
+
+Each section must produce a materially new resulting state. Do not create another section merely to restate or reconfirm a relationship change, realization, warning, or trust shift already achieved. Revisit an arc only when a new event escalates, reverses, costs, or transforms it.
+
+## Story Arc role guidance
+
+The Resurrection must not replay the Ordeal at greater scale. The Ordeal must create a cost, revelation, failure, or changed condition that materially alters how the final confrontation works.
+
 ## Container semantics for planning
 
 Choose a container for the scale of one dramatic unit, not to fake novel length:
@@ -979,7 +987,7 @@ ${renderRecipeObligations(obligations)}
 
 ## Story material enrichment
 ${storyMaterial ? JSON.stringify(storyMaterial, null, 2) : "No enrichment package was supplied; preserve the complete recipe while planning."}
-Use this package to develop concrete events. Do not treat planner-invented material as authored recipe fact.
+Use this package to develop concrete events. Do not treat planner-invented material as authored recipe fact. When the planning context supplies a concrete location, clue, institution, object, threat mechanism, or consequence, use it rather than generic phrases such as "damaged site", "weak point", "psychic pressure", or "thin place".
 
 ## Use the minimum-only allocation
 
