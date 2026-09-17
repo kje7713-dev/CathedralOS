@@ -36,7 +36,8 @@ import type { LLMMessage, LLMProvider } from "../generate-story/_provider.ts";
 import { checkCredits, type CreditStore } from "../generate-story/_credits.ts";
 import {
   computeMaxChargeCredits,
-  estimateTokensFromText,
+  estimateTokensFromMessages,
+  inputTokenLimitDetails,
   snapshotPricing,
   isBillableGenerationModel,
 } from "../generate-story/_generation_models.ts";
@@ -312,8 +313,19 @@ export async function handleCoherenceCheck(
   const messages = buildMessages(request);
   if ((request.action ?? "check") === "estimate") {
     const entitlement = await deps.creditStore.loadOrDefault(userId);
-    const estimatedInputTokens = estimateTokensFromText(messages.system) +
-      estimateTokensFromText(messages.user);
+    const estimatedInputTokens = estimateTokensFromMessages([
+      { content: messages.system },
+      { content: messages.user },
+    ]);
+    const inputLimit = inputTokenLimitDetails(estimatedInputTokens);
+    if (inputLimit) {
+      return errorResponse(
+        "input_token_limit_exceeded",
+        `Estimated input is ${inputLimit.estimatedInputTokens} tokens; ` +
+          `Cathedral's hard limit is ${inputLimit.limit} tokens`,
+        413,
+      );
+    }
     const estimatedCredits = computeMaxChargeCredits(
       {
         uncachedInputTokens: estimatedInputTokens,

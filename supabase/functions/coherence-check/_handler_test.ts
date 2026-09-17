@@ -374,6 +374,20 @@ function auditRows(
 // Test scenarios
 // ---------------------------------------------------------------------------
 
+Deno.test("handleCoherenceCheck estimate rejects complete input above 270K", async () => {
+  const { client: admin } = makeMockAdmin();
+  const { store: creditStore } = makeCreditStore();
+  const response = await handleCoherenceCheck(
+    USER_ID,
+    { ...VALID_REQUEST, output_text: "x".repeat(810_000), action: "estimate" },
+    { adminClient: admin, provider: makeProvider(makeLLMResponse()), creditStore },
+    CONFIG,
+  );
+  const body = await response.json();
+  assertEquals(response.status, 413);
+  assertEquals(body.errorCode, "input_token_limit_exceeded");
+});
+
 Deno.test(
   "handleCoherenceCheck [a] valid structured response: typed result + one complete event + one charge",
   async () => {

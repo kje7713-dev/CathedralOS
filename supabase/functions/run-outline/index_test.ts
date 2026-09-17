@@ -5,6 +5,11 @@ import {
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { prepareCreditReservation } from "./_credit_preflight.ts";
 import {
+  computeMaxChargeCredits,
+  snapshotPricing,
+  type GenerationModel,
+} from "../generate-story/_generation_models.ts";
+import {
   generationReadinessFailures,
   loadRunOutline,
   requireRunOutlineRecipe,
@@ -432,4 +437,27 @@ Deno.test("Run All preserves memory lineage and avoids duplicate prose billing o
     "await ensureOutputMemory(",
     "existing prose must repair memory before the section advances",
   );
+});
+
+
+Deno.test("Run All Luna estimate uses canonical token pricing, not the legacy 709-credit floor", () => {
+  const luna: GenerationModel = {
+    id: "gpt-5.6-luna", provider: "openai", provider_model: "gpt-5.6-luna",
+    display_name: "GPT-5.6 Luna", description: null, input_credit_rate: 0,
+    output_credit_rate: 0, minimum_charge_credits: 0.25, max_output_tokens: 4096,
+    enabled: true, sort_order: 1, provider_available: true,
+    model_kind: "text_generation", pricing_state: "verified",
+    pricing_verified_at: "2026-09-17T00:00:00Z", cache_write_pricing_required: true,
+    billing_multiplier: 2, provider_input_usd_per_1m: 0.2,
+    provider_cached_input_usd_per_1m: 0.02, provider_cache_write_usd_per_1m: 0.25,
+    provider_output_usd_per_1m: 1.2, pricing_effective_at: "2026-09-17T23:00:00Z",
+    cacheMode: "explicit",
+  };
+  const estimate = computeMaxChargeCredits(
+    { uncachedInputTokens: 1_000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 4_096, toolCostUsd: 0 },
+    snapshotPricing(luna),
+  );
+  const reservation = prepareCreditReservation(estimate, entitlement);
+  assertEquals(reservation.reservedCredits, 2);
+  assertEquals(reservation.reservedCredits < 709, true);
 });
