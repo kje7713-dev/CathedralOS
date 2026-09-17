@@ -81,6 +81,21 @@ export function compactMaterial(material: any): unknown[] {
     : []);
 }
 
+/**
+ * The final outline prompt already carries authored recipe prose in
+ * `planningContext.recipe`. Keep the material index for provenance and
+ * planner-created candidates, but do not repeat label/description for
+ * canonical recipe entries.
+ */
+export function compactMaterialForOutline(material: any): unknown[] {
+  return compactMaterial(material).map((item) => {
+    const entry = item as Record<string, unknown>;
+    if (entry.source !== "recipe") return entry;
+    const { label: _label, description: _description, ...provenance } = entry;
+    return provenance;
+  });
+}
+
 export function compactObligations(obligations: any[]): unknown[] {
   return (obligations ?? []).map((o) => ({ id: o.id, source: compactText(o.source, 180), classification: compactText(o.classification, 100), required: Boolean(o.required), label: compactText(o.label, 180), directive: compactText(o.directive ?? o.statement, 500), sourceRefIDs: o.sourceRefIDs ?? o.sourceReferenceIDs ?? [] }));
 }

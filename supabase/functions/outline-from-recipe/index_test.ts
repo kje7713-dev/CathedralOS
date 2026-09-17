@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects, assertThrows } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { deriveRecipeObligations, obligationCoverage } from "./_recipe_obligations.ts";
+import { compactMaterial } from "./_prompt_context.ts";
 
 Deno.test("outline suggestion polling contract preserves structured failures and success", async () => {
   const source = await Deno.readTextFile(
@@ -577,6 +578,33 @@ Deno.test("sparse recipe context is preserved for the single comprehensive outli
 });
 
 
+Deno.test("global outline prompt keeps recipe prose once while retaining material provenance", async () => {
+  const material = enrichmentFixture();
+  material.characters.push({
+    id: "planner-character",
+    label: "Planner candidate",
+    description: "A planner-created candidate.",
+    source: "planner",
+  });
+  material.characters[0] = {
+    ...material.characters[0],
+    source: "recipe",
+    sourceReference: "character:authored-character",
+  };
+  const request = { ...sparseRequest, storyMaterialEnrichment: material } as any;
+  const { user } = buildPrompt(request, new Map(), [], material);
+  const planningContext = JSON.parse(user).planningContext;
+  const recipeEntry = planningContext.materialIndex.find((item: any) => item.source === "recipe");
+  const plannerEntry = planningContext.materialIndex.find((item: any) => item.source === "planner");
+  assertEquals("label" in recipeEntry, false);
+  assertEquals("description" in recipeEntry, false);
+  assertEquals(recipeEntry.sourceReference, "character:authored-character");
+  assertEquals(plannerEntry.label, "Planner candidate");
+  assertEquals(plannerEntry.description, "A planner-created candidate.");
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes("115_000"), true);
+});
+
 Deno.test("single-pass prompt accepts rich recipes beyond the former 20K stage budget", async () => {
   const richRecipe = {
     ...sparseRequest.recipe,
@@ -598,6 +626,21 @@ Deno.test("single-pass prompt accepts rich recipes beyond the former 20K stage b
     { minSections: 0, rationale: "single-pass outline generation" },
   ]));
   const primary = buildPrompt(request, allocation);
+  const richMaterial = enrichmentFixture();
+  richMaterial.characters = Array.from({ length: 40 }, (_, index) => ({
+    id: `character-${index}`,
+    source: index % 2 === 0 ? "recipe" : "planner",
+    sourceReference: index % 2 === 0 ? `character:character-${index}` : null,
+    label: `Character ${index}`,
+    description: `Character material ${index} ` + "z".repeat(900),
+  }));
+  const richPrimary = buildPrompt({ ...request, storyMaterialEnrichment: richMaterial } as any, allocation, [], richMaterial);
+  const duplicatedPayload = JSON.parse(richPrimary.user);
+  duplicatedPayload.planningContext.materialIndex = compactMaterial(richMaterial);
+  const duplicatedChars = JSON.stringify(duplicatedPayload, null, 2).length;
+  const deduplicatedChars = richPrimary.user.length;
+  console.log(`global outline prompt rich fixture: ${duplicatedChars} chars before, ${deduplicatedChars} after, ${duplicatedChars - deduplicatedChars} removed`);
+  assertEquals(deduplicatedChars < duplicatedChars, true);
   const allocationPrompt = buildAllocationPrompt(request, deriveRecipeObligations(request.recipe));
   const parsedAllocation = JSON.parse(allocationPrompt.user);
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
