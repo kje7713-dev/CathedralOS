@@ -122,12 +122,17 @@ struct ProjectDetailView: View {
     /// can insert the canonical project when the pre-restore local ID was an
     /// alias, so resolve lineage first and local ID second.
     private func refreshProjectReference(localProjectID: UUID, lineageID: UUID?) {
-        guard let refreshed = (try? modelContext.fetch(FetchDescriptor<StoryProject>()))?.first(where: { candidate in
-            if let lineageID { return candidate.stableLineageID == lineageID }
-            return candidate.id == localProjectID
-            return candidate.id == project.id || candidate.stableLineageID == project.stableLineageID
-        }) else { return }
-        project = refreshed
+        guard let projects = try? modelContext.fetch(FetchDescriptor<StoryProject>()) else { return }
+
+        if let lineageID,
+           let canonical = projects.first(where: { $0.stableLineageID == lineageID }) {
+            project = canonical
+            return
+        }
+
+        if let local = projects.first(where: { $0.id == localProjectID }) {
+            project = local
+        }
     }
 
     private func markFirstGenerateCompleted() {
