@@ -121,34 +121,21 @@ struct ProjectDetailView: View {
     /// Replace the view's project reference after targeted restore. Restore
     /// can insert the canonical project when the pre-restore local ID was an
     /// alias, so resolve lineage first and local ID second.
-    private func refreshProjectReference(localProjectID: UUID, lineageID: UUID?) {
-        guard let projects = try? modelContext.fetch(FetchDescriptor<StoryProject>()) else { return }
+    private var refreshProjectReferenceHandler: ((UUID, UUID?) -> Void) {
+        let projectBinding = $project
+        let context = modelContext
+        return { localProjectID, lineageID in
+            guard let projects = try? context.fetch(FetchDescriptor<StoryProject>()) else { return }
 
-        if let lineageID,
-           let canonical = projects.first(where: { $0.stableLineageID == lineageID }) {
-            $project.wrappedValue = canonical
-            return
-        }
+            if let lineageID,
+               let canonical = projects.first(where: { $0.stableLineageID == lineageID }) {
+                projectBinding.wrappedValue = canonical
+                return
+            }
 
-        if let local = projects.first(where: { $0.id == localProjectID }) {
-            $project.wrappedValue = local
-        }
-    }
-
-    @ViewBuilder
-    private var hiddenOutlineTab: some View {
-        if storyEditorMode != .outline && !advancedMode {
-            OutlineTabView(
-                project: project,
-                generationLaunch: $pendingOutlineGeneration,
-                isGenerationStarting: $isRunAllStarting,
-                onProjectRefreshed: refreshProjectReference,
-                onGenerationCompleted: {
-                    advancedMode = false
-                    storyEditorModeRaw = StoryEditorMode.output.rawValue
-                }
-            )
-            .hidden()
+            if let local = projects.first(where: { $0.id == localProjectID }) {
+                projectBinding.wrappedValue = local
+            }
         }
     }
 
@@ -217,12 +204,12 @@ struct ProjectDetailView: View {
                     OutlineTabView(
                         project: project,
                         generationLaunch: $pendingOutlineGeneration,
-                        onProjectRefreshed: refreshProjectReference,
                         isGenerationStarting: $isRunAllStarting,
                         onGenerationCompleted: {
                             advancedMode = false
                             storyEditorModeRaw = StoryEditorMode.output.rawValue
-                        }
+                        },
+                        onProjectRefreshed: refreshProjectReferenceHandler
                     )
                     generationsSection
                 } else {
@@ -246,11 +233,11 @@ struct ProjectDetailView: View {
                         OutlineTabView(
                             project: project,
                             generationLaunch: $pendingOutlineGeneration,
-                            onProjectRefreshed: refreshProjectReference,
                             onGenerationCompleted: {
                                 advancedMode = false
                                 storyEditorModeRaw = StoryEditorMode.output.rawValue
-                            }
+                            },
+                            onProjectRefreshed: refreshProjectReferenceHandler
                         )
                     case .output:
                         generationsSection
@@ -266,7 +253,17 @@ struct ProjectDetailView: View {
         // Keep the existing confirmation and kickoff flow alive while the user
         // remains on Novel Workspace instead of switching to Outline.
         .background {
-            hiddenOutlineTab
+            HiddenOutlineTabView(
+                project: project,
+                generationLaunch: $pendingOutlineGeneration,
+                isGenerationStarting: $isRunAllStarting,
+                isVisible: storyEditorMode != .outline && !advancedMode,
+                onProjectRefreshed: refreshProjectReferenceHandler,
+                onGenerationCompleted: {
+                    advancedMode = false
+                    storyEditorModeRaw = StoryEditorMode.output.rawValue
+                }
+            )
         }
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.large)
@@ -298,7 +295,7 @@ struct ProjectDetailView: View {
         .task {
             durabilityCoordinator.resumeAcceptAllIfNeeded(
                 context: modelContext,
-                onProjectRefreshed: refreshProjectReference
+                onProjectRefreshed: refreshProjectReferenceHandler
             )
             await durabilityCoordinator.reconcilePersistedRunStatusIfNeeded(
                 for: project.stableLineageID,
@@ -2010,5 +2007,29 @@ struct TutorialStepBanner: View {
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
         .padding(.horizontal, CathedralTheme.Spacing.base)
         .padding(.bottom, CathedralTheme.Spacing.xs)
+    }
+}
+
+private struct HiddenOutlineTabView: View {
+    let project: StoryProject
+    @Binding var generationLaunch: OutlineGenerationLaunch?
+    @Binding var isGenerationStarting: Bool
+    let isVisible: Bool
+    let onProjectRefreshed: ((UUID, UUID?) -> Void)?
+    let onGenerationCompleted: (() -> Void)?
+
+    var body: some View {
+        Group {
+            if isVisible {
+                OutlineTabView(
+                    project: project,
+                    generationLaunch: $generationLaunch,
+                    isGenerationStarting: $isGenerationStarting,
+                    onGenerationCompleted: onGenerationCompleted,
+                    onProjectRefreshed: onProjectRefreshed
+                )
+                .hidden()
+            }
+        }
     }
 }
