@@ -7,6 +7,7 @@ import {
   computeActualChargeCredits,
   computeMarginCents,
   computeProviderCogsCents,
+  DEFAULT_PRICING,
   estimateTokensFromText,
   type GenerationUsage,
   type PricingSnapshot,
@@ -19,12 +20,13 @@ export const AI_COVER_SIZE = "1024x1536";
 export const AI_COVER_QUALITY = "high";
 export const AI_COVER_IMAGE_OUTPUT_TOKENS = 6240;
 
-// OpenAI pricing is USD per 1M tokens. The customer-facing rates below are
-// derived with the same 2x markup and $0.01/credit convention as text paths.
+// OpenAI pricing is USD per 1M tokens. The customer-facing rates below use
+// the shared Cathedral credit denomination. The image
+// cover remains a separate fixed-price product until it is catalog-backed.
 const AI_COVER_TEXT_INPUT_USD_PER_1M = 5;
 const AI_COVER_IMAGE_OUTPUT_USD_PER_1M = 40;
 const AI_COVER_BILLING_MULTIPLIER = 2;
-const AI_COVER_CREDIT_VALUE_USD = 0.01;
+const AI_COVER_CREDIT_VALUE_USD = DEFAULT_PRICING.creditValueUsd;
 const AI_COVER_MINIMUM_CHARGE_CREDITS = 0.25;
 
 export class AiCoverInsufficientCreditsError extends Error {
@@ -44,10 +46,10 @@ export interface AiCoverBilling {
 
 export function aiCoverPricing(): PricingSnapshot {
   return {
-    inputCreditRatePer1k: AI_COVER_TEXT_INPUT_USD_PER_1M *
-      AI_COVER_BILLING_MULTIPLIER / 10,
-    outputCreditRatePer1k: AI_COVER_IMAGE_OUTPUT_USD_PER_1M *
-      AI_COVER_BILLING_MULTIPLIER / 10,
+    inputCreditRatePer1k: (AI_COVER_TEXT_INPUT_USD_PER_1M / 1000) *
+      AI_COVER_BILLING_MULTIPLIER / AI_COVER_CREDIT_VALUE_USD,
+    outputCreditRatePer1k: (AI_COVER_IMAGE_OUTPUT_USD_PER_1M / 1000) *
+      AI_COVER_BILLING_MULTIPLIER / AI_COVER_CREDIT_VALUE_USD,
     billingMultiplier: AI_COVER_BILLING_MULTIPLIER,
     minimumChargeCredits: AI_COVER_MINIMUM_CHARGE_CREDITS,
     creditValueUsd: AI_COVER_CREDIT_VALUE_USD,

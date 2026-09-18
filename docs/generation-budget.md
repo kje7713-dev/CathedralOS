@@ -15,6 +15,8 @@ Today the user picks a **length** (Short / Complete / Extended / Chapter) and Ca
 - Some generations truncate mid-scene (the red "hit model length limit" warning).
 - The implicit credit→USD mapping varies wildly across model tiers, so margin is invisible.
 
+**Accounting invariant:** 1 credit = $0.05. Customer charge is standard provider-priced usage × the catalog `billing_multiplier`, divided by $0.05. Larger IAP packs may sell credits below $0.05 effective retail price; that does not change the canonical accounting denomination unless the product explicitly changes it.
+
 This reframe moves the user from picking **shape** to picking **spend**, and gives the server the room to finish what it started.
 
 ---

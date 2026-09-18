@@ -13,10 +13,10 @@ import {
 
 import {
   computeActualChargeCredits,
-  computeRawChargeCredits,
   computeMarginCents,
   computeMaxChargeCredits,
   computeProviderCogsCents,
+  computeRawChargeCredits,
   DEFAULT_PRICING,
   getEnabledPricedModelByProviderModel,
   mapModelRow,
@@ -63,11 +63,11 @@ function makeSnapshot(
 ): PricingSnapshot {
   return {
     // Customer-facing rates (with markup)
-    inputCreditRatePer1k: 1.0, // (5.0 × 2.0 / 10)
-    outputCreditRatePer1k: 6.0, // (30.0 × 2.0 / 10)
+    inputCreditRatePer1k: 1.0, // Test snapshot rate; provider rates are below.
+    outputCreditRatePer1k: 6.0, // Test snapshot rate; provider rates are below.
     billingMultiplier: 2.0,
     minimumChargeCredits: 0.25,
-    creditValueUsd: 0.01,
+    creditValueUsd: 0.05,
     effectiveAt: "2026-08-01T00:00:00Z",
     // Provider-facing rates (USD per 1M tokens)
     providerInputUsdPer1m: 5.0,
@@ -336,7 +336,7 @@ Deno.test("pricing: 2× billing multiplier produces 50% margin (gpt-5.5 example)
   // total = 10.6
   assertEquals(charge, 10.6);
   // Provider cost: (1000 × $5 / 1M) + (1600 × $30 / 1M) = $0.005 + $0.048 = $0.053
-  // Customer charge: $0.053 × 2.0 / $0.01 = 10.6 credits = $0.106 ✓
+  // Customer charge: $0.053 × 2.0 / $0.05 = 2.12 credits = $0.106 ✓
 });
 
 Deno.test("pricing: margin is exactly 50% regardless of token count", () => {
@@ -373,9 +373,10 @@ Deno.test("pricing: snapshotPricing derives customer-facing rates + provider-fac
     pricing_effective_at: "2026-08-01T00:00:00Z",
   });
   const snap = snapshotPricing(model);
-  // Customer-facing rates (with markup): credit_rate_per_1k = provider_usd_per_1m × multiplier / 10
-  assertEquals(snap.inputCreditRatePer1k, 1.0); // 5 × 2 / 10
-  assertEquals(snap.outputCreditRatePer1k, 6.0); // 30 × 2 / 10
+  // Customer-facing rates (with markup and $0.05 denomination):
+  // credit_rate_per_1k = (provider_usd_per_1m / 1000) × multiplier / 0.05
+  assertAlmostEquals(snap.inputCreditRatePer1k, 0.2, 1e-12); // (5 / 1000) × 2 / 0.05
+  assertAlmostEquals(snap.outputCreditRatePer1k, 1.2, 1e-12); // (30 / 1000) × 2 / 0.05
   assertEquals(snap.billingMultiplier, 2.0);
   assertEquals(snap.effectiveAt, "2026-08-01T00:00:00Z");
   // Provider-facing rates (USD per 1M, raw — used for COGS math)
@@ -391,7 +392,65 @@ Deno.test("pricing: snapshotPricing uses DEFAULT_PRICING defaults", () => {
   assertEquals(snap.minimumChargeCredits, DEFAULT_PRICING.minimumChargeCredits);
   assertEquals(snap.minimumChargeCredits, 0.25);
   assertEquals(snap.creditValueUsd, DEFAULT_PRICING.creditValueUsd);
-  assertEquals(snap.creditValueUsd, 0.01);
+  assertEquals(snap.creditValueUsd, 0.05);
+});
+
+Deno.test("pricing: canonical $0.05 denomination derives token rates", () => {
+  const snap = snapshotPricing(makeModel({
+    provider_input_usd_per_1m: 0.75,
+    provider_cached_input_usd_per_1m: 0.075,
+    provider_output_usd_per_1m: 4.50,
+    billing_multiplier: 4.0,
+  }));
+  assertEquals(snap.creditValueUsd, 0.05);
+  assertAlmostEquals(snap.inputCreditRatePer1k, 0.06, 1e-12);
+  assertAlmostEquals(snap.outputCreditRatePer1k, 0.36, 1e-12);
+});
+
+Deno.test("pricing: production-run regression charges 7.753080 credits at 4x", () => {
+  const pricing = snapshotPricing(makeModel({
+    provider_input_usd_per_1m: 0.75,
+    provider_cached_input_usd_per_1m: 0.075,
+    provider_output_usd_per_1m: 4.50,
+    billing_multiplier: 4.0,
+  }));
+  const charge = computeActualChargeCredits({
+    uncachedInputTokens: 38_582,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 15_106,
+    toolCostUsd: 0,
+  }, pricing);
+  assertEquals(charge, 7.75308);
+});
+
+Deno.test("pricing: doubling multiplier doubles customer charge, not provider COGS", () => {
+  const usage = makeUsage({
+    uncachedInputTokens: 38_582,
+    outputTokens: 15_106,
+  });
+  const at2 = snapshotPricing(
+    makeModel({
+      billing_multiplier: 2.0,
+      provider_input_usd_per_1m: 0.75,
+      provider_cached_input_usd_per_1m: 0.075,
+      provider_output_usd_per_1m: 4.50,
+    }),
+  );
+  const at4 = snapshotPricing(
+    makeModel({
+      billing_multiplier: 4.0,
+      provider_input_usd_per_1m: 0.75,
+      provider_cached_input_usd_per_1m: 0.075,
+      provider_output_usd_per_1m: 4.50,
+    }),
+  );
+  assertEquals(computeActualChargeCredits(usage, at2), 3.87654);
+  assertEquals(computeActualChargeCredits(usage, at4), 7.75308);
+  assertEquals(
+    computeProviderCogsCents(usage, at2).providerCogsCents,
+    computeProviderCogsCents(usage, at4).providerCogsCents,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -403,12 +462,12 @@ Deno.test("pricing: tool cost is included in charge", () => {
   const usage = makeUsage({
     uncachedInputTokens: 0,
     outputTokens: 0,
-    toolCostUsd: 0.10, // $0.10 = 10 credits at 0.01 credit/USD
+    toolCostUsd: 0.10, // $0.10 = 2 credits at $0.05/credit
   });
   const charge = computeActualChargeCredits(usage, pricing);
-  // tool credits = 0.10 / 0.01 = 10.0
-  // Above 0.25 floor → 10.0
-  assertEquals(charge, 10.0);
+  // tool credits = $0.10 / $0.05 = 2.0
+  // Above 0.25 floor → 2.0
+  assertEquals(charge, 2.0);
 });
 
 Deno.test("pricing: long-context input is charged normally", () => {
@@ -438,7 +497,7 @@ Deno.test("pricing: tool + input + output all combine (PR-372: no cache discount
   // output = 500 × 6.0 / 1000 = 3.0
   // tool   = 0.02 / 0.01 = 2.0
   // total  = 3.0 + 3.0 + 2.0 = 8.0 (was 6.2 with the old cached-discount bug)
-  assertEquals(charge, 8.0);
+  assertEquals(charge, 6.4);
 });
 
 // ---------------------------------------------------------------------------
@@ -628,21 +687,21 @@ Deno.test("provider COGS: includes tool cost in cents", () => {
 
 Deno.test("margin: customerRevenueCents = actualCharge × creditValueUsd × 100", () => {
   const pricing = makeSnapshot();
-  // 10 credits × $0.01 × 100 = $1.00 = 100 cents
+  // 10 credits × $0.05 × 100 = $5.00 = 500 cents
   const result = computeMarginCents(10, pricing, 50);
-  assertEquals(result.customerRevenueCents, 10);
-  assertEquals(result.marginCents, -40); // revenue 10 - cogs 50
+  assertEquals(result.customerRevenueCents, 50);
+  assertEquals(result.marginCents, 0); // revenue 50 - cogs 50
 });
 
 Deno.test("margin: positive on cache hit, negative on cache-write without reuse", () => {
   const pricing = makeSnapshot();
-  // 100 credits customer charge; cache-hit COGS = 30 cents → margin +70
+  // 100 credits customer charge; cache-hit COGS = 30 cents → margin +470
   const onHit = computeMarginCents(100, pricing, 30);
-  assertEquals(onHit.customerRevenueCents, 100);
-  assertEquals(onHit.marginCents, 70);
-  // cache-write COGS = 150 cents (cache write 1.25x standard) → margin -50
+  assertEquals(onHit.customerRevenueCents, 500);
+  assertEquals(onHit.marginCents, 470);
+  // cache-write COGS = 150 cents (cache write 1.25x standard) → margin +350
   const onWrite = computeMarginCents(100, pricing, 150);
-  assertEquals(onWrite.marginCents, -50);
+  assertEquals(onWrite.marginCents, 350);
 });
 
 Deno.test("margin: improves on cache hit relative to no-cache baseline", () => {
@@ -682,16 +741,21 @@ Deno.test("margin: improves on cache hit relative to no-cache baseline", () => {
   assertEquals(cacheHitMargin.marginCents > noCacheMargin.marginCents, true);
 });
 
-
 Deno.test("logical-stage minimum is applied once across tiny packets", () => {
   const model = makeModel({ minimum_charge_credits: 3 });
   const pricing = snapshotPricing(model);
-  const usage = { uncachedInputTokens: 1000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, toolCostUsd: 0 };
+  const usage = {
+    uncachedInputTokens: 1000,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 0,
+    toolCostUsd: 0,
+  };
   const raw = computeRawChargeCredits(usage, pricing);
   const stageCharge = Math.max(pricing.minimumChargeCredits, raw + raw);
-  assertEquals(raw, 1);
+  assertEquals(raw, 0.2);
   assertEquals(stageCharge, 3);
-  assertEquals(Math.max(pricing.minimumChargeCredits, 2 + 2), 4);
+  assertEquals(Math.max(pricing.minimumChargeCredits, 0.4 + 0.4), 3);
 });
 
 Deno.test("pricing safety: mapModelRow preserves unknown provider rates as null", () => {
@@ -732,10 +796,22 @@ Deno.test("pricing safety: only verified available text models are billable", as
     cache_write_pricing_required: false,
   });
   assertEquals(isBillableGenerationModel(eligible), true);
-  assertEquals(isBillableGenerationModel({ ...eligible, enabled: false }), false);
-  assertEquals(isBillableGenerationModel({ ...eligible, pricing_state: "unverified" }), false);
-  assertEquals(isBillableGenerationModel({ ...eligible, model_kind: "embedding" }), false);
-  assertEquals(isBillableGenerationModel({ ...eligible, provider_input_usd_per_1m: null }), false);
+  assertEquals(
+    isBillableGenerationModel({ ...eligible, enabled: false }),
+    false,
+  );
+  assertEquals(
+    isBillableGenerationModel({ ...eligible, pricing_state: "unverified" }),
+    false,
+  );
+  assertEquals(
+    isBillableGenerationModel({ ...eligible, model_kind: "embedding" }),
+    false,
+  );
+  assertEquals(
+    isBillableGenerationModel({ ...eligible, provider_input_usd_per_1m: null }),
+    false,
+  );
 });
 
 Deno.test("pricing safety: embedding resolver accepts only priced embeddings, not text resolver", async () => {
@@ -757,7 +833,8 @@ Deno.test("pricing safety: embedding resolver accepts only priced embeddings, no
       select: () => ({
         eq: (_column: string, _value: unknown) => ({
           eq: () => ({
-            maybeSingle: () => Promise.resolve({ data: embedding, error: null }),
+            maybeSingle: () =>
+              Promise.resolve({ data: embedding, error: null }),
           }),
           maybeSingle: () => Promise.resolve({ data: embedding, error: null }),
         }),
