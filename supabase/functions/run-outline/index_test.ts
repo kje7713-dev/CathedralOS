@@ -6,8 +6,8 @@ import {
 import { prepareCreditReservation } from "./_credit_preflight.ts";
 import {
   computeMaxChargeCredits,
-  snapshotPricing,
   type GenerationModel,
+  snapshotPricing,
 } from "../generate-story/_generation_models.ts";
 import {
   generationReadinessFailures,
@@ -262,17 +262,28 @@ Deno.test("generation readiness rejects incomplete or undersized outlines", () =
 
   const linkedFailures = generationReadinessFailures(
     {
-      source_recipe_json: {}, source_recipe_hash: "hash",
-      target_word_count_min: 1, projected_word_count: 100,
+      source_recipe_json: {},
+      source_recipe_hash: "hash",
+      target_word_count_min: 1,
+      projected_word_count: 100,
       story_arc_id: "arc-1",
     },
     [{
-      id: "s1", title: "One", summary: "Same", container: "scene",
-      pov: "firstPerson", terminal_beat: "End", target_words: 100,
-      story_arc_beat_id: "beat", recipe_requirement_ids: [],
+      id: "s1",
+      title: "One",
+      summary: "Same",
+      container: "scene",
+      pov: "firstPerson",
+      terminal_beat: "End",
+      target_words: 100,
+      story_arc_beat_id: "beat",
+      recipe_requirement_ids: [],
     }],
   );
-  assertEquals(linkedFailures.includes("outline_missing_story_arc_linkage"), false);
+  assertEquals(
+    linkedFailures.includes("outline_missing_story_arc_linkage"),
+    false,
+  );
 });
 
 Deno.test("uses cloudGenerationOutputID as the output handoff", () => {
@@ -393,11 +404,16 @@ Deno.test("initial Run All estimate is not duplicated by model state initializat
   );
 });
 
-
 Deno.test("Run All recovery reuses exact persisted output before generation or normalization", async () => {
-  const source = await Deno.readTextFile("supabase/functions/run-outline/index.ts");
-  const existing = source.indexOf("const existingOutput = await findRunOutput(");
-  const normalize = source.indexOf("const normalize = await ensureMemoryPipelineVersion(");
+  const source = await Deno.readTextFile(
+    "supabase/functions/run-outline/index.ts",
+  );
+  const existing = source.indexOf(
+    "const existingOutput = await findRunOutput(",
+  );
+  const normalize = source.indexOf(
+    "const normalize = await ensureMemoryPipelineVersion(",
+  );
   const generate = source.indexOf("const result = await callGenerateStory(");
   const repair = source.indexOf("await ensureOutputMemory(", existing);
   const advance = source.indexOf('status: "completed"', repair);
@@ -431,7 +447,10 @@ Deno.test("Run All preserves memory lineage and avoids duplicate prose billing o
   assertStringIncludes(runOutline, '.eq("run_section_id", sectionId)');
   assertStringIncludes(runOutline, '.eq("status", "complete")');
   assertStringIncludes(runOutline, "output_id: existingOutput");
-  assertStringIncludes(embedding, "repaired?.generation_output_id !== outputId");
+  assertStringIncludes(
+    embedding,
+    "repaired?.generation_output_id !== outputId",
+  );
   assertStringIncludes(
     runOutline,
     "await ensureOutputMemory(",
@@ -439,25 +458,43 @@ Deno.test("Run All preserves memory lineage and avoids duplicate prose billing o
   );
 });
 
-
 Deno.test("Run All Luna estimate uses canonical token pricing, not the legacy 709-credit floor", () => {
   const luna: GenerationModel = {
-    id: "gpt-5.6-luna", provider: "openai", provider_model: "gpt-5.6-luna",
-    display_name: "GPT-5.6 Luna", description: null, input_credit_rate: 0,
-    output_credit_rate: 0, minimum_charge_credits: 0.25, max_output_tokens: 4096,
-    enabled: true, sort_order: 1, provider_available: true,
-    model_kind: "text_generation", pricing_state: "verified",
-    pricing_verified_at: "2026-09-17T00:00:00Z", cache_write_pricing_required: true,
-    billing_multiplier: 2, provider_input_usd_per_1m: 0.2,
-    provider_cached_input_usd_per_1m: 0.02, provider_cache_write_usd_per_1m: 0.25,
-    provider_output_usd_per_1m: 1.2, pricing_effective_at: "2026-09-17T23:00:00Z",
+    id: "gpt-5.6-luna",
+    provider: "openai",
+    provider_model: "gpt-5.6-luna",
+    display_name: "GPT-5.6 Luna",
+    description: null,
+    input_credit_rate: 0,
+    output_credit_rate: 0,
+    minimum_charge_credits: 0.25,
+    max_output_tokens: 4096,
+    enabled: true,
+    sort_order: 1,
+    provider_available: true,
+    model_kind: "text_generation",
+    pricing_state: "verified",
+    pricing_verified_at: "2026-09-17T00:00:00Z",
+    cache_write_pricing_required: true,
+    billing_multiplier: 2,
+    provider_input_usd_per_1m: 0.2,
+    provider_cached_input_usd_per_1m: 0.02,
+    provider_cache_write_usd_per_1m: 0.25,
+    provider_output_usd_per_1m: 1.2,
+    pricing_effective_at: "2026-09-17T23:00:00Z",
     cacheMode: "explicit",
   };
   const estimate = computeMaxChargeCredits(
-    { uncachedInputTokens: 1_000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 4_096, toolCostUsd: 0 },
+    {
+      uncachedInputTokens: 1_000,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      outputTokens: 4_096,
+      toolCostUsd: 0,
+    },
     snapshotPricing(luna),
   );
   const reservation = prepareCreditReservation(estimate, entitlement);
-  assertEquals(reservation.reservedCredits, 2);
+  assertEquals(reservation.reservedCredits, 1);
   assertEquals(reservation.reservedCredits < 709, true);
 });

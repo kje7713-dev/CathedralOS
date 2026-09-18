@@ -96,7 +96,8 @@ function hasUsablePricing(model: GenerationModel): boolean {
     model.provider_cached_input_usd_per_1m,
     model.provider_output_usd_per_1m,
   ];
-  return Number.isFinite(model.billing_multiplier) && model.billing_multiplier > 0 &&
+  return Number.isFinite(model.billing_multiplier) &&
+    model.billing_multiplier > 0 &&
     model.provider_model.trim().length > 0 &&
     model.pricing_state === "verified" &&
     model.pricing_verified_at != null &&
@@ -167,7 +168,10 @@ export function mapModelRow(row: Record<string, unknown>): GenerationModel {
     // canonical 0.25 product floor. Round to 6 decimals so the snapshot
     // path matches computeActualChargeCredits precision.
     minimum_charge_credits: round6(
-      toNumber(row.minimum_charge_credits, DEFAULT_PRICING.minimumChargeCredits),
+      toNumber(
+        row.minimum_charge_credits,
+        DEFAULT_PRICING.minimumChargeCredits,
+      ),
     ),
     max_output_tokens: row.max_output_tokens == null
       ? null
@@ -268,7 +272,6 @@ export class SupabaseGenerationModelStore implements GenerationModelStore {
         sort_order: model.sort_order,
       }));
   }
-
 }
 
 export function normalizedModelId(selectedModelId: unknown): string {
@@ -305,9 +308,10 @@ export function estimateTokensFromMessages(
   messages: readonly { content: unknown }[],
 ): number {
   return messages.reduce(
-    (total, message) => total + estimateTokensFromText(
-      textFromMessageContent(message.content),
-    ),
+    (total, message) =>
+      total + estimateTokensFromText(
+        textFromMessageContent(message.content),
+      ),
     0,
   );
 }
@@ -343,7 +347,8 @@ export function computeGenerationCreditCharge(
 
 export interface PricingSnapshot {
   // -----------------------------------------------------------------------
-  // Customer-facing rates (credits per 1K tokens, with markup already applied)
+  // Customer-facing rates (credits per 1K tokens, with markup and the canonical
+  // credit denomination already applied)
   // -----------------------------------------------------------------------
 
   /** Credits per 1K input tokens charged to the customer. PR-372: ALL input
@@ -357,7 +362,7 @@ export interface PricingSnapshot {
   billingMultiplier: number;
   /** Product floor (NOT the OpenAI minimum). 0.25 credits by default. */
   minimumChargeCredits: number;
-  /** USD value of one credit. 0.01 by default. */
+  /** USD value of one credit in Cathedral accounting. */
   creditValueUsd: number;
   /** ISO timestamp of when this pricing snapshot became effective. */
   effectiveAt: string;
@@ -404,9 +409,11 @@ export interface PricingDefaults {
   creditValueUsd: number;
 }
 
+export const CANONICAL_CREDIT_VALUE_USD = 0.05;
+
 export const DEFAULT_PRICING: PricingDefaults = {
   minimumChargeCredits: 0.25,
-  creditValueUsd: 0.01,
+  creditValueUsd: CANONICAL_CREDIT_VALUE_USD,
 };
 
 /**
@@ -419,7 +426,8 @@ export function snapshotPricing(
   defaults: PricingDefaults = DEFAULT_PRICING,
 ): PricingSnapshot {
   const multiplier = model.billing_multiplier;
-  if (!Number.isFinite(multiplier) || multiplier <= 0 ||
+  if (
+    !Number.isFinite(multiplier) || multiplier <= 0 ||
     model.provider_input_usd_per_1m == null ||
     !Number.isFinite(model.provider_input_usd_per_1m) ||
     model.provider_input_usd_per_1m < 0 ||
@@ -432,15 +440,16 @@ export function snapshotPricing(
     (model.cache_write_pricing_required &&
       (model.provider_cache_write_usd_per_1m == null ||
         !Number.isFinite(model.provider_cache_write_usd_per_1m) ||
-        model.provider_cache_write_usd_per_1m < 0))) {
+        model.provider_cache_write_usd_per_1m < 0))
+  ) {
     throw new Error("model pricing is incomplete or unusable");
   }
   return {
     // Customer-facing rates (with markup)
-    inputCreditRatePer1k: model.provider_input_usd_per_1m * multiplier /
-      10,
-    outputCreditRatePer1k: model.provider_output_usd_per_1m *
-      multiplier / 10,
+    inputCreditRatePer1k: (model.provider_input_usd_per_1m / 1000) *
+      multiplier / defaults.creditValueUsd,
+    outputCreditRatePer1k: (model.provider_output_usd_per_1m / 1000) *
+      multiplier / defaults.creditValueUsd,
     billingMultiplier: multiplier,
     minimumChargeCredits: Number.isFinite(model.minimum_charge_credits) &&
         model.minimum_charge_credits >= 0

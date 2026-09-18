@@ -2,10 +2,7 @@ import {
   assertEquals,
   assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import {
-  preflightDirectUsage,
-  settleDirectUsage,
-} from "./direct-billing.ts";
+import { preflightDirectUsage, settleDirectUsage } from "./direct-billing.ts";
 import type { GenerationModel } from "../generate-story/_generation_models.ts";
 import type { CreditStore } from "../generate-story/_credits.ts";
 
@@ -57,14 +54,33 @@ function makeContext(model: GenerationModel = EMBEDDING_MODEL) {
     },
   };
   const creditStore = {
-    loadOrDefault: () => Promise.resolve({ monthly_credit_allowance: 100, purchased_credit_balance: 0 }),
+    loadOrDefault: () =>
+      Promise.resolve({
+        monthly_credit_allowance: 100,
+        purchased_credit_balance: 0,
+      }),
   } as unknown as CreditStore;
-  return { context: { userID: "user-1", action: "embed", outputID: "output-1", adminClient, creditStore }, rpcCalls };
+  return {
+    context: {
+      userID: "user-1",
+      action: "embed",
+      outputID: "output-1",
+      adminClient,
+      creditStore,
+    },
+    rpcCalls,
+  };
 }
 
 Deno.test("direct billing: embedding resolves and settles through embedding pricing", async () => {
   const { context, rpcCalls } = makeContext();
-  await preflightDirectUsage(context, "text-embedding-3-small", 100, 0, "embedding");
+  await preflightDirectUsage(
+    context,
+    "text-embedding-3-small",
+    100,
+    0,
+    "embedding",
+  );
   const charge = await settleDirectUsage(
     context,
     "scene-memory-embedding",
@@ -89,7 +105,14 @@ Deno.test("direct billing: embedding never passes the text-generation resolver",
 Deno.test("direct billing: 270001 estimated input is rejected before entitlement mutation", async () => {
   const { context, rpcCalls } = makeContext();
   await assertRejects(
-    () => preflightDirectUsage(context, "text-embedding-3-small", 270_001, 0, "embedding"),
+    () =>
+      preflightDirectUsage(
+        context,
+        "text-embedding-3-small",
+        270_001,
+        0,
+        "embedding",
+      ),
     Error,
     "input_token_limit_exceeded",
   );
@@ -106,6 +129,6 @@ Deno.test("direct billing: provider usage over 270K still settles after dispatch
     0,
     "embedding",
   );
-  assertEquals(charge, 1.080004);
+  assertEquals(charge, 0.25);
   assertEquals(rpcCalls, ["settle_scene_memory_stage"]);
 });
