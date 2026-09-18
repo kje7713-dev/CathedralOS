@@ -3148,6 +3148,10 @@ async function handler(
     );
     const promptCacheKey = projectID ? `cath:proj:${projectID}:v1` : undefined;
 
+    const billingIdempotencyKey = durableRunId && body.outline_section_id
+      ? `generate:${durableRunId}:${body.outline_section_id}`
+      : outputId;
+
     billableResult = await runBillableLLM<GenerateFeatureResult>(
       {
         userID: userId,
@@ -3173,6 +3177,7 @@ async function handler(
         maxOutputTokens: maxCompletionTokens,
         usageContext: {
           projectID,
+          idempotencyKey: billingIdempotencyKey,
           generationOutputID: outputId,
           generationLengthMode,
           outputBudget: maxCompletionTokens,
