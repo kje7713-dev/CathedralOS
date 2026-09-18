@@ -298,6 +298,24 @@ Deno.test("run completion never charges outputs a second time", () => {
   assertEquals(shouldChargeAtRunCompletion(), false);
 });
 
+Deno.test("successful finalization preserves fractional actual credits", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/run-outline/index.ts",
+  );
+  const finalize = source.indexOf("async function finalizeRun(");
+  const helpers = source.indexOf("// ---- helpers", finalize);
+  const body = source.slice(finalize, helpers);
+  assertStringIncludes(body, "const actual = await loadActualCredits");
+  assertStringIncludes(body, "credits_actual: actual");
+  assertEquals(body.includes("Math.ceil(actual)"), false);
+
+  const migration = await Deno.readTextFile(
+    "./supabase/migrations/20260918143000_make_chapter_run_actual_credits_numeric.sql",
+  );
+  assertStringIncludes(migration, "credits_actual type numeric(18,6)");
+  assertEquals(migration.includes("alter column credits_reserved"), false);
+});
+
 Deno.test("run finalization verifies the terminal database update", async () => {
   const source = await Deno.readTextFile(
     "./supabase/functions/run-outline/index.ts",
