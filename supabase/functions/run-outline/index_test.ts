@@ -298,6 +298,19 @@ Deno.test("run completion never charges outputs a second time", () => {
   assertEquals(shouldChargeAtRunCompletion(), false);
 });
 
+Deno.test("run finalization verifies the terminal database update", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/run-outline/index.ts",
+  );
+  const finalize = source.indexOf("async function finalizeRun(");
+  const helpers = source.indexOf("// ---- helpers", finalize);
+  const body = source.slice(finalize, helpers);
+  assertStringIncludes(body, 'eq("status", "running")');
+  assertStringIncludes(body, '.select("id, status")');
+  assertStringIncludes(body, "finalizeError");
+  assertStringIncludes(body, "no running chapter run row updated");
+});
+
 Deno.test("finds a project snapshot through either local ID or lineage", () => {
   assertEquals(
     projectSnapshotLookupFilter("local-1", "lineage-1"),
