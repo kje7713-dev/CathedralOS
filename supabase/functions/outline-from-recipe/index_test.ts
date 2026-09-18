@@ -1371,6 +1371,29 @@ Deno.test("Test3-shaped undersized outline fails closed after bounded expansion"
   assertEquals((failure as NovelScalePlanningError).message.includes("70,000-word minimum"), true);
 });
 
+Deno.test("stale expansion anchors append within their beat while exact anchors remain stable", () => {
+  const original = [
+    expansionSection("Setup", "scene", "beat-1"),
+    expansionSection("Beat Two Opening", "scene", "beat-2"),
+    expansionSection("Beat Two Closer", "scene", "beat-2"),
+  ];
+  const stale = validateExpansionAdditions({
+    suggestions: [expansionSection("Beat Two Addition", "scene", "beat-2", "Removed section")],
+  }, new Set(["beat-1", "beat-2"]), original as any);
+  assertEquals(stale[0].insertAfterTitle, null);
+  assertEquals(mergeExpansionAdditions(original as any, stale as any).map((s) => s.title), [
+    "Setup", "Beat Two Opening", "Beat Two Closer", "Beat Two Addition",
+  ]);
+
+  const exact = validateExpansionAdditions({
+    suggestions: [expansionSection("Anchored Addition", "scene", "beat-2", "Beat Two Opening")],
+  }, new Set(["beat-1", "beat-2"]), original as any);
+  assertEquals(exact[0].insertAfterTitle, "Beat Two Opening");
+  assertEquals(mergeExpansionAdditions(original as any, exact as any).map((s) => s.title), [
+    "Setup", "Beat Two Opening", "Anchored Addition", "Beat Two Closer",
+  ]);
+});
+
 Deno.test("invalid expansion responses remain typed at the billable boundary", () => {
   const initial = sceneOutline(22);
   let failure: unknown;

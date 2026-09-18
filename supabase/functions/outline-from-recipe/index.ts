@@ -1734,15 +1734,18 @@ export function validateExpansionAdditions(
       }
     }
     if (insertAfterTitle !== null && typeof insertAfterTitle !== "string") throw new Error("expansion placement must be a title or null");
-    if (insertAfterTitle !== null && !originalTitles.has(insertAfterTitle)) throw new Error("expansion placement must reference an original section");
-    if (insertAfterTitle !== null) {
-      const anchor = original.find((s) => s.title === insertAfterTitle);
+    let resolvedInsertAfterTitle = insertAfterTitle;
+    if (resolvedInsertAfterTitle !== null && !originalTitles.has(resolvedInsertAfterTitle)) {
+      resolvedInsertAfterTitle = null;
+    }
+    if (resolvedInsertAfterTitle !== null) {
+      const anchor = original.find((s) => s.title === resolvedInsertAfterTitle);
       if (!anchor || anchor.storyArcBeatID !== validated.storyArcBeatID) throw new Error("expansion placement crosses arc beats");
     }
     const fingerprint = `${validated.title}|${validated.summary}|${validated.storyArcBeatID}`;
     if (fingerprints.has(fingerprint)) throw new Error("expansion introduced a duplicate section contract");
     fingerprints.add(fingerprint);
-    additions.push({ ...validated, insertAfterTitle });
+    additions.push({ ...validated, insertAfterTitle: resolvedInsertAfterTitle });
   }
   return additions;
 }
