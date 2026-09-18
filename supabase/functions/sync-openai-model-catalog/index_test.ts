@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { type CatalogSyncDb, handler } from "./_handler.ts";
+import { type CatalogSyncDb, handler, parseModels } from "./_handler.ts";
 
 const RUN_ID = "11111111-1111-4111-8111-111111111111";
 const request = () =>
@@ -8,10 +8,11 @@ const request = () =>
   });
 
 type RpcCall = { name: string; args: Record<string, unknown> };
-function testDb(
-  reconcile: { data: unknown; error: { message?: string } | null },
-  calls: RpcCall[],
-): CatalogSyncDb {
+type DbOptions = {
+  reconcile?: { data: unknown; error: { message?: string } | null };
+  finish?: { data: unknown; error: { message?: string } | null };
+};
+function testDb(options: DbOptions, calls: RpcCall[]): CatalogSyncDb {
   return {
     rpc: (name, args) => {
       calls.push({ name, args });
@@ -19,9 +20,9 @@ function testDb(
         return Promise.resolve({ data: RUN_ID, error: null });
       }
       if (name === "finish_openai_model_sync_run") {
-        return Promise.resolve({ data: null, error: null });
+        return Promise.resolve(options.finish ?? { data: null, error: null });
       }
-      return Promise.resolve(reconcile);
+      return Promise.resolve(options.reconcile ?? { data: null, error: null });
     },
   };
 }
@@ -37,45 +38,71 @@ const deps = (
   fetchImpl,
 });
 
-Deno.test("sync: successful reconciliation finalizes the started run", async () => {
+const validResponse = () =>
+  Promise.resolve(
+    new Response(
+      JSON.stringify({
+        data: [
+          { id: "gpt-4o-mini", created: 1, owned_by: "openai" },
+          { id: "gpt-6-astra", owned_by: "openai" },
+        ],
+      }),
+      { status: 200 },
+    ),
+  );
+
+Deno.test("parser accepts exact IDs and preserves them", () => {
+  assertEquals(parseModels({ data: [{ id: "gpt-5.6-luna" }] }), [
+    { id: "gpt-5.6-luna" },
+  ]);
+});
+
+Deno.test("parser rejects leading or trailing whitespace in provider IDs", () => {
+  assertEquals(parseModels({ data: [{ id: " gpt-5.6-luna" }] }), null);
+  assertEquals(parseModels({ data: [{ id: "gpt-5.6-luna " }] }), null);
+});
+
+Deno.test("parser rejects duplicate provider IDs", () => {
+  assertEquals(
+    parseModels({ data: [{ id: "gpt-5.6-luna" }, { id: "gpt-5.6-luna" }] }),
+    null,
+  );
+});
+
+Deno.test("sync: successful reconciliation returns its atomic counters", async () => {
   const calls: RpcCall[] = [];
   const res = await handler(
     request(),
     deps(
       testDb({
-        data: {
-          run_id: RUN_ID,
-          models_seen: 2,
-          models_inserted: 1,
-          models_marked_available: 0,
-          models_marked_unavailable: 0,
+        reconcile: {
+          data: {
+            run_id: RUN_ID,
+            models_seen: 2,
+            models_inserted: 1,
+            models_marked_available: 0,
+            models_marked_unavailable: 0,
+          },
+          error: null,
         },
-        error: null,
       }, calls),
-      () =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify({
-              data: [
-                { id: "gpt-4o-mini", created: 1, owned_by: "openai" },
-                { id: "gpt-6-astra", owned_by: "openai" },
-              ],
-            }),
-            { status: 200 },
-          ),
-        ),
+      validResponse,
     ),
   );
   assertEquals(res.status, 200);
-  assertEquals((await res.json()).status, "complete");
+  assertEquals(await res.json(), {
+    status: "complete",
+    run_id: RUN_ID,
+    models_seen: 2,
+    models_inserted: 1,
+    models_marked_available: 0,
+    models_marked_unavailable: 0,
+  });
   assertEquals(calls.map((call) => call.name), [
     "start_openai_model_sync_run",
     "reconcile_openai_model_catalog",
-    "finish_openai_model_sync_run",
   ]);
   assertEquals(calls[1].args.p_run_id, RUN_ID);
-  assertEquals(calls[2].args.p_status, "complete");
-  assertEquals(calls[2].args.p_models_seen, 2);
 });
 
 Deno.test("sync: provider/network failure marks the started run failed", async () => {
@@ -83,7 +110,7 @@ Deno.test("sync: provider/network failure marks the started run failed", async (
   const res = await handler(
     request(),
     deps(
-      testDb({ data: null, error: null }, calls),
+      testDb({}, calls),
       () => Promise.reject(new Error("network details must not escape")),
     ),
   );
@@ -97,12 +124,27 @@ Deno.test("sync: provider/network failure marks the started run failed", async (
   assertEquals(calls[1].args.p_sanitized_error, "provider_fetch_failed");
 });
 
+Deno.test("sync: failed-run finalization errors are reported safely", async () => {
+  const calls: RpcCall[] = [];
+  const res = await handler(
+    request(),
+    deps(
+      testDb({
+        finish: { data: null, error: { message: "secret DB details" } },
+      }, calls),
+      () => Promise.reject(new Error("provider secret must not escape")),
+    ),
+  );
+  assertEquals(res.status, 500);
+  assertEquals(await res.json(), { errorCode: "sync_run_finalize_failed" });
+});
+
 Deno.test("sync: malformed payload marks the started run failed before reconciliation", async () => {
   const calls: RpcCall[] = [];
   const res = await handler(
     request(),
     deps(
-      testDb({ data: null, error: null }, calls),
+      testDb({}, calls),
       () =>
         Promise.resolve(
           new Response(JSON.stringify({ data: [{ created: 1 }] }), {
@@ -124,7 +166,7 @@ Deno.test("sync: empty inventory fails and never calls reconciliation", async ()
   const res = await handler(
     request(),
     deps(
-      testDb({ data: null, error: null }, calls),
+      testDb({}, calls),
       () =>
         Promise.resolve(
           new Response(JSON.stringify({ data: [] }), { status: 200 }),
@@ -139,14 +181,16 @@ Deno.test("sync: empty inventory fails and never calls reconciliation", async ()
   assertEquals(calls[1].args.p_error_code, "empty_inventory");
 });
 
-Deno.test("sync: reconciliation RPC failure marks the same run failed", async () => {
+Deno.test("sync: reconciliation failure marks the same run failed", async () => {
   const calls: RpcCall[] = [];
   const res = await handler(
     request(),
     deps(
       testDb({
-        data: null,
-        error: { message: "database secrets must not escape" },
+        reconcile: {
+          data: null,
+          error: { message: "database secrets must not escape" },
+        },
       }, calls),
       () =>
         Promise.resolve(
@@ -166,10 +210,26 @@ Deno.test("sync: reconciliation RPC failure marks the same run failed", async ()
   assertEquals(calls[2].args.p_error_code, "catalog_reconciliation_failed");
 });
 
-Deno.test("sync: new inventory remains protected behind service-role authorization", async () => {
+Deno.test("sync: reconciliation finalization failure is not hidden", async () => {
+  const calls: RpcCall[] = [];
+  const res = await handler(
+    request(),
+    deps(
+      testDb({
+        reconcile: { data: null, error: { message: "raw DB error" } },
+        finish: { data: null, error: { message: "audit write failed" } },
+      }, calls),
+      validResponse,
+    ),
+  );
+  assertEquals(res.status, 500);
+  assertEquals(await res.json(), { errorCode: "sync_run_finalize_failed" });
+});
+
+Deno.test("sync: service-role authorization remains required", async () => {
   const calls: RpcCall[] = [];
   const res = await handler(request(), {
-    db: testDb({ data: null, error: null }, calls),
+    db: testDb({}, calls),
     authorized: false,
     apiKey: "test-key",
   });

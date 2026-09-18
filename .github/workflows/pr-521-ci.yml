@@ -8,8 +8,12 @@ on:
       - 'supabase/functions/embed-section/**'
       - 'supabase/functions/run-outline/**'
       - 'supabase/functions/outline-from-recipe/**'
+      - 'supabase/functions/sync-openai-model-catalog/**'
       - 'supabase/migrations/20260909215722_scene_memory_stage_ledger_and_run_lineage.sql'
+      - 'supabase/migrations/20260917190000_generation_model_pricing_safety.sql'
+      - 'supabase/migrations/20260917200000_sync_openai_model_catalog.sql'
       - 'supabase/tests/database/scene_memory_stage_ledger.test.sql'
+      - 'supabase/tests/database/openai_model_catalog_sync.test.sql'
       - '.github/workflows/pr-521-ci.yml'
 
 jobs:
@@ -65,3 +69,15 @@ jobs:
         run: >-
           deno test --no-check -A
           supabase/functions/outline-from-recipe/index_test.ts
+
+
+      - name: Type check PR2 OpenAI catalog sync sources
+        run: >-
+          deno check
+          supabase/functions/sync-openai-model-catalog/_handler.ts
+          supabase/functions/sync-openai-model-catalog/index.ts
+
+      - name: Test PR2 OpenAI catalog sync handler and parser
+        run: >-
+          deno test --no-check -A
+          supabase/functions/sync-openai-model-catalog/index_test.ts

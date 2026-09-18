@@ -45,10 +45,25 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  safe_error text;
 begin
   if p_status not in ('complete', 'failed') then
     raise exception 'invalid sync run status' using errcode = '22023';
   end if;
+
+  safe_error := left(
+    regexp_replace(
+      regexp_replace(
+        coalesce(nullif(p_sanitized_error, ''), p_error_code, ''),
+        '(?i)(authorization|bearer|api[_ -]?key|openai[_ -]?api[_ -]?key)[=: ]+[^,;]+',
+        '\1=[redacted]',
+        'g'
+      ),
+      '[^a-zA-Z0-9_. -]+', '_', 'g'
+    ),
+    500
+  );
 
   update public.openai_model_sync_runs
      set completed_at = now(),
@@ -58,7 +73,7 @@ begin
          models_marked_available = greatest(coalesce(p_models_marked_available, 0), 0),
          models_marked_unavailable = greatest(coalesce(p_models_marked_unavailable, 0), 0),
          error_code = left(nullif(regexp_replace(coalesce(p_error_code, ''), '[^a-z0-9_]+', '_', 'gi'), ''), 100),
-         sanitized_error = left(nullif(regexp_replace(coalesce(p_error_code, ''), '[^a-z0-9_. -]+', '_', 'g'), ''), 500)
+         sanitized_error = nullif(safe_error, '')
    where id = p_run_id
      and status = 'started';
 
@@ -81,6 +96,7 @@ declare
   item record;
   existing_id text;
   was_available boolean;
+  run_status text;
   inserted_count integer := 0;
   available_count integer := 0;
   unavailable_count integer := 0;
@@ -93,12 +109,29 @@ begin
     raise exception 'models must be a non-empty JSON array' using errcode = '22023';
   end if;
 
+  select status into run_status
+    from public.openai_model_sync_runs
+   where id = p_run_id
+   for update;
+  if run_status is distinct from 'started' then
+    raise exception 'sync run not found or not started' using errcode = '22023';
+  end if;
+
+  if exists (
+    select 1
+      from jsonb_to_recordset(p_models) as m(id text)
+     group by m.id
+    having count(*) > 1
+  ) then
+    raise exception 'model ids must be unique' using errcode = '22023';
+  end if;
+
   for item in
     select * from jsonb_to_recordset(p_models)
       as m(id text, created bigint, owned_by text)
   loop
-    if item.id is null or btrim(item.id) = '' then
-      raise exception 'model id must be non-empty' using errcode = '22023';
+    if item.id is null or item.id = '' or item.id <> btrim(item.id) then
+      raise exception 'model id must be non-empty and unmodified' using errcode = '22023';
     end if;
     seen_count := seen_count + 1;
 
@@ -149,6 +182,20 @@ begin
         where m.id = gm.provider_model
      );
   get diagnostics unavailable_count = row_count;
+
+  update public.openai_model_sync_runs
+     set completed_at = now(),
+         status = 'complete',
+         models_seen = seen_count,
+         models_inserted = inserted_count,
+         models_marked_available = available_count,
+         models_marked_unavailable = unavailable_count,
+         error_code = null,
+         sanitized_error = null
+   where id = p_run_id and status = 'started';
+  if not found then
+    raise exception 'sync run was finalized during reconciliation' using errcode = '22023';
+  end if;
 
   return jsonb_build_object(
     'run_id', p_run_id, 'models_seen', seen_count,
