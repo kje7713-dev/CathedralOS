@@ -36,8 +36,10 @@ import type { LLMMessage, LLMProvider } from "../generate-story/_provider.ts";
 import { checkCredits, type CreditStore } from "../generate-story/_credits.ts";
 import {
   computeMaxChargeCredits,
-  estimateTokensFromText,
+  estimateTokensFromMessages,
+  inputTokenLimitDetails,
   snapshotPricing,
+  isBillableGenerationModel,
 } from "../generate-story/_generation_models.ts";
 
 // ---------------------------------------------------------------------------
@@ -83,7 +85,7 @@ export interface CoherenceRuntimeDeps {
 
 export interface CoherenceConfig {
   openaiModelDefault: string;
-  fallbackModel: GenerationModel;
+  fallbackModel?: GenerationModel;
   maxCompletionTokens: number;
   temperature: number;
 }
@@ -260,7 +262,7 @@ const errorResponse = (
  *   - parsed + validated the request body via validateRequest()
  *
  * Flow:
- *   1. Resolve the GenerationModel (admin lookup + FALLBACK_MODEL fallback).
+ *   1. Resolve the GenerationModel (admin lookup through the canonical catalog).
  *   2. Build messages + idempotency key.
  *   3. Capture startMs for the duration metric.
  *   4. Call runBillableLLM with onProviderSuccess callback. The callback
@@ -294,16 +296,36 @@ export async function handleCoherenceCheck(
     ? await modelTable.eq("id", request.selected_model_id).maybeSingle()
     : await modelTable.eq("provider_model", config.openaiModelDefault)
       .maybeSingle();
-  const model: GenerationModel = (modelRow?.data as GenerationModel | null) ??
-    config.fallbackModel;
+  const model = modelRow?.data as GenerationModel | null;
+  if (!model || !isBillableGenerationModel(model)) {
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "model_unavailable_or_unpriced",
+        errorMessage: "Selected model is unavailable or has unverified pricing.",
+      }),
+      { status: 400 },
+    );
+  }
 
   // 2. Build messages. Estimate uses the exact same prompt shape as the
   // billable call, but never invokes the provider or writes usage rows.
   const messages = buildMessages(request);
   if ((request.action ?? "check") === "estimate") {
     const entitlement = await deps.creditStore.loadOrDefault(userId);
-    const estimatedInputTokens = estimateTokensFromText(messages.system) +
-      estimateTokensFromText(messages.user);
+    const estimatedInputTokens = estimateTokensFromMessages([
+      { content: messages.system },
+      { content: messages.user },
+    ]);
+    const inputLimit = inputTokenLimitDetails(estimatedInputTokens);
+    if (inputLimit) {
+      return errorResponse(
+        "input_token_limit_exceeded",
+        `Estimated input is ${inputLimit.estimatedInputTokens} tokens; ` +
+          `Cathedral's hard limit is ${inputLimit.limit} tokens`,
+        413,
+      );
+    }
     const estimatedCredits = computeMaxChargeCredits(
       {
         uncachedInputTokens: estimatedInputTokens,
@@ -390,6 +412,17 @@ export async function handleCoherenceCheck(
     }
     // BillableLLMError codes.
     if (err instanceof BillableLLMError) {
+      if (err.code === "input_token_limit_exceeded") {
+        const details = err.details && typeof err.details === "object"
+          ? err.details as Record<string, unknown>
+          : {};
+        return errorResponse(
+          err.code,
+          `${err.message} (estimated=${details.estimatedInputTokens ?? "unknown"}, ` +
+            `limit=${details.limit ?? "unknown"})`,
+          413,
+        );
+      }
       if (err.code === "insufficient_credits") {
         return errorResponse("insufficient_credits", err.message, 402);
       }

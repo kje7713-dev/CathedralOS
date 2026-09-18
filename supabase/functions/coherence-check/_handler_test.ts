@@ -81,6 +81,11 @@ const MODEL_ROW: GenerationModel = {
   minimum_charge_credits: 1,
   max_output_tokens: 16000,
   enabled: true,
+  provider_available: true,
+  model_kind: "text_generation",
+  pricing_state: "verified",
+  pricing_verified_at: "2026-01-01T00:00:00Z",
+  cache_write_pricing_required: false,
   sort_order: 0,
   billing_multiplier: 2.0,
   provider_input_usd_per_1m: 0.15,
@@ -157,20 +162,48 @@ interface InsertedRow {
 interface MockAdminState {
   insertedRows: InsertedRow[];
   usageEventResult: { data: { id: string } | null; error: unknown };
+  settlementError?: { message: string };
 }
 
 function makeMockAdmin(opts: {
   modelRow?: GenerationModel | null;
   usageEventResult?: { data: { id: string } | null; error: unknown };
+  settlementError?: { message: string };
 } = {}): { client: unknown; state: MockAdminState } {
   const state: MockAdminState = {
     insertedRows: [],
     usageEventResult: opts.usageEventResult ??
       { data: { id: "row-1" }, error: null },
+    settlementError: opts.settlementError,
   };
   const modelRow = opts.modelRow === undefined ? MODEL_ROW : opts.modelRow;
 
   const client: unknown = {
+    rpc(name: string, params: Record<string, unknown>): Promise<unknown> {
+      if (name !== "settle_billable_usage") {
+        return Promise.resolve({ data: null, error: null });
+      }
+      if (state.settlementError) {
+        return Promise.resolve({ data: null, error: state.settlementError });
+      }
+      state.insertedRows.push({
+        table: "generation_usage_events",
+        row: {
+          user_id: params.p_user_id,
+          generation_output_id: params.p_generation_output_id ?? null,
+          action: params.p_action,
+          purpose: params.p_purpose,
+          model_name: params.p_model_name,
+          input_tokens: params.p_input_tokens,
+          output_tokens: params.p_output_tokens,
+          status: "complete",
+        },
+      });
+      return Promise.resolve({
+        data: [{ settlement_status: "settled", usage_event_id: "row-1", ledger_id: "ledger-1", remaining_credits: 95 }],
+        error: null,
+      });
+    },
     from(table: string): unknown {
       if (table === "generation_models") {
         return {
@@ -341,6 +374,20 @@ function auditRows(
 // Test scenarios
 // ---------------------------------------------------------------------------
 
+Deno.test("handleCoherenceCheck estimate rejects complete input above 270K", async () => {
+  const { client: admin } = makeMockAdmin();
+  const { store: creditStore } = makeCreditStore();
+  const response = await handleCoherenceCheck(
+    USER_ID,
+    { ...VALID_REQUEST, output_text: "x".repeat(810_000), action: "estimate" },
+    { adminClient: admin, provider: makeProvider(makeLLMResponse()), creditStore },
+    CONFIG,
+  );
+  const body = await response.json();
+  assertEquals(response.status, 413);
+  assertEquals(body.errorCode, "input_token_limit_exceeded");
+});
+
 Deno.test(
   "handleCoherenceCheck [a] valid structured response: typed result + one complete event + one charge",
   async () => {
@@ -399,8 +446,9 @@ Deno.test(
     assertEquals(typeof audits[0].duration_ms, "number");
     assertStrictEquals((audits[0].duration_ms as number) >= 0, true);
 
-    // Exactly ONE credit charge call (exactly-once billing).
-    assertEquals(creditState.chargeCalls.length, 1);
+    // Settlement is atomic through settle_billable_usage; the local credit
+    // store is not mutated by the shared runner.
+    assertEquals(creditState.chargeCalls.length, 0);
   },
 );
 
@@ -499,8 +547,10 @@ Deno.test(
 Deno.test(
   "handleCoherenceCheck [d] credit charge failure: no success response, 500 billing_charge_failed",
   async () => {
-    const { client: admin, state: adminState } = makeMockAdmin();
-    const { store: creditStore } = makeCreditStore({ chargeShouldThrow: true });
+    const { client: admin, state: adminState } = makeMockAdmin({
+      settlementError: { message: "simulated charge failure" },
+    });
+    const { store: creditStore } = makeCreditStore();
     const provider = makeProvider(makeLLMResponse({
       content: '{"warnings":[]}',
       inputTokens: 1500,
@@ -524,11 +574,10 @@ Deno.test(
     assertEquals(body.errorCode, "billing_charge_failed");
     assertStringIncludes(body.message, "Credit charge failed");
 
-    // Usage event WAS inserted (runner inserts before charging) — preserved
-    // for audit/reconciliation. Charge failed AFTER the insert.
+    // The atomic settlement RPC failed before inserting a successful usage
+    // event, so no usage settlement or credit mutation is visible.
     const events = usageEventRows(adminState);
-    assertEquals(events.length, 1);
-    assertEquals(events[0].status, "complete");
+    assertEquals(events.length, 0);
 
     // NO llm_prompts audit (audit is after runner success; runner threw
     // credit_charge_failed before audit was reached).

@@ -52,6 +52,7 @@ import { SupabaseCreditStore } from "../generate-story/_credits.ts";
 import {
   computeMaxChargeCredits,
   getEnabledModelByProviderModel,
+  getEnabledPricedModelByProviderModel,
   snapshotPricing,
 } from "../generate-story/_generation_models.ts";
 
@@ -1537,9 +1538,10 @@ async function estimateRunCost(
       adminClient,
       Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-4o-mini",
     );
-    const embedder = await getEnabledModelByProviderModel(
+    const embedder = await getEnabledPricedModelByProviderModel(
       adminClient,
       "text-embedding-3-small",
+      "embedding",
     );
     if (!extractor || !embedder) {
       throw new Error("legacy memory pricing unavailable");

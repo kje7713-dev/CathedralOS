@@ -567,11 +567,21 @@ class SupabaseGenerationPersistenceStore implements GenerationPersistenceStore {
       .maybeSingle();
     if (error || !data) return null;
     const r = data as Record<string, unknown>;
+    const inputRate = Number(r.input_per_1k_usd);
+    const outputRate = Number(r.output_per_1k_usd);
+    const markup = Number(r.premium_markup_pct);
+    if (!Number.isFinite(inputRate) || inputRate < 0 ||
+      !Number.isFinite(outputRate) || outputRate < 0 ||
+      !Number.isFinite(markup) || markup < 0) return null;
+    const tier = r.tier;
+    if (tier !== "cheap" && tier !== "standard" && tier !== "premium") {
+      return null;
+    }
     return {
-      input_per_1k_usd: Number(r.input_per_1k_usd) || 0,
-      output_per_1k_usd: Number(r.output_per_1k_usd) || 0,
-      premium_markup_pct: Number(r.premium_markup_pct) || 0,
-      tier: (r.tier as ModelRateRow["tier"]) || "cheap",
+      input_per_1k_usd: inputRate,
+      output_per_1k_usd: outputRate,
+      premium_markup_pct: markup,
+      tier,
     };
   }
 }
@@ -2679,15 +2689,15 @@ async function handler(
       outputBudget,
       selectedModelId,
       status: "failed",
-      errorCode: "invalid_model",
-      errorMessage: "Selected model is invalid or disabled.",
+      errorCode: "model_unavailable_or_unpriced",
+      errorMessage: "Selected model is unavailable or has unverified pricing.",
       durationMs: Date.now() - requestStartMs,
     });
     return corsResponse(
       JSON.stringify({
         status: "failed",
-        errorCode: "invalid_model",
-        errorMessage: "Selected model is invalid or disabled.",
+        errorCode: "model_unavailable_or_unpriced",
+        errorMessage: "Selected model is unavailable or has unverified pricing.",
       }),
       { status: 400 },
     );
@@ -3384,6 +3394,34 @@ async function handler(
     );
   } catch (err) {
     const isBillableError = err instanceof BillableLLMError;
+    if (isBillableError && err.code === "input_token_limit_exceeded") {
+      const details = err.details && typeof err.details === "object"
+        ? err.details as Record<string, unknown>
+        : {};
+      await limiter.recordRequest(userId, {
+        requestId,
+        action: generationAction,
+        generationLengthMode,
+        outputBudget: maxCompletionTokens,
+        selectedModelId,
+        providerModel: selectedModel.provider_model,
+        maxCompletionTokens,
+        status: "rejected",
+        errorCode: err.code,
+        errorMessage: err.message,
+        durationMs: Date.now() - requestStartMs,
+      });
+      return corsResponse(
+        JSON.stringify({
+          status: "failed",
+          errorCode: err.code,
+          errorMessage: err.message,
+          estimatedInputTokens: details.estimatedInputTokens ?? null,
+          inputTokenLimit: details.limit ?? null,
+        }),
+        { status: 413 },
+      );
+    }
     if (isBillableError && err.code === "insufficient_credits") {
       const details = err.details && typeof err.details === "object"
         ? err.details as Record<string, unknown>

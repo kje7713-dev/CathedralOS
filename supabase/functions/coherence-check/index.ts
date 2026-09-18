@@ -44,7 +44,6 @@ import {
   handleCoherenceCheck,
 } from "./_handler.ts";
 import { validateRequest } from "./_validation.ts";
-import { GenerationModel } from "../generate-story/_generation_models.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
 import { LLMProvider, OpenAIProvider } from "../generate-story/_provider.ts";
 
@@ -73,37 +72,8 @@ const provider: LLMProvider = new OpenAIProvider(
   OPENAI_MODEL_DEFAULT,
 );
 
-// Fallback model row when the env-var-provided model isn\'t in
-// generation_models. Used for snapshotPricing() only — the actual LLM call
-// still uses OPENAI_MODEL_DEFAULT.
-const FALLBACK_MODEL: GenerationModel = {
-  id: "__fallback__",
-  provider: "openai",
-  provider_model: OPENAI_MODEL_DEFAULT,
-  display_name: OPENAI_MODEL_DEFAULT,
-  description:
-    "Fallback pricing for coherence-check when model not in generation_models",
-  input_credit_rate: 0,
-  output_credit_rate: 0,
-  minimum_charge_credits: 1,
-  max_output_tokens: null,
-  enabled: true,
-  // PR-372: cache-write rate (1.25× input standard; coherence-check
-  // doesn't actually hit cache in production, but the snapshot is
-  // populated for billing-correctness when cacheWrite tokens appear).
-  provider_cache_write_usd_per_1m: 0,
-  // PR-372: coherence-check uses chat/completions which doesn't support
-  // explicit cache mode. Default to "implicit" so prompt_cache_key is
-  // sent (cache writes / reads never materialize here, so this is safe).
-  cacheMode: "implicit",
-  sort_order: 0,
-  billing_multiplier: 2.0,
-  provider_input_usd_per_1m: 0.40,
-  provider_cached_input_usd_per_1m: 0.10,
-  provider_output_usd_per_1m: 1.60,
-  pricing_effective_at: new Date().toISOString(),
-};
-
+// The configured model must resolve to an eligible generation_models row;
+// coherence-check no longer uses a synthetic pricing fallback.
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -133,7 +103,6 @@ const RUNTIME_DEPS: CoherenceRuntimeDeps = {
 
 const RUNTIME_CONFIG: CoherenceConfig = {
   openaiModelDefault: OPENAI_MODEL_DEFAULT,
-  fallbackModel: FALLBACK_MODEL,
   maxCompletionTokens: COHERENCE_MAX_COMPLETION_TOKENS,
   temperature: COHERENCE_TEMPERATURE,
 };
