@@ -1924,6 +1924,10 @@ struct ActiveRunBanner: View {
         }
         let done = status.sections_done ?? 0
         let total = status.sections_total ?? 0
+        // The backend briefly remains `running` while it finalizes the run
+        // after the last section is durably marked complete. Do not render an
+        // impossible "N+1 of N" progress state during that transition.
+        if total > 0, done >= total { return "Finalizing generation" }
         return "Generating section \(done + 1) of \(total)"
     }
 
