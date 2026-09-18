@@ -15,7 +15,61 @@ create table if not exists public.openai_model_sync_runs (
 
 alter table public.openai_model_sync_runs enable row level security;
 
+create or replace function public.start_openai_model_sync_run(
+  p_started_at timestamptz default now()
+) returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  run_id uuid := gen_random_uuid();
+begin
+  insert into public.openai_model_sync_runs (id, started_at, status)
+  values (run_id, p_started_at, 'started');
+  return run_id;
+end;
+$$;
+
+create or replace function public.finish_openai_model_sync_run(
+  p_run_id uuid,
+  p_status text,
+  p_models_seen integer default 0,
+  p_models_inserted integer default 0,
+  p_models_marked_available integer default 0,
+  p_models_marked_unavailable integer default 0,
+  p_error_code text default null,
+  p_sanitized_error text default null
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if p_status not in ('complete', 'failed') then
+    raise exception 'invalid sync run status' using errcode = '22023';
+  end if;
+
+  update public.openai_model_sync_runs
+     set completed_at = now(),
+         status = p_status,
+         models_seen = greatest(coalesce(p_models_seen, 0), 0),
+         models_inserted = greatest(coalesce(p_models_inserted, 0), 0),
+         models_marked_available = greatest(coalesce(p_models_marked_available, 0), 0),
+         models_marked_unavailable = greatest(coalesce(p_models_marked_unavailable, 0), 0),
+         error_code = left(nullif(regexp_replace(coalesce(p_error_code, ''), '[^a-z0-9_]+', '_', 'gi'), ''), 100),
+         sanitized_error = left(nullif(regexp_replace(coalesce(p_error_code, ''), '[^a-z0-9_. -]+', '_', 'g'), ''), 500)
+   where id = p_run_id
+     and status = 'started';
+
+  if not found then
+    raise exception 'sync run not found or already finalized' using errcode = '22023';
+  end if;
+end;
+$$;
+
 create or replace function public.reconcile_openai_model_catalog(
+  p_run_id uuid,
   p_models jsonb,
   p_started_at timestamptz default now()
 ) returns jsonb
@@ -26,18 +80,18 @@ as $$
 declare
   item record;
   existing_id text;
+  was_available boolean;
   inserted_count integer := 0;
   available_count integer := 0;
   unavailable_count integer := 0;
   seen_count integer := 0;
-  run_id uuid := gen_random_uuid();
 begin
-  if jsonb_typeof(p_models) <> 'array' then
-    raise exception 'models must be a JSON array' using errcode = '22023';
+  if p_run_id is null then
+    raise exception 'sync run id is required' using errcode = '22023';
   end if;
-
-  insert into public.openai_model_sync_runs (id, started_at, status)
-  values (run_id, p_started_at, 'started');
+  if jsonb_typeof(p_models) <> 'array' or jsonb_array_length(p_models) = 0 then
+    raise exception 'models must be a non-empty JSON array' using errcode = '22023';
+  end if;
 
   for item in
     select * from jsonb_to_recordset(p_models)
@@ -48,7 +102,7 @@ begin
     end if;
     seen_count := seen_count + 1;
 
-    select gm.id into existing_id
+    select gm.id, gm.provider_available into existing_id, was_available
       from public.generation_models gm
      where gm.provider = 'openai' and gm.provider_model = item.id
      limit 1;
@@ -62,7 +116,9 @@ begin
              provider_owned_by = coalesce(nullif(item.owned_by, ''), provider_owned_by),
              updated_at = now()
        where id = existing_id;
-      available_count := available_count + 1;
+      if not coalesce(was_available, false) then
+        available_count := available_count + 1;
+      end if;
     else
       insert into public.generation_models (
         id, provider, provider_model, display_name, description,
@@ -85,7 +141,6 @@ begin
 
   update public.generation_models gm
      set provider_available = false,
-         provider_last_seen_at = gm.provider_last_seen_at,
          updated_at = now()
    where gm.provider = 'openai'
      and gm.provider_available = true
@@ -95,32 +150,24 @@ begin
      );
   get diagnostics unavailable_count = row_count;
 
-  update public.openai_model_sync_runs
-     set completed_at = now(), status = 'complete', models_seen = seen_count,
-         models_inserted = inserted_count,
-         models_marked_available = available_count,
-         models_marked_unavailable = unavailable_count
-   where id = run_id;
-
   return jsonb_build_object(
-    'run_id', run_id, 'models_seen', seen_count,
+    'run_id', p_run_id, 'models_seen', seen_count,
     'models_inserted', inserted_count,
     'models_marked_available', available_count,
     'models_marked_unavailable', unavailable_count
   );
-exception when others then
-  if run_id is not null then
-    update public.openai_model_sync_runs
-       set completed_at = now(), status = 'failed',
-           models_seen = seen_count, error_code = sqlstate,
-           sanitized_error = left(sqlerrm, 500)
-     where id = run_id;
-  end if;
-  raise;
 end;
 $$;
 
-revoke all on function public.reconcile_openai_model_catalog(jsonb, timestamptz)
+revoke all on function public.start_openai_model_sync_run(timestamptz)
   from public, anon, authenticated;
-grant execute on function public.reconcile_openai_model_catalog(jsonb, timestamptz)
+revoke all on function public.finish_openai_model_sync_run(uuid, text, integer, integer, integer, integer, text, text)
+  from public, anon, authenticated;
+revoke all on function public.reconcile_openai_model_catalog(uuid, jsonb, timestamptz)
+  from public, anon, authenticated;
+grant execute on function public.start_openai_model_sync_run(timestamptz)
+  to service_role;
+grant execute on function public.finish_openai_model_sync_run(uuid, text, integer, integer, integer, integer, text, text)
+  to service_role;
+grant execute on function public.reconcile_openai_model_catalog(uuid, jsonb, timestamptz)
   to service_role;
