@@ -25,9 +25,13 @@ alter table public.generation_models
 
 alter table public.generation_models
   add constraint generation_models_model_kind_check
-    check (model_kind in ('text_generation', 'embedding', 'image', 'audio', 'moderation', 'unknown)),
+    check (model_kind in ('text_generation', 'embedding', 'image', 'audio', 'moderation', 'unknown'));
+
+alter table public.generation_models
   add constraint generation_models_pricing_state_check
-    check (pricing_state in ('unverified', 'verified', 'needs_review')),
+    check (pricing_state in ('unverified', 'verified', 'needs_review'));
+
+alter table public.generation_models
   add constraint generation_models_cache_mode_check
     check (cache_mode in ('none', 'implicit', 'explicit'));
 
