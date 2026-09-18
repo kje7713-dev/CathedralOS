@@ -1329,13 +1329,29 @@ async function finalizeRun(
     return;
   }
   const actual = await loadActualCredits(adminClient, sections);
-  await adminClient.from("chapter_runs").update({
-    status: "completed",
-    credits_actual: actual,
-    completed_at: new Date().toISOString(),
-    worker_lease_until: null,
-    next_retry_at: null,
-  }).eq("id", runId);
+  const { data: finalized, error: finalizeError } = await adminClient
+    .from("chapter_runs")
+    .update({
+      status: "completed",
+      credits_actual: actual,
+      completed_at: new Date().toISOString(),
+      worker_lease_until: null,
+      next_retry_at: null,
+    })
+    .eq("id", runId)
+    .eq("status", "running")
+    .select("id, status")
+    .maybeSingle();
+  if (finalizeError) {
+    throw new Error(
+      `could not finalize run ${runId}: ${finalizeError.message}`,
+    );
+  }
+  if (!finalized || finalized.status !== "completed") {
+    throw new Error(
+      `could not finalize run ${runId}: no running chapter run row updated`,
+    );
+  }
   console.log(
     `[run-outline] run_id=${runId} completed; actual_credits=${actual}`,
   );
@@ -2078,7 +2094,7 @@ async function markRunFailed(
   const actual = await loadActualCredits(adminClient, sections);
   // generate-story owns the real debit. The orchestrator reports successful
   // section charges and clears its estimate on failure (no failed-call charge).
-  await adminClient.from("chapter_runs").update({
+  const { error: failError } = await adminClient.from("chapter_runs").update({
     status: "failed",
     error,
     credits_reserved: 0,
@@ -2086,5 +2102,10 @@ async function markRunFailed(
     completed_at: new Date().toISOString(),
     worker_lease_until: null,
     next_retry_at: null,
-  }).eq("id", runId);
+  }).eq("id", runId).in("status", ["queued", "running"]);
+  if (failError) {
+    throw new Error(
+      `could not persist failed run ${runId}: ${failError.message}`,
+    );
+  }
 }
