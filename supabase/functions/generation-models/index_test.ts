@@ -1,8 +1,11 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import {
+  assertAlmostEquals,
+  assertEquals,
+} from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { handler } from "./index.ts";
 import {
-  SupabaseGenerationModelStore,
   type GenerationModelStore,
+  SupabaseGenerationModelStore,
 } from "../generate-story/_generation_models.ts";
 
 const mockModelStore: GenerationModelStore = {
@@ -44,8 +47,10 @@ Deno.test("generation-models: returns only enabled model list payload", async ()
   assertEquals(body.models[0].id, "gpt-4o-mini");
 });
 
-
-function rawModel(providerModel: string, overrides: Record<string, unknown> = {}) {
+function rawModel(
+  providerModel: string,
+  overrides: Record<string, unknown> = {},
+) {
   return {
     id: providerModel,
     provider: "openai",
@@ -77,7 +82,10 @@ function rawModel(providerModel: string, overrides: Record<string, unknown> = {}
 Deno.test("generation-models: real store filters mixed invalid rows before picker payload", async () => {
   const rows = [
     rawModel("gpt-4o-mini"),
-    rawModel("unpriced-model", { pricing_state: "unverified", provider_input_usd_per_1m: null }),
+    rawModel("unpriced-model", {
+      pricing_state: "unverified",
+      provider_input_usd_per_1m: null,
+    }),
     rawModel("disabled-model", { enabled: false }),
     rawModel("embedding-model", { model_kind: "embedding" }),
   ];
@@ -86,8 +94,12 @@ Deno.test("generation-models: real store filters mixed invalid rows before picke
       return {
         select() {
           return {
-            eq(_column: string, _value: unknown) { return this; },
-            order(_column: string, _options: unknown) { return this; },
+            eq(_column: string, _value: unknown) {
+              return this;
+            },
+            order(_column: string, _options: unknown) {
+              return this;
+            },
             then(resolve: (value: unknown) => unknown) {
               return Promise.resolve(resolve({ data: rows, error: null }));
             },
@@ -99,4 +111,57 @@ Deno.test("generation-models: real store filters mixed invalid rows before picke
   const store = new SupabaseGenerationModelStore(db);
   const models = await store.listEnabledModels();
   assertEquals(models.map((model) => model.id), ["gpt-4o-mini"]);
+});
+
+Deno.test("generation-models: public rates come from canonical pricing, not legacy columns", async () => {
+  const rows = [{
+    id: "gpt-5.6-luna",
+    provider: "openai",
+    provider_model: "gpt-5.6-luna",
+    display_name: "GPT-5.6 Luna",
+    description: null,
+    // Deliberately stale legacy values.
+    input_credit_rate: 3,
+    output_credit_rate: 3,
+    minimum_charge_credits: 0.25,
+    max_output_tokens: 4096,
+    sort_order: 1,
+    enabled: true,
+    provider_available: true,
+    model_kind: "text_generation",
+    pricing_state: "verified",
+    pricing_verified_at: "2026-09-18T00:00:00Z",
+    cache_write_pricing_required: false,
+    billing_multiplier: 4,
+    provider_input_usd_per_1m: 0.2,
+    provider_cached_input_usd_per_1m: 0.02,
+    provider_cache_write_usd_per_1m: null,
+    provider_output_usd_per_1m: 1.2,
+    pricing_effective_at: "2026-09-18T00:00:00Z",
+    cache_mode: "implicit",
+  }];
+  const db = {
+    from() {
+      return {
+        select() {
+          return {
+            eq(_column: string, _value: unknown) {
+              return this;
+            },
+            order(_column: string, _options: unknown) {
+              return this;
+            },
+            then(resolve: (value: unknown) => unknown) {
+              return Promise.resolve(resolve({ data: rows, error: null }));
+            },
+          };
+        },
+      };
+    },
+  };
+
+  const models = await new SupabaseGenerationModelStore(db).listEnabledModels();
+  assertAlmostEquals(models[0].input_credit_rate, 0.016);
+  assertAlmostEquals(models[0].output_credit_rate, 0.096);
+  assertEquals(models[0].minimum_charge_credits, 0.25);
 });
