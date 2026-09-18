@@ -261,16 +261,23 @@ export class SupabaseGenerationModelStore implements GenerationModelStore {
     if (error || !data) return [];
     return (data as Record<string, unknown>[]).map(mapModelRow)
       .filter(isBillableGenerationModel)
-      .map((model) => ({
-        id: model.id,
-        display_name: model.display_name,
-        description: model.description,
-        input_credit_rate: model.input_credit_rate,
-        output_credit_rate: model.output_credit_rate,
-        minimum_charge_credits: model.minimum_charge_credits,
-        max_output_tokens: model.max_output_tokens,
-        sort_order: model.sort_order,
-      }));
+      .map((model) => {
+        // The model picker is also consumed by Generate's budget labels.
+        // Publish rates from the same canonical snapshot used by preflight
+        // and settlement; never expose the legacy catalog rate columns as
+        // customer-facing pricing.
+        const pricing = snapshotPricing(model);
+        return {
+          id: model.id,
+          display_name: model.display_name,
+          description: model.description,
+          input_credit_rate: pricing.inputCreditRatePer1k,
+          output_credit_rate: pricing.outputCreditRatePer1k,
+          minimum_charge_credits: pricing.minimumChargeCredits,
+          max_output_tokens: model.max_output_tokens,
+          sort_order: model.sort_order,
+        };
+      });
   }
 }
 
