@@ -32,7 +32,7 @@ select (public.record_openai_pricing_observation(jsonb_build_object(
   'output_usd_per_1m', 1.20,
   'error_code', 'required_cache_write_rate_missing'
 ))->>'promoted') as incomplete_promoted \gset
-select is(:'incomplete_promoted', 'false', 'incomplete observation is not promoted');
+select is(:'incomplete_promoted'::text, 'false'::text, 'incomplete observation is not promoted');
 select is((select provider_cache_write_usd_per_1m from public.generation_models where id = 'db-pricing-luna'), 0.25::numeric, 'existing cache-write rate is retained');
 select is((select pricing_state from public.generation_models where id = 'db-pricing-luna'), 'verified', 'model remains verified and billable');
 select is((select enabled from public.generation_models where id = 'db-pricing-luna'), true, 'incomplete observation preserves enablement');
@@ -51,7 +51,7 @@ select (public.record_openai_pricing_observation(jsonb_build_object(
   'cache_write_usd_per_1m', 0.25,
   'output_usd_per_1m', 1.20
 ))->>'promotion_reason' as extreme_reason \gset
-select is(:'extreme_reason', 'extreme_price_change_requires_review', 'extreme price change is rejected with deterministic reason');
+select is(:'extreme_reason'::text, 'extreme_price_change_requires_review'::text, 'extreme price change is rejected with deterministic reason');
 select is((select provider_input_usd_per_1m from public.generation_models where id = 'db-pricing-luna'), 0.20::numeric, 'extreme price leaves input rate unchanged');
 select is((select provider_output_usd_per_1m from public.generation_models where id = 'db-pricing-luna'), 1.20::numeric, 'extreme price leaves output rate unchanged');
 select is((select enabled from public.generation_models where id = 'db-pricing-luna'), true, 'extreme price preserves enablement');
@@ -70,7 +70,7 @@ select (public.record_openai_pricing_observation(jsonb_build_object(
   'cache_write_usd_per_1m', 0.25,
   'output_usd_per_1m', 1.20
 ))->>'promoted') as complete_promoted \gset
-select is(:'complete_promoted', 'true', 'complete observation is promoted');
+select is(:'complete_promoted'::text, 'true'::text, 'complete observation is promoted');
 select is((select provider_cache_write_usd_per_1m from public.generation_models where id = 'db-pricing-luna'), 0.25::numeric, 'complete observation promotes cache-write rate');
 select is((select provider_input_usd_per_1m from public.generation_models where id = 'db-pricing-luna'), 0.20::numeric, 'complete observation promotes input rate');
 select is((select provider_cached_input_usd_per_1m from public.generation_models where id = 'db-pricing-luna'), 0.02::numeric, 'complete observation promotes cached-input rate');
@@ -105,7 +105,7 @@ select (public.record_openai_pricing_observation(jsonb_build_object(
   'cache_write_usd_per_1m', 0.25,
   'output_usd_per_1m', 1.20
 ))->>'promotion_reason' as ambiguous_reason \gset
-select is(:'ambiguous_reason', 'ambiguous_provider_model', 'duplicate OpenAI provider/model refuses promotion');
+select is(:'ambiguous_reason'::text, 'ambiguous_provider_model'::text, 'duplicate OpenAI provider/model refuses promotion');
 select is((select provider_input_usd_per_1m from public.generation_models where id = 'db-pricing-luna'), 0.20::numeric, 'ambiguous identity leaves exact row unchanged');
 select is((select count(*)::integer from public.openai_pricing_observations where provider_model = 'gpt-5.6-luna'), 4, 'ambiguous observation is still appended');
 
@@ -122,7 +122,7 @@ select (public.record_openai_pricing_observation(jsonb_build_object(
   'cache_write_usd_per_1m', 1.25,
   'output_usd_per_1m', 2
 ))->>'promoted') as unknown_promoted \gset
-select is(:'unknown_promoted', 'false', 'unknown model is not promoted');
+select is(:'unknown_promoted'::text, 'false'::text, 'unknown model is not promoted');
 
 select * from finish();
 rollback;
