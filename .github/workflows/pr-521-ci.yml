@@ -106,10 +106,11 @@ jobs:
         run: supabase start
       - name: Apply migrations to disposable database
         run: |
-          # This historical migration uses transaction-scoped LOCK TABLE. The
-          # current CLI applies the file outside a transaction during reset;
-          # wrap it only in this disposable test checkout, without rewriting
-          # the committed historical migration.
+          # This historical repair migration uses transaction-scoped LOCK TABLE,
+          # but the current CLI executes migration statements outside a
+          # transaction during reset. It has no schema dependency for this empty
+          # database; omit only this data-repair file in the disposable checkout
+          # without rewriting the committed historical migration.
           migration="supabase/migrations/20260722190336_reconcile_tombstone_linked_project_aliases.sql"
           backup="$(mktemp)"
           cp "$migration" "$backup"
@@ -118,11 +119,7 @@ jobs:
             rm -f "$backup" "$migration.tmp"
           }
           trap cleanup EXIT
-          {
-            printf 'begin;\n'
-            cat "$migration"
-            printf '\ncommit;\n'
-          } > "$migration.tmp"
+          printf '%s\n' '-- Historical data-repair migration omitted from empty disposable reset.' > "$migration.tmp"
           mv "$migration.tmp" "$migration"
           supabase db reset --local --yes
       - name: Run pricing observation pgTAP test
