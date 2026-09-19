@@ -1,5 +1,5 @@
 begin;
-select plan(25);
+select plan(28);
 
 select has_table('public', 'openai_daily_costs', 'operator cost table exists');
 select has_table('public', 'openai_daily_completion_usage', 'operator usage table exists');
