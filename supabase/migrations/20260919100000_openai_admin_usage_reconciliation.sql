@@ -155,10 +155,10 @@ select
   coalesce(u.openai_cached_input_tokens, 0)::bigint as openai_cached_input_tokens,
   coalesce(u.openai_cache_write_tokens, 0)::bigint as openai_cache_write_tokens,
   coalesce(u.openai_output_tokens, 0)::bigint as openai_output_tokens,
-  (coalesce(u.openai_input_tokens, 0) - coalesce(i.cathedral_input_tokens, 0))::bigint as input_token_variance,
-  (coalesce(u.openai_cached_input_tokens, 0) - coalesce(i.cathedral_cached_input_tokens, 0))::bigint as cached_token_variance,
-  (coalesce(u.openai_cache_write_tokens, 0) - coalesce(i.cathedral_cache_write_tokens, 0))::bigint as cache_write_token_variance,
-  (coalesce(u.openai_output_tokens, 0) - coalesce(i.cathedral_output_tokens, 0))::bigint as output_token_variance,
+  (coalesce(u.openai_input_tokens, 0) - coalesce(pi.cathedral_input_tokens, 0))::bigint as input_token_variance,
+  (coalesce(u.openai_cached_input_tokens, 0) - coalesce(pi.cathedral_cached_input_tokens, 0))::bigint as cached_token_variance,
+  (coalesce(u.openai_cache_write_tokens, 0) - coalesce(pi.cathedral_cache_write_tokens, 0))::bigint as cache_write_token_variance,
+  (coalesce(u.openai_output_tokens, 0) - coalesce(pi.cathedral_output_tokens, 0))::bigint as output_token_variance,
   case
     when u.date is null then 'cost_only_or_no_usage'
     when a.bucket_date is null then 'usage_only_or_no_cost'
