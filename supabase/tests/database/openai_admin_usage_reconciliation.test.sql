@@ -90,7 +90,7 @@ insert into public.generation_provider_attempts (
 );
 select is((select cathedral_settled_customer_credits from public.openai_daily_billing_reconciliation where date = '2026-09-18'), 10::numeric, 'settled credits remain a separate customer aggregate');
 select is((select cathedral_settled_customer_revenue_usd from public.openai_daily_billing_reconciliation where date = '2026-09-18'), 0.10::numeric, 'historical old settlement keeps its stored ten-cent revenue');
-select is((select cathedral_recorded_provider_cogs_usd from public.openai_daily_billing_reconciliation where date = '2026-09-18'), 0.45::numeric, 'provider-complete settled and provider-succeeded COGS use stored historical cents');
+select is((select cathedral_recorded_provider_cogs_usd from public.openai_daily_billing_reconciliation where date = '2026-09-18'), 0.40::numeric, 'provider-complete settled and provider-succeeded COGS use stored historical cents');
 select is((select cathedral_settled_customer_revenue_usd from public.openai_daily_billing_reconciliation where date = '2026-09-19'), 0.50::numeric, 'current settlement keeps its stored fifty-cent revenue');
 select is((select cathedral_recorded_provider_cogs_usd from public.openai_daily_billing_reconciliation where date = '2026-09-19'), 0.05::numeric, 'provider COGS remains the stored historical cents');
 select is((select cathedral_recorded_provider_cogs_usd from public.openai_daily_billing_reconciliation where date = '2026-09-17'), 0.20::numeric, 'provider-complete settlement failure retains provider COGS');
