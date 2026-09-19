@@ -111,10 +111,11 @@ function pageUrl(
   url.searchParams.append("project_ids[]", projectId);
   url.searchParams.set("limit", "100");
   if (page) url.searchParams.set("page", page);
-  if (path === "usage/completions") {
-    for (const group of ["project_id", "model", "service_tier", "batch"]) {
-      url.searchParams.append("group_by[]", group);
-    }
+  const groups = path === "usage/completions"
+    ? ["project_id", "model", "service_tier", "batch"]
+    : ["project_id", "line_item"];
+  for (const group of groups) {
+    url.searchParams.append("group_by[]", group);
   }
   return url.toString();
 }

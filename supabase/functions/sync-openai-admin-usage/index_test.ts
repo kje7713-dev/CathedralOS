@@ -203,6 +203,48 @@ Deno.test("PR4 fetches both real-shaped endpoints, paginates, and persists atomi
     ),
     true,
   );
+  const costsUrl = requests.find((url) => url.includes("/costs"))!;
+  assertEquals(
+    new URL(costsUrl).searchParams.get("project_ids[]"),
+    "proj-test",
+  );
+  assertEquals(new URL(costsUrl).searchParams.getAll("group_by[]"), [
+    "project_id",
+    "line_item",
+  ]);
+  const usageUrl = requests.find((url) => url.includes("/usage/completions"))!;
+  assertEquals(new URL(usageUrl).searchParams.getAll("group_by[]"), [
+    "project_id",
+    "model",
+    "service_tier",
+    "batch",
+  ]);
+});
+
+Deno.test("PR4 rejects ungrouped null-line-item Costs before reconciliation", async () => {
+  const calls: RpcCall[] = [];
+  const res = await handler(
+    request(),
+    deps(calls, (input) => {
+      const isUsage = String(input).includes("usage/completions");
+      const result = isUsage
+        ? { project_id: "proj-test", model: "gpt-5.6-luna", input_tokens: 1 }
+        : {
+          project_id: null,
+          line_item: null,
+          amount: { value: "0.10", currency: "usd" },
+        };
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ data: [bucket([result])], has_more: false }),
+          { status: 200 },
+        ),
+      );
+    }),
+  );
+  assertEquals(res.status, 502);
+  assertEquals(await res.json(), { errorCode: "provider_payload_invalid" });
+  assertEquals(calls.length, 0);
 });
 
 Deno.test("PR4 provider failure and malformed payload do not call persistence", async () => {

@@ -65,10 +65,25 @@ grant all on public.openai_daily_completion_usage to service_role;
 create or replace view public.openai_daily_billing_reconciliation
 with (security_invoker = true)
 as
+-- Provider-side metrics use historical provider telemetry whenever a physical
+-- provider dispatch completed: provider_succeeded, provider_completed_at, or
+-- recorded provider COGS/token telemetry. Customer revenue is separate and
+-- comes only from linked immutable generation_usage_events.credit_revenue_usd
+-- for customer settlement outcomes. It is never reconstructed from credits.
 with days as (
   select bucket_date as date from public.openai_daily_costs
   union
   select bucket_date from public.openai_daily_completion_usage
+  union
+  select (a.started_at at time zone 'utc')::date
+  from public.generation_provider_attempts a
+  where a.status = 'provider_succeeded'
+     or a.provider_completed_at is not null
+     or a.provider_cogs_cents is not null
+     or a.input_tokens is not null
+     or a.output_tokens is not null
+     or a.cached_input_tokens is not null
+     or a.cache_write_input_tokens is not null
   union
   select (a.started_at at time zone 'utc')::date
   from public.generation_provider_attempts a
@@ -78,18 +93,31 @@ with days as (
   from public.openai_daily_costs
   where lower(amount_currency) = 'usd'
   group by bucket_date
-), internal as (
+), provider_internal as (
   select
     (a.started_at at time zone 'utc')::date as date,
     sum(coalesce(a.provider_cogs_cents, 0)) / 100.0 as cathedral_recorded_provider_cogs_usd,
-    sum(coalesce(a.settled_charge_credits, 0)) as cathedral_settled_customer_credits,
-    sum(coalesce(a.settled_charge_credits, 0)) * 0.05 as cathedral_settled_customer_revenue_usd,
     count(*)::bigint as cathedral_provider_calls,
     sum(coalesce(a.input_tokens, 0))::bigint as cathedral_input_tokens,
     sum(coalesce(a.cached_input_tokens, 0))::bigint as cathedral_cached_input_tokens,
     sum(coalesce(a.cache_write_input_tokens, 0))::bigint as cathedral_cache_write_tokens,
     sum(coalesce(a.output_tokens, 0))::bigint as cathedral_output_tokens
   from public.generation_provider_attempts a
+  where a.status = 'provider_succeeded'
+     or a.provider_completed_at is not null
+     or a.provider_cogs_cents is not null
+     or a.input_tokens is not null
+     or a.output_tokens is not null
+     or a.cached_input_tokens is not null
+     or a.cache_write_input_tokens is not null
+  group by 1
+), customer_internal as (
+  select
+    (a.started_at at time zone 'utc')::date as date,
+    sum(coalesce(a.settled_charge_credits, 0)) as cathedral_settled_customer_credits,
+    sum(coalesce(e.credit_revenue_usd, 0)) as cathedral_settled_customer_revenue_usd
+  from public.generation_provider_attempts a
+  left join public.generation_usage_events e on e.id = a.usage_event_id
   where a.status in ('settled', 'feature_validation_failed', 'feature_persistence_failed')
   group by 1
 ), usage as (
@@ -106,22 +134,22 @@ with days as (
 select
   d.date,
   coalesce(a.openai_actual_cost_usd, 0)::numeric as openai_actual_cost_usd,
-  coalesce(i.cathedral_recorded_provider_cogs_usd, 0)::numeric as cathedral_recorded_provider_cogs_usd,
-  coalesce(i.cathedral_settled_customer_credits, 0)::numeric as cathedral_settled_customer_credits,
-  coalesce(i.cathedral_settled_customer_revenue_usd, 0)::numeric as cathedral_settled_customer_revenue_usd,
-  (coalesce(i.cathedral_settled_customer_revenue_usd, 0) - coalesce(a.openai_actual_cost_usd, 0))::numeric as actual_margin_usd,
+  coalesce(pi.cathedral_recorded_provider_cogs_usd, 0)::numeric as cathedral_recorded_provider_cogs_usd,
+  coalesce(ci.cathedral_settled_customer_credits, 0)::numeric as cathedral_settled_customer_credits,
+  coalesce(ci.cathedral_settled_customer_revenue_usd, 0)::numeric as cathedral_settled_customer_revenue_usd,
+  (coalesce(ci.cathedral_settled_customer_revenue_usd, 0) - coalesce(a.openai_actual_cost_usd, 0))::numeric as actual_margin_usd,
   case when coalesce(a.openai_actual_cost_usd, 0) <> 0 then
-    ((coalesce(i.cathedral_settled_customer_revenue_usd, 0) - coalesce(a.openai_actual_cost_usd, 0)) / a.openai_actual_cost_usd * 100)::numeric
+    ((coalesce(ci.cathedral_settled_customer_revenue_usd, 0) - coalesce(a.openai_actual_cost_usd, 0)) / a.openai_actual_cost_usd * 100)::numeric
   end as actual_margin_pct,
-  (coalesce(a.openai_actual_cost_usd, 0) - coalesce(i.cathedral_recorded_provider_cogs_usd, 0))::numeric as provider_cost_variance_usd,
+  (coalesce(a.openai_actual_cost_usd, 0) - coalesce(pi.cathedral_recorded_provider_cogs_usd, 0))::numeric as provider_cost_variance_usd,
   case when coalesce(a.openai_actual_cost_usd, 0) <> 0 then
-    ((coalesce(a.openai_actual_cost_usd, 0) - coalesce(i.cathedral_recorded_provider_cogs_usd, 0)) / a.openai_actual_cost_usd * 100)::numeric
+    ((coalesce(a.openai_actual_cost_usd, 0) - coalesce(pi.cathedral_recorded_provider_cogs_usd, 0)) / a.openai_actual_cost_usd * 100)::numeric
   end as provider_cost_variance_pct,
-  coalesce(i.cathedral_provider_calls, 0)::bigint as cathedral_provider_calls,
-  coalesce(i.cathedral_input_tokens, 0)::bigint as cathedral_input_tokens,
-  coalesce(i.cathedral_cached_input_tokens, 0)::bigint as cathedral_cached_input_tokens,
-  coalesce(i.cathedral_cache_write_tokens, 0)::bigint as cathedral_cache_write_tokens,
-  coalesce(i.cathedral_output_tokens, 0)::bigint as cathedral_output_tokens,
+  coalesce(pi.cathedral_provider_calls, 0)::bigint as cathedral_provider_calls,
+  coalesce(pi.cathedral_input_tokens, 0)::bigint as cathedral_input_tokens,
+  coalesce(pi.cathedral_cached_input_tokens, 0)::bigint as cathedral_cached_input_tokens,
+  coalesce(pi.cathedral_cache_write_tokens, 0)::bigint as cathedral_cache_write_tokens,
+  coalesce(pi.cathedral_output_tokens, 0)::bigint as cathedral_output_tokens,
   coalesce(u.openai_provider_requests, 0)::bigint as openai_provider_requests,
   coalesce(u.openai_input_tokens, 0)::bigint as openai_input_tokens,
   coalesce(u.openai_cached_input_tokens, 0)::bigint as openai_cached_input_tokens,
@@ -138,7 +166,8 @@ select
   end as coverage_status
 from days d
 left join actuals a on a.bucket_date = d.date
-left join internal i on i.date = d.date
+left join provider_internal pi on pi.date = d.date
+left join customer_internal ci on ci.date = d.date
 left join usage u on u.date = d.date;
 
 revoke all on public.openai_daily_billing_reconciliation from public, anon, authenticated;
