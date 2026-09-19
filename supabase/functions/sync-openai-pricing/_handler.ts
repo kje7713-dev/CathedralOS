@@ -1,4 +1,8 @@
-import { type ParsedPricing, parseOfficialPricing } from "./_parser.ts";
+import {
+  normalizedPricingEvidence,
+  type ParsedPricing,
+  parseOfficialPricing,
+} from "./_parser.ts";
 
 export interface PricingSyncDb {
   from(table: string): any;
@@ -8,12 +12,17 @@ export interface PricingSyncDb {
   }>;
 }
 
+interface CatalogModel {
+  provider_model: string;
+  cache_write_pricing_required: boolean;
+}
+
 export interface PricingSyncDependencies {
   db: PricingSyncDb;
   authorized?: boolean;
   fetchImpl?: typeof fetch;
   now?: () => Date;
-  models?: string[];
+  models?: Array<string | CatalogModel>;
 }
 
 const json = (body: unknown, status = 200) =>
@@ -26,7 +35,7 @@ function officialUrl(providerModel: string): string | null {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(providerModel)) return null;
   return `https://developers.openai.com/api/docs/models/${
     encodeURIComponent(providerModel)
-  }`;
+  }.md`;
 }
 
 async function sha256(value: string): Promise<string> {
@@ -37,18 +46,28 @@ async function sha256(value: string): Promise<string> {
   ).join("");
 }
 
-async function catalogModels(db: PricingSyncDb): Promise<string[]> {
+async function catalogModels(db: PricingSyncDb): Promise<CatalogModel[]> {
   const { data, error } = await db.from("generation_models")
-    .select("provider_model")
+    .select("provider_model, cache_write_pricing_required")
     .eq("provider", "openai")
     .eq("model_kind", "text_generation");
   if (error || !Array.isArray(data)) throw new Error("catalog_lookup_failed");
   return [
-    ...new Set(
-      data.map((row: Record<string, unknown>) =>
-        String(row.provider_model ?? "")
-      ).filter(Boolean),
-    ),
+    ...new Map(
+      data
+        .map((row: Record<string, unknown>) => {
+          const providerModel = String(row.provider_model ?? "");
+          return [
+            providerModel,
+            {
+              provider_model: providerModel,
+              cache_write_pricing_required:
+                row.cache_write_pricing_required === true,
+            } satisfies CatalogModel,
+          ] as const;
+        })
+        .filter(([providerModel]) => providerModel),
+    ).values(),
   ];
 }
 
@@ -57,13 +76,15 @@ function observationPayload(
   observedAt: string,
   sourceUrl: string,
   sourceHash: string,
+  evidenceHash: string,
 ): Record<string, unknown> {
   return {
     provider_model: parsed.provider_model,
     observed_at: observedAt,
     source_url: sourceUrl,
     source_hash: sourceHash,
-    parser_version: "pricing-page-v1",
+    normalized_evidence_hash: evidenceHash,
+    parser_version: "pricing-page-markdown-v2",
     status: parsed.status,
     input_usd_per_1m: parsed.input_usd_per_1m,
     cached_input_usd_per_1m: parsed.cached_input_usd_per_1m,
@@ -88,9 +109,15 @@ export async function handler(
   if (!deps.authorized) return json({ errorCode: "unauthenticated" }, 401);
 
   const now = (deps.now ?? (() => new Date()))().toISOString();
-  let models: string[];
+  let models: CatalogModel[];
   try {
-    models = deps.models ?? await catalogModels(deps.db);
+    models = deps.models
+      ? deps.models.map((model) =>
+        typeof model === "string"
+          ? { provider_model: model, cache_write_pricing_required: false }
+          : model
+      )
+      : await catalogModels(deps.db);
   } catch {
     return json({ errorCode: "catalog_lookup_failed" }, 500);
   }
@@ -103,7 +130,8 @@ export async function handler(
     failed: 0,
     promoted: 0,
   };
-  for (const providerModel of models) {
+  for (const model of models) {
+    const providerModel = model.provider_model;
     const sourceUrl = officialUrl(providerModel);
     let parsed: ParsedPricing;
     let body = "";
@@ -124,24 +152,35 @@ export async function handler(
       try {
         const response = await fetchImpl(sourceUrl);
         body = await response.text();
-        if (!response.ok) {
-          parsed = {
-            ...parseOfficialPricing("", providerModel),
+        parsed = response.ok
+          ? parseOfficialPricing(
+            body,
+            providerModel,
+            model.cache_write_pricing_required,
+          )
+          : {
+            ...parseOfficialPricing(
+              "",
+              providerModel,
+              model.cache_write_pricing_required,
+            ),
             status: "fetch_failed",
             error_code: "official_page_fetch_failed",
           };
-        } else {
-          parsed = parseOfficialPricing(body, providerModel);
-        }
       } catch {
         parsed = {
-          ...parseOfficialPricing("", providerModel),
+          ...parseOfficialPricing(
+            "",
+            providerModel,
+            model.cache_write_pricing_required,
+          ),
           status: "fetch_failed",
           error_code: "official_page_fetch_failed",
         };
       }
     }
     const sourceHash = await sha256(body);
+    const evidenceHash = await sha256(normalizedPricingEvidence(parsed));
     try {
       const { data, error } = await deps.db.rpc(
         "record_openai_pricing_observation",
@@ -151,6 +190,7 @@ export async function handler(
             now,
             sourceUrl ?? "",
             sourceHash,
+            evidenceHash,
           ),
         },
       );

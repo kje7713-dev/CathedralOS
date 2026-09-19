@@ -1,83 +1,94 @@
 import {
+  assert,
   assertEquals,
+  assertNotEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { handler } from "./_handler.ts";
-import {
-  parseOfficialPricing,
-  reconcileOfficialPricingSources,
-} from "./_parser.ts";
+import { normalizedPricingEvidence, parseOfficialPricing } from "./_parser.ts";
 
-const page = (model = "gpt-4o-mini", rates = ["0.15", "0.075", "0.60"]) =>
-  `# ${model}\n\nModel ID: \`${model}\`\n\n## Pricing\n\n### Text tokens\n\n| Metric | Price | Unit |\n| --- | ---: | --- |\n| Input | $${
-    rates[0]
-  } | 1M tokens |\n| Cached input | $${rates[1]} | 1M tokens |\n| Output | $${
-    rates[2]
-  } | 1M tokens |`;
+const lunaPage = `# GPT-5.6 Luna
 
-Deno.test("pricing parser accepts the exact model and labeled rates", () => {
-  assertEquals(parseOfficialPricing(page(), "gpt-4o-mini"), {
-    provider_model: "gpt-4o-mini",
-    status: "verified",
-    input_usd_per_1m: 0.15,
-    cached_input_usd_per_1m: 0.075,
-    cache_write_usd_per_1m: null,
-    output_usd_per_1m: 0.6,
-    long_context_threshold_tokens: null,
-    long_context_input_multiplier: null,
-    long_context_output_multiplier: null,
-    error_code: null,
-  });
-});
+Model ID: \`gpt-5.6-luna\`
 
-Deno.test("pricing parser rejects a page for the wrong model", () => {
-  assertEquals(
-    parseOfficialPricing(page("gpt-4o"), "gpt-4o-mini").error_code,
-    "wrong_model",
-  );
-});
+## Pricing
 
-Deno.test("pricing parser rejects incomplete and ambiguous rate tables", () => {
-  assertEquals(
-    parseOfficialPricing(
-      page("gpt-4o-mini", ["0.15", "0.075", ""]),
-      "gpt-4o-mini",
-    ).error_code,
-    "required_rate_missing",
-  );
-  const duplicate = page() + "\n| Input | $0.20 | 1M tokens |";
-  assertEquals(
-    parseOfficialPricing(duplicate, "gpt-4o-mini").error_code,
-    "required_rate_missing",
-  );
-});
+### Text tokens
 
-Deno.test("pricing parser captures cache-write and long-context metadata", () => {
-  const markdown =
-    `${page()}\n\n> Above 272K tokens, input 2x output 1.5x\n\n| Cache write | $0.20 | 1M tokens |`;
-  const parsed = parseOfficialPricing(markdown, "gpt-4o-mini");
+| Metric | Price | Unit |
+| --- | ---: | --- |
+| Input | $0.2 | 1M tokens |
+| Cached input | $0.02 | 1M tokens |
+| Output | $1.2 | 1M tokens |
+
+- Prompts with >272K input tokens are priced at 2x input and 1.5x output for the full request.
+- Cache writes are billed at 1.25x the uncached input token rate.
+
+## Endpoints
+`;
+
+Deno.test("real official Luna Markdown parses required pricing", () => {
+  const parsed = parseOfficialPricing(lunaPage, "gpt-5.6-luna", true);
   assertEquals(parsed.status, "verified");
-  assertEquals(parsed.cache_write_usd_per_1m, 0.2);
+  assertEquals(parsed.input_usd_per_1m, 0.2);
+  assertEquals(parsed.cached_input_usd_per_1m, 0.02);
+  assertEquals(parsed.output_usd_per_1m, 1.2);
+  assertEquals(parsed.cache_write_usd_per_1m, 0.25);
   assertEquals(parsed.long_context_threshold_tokens, 272000);
   assertEquals(parsed.long_context_input_multiplier, 2);
   assertEquals(parsed.long_context_output_multiplier, 1.5);
 });
 
-Deno.test("source disagreement becomes conflict and cannot promote", () => {
-  const primary = parseOfficialPricing(page(), "gpt-4o-mini");
-  const secondary = parseOfficialPricing(
-    page("gpt-4o-mini", ["0.20", "0.10", "0.80"]),
-    "gpt-4o-mini",
+Deno.test("parser verifies model identity and fails closed on source drift", () => {
+  assertEquals(
+    parseOfficialPricing(lunaPage, "gpt-5.6-terra", true).error_code,
+    "wrong_model",
   );
   assertEquals(
-    reconcileOfficialPricingSources(primary, secondary).status,
-    "conflict",
+    parseOfficialPricing(
+      lunaPage.replace("| Output | $1.2", "| Result | $1.2"),
+      "gpt-5.6-luna",
+      true,
+    ).error_code,
+    "required_rate_missing",
+  );
+  assertEquals(
+    parseOfficialPricing(
+      lunaPage.replace("### Text tokens", "### Tokens"),
+      "gpt-5.6-luna",
+      true,
+    ).error_code,
+    "pricing_table_missing",
   );
 });
 
-Deno.test("sync records parser failure without overwriting known-good rates", async () => {
+Deno.test("internal contradictory pricing is a real conflict", () => {
+  const contradictory = lunaPage.replace(
+    "| Output | $1.2 | 1M tokens |",
+    "| Output | $1.2 | 1M tokens |\n| Output | $1.3 | 1M tokens |",
+  );
+  const parsed = parseOfficialPricing(contradictory, "gpt-5.6-luna", true);
+  assertEquals(parsed.status, "conflict");
+  assertEquals(parsed.error_code, "contradictory_pricing");
+});
+
+Deno.test("normalized evidence is stable across unrelated source noise", () => {
+  const first = parseOfficialPricing(lunaPage, "gpt-5.6-luna", true);
+  const second = parseOfficialPricing(
+    "Build timestamp: 2026-09-19\n" + lunaPage + "\nFooter build hash: abc123",
+    "gpt-5.6-luna",
+    true,
+  );
+  assertEquals(
+    normalizedPricingEvidence(first),
+    normalizedPricingEvidence(second),
+  );
+});
+
+Deno.test("incomplete observation is recorded without promotion or pricing mutation", async () => {
   const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const db = {
+    from: () => ({}),
     rpc: (name: string, args: Record<string, unknown>) => {
       calls.push({ name, args });
       return Promise.resolve({ data: { promoted: false }, error: null });
@@ -90,16 +101,95 @@ Deno.test("sync records parser failure without overwriting known-good rates", as
     {
       db,
       authorized: true,
-      models: ["gpt-4o-mini"],
+      models: [{
+        provider_model: "gpt-5.6-luna",
+        cache_write_pricing_required: true,
+      }],
       now: () => new Date("2026-09-19T00:00:00Z"),
       fetchImpl: () =>
-        Promise.resolve(new Response("not a model page", { status: 200 })),
+        Promise.resolve(
+          new Response(
+            lunaPage.replace(
+              "Cache writes are billed at 1.25x the uncached input token rate.",
+              "Cache writes are billed according to the current pricing policy.",
+            ),
+            { status: 200 },
+          ),
+        ),
     },
   );
   assertEquals(response.status, 200);
-  assertEquals((await response.json()).failed, 1);
+  assertEquals((await response.json()).promoted, 0);
   const observation = calls[0].args.p_observation as Record<string, unknown>;
-  assertEquals(observation.status, "unsupported");
-  assertEquals(observation.error_code, "wrong_model");
-  assertStringIncludes(String(observation.source_url), "developers.openai.com");
+  assertEquals(observation.status, "incomplete");
+  assertEquals(observation.error_code, "required_cache_write_rate_missing");
+  assertStringIncludes(String(observation.source_url), ".md");
+  assertNotEquals(observation.source_hash, "");
+  assertNotEquals(observation.normalized_evidence_hash, "");
+});
+
+Deno.test("failed fetch records an observation without promotion", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const response = await handler(
+    new Request("https://test.example.com/sync-openai-pricing", {
+      method: "POST",
+    }),
+    {
+      db: {
+        from: () => ({}),
+        rpc: (_name: string, args: Record<string, unknown>) => {
+          calls.push(args.p_observation as Record<string, unknown>);
+          return Promise.resolve({ data: { promoted: false }, error: null });
+        },
+      },
+      authorized: true,
+      models: ["gpt-5.6-luna"],
+      fetchImpl: () => Promise.reject(new Error("network")),
+    },
+  );
+  assertEquals(response.status, 200);
+  assertEquals(calls[0].status, "fetch_failed");
+  assertEquals(
+    calls[0].source_hash,
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(""),
+    ).then((bytes) =>
+      [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0"))
+        .join("")
+    ),
+  );
+});
+
+Deno.test("unknown provider model cannot report promotion", async () => {
+  let observation: Record<string, unknown> | undefined;
+  const response = await handler(
+    new Request("https://test.example.com/sync-openai-pricing", {
+      method: "POST",
+    }),
+    {
+      db: {
+        from: () => ({}),
+        rpc: (_name: string, args: Record<string, unknown>) => {
+          observation = args.p_observation as Record<string, unknown>;
+          return Promise.resolve({ data: { promoted: false }, error: null });
+        },
+      },
+      authorized: true,
+      models: [{
+        provider_model: "gpt-does-not-exist",
+        cache_write_pricing_required: false,
+      }],
+      fetchImpl: () =>
+        Promise.resolve(
+          new Response(
+            lunaPage.replaceAll("gpt-5.6-luna", "gpt-does-not-exist"),
+            { status: 200 },
+          ),
+        ),
+    },
+  );
+  assertEquals(response.status, 200);
+  assertEquals(observation?.status, "verified");
+  assert(observation?.provider_model === "gpt-does-not-exist");
 });

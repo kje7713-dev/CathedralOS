@@ -18,8 +18,10 @@ export interface ParsedPricing {
   error_code: string | null;
 }
 
-const DETAIL_ID = /^Model ID:\s*`([^`]+)`\s*$/m;
 const MONEY = /^\$\s*([0-9]+(?:\.[0-9]+)?)$/;
+const MODEL_ID = /^Model ID:\s*`?([^`\s]+)`?\s*$/m;
+
+type Table = { headers: string[]; rows: string[][] };
 
 function numberFromMoney(value: string): number | null {
   const match = value.trim().match(MONEY);
@@ -29,47 +31,71 @@ function numberFromMoney(value: string): number | null {
 }
 
 function section(markdown: string, heading: string): string | null {
-  const start = markdown.search(new RegExp(`^###\\s+${heading}\\s*$`, "mi"));
+  const start = markdown.search(
+    new RegExp(`^#{1,3}\\s+${heading}\\s*$`, "mi"),
+  );
   if (start < 0) return null;
   const rest = markdown.slice(start);
-  const next = rest.search(/^###\s+/mi);
+  const next = rest.search(/^#{1,3}\s+/mi);
   return next > 0 ? rest.slice(0, next) : rest;
 }
 
-function rows(markdown: string): Map<string, string[]> {
-  const result = new Map<string, string[]>();
-  for (const line of markdown.split(/\r?\n/)) {
-    const match = line.match(/^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|/);
-    if (!match || /^-+$/.test(match[1].trim())) continue;
-    const label = match[1].trim().toLowerCase();
-    const values = result.get(label) ?? [];
-    values.push(match[2].trim());
-    result.set(label, values);
+function tables(markdown: string): Table[] {
+  const lines = markdown.split(/\r?\n/);
+  const result: Table[] = [];
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const header = lines[index].match(/^\|(.+)\|\s*$/);
+    const separator = lines[index + 1].match(/^\|(?:\s*:?-+:?\s*\|)+\s*$/);
+    if (!header || !separator) continue;
+    const headers = header[1].split("|").map((cell) =>
+      cell.trim().toLowerCase()
+    );
+    const rows: string[][] = [];
+    for (let rowIndex = index + 2; rowIndex < lines.length; rowIndex += 1) {
+      const row = lines[rowIndex].match(/^\|(.+)\|\s*$/);
+      if (!row) break;
+      rows.push(row[1].split("|").map((cell) => cell.trim()));
+    }
+    result.push({ headers, rows });
   }
   return result;
 }
 
-function oneRate(
-  table: Map<string, string[]>,
-  labels: RegExp[],
-): number | null {
-  const matches = [...table.entries()]
-    .filter(([label]) => labels.some((pattern) => pattern.test(label.trim())))
-    .flatMap(([, values]) => values);
-  if (matches.length !== 1) return null;
-  return numberFromMoney(matches[0]);
+function rateFromTable(
+  table: Table,
+  metric: string,
+): { value: number | null; found: boolean; conflict: boolean } {
+  const metricIndex = table.headers.indexOf("metric");
+  const priceIndex = table.headers.indexOf("price");
+  if (metricIndex < 0 || priceIndex < 0) {
+    return { value: null, found: false, conflict: false };
+  }
+  const values = table.rows
+    .filter((row) => row[metricIndex]?.trim().toLowerCase() === metric)
+    .map((row) => numberFromMoney(row[priceIndex] ?? ""));
+  if (values.length === 0 || values.some((value) => value == null)) {
+    return {
+      value: null,
+      found: values.length > 0,
+      conflict: values.length > 1,
+    };
+  }
+  const unique = [...new Set(values)];
+  return {
+    value: unique[0] ?? null,
+    found: true,
+    conflict: unique.length > 1,
+  };
 }
 
-function longContext(
-  markdown: string,
-): Pick<
+function longContext(markdown: string): Pick<
   ParsedPricing,
   | "long_context_threshold_tokens"
   | "long_context_input_multiplier"
   | "long_context_output_multiplier"
 > {
   const match = markdown.match(
-    /(?:over|above|>)\s*([\d,]+)\s*K[^\n]*?(?:input\s*)?([0-9]+(?:\.[0-9]+)?)x?[^\n]*?(?:output\s*)?([0-9]+(?:\.[0-9]+)?)x?/i,
+    /(?:prompts?\s+with\s+)?(?:>|over|above)\s*([\d,]+)\s*K[^\n]*?priced\s+at\s*([0-9]+(?:\.[0-9]+)?)x\s+input\s+and\s*([0-9]+(?:\.[0-9]+)?)x\s+output/i,
   );
   if (!match) {
     return {
@@ -90,9 +116,21 @@ function longContext(
   };
 }
 
+function cacheWriteRate(markdown: string, input: number): number | null {
+  const match = markdown.match(
+    /cache\s+writes?\s+are\s+billed\s+at\s*([0-9]+(?:\.[0-9]+)?)x\s+the\s+uncached\s+input\s+token\s+rate/i,
+  );
+  if (!match) return null;
+  const multiplier = Number(match[1]);
+  return Number.isFinite(multiplier) && multiplier >= 0
+    ? input * multiplier
+    : null;
+}
+
 export function parseOfficialPricing(
   markdown: string,
   expectedModel: string,
+  cacheWriteRequired = false,
 ): ParsedPricing {
   const base: ParsedPricing = {
     provider_model: expectedModel,
@@ -104,49 +142,52 @@ export function parseOfficialPricing(
     ...longContext(markdown),
     error_code: null,
   };
-  const identity = markdown.match(DETAIL_ID)?.[1];
+  const identity = markdown.match(MODEL_ID)?.[1];
   if (identity !== expectedModel) {
     return { ...base, status: "unsupported", error_code: "wrong_model" };
   }
   const textTokens = section(markdown, "Text tokens");
-  if (!textTokens) {
-    return { ...base, error_code: "text_pricing_section_missing" };
+  const table = textTokens ? tables(textTokens)[0] : null;
+  if (!table) return { ...base, error_code: "pricing_table_missing" };
+
+  const input = rateFromTable(table, "input");
+  const cached = rateFromTable(table, "cached input");
+  const output = rateFromTable(table, "output");
+  if (input.conflict || cached.conflict || output.conflict) {
+    return { ...base, status: "conflict", error_code: "contradictory_pricing" };
   }
-  const table = rows(textTokens);
-  const input = oneRate(table, [/^input$/]);
-  const cached = oneRate(table, [/^cached input$/]);
-  const output = oneRate(table, [/^output$/]);
-  const cacheWrite = oneRate(table, [/cache\s*write/]);
-  if (input == null || cached == null || output == null) {
+  if (
+    !input.found || input.value == null ||
+    !cached.found || cached.value == null ||
+    !output.found || output.value == null
+  ) {
     return { ...base, error_code: "required_rate_missing" };
+  }
+  const cacheWrite = cacheWriteRate(markdown, input.value);
+  if (cacheWriteRequired && cacheWrite == null) {
+    return { ...base, error_code: "required_cache_write_rate_missing" };
   }
   return {
     ...base,
     status: "verified",
-    input_usd_per_1m: input,
-    cached_input_usd_per_1m: cached,
-    output_usd_per_1m: output,
+    input_usd_per_1m: input.value,
+    cached_input_usd_per_1m: cached.value,
     cache_write_usd_per_1m: cacheWrite,
+    output_usd_per_1m: output.value,
   };
 }
 
-export function reconcileOfficialPricingSources(
-  primary: ParsedPricing,
-  secondary: ParsedPricing | null,
-): ParsedPricing {
-  if (!secondary || secondary.status !== "verified") return primary;
-  const fields: (keyof ParsedPricing)[] = [
-    "input_usd_per_1m",
-    "cached_input_usd_per_1m",
-    "cache_write_usd_per_1m",
-    "output_usd_per_1m",
-  ];
-  const disagreement = fields.some((field) => {
-    const left = primary[field];
-    const right = secondary[field];
-    return left != null && right != null && left !== right;
+export function normalizedPricingEvidence(parsed: ParsedPricing): string {
+  return JSON.stringify({
+    provider_model: parsed.provider_model,
+    status: parsed.status,
+    input_usd_per_1m: parsed.input_usd_per_1m,
+    cached_input_usd_per_1m: parsed.cached_input_usd_per_1m,
+    cache_write_usd_per_1m: parsed.cache_write_usd_per_1m,
+    output_usd_per_1m: parsed.output_usd_per_1m,
+    long_context_threshold_tokens: parsed.long_context_threshold_tokens,
+    long_context_input_multiplier: parsed.long_context_input_multiplier,
+    long_context_output_multiplier: parsed.long_context_output_multiplier,
+    error_code: parsed.error_code,
   });
-  return disagreement
-    ? { ...primary, status: "conflict", error_code: "official_source_conflict" }
-    : primary;
 }
