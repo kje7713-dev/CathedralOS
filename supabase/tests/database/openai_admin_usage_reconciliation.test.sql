@@ -61,8 +61,8 @@ insert into public.generation_usage_events (
   id, user_id, action, purpose, model_name, status, credit_revenue_usd,
   idempotency_key, created_at
 ) values
-  ('00000000-0000-0000-0000-000000000014', '00000000-0000-0000-0000-000000000004', 'test', 'test', 'gpt-5.6-luna', 'complete', 0.10, 'pr4-old', '2026-09-18 12:00:00+00'),
-  ('00000000-0000-0000-0000-000000000015', '00000000-0000-0000-0000-000000000004', 'test', 'test', 'gpt-5.6-luna', 'complete', 0.50, 'pr4-current', '2026-09-19 13:00:00+00');
+  ('00000000-0000-0000-0000-000000000014', '00000000-0000-0000-0000-000000000004', 'test', 'generate', 'gpt-5.6-luna', 'complete', 0.10, 'pr4-old', '2026-09-18 12:00:00+00'),
+  ('00000000-0000-0000-0000-000000000015', '00000000-0000-0000-0000-000000000004', 'test', 'generate', 'gpt-5.6-luna', 'complete', 0.50, 'pr4-current', '2026-09-19 13:00:00+00');
 insert into public.generation_provider_attempts (
   user_id, purpose, action, attempt_key, logical_stage_key, attempt_ordinal,
   model_name, status, settled_charge_credits, provider_cogs_cents,
