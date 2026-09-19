@@ -31,13 +31,17 @@ function numberFromMoney(value: string): number | null {
 }
 
 function section(markdown: string, heading: string): string | null {
-  const start = markdown.search(
-    new RegExp(`^#{1,3}\\s+${heading}\\s*$`, "mi"),
+  const headingPattern = new RegExp(
+    `^(#{1,3})\\s+${heading}\\s*$`,
+    "mi",
   );
-  if (start < 0) return null;
-  const rest = markdown.slice(start);
-  const next = rest.search(/^#{1,3}\s+/mi);
-  return next > 0 ? rest.slice(0, next) : rest;
+  const match = markdown.match(headingPattern);
+  if (!match || match.index == null) return null;
+  const level = match[1].length;
+  const contentStart = match.index + match[0].length;
+  const rest = markdown.slice(contentStart);
+  const next = rest.search(new RegExp(`^#{1,${level}}\\s+`, "mi"));
+  return next >= 0 ? rest.slice(0, next) : rest;
 }
 
 function tables(markdown: string): Table[] {
@@ -64,27 +68,39 @@ function tables(markdown: string): Table[] {
 function rateFromTable(
   table: Table,
   metric: string,
-): { value: number | null; found: boolean; conflict: boolean } {
+): {
+  value: number | null;
+  found: boolean;
+  conflict: boolean;
+  unitValid: boolean;
+} {
   const metricIndex = table.headers.indexOf("metric");
   const priceIndex = table.headers.indexOf("price");
-  if (metricIndex < 0 || priceIndex < 0) {
-    return { value: null, found: false, conflict: false };
+  const unitIndex = table.headers.indexOf("unit");
+  if (metricIndex < 0 || priceIndex < 0 || unitIndex < 0) {
+    return { value: null, found: false, conflict: false, unitValid: false };
   }
-  const values = table.rows
-    .filter((row) => row[metricIndex]?.trim().toLowerCase() === metric)
-    .map((row) => numberFromMoney(row[priceIndex] ?? ""));
-  if (values.length === 0 || values.some((value) => value == null)) {
-    return {
-      value: null,
-      found: values.length > 0,
-      conflict: values.length > 1,
-    };
+  const rows = table.rows
+    .filter((row) => row[metricIndex]?.trim().toLowerCase() === metric);
+  if (rows.length === 0) {
+    return { value: null, found: false, conflict: false, unitValid: true };
+  }
+  const values = rows.map((row) => numberFromMoney(row[priceIndex] ?? ""));
+  const units = rows.map((row) =>
+    row[unitIndex]?.trim().toLowerCase().replace(/\s+/g, " ")
+  );
+  const unitValid = units.every((unit) =>
+    /^(?:per )?1m tokens?$/.test(unit ?? "")
+  );
+  if (!unitValid || values.some((value) => value == null)) {
+    return { value: null, found: true, conflict: rows.length > 1, unitValid };
   }
   const unique = [...new Set(values)];
   return {
     value: unique[0] ?? null,
     found: true,
-    conflict: unique.length > 1,
+    conflict: rows.length > 1 || unique.length > 1,
+    unitValid: true,
   };
 }
 
@@ -155,6 +171,9 @@ export function parseOfficialPricing(
   const output = rateFromTable(table, "output");
   if (input.conflict || cached.conflict || output.conflict) {
     return { ...base, status: "conflict", error_code: "contradictory_pricing" };
+  }
+  if (!input.unitValid || !cached.unitValid || !output.unitValid) {
+    return { ...base, error_code: "invalid_rate_unit" };
   }
   if (
     !input.found || input.value == null ||

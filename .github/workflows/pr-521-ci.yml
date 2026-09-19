@@ -9,6 +9,9 @@ on:
       - 'supabase/functions/run-outline/**'
       - 'supabase/functions/outline-from-recipe/**'
       - 'supabase/functions/sync-openai-model-catalog/**'
+      - 'supabase/functions/sync-openai-pricing/**'
+      - 'supabase/migrations/20260919070000_openai_pricing_observations.sql'
+      - 'supabase/tests/database/openai_pricing_observations.test.sql'
       - 'supabase/migrations/20260909215722_scene_memory_stage_ledger_and_run_lineage.sql'
       - 'supabase/migrations/20260917190000_generation_model_pricing_safety.sql'
       - 'supabase/migrations/20260917200000_sync_openai_model_catalog.sql'
@@ -81,3 +84,29 @@ jobs:
         run: >-
           deno test --no-check -A
           supabase/functions/sync-openai-model-catalog/index_test.ts
+
+      - name: Type check and test official pricing observer
+        run: >-
+          deno check
+          supabase/functions/sync-openai-pricing/index.ts
+          supabase/functions/sync-openai-pricing/_handler.ts
+          supabase/functions/sync-openai-pricing/_parser.ts
+          && deno test --no-check -A
+          supabase/functions/sync-openai-pricing/index_test.ts
+
+  pricing-database-regression:
+    name: Pricing observation pgTAP regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v2
+        with:
+          version: latest
+      - name: Start disposable Supabase database
+        run: supabase start
+      - name: Apply migrations to disposable database
+        run: supabase db reset --local --yes
+      - name: Run pricing observation pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/openai_pricing_observations.test.sql

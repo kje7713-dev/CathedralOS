@@ -39,6 +39,55 @@ Deno.test("real official Luna Markdown parses required pricing", () => {
   assertEquals(parsed.long_context_output_multiplier, 1.5);
 });
 
+Deno.test("required rates accept only explicit 1M-token units", () => {
+  const wrongUnit = lunaPage.replace(
+    "| Input | $0.2 | 1M tokens |",
+    "| Input | $0.2 | 1K tokens |",
+  );
+  assertEquals(
+    parseOfficialPricing(wrongUnit, "gpt-5.6-luna", true).error_code,
+    "invalid_rate_unit",
+  );
+
+  const missingUnit = lunaPage.replace(
+    "| Metric | Price | Unit |",
+    "| Metric | Price |",
+  );
+  assertEquals(
+    parseOfficialPricing(missingUnit, "gpt-5.6-luna", true).error_code,
+    "invalid_rate_unit",
+  );
+
+  const duplicateUnit = lunaPage.replace(
+    "| Input | $0.2 | 1M tokens |",
+    "| Input | $0.2 | 1M tokens |\n| Input | $0.2 | 1K tokens |",
+  );
+  const duplicate = parseOfficialPricing(duplicateUnit, "gpt-5.6-luna", true);
+  assertEquals(duplicate.status, "conflict");
+  assertEquals(duplicate.error_code, "contradictory_pricing");
+});
+
+Deno.test("malformed Text tokens cannot be rescued by a later table", () => {
+  const drifted = lunaPage.replace(
+    "| Output | $1.2 | 1M tokens |",
+    "| Result | $1.2 | 1M tokens |",
+  ) + `
+
+## Unrelated section
+
+### Text tokens
+
+| Metric | Price | Unit |
+| --- | ---: | --- |
+| Input | $0.2 | 1M tokens |
+| Cached input | $0.02 | 1M tokens |
+| Output | $1.2 | 1M tokens |`;
+  assertEquals(
+    parseOfficialPricing(drifted, "gpt-5.6-luna", true).error_code,
+    "required_rate_missing",
+  );
+});
+
 Deno.test("parser verifies model identity and fails closed on source drift", () => {
   assertEquals(
     parseOfficialPricing(lunaPage, "gpt-5.6-terra", true).error_code,
