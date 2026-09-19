@@ -15,7 +15,7 @@ insert into public.openai_daily_costs (
 ) values
   ('2026-09-18 00:00:00+00', '2026-09-19 00:00:00+00', '2026-09-18', 'project-pr4', 'model-a', 0.10, 'usd', 'openai_organization_costs_api', 'old-a'),
   ('2026-09-18 00:00:00+00', '2026-09-19 00:00:00+00', '2026-09-18', 'project-pr4', 'model-b', 0.20, 'usd', 'openai_organization_costs_api', 'old-b'),
-  ('2026-09-18 00:00:00+00', '2026-09-19 00:00:00+00', '2026-09-18', 'other-project', 'outside-project', 9.99, 'usd', 'openai_organization_costs_api', 'outside-project'),
+  ('2026-09-17 00:00:00+00', '2026-09-18 00:00:00+00', '2026-09-17', 'other-project', 'outside-project', 9.99, 'usd', 'openai_organization_costs_api', 'outside-project'),
   ('2026-08-01 00:00:00+00', '2026-08-02 00:00:00+00', '2026-08-01', 'project-pr4', 'outside-window', 8.88, 'usd', 'openai_organization_costs_api', 'outside-window');
 
 insert into public.openai_daily_completion_usage (
@@ -24,7 +24,7 @@ insert into public.openai_daily_completion_usage (
 ) values
   ('2026-09-18 00:00:00+00', '2026-09-19 00:00:00+00', '2026-09-18', 'project-pr4', 'model-a', 'default', '', 100, 30, 5, 40, 'openai_organization_usage_completions_api'),
   ('2026-09-18 00:00:00+00', '2026-09-19 00:00:00+00', '2026-09-18', 'project-pr4', 'model-b', 'default', '', 200, 20, 2, 50, 'openai_organization_usage_completions_api'),
-  ('2026-09-18 00:00:00+00', '2026-09-19 00:00:00+00', '2026-09-18', 'other-project', 'outside-project', 'default', '', 9, 0, 0, 1, 'openai_organization_usage_completions_api');
+  ('2026-09-17 00:00:00+00', '2026-09-18 00:00:00+00', '2026-09-17', 'other-project', 'outside-project', 'default', '', 9, 0, 0, 1, 'openai_organization_usage_completions_api');
 
 select is(
   (select (public.reconcile_openai_admin_usage(
