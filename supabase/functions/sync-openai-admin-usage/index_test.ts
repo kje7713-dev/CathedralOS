@@ -208,11 +208,13 @@ Deno.test("PR4 fetches both real-shaped endpoints, paginates, and persists atomi
     new URL(costsUrl).searchParams.get("project_ids[]"),
     "proj-test",
   );
+  assertEquals(new URL(costsUrl).searchParams.get("limit"), "100");
   assertEquals(new URL(costsUrl).searchParams.getAll("group_by[]"), [
     "project_id",
     "line_item",
   ]);
   const usageUrl = requests.find((url) => url.includes("/usage/completions"))!;
+  assertEquals(new URL(usageUrl).searchParams.get("limit"), "31");
   assertEquals(new URL(usageUrl).searchParams.getAll("group_by[]"), [
     "project_id",
     "model",

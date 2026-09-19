@@ -109,7 +109,10 @@ function pageUrl(
     String(Math.floor(window.end.getTime() / 1000)),
   );
   url.searchParams.append("project_ids[]", projectId);
-  url.searchParams.set("limit", "100");
+  url.searchParams.set(
+    "limit",
+    path === "usage/completions" ? "31" : "100",
+  );
   if (page) url.searchParams.set("page", page);
   const groups = path === "usage/completions"
     ? ["project_id", "model", "service_tier", "batch"]
