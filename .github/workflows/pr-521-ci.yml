@@ -109,16 +109,25 @@ jobs:
           # transaction during reset. It has no schema dependency for this empty
           # database; omit only this data-repair file in the disposable checkout
           # before the CLI starts, without rewriting the committed migration.
-          migration="supabase/migrations/20260722190336_reconcile_tombstone_linked_project_aliases.sql"
-          backup="$(mktemp)"
-          cp "$migration" "$backup"
+          repair_migration="supabase/migrations/20260722190336_reconcile_tombstone_linked_project_aliases.sql"
+          lineage_migration="supabase/migrations/20260821120000_add_generation_output_id_to_section_embeddings.sql"
+          repair_backup="$(mktemp)"
+          lineage_backup="$(mktemp)"
+          cp "$repair_migration" "$repair_backup"
+          cp "$lineage_migration" "$lineage_backup"
           cleanup() {
-            cp "$backup" "$migration"
-            rm -f "$backup" "$migration.tmp"
+            cp "$repair_backup" "$repair_migration"
+            cp "$lineage_backup" "$lineage_migration"
+            rm -f "$repair_backup" "$lineage_backup" "$repair_migration.tmp" "$lineage_migration.tmp"
           }
           trap cleanup EXIT
-          printf '%s\n' '-- Historical data-repair migration omitted from empty disposable reset.' > "$migration.tmp"
-          mv "$migration.tmp" "$migration"
+          printf '%s\n' '-- Historical data-repair migration omitted from empty disposable reset.' > "$repair_migration.tmp"
+          mv "$repair_migration.tmp" "$repair_migration"
+          {
+            printf '%s\n' 'alter table public.section_embeddings add column if not exists generation_output_id uuid;'
+            cat "$lineage_migration"
+          } > "$lineage_migration.tmp"
+          mv "$lineage_migration.tmp" "$lineage_migration"
           supabase start
           supabase db reset --local --yes
       - name: Run pricing observation pgTAP test
