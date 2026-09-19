@@ -64,6 +64,10 @@ jobs:
         if: ${{ hashFiles('supabase/functions/generation-models/index.ts') != '' }}
         run: supabase functions deploy generation-models --project-ref "$SUPABASE_PROJECT_REF"
 
+      - name: Deploy Edge Function - sync-openai-admin-usage
+        if: ${{ hashFiles('supabase/functions/sync-openai-admin-usage/index.ts') != '' }}
+        run: supabase functions deploy sync-openai-admin-usage --project-ref "$SUPABASE_PROJECT_REF"
+
       - name: Deploy Edge Function - public-sharing
         if: ${{ hashFiles('supabase/functions/public-sharing/index.ts') != '' }}
         run: supabase functions deploy public-sharing --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
