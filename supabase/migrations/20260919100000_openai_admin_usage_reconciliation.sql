@@ -132,8 +132,8 @@ select
   case
     when u.date is null then 'cost_only_or_no_usage'
     when a.bucket_date is null then 'usage_only_or_no_cost'
-    when i.date is null then 'provider_actual_present_internal_missing'
-    else 'partial_openai_completions_only'
+    when i.date is null then 'partial_openai_completions_only'
+    else 'complete_comparable_coverage'
   end as coverage_status
 from days d
 left join actuals a on a.bucket_date = d.date

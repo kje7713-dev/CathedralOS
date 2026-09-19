@@ -4,8 +4,8 @@ select plan(13);
 select has_table('public', 'openai_daily_costs', 'operator cost table exists');
 select has_table('public', 'openai_daily_completion_usage', 'operator usage table exists');
 select has_view('public', 'openai_daily_billing_reconciliation', 'operator reconciliation view exists');
-select has_index('public', 'openai_daily_costs_identity_unique', 'cost identity is unique');
-select has_index('public', 'openai_daily_completion_usage_identity_unique', 'usage identity is unique');
+select has_index('public', 'openai_daily_costs', 'openai_daily_costs_identity_unique', 'cost identity is unique');
+select has_index('public', 'openai_daily_completion_usage', 'openai_daily_completion_usage_identity_unique', 'usage identity is unique');
 
 insert into public.openai_daily_costs (
   bucket_start, bucket_end, bucket_date, project_id, line_item,
