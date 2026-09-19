@@ -1,9 +1,11 @@
 export type AdminUsageDb = {
-  from(table: string): {
-    upsert(rows: unknown[], options: { onConflict: string }): PromiseLike<{
-      error: { message?: string; code?: string } | null;
-    }>;
-  };
+  rpc(
+    name: string,
+    args: Record<string, unknown>,
+  ): PromiseLike<{
+    data: unknown;
+    error: { message?: string; code?: string } | null;
+  }>;
 };
 
 export type AdminUsageDependencies = {
@@ -18,6 +20,15 @@ export type AdminUsageDependencies = {
 type JsonObject = Record<string, unknown>;
 export type SyncWindow = { start: Date; end: Date };
 
+const COST_SOURCE = "openai_organization_costs_api";
+const USAGE_SOURCE = "openai_organization_usage_completions_api";
+
+class ProviderPayloadError extends Error {
+  constructor() {
+    super("provider_payload_invalid");
+  }
+}
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -29,16 +40,30 @@ const asObject = (value: unknown): JsonObject | null =>
     ? value as JsonObject
     : null;
 
-const asNumber = (value: unknown, fallback = 0): number =>
-  typeof value === "number" && Number.isFinite(value)
+function requiredNumber(value: unknown): number {
+  const number = typeof value === "number"
     ? value
-    : typeof value === "string" && value.trim() !== "" &&
-        Number.isFinite(Number(value))
+    : typeof value === "string" && value.trim() !== ""
     ? Number(value)
-    : fallback;
+    : NaN;
+  if (!Number.isFinite(number)) throw new ProviderPayloadError();
+  return number;
+}
 
-const asText = (value: unknown, fallback = ""): string =>
-  typeof value === "string" ? value : fallback;
+function optionalNumber(value: unknown): number {
+  if (value == null) return 0;
+  return requiredNumber(value);
+}
+
+function requiredText(value: unknown): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new ProviderPayloadError();
+  }
+  return value;
+}
+
+const optionalText = (value: unknown): string =>
+  typeof value === "string" ? value : "";
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -63,7 +88,7 @@ export function utcWindow(now: Date): SyncWindow {
   const end = new Date(now);
   end.setUTCHours(24, 0, 0, 0);
   const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - 7);
+  start.setUTCDate(start.getUTCDate() - 8);
   return { start, end };
 }
 
@@ -114,10 +139,11 @@ async function fetchPages(
     }
     for (const item of payload.data) {
       const row = asObject(item);
-      if (row) buckets.push(row);
+      if (!row) throw new Error("provider_payload_invalid");
+      buckets.push(row);
     }
     if (payload.has_more !== true) return buckets;
-    const next = asText(payload.next_page);
+    const next = optionalText(payload.next_page);
     if (!next) throw new Error("provider_pagination_invalid");
     page = next;
   }
@@ -126,20 +152,36 @@ async function fetchPages(
 
 function bucketTimes(
   bucket: JsonObject,
-): { start: string; end: string; date: string } | null {
-  const start = asNumber(bucket.start_time, NaN);
-  const end = asNumber(bucket.end_time, NaN);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+): { start: string; end: string; date: string } {
+  const start = requiredNumber(bucket.start_time);
+  const end = requiredNumber(bucket.end_time);
   const startDate = new Date(start * 1000);
   const endDate = new Date(end * 1000);
-  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
-    return null;
-  }
+  if (
+    Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) ||
+    endDate <= startDate
+  ) throw new ProviderPayloadError();
   return {
     start: startDate.toISOString(),
     end: endDate.toISOString(),
     date: startDate.toISOString().slice(0, 10),
   };
+}
+
+function results(bucket: JsonObject): unknown[] {
+  if (!Object.prototype.hasOwnProperty.call(bucket, "results")) {
+    throw new ProviderPayloadError();
+  }
+  if (!Array.isArray(bucket.results)) throw new ProviderPayloadError();
+  return bucket.results;
+}
+
+function projectValue(result: JsonObject, projectId: string): string {
+  const value = result.project_id == null
+    ? projectId
+    : requiredText(result.project_id);
+  if (value !== projectId) throw new ProviderPayloadError();
+  return value;
 }
 
 export async function parseCostRows(
@@ -150,33 +192,34 @@ export async function parseCostRows(
   const rows: JsonObject[] = [];
   for (const bucket of buckets) {
     const times = bucketTimes(bucket);
-    if (!times || !Array.isArray(bucket.result)) continue;
-    for (const raw of bucket.result) {
+    for (const raw of results(bucket)) {
       const result = asObject(raw);
-      if (!result) continue;
-      const amount = asObject(result.amount) ?? {};
+      if (!result) throw new ProviderPayloadError();
+      const amount = asObject(result.amount);
+      if (!amount) throw new ProviderPayloadError();
+      const quantity = result.quantity == null
+        ? null
+        : requiredNumber(result.quantity);
       rows.push({
         bucket_start: times.start,
         bucket_end: times.end,
         bucket_date: times.date,
-        project_id: asText(result.project_id, projectId),
-        line_item: asText(result.line_item),
-        amount_value: asNumber(amount.value, NaN),
-        amount_currency: asText(amount.currency, "usd").toLowerCase(),
-        quantity: result.quantity == null
-          ? null
-          : asNumber(result.quantity, NaN),
+        project_id: projectValue(result, projectId),
+        line_item: requiredText(result.line_item),
+        amount_value: requiredNumber(amount.value),
+        amount_currency: requiredText(amount.currency).toLowerCase(),
+        quantity,
         quantity_unit: result.quantity_unit == null
           ? null
-          : asText(result.quantity_unit),
+          : requiredText(result.quantity_unit),
         synced_at: syncedAt,
-        source: "openai_organization_costs_api",
+        source: COST_SOURCE,
         source_result_hash: await hash(result),
         raw_metadata: result,
       });
     }
   }
-  return rows.filter((row) => Number.isFinite(row.amount_value as number));
+  return rows;
 }
 
 export async function parseUsageRows(
@@ -187,46 +230,38 @@ export async function parseUsageRows(
   const rows: JsonObject[] = [];
   for (const bucket of buckets) {
     const times = bucketTimes(bucket);
-    if (!times || !Array.isArray(bucket.result)) continue;
-    for (const raw of bucket.result) {
+    for (const raw of results(bucket)) {
       const result = asObject(raw);
-      if (!result) continue;
+      if (!result) throw new ProviderPayloadError();
       rows.push({
         bucket_start: times.start,
         bucket_end: times.end,
         bucket_date: times.date,
-        project_id: asText(result.project_id, projectId),
-        model: asText(result.model),
-        service_tier: asText(result.service_tier),
-        batch: asText(result.batch),
-        num_model_requests: Math.trunc(asNumber(result.num_model_requests)),
-        input_tokens: Math.trunc(asNumber(result.input_tokens)),
+        project_id: projectValue(result, projectId),
+        model: optionalText(result.model),
+        service_tier: optionalText(result.service_tier),
+        batch: optionalText(result.batch),
+        num_model_requests: Math.trunc(
+          optionalNumber(result.num_model_requests),
+        ),
+        input_tokens: Math.trunc(optionalNumber(result.input_tokens)),
         input_uncached_tokens: Math.trunc(
-          asNumber(result.input_uncached_tokens),
+          optionalNumber(result.input_uncached_tokens),
         ),
-        input_cached_tokens: Math.trunc(asNumber(result.input_cached_tokens)),
+        input_cached_tokens: Math.trunc(
+          optionalNumber(result.input_cached_tokens),
+        ),
         input_cache_write_tokens: Math.trunc(
-          asNumber(result.input_cache_write_tokens),
+          optionalNumber(result.input_cache_write_tokens),
         ),
-        output_tokens: Math.trunc(asNumber(result.output_tokens)),
+        output_tokens: Math.trunc(optionalNumber(result.output_tokens)),
         synced_at: syncedAt,
-        source: "openai_organization_usage_completions_api",
+        source: USAGE_SOURCE,
         source_result_hash: await hash(result),
       });
     }
   }
   return rows;
-}
-
-async function upsert(
-  db: AdminUsageDb,
-  table: string,
-  rows: JsonObject[],
-  onConflict: string,
-): Promise<void> {
-  if (rows.length === 0) return;
-  const { error } = await db.from(table).upsert(rows, { onConflict });
-  if (error) throw new Error("database_upsert_failed");
 }
 
 export async function handler(
@@ -246,8 +281,9 @@ export async function handler(
   const syncedAt = now.toISOString();
   const fetchImpl = deps.fetchImpl ?? fetch;
   try {
-    // Fetch the complete window before writing either table. A provider error
-    // therefore preserves the previously converged rows.
+    // Both complete provider responses are fetched and validated before the
+    // single service-role RPC. A provider or database failure leaves both
+    // tables at their previous converged state.
     const [costBuckets, usageBuckets] = await Promise.all([
       fetchPages("costs", window, deps.projectId, deps.adminKey, fetchImpl),
       fetchPages(
@@ -262,38 +298,37 @@ export async function handler(
       parseCostRows(costBuckets, deps.projectId, syncedAt),
       parseUsageRows(usageBuckets, deps.projectId, syncedAt),
     ]);
-    await upsert(
-      deps.db,
-      "openai_daily_costs",
-      costRows,
-      "bucket_start,bucket_end,bucket_date,project_id,line_item,amount_currency,source",
+    const { data, error } = await deps.db.rpc(
+      "reconcile_openai_admin_usage",
+      {
+        p_project_id: deps.projectId,
+        p_window_start: window.start.toISOString(),
+        p_window_end: window.end.toISOString(),
+        p_cost_rows: costRows,
+        p_usage_rows: usageRows,
+      },
     );
-    await upsert(
-      deps.db,
-      "openai_daily_completion_usage",
-      usageRows,
-      "bucket_start,bucket_end,bucket_date,project_id,model,service_tier,batch,source",
-    );
+    if (error) throw new Error("database_reconciliation_failed");
+    const counts = asObject(data) ?? {};
     return json({
       status: "complete",
       window_start: window.start.toISOString(),
       window_end: window.end.toISOString(),
-      costs_upserted: costRows.length,
-      usage_upserted: usageRows.length,
+      costs_upserted: requiredNumber(counts.costs_upserted ?? costRows.length),
+      usage_upserted: requiredNumber(counts.usage_upserted ?? usageRows.length),
     });
   } catch (error) {
-    const code =
-      error instanceof Error && error.message === "provider_payload_invalid"
-        ? "provider_payload_invalid"
-        : error instanceof Error &&
-            error.message === "provider_pagination_invalid"
-        ? "provider_pagination_invalid"
-        : error instanceof Error && error.message === "database_upsert_failed"
-        ? "database_upsert_failed"
-        : "provider_request_failed";
+    const message = error instanceof Error ? error.message : "";
+    const code = message === "provider_payload_invalid"
+      ? "provider_payload_invalid"
+      : message === "provider_pagination_invalid"
+      ? "provider_pagination_invalid"
+      : message === "database_reconciliation_failed"
+      ? "database_reconciliation_failed"
+      : "provider_request_failed";
     return json(
       { errorCode: code },
-      code === "database_upsert_failed" ? 500 : 502,
+      code === "database_reconciliation_failed" ? 500 : 502,
     );
   }
 }
