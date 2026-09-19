@@ -5,6 +5,11 @@ create extension if not exists pgtap;
 begin;
 select no_plan();
 
+-- The catalog seed already contains this exact OpenAI model; isolate the
+-- fixture so the first promotion path has one and only one target row.
+delete from public.generation_models
+where provider = 'openai' and provider_model = 'gpt-5.6-luna';
+
 insert into public.generation_models (
   id, provider, provider_model, display_name, description,
   input_credit_rate, output_credit_rate, minimum_charge_credits,
