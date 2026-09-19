@@ -10,6 +10,9 @@ on:
       - 'supabase/functions/outline-from-recipe/**'
       - 'supabase/functions/sync-openai-model-catalog/**'
       - 'supabase/functions/sync-openai-pricing/**'
+      - 'supabase/functions/sync-openai-admin-usage/**'
+      - 'supabase/migrations/20260919100000_openai_admin_usage_reconciliation.sql'
+      - 'supabase/tests/database/openai_admin_usage_reconciliation.test.sql'
       - 'supabase/migrations/20260919070000_openai_pricing_observations.sql'
       - 'supabase/tests/database/openai_pricing_observations.test.sql'
       - 'supabase/migrations/20260909215722_scene_memory_stage_ledger_and_run_lineage.sql'
@@ -94,6 +97,14 @@ jobs:
           && deno test --no-check -A
           supabase/functions/sync-openai-pricing/index_test.ts
 
+      - name: Type check and test OpenAI admin usage sync
+        run: >-
+          deno check
+          supabase/functions/sync-openai-admin-usage/index.ts
+          supabase/functions/sync-openai-admin-usage/_handler.ts
+          && deno test --no-check -A
+          supabase/functions/sync-openai-admin-usage/index_test.ts
+
   pricing-database-regression:
     name: Pricing observation pgTAP regression
     runs-on: ubuntu-latest
@@ -134,3 +145,7 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/openai_pricing_observations.test.sql
+      - name: Run admin usage reconciliation pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/openai_admin_usage_reconciliation.test.sql
