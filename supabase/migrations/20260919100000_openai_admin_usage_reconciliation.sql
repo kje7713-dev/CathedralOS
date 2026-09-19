@@ -131,7 +131,7 @@ select
   (coalesce(u.openai_output_tokens, 0) - coalesce(i.cathedral_output_tokens, 0))::bigint as output_token_variance,
   case
     when u.date is null then 'cost_only_or_no_usage'
-    when a.date is null then 'usage_only_or_no_cost'
+    when a.bucket_date is null then 'usage_only_or_no_cost'
     when i.date is null then 'provider_actual_present_internal_missing'
     else 'partial_openai_completions_only'
   end as coverage_status
