@@ -99,5 +99,22 @@ select is((select cathedral_provider_calls from public.openai_daily_billing_reco
 select is((select coverage_status from public.openai_daily_billing_reconciliation where date = '2026-09-18'), 'partial_openai_completions_only', 'coverage is explicitly partial because only completions usage is ingested');
 select is((select actual_margin_usd from public.openai_daily_billing_reconciliation where date = '2026-09-18'), (0.10 - 0.123456789)::numeric, 'margin uses immutable historical revenue and provider cost');
 
+select has_function(
+  'public',
+  'invoke_openai_admin_usage_sync',
+  array[]::text[],
+  'OpenAI Admin Usage scheduler helper exists'
+);
+select is(
+  (select count(*)::int from cron.job where jobname = 'openai-admin-usage-sync'),
+  1,
+  'OpenAI Admin Usage scheduler job exists'
+);
+select is(
+  (select schedule from cron.job where jobname = 'openai-admin-usage-sync'),
+  '0 */6 * * *',
+  'OpenAI Admin Usage scheduler runs every six hours'
+);
+
 select finish();
 rollback;
