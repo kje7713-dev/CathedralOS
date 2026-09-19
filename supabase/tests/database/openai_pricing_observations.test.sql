@@ -50,7 +50,7 @@ select (public.record_openai_pricing_observation(jsonb_build_object(
   'cached_input_usd_per_1m', 0.02,
   'cache_write_usd_per_1m', 0.25,
   'output_usd_per_1m', 1.20
-))->>'promotion_reason' as extreme_reason \gset
+))->>'promotion_reason') as extreme_reason \gset
 select is(:'extreme_reason'::text, 'extreme_price_change_requires_review'::text, 'extreme price change is rejected with deterministic reason');
 select is((select provider_input_usd_per_1m from public.generation_models where id = 'db-pricing-luna'), 0.20::numeric, 'extreme price leaves input rate unchanged');
 select is((select provider_output_usd_per_1m from public.generation_models where id = 'db-pricing-luna'), 1.20::numeric, 'extreme price leaves output rate unchanged');
@@ -104,7 +104,7 @@ select (public.record_openai_pricing_observation(jsonb_build_object(
   'cached_input_usd_per_1m', 0.02,
   'cache_write_usd_per_1m', 0.25,
   'output_usd_per_1m', 1.20
-))->>'promotion_reason' as ambiguous_reason \gset
+))->>'promotion_reason') as ambiguous_reason \gset
 select is(:'ambiguous_reason'::text, 'ambiguous_provider_model'::text, 'duplicate OpenAI provider/model refuses promotion');
 select is((select provider_input_usd_per_1m from public.generation_models where id = 'db-pricing-luna'), 0.20::numeric, 'ambiguous identity leaves exact row unchanged');
 select is((select count(*)::integer from public.openai_pricing_observations where provider_model = 'gpt-5.6-luna'), 4, 'ambiguous observation is still appended');
