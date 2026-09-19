@@ -105,7 +105,26 @@ jobs:
       - name: Start disposable Supabase database
         run: supabase start
       - name: Apply migrations to disposable database
-        run: supabase db reset --local --yes
+        run: |
+          # This historical migration uses transaction-scoped LOCK TABLE. The
+          # current CLI applies the file outside a transaction during reset;
+          # wrap it only in this disposable test checkout, without rewriting
+          # the committed historical migration.
+          migration="supabase/migrations/20260722190336_reconcile_tombstone_linked_project_aliases.sql"
+          backup="$(mktemp)"
+          cp "$migration" "$backup"
+          cleanup() {
+            cp "$backup" "$migration"
+            rm -f "$backup" "$migration.tmp"
+          }
+          trap cleanup EXIT
+          {
+            printf 'begin;\\n'
+            cat "$migration"
+            printf '\\ncommit;\\n'
+          } > "$migration.tmp"
+          mv "$migration.tmp" "$migration"
+          supabase db reset --local --yes
       - name: Run pricing observation pgTAP test
         run: >-
           supabase db test --local
