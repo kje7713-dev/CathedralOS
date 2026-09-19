@@ -119,9 +119,9 @@ jobs:
           }
           trap cleanup EXIT
           {
-            printf 'begin;\\n'
+            printf 'begin;\n'
             cat "$migration"
-            printf '\\ncommit;\\n'
+            printf '\ncommit;\n'
           } > "$migration.tmp"
           mv "$migration.tmp" "$migration"
           supabase db reset --local --yes
