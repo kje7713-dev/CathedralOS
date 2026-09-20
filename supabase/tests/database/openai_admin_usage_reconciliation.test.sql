@@ -1,5 +1,5 @@
 begin;
-select plan(28);
+select plan(33);
 
 select has_table('public', 'openai_daily_costs', 'operator cost table exists');
 select has_table('public', 'openai_daily_completion_usage', 'operator usage table exists');
@@ -114,6 +114,31 @@ select is(
   (select schedule from cron.job where jobname = 'openai-admin-usage-sync'),
   '0 */6 * * *',
   'OpenAI Admin Usage scheduler runs every six hours'
+);
+select like(
+  pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
+  '%project_url%',
+  'scheduler reads the project_url Vault secret'
+);
+select like(
+  pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
+  '%supabase_secret_key%',
+  'scheduler reads the current Supabase secret key Vault secret'
+);
+select like(
+  pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
+  '%apikey%',
+  'scheduler sends the secret key as the apikey header'
+);
+select unlike(
+  pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
+  '%service_role_key%',
+  'scheduler no longer references the legacy service role secret'
+);
+select unlike(
+  pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
+  '%Authorization%',
+  'scheduler no longer sends a legacy Authorization bearer header'
 );
 
 select finish();
