@@ -1470,13 +1470,23 @@ export const OBLIGATION_REPAIR_SCHEMA = buildObligationRepairResponseSchema(
   { name: "repair", beats: [{ id: "beat", role: "setup", label: "Beat", description: "Beat" }] },
 );
 
-export function mergeObligationRepairOperations(current: Suggestion[], parsed: any, beatIds: Set<string>, obligations: RecipeObligation[], template: Pick<ArcTemplateBlob, "name" | "beats">): Suggestion[] {
+export function mergeObligationRepairOperations(
+  current: Suggestion[],
+  parsed: any,
+  beatIds: Set<string>,
+  obligations: RecipeObligation[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+  allocation?: Map<string, Allocation>,
+): Suggestion[] {
   if (!parsed || !Array.isArray(parsed.operations)) throw new RecipeObligationValidationError("missing_recipe_obligations: repair response missing operations");
   const result = current.map((section) => ({ ...section }));
   for (const operation of parsed.operations) {
     const index = operation.action === "replace" ? operation.replaceIndex : -1;
     if (operation.action === "replace" && (!Number.isInteger(index) || index < 0 || index >= result.length)) {
       throw new RecipeObligationValidationError("missing_recipe_obligations: repair target section index out of range");
+    }
+    if (operation.action === "replace" && operation.section?.storyArcBeatID !== result[index].storyArcBeatID) {
+      throw new RecipeObligationValidationError("missing_recipe_obligations: replacement must preserve the target section's story arc beat");
     }
     const validated = validateSuggestions({ suggestions: [operation.section] }, beatIds, undefined, obligations, template).suggestions[0];
     if (!validated) throw new RecipeObligationValidationError("missing_recipe_obligations: repair returned no valid section");
@@ -1485,7 +1495,16 @@ export function mergeObligationRepairOperations(current: Suggestion[], parsed: a
       result.push(validated);
     } else result[index] = validated;
   }
-  return result;
+  const normalized = mergeSuggestionsByBeatOrder(template.beats.map((beat) => beat.id), result, []);
+  try {
+    // Operation sections are obligation-validated individually above. Re-run
+    // only the structural contract here because persisted first-pass sections
+    // may legitimately carry an omitted/empty recipeRequirementIDs field.
+    validateSuggestions({ suggestions: normalized }, beatIds, allocation, [], template);
+    return normalized;
+  } catch (error) {
+    throw new RecipeObligationValidationError(`missing_recipe_obligations: repair violated the structural plan: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 export function buildObligationRepairPrompt(req: OutlineFromRecipeRequest, current: Suggestion[], existing: ExistingSectionBlob[], missing: RecipeObligation[]) {
@@ -1495,17 +1514,17 @@ export function buildObligationRepairPrompt(req: OutlineFromRecipeRequest, curre
   };
 }
 
-export async function repairRequiredRecipeObligations(current: Suggestion[], req: OutlineFromRecipeRequest, obligations: RecipeObligation[], billableCall: SuggestionLLMCall): Promise<{ suggestions: Suggestion[]; missing: RecipeObligation[] }> {
+export async function repairRequiredRecipeObligations(current: Suggestion[], req: OutlineFromRecipeRequest, obligations: RecipeObligation[], billableCall: SuggestionLLMCall, allocation?: Map<string, Allocation>): Promise<{ suggestions: Suggestion[]; missing: RecipeObligation[] }> {
   const before = obligationCoverage([...(req.existingSections ?? []), ...current], obligations);
   if (!before.missingRequired.length) return { suggestions: current, missing: [] };
   const prompt = buildObligationRepairPrompt(req, current, req.existingSections ?? [], before.missingRequired);
   const responseSchema = buildObligationRepairResponseSchema(new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate);
   const raw = await billableCall(prompt.system, prompt.user, 8000, { type: "json_schema", json_schema: { name: "outline_required_obligation_repair", strict: true, schema: responseSchema } }, "outline-obligation-repair", (content) => {
-    const repaired = mergeObligationRepairOperations(current, JSON.parse(content), new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate);
+    const repaired = mergeObligationRepairOperations(current, JSON.parse(content), new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate, allocation);
     if (repaired.length > MAX_PLANNED_SECTIONS) throw new RecipeObligationValidationError("missing_recipe_obligations: repair exceeded section safety cap");
     return content;
   });
-  const repaired = mergeObligationRepairOperations(current, JSON.parse(raw.content), new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate);
+  const repaired = mergeObligationRepairOperations(current, JSON.parse(raw.content), new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate, allocation);
   return { suggestions: repaired, missing: obligationCoverage([...(req.existingSections ?? []), ...repaired], obligations).missingRequired };
 }
 
@@ -3470,7 +3489,10 @@ export async function runSuggestionJob(
       };
     }
     if (planningState.nextAction === "obligation-repair") {
-      const repair = await repairRequiredRecipeObligations(Array.isArray(claimedRun.suggestions) ? claimedRun.suggestions as Suggestion[] : [], body, recipeObligations, billableCall);
+      const repairAllocation = Array.isArray(planningState.allocationEntries)
+        ? new Map<string, Allocation>(planningState.allocationEntries as Array<[string, Allocation]>)
+        : undefined;
+      const repair = await repairRequiredRecipeObligations(Array.isArray(claimedRun.suggestions) ? claimedRun.suggestions as Suggestion[] : [], body, recipeObligations, billableCall, repairAllocation);
       const missing = repair.missing.map((obligation) => obligation.id);
       diagnostics = { ...diagnostics, stage: missing.length ? "obligation_repair_failed" : "obligation_repair_complete", recipeObligationCoverage: obligationCoverage([...(body.existingSections ?? []), ...repair.suggestions], recipeObligations).covered, missingRequiredRecipeObligations: missing };
       if (missing.length) throw new RecipeObligationValidationError(`missing_recipe_obligations: ${missing.join(", ")}`);
