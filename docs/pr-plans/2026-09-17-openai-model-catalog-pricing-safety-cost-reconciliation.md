@@ -1,12 +1,41 @@
 **CathedralOS OpenAI Model Catalog, Pricing Safety, and Cost Reconciliation PR Bundle**  
   
-**Status: implementation plan only**  
+**Status: implementation plan plus repository implementation; production wiring is not yet deployed**
 **Repository: kje7713-dev/CathedralOS**  
 **Verified repository baseline: main at 714767e60e15e8a6a42705a4397de020236777ac (fix(outline): sharpen section quality guidance (#591))**  
 **Production Supabase project inspected: vrzlwukuslpnqebaakxy**  
 **Plan snapshot date: 2026-09-17**  
-  
-> **Agent instruction:** Re-check `main` and production schema before beginning. This document records the verified starting point above; do not blindly assume the SHA or schema is unchanged when implementation starts.  
+
+> **Agent instruction:** Re-check `main` and production schema before beginning. This document records the verified starting point above; do not blindly assume the SHA or schema is unchanged when implementation starts.
+
+**Operational follow-up status (this PR):** Phase B model-catalog deployment wiring and Phase C official-pricing deployment wiring are implemented in the repository, including Vault-backed pg_cron/pg_net invocation. This does **not** claim production deployment or a successful first production run. After approval, deployment and first-run validation must follow the checklist below.
+
+**Repository schedules:**
+
+```text
+04:05 UTC daily  sync-openai-model-catalog
+04:20 UTC daily  sync-openai-pricing
+0 */6 * * *       sync-openai-admin-usage
+06:00 UTC Monday  telemetry-weekly-snapshot (unchanged)
+```
+
+**Vault/auth note:** both new scheduler helpers read `project_url` and `supabase_secret_key` at invocation time and send the value as `Authorization: Bearer ...`, matching the catalog/pricing functions' operator-only service-role contract. The existing Vault entries are sufficient only when `supabase_secret_key` is the service-role credential expected by those functions; verify that mapping during the post-merge checklist before enabling cron.
+
+**Post-merge production checklist (do not execute as part of this PR):**
+
+1. Deploy `sync-openai-model-catalog`.
+2. Deploy `sync-openai-pricing`.
+3. Confirm both Edge Functions are ACTIVE and their operator-only auth contracts remain intact.
+4. Invoke model catalog sync manually once.
+5. Inspect `openai_model_sync_runs` and new `generation_models` rows.
+6. Confirm every newly discovered row has `enabled = false`.
+7. Invoke pricing sync manually once.
+8. Inspect `openai_pricing_observations` and compare known rates with official OpenAI sources.
+9. Confirm verified pricing never changes `enabled` automatically.
+10. Only after the manual checks, enable/verify the two cron jobs.
+11. Confirm the next scheduled catalog run succeeds.
+12. Confirm the next scheduled pricing run succeeds.
+13. If Astra appears, record its exact `provider_model`, `provider_available`, `pricing_state`, verified rates, and `enabled` state, then stop for operator decision; do not enable it automatically.
   
   
   

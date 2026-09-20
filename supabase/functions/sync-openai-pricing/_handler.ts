@@ -50,7 +50,10 @@ async function catalogModels(db: PricingSyncDb): Promise<CatalogModel[]> {
   const { data, error } = await db.from("generation_models")
     .select("provider_model, cache_write_pricing_required")
     .eq("provider", "openai")
-    .eq("model_kind", "text_generation");
+    // Catalog discovery intentionally creates new rows as model_kind=unknown.
+    // Observe those rows too; promotion classifies only a complete official
+    // text-token pricing page, and never enables the model.
+    .in("model_kind", ["text_generation", "unknown"]);
   if (error || !Array.isArray(data)) throw new Error("catalog_lookup_failed");
   return [
     ...new Map(

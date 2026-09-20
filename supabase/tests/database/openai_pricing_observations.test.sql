@@ -129,5 +129,40 @@ select (public.record_openai_pricing_observation(jsonb_build_object(
 ))->>'promoted') as unknown_promoted \gset
 select is(:'unknown_promoted'::text, 'false'::text, 'unknown model is not promoted');
 
+-- A newly discovered catalog row may receive verified official pricing without
+-- becoming picker-visible. Enablement remains an explicit operator action.
+insert into public.generation_models (
+  id, provider, provider_model, display_name, description,
+  input_credit_rate, output_credit_rate, minimum_charge_credits,
+  enabled, sort_order, provider_available, model_kind, pricing_state,
+  pricing_verified_at, provider_input_usd_per_1m,
+  provider_cached_input_usd_per_1m, provider_output_usd_per_1m,
+  billing_multiplier, pricing_effective_at, cache_write_pricing_required
+) values (
+  'db-pricing-astra', 'openai', 'gpt-6-astra', 'gpt-6-astra', null,
+  1, 1, 0.25, false, 10000, true, 'unknown', 'unverified', null,
+  null, null, null, 2.0, now(), false
+);
+select (public.record_openai_pricing_observation(jsonb_build_object(
+  'provider_model', 'gpt-6-astra',
+  'observed_at', '2026-09-19T12:03:00Z',
+  'source_url', 'https://developers.openai.com/api/docs/models/gpt-6-astra.md',
+  'source_hash', 'raw-astra-valid',
+  'normalized_evidence_hash', 'evidence-astra-valid',
+  'parser_version', 'pricing-page-markdown-v2',
+  'status', 'verified',
+  'input_usd_per_1m', 1.0,
+  'cached_input_usd_per_1m', 0.1,
+  'output_usd_per_1m', 5.0
+))->>'promoted') as astra_promoted \gset
+select is(:'astra_promoted'::text, 'true'::text, 'verified pricing promotes discovered Astra economics');
+select is((select provider_input_usd_per_1m from public.generation_models where id = 'db-pricing-astra'), 1.0::numeric, 'Astra input pricing is populated');
+select is((select pricing_state from public.generation_models where id = 'db-pricing-astra'), 'verified', 'Astra pricing becomes verified');
+select is((select enabled from public.generation_models where id = 'db-pricing-astra'), false, 'Astra remains disabled after pricing sync');
+select is((select model_kind from public.generation_models where id = 'db-pricing-astra'), 'text_generation', 'verified official text pricing classifies Astra as text generation');
+select is((select count(*)::integer from public.generation_models where enabled = true and provider_model = 'gpt-6-astra'), 0, 'picker-visible Astra rows remain absent');
+update public.generation_models set enabled = true where id = 'db-pricing-astra';
+select is((select count(*)::integer from public.generation_models where enabled = true and provider_model = 'gpt-6-astra'), 1, 'operator enablement makes Astra visible without an iOS release');
+
 select * from finish();
 rollback;
