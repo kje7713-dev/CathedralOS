@@ -13,6 +13,7 @@ import {
   generationReadinessFailures,
   isInsufficientCreditsError,
   loadRunOutline,
+  parseEmbedSectionError,
   requireRunOutlineRecipe,
   RunOutlineOutlineError,
   runOutlineSectionLifecycle,
@@ -576,6 +577,21 @@ Deno.test("insufficient credits are classified narrowly", () => {
   assertEquals(
     isInsufficientCreditsError({ code: "insufficient_credits" }),
     true,
+  );
+});
+
+Deno.test("embed-section HTTP 402 body reaches Run All credit classifier", () => {
+  const error = parseEmbedSectionError(
+    402,
+    JSON.stringify({
+      errorCode: "insufficient_credits",
+      message: "Insufficient credits for the next billable stage.",
+    }),
+  );
+  assertEquals(isInsufficientCreditsError(error), true);
+  assertEquals(
+    error.message,
+    "Insufficient credits for the next billable stage.",
   );
 });
 

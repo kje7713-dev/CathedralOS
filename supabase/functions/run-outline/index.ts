@@ -1997,6 +1997,27 @@ export function isInsufficientCreditsError(error: unknown): boolean {
   );
 }
 
+export function parseEmbedSectionError(
+  status: number,
+  errBody: string,
+): Error {
+  let parsedError: Record<string, unknown> | null = null;
+  try {
+    parsedError = JSON.parse(errBody) as Record<string, unknown>;
+  } catch { /* preserve raw diagnostic */ }
+  if (parsedError?.errorCode === "insufficient_credits") {
+    return new InsufficientCreditsError(
+      String(
+        parsedError.message ??
+          "Insufficient credits for the next billable stage.",
+      ),
+    );
+  }
+  return new Error(
+    `embed-section returned ${status}: ${errBody.slice(0, 200)}`,
+  );
+}
+
 async function reconcileActualCredits(
   adminClient: ReturnType<typeof createClient>,
   runId: string,
@@ -2230,21 +2251,7 @@ async function callEmbedSection(
   });
   if (!response.ok) {
     const errBody = await response.text();
-    let parsedError: Record<string, unknown> | null = null;
-    try {
-      parsedError = JSON.parse(errBody) as Record<string, unknown>;
-    } catch { /* preserve raw diagnostic */ }
-    if (
-      parsedError?.errorCode === "insufficient_credits" ||
-      /(^|[^a-z])insufficient_credits([^a-z]|$)/i.test(errBody)
-    ) {
-      throw new InsufficientCreditsError(
-        String(parsedError?.errorMessage ?? parsedError?.message ?? errBody),
-      );
-    }
-    throw new Error(
-      `embed-section returned ${response.status}: ${errBody.slice(0, 200)}`,
-    );
+    throw parseEmbedSectionError(response.status, errBody);
   }
 }
 
