@@ -7,11 +7,38 @@ import {
   fetchLeafSectionTotals,
   hashCanonicalRecipe,
   lineageMismatchResponse,
+  missingRequiredRecipeObligationIDs,
   mergeSectionsByCanonicalID,
   normalizeStoryArcBeatIDs,
   sectionRow,
   validate,
 } from "./index.ts";
+
+Deno.test("Accept All checks required obligations across existing and incoming sections", () => {
+  const recipe = { schema: "cathedralos.story_packet", version: 1, project: { summary: "Premise" }, promptPack: { id: "pack", name: "Pack" } } as any;
+  assertEquals(missingRequiredRecipeObligationIDs(recipe, [{ recipe_requirement_ids: [] }]), ["R1"]);
+  assertEquals(missingRequiredRecipeObligationIDs(recipe, [{ id: "x", recipe_requirement_ids: ["R1"] }, { id: "y", recipeRequirementIDs: [] }]), []);
+});
+
+Deno.test("Accept All checks effective post-commit section replacements", () => {
+  const recipe = { schema: "cathedralos.story_packet", version: 1, project: { summary: "Premise" }, promptPack: { id: "pack", name: "Pack" } } as any;
+  assertEquals(missingRequiredRecipeObligationIDs(recipe, [
+    { id: "x", recipe_requirement_ids: ["R1"] },
+    { id: "x", recipeRequirementIDs: [] },
+  ]), ["R1"]);
+  assertEquals(missingRequiredRecipeObligationIDs(recipe, [
+    { id: "x", recipe_requirement_ids: ["R1"] },
+    { id: "y", recipeRequirementIDs: [] },
+  ]), []);
+  assertEquals(missingRequiredRecipeObligationIDs(recipe, [
+    { id: "x", recipe_requirement_ids: [] },
+    { id: "x", recipeRequirementIDs: ["R1"] },
+  ]), []);
+  assertEquals(missingRequiredRecipeObligationIDs(recipe, [
+    { id: "x", recipe_requirement_ids: ["R1"] },
+    { id: "y", recipeRequirementIDs: ["R2"] },
+  ]), []);
+});
 
 Deno.test("Accept All completes only after all sections and snapshot merge succeed", () => {
   assertEquals(acceptRunTerminalOutcome(0, null, null), {
