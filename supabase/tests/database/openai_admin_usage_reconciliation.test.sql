@@ -115,27 +115,27 @@ select is(
   '0 */6 * * *',
   'OpenAI Admin Usage scheduler runs every six hours'
 );
-select like(
+select alike(
   pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
   '%project_url%',
   'scheduler reads the project_url Vault secret'
 );
-select like(
+select alike(
   pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
   '%supabase_secret_key%',
   'scheduler reads the current Supabase secret key Vault secret'
 );
-select like(
+select alike(
   pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
   '%apikey%',
   'scheduler sends the secret key as the apikey header'
 );
-select unlike(
+select unalike(
   pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
   '%service_role_key%',
   'scheduler no longer references the legacy service role secret'
 );
-select unlike(
+select unalike(
   pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
   '%Authorization%',
   'scheduler no longer sends a legacy Authorization bearer header'
