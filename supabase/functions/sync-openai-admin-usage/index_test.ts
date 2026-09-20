@@ -49,6 +49,22 @@ const bucket = (results: unknown[]) => ({
   results,
 });
 
+Deno.test("unauthorized requests stop before provider fetch or reconciliation", async () => {
+  const calls: RpcCall[] = [];
+  let requests = 0;
+  const res = await handler(
+    request(),
+    deps(calls, () => {
+      requests++;
+      return Promise.reject(new Error("must not request"));
+    }, { authorized: false }),
+  );
+  assertEquals(res.status, 401);
+  assertEquals(await res.json(), { errorCode: "unauthenticated" });
+  assertEquals(requests, 0);
+  assertEquals(calls.length, 0);
+});
+
 Deno.test("PR4 window is current UTC day plus previous seven UTC days", () => {
   const window = utcWindow(NOW);
   assertEquals(window.start.toISOString(), "2026-09-12T00:00:00.000Z");

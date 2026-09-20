@@ -1,5 +1,5 @@
 begin;
-select plan(25);
+select plan(33);
 
 select has_table('public', 'openai_daily_costs', 'operator cost table exists');
 select has_table('public', 'openai_daily_completion_usage', 'operator usage table exists');
@@ -98,6 +98,48 @@ select is((select cathedral_settled_customer_revenue_usd from public.openai_dail
 select is((select cathedral_provider_calls from public.openai_daily_billing_reconciliation where date = '2026-09-17'), 1::bigint, 'provider failure without completion is excluded from provider calls');
 select is((select coverage_status from public.openai_daily_billing_reconciliation where date = '2026-09-18'), 'partial_openai_completions_only', 'coverage is explicitly partial because only completions usage is ingested');
 select is((select actual_margin_usd from public.openai_daily_billing_reconciliation where date = '2026-09-18'), (0.10 - 0.123456789)::numeric, 'margin uses immutable historical revenue and provider cost');
+
+select has_function(
+  'public',
+  'invoke_openai_admin_usage_sync',
+  array[]::text[],
+  'OpenAI Admin Usage scheduler helper exists'
+);
+select is(
+  (select count(*)::int from cron.job where jobname = 'openai-admin-usage-sync'),
+  1,
+  'OpenAI Admin Usage scheduler job exists'
+);
+select is(
+  (select schedule from cron.job where jobname = 'openai-admin-usage-sync'),
+  '0 */6 * * *',
+  'OpenAI Admin Usage scheduler runs every six hours'
+);
+select alike(
+  pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
+  '%project_url%',
+  'scheduler reads the project_url Vault secret'
+);
+select alike(
+  pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
+  '%supabase_secret_key%',
+  'scheduler reads the current Supabase secret key Vault secret'
+);
+select alike(
+  pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
+  '%apikey%',
+  'scheduler sends the secret key as the apikey header'
+);
+select unalike(
+  pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
+  '%service_role_key%',
+  'scheduler no longer references the legacy service role secret'
+);
+select unalike(
+  pg_get_functiondef('public.invoke_openai_admin_usage_sync()'::regprocedure),
+  '%Authorization%',
+  'scheduler no longer sends a legacy Authorization bearer header'
+);
 
 select finish();
 rollback;

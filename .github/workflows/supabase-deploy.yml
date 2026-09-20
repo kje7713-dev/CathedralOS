@@ -66,7 +66,7 @@ jobs:
 
       - name: Deploy Edge Function - sync-openai-admin-usage
         if: ${{ hashFiles('supabase/functions/sync-openai-admin-usage/index.ts') != '' }}
-        run: supabase functions deploy sync-openai-admin-usage --project-ref "$SUPABASE_PROJECT_REF"
+        run: supabase functions deploy sync-openai-admin-usage --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
 
       - name: Deploy Edge Function - public-sharing
         if: ${{ hashFiles('supabase/functions/public-sharing/index.ts') != '' }}
