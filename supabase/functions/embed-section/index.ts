@@ -56,6 +56,25 @@ const errorResponse = (
 ): Response =>
   corsResponse(JSON.stringify({ errorCode: code, message }), { status });
 
+const INSUFFICIENT_CREDITS_MESSAGE =
+  "Insufficient credits for the next billable stage.";
+
+export function embedSectionErrorResponse(error: unknown): Response {
+  const record = error as { code?: unknown } | null;
+  if (record?.code === "insufficient_credits") {
+    return errorResponse(
+      "insufficient_credits",
+      INSUFFICIENT_CREDITS_MESSAGE,
+      402,
+    );
+  }
+  if (error instanceof SectionEmbeddingError) {
+    const status = error.code === "database_error" ? 500 : 502;
+    return errorResponse(error.code, error.message, status);
+  }
+  return errorResponse("provider_error", String(error), 502);
+}
+
 import {
   type EmbedSectionRequest,
   processEmbedSection,
@@ -145,10 +164,6 @@ Deno.serve(async (req: Request) => {
     );
     return corsResponse(JSON.stringify(result), { status: 200 });
   } catch (err) {
-    if (err instanceof SectionEmbeddingError) {
-      const status = err.code === "database_error" ? 500 : 502;
-      return errorResponse(err.code, err.message, status);
-    }
-    return errorResponse("provider_error", String(err), 502);
+    return embedSectionErrorResponse(err);
   }
 });

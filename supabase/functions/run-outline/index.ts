@@ -417,7 +417,9 @@ async function handleKickoff(req: Request): Promise<Response> {
     .eq("idempotency_key", idempotencyKey)
     .maybeSingle();
   if (
-    existing && (existing.status === "queued" || existing.status === "running")
+    existing &&
+    (existing.status === "queued" || existing.status === "running" ||
+      existing.status === "paused_insufficient_credits")
   ) {
     // A prior worker may have died before claiming a lease (or while the app
     // was offline). Keep the idempotency response, but also use this retry as
@@ -645,7 +647,10 @@ async function handleEstimate(
       status: "ok",
       estimated_credits: reservedCredits,
       available_credits: check.availableCredits,
-      allowed: check.allowed,
+      // Backwards-compatible field: whole-run affordability is informational
+      // and must never block kickoff. Clients must not use this as an admission gate.
+      allowed: true,
+      can_afford_estimate: check.allowed,
       section_count: sections.length,
       model: body.model ?? null,
     }),
@@ -712,32 +717,10 @@ async function prepareRun(
     return;
   }
 
-  const { data: entData, error: entErr } = await adminClient
-    .from("user_entitlements")
-    .select(
-      "user_id, plan_name, is_pro, monthly_credit_allowance, purchased_credit_balance, current_period_start, current_period_end, entitlement_source, updated_at",
-    )
-    .eq("user_id", run.user_id)
-    .single();
-  if (entErr || !entData) {
-    await markRunFailed(adminClient, runId, "could not load user entitlement");
-    return;
-  }
-  const { reservedCredits, check } = prepareCreditReservation(
-    estimatedCost,
-    normalizeUserEntitlement(entData as Record<string, unknown>),
-  );
-  if (!check.allowed) {
-    await adminClient.from("chapter_runs").update({
-      status: "failed",
-      error:
-        `insufficient_credits: needed ${reservedCredits}, have ${check.availableCredits}`,
-      credits_reserved: 0,
-      completed_at: new Date().toISOString(),
-      worker_lease_until: null,
-    }).eq("id", runId);
-    return;
-  }
+  // Keep the conservative whole-run estimate for compatibility and UI
+  // disclosure, but never treat it as escrow or an admission gate. The
+  // authoritative preflight runs immediately before each billable stage.
+  const reservedCredits = Math.ceil(estimatedCost);
 
   const { error: startError } = await adminClient.from("chapter_runs").update({
     status: "running",
@@ -864,6 +847,52 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
   );
 }
 
+export type RunOutlineSectionLifecycleResult = {
+  status: "completed" | "paused_insufficient_credits";
+  outputID: string;
+};
+
+/**
+ * Owns the durable boundary between prose and scene memory. The output ID is
+ * persisted before memory settlement, so a credit shortage during extraction
+ * or embedding can pause and later reuse the exact prose without another
+ * provider call or primary-generation charge.
+ */
+export async function runOutlineSectionLifecycle(input: {
+  existingOutputID?: string | null;
+  generate: () => Promise<{
+    outputID: string;
+    status: string;
+    wasTruncated?: boolean;
+  }>;
+  persistPendingOutput: (outputID: string) => Promise<void>;
+  ensureMemory: (outputID: string) => Promise<void>;
+  persistCompleted: (outputID: string) => Promise<void>;
+  isInsufficientCredits: (error: unknown) => boolean;
+}): Promise<RunOutlineSectionLifecycleResult> {
+  let outputID = input.existingOutputID ?? "";
+  if (!input.existingOutputID) {
+    const generated = await input.generate();
+    outputID = generated.outputID;
+    if (generated.status !== "complete" || generated.wasTruncated) {
+      throw new Error(
+        `durable generation incomplete for section output ${outputID}`,
+      );
+    }
+    await input.persistPendingOutput(outputID);
+  }
+  try {
+    await input.ensureMemory(outputID);
+  } catch (error) {
+    if (input.isInsufficientCredits(error)) {
+      return { status: "paused_insufficient_credits", outputID };
+    }
+    throw error;
+  }
+  await input.persistCompleted(outputID);
+  return { status: "completed", outputID };
+}
+
 // ---- outline-walker + per-section loop (Day 2) -------------------------
 async function runOutline(
   runId: string,
@@ -976,34 +1005,57 @@ async function runOutline(
         String(projectId),
       );
       if (existingOutput) {
-        await ensureOutputMemory(
-          {
-            outline_section_id: String(section.id),
-            outline_id: String(run.outline_id),
-            project_id: String(projectId),
-            position: Number(section.position ?? 0),
-            title: String(section.title ?? ""),
-            summary: String(section.summary ?? ""),
-            container: (section.container ?? null) as string | null,
-            pov: (section.pov ?? null) as string | null,
-            terminal_beat: (section.terminal_beat ?? null) as string | null,
-            story_arc_beat_id: (section.story_arc_beat_id ?? null) as
-              | string
-              | null,
-            output_id: existingOutput,
+        const lifecycle = await runOutlineSectionLifecycle({
+          existingOutputID: existingOutput,
+          generate: async () => {
+            throw new Error("existing output should be reused");
           },
-          existingOutput,
-          String(run.user_id),
-          adminClient,
-          Deno.env.get("OPENAI_API_KEY") ?? "",
-        );
-        await updateSectionStatus(adminClient, runId, {
-          ...section,
-          status: "completed",
-          output_id: existingOutput,
-          cost: estimateSectionCost(section.container as string | null),
-          completed_at: new Date().toISOString(),
+          persistPendingOutput: async () => {},
+          ensureMemory: async (outputID) => {
+            await ensureOutputMemory(
+              {
+                outline_section_id: String(section.id),
+                outline_id: String(run.outline_id),
+                project_id: String(projectId),
+                position: Number(section.position ?? 0),
+                title: String(section.title ?? ""),
+                summary: String(section.summary ?? ""),
+                container: (section.container ?? null) as string | null,
+                pov: (section.pov ?? null) as string | null,
+                terminal_beat: (section.terminal_beat ?? null) as string | null,
+                story_arc_beat_id: (section.story_arc_beat_id ?? null) as
+                  | string
+                  | null,
+                output_id: outputID,
+              },
+              outputID,
+              String(run.user_id),
+              adminClient,
+              Deno.env.get("OPENAI_API_KEY") ?? "",
+            );
+          },
+          persistCompleted: async (outputID) => {
+            await updateSectionStatus(adminClient, runId, {
+              ...section,
+              status: "completed",
+              output_id: outputID,
+              cost: estimateSectionCost(section.container as string | null),
+              completed_at: new Date().toISOString(),
+            });
+          },
+          isInsufficientCredits: isInsufficientCreditsError,
         });
+        section.output_id = lifecycle.outputID;
+        if (lifecycle.status === "paused_insufficient_credits") {
+          await pauseRunInsufficientCredits(
+            adminClient,
+            runId,
+            section,
+            new InsufficientCreditsError(),
+          );
+          return;
+        }
+        await reconcileActualCredits(adminClient, runId);
         continue;
       }
       const normalize = await ensureMemoryPipelineVersion(
@@ -1053,45 +1105,79 @@ async function runOutline(
           String(section.id),
         );
       await renewRunLease(adminClient, runId, workerAttempt);
-      const result = await callGenerateStory(generationRequest, authHeader);
-      await renewRunLease(adminClient, runId, workerAttempt);
-      if (result.status !== "complete" || result.wasTruncated) {
-        throw new Error(
-          `durable generation incomplete for section ${section.id}`,
-        );
-      }
-      // Durable completion is unconditional on the exact persisted output's
-      // memory lineage, even when generate-story returned 200.
-      await ensureOutputMemory(
-        {
-          outline_section_id: String(section.id),
-          outline_id: String(run.outline_id),
-          project_id: String(projectId),
-          position: Number(section.position ?? 0),
-          title: String(section.title ?? ""),
-          summary: String(section.summary ?? ""),
-          container: (section.container ?? null) as string | null,
-          pov: (section.pov ?? null) as string | null,
-          terminal_beat: (section.terminal_beat ?? null) as string | null,
-          story_arc_beat_id: (section.story_arc_beat_id ?? null) as
-            | string
-            | null,
-          output_id: result.output_id,
+      const lifecycle = await runOutlineSectionLifecycle({
+        generate: async () => {
+          const result = await callGenerateStory(generationRequest, authHeader);
+          await renewRunLease(adminClient, runId, workerAttempt);
+          return {
+            outputID: result.output_id,
+            status: result.status,
+            wasTruncated: result.wasTruncated,
+          };
         },
-        result.output_id,
-        String(run.user_id),
-        adminClient,
-        Deno.env.get("OPENAI_API_KEY") ?? "",
-      );
-      await updateSectionStatus(adminClient, runId, {
-        ...section,
-        status: "completed",
-        output_id: result.output_id,
-        cost: estimateSectionCost(section.container as string | null),
-        completed_at: new Date().toISOString(),
+        persistPendingOutput: async (outputID) => {
+          // Persist the output lineage immediately after generate-story
+          // returns so memory settlement can pause without losing prose.
+          section.output_id = outputID;
+          await updateSectionStatus(adminClient, runId, {
+            ...section,
+            status: "pending",
+            output_id: outputID,
+          });
+        },
+        ensureMemory: async (outputID) => {
+          await ensureOutputMemory(
+            {
+              outline_section_id: String(section.id),
+              outline_id: String(run.outline_id),
+              project_id: String(projectId),
+              position: Number(section.position ?? 0),
+              title: String(section.title ?? ""),
+              summary: String(section.summary ?? ""),
+              container: (section.container ?? null) as string | null,
+              pov: (section.pov ?? null) as string | null,
+              terminal_beat: (section.terminal_beat ?? null) as
+                | string
+                | null,
+              story_arc_beat_id: (section.story_arc_beat_id ?? null) as
+                | string
+                | null,
+              output_id: outputID,
+            },
+            outputID,
+            String(run.user_id),
+            adminClient,
+            Deno.env.get("OPENAI_API_KEY") ?? "",
+          );
+        },
+        persistCompleted: async (outputID) => {
+          await updateSectionStatus(adminClient, runId, {
+            ...section,
+            status: "completed",
+            output_id: outputID,
+            cost: estimateSectionCost(section.container as string | null),
+            completed_at: new Date().toISOString(),
+          });
+        },
+        isInsufficientCredits: isInsufficientCreditsError,
       });
+      section.output_id = lifecycle.outputID;
+      if (lifecycle.status === "paused_insufficient_credits") {
+        await pauseRunInsufficientCredits(
+          adminClient,
+          runId,
+          section,
+          new InsufficientCreditsError(),
+        );
+        return;
+      }
+      await reconcileActualCredits(adminClient, runId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (isInsufficientCreditsError(err)) {
+        await pauseRunInsufficientCredits(adminClient, runId, section, err);
+        return;
+      }
       if (isRetryableOutlineLookupError(err)) {
         await updateSectionStatus(adminClient, runId, {
           ...section,
@@ -1187,6 +1273,57 @@ async function handleResume(
     .select("id, outline_id, status").eq("id", runId)
     .eq("user_id", userId).maybeSingle();
   if (!run) return errorResponse("not_found", "run not found", 404);
+  if (run.status === "paused_insufficient_credits") {
+    const { data: resumed, error: resumeError } = await adminClient
+      .from("chapter_runs")
+      .update({
+        status: "running",
+        error: null,
+        worker_lease_until: null,
+        next_retry_at: null,
+        completed_at: null,
+      })
+      .eq("id", runId)
+      .eq("user_id", userId)
+      .eq("status", "paused_insufficient_credits")
+      .select("id, status")
+      .maybeSingle();
+    if (resumeError) return errorResponse("db_error", resumeError.message, 500);
+    if (!resumed) {
+      const { data: current } = await adminClient.from("chapter_runs")
+        .select("status").eq("id", runId).maybeSingle();
+      return corsResponse(
+        JSON.stringify({
+          run_id: runId,
+          status: current?.status ?? run.status,
+        }),
+        { status: 200 },
+      );
+    }
+    // Resume skips whole-run estimate/preflight; the next billable stage
+    // performs its normal authoritative credit check.
+    EdgeRuntime.waitUntil(
+      runOutline(runId, adminClient, authHeader).catch(async (err) => {
+        if (isRetryableOutlineLookupError(err)) {
+          await scheduleTransientOutlineLookupRetry(
+            adminClient,
+            runId,
+            authHeader,
+            err,
+          );
+        } else if (isInsufficientCreditsError(err)) {
+          await pauseRunInsufficientCredits(adminClient, runId, null, err);
+        } else {await markRunFailed(
+            adminClient,
+            runId,
+            err instanceof Error ? err.message : String(err),
+          );}
+      }),
+    );
+    return corsResponse(JSON.stringify({ run_id: runId, status: "running" }), {
+      status: 202,
+    });
+  }
   if (run.status !== "queued" && run.status !== "running") {
     return corsResponse(JSON.stringify({ run_id: runId, status: run.status }), {
       status: 200,
@@ -1843,6 +1980,98 @@ async function findRunOutput(
   return String(data.id);
 }
 
+class InsufficientCreditsError extends Error {
+  readonly code = "insufficient_credits";
+  constructor(message = "Insufficient credits for the next billable stage.") {
+    super(message);
+    this.name = "InsufficientCreditsError";
+  }
+}
+
+export function isInsufficientCreditsError(error: unknown): boolean {
+  if (error instanceof InsufficientCreditsError) return true;
+  const record = error as Record<string, unknown> | null;
+  if (record && record.code === "insufficient_credits") return true;
+  return /(^|[^a-z])insufficient_credits([^a-z]|$)/i.test(
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+export function parseEmbedSectionError(
+  status: number,
+  errBody: string,
+): Error {
+  let parsedError: Record<string, unknown> | null = null;
+  try {
+    parsedError = JSON.parse(errBody) as Record<string, unknown>;
+  } catch { /* preserve raw diagnostic */ }
+  if (parsedError?.errorCode === "insufficient_credits") {
+    return new InsufficientCreditsError(
+      String(
+        parsedError.message ??
+          "Insufficient credits for the next billable stage.",
+      ),
+    );
+  }
+  return new Error(
+    `embed-section returned ${status}: ${errBody.slice(0, 200)}`,
+  );
+}
+
+async function reconcileActualCredits(
+  adminClient: ReturnType<typeof createClient>,
+  runId: string,
+): Promise<void> {
+  const { data: run } = await adminClient.from("chapter_runs")
+    .select("sections").eq("id", runId).maybeSingle();
+  const sections = Array.isArray(run?.sections)
+    ? run.sections as Array<Record<string, unknown>>
+    : [];
+  const actual = await loadActualCredits(adminClient, sections);
+  await adminClient.from("chapter_runs").update({ credits_actual: actual })
+    .eq("id", runId).in("status", ["running", "paused_insufficient_credits"]);
+}
+
+async function pauseRunInsufficientCredits(
+  adminClient: ReturnType<typeof createClient>,
+  runId: string,
+  section: Record<string, unknown> | null,
+  error: unknown,
+): Promise<void> {
+  if (section) {
+    await updateSectionStatus(adminClient, runId, {
+      ...section,
+      status: "pending",
+      error: "More credits are needed to continue.",
+      completed_at: null,
+    });
+  }
+  const { data: run } = await adminClient.from("chapter_runs")
+    .select("sections").eq("id", runId).maybeSingle();
+  const sections = Array.isArray(run?.sections)
+    ? run.sections as Array<Record<string, unknown>>
+    : [];
+  const actual = await loadActualCredits(adminClient, sections);
+  const { error: pauseError } = await adminClient.from("chapter_runs")
+    .update({
+      status: "paused_insufficient_credits",
+      error: "More credits are needed to continue.",
+      credits_actual: actual,
+      worker_lease_until: null,
+      next_retry_at: null,
+      completed_at: null,
+    })
+    .eq("id", runId).eq("status", "running");
+  if (pauseError) {
+    throw new Error(`could not pause run ${runId}: ${pauseError.message}`);
+  }
+  console.warn(
+    `[run-outline] run_id=${runId} paused for insufficient credits: ${
+      String(error)
+    }`,
+  );
+}
+
 class RetryableMemoryError extends Error {
   constructor(message: string) {
     super(message);
@@ -1890,11 +2119,22 @@ async function callGenerateStory(
     } catch {
       // Preserve the existing diagnostic for non-JSON provider/HTTP failures.
     }
+    if (parsedError?.errorCode === "insufficient_credits") {
+      throw new InsufficientCreditsError(
+        String(
+          parsedError.errorMessage ?? parsedError.message ??
+            "Insufficient credits for generation.",
+        ),
+      );
+    }
     if (parsedError?.errorCode === "memory_failed") {
       throw new RetryableMemoryError(
-        `generate-story memory repair pending: ${String(
-          parsedError.errorMessage ?? parsedError.message ?? errBody.slice(0, 200),
-        )}`,
+        `generate-story memory repair pending: ${
+          String(
+            parsedError.errorMessage ?? parsedError.message ??
+              errBody.slice(0, 200),
+          )
+        }`,
       );
     }
     if (response.status === 429) {
@@ -2011,9 +2251,7 @@ async function callEmbedSection(
   });
   if (!response.ok) {
     const errBody = await response.text();
-    throw new Error(
-      `embed-section returned ${response.status}: ${errBody.slice(0, 200)}`,
-    );
+    throw parseEmbedSectionError(response.status, errBody);
   }
 }
 

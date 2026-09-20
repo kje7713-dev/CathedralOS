@@ -11,9 +11,12 @@ import {
 } from "../generate-story/_generation_models.ts";
 import {
   generationReadinessFailures,
+  isInsufficientCreditsError,
   loadRunOutline,
+  parseEmbedSectionError,
   requireRunOutlineRecipe,
   RunOutlineOutlineError,
+  runOutlineSectionLifecycle,
 } from "./index.ts";
 import {
   buildGenerateStoryRequest,
@@ -21,6 +24,12 @@ import {
   projectSnapshotLookupFilter,
   shouldChargeAtRunCompletion,
 } from "./_generation_request.ts";
+
+function prepareRunSource(source: string): string {
+  const start = source.indexOf("async function prepareRun(");
+  const end = source.indexOf("// ---- GET /functions/v1/run-outline", start);
+  return source.slice(start, end);
+}
 
 const snapshot = {
   project: { id: "project-1", name: "Novel", summary: "A mystery" },
@@ -374,11 +383,11 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   assertEquals(source.includes('status: "queued"'), true);
   assertEquals(source.includes("prepareRun("), true);
   assertEquals(source.includes("credits_reserved: reservedCredits"), true);
-  assertEquals(source.includes("needed ${reservedCredits}"), true);
-  assertEquals(
-    source.indexOf("queueContinuation(runId, authHeader)") >
-      source.indexOf("if (!check.allowed)"),
-    true,
+  assertEquals(source.includes("needed ${reservedCredits}"), false);
+  assertEquals(source.includes("if (!check.allowed)"), false);
+  assertStringIncludes(
+    prepareRunSource(source),
+    "queueContinuation(runId, authHeader)",
   );
 });
 
@@ -477,7 +486,8 @@ Deno.test("Run All preserves memory lineage and avoids duplicate prose billing o
   assertStringIncludes(runOutline, '.eq("run_id", runId)');
   assertStringIncludes(runOutline, '.eq("run_section_id", sectionId)');
   assertStringIncludes(runOutline, '.eq("status", "complete")');
-  assertStringIncludes(runOutline, "output_id: existingOutput");
+  assertStringIncludes(runOutline, "existingOutputID: existingOutput");
+  assertStringIncludes(runOutline, "output_id: outputID");
   assertStringIncludes(
     embedding,
     "repaired?.generation_output_id !== outputId",
@@ -528,4 +538,257 @@ Deno.test("Run All Luna estimate uses canonical token pricing, not the legacy 70
   const reservation = prepareCreditReservation(estimate, entitlement);
   assertEquals(reservation.reservedCredits, 1);
   assertEquals(reservation.reservedCredits < 709, true);
+});
+
+Deno.test("whole-run maximum estimate is informational, not a kickoff gate", async () => {
+  const source = await Deno.readTextFile(
+    "supabase/functions/run-outline/index.ts",
+  );
+  const prepare = source.slice(
+    source.indexOf("async function prepareRun("),
+    source.indexOf(
+      "// ---- GET /functions/v1/run-outline",
+      source.indexOf("async function prepareRun("),
+    ),
+  );
+  assertStringIncludes(
+    prepare,
+    "const reservedCredits = Math.ceil(estimatedCost)",
+  );
+  assertStringIncludes(prepare, 'status: "running"');
+  assertEquals(prepare.includes("if (!check.allowed)"), false);
+  const estimate = source.slice(
+    source.indexOf("async function handleEstimate("),
+    source.indexOf("// ---- durable estimate/credit preflight"),
+  );
+  assertStringIncludes(estimate, "estimated_credits: reservedCredits");
+  assertStringIncludes(estimate, "allowed: true");
+  assertStringIncludes(estimate, "can_afford_estimate: check.allowed");
+});
+
+Deno.test("insufficient credits are classified narrowly", () => {
+  assertEquals(
+    isInsufficientCreditsError(
+      new Error("insufficient_credits: need 2, have 1"),
+    ),
+    true,
+  );
+  assertEquals(isInsufficientCreditsError(new Error("provider failed")), false);
+  assertEquals(
+    isInsufficientCreditsError({ code: "insufficient_credits" }),
+    true,
+  );
+});
+
+Deno.test("embed-section HTTP 402 body reaches Run All credit classifier", () => {
+  const error = parseEmbedSectionError(
+    402,
+    JSON.stringify({
+      errorCode: "insufficient_credits",
+      message: "Insufficient credits for the next billable stage.",
+    }),
+  );
+  assertEquals(isInsufficientCreditsError(error), true);
+  assertEquals(
+    error.message,
+    "Insufficient credits for the next billable stage.",
+  );
+});
+
+Deno.test("credit shortage pauses a resumable run and preserves the exact prose output", async () => {
+  const source = await Deno.readTextFile(
+    "supabase/functions/run-outline/index.ts",
+  );
+  const pauseStart = source.indexOf(
+    "async function pauseRunInsufficientCredits(",
+  );
+  const pauseEnd = source.indexOf("class RetryableMemoryError", pauseStart);
+  const pause = source.slice(pauseStart, pauseEnd);
+  assertStringIncludes(pause, 'status: "paused_insufficient_credits"');
+  assertStringIncludes(pause, 'status: "pending"');
+  assertStringIncludes(pause, "credits_actual: actual");
+  assertStringIncludes(pause, "completed_at: null");
+  assertStringIncludes(source, "outputID: result.output_id");
+  assertStringIncludes(source, "Resume skips whole-run estimate/preflight");
+  assertStringIncludes(source, 'run.status === "paused_insufficient_credits"');
+  assertStringIncludes(source, "runOutline(runId, adminClient, authHeader)");
+  assertEquals(pause.includes('status: "failed"'), false);
+});
+
+Deno.test("live actual spend reconciles after completed and recovered sections", async () => {
+  const source = await Deno.readTextFile(
+    "supabase/functions/run-outline/index.ts",
+  );
+  const reconcile = source.indexOf("async function reconcileActualCredits(");
+  assertStringIncludes(
+    source.slice(reconcile, reconcile + 900),
+    "loadActualCredits",
+  );
+  assertStringIncludes(
+    source.slice(reconcile, reconcile + 900),
+    "credits_actual: actual",
+  );
+  const recovery = source.indexOf(
+    "const existingOutput = await findRunOutput(",
+  );
+  const recoveryEnd = source.indexOf("continue;", recovery);
+  assertStringIncludes(
+    source.slice(recovery, recoveryEnd),
+    "reconcileActualCredits",
+  );
+  const generation = source.indexOf("const result = await callGenerateStory(");
+  const memory = source.indexOf("await ensureOutputMemory(", generation);
+  assertEquals(generation < memory, true);
+  assertStringIncludes(source.slice(generation, memory), 'status: "pending"');
+});
+
+Deno.test("paused status is included only in the new forward migration", async () => {
+  const migration = await Deno.readTextFile(
+    "supabase/migrations/20260920170000_pause_run_on_insufficient_credits.sql",
+  );
+  assertStringIncludes(migration, "paused_insufficient_credits");
+  const historical = await Deno.readTextFile(
+    "supabase/migrations/20260901120000_durable_run_outline_estimate_preflight.sql",
+  );
+  assertEquals(historical.includes("paused_insufficient_credits"), false);
+});
+
+Deno.test("Run All iOS presentation treats paused as resumable and shows actual spend", async () => {
+  const [sheet, banner, coordinator, service] = await Promise.all([
+    Deno.readTextFile(
+      "CathedralOSApp/Features/Projects/OutlineSectionsRegionView.swift",
+    ),
+    Deno.readTextFile(
+      "CathedralOSApp/Features/Projects/OutlineSectionsRegionView.swift",
+    ),
+    Deno.readTextFile(
+      "CathedralOSApp/Services/DataDurabilityCoordinator.swift",
+    ),
+    Deno.readTextFile("CathedralOSApp/Services/RunOutlineService.swift"),
+  ]);
+  assertStringIncludes(sheet, "Maximum estimated cost:");
+  assertStringIncludes(sheet, "!isStarting");
+  assertEquals(sheet.includes("return est.allowed"), false);
+  assertStringIncludes(banner, "Generation paused");
+  assertStringIncludes(banner, "More credits needed");
+  assertStringIncludes(banner, 'Button("Resume")');
+  assertStringIncludes(banner, "Final cost:");
+  assertStringIncludes(
+    coordinator,
+    'status.status == "paused_insufficient_credits"',
+  );
+  assertStringIncludes(
+    coordinator,
+    "preserving status without terminal reconciliation",
+  );
+  assertStringIncludes(service, "resume_run_id");
+  assertStringIncludes(service, "actualCreditsText");
+});
+
+Deno.test("Run All executable lifecycle pauses after prose settlement and resumes memory without duplicate generation", async () => {
+  const state: {
+    run: "running" | "paused_insufficient_credits" | "completed";
+    section: "running" | "pending" | "completed";
+    outputID: string | null;
+    creditsActual: number;
+  } = {
+    run: "running",
+    section: "running",
+    outputID: null,
+    creditsActual: 0,
+  };
+  let providerCalls = 0;
+  let proseBillingCalls = 0;
+  let memoryCalls = 0;
+  const outputID = "output-prose-1";
+
+  const first = await runOutlineSectionLifecycle({
+    generate: async () => {
+      providerCalls++;
+      proseBillingCalls++;
+      state.creditsActual += 2.75;
+      return { outputID, status: "complete", wasTruncated: false };
+    },
+    persistPendingOutput: async (id) => {
+      state.outputID = id;
+      state.section = "pending";
+    },
+    ensureMemory: async () => {
+      memoryCalls++;
+      throw { code: "insufficient_credits" };
+    },
+    persistCompleted: async () => {
+      state.section = "completed";
+    },
+    isInsufficientCredits: (error) =>
+      (error as { code?: string }).code === "insufficient_credits",
+  });
+  state.run = first.status;
+
+  assertEquals(first.status, "paused_insufficient_credits");
+  assertEquals(first.outputID, outputID);
+  assertEquals(state.outputID, outputID);
+  assertEquals(state.section, "pending");
+  assertEquals(state.run, "paused_insufficient_credits");
+  assertEquals(state.creditsActual, 2.75);
+  assertEquals(providerCalls, 1);
+  assertEquals(proseBillingCalls, 1);
+  assertEquals(memoryCalls, 1);
+
+  const resumed = await runOutlineSectionLifecycle({
+    existingOutputID: state.outputID,
+    generate: async () => {
+      providerCalls++;
+      proseBillingCalls++;
+      return { outputID: "unexpected-new-output", status: "complete" };
+    },
+    persistPendingOutput: async () => {
+      throw new Error("persistPendingOutput must not run during recovery");
+    },
+    ensureMemory: async (id) => {
+      memoryCalls++;
+      assertEquals(id, outputID);
+    },
+    persistCompleted: async (id) => {
+      assertEquals(id, outputID);
+      state.section = "completed";
+      state.run = "completed";
+    },
+    isInsufficientCredits: () => false,
+  });
+
+  assertEquals(resumed.status, "completed");
+  assertEquals(resumed.outputID, outputID);
+  assertEquals(state.section, "completed");
+  assertEquals(state.run, "completed");
+  assertEquals(state.creditsActual, 2.75);
+  assertEquals(providerCalls, 1);
+  assertEquals(proseBillingCalls, 1);
+  assertEquals(memoryCalls, 2);
+});
+
+Deno.test("Run All atomic memory settlement race pauses instead of failing", async () => {
+  let providerCalls = 0;
+  let billingCalls = 0;
+  let finalStatus = "running";
+  const result = await runOutlineSectionLifecycle({
+    generate: async () => {
+      providerCalls++;
+      billingCalls++;
+      return { outputID: "output-race-1", status: "complete" };
+    },
+    persistPendingOutput: async () => {},
+    ensureMemory: async () => {
+      throw new Error("insufficient credits for stage");
+    },
+    persistCompleted: async () => {
+      finalStatus = "completed";
+    },
+    isInsufficientCredits: (error) =>
+      /insufficient credits for stage/i.test(String(error)),
+  });
+  finalStatus = result.status;
+  assertEquals(finalStatus, "paused_insufficient_credits");
+  assertEquals(providerCalls, 1);
+  assertEquals(billingCalls, 1);
 });

@@ -70,6 +70,11 @@ struct RunOutlineCostEstimate: Codable {
     }
 }
 
+struct RunOutlineResumeResponse: Codable {
+    let run_id: String
+    let status: String
+}
+
 struct RunOutlineKickoffResponse: Codable {
     let run_id: String
     let status: String
@@ -99,6 +104,16 @@ struct RunOutlineStatus: Codable {
     let created_at: String?
     let updated_at: String?
     let completed_at: String?
+}
+
+extension RunOutlineStatus {
+    var actualCreditsText: String {
+        String(format: "%.2f", credits_actual ?? 0)
+    }
+
+    var isPausedForInsufficientCredits: Bool {
+        status == "paused_insufficient_credits"
+    }
 }
 
 struct RunOutlineCurrentSection: Codable {
@@ -191,6 +206,21 @@ struct RunOutlineService {
         let (data, response) = try await performRequest(request)
         try checkStatus(response: response, data: data)
         return try decode(RunOutlineCostEstimate.self, from: data)
+    }
+
+    /// Resume a paused durable run without recreating its idempotency key.
+    func resume(runID: String) async throws -> RunOutlineResumeResponse {
+        let client = try requireClient()
+        let token = try await validAccessToken()
+        let url = client.edgeFunctionURL(path: "run-outline")
+        var request = client.authorizedRequest(for: url, userAccessToken: token)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["resume_run_id": runID], options: [])
+        let (data, response) = try await performRequest(request)
+        try checkStatus(response: response, data: data)
+        return try decode(RunOutlineResumeResponse.self, from: data)
     }
 
     /// Find the current attempt for an idempotent outline/section pair. This
