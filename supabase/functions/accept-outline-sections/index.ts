@@ -1,6 +1,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { acceptRunTerminalOutcome } from "./_outcome.ts";
 import { canonicalUUID } from "../_shared/uuid.ts";
+import { deriveRecipeObligations, obligationCoverage } from "../outline-from-recipe/_recipe_obligations.ts";
 export { canonicalUUID };
 
 // Durable Accept All worker. The iOS client submits the complete suggestion
@@ -74,6 +75,11 @@ type Section = {
   recipeRequirementIDs?: string[] | null;
 };
 type CanonicalRecipe = Record<string, unknown>;
+export function missingRequiredRecipeObligationIDs(recipe: CanonicalRecipe, sections: Array<{ recipe_requirement_ids?: unknown; recipeRequirementIDs?: unknown }>): string[] {
+  const obligations = deriveRecipeObligations(recipe);
+  return obligationCoverage(sections.map((section) => ({ recipeRequirementIDs: Array.isArray(section.recipe_requirement_ids) ? section.recipe_requirement_ids as string[] : Array.isArray(section.recipeRequirementIDs) ? section.recipeRequirementIDs as string[] : [] })), obligations).missingRequired.map((obligation) => obligation.id);
+}
+class MissingRecipeObligationsError extends Error { readonly code = "missing_recipe_obligations"; }
 type RequestBody = {
   outline_id: string;
   project_id: string;
@@ -533,6 +539,10 @@ async function runJob(runID: string, authHeader: string, userID: string) {
   if (claimError || !claimed?.[0]) return;
   const request = claimed[0].request_json as RequestBody;
   try {
+    const { data: persistedSections, error: persistedSectionsError } = await db.from("outline_sections").select("recipe_requirement_ids,status").eq("outline_id", request.outline_id).neq("status", "deleted");
+    if (persistedSectionsError) throw new Error(`Could not read existing outline obligations: ${persistedSectionsError.message}`);
+    const missingRequired = missingRequiredRecipeObligationIDs(request.source_recipe_json, [...(persistedSections ?? []), ...request.sections]);
+    if (missingRequired.length > 0) throw new MissingRecipeObligationsError(`Required recipe obligations are not covered: ${missingRequired.join(", ")}`);
     const normalizedSections = (await normalizeStoryArcBeatIDs(
       db,
       request.sections,
@@ -637,7 +647,7 @@ async function runJob(runID: string, authHeader: string, userID: string) {
     const message = err instanceof Error ? err.message : String(err);
     await db.from("outline_accept_runs").update({
       status: "failed",
-      error: message.slice(0, 2000),
+      error: `${err instanceof MissingRecipeObligationsError ? err.code + ": " : ""}${message}`.slice(0, 2000),
       completed_at: new Date().toISOString(),
     }).eq("id", runID);
   }

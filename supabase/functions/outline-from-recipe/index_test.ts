@@ -20,6 +20,9 @@ import {
   outlineLogicalStageFamily,
   buildPrompt,
   buildSuggestionResponseSchema,
+  buildObligationRepairPrompt,
+  mergeObligationRepairOperations,
+  repairRequiredRecipeObligations,
   STORY_MATERIAL_ENRICHMENT_SCHEMA,
   calculateRepairAllocation,
   ExpansionValidationError,
@@ -3649,7 +3652,7 @@ function fakeWorkerBilling(requestedActions: string[], providerCalls = requested
     requestedActions.push(request.action);
     if (providerCalls !== requestedActions) providerCalls.push(request.action);
     if (request.action === "outline-suggestions") {
-      const section = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: [], entryState: "The prior state holds.", dramaticEvent: `${title} happens.`, resultingChange: `${title} changes the pressure.`, terminalState: `${title} hands forward a new pressure.` });
+      const section = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`), entryState: "The prior state holds.", dramaticEvent: `${title} happens.`, resultingChange: `${title} changes the pressure.`, terminalState: `${title} hands forward a new pressure.` });
       return { featureResult: JSON.stringify({ beats: { "beat-1": [section("beat-1", "Opening route")], "beat-2": [section("beat-2", "Cost of the route")] } }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
     }
     if (request.action === "outline-plan") {
@@ -3748,7 +3751,7 @@ Deno.test("multi-beat expansion checkpoints beat one before the one-dispatch yie
   row.story_material = material;
   const db = new ExecutableRunDb(row);
   const actions: string[] = [];
-  const baseSection = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: [], entryState: "Prior state", dramaticEvent: `${title} happens`, resultingChange: `${title} changes the pressure`, terminalState: `${title} hands forward pressure` });
+  const baseSection = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`), entryState: "Prior state", dramaticEvent: `${title} happens`, resultingChange: `${title} changes the pressure`, terminalState: `${title} hands forward pressure` });
   const billable = validatedWorkerBilling(actions, (action) => {
     if (action === "outline-suggestions") return { beats: { "beat-1": [baseSection("beat-1", "Opening")], "beat-2": [baseSection("beat-2", "Closing")] } };
     const beat = action.endsWith("beat-1") ? "beat-1" : "beat-2";
@@ -3899,7 +3902,29 @@ Deno.test("global outline completion preserves advisory quality and obligation a
   assertEquals(typeof diagnostics.unusedStoryMaterialItems, "number");
   assertEquals("advisoryValidationError" in diagnostics, false);
   assertEquals(typeof diagnostics.recipeObligationCoverage, "object");
-  assertEquals(Array.isArray(diagnostics.missingRequiredRecipeObligations), true);
+  assertEquals(diagnostics.missingRequiredRecipeObligations, []);
+});
+
+
+Deno.test("required-obligation repair prompt and validator preserve the contract", () => {
+  const obligations = deriveRecipeObligations(sparseRequest.recipe as any);
+  const template = sparseRequest.arcTemplate as any;
+  const section = { title: "Repair", summary: "A repair", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Repair ends", entryState: "Before", dramaticEvent: "Repair happens", resultingChange: "Pressure changes", terminalState: "After", dramaticFunction: arcRoleContract(template.beats[0], template.name).allowedFunctions[0], storyArcBeatID: template.beats[0].id, recipeRequirementIDs: [obligations[0].id] };
+  const prompt = buildObligationRepairPrompt(sparseRequest as any, [], [], [obligations[0]]);
+  assertEquals(prompt.user.includes(obligations[0].id), true);
+  const repaired = mergeObligationRepairOperations([], { operations: [{ action: "add", replaceTitle: null, section }] }, new Set(template.beats.map((beat: any) => beat.id)), obligations, template);
+  assertEquals(repaired[0].recipeRequirementIDs, [obligations[0].id]);
+  assertThrows(() => mergeObligationRepairOperations([], { operations: [{ action: "add", replaceTitle: null, section: { ...section, recipeRequirementIDs: ["R999"] } }] }, new Set(template.beats.map((beat: any) => beat.id)), obligations, template));
+});
+
+Deno.test("required-obligation repair is one billable stage and rechecks coverage", async () => {
+  const obligations = deriveRecipeObligations(sparseRequest.recipe as any);
+  const template = sparseRequest.arcTemplate as any;
+  const section = { title: "Repair", summary: "A repair", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Repair ends", entryState: "Before", dramaticEvent: "Repair happens", resultingChange: "Pressure changes", terminalState: "After", dramaticFunction: arcRoleContract(template.beats[0], template.name).allowedFunctions[0], storyArcBeatID: template.beats[0].id, recipeRequirementIDs: obligations.map((obligation) => obligation.id) };
+  const actions: string[] = [];
+  const result = await repairRequiredRecipeObligations([], sparseRequest as any, obligations, (async (_a: any, _b: any, _c: any, _d: any, action: string, validate: any) => { actions.push(action); const content = JSON.stringify({ operations: [{ action: "add", replaceTitle: null, section }] }); await validate(content); return { content, creditCostCharged: 1, remainingCredits: 1 }; }) as any);
+  assertEquals(actions, ["outline-obligation-repair"]);
+  assertEquals(result.missing, []);
 });
 
 Deno.test("one physical provider call stops the second dispatch before provider execution", async () => {

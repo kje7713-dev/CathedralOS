@@ -1404,6 +1404,55 @@ export class RecipeObligationValidationError extends Error {
   readonly code = "missing_recipe_obligations";
 }
 
+export const OBLIGATION_REPAIR_SCHEMA = {
+  type: "object",
+  properties: {
+    operations: { type: "array", minItems: 1, maxItems: 3, items: {
+      type: "object", properties: {
+        action: { type: "string", enum: ["add", "replace"] },
+        replaceTitle: { type: ["string", "null"], maxLength: 200 },
+        section: { type: "object", additionalProperties: true },
+      }, required: ["action", "replaceTitle", "section"], additionalProperties: false,
+    } },
+  }, required: ["operations"], additionalProperties: false,
+} as const;
+
+export function mergeObligationRepairOperations(current: Suggestion[], parsed: any, beatIds: Set<string>, obligations: RecipeObligation[], template: Pick<ArcTemplateBlob, "name" | "beats">): Suggestion[] {
+  if (!parsed || !Array.isArray(parsed.operations)) throw new RecipeObligationValidationError("missing_recipe_obligations: repair response missing operations");
+  const result = current.map((section) => ({ ...section }));
+  for (const operation of parsed.operations) {
+    const index = operation.action === "replace" ? result.findIndex((section) => section.title === operation.replaceTitle) : -1;
+    if (operation.action === "replace" && index < 0) throw new RecipeObligationValidationError("missing_recipe_obligations: repair target section not found");
+    const validated = validateSuggestions({ suggestions: [operation.section] }, beatIds, undefined, obligations, template).suggestions[0];
+    if (!validated) throw new RecipeObligationValidationError("missing_recipe_obligations: repair returned no valid section");
+    if (operation.action === "add") {
+      if (result.some((section) => section.title === validated.title)) throw new RecipeObligationValidationError("missing_recipe_obligations: repair added duplicate section");
+      result.push(validated);
+    } else result[index] = validated;
+  }
+  return result;
+}
+
+export function buildObligationRepairPrompt(req: OutlineFromRecipeRequest, current: Suggestion[], existing: ExistingSectionBlob[], missing: RecipeObligation[]) {
+  return {
+    system: "Repair only the missing required recipe obligations. Add one focused section or replace one appropriate section; never delete, move unrelated sections, drop covered obligations, use unknown IDs, or violate Story Arc contracts.",
+    user: JSON.stringify({ arc: req.arcTemplate, existingAcceptedSections: existing, currentSuggestions: current, missingRequiredObligations: missing }),
+  };
+}
+
+export async function repairRequiredRecipeObligations(current: Suggestion[], req: OutlineFromRecipeRequest, obligations: RecipeObligation[], billableCall: SuggestionLLMCall): Promise<{ suggestions: Suggestion[]; missing: RecipeObligation[] }> {
+  const before = obligationCoverage([...(req.existingSections ?? []), ...current], obligations);
+  if (!before.missingRequired.length) return { suggestions: current, missing: [] };
+  const prompt = buildObligationRepairPrompt(req, current, req.existingSections ?? [], before.missingRequired);
+  const raw = await billableCall(prompt.system, prompt.user, 8000, { type: "json_schema", json_schema: { name: "outline_required_obligation_repair", strict: true, schema: OBLIGATION_REPAIR_SCHEMA } }, "outline-obligation-repair", (content) => {
+    const repaired = mergeObligationRepairOperations(current, JSON.parse(content), new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate);
+    if (repaired.length > MAX_PLANNED_SECTIONS) throw new RecipeObligationValidationError("missing_recipe_obligations: repair exceeded section safety cap");
+    return content;
+  });
+  const repaired = mergeObligationRepairOperations(current, JSON.parse(raw.content), new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate);
+  return { suggestions: repaired, missing: obligationCoverage([...(req.existingSections ?? []), ...repaired], obligations).missingRequired };
+}
+
 export class NovelScalePlanningError extends Error {
   readonly code: NovelPlanningFailureCode;
 
@@ -3287,6 +3336,15 @@ export async function runSuggestionJob(
     };
 
     const provenance = await recipeProvenance(body.recipe);
+    const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
+    if (planningState.nextAction === "obligation-repair") {
+      const repair = await repairRequiredRecipeObligations(Array.isArray(claimedRun.suggestions) ? claimedRun.suggestions as Suggestion[] : [], body, recipeObligations, billableCall);
+      const missing = repair.missing.map((obligation) => obligation.id);
+      diagnostics = { ...diagnostics, stage: missing.length ? "obligation_repair_failed" : "obligation_repair_complete", recipeObligationCoverage: obligationCoverage([...(body.existingSections ?? []), ...repair.suggestions], recipeObligations).covered, missingRequiredRecipeObligations: missing };
+      if (missing.length) throw new RecipeObligationValidationError(`missing_recipe_obligations: ${missing.join(", ")}`);
+      await updateRun({ status: "completed", suggestions: repair.suggestions, warnings: [], completed_at: new Date().toISOString(), planning_state: { ...planningState, phase: "completed", nextAction: "completed" }, diagnostics: { ...diagnostics, stage: "completed" }, lease_owner: null, lease_expires_at: null });
+      return;
+    }
     if (!body.storyMaterialEnrichment && claimedRun.story_material) {
       body = {
         ...body,
@@ -3489,7 +3547,6 @@ export async function runSuggestionJob(
     await persistPlanningProvenance(db, body, runId, storyMaterial, provenance);
     body = { ...body, storyMaterialEnrichment: storyMaterial };
     const beatIds = new Set(body.arcTemplate.beats.map((b) => b.id));
-    const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
     // Freeze the deterministic compact view on the durable run so a reclaimed
     // worker cannot silently prompt against a materially different payload.
     const computedPlanningContext = {
@@ -3612,9 +3669,7 @@ export async function runSuggestionJob(
       }
     }
 
-    // Structural validation above is the completion gate. The following checks
-    // are intentionally advisory: literary heuristics must never reject a
-    // structurally usable outline or trigger another billable call.
+    // Structural validation and required recipe-obligation coverage are completion invariants; literary heuristics remain advisory.
     latestValidSuggestions = result.suggestions;
     const initialQuality = collectAdvisoryOutlineQuality(
       result.suggestions,
@@ -3646,6 +3701,11 @@ export async function runSuggestionJob(
     };
     let completedSuggestions = result.suggestions;
     let completionWarnings = result.warnings;
+    if (coverage.missingRequired.length > 0) {
+      planningState = { ...planningState, phase: "obligation_repair_pending", nextAction: "obligation-repair" };
+      await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics: { ...diagnostics, stage: "obligation_repair_pending" } });
+      throw new SuggestionWorkerYield();
+    }
     const outlineNeedsExpansion = requestedStoryMaterialFormat(body) === "novel" &&
       needsNovelExpansion(completedSuggestions, body.existingSections ?? []);
     planningState = {
@@ -3683,6 +3743,9 @@ export async function runSuggestionJob(
         novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
       };
     }
+    const finalCoverage = obligationCoverage([...(body.existingSections ?? []), ...completedSuggestions], recipeObligations);
+    diagnostics = { ...diagnostics, recipeObligationCoverage: finalCoverage.covered, missingRequiredRecipeObligations: finalCoverage.missingRequired.map((obligation) => obligation.id) };
+    if (finalCoverage.missingRequired.length > 0) throw new RecipeObligationValidationError(`missing_recipe_obligations: ${finalCoverage.missingRequired.map((obligation) => obligation.id).join(", ")}`);
     const finalScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
     if (requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsMinimum) {
       throw new Error("outline expansion did not reach plausible novel scale");
@@ -3719,7 +3782,9 @@ export async function runSuggestionJob(
       );
       return;
     }
-    const errorCode = err instanceof StoryMaterialSufficiencyError
+    const errorCode = err instanceof RecipeObligationValidationError
+      ? err.code
+      : err instanceof StoryMaterialSufficiencyError
       ? "insufficient_story_material"
       : err && typeof err === "object" && "code" in err
       ? String((err as { code?: unknown }).code)
