@@ -17,12 +17,15 @@ select
   count(*)                                     as generations,
   count(*) filter (where status = 'complete')  as completed,
   count(*) filter (where status = 'failed')    as failed,
-  coalesce(sum(credit_revenue_usd), 0)         as revenue_usd,
-  coalesce(sum(total_model_usd), 0)            as model_cost_usd,
-  coalesce(sum(margin_usd), 0)                 as margin_usd,
+  sum(coalesce(customer_revenue_cents / 100.0, credit_revenue_usd))         as revenue_usd,
+  sum(provider_cogs_cents) / 100.0            as model_cost_usd,
+  sum(margin_cents) / 100.0                 as margin_usd,
+  count(*) filter (where coalesce(customer_revenue_cents / 100.0, credit_revenue_usd) is not null)::numeric / nullif(count(*), 0) as customer_revenue_coverage,
+  count(*) filter (where provider_cogs_cents is not null)::numeric / nullif(count(*), 0) as provider_cogs_coverage,
+  count(*) filter (where margin_cents is not null)::numeric / nullif(count(*), 0) as margin_coverage,
   case
-    when sum(credit_revenue_usd) > 0
-      then sum(margin_usd) / sum(credit_revenue_usd)
+    when sum(coalesce(customer_revenue_cents / 100.0, credit_revenue_usd)) > 0
+      then sum(margin_cents) / nullif(sum(coalesce(customer_revenue_cents / 100.0, credit_revenue_usd)), 0) / 100.0
     else null
   end                                          as margin_pct
 from public.generation_usage_events
@@ -33,70 +36,76 @@ order by 1 desc;
 
 -- ---------------------------------------------------------------------------
 -- 2. Truncation rate by (lengthMode × model).
--- "Truncated" is recorded as error_code = 'output_truncated' on the row;
--- we look for it via the limiter-side status field. Since output_truncated
--- still produces a status='complete' row, this query counts rows whose
--- generation hit the model length cap.
+-- generate-story persists provider finish_reason='length' as a draft
+-- generation_outputs row. Follow the usage event's output FK rather than
+-- reading the nonexistent legacy generation_usage_events.error_code.
 -- ---------------------------------------------------------------------------
 select
-  model_name,
-  generation_length_mode,
+  e.model_name,
+  e.generation_length_mode,
   count(*)                                                     as generations,
-  count(*) filter (where error_code = 'output_truncated')      as truncated,
+  count(*) filter (where o.status = 'draft')                  as truncated,
   case
     when count(*) > 0
-      then count(*) filter (where error_code = 'output_truncated')::numeric / count(*)
+      then count(*) filter (where o.status = 'draft')::numeric / count(*)
     else 0
   end                                                          as truncation_rate
-from public.generation_usage_events
-where created_at >= now() - interval '12 weeks'
-  and status = 'complete'
+from public.generation_usage_events e
+  left join public.generation_outputs o on o.id = e.generation_output_id
+where e.created_at >= now() - interval '12 weeks'
+  and e.status = 'complete'
 group by 1, 2
 order by truncation_rate desc, generations desc;
 
 -- ---------------------------------------------------------------------------
--- 3. Average margin per model tier (joins model_rates).
+-- 3. Average margin per catalog model kind.
 -- ---------------------------------------------------------------------------
 select
-  r.tier,
+  r.model_kind,
   count(*)                                              as generations,
-  coalesce(avg(e.total_model_usd), 0)                   as avg_model_cost_usd,
-  coalesce(avg(e.credit_revenue_usd), 0)                as avg_revenue_usd,
-  coalesce(avg(e.margin_usd), 0)                        as avg_margin_usd,
+  avg(e.provider_cogs_cents) / 100.0                   as avg_model_cost_usd,
+  avg(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd))                as avg_revenue_usd,
+  avg(e.margin_cents) / 100.0                        as avg_margin_usd,
+  count(*) filter (where coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd) is not null)::numeric / nullif(count(*), 0) as customer_revenue_coverage,
+  count(*) filter (where e.provider_cogs_cents is not null)::numeric / nullif(count(*), 0) as provider_cogs_coverage,
+  count(*) filter (where e.margin_cents is not null)::numeric / nullif(count(*), 0) as margin_coverage,
   case
-    when avg(e.credit_revenue_usd) > 0
-      then avg(e.margin_usd) / avg(e.credit_revenue_usd)
+    when avg(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd)) > 0
+      then avg(e.margin_cents) / nullif(avg(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd)), 0) / 100.0
     else null
   end                                                   as avg_margin_pct
 from public.generation_usage_events e
-  left join public.model_rates r on r.model_name = e.model_name
+  left join public.generation_models r on r.provider_model = e.model_name
 where e.created_at >= now() - interval '12 weeks'
   and e.status = 'complete'
-group by r.tier
-order by r.tier;
+group by r.model_kind
+order by r.model_kind;
 
 -- ---------------------------------------------------------------------------
 -- 4. Top models by usage and margin contribution.
 -- ---------------------------------------------------------------------------
 select
   e.model_name,
-  r.tier,
+  r.model_kind,
   count(*)                                  as generations,
-  coalesce(sum(e.total_model_usd), 0)       as total_cost_usd,
-  coalesce(sum(e.credit_revenue_usd), 0)    as total_revenue_usd,
-  coalesce(sum(e.margin_usd), 0)            as total_margin_usd
+  sum(e.provider_cogs_cents) / 100.0       as total_cost_usd,
+  sum(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd))    as total_revenue_usd,
+  sum(e.margin_cents) / 100.0            as total_margin_usd,
+  count(*) filter (where coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd) is not null)::numeric / nullif(count(*), 0) as customer_revenue_coverage,
+  count(*) filter (where e.provider_cogs_cents is not null)::numeric / nullif(count(*), 0) as provider_cogs_coverage,
+  count(*) filter (where e.margin_cents is not null)::numeric / nullif(count(*), 0) as margin_coverage
 from public.generation_usage_events e
-  left join public.model_rates r on r.model_name = e.model_name
+  left join public.generation_models r on r.provider_model = e.model_name
 where e.created_at >= now() - interval '12 weeks'
   and e.status = 'complete'
-group by e.model_name, r.tier
+group by e.model_name, r.model_kind
 order by generations desc
 limit 25;
 
 -- ---------------------------------------------------------------------------
 -- 5. Inputs/outputs that hit unmapped models (null margins).
 -- A non-zero count here means a model is generating but missing from
--- model_rates — Kevin should add a row or mark is_active accordingly.
+-- generation_models — investigate missing modern provider economics.
 -- ---------------------------------------------------------------------------
 select
   model_name,
@@ -104,6 +113,6 @@ select
 from public.generation_usage_events
 where created_at >= now() - interval '12 weeks'
   and status = 'complete'
-  and total_model_usd is null
+  and provider_cogs_cents is null
 group by 1
 order by unmapped_generations desc;

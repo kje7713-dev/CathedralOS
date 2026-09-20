@@ -15,6 +15,8 @@ on:
       - 'supabase/tests/database/openai_admin_usage_reconciliation.test.sql'
       - 'supabase/migrations/20260919070000_openai_pricing_observations.sql'
       - 'supabase/tests/database/openai_pricing_observations.test.sql'
+      - 'supabase/migrations/20260920100000_retire_legacy_model_rates.sql'
+      - 'supabase/tests/database/legacy_model_rates_retirement.test.sql'
       - 'supabase/migrations/20260909215722_scene_memory_stage_ledger_and_run_lineage.sql'
       - 'supabase/migrations/20260917190000_generation_model_pricing_safety.sql'
       - 'supabase/migrations/20260917200000_sync_openai_model_catalog.sql'
@@ -151,3 +153,7 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/openai_admin_usage_reconciliation.test.sql
+      - name: Run PR5 legacy pricing retirement pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/legacy_model_rates_retirement.test.sql

@@ -175,7 +175,6 @@ export async function settleAiCoverCredits(
     idempotency_key: `export-job:${exportJobId}`,
     input_tokens: billing.usage.uncachedInputTokens,
     output_tokens: billing.usage.outputTokens,
-    credit_revenue_usd: billing.customerRevenueCents / 100,
     provider_cogs_cents: billing.providerCogsCents,
     customer_revenue_cents: billing.customerRevenueCents,
     margin_cents: billing.marginCents,

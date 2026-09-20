@@ -108,26 +108,22 @@ We already log per generation: `tokens` (input/output/total), `selectedModelId`,
 
 ### 5.1 Schema additions
 
-1. **`model_rates`** table:
-   - `model_id` (PK, FK → `generation_models.id`)
-   - `input_per_1k_usd` (numeric)
-   - `output_per_1k_usd` (numeric)
-   - `premium_markup_pct` (numeric, e.g., 0.50 for +50%)
-   - `tier` (text: 'cheap' | 'standard' | 'premium')
-   - `is_active` (boolean)
-   - `updated_at`
+The live pricing authority is `public.generation_models`. Provider economics are
+recorded in immutable modern telemetry columns on
+`public.generation_usage_events`: `provider_cogs_cents`,
+`customer_revenue_cents`, and `margin_cents`. These fields are populated by the
+settlement/billing paths and are the only fields used by current cost reports.
 
-2. **New columns on `GenerationUsageEvent`:**
-   - `model_input_usd`, `model_output_usd`, `total_model_usd`
-   - `credit_revenue_usd` (= `credit_cost_charged × $0.05`)
-   - `margin_usd` (= `credit_revenue_usd − total_model_usd`)
-   - `margin_pct` (= `margin_usd / credit_revenue_usd`)
+The older `model_input_usd`, `model_output_usd`, `total_model_usd`,
+`margin_usd`, and `margin_pct` columns remain only for historical compatibility;
+they are deprecated and must not be populated by new runtime code.
 
-3. **Compute on insert** in `supabase/functions/generate-story/index.ts`, using a `model_rates` lookup keyed off `selectedModelId`.
+`public.model_rates` and its lookup path were retired in PR 5. Do not add new
+consumers or seed rows there.
 
-### 5.2 Seeded model rates (best estimates, validate against invoices)
+### 5.2 Historical pricing notes
 
-These are **public list prices as of early 2026** — accurate to within ~10%, but **validate against actual provider invoices before Phase 1 ships**. Sources: each provider's published pricing page as of Jan 2026.
+The table below documents the former Phase 1 estimates for historical context only. It is not a runtime source of truth and must not be used to seed or calculate new customer charges; current rates are verified into `generation_models` from the official pricing observer.
 
 | `model_id`             | Tier     | Input / 1k USD | Output / 1k USD | Notes                              |
 |------------------------|----------|----------------|-----------------|------------------------------------|
