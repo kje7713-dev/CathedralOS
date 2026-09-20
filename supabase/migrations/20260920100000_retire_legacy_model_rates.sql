@@ -230,7 +230,7 @@ begin
     from public.generation_usage_events e
       left join public.generation_models r on r.provider_model = e.model_name
     where e.created_at >= week_start_tz
-      and created_at <  week_end
+      and e.created_at <  week_end
       and e.status = 'complete'
     group by e.model_name, r.model_kind
     order by generations desc
