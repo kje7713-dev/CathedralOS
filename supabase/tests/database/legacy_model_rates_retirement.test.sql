@@ -59,7 +59,7 @@ insert into public.generation_usage_events (
 ) values (
   '00000000-0000-4000-8000-000000000605',
   '00000000-0000-4000-8000-000000000605',
-  'generate', 'pr5-fixture', 'gpt-4o-mini', 'complete', 35.533355,
+  'generate', 'generate', 'gpt-4o-mini', 'complete', 35.533355,
   '2026-08-03T12:00:00Z'
 );
 
