@@ -27,18 +27,18 @@ select ok(
 );
 
 select ok(
-  position('generation_models' in pg_get_functiondef('public.capture_telemetry_weekly_snapshot(date)')) > 0,
+  position('generation_models' in pg_get_functiondef(to_regprocedure('public.capture_telemetry_weekly_snapshot(date)'))) > 0,
   'weekly snapshot uses the canonical generation_models catalog'
 );
 
 select ok(
-  position('provider_cogs_cents' in pg_get_functiondef('public.capture_telemetry_weekly_snapshot(date)')) > 0
-    and position('margin_cents' in pg_get_functiondef('public.capture_telemetry_weekly_snapshot(date)')) > 0,
+  position('provider_cogs_cents' in pg_get_functiondef(to_regprocedure('public.capture_telemetry_weekly_snapshot(date)'))) > 0
+    and position('margin_cents' in pg_get_functiondef(to_regprocedure('public.capture_telemetry_weekly_snapshot(date)'))) > 0,
   'weekly snapshot uses modern immutable telemetry economics'
 );
 
 select ok(
-  position('model_rates' in pg_get_functiondef('public.capture_telemetry_weekly_snapshot(date)')) = 0,
+  position('model_rates' in pg_get_functiondef(to_regprocedure('public.capture_telemetry_weekly_snapshot(date)'))) = 0,
   'weekly snapshot has no legacy model_rates dependency'
 );
 
