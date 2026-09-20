@@ -75,9 +75,20 @@ type Section = {
   recipeRequirementIDs?: string[] | null;
 };
 type CanonicalRecipe = Record<string, unknown>;
-export function missingRequiredRecipeObligationIDs(recipe: CanonicalRecipe, sections: Array<{ recipe_requirement_ids?: unknown; recipeRequirementIDs?: unknown }>): string[] {
+export function missingRequiredRecipeObligationIDs(recipe: CanonicalRecipe, sections: Array<{ id?: unknown; recipe_requirement_ids?: unknown; recipeRequirementIDs?: unknown }>): string[] {
   const obligations = deriveRecipeObligations(recipe);
-  return obligationCoverage(sections.map((section) => ({ recipeRequirementIDs: Array.isArray(section.recipe_requirement_ids) ? section.recipe_requirement_ids as string[] : Array.isArray(section.recipeRequirementIDs) ? section.recipeRequirementIDs as string[] : [] })), obligations).missingRequired.map((obligation) => obligation.id);
+  const effectiveByID = new Map<string, { recipeRequirementIDs: string[] }>();
+  for (const section of sections) {
+    const id = section.id == null ? crypto.randomUUID() : canonicalUUID(String(section.id));
+    effectiveByID.set(id, {
+      recipeRequirementIDs: Array.isArray(section.recipe_requirement_ids)
+        ? section.recipe_requirement_ids as string[]
+        : Array.isArray(section.recipeRequirementIDs)
+        ? section.recipeRequirementIDs as string[]
+        : [],
+    });
+  }
+  return obligationCoverage(Array.from(effectiveByID.values()), obligations).missingRequired.map((obligation) => obligation.id);
 }
 class MissingRecipeObligationsError extends Error { readonly code = "missing_recipe_obligations"; }
 type RequestBody = {
@@ -539,7 +550,7 @@ async function runJob(runID: string, authHeader: string, userID: string) {
   if (claimError || !claimed?.[0]) return;
   const request = claimed[0].request_json as RequestBody;
   try {
-    const { data: persistedSections, error: persistedSectionsError } = await db.from("outline_sections").select("recipe_requirement_ids,status").eq("outline_id", request.outline_id).neq("status", "deleted");
+    const { data: persistedSections, error: persistedSectionsError } = await db.from("outline_sections").select("id,recipe_requirement_ids,status").eq("outline_id", request.outline_id).neq("status", "deleted");
     if (persistedSectionsError) throw new Error(`Could not read existing outline obligations: ${persistedSectionsError.message}`);
     const missingRequired = missingRequiredRecipeObligationIDs(request.source_recipe_json, [...(persistedSections ?? []), ...request.sections]);
     if (missingRequired.length > 0) throw new MissingRecipeObligationsError(`Required recipe obligations are not covered: ${missingRequired.join(", ")}`);

@@ -22,6 +22,7 @@ import {
   buildSuggestionResponseSchema,
   buildObligationRepairPrompt,
   mergeObligationRepairOperations,
+  buildObligationRepairResponseSchema,
   repairRequiredRecipeObligations,
   STORY_MATERIAL_ENRICHMENT_SCHEMA,
   calculateRepairAllocation,
@@ -3912,9 +3913,40 @@ Deno.test("required-obligation repair prompt and validator preserve the contract
   const section = { title: "Repair", summary: "A repair", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Repair ends", entryState: "Before", dramaticEvent: "Repair happens", resultingChange: "Pressure changes", terminalState: "After", dramaticFunction: arcRoleContract(template.beats[0], template.name).allowedFunctions[0], storyArcBeatID: template.beats[0].id, recipeRequirementIDs: [obligations[0].id] };
   const prompt = buildObligationRepairPrompt(sparseRequest as any, [], [], [obligations[0]]);
   assertEquals(prompt.user.includes(obligations[0].id), true);
-  const repaired = mergeObligationRepairOperations([], { operations: [{ action: "add", replaceTitle: null, section }] }, new Set(template.beats.map((beat: any) => beat.id)), obligations, template);
+  const repaired = mergeObligationRepairOperations([], { operations: [{ action: "add", replaceIndex: null, section }] }, new Set(template.beats.map((beat: any) => beat.id)), obligations, template);
   assertEquals(repaired[0].recipeRequirementIDs, [obligations[0].id]);
-  assertThrows(() => mergeObligationRepairOperations([], { operations: [{ action: "add", replaceTitle: null, section: { ...section, recipeRequirementIDs: ["R999"] } }] }, new Set(template.beats.map((beat: any) => beat.id)), obligations, template));
+  assertThrows(() => mergeObligationRepairOperations([], { operations: [{ action: "add", replaceIndex: null, section: { ...section, recipeRequirementIDs: ["R999"] } }] }, new Set(template.beats.map((beat: any) => beat.id)), obligations, template));
+});
+
+Deno.test("required-obligation repair schema is strict and obligation-enumerated", () => {
+  const obligations = deriveRecipeObligations(sparseRequest.recipe as any);
+  const template = sparseRequest.arcTemplate as any;
+  const schema: any = buildObligationRepairResponseSchema(
+    new Set(template.beats.map((beat: any) => beat.id)),
+    obligations,
+    template,
+  );
+  const section = schema.properties.operations.items.properties.section;
+  assertEquals(section.additionalProperties, false);
+  assertEquals(section.required.sort(), Object.keys(section.properties).sort());
+  assertEquals(section.properties.recipeRequirementIDs.items.enum, obligations.map((obligation) => obligation.id));
+  assertEquals(schema.properties.operations.items.additionalProperties, false);
+});
+
+Deno.test("required-obligation repair replacement uses stable index with duplicate titles", () => {
+  const obligations = deriveRecipeObligations(sparseRequest.recipe as any);
+  const template = sparseRequest.arcTemplate as any;
+  const base = { title: "Duplicate", summary: "Old", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Old ends", entryState: "Before", dramaticEvent: "Old event", resultingChange: "Old change", terminalState: "After", dramaticFunction: arcRoleContract(template.beats[0], template.name).allowedFunctions[0], storyArcBeatID: template.beats[0].id, recipeRequirementIDs: [] };
+  const replacement = { ...base, title: "Repaired", summary: "New", recipeRequirementIDs: [obligations[0].id] };
+  const repaired = mergeObligationRepairOperations(
+    [base, { ...base, storyArcBeatID: template.beats[1].id }],
+    { operations: [{ action: "replace", replaceIndex: 1, section: replacement }] },
+    new Set(template.beats.map((beat: any) => beat.id)),
+    obligations,
+    template,
+  );
+  assertEquals(repaired[0].title, "Duplicate");
+  assertEquals(repaired[1].title, "Repaired");
 });
 
 Deno.test("required-obligation repair is one billable stage and rechecks coverage", async () => {
@@ -3922,9 +3954,81 @@ Deno.test("required-obligation repair is one billable stage and rechecks coverag
   const template = sparseRequest.arcTemplate as any;
   const section = { title: "Repair", summary: "A repair", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Repair ends", entryState: "Before", dramaticEvent: "Repair happens", resultingChange: "Pressure changes", terminalState: "After", dramaticFunction: arcRoleContract(template.beats[0], template.name).allowedFunctions[0], storyArcBeatID: template.beats[0].id, recipeRequirementIDs: obligations.map((obligation) => obligation.id) };
   const actions: string[] = [];
-  const result = await repairRequiredRecipeObligations([], sparseRequest as any, obligations, (async (_a: any, _b: any, _c: any, _d: any, action: string, validate: any) => { actions.push(action); const content = JSON.stringify({ operations: [{ action: "add", replaceTitle: null, section }] }); await validate(content); return { content, creditCostCharged: 1, remainingCredits: 1 }; }) as any);
+  const result = await repairRequiredRecipeObligations([], sparseRequest as any, obligations, (async (_a: any, _b: any, _c: any, _d: any, action: string, validate: any) => { actions.push(action); const content = JSON.stringify({ operations: [{ action: "add", replaceIndex: null, section }] }); await validate(content); return { content, creditCostCharged: 1, remainingCredits: 1 }; }) as any);
   assertEquals(actions, ["outline-obligation-repair"]);
   assertEquals(result.missing, []);
+});
+
+Deno.test("durable worker lifecycle checkpoints missing obligations then completes through the common gate", async () => {
+  const body = await executableWorkerBody();
+  const obligations = deriveRecipeObligations(body.recipe as any);
+  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: "A section", container: "scene", pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before", dramaticEvent: "It happens", resultingChange: "Pressure changes", terminalState: "After", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
+  const row: any = checkpointedWorkerRow(body);
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const billable = validatedWorkerBilling(actions, (action) => action === "outline-suggestions"
+    ? { beats: { "beat-1": [section([])], "beat-2": [section([], "beat-2")] } }
+    : { operations: [{ action: "add", replaceIndex: null, section: { ...section(obligations.map((obligation) => obligation.id)), title: "Repair addition" } }] });
+  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  await run();
+  assertEquals(db.row.status, "pending", JSON.stringify({ actions, error: db.row.error, diagnostics: db.row.diagnostics, planningState: db.row.planning_state }));
+  assertEquals(db.row.planning_state.phase, "obligation_repair_pending");
+  assertEquals(db.row.planning_state.nextAction, "obligation-repair");
+  assertEquals(db.row.suggestions.length, 2);
+  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.length > 0, true);
+  assertEquals(actions, ["outline-suggestions"]);
+  await run();
+  assertEquals(actions, ["outline-suggestions", "outline-obligation-repair"]);
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations, []);
+});
+
+Deno.test("successful obligation repair enters novel expansion instead of completing early", async () => {
+  const fullBody = await executableWorkerBody();
+  const novelMaterial = attachRecipeProvenance({
+    ...repairStoryMaterialFromRecipe(fullBody.recipe as any, {
+      sourceRecipeHash: "worker-fixture",
+      sourceRecipeVersion: 1,
+      sourcePromptPackID: "worker-pack",
+      sourcePromptPackName: "Worker fixture",
+    }, "novel"),
+    schema: "cathedralos.story_material_enrichment",
+    rationale: "Worker fixture",
+    locations: [
+      { id: "worker-location-1", source: "planner", sourceReference: null, label: "Shelter", description: "A defensible shelter." },
+      { id: "worker-location-2", source: "planner", sourceReference: null, label: "Crossing", description: "A dangerous crossing." },
+    ],
+    escalationLadder: [
+      { id: "worker-escalation-1", source: "planner", sourceReference: null, label: "First pressure", description: "The first pressure rises." },
+      { id: "worker-escalation-2", source: "planner", sourceReference: null, label: "Second pressure", description: "The second pressure rises." },
+      { id: "worker-escalation-3", source: "planner", sourceReference: null, label: "Final pressure", description: "The final pressure rises." },
+    ],
+    reversals: [{ id: "worker-reversal-1", source: "planner", sourceReference: null, label: "Reversal", description: "The plan turns." }],
+    consequences: [{ id: "worker-consequence-1", source: "planner", sourceReference: null, label: "Consequence", description: "The choice costs something." }],
+  } as any,
+    await recipeProvenance(fullBody.recipe as any),
+  );
+  const body = { ...fullBody, requestedFormat: "novel", storyMaterialEnrichment: novelMaterial } as any;
+  const obligations = deriveRecipeObligations(body.recipe as any);
+  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: "A section", container: "scene", pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before", dramaticEvent: "It happens", resultingChange: "Pressure changes", terminalState: "After", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
+  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const actions: string[] = [];
+  const billable = validatedWorkerBilling(actions, (action) => {
+    if (action === "outline-suggestions") return { beats: { "beat-1": [section([])], "beat-2": [section([], "beat-2")] } };
+    if (action === "outline-obligation-repair") return { operations: [{ action: "add", replaceIndex: null, section: { ...section(obligations.map((obligation) => obligation.id)), title: "Repair addition" } }] };
+    return { suggestions: [] };
+  });
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  await run();
+  await run();
+  assertEquals(db.row.status, "pending", JSON.stringify({ actions, error: db.row.error, diagnostics: db.row.diagnostics, planningState: db.row.planning_state }));
+  assertEquals(db.row.planning_state.phase, "expansion");
+  assertEquals(db.row.status === "completed", false);
+  assertEquals(actions.slice(0, 2), ["outline-suggestions", "outline-obligation-repair"]);
 });
 
 Deno.test("one physical provider call stops the second dispatch before provider execution", async () => {
