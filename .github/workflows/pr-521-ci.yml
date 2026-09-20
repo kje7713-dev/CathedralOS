@@ -13,6 +13,9 @@ on:
       - 'supabase/functions/sync-openai-admin-usage/**'
       - 'supabase/migrations/20260919100000_openai_admin_usage_reconciliation.sql'
       - 'supabase/tests/database/openai_admin_usage_reconciliation.test.sql'
+      - 'supabase/migrations/20260919110000_schedule_openai_admin_usage.sql'
+      - 'supabase/migrations/20260920230000_schedule_openai_catalog_and_pricing.sql'
+      - 'supabase/tests/database/openai_catalog_pricing_schedulers.test.sql'
       - 'supabase/migrations/20260919070000_openai_pricing_observations.sql'
       - 'supabase/tests/database/openai_pricing_observations.test.sql'
       - 'supabase/migrations/20260920100000_retire_legacy_model_rates.sql'
@@ -153,6 +156,10 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/openai_admin_usage_reconciliation.test.sql
+      - name: Run catalog and pricing scheduler pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/openai_catalog_pricing_schedulers.test.sql
       - name: Run PR5 legacy pricing retirement pgTAP test
         run: >-
           supabase db test --local

@@ -242,3 +242,20 @@ Deno.test("unknown provider model cannot report promotion", async () => {
   assertEquals(observation?.status, "verified");
   assert(observation?.provider_model === "gpt-does-not-exist");
 });
+
+Deno.test("pricing: unauthorized invocation is rejected before catalog access", async () => {
+  const response = await handler(
+    new Request("https://test.example.com/sync-openai-pricing", {
+      method: "POST",
+    }),
+    {
+      db: {
+        from: () => ({}),
+        rpc: () => Promise.resolve({ data: null, error: null }),
+      },
+      authorized: false,
+    },
+  );
+  assertEquals(response.status, 401);
+  assertEquals(await response.json(), { errorCode: "unauthenticated" });
+});

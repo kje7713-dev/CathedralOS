@@ -236,3 +236,15 @@ Deno.test("sync: service-role authorization remains required", async () => {
   assertEquals(res.status, 401);
   assertEquals(calls, []);
 });
+
+Deno.test("sync: missing backend OpenAI configuration fails closed", async () => {
+  const calls: RpcCall[] = [];
+  const res = await handler(request(), {
+    db: testDb({}, calls),
+    authorized: true,
+    apiKey: "",
+  });
+  assertEquals(res.status, 500);
+  assertEquals(await res.json(), { errorCode: "backend_config_missing" });
+  assertEquals(calls, []);
+});

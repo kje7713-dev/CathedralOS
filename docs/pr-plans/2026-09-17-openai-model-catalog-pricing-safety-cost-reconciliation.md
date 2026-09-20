@@ -1,12 +1,70 @@
 **CathedralOS OpenAI Model Catalog, Pricing Safety, and Cost Reconciliation PR Bundle**  
   
-**Status: implementation plan only**  
+**Status: implementation plan plus repository implementation; production wiring is not yet deployed**
 **Repository: kje7713-dev/CathedralOS**  
 **Verified repository baseline: main at 714767e60e15e8a6a42705a4397de020236777ac (fix(outline): sharpen section quality guidance (#591))**  
 **Production Supabase project inspected: vrzlwukuslpnqebaakxy**  
 **Plan snapshot date: 2026-09-17**  
-  
-> **Agent instruction:** Re-check `main` and production schema before beginning. This document records the verified starting point above; do not blindly assume the SHA or schema is unchanged when implementation starts.  
+
+> **Agent instruction:** Re-check `main` and production schema before beginning. This document records the verified starting point above; do not blindly assume the SHA or schema is unchanged when implementation starts.
+
+**Operational follow-up status (this PR):** Phase B model-catalog deployment wiring and Phase C official-pricing deployment wiring are implemented in the repository, including Vault-backed pg_cron/pg_net invocation. This does **not** claim production deployment or a successful first production run. After approval, deployment and first-run validation must follow the checklist below.
+
+**Repository schedules:**
+
+```text
+04:05 UTC daily  sync-openai-model-catalog
+04:20 UTC daily  sync-openai-pricing
+0 */6 * * *       sync-openai-admin-usage
+06:00 UTC Monday  telemetry-weekly-snapshot (unchanged)
+```
+
+**Vault/auth note:** both new scheduler helpers (`invoke_openai_model_catalog_sync`, `invoke_openai_pricing_sync`) read `project_url` and `supabase_secret_key` from `vault.decrypted_secrets` at invocation time and send them as `Content-Type: application/json` plus an `apikey` header (NOT `Authorization: Bearer`). This matches the same machine-to-machine contract already used by `sync-openai-admin-usage` / `invoke_openai_admin_usage_sync`, where the secret value comes from `SUPABASE_SECRET_KEYS.default` and the Edge Functions are deployed with `--no-verify-jwt` and perform their own explicit `isAuthorized(req, expectedSecretKey)` check via the shared `_auth.ts` helper. The existing Vault entries (`project_url`, `supabase_secret_key`) are sufficient; no new Vault rotation is required by this PR. Verify both Vault entries are populated during the post-merge checklist before relying on scheduled runs.
+
+**Post-merge production checklist (do not execute as part of this PR):**
+
+1. Deploy `sync-openai-model-catalog` (deployed with `--no-verify-jwt`; `supabase-deploy.yml` does this automatically).
+2. Deploy `sync-openai-pricing` (deployed with `--no-verify-jwt`; `supabase-deploy.yml` does this automatically).
+3. Confirm both Edge Functions are ACTIVE and their operator-only `apikey` auth contracts remain intact (function source must use the shared `_auth.ts` `isAuthorized`/`readSupabaseSecretKey` helpers from `sync-openai-admin-usage`, not `Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>`).
+4. First-run validation for the catalog sync (uses the exact same path `cron` will use):
+   ```sql
+   select public.invoke_openai_model_catalog_sync();
+   ```
+5. Inspect the catalog run:
+   ```sql
+   select * from openai_model_sync_runs order by started_at desc limit 1;
+   ```
+   A successful run has `started_at` populated, `completed_at` populated, and `status = 'complete'`. (Note: the canonical status enum is `complete`/`failed`; this is NOT `succeeded` and the table uses `completed_at`, not `finished_at`.)
+6. Inspect new `generation_models` rows and confirm every newly discovered row has `enabled = false` and `model_kind = 'unknown'` until verified pricing promotes it to `'text_generation'`.
+7. First-run validation for the pricing sync (uses the exact same path `cron` will use):
+   ```sql
+   select public.invoke_openai_pricing_sync();
+   ```
+8. Inspect pricing observations and verify rows:
+   ```sql
+   select * from openai_pricing_observations order by observed_at desc limit 10;
+   ```
+   Compare known rates with official OpenAI sources for any model whose `status = 'verified'`.
+9. Confirm verified pricing never changes `enabled` automatically. `enabled` must remain `false` until an explicit operator action enables the model.
+10. Only after the manual checks, enable/verify the two cron jobs. They should already be enabled by the migration; verify with:
+    ```sql
+    select jobname, schedule from cron.job where jobname in ('openai-model-catalog-sync','openai-pricing-sync');
+    ```
+    Expected: `openai-model-catalog-sync | 5 4 * * *` and `openai-pricing-sync | 20 4 * * *` (exactly one row each).
+11. Confirm the next scheduled catalog run succeeds (inspect `openai_model_sync_runs` after 04:25 UTC for `status = 'complete'`).
+12. Confirm the next scheduled pricing run succeeds (inspect `openai_pricing_observations` for new rows after 04:25 UTC).
+13. Astra verification: do NOT claim an exact Astra `provider_model` until production discovery confirms it. Verify any Astra-class row is safely recorded with `enabled = false`:
+    ```sql
+    select provider_model, provider_available, model_kind, pricing_state, enabled
+      from public.generation_models
+     where provider = 'openai'
+       and (
+         lower(provider_model) like '%astra%'
+         or lower(coalesce(display_name, '')) like '%astra%'
+       )
+       and enabled = true;
+    ```
+    Expected: zero rows. If non-zero rows appear, stop and report; do NOT enable Astra automatically.
   
   
   
