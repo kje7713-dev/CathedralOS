@@ -847,6 +847,52 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
   );
 }
 
+export type RunOutlineSectionLifecycleResult = {
+  status: "completed" | "paused_insufficient_credits";
+  outputID: string;
+};
+
+/**
+ * Owns the durable boundary between prose and scene memory. The output ID is
+ * persisted before memory settlement, so a credit shortage during extraction
+ * or embedding can pause and later reuse the exact prose without another
+ * provider call or primary-generation charge.
+ */
+export async function runOutlineSectionLifecycle(input: {
+  existingOutputID?: string | null;
+  generate: () => Promise<{
+    outputID: string;
+    status: string;
+    wasTruncated?: boolean;
+  }>;
+  persistPendingOutput: (outputID: string) => Promise<void>;
+  ensureMemory: (outputID: string) => Promise<void>;
+  persistCompleted: (outputID: string) => Promise<void>;
+  isInsufficientCredits: (error: unknown) => boolean;
+}): Promise<RunOutlineSectionLifecycleResult> {
+  let outputID = input.existingOutputID ?? "";
+  if (!input.existingOutputID) {
+    const generated = await input.generate();
+    outputID = generated.outputID;
+    if (generated.status !== "complete" || generated.wasTruncated) {
+      throw new Error(
+        `durable generation incomplete for section output ${outputID}`,
+      );
+    }
+    await input.persistPendingOutput(outputID);
+  }
+  try {
+    await input.ensureMemory(outputID);
+  } catch (error) {
+    if (input.isInsufficientCredits(error)) {
+      return { status: "paused_insufficient_credits", outputID };
+    }
+    throw error;
+  }
+  await input.persistCompleted(outputID);
+  return { status: "completed", outputID };
+}
+
 // ---- outline-walker + per-section loop (Day 2) -------------------------
 async function runOutline(
   runId: string,
@@ -959,34 +1005,56 @@ async function runOutline(
         String(projectId),
       );
       if (existingOutput) {
-        await ensureOutputMemory(
-          {
-            outline_section_id: String(section.id),
-            outline_id: String(run.outline_id),
-            project_id: String(projectId),
-            position: Number(section.position ?? 0),
-            title: String(section.title ?? ""),
-            summary: String(section.summary ?? ""),
-            container: (section.container ?? null) as string | null,
-            pov: (section.pov ?? null) as string | null,
-            terminal_beat: (section.terminal_beat ?? null) as string | null,
-            story_arc_beat_id: (section.story_arc_beat_id ?? null) as
-              | string
-              | null,
-            output_id: existingOutput,
+        const lifecycle = await runOutlineSectionLifecycle({
+          existingOutputID: existingOutput,
+          generate: async () => {
+            throw new Error("existing output should be reused");
           },
-          existingOutput,
-          String(run.user_id),
-          adminClient,
-          Deno.env.get("OPENAI_API_KEY") ?? "",
-        );
-        await updateSectionStatus(adminClient, runId, {
-          ...section,
-          status: "completed",
-          output_id: existingOutput,
-          cost: estimateSectionCost(section.container as string | null),
-          completed_at: new Date().toISOString(),
+          persistPendingOutput: async () => {},
+          ensureMemory: async (outputID) => {
+            await ensureOutputMemory(
+              {
+                outline_section_id: String(section.id),
+                outline_id: String(run.outline_id),
+                project_id: String(projectId),
+                position: Number(section.position ?? 0),
+                title: String(section.title ?? ""),
+                summary: String(section.summary ?? ""),
+                container: (section.container ?? null) as string | null,
+                pov: (section.pov ?? null) as string | null,
+                terminal_beat: (section.terminal_beat ?? null) as string | null,
+                story_arc_beat_id: (section.story_arc_beat_id ?? null) as
+                  | string
+                  | null,
+                output_id: outputID,
+              },
+              outputID,
+              String(run.user_id),
+              adminClient,
+              Deno.env.get("OPENAI_API_KEY") ?? "",
+            );
+          },
+          persistCompleted: async (outputID) => {
+            await updateSectionStatus(adminClient, runId, {
+              ...section,
+              status: "completed",
+              output_id: outputID,
+              cost: estimateSectionCost(section.container as string | null),
+              completed_at: new Date().toISOString(),
+            });
+          },
+          isInsufficientCredits: isInsufficientCreditsError,
         });
+        section.output_id = lifecycle.outputID;
+        if (lifecycle.status === "paused_insufficient_credits") {
+          await pauseRunInsufficientCredits(
+            adminClient,
+            runId,
+            section,
+            new InsufficientCreditsError(),
+          );
+          return;
+        }
         await reconcileActualCredits(adminClient, runId);
         continue;
       }
@@ -1037,52 +1105,72 @@ async function runOutline(
           String(section.id),
         );
       await renewRunLease(adminClient, runId, workerAttempt);
-      const result = await callGenerateStory(generationRequest, authHeader);
-      await renewRunLease(adminClient, runId, workerAttempt);
-      if (result.status !== "complete" || result.wasTruncated) {
-        throw new Error(
-          `durable generation incomplete for section ${section.id}`,
-        );
-      }
-      // Persist the output lineage immediately after generate-story returns.
-      // Memory may be a separate billable stage; if it pauses for credits,
-      // resume must recover this exact prose output without regenerating it.
-      await updateSectionStatus(adminClient, runId, {
-        ...section,
-        status: "pending",
-        output_id: result.output_id,
-      });
-      section.output_id = result.output_id;
-      // Durable completion is unconditional on the exact persisted output's
-      // memory lineage, even when generate-story returned 200.
-      await ensureOutputMemory(
-        {
-          outline_section_id: String(section.id),
-          outline_id: String(run.outline_id),
-          project_id: String(projectId),
-          position: Number(section.position ?? 0),
-          title: String(section.title ?? ""),
-          summary: String(section.summary ?? ""),
-          container: (section.container ?? null) as string | null,
-          pov: (section.pov ?? null) as string | null,
-          terminal_beat: (section.terminal_beat ?? null) as string | null,
-          story_arc_beat_id: (section.story_arc_beat_id ?? null) as
-            | string
-            | null,
-          output_id: result.output_id,
+      const lifecycle = await runOutlineSectionLifecycle({
+        generate: async () => {
+          const result = await callGenerateStory(generationRequest, authHeader);
+          await renewRunLease(adminClient, runId, workerAttempt);
+          return {
+            outputID: result.output_id,
+            status: result.status,
+            wasTruncated: result.wasTruncated,
+          };
         },
-        result.output_id,
-        String(run.user_id),
-        adminClient,
-        Deno.env.get("OPENAI_API_KEY") ?? "",
-      );
-      await updateSectionStatus(adminClient, runId, {
-        ...section,
-        status: "completed",
-        output_id: result.output_id,
-        cost: estimateSectionCost(section.container as string | null),
-        completed_at: new Date().toISOString(),
+        persistPendingOutput: async (outputID) => {
+          // Persist the output lineage immediately after generate-story
+          // returns so memory settlement can pause without losing prose.
+          section.output_id = outputID;
+          await updateSectionStatus(adminClient, runId, {
+            ...section,
+            status: "pending",
+            output_id: outputID,
+          });
+        },
+        ensureMemory: async (outputID) => {
+          await ensureOutputMemory(
+            {
+              outline_section_id: String(section.id),
+              outline_id: String(run.outline_id),
+              project_id: String(projectId),
+              position: Number(section.position ?? 0),
+              title: String(section.title ?? ""),
+              summary: String(section.summary ?? ""),
+              container: (section.container ?? null) as string | null,
+              pov: (section.pov ?? null) as string | null,
+              terminal_beat: (section.terminal_beat ?? null) as
+                | string
+                | null,
+              story_arc_beat_id: (section.story_arc_beat_id ?? null) as
+                | string
+                | null,
+              output_id: outputID,
+            },
+            outputID,
+            String(run.user_id),
+            adminClient,
+            Deno.env.get("OPENAI_API_KEY") ?? "",
+          );
+        },
+        persistCompleted: async (outputID) => {
+          await updateSectionStatus(adminClient, runId, {
+            ...section,
+            status: "completed",
+            output_id: outputID,
+            cost: estimateSectionCost(section.container as string | null),
+            completed_at: new Date().toISOString(),
+          });
+        },
+        isInsufficientCredits: isInsufficientCreditsError,
       });
+      section.output_id = lifecycle.outputID;
+      if (lifecycle.status === "paused_insufficient_credits") {
+        await pauseRunInsufficientCredits(
+          adminClient,
+          runId,
+          section,
+          new InsufficientCreditsError(),
+        );
+        return;
+      }
       await reconcileActualCredits(adminClient, runId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

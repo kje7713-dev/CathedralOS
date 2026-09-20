@@ -2,6 +2,9 @@ import SwiftUI
 import SwiftData
 import os
 
+private func formatRunCredits(_ value: Double) -> String {
+    String(format: "%.2f", value)
+}
 
 /// Captured at Generate-tap time. Stores the outline ID so the kickoff
 /// never has to re-resolve the outline through `section.outline`,
@@ -67,10 +70,6 @@ struct OutlineSectionsRegionView: View {
     @Binding var isGenerationStarting: Bool
     let onGenerationCompleted: (() -> Void)?
     let onProjectRefreshed: ((UUID, UUID?) -> Void)?
-
-    private func credits(_ value: Double) -> String {
-        String(format: "%.2f", value)
-    }
 
     init(
         project: StoryProject,
@@ -1735,7 +1734,7 @@ struct KickoffConfirmationSheet: View {
                 Image(systemName: "bolt.circle")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                Text("Maximum estimated cost: \(credits(estimate.estimatedCredits)) credits · \(credits(estimate.availableCredits)) available")
+                Text("Maximum estimated cost: \(formatRunCredits(estimate.estimatedCredits)) credits · \(formatRunCredits(estimate.availableCredits)) available")
                     .font(CathedralTheme.Typography.label(11, weight: .regular))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
@@ -1858,13 +1857,6 @@ struct AcceptRunBanner: View {
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
             Spacer()
-            if isPaused, let onResume {
-                Button("Resume") {
-                    Task { await onResume() }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            }
         }
         .padding(CathedralTheme.Spacing.md)
         .background(CathedralTheme.Colors.surface)
@@ -1903,25 +1895,37 @@ struct ActiveRunBanner: View {
     let status: RunOutlineStatus
     var pollingError: String? = nil
     var onResume: (() async -> Void)? = nil
+    var onNavigate: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: CathedralTheme.Spacing.md) {
-            if isRunning {
-                ProgressView()
-                    .controlSize(.small)
-            } else {
-                Image(systemName: isCompleted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .foregroundStyle(isCompleted ? Color.green : Color.red)
-                    .font(.title3)
+            HStack(spacing: CathedralTheme.Spacing.md) {
+                if isRunning {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: isCompleted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .foregroundStyle(isCompleted ? Color.green : Color.red)
+                        .font(.title3)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                    Text(subtitle)
+                        .font(CathedralTheme.Typography.caption(12))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
-                Text(subtitle)
-                    .font(CathedralTheme.Typography.caption(12))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            }
+            .contentShape(Rectangle())
+            .onTapGesture { onNavigate?() }
             Spacer()
+            if isPaused, let onResume {
+                Button("Resume") {
+                    Task { await onResume() }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
         }
         .padding(CathedralTheme.Spacing.md)
         .background(CathedralTheme.Colors.surface)

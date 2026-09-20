@@ -2,7 +2,11 @@ import {
   assertEquals,
   assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { preflightDirectUsage, settleDirectUsage } from "./direct-billing.ts";
+import {
+  DirectBillingInsufficientCreditsError,
+  preflightDirectUsage,
+  settleDirectUsage,
+} from "./direct-billing.ts";
 import type { GenerationModel } from "../generate-story/_generation_models.ts";
 import type { CreditStore } from "../generate-story/_credits.ts";
 
@@ -32,7 +36,10 @@ const EMBEDDING_MODEL: GenerationModel = {
   cacheMode: "none",
 };
 
-function makeContext(model: GenerationModel = EMBEDDING_MODEL) {
+function makeContext(
+  model: GenerationModel = EMBEDDING_MODEL,
+  rpcError: { message: string } | null = null,
+) {
   const rpcCalls: string[] = [];
   const adminClient = {
     from: () => ({
@@ -48,8 +55,8 @@ function makeContext(model: GenerationModel = EMBEDDING_MODEL) {
     rpc: (name: string) => {
       rpcCalls.push(name);
       return Promise.resolve({
-        data: [{ id: "usage-1", charge: 0.25 }],
-        error: null,
+        data: rpcError ? null : [{ id: "usage-1", charge: 0.25 }],
+        error: rpcError,
       });
     },
   };
@@ -131,4 +138,23 @@ Deno.test("direct billing: provider usage over 270K still settles after dispatch
   );
   assertEquals(charge, 0.25);
   assertEquals(rpcCalls, ["settle_scene_memory_stage"]);
+});
+
+Deno.test("direct billing: atomic insufficient-credit race has canonical classification", async () => {
+  const { context } = makeContext(EMBEDDING_MODEL, {
+    message: "insufficient credits for stage",
+  });
+  await assertRejects(
+    () =>
+      settleDirectUsage(
+        context,
+        "scene-memory-embedding",
+        "text-embedding-3-small",
+        100,
+        0,
+        "embedding",
+      ),
+    DirectBillingInsufficientCreditsError,
+    "Insufficient credits for the next billable stage.",
+  );
 });

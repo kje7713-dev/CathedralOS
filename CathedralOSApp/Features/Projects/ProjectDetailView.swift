@@ -640,18 +640,14 @@ struct ProjectDetailView: View {
     @ViewBuilder
     private func runAllStatusSection(_ status: RunOutlineStatus) -> some View {
         Section {
-            Button {
-                storyEditorModeRaw = StoryEditorMode.outline.rawValue
-            } label: {
-                ActiveRunBanner(
-                    status: status,
-                    pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
-                        ? durabilityCoordinator.activeRunPollingError
-                        : nil,
-                    onResume: { await self.resumeRun(status) }
-                )
-            }
-            .buttonStyle(.plain)
+            ActiveRunBanner(
+                status: status,
+                pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
+                    ? durabilityCoordinator.activeRunPollingError
+                    : nil,
+                onResume: { await self.resumeRun(status) },
+                onNavigate: { storyEditorModeRaw = StoryEditorMode.outline.rawValue }
+            )
             .accessibilityLabel("View Run All status in Outline")
             .listRowBackground(CathedralTheme.Colors.background)
             .listRowSeparator(.hidden)

@@ -24,6 +24,28 @@ export interface DirectBillingContext {
   creditStore: CreditStore;
 }
 
+/** Stable cross-stage classification for the entitlement-lock race. */
+export class DirectBillingInsufficientCreditsError extends Error {
+  readonly code = "insufficient_credits" as const;
+
+  constructor(message = "Insufficient credits for the next billable stage.") {
+    super(message);
+    this.name = "DirectBillingInsufficientCreditsError";
+  }
+}
+
+function isInsufficientCreditsSettlementError(error: unknown): boolean {
+  const record = error as Record<string, unknown> | null;
+  const text = [
+    record?.message,
+    record?.details,
+    record?.hint,
+  ].filter((value): value is string => typeof value === "string").join(" ")
+    .trim()
+    .toLowerCase();
+  return /^insufficient credits for stage(?:\b|:)/.test(text);
+}
+
 export async function preflightDirectUsage(
   context: DirectBillingContext,
   modelName: string,
@@ -162,6 +184,9 @@ export async function settleDirectUsage(
       p_margin_cents: margin.marginCents,
     },
   );
+  if (error && isInsufficientCreditsSettlementError(error)) {
+    throw new DirectBillingInsufficientCreditsError();
+  }
   if (error || !Array.isArray(data) || !data[0]) {
     throw new Error(
       `atomic stage settlement failed: ${error?.message ?? "no row"}`,

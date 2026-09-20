@@ -15,6 +15,7 @@ import {
   loadRunOutline,
   requireRunOutlineRecipe,
   RunOutlineOutlineError,
+  runOutlineSectionLifecycle,
 } from "./index.ts";
 import {
   buildGenerateStoryRequest,
@@ -484,7 +485,8 @@ Deno.test("Run All preserves memory lineage and avoids duplicate prose billing o
   assertStringIncludes(runOutline, '.eq("run_id", runId)');
   assertStringIncludes(runOutline, '.eq("run_section_id", sectionId)');
   assertStringIncludes(runOutline, '.eq("status", "complete")');
-  assertStringIncludes(runOutline, "output_id: existingOutput");
+  assertStringIncludes(runOutline, "existingOutputID: existingOutput");
+  assertStringIncludes(runOutline, "output_id: outputID");
   assertStringIncludes(
     embedding,
     "repaired?.generation_output_id !== outputId",
@@ -590,7 +592,7 @@ Deno.test("credit shortage pauses a resumable run and preserves the exact prose 
   assertStringIncludes(pause, 'status: "pending"');
   assertStringIncludes(pause, "credits_actual: actual");
   assertStringIncludes(pause, "completed_at: null");
-  assertStringIncludes(source, "output_id: result.output_id");
+  assertStringIncludes(source, "outputID: result.output_id");
   assertStringIncludes(source, "Resume skips whole-run estimate/preflight");
   assertStringIncludes(source, 'run.status === "paused_insufficient_credits"');
   assertStringIncludes(source, "runOutline(runId, adminClient, authHeader)");
@@ -665,4 +667,112 @@ Deno.test("Run All iOS presentation treats paused as resumable and shows actual 
   );
   assertStringIncludes(service, "resume_run_id");
   assertStringIncludes(service, "actualCreditsText");
+});
+
+Deno.test("Run All executable lifecycle pauses after prose settlement and resumes memory without duplicate generation", async () => {
+  const state: {
+    run: "running" | "paused_insufficient_credits" | "completed";
+    section: "running" | "pending" | "completed";
+    outputID: string | null;
+    creditsActual: number;
+  } = {
+    run: "running",
+    section: "running",
+    outputID: null,
+    creditsActual: 0,
+  };
+  let providerCalls = 0;
+  let proseBillingCalls = 0;
+  let memoryCalls = 0;
+  const outputID = "output-prose-1";
+
+  const first = await runOutlineSectionLifecycle({
+    generate: async () => {
+      providerCalls++;
+      proseBillingCalls++;
+      state.creditsActual += 2.75;
+      return { outputID, status: "complete", wasTruncated: false };
+    },
+    persistPendingOutput: async (id) => {
+      state.outputID = id;
+      state.section = "pending";
+    },
+    ensureMemory: async () => {
+      memoryCalls++;
+      throw { code: "insufficient_credits" };
+    },
+    persistCompleted: async () => {
+      state.section = "completed";
+    },
+    isInsufficientCredits: (error) =>
+      (error as { code?: string }).code === "insufficient_credits",
+  });
+  state.run = first.status;
+
+  assertEquals(first.status, "paused_insufficient_credits");
+  assertEquals(first.outputID, outputID);
+  assertEquals(state.outputID, outputID);
+  assertEquals(state.section, "pending");
+  assertEquals(state.run, "paused_insufficient_credits");
+  assertEquals(state.creditsActual, 2.75);
+  assertEquals(providerCalls, 1);
+  assertEquals(proseBillingCalls, 1);
+  assertEquals(memoryCalls, 1);
+
+  const resumed = await runOutlineSectionLifecycle({
+    existingOutputID: state.outputID,
+    generate: async () => {
+      providerCalls++;
+      proseBillingCalls++;
+      return { outputID: "unexpected-new-output", status: "complete" };
+    },
+    persistPendingOutput: async () => {
+      throw new Error("persistPendingOutput must not run during recovery");
+    },
+    ensureMemory: async (id) => {
+      memoryCalls++;
+      assertEquals(id, outputID);
+    },
+    persistCompleted: async (id) => {
+      assertEquals(id, outputID);
+      state.section = "completed";
+      state.run = "completed";
+    },
+    isInsufficientCredits: () => false,
+  });
+
+  assertEquals(resumed.status, "completed");
+  assertEquals(resumed.outputID, outputID);
+  assertEquals(state.section, "completed");
+  assertEquals(state.run, "completed");
+  assertEquals(state.creditsActual, 2.75);
+  assertEquals(providerCalls, 1);
+  assertEquals(proseBillingCalls, 1);
+  assertEquals(memoryCalls, 2);
+});
+
+Deno.test("Run All atomic memory settlement race pauses instead of failing", async () => {
+  let providerCalls = 0;
+  let billingCalls = 0;
+  let finalStatus = "running";
+  const result = await runOutlineSectionLifecycle({
+    generate: async () => {
+      providerCalls++;
+      billingCalls++;
+      return { outputID: "output-race-1", status: "complete" };
+    },
+    persistPendingOutput: async () => {},
+    ensureMemory: async () => {
+      throw new Error("insufficient credits for stage");
+    },
+    persistCompleted: async () => {
+      finalStatus = "completed";
+    },
+    isInsufficientCredits: (error) =>
+      /insufficient credits for stage/i.test(String(error)),
+  });
+  finalStatus = result.status;
+  assertEquals(finalStatus, "paused_insufficient_credits");
+  assertEquals(providerCalls, 1);
+  assertEquals(billingCalls, 1);
 });
