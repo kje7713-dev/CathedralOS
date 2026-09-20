@@ -117,6 +117,7 @@ struct ProjectDetailView: View {
     @State private var estimateError: String?
     @State private var estimateTask: Task<Void, Never>?
     @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator = .shared
+    private let runOutlineService = RunOutlineService()
 
     /// Replace the view's project reference after targeted restore. Restore
     /// can insert the canonical project when the pre-restore local ID was an
@@ -471,6 +472,24 @@ struct ProjectDetailView: View {
         ]
     }
 
+    @MainActor
+    private func resumeRun(_ status: RunOutlineStatus) async {
+        do {
+            _ = try await runOutlineService.resume(runID: status.run_id)
+            let resumed = try await runOutlineService.status(runID: status.run_id)
+            durabilityCoordinator.startPolling(
+                runID: status.run_id,
+                initialStatus: resumed,
+                projectLineageID: project.stableLineageID,
+                runOutlineService: runOutlineService,
+                context: modelContext,
+                onSyncCompleted: { _ in }
+            )
+        } catch {
+            durabilityCoordinator.setRunPollingError(error.localizedDescription)
+        }
+    }
+
     private var nextWorkflowStage: NovelWorkflowStage {
         for stage in NovelWorkflowStage.allCases {
             if workflowCompletion[stage] == false {
@@ -499,7 +518,8 @@ struct ProjectDetailView: View {
                             status: status,
                             pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
                                 ? durabilityCoordinator.activeRunPollingError
-                                : nil
+                                : nil,
+                            onResume: { await self.resumeRun(status) }
                         )
                     }
                     HStack(alignment: .firstTextBaseline) {
@@ -627,7 +647,8 @@ struct ProjectDetailView: View {
                     status: status,
                     pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
                         ? durabilityCoordinator.activeRunPollingError
-                        : nil
+                        : nil,
+                    onResume: { await self.resumeRun(status) }
                 )
             }
             .buttonStyle(.plain)

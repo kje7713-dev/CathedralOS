@@ -68,6 +68,10 @@ struct OutlineSectionsRegionView: View {
     let onGenerationCompleted: (() -> Void)?
     let onProjectRefreshed: ((UUID, UUID?) -> Void)?
 
+    private func credits(_ value: Double) -> String {
+        String(format: "%.2f", value)
+    }
+
     init(
         project: StoryProject,
         modelContext: ModelContext,
@@ -223,7 +227,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     status: status,
                     pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
                         ? durabilityCoordinator.activeRunPollingError
-                        : nil
+                        : nil,
+                    onResume: { await self.resumeRun(status) }
                 )
             }
             header
@@ -1171,6 +1176,27 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     /// We intentionally do NOT re-resolve the outline through `section.outline`,
     /// `currentOutline`, or `project.outlines` — those lookups were returning
     /// nil at kickoff time even though the outline existed at tap time.
+    @MainActor
+    private func resumeRun(_ status: RunOutlineStatus) async {
+        do {
+            _ = try await runOutlineService.resume(runID: status.run_id)
+            let resumed = try await runOutlineService.status(runID: status.run_id)
+            durabilityCoordinator.startPolling(
+                runID: status.run_id,
+                initialStatus: resumed,
+                projectLineageID: project.stableLineageID,
+                runOutlineService: runOutlineService,
+                context: modelContext,
+                onSyncCompleted: { [self] context in
+                    self.refreshAllOutputs()
+                    self.recordEyeDebug(context: context)
+                }
+            )
+        } catch {
+            durabilityCoordinator.setRunPollingError(error.localizedDescription)
+        }
+    }
+
     private func kickoffAndStartPolling(_ target: OutlineGenerationTarget, model: String? = nil, scope: String? = nil) async {
         let section = target.section
         let outlineID = target.outlineID
@@ -1587,9 +1613,9 @@ struct KickoffConfirmationSheet: View {
     }
 
     private var canStart: Bool {
-        guard !isStarting else { return false }
-        if let est = runEstimate { return est.allowed }
-        return true // optimistic until estimate arrives
+        // The whole-run estimate is informational. Per-call backend preflight
+        // remains authoritative, so a low current balance must not disable Start.
+        !isStarting
     }
 
     var body: some View {
@@ -1708,16 +1734,10 @@ struct KickoffConfirmationSheet: View {
             HStack(spacing: CathedralTheme.Spacing.xs) {
                 Image(systemName: "bolt.circle")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(estimate.allowed
-                        ? CathedralTheme.Colors.secondaryText
-                        : CathedralTheme.Colors.destructive)
-                Text(estimate.allowed
-                    ? "Up to: \(estimate.estimatedCredits) credits\(estimate.sectionCount > 1 ? " total" : "") · \(estimate.availableCredits) remaining"
-                    : "Need \(estimate.estimatedCredits) credits total, you have \(estimate.availableCredits)")
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Text("Maximum estimated cost: \(credits(estimate.estimatedCredits)) credits · \(credits(estimate.availableCredits)) available")
                     .font(CathedralTheme.Typography.label(11, weight: .regular))
-                    .foregroundStyle(estimate.allowed
-                        ? CathedralTheme.Colors.secondaryText
-                        : CathedralTheme.Colors.destructive)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -1838,6 +1858,13 @@ struct AcceptRunBanner: View {
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
             Spacer()
+            if isPaused, let onResume {
+                Button("Resume") {
+                    Task { await onResume() }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
         }
         .padding(CathedralTheme.Spacing.md)
         .background(CathedralTheme.Colors.surface)
@@ -1875,6 +1902,7 @@ struct GenerationStartingBanner: View {
 struct ActiveRunBanner: View {
     let status: RunOutlineStatus
     var pollingError: String? = nil
+    var onResume: (() async -> Void)? = nil
 
     var body: some View {
         HStack(spacing: CathedralTheme.Spacing.md) {
@@ -1912,12 +1940,17 @@ struct ActiveRunBanner: View {
         status.status == "completed"
     }
 
+    private var isPaused: Bool {
+        status.isPausedForInsufficientCredits
+    }
+
     private var isFailed: Bool {
         status.status == "failed"
     }
 
     private var title: String {
         if isCompleted { return "Generation complete" }
+        if isPaused { return "Generation paused" }
         if isFailed { return "Generation failed" }
         if let current = status.current_section {
             return "Generating '\(current.title)'"
@@ -1932,14 +1965,19 @@ struct ActiveRunBanner: View {
     }
 
     private var subtitle: String {
-        if isRunning, let pollingError { return pollingError }
-        if let error = status.error { return error }
         let done = status.sections_done ?? 0
         let total = status.sections_total ?? 0
-        if isCompleted { return "Done (\(done) of \(total) sections)" }
-        if let current = status.current_section {
-            return "Section \(done + 1) of \(total): \(current.title) • continues in background"
+        let spend = status.actualCreditsText
+        if isPaused { return "\(done) of \(total) sections · \(spend) credits used · More credits needed" }
+        if isCompleted { return "\(done) sections generated · Final cost: \(spend) credits" }
+        if isFailed {
+            let message = status.error ?? "Generation failed"
+            return spend == "0.00" ? message : "\(message) · \(spend) credits used"
         }
-        return "Running in background"
+        if isRunning, let pollingError { return pollingError }
+        if let current = status.current_section {
+            return "\(done) of \(total) sections · \(spend) credits used · Current: \(current.title)"
+        }
+        return "\(done) of \(total) sections · \(spend) credits used"
     }
 }

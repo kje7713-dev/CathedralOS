@@ -737,3 +737,52 @@ final class GenerationBackendServiceTests: XCTestCase {
                        "sourcePayloadJSON must not be overwritten after a failed generation")
     }
 }
+
+final class RunAllBillingLifecycleTests: XCTestCase {
+    func testPausedRunIsResumableAndActualSpendUsesTwoDecimals() {
+        let status = RunOutlineStatus(
+            run_id: "run-1",
+            status: "paused_insufficient_credits",
+            outline_id: "outline-1",
+            start_parent_section_id: "section-1",
+            sections_done: 5,
+            sections_total: 10,
+            sections_failed: 0,
+            current_section: nil,
+            sections: nil,
+            error: "More credits are needed to continue.",
+            credits_reserved: 260,
+            credits_actual: 47.63,
+            created_at: nil,
+            updated_at: nil,
+            completed_at: nil
+        )
+
+        XCTAssertTrue(status.isPausedForInsufficientCredits)
+        XCTAssertEqual(status.actualCreditsText, "47.63")
+        XCTAssertEqual(status.status, "paused_insufficient_credits")
+    }
+
+    func testCompletedRunPreservesFractionalFinalCost() {
+        let status = RunOutlineStatus(
+            run_id: "run-2",
+            status: "completed",
+            outline_id: nil,
+            start_parent_section_id: nil,
+            sections_done: 60,
+            sections_total: 60,
+            sections_failed: 0,
+            current_section: nil,
+            sections: nil,
+            error: nil,
+            credits_reserved: 260,
+            credits_actual: 91.27,
+            created_at: nil,
+            updated_at: nil,
+            completed_at: "2026-09-20T00:00:00Z"
+        )
+
+        XCTAssertEqual(status.actualCreditsText, "91.27")
+        XCTAssertFalse(status.isPausedForInsufficientCredits)
+    }
+}

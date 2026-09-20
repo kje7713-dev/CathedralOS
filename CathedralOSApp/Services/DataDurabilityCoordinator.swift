@@ -1246,6 +1246,11 @@ final class DataDurabilityCoordinator: ObservableObject {
                     coordinator.activeRunProjectLineageID = projectLineageID
                     coordinator.persistRunStatus(status, for: projectLineageID)
                     DiagnosticLog.write("poll: status=\(status.status) done=\(status.sections_done ?? 0)/\(status.sections_total ?? 0)")
+                    if status.status == "paused_insufficient_credits" {
+                        DiagnosticLog.write("poll: run paused for insufficient credits; preserving status without terminal reconciliation")
+                        coordinator.pollingTask = nil
+                        break
+                    }
                     if status.status == "completed" || status.status == "failed" {
                         DiagnosticLog.write("poll: run finished (\(status.status)); triggering pull reconciliation")
                         await coordinator.reconcileRunOutputs(context: modelContext, callback: callback)
@@ -1399,6 +1404,11 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     private func clearPersistedRunStatus(for projectLineageID: UUID) {
         runStatusDefaults.removeObject(forKey: Self.runStatusKey(for: projectLineageID))
+    }
+
+    /// Surface a resume/request error without exposing the published setter.
+    func setRunPollingError(_ message: String?) {
+        activeRunPollingError = message
     }
 
     /// Cancel the active polling task if any. Does not affect in-flight syncs.
