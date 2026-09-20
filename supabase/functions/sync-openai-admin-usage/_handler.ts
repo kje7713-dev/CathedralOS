@@ -108,7 +108,7 @@ function pageUrl(
     "end_time",
     String(Math.floor(window.end.getTime() / 1000)),
   );
-  url.searchParams.append("project_ids[]", projectId);
+  url.searchParams.append("project_ids", projectId);
   url.searchParams.set(
     "limit",
     path === "usage/completions" ? "31" : "100",
@@ -118,9 +118,40 @@ function pageUrl(
     ? ["project_id", "model", "service_tier", "batch"]
     : ["project_id", "line_item"];
   for (const group of groups) {
-    url.searchParams.append("group_by[]", group);
+    url.searchParams.append("group_by", group);
   }
   return url.toString();
+}
+
+function diagnosticToken(value: string | null): string {
+  return (value ?? "").replace(/[^A-Za-z0-9_./:-]/g, "_").slice(0, 80);
+}
+
+async function providerRequestError(
+  path: string,
+  response: Response,
+): Promise<Error> {
+  let code = "";
+  let type = "";
+  try {
+    const payload = asObject(await response.clone().json());
+    const error = asObject(payload?.error);
+    code = diagnosticToken(typeof error?.code === "string" ? error.code : null);
+    type = diagnosticToken(typeof error?.type === "string" ? error.type : null);
+  } catch {
+    // Preserve the sanitized provider error contract when the body is not JSON.
+  }
+  const details = [
+    `endpoint=${diagnosticToken(path)}`,
+    `status=${response.status}`,
+    code ? `code=${code}` : "",
+    type ? `type=${type}` : "",
+    response.headers.get("x-request-id")
+      ? `request_id=${diagnosticToken(response.headers.get("x-request-id"))}`
+      : "",
+  ].filter(Boolean).join(" ");
+  console.error(`OpenAI admin request failed ${details}`);
+  return new Error("provider_request_failed");
 }
 
 async function fetchPages(
@@ -136,7 +167,7 @@ async function fetchPages(
     const response = await fetchImpl(pageUrl(path, window, projectId, page), {
       headers: { Authorization: `Bearer ${adminKey}` },
     });
-    if (!response.ok) throw new Error("provider_request_failed");
+    if (!response.ok) throw await providerRequestError(path, response);
     const payload = asObject(await response.json());
     if (!payload || !Array.isArray(payload.data)) {
       throw new Error("provider_payload_invalid");
