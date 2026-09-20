@@ -203,7 +203,8 @@ Deno.test("PR4 fetches both real-shaped endpoints, paginates, and persists atomi
   assertEquals(requests.length, 4);
   assertEquals(
     requests.every((url) =>
-      new URL(url).searchParams.get("project_ids[]") === "proj-test"
+      new URL(url).searchParams.get("project_ids") === "proj-test" &&
+      new URL(url).searchParams.get("project_ids[]") === null
     ),
     true,
   );
@@ -221,17 +222,19 @@ Deno.test("PR4 fetches both real-shaped endpoints, paginates, and persists atomi
   );
   const costsUrl = requests.find((url) => url.includes("/costs"))!;
   assertEquals(
-    new URL(costsUrl).searchParams.get("project_ids[]"),
+    new URL(costsUrl).searchParams.get("project_ids"),
     "proj-test",
   );
   assertEquals(new URL(costsUrl).searchParams.get("limit"), "100");
-  assertEquals(new URL(costsUrl).searchParams.getAll("group_by[]"), [
+  assertEquals(new URL(costsUrl).searchParams.get("group_by[]"), null);
+  assertEquals(new URL(costsUrl).searchParams.getAll("group_by"), [
     "project_id",
     "line_item",
   ]);
   const usageUrl = requests.find((url) => url.includes("/usage/completions"))!;
   assertEquals(new URL(usageUrl).searchParams.get("limit"), "31");
-  assertEquals(new URL(usageUrl).searchParams.getAll("group_by[]"), [
+  assertEquals(new URL(usageUrl).searchParams.get("group_by[]"), null);
+  assertEquals(new URL(usageUrl).searchParams.getAll("group_by"), [
     "project_id",
     "model",
     "service_tier",
@@ -263,6 +266,47 @@ Deno.test("PR4 rejects ungrouped null-line-item Costs before reconciliation", as
   assertEquals(res.status, 502);
   assertEquals(await res.json(), { errorCode: "provider_payload_invalid" });
   assertEquals(calls.length, 0);
+});
+
+Deno.test("provider failure diagnostics are sanitized and preserve no partial persistence", async () => {
+  const calls: RpcCall[] = [];
+  const originalError = console.error;
+  const logs: string[] = [];
+  console.error = (...args: unknown[]) => logs.push(args.join(" "));
+  try {
+    const res = await handler(
+      request(),
+      deps(calls, () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "invalid_request_error",
+                type: "invalid_request_error",
+                message: "admin-secret must never be logged",
+              },
+            }),
+            {
+              status: 400,
+              headers: { "x-request-id": "req_admin_123" },
+            },
+          ),
+        )),
+    );
+    assertEquals(res.status, 502);
+    assertEquals(await res.json(), { errorCode: "provider_request_failed" });
+    assertEquals(calls.length, 0);
+    const diagnostic = logs.join(" ");
+    assertEquals(diagnostic.includes("endpoint=costs"), true);
+    assertEquals(diagnostic.includes("status=400"), true);
+    assertEquals(diagnostic.includes("code=invalid_request_error"), true);
+    assertEquals(diagnostic.includes("type=invalid_request_error"), true);
+    assertEquals(diagnostic.includes("request_id=req_admin_123"), true);
+    assertEquals(diagnostic.includes("admin-secret"), false);
+    assertEquals(diagnostic.includes("Authorization"), false);
+  } finally {
+    console.error = originalError;
+  }
 });
 
 Deno.test("PR4 provider failure and malformed payload do not call persistence", async () => {
