@@ -14,13 +14,29 @@ select
     and gm.model_kind = 'text_generation'
     and gm.pricing_state = 'verified'
     and gm.pricing_verified_at is not null
-    and gm.provider_model <> ''
+    and trim(gm.provider_model) <> ''
+    and gm.billing_multiplier is not null
+    and gm.billing_multiplier <> 'NaN'::numeric
     and gm.billing_multiplier > 0
     and gm.provider_input_usd_per_1m is not null
+    and gm.provider_input_usd_per_1m <> 'NaN'::numeric
+    and gm.provider_input_usd_per_1m >= 0
+    and (gm.model_kind <> 'text_generation'
+      or gm.provider_input_usd_per_1m > 0)
     and gm.provider_cached_input_usd_per_1m is not null
+    and gm.provider_cached_input_usd_per_1m <> 'NaN'::numeric
+    and gm.provider_cached_input_usd_per_1m >= 0
     and gm.provider_output_usd_per_1m is not null
+    and gm.provider_output_usd_per_1m <> 'NaN'::numeric
+    and gm.provider_output_usd_per_1m >= 0
+    and (gm.model_kind <> 'text_generation'
+      or gm.provider_output_usd_per_1m > 0)
     and (not gm.cache_write_pricing_required
-      or gm.provider_cache_write_usd_per_1m is not null)) as picker_eligible,
+      or (
+        gm.provider_cache_write_usd_per_1m is not null
+        and gm.provider_cache_write_usd_per_1m <> 'NaN'::numeric
+        and gm.provider_cache_write_usd_per_1m >= 0
+      ))) as picker_eligible,
   gm.pricing_state,
   gm.pricing_verified_at,
   gm.pricing_source_url,
@@ -33,13 +49,30 @@ select
   case
     when not gm.enabled then 'operator_disabled'
     when not gm.provider_available then 'provider_unavailable'
-    when gm.model_kind <> 'text_generation' then 'wrong_model_kind'
+    when trim(gm.provider_model) = '' then 'empty_provider_model'
+    when gm.billing_multiplier is null
+      or gm.billing_multiplier = 'NaN'::numeric
+      or gm.billing_multiplier <= 0 then 'invalid_multiplier'
     when gm.pricing_state <> 'verified' or gm.pricing_verified_at is null then 'pricing_unverified'
     when gm.provider_input_usd_per_1m is null then 'missing_input_price'
+    when gm.provider_input_usd_per_1m = 'NaN'::numeric
+      or gm.provider_input_usd_per_1m < 0
+      or (gm.model_kind = 'text_generation' and gm.provider_input_usd_per_1m = 0)
+      then 'invalid_input_price'
     when gm.provider_cached_input_usd_per_1m is null then 'missing_cached_input_price'
+    when gm.provider_cached_input_usd_per_1m = 'NaN'::numeric
+      or gm.provider_cached_input_usd_per_1m < 0 then 'invalid_cached_input_price'
     when gm.provider_output_usd_per_1m is null then 'missing_output_price'
+    when gm.provider_output_usd_per_1m = 'NaN'::numeric
+      or gm.provider_output_usd_per_1m < 0
+      or (gm.model_kind = 'text_generation' and gm.provider_output_usd_per_1m = 0)
+      then 'invalid_output_price'
     when gm.cache_write_pricing_required and gm.provider_cache_write_usd_per_1m is null then 'missing_cache_write_price'
-    when gm.billing_multiplier <= 0 then 'invalid_multiplier'
+    when gm.cache_write_pricing_required
+      and (gm.provider_cache_write_usd_per_1m = 'NaN'::numeric
+        or gm.provider_cache_write_usd_per_1m < 0)
+      then 'invalid_cache_write_price'
+    when gm.model_kind <> 'text_generation' then 'wrong_model_kind'
     else null
   end as reason_not_selectable
 from public.generation_models gm;
@@ -82,12 +115,27 @@ begin
     'headline',
     jsonb_build_object(
       'generations',    count(*),
-      'revenue_usd',    coalesce(sum(customer_revenue_cents) / 100.0, 0),
-      'model_cost_usd', coalesce(sum(provider_cogs_cents) / 100.0, 0),
-      'margin_usd',     coalesce(sum(margin_cents) / 100.0, 0),
+      'revenue_usd',    sum(coalesce(customer_revenue_cents / 100.0, credit_revenue_usd)),
+      'model_cost_usd', sum(provider_cogs_cents) / 100.0,
+      'margin_usd',     sum(margin_cents) / 100.0,
+      'customer_revenue_coverage', case
+                          when count(*) > 0
+                            then count(*) filter (where coalesce(customer_revenue_cents / 100.0, credit_revenue_usd) is not null)::numeric / count(*)
+                          else 0
+                        end,
+      'provider_cogs_coverage', case
+                          when count(*) > 0
+                            then count(*) filter (where provider_cogs_cents is not null)::numeric / count(*)
+                          else 0
+                        end,
+      'margin_coverage', case
+                          when count(*) > 0
+                            then count(*) filter (where margin_cents is not null)::numeric / count(*)
+                          else 0
+                        end,
       'margin_pct',     case
-                          when sum(customer_revenue_cents) / 100.0 > 0
-                            then sum(margin_cents) / nullif(sum(customer_revenue_cents), 0)
+                          when sum(coalesce(customer_revenue_cents / 100.0, credit_revenue_usd)) > 0
+                            then sum(margin_cents) / nullif(sum(coalesce(customer_revenue_cents / 100.0, credit_revenue_usd)), 0) / 100.0
                           else null
                         end
     )
@@ -136,12 +184,15 @@ begin
     select
       r.model_kind,
       count(*)                                       as generations,
-      coalesce(avg(e.provider_cogs_cents) / 100.0, 0)            as avg_model_cost_usd,
-      coalesce(avg(e.customer_revenue_cents) / 100.0, 0)         as avg_revenue_usd,
-      coalesce(avg(e.margin_cents) / 100.0, 0)                 as avg_margin_usd,
+      avg(e.provider_cogs_cents) / 100.0            as avg_model_cost_usd,
+      avg(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd))         as avg_revenue_usd,
+      avg(e.margin_cents) / 100.0                 as avg_margin_usd,
+      count(*) filter (where coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd) is not null)::numeric / nullif(count(*), 0) as customer_revenue_coverage,
+      count(*) filter (where e.provider_cogs_cents is not null)::numeric / nullif(count(*), 0) as provider_cogs_coverage,
+      count(*) filter (where e.margin_cents is not null)::numeric / nullif(count(*), 0) as margin_coverage,
       case
-        when avg(e.customer_revenue_cents) / 100.0 > 0
-          then avg(e.margin_cents) / nullif(avg(e.customer_revenue_cents), 0)
+        when avg(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd)) > 0
+          then avg(e.margin_cents) / nullif(avg(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd)), 0) / 100.0
         else null
       end                                            as avg_margin_pct
     from public.generation_usage_events e
@@ -166,9 +217,12 @@ begin
       e.model_name,
       r.model_kind,
       count(*)                                     as generations,
-      coalesce(sum(e.provider_cogs_cents) / 100.0, 0)          as total_cost_usd,
-      coalesce(sum(e.customer_revenue_cents) / 100.0, 0)       as total_revenue_usd,
-      coalesce(sum(e.margin_cents) / 100.0, 0)               as total_margin_usd
+      sum(e.provider_cogs_cents) / 100.0          as total_cost_usd,
+      sum(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd))       as total_revenue_usd,
+      sum(e.margin_cents) / 100.0               as total_margin_usd,
+      count(*) filter (where coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd) is not null)::numeric / nullif(count(*), 0) as customer_revenue_coverage,
+      count(*) filter (where e.provider_cogs_cents is not null)::numeric / nullif(count(*), 0) as provider_cogs_coverage,
+      count(*) filter (where e.margin_cents is not null)::numeric / nullif(count(*), 0) as margin_coverage
     from public.generation_usage_events e
       left join public.generation_models r on r.provider_model = e.model_name
     where e.created_at >= week_start_tz

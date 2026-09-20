@@ -17,12 +17,15 @@ select
   count(*)                                     as generations,
   count(*) filter (where status = 'complete')  as completed,
   count(*) filter (where status = 'failed')    as failed,
-  coalesce(sum(customer_revenue_cents) / 100.0, 0)         as revenue_usd,
-  coalesce(sum(provider_cogs_cents) / 100.0, 0)            as model_cost_usd,
-  coalesce(sum(margin_cents) / 100.0, 0)                 as margin_usd,
+  sum(coalesce(customer_revenue_cents / 100.0, credit_revenue_usd))         as revenue_usd,
+  sum(provider_cogs_cents) / 100.0            as model_cost_usd,
+  sum(margin_cents) / 100.0                 as margin_usd,
+  count(*) filter (where coalesce(customer_revenue_cents / 100.0, credit_revenue_usd) is not null)::numeric / nullif(count(*), 0) as customer_revenue_coverage,
+  count(*) filter (where provider_cogs_cents is not null)::numeric / nullif(count(*), 0) as provider_cogs_coverage,
+  count(*) filter (where margin_cents is not null)::numeric / nullif(count(*), 0) as margin_coverage,
   case
-    when sum(customer_revenue_cents) / 100.0 > 0
-      then sum(margin_cents) / nullif(sum(customer_revenue_cents), 0)
+    when sum(coalesce(customer_revenue_cents / 100.0, credit_revenue_usd)) > 0
+      then sum(margin_cents) / nullif(sum(coalesce(customer_revenue_cents / 100.0, credit_revenue_usd)), 0) / 100.0
     else null
   end                                          as margin_pct
 from public.generation_usage_events
@@ -60,12 +63,15 @@ order by truncation_rate desc, generations desc;
 select
   r.model_kind,
   count(*)                                              as generations,
-  coalesce(avg(e.provider_cogs_cents) / 100.0, 0)                   as avg_model_cost_usd,
-  coalesce(avg(e.customer_revenue_cents) / 100.0, 0)                as avg_revenue_usd,
-  coalesce(avg(e.margin_cents) / 100.0, 0)                        as avg_margin_usd,
+  avg(e.provider_cogs_cents) / 100.0                   as avg_model_cost_usd,
+  avg(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd))                as avg_revenue_usd,
+  avg(e.margin_cents) / 100.0                        as avg_margin_usd,
+  count(*) filter (where coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd) is not null)::numeric / nullif(count(*), 0) as customer_revenue_coverage,
+  count(*) filter (where e.provider_cogs_cents is not null)::numeric / nullif(count(*), 0) as provider_cogs_coverage,
+  count(*) filter (where e.margin_cents is not null)::numeric / nullif(count(*), 0) as margin_coverage,
   case
-    when avg(e.customer_revenue_cents) / 100.0 > 0
-      then avg(e.margin_cents) / nullif(avg(e.customer_revenue_cents), 0)
+    when avg(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd)) > 0
+      then avg(e.margin_cents) / nullif(avg(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd)), 0) / 100.0
     else null
   end                                                   as avg_margin_pct
 from public.generation_usage_events e
@@ -82,9 +88,12 @@ select
   e.model_name,
   r.model_kind,
   count(*)                                  as generations,
-  coalesce(sum(e.provider_cogs_cents) / 100.0, 0)       as total_cost_usd,
-  coalesce(sum(e.customer_revenue_cents) / 100.0, 0)    as total_revenue_usd,
-  coalesce(sum(e.margin_cents) / 100.0, 0)            as total_margin_usd
+  sum(e.provider_cogs_cents) / 100.0       as total_cost_usd,
+  sum(coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd))    as total_revenue_usd,
+  sum(e.margin_cents) / 100.0            as total_margin_usd,
+  count(*) filter (where coalesce(e.customer_revenue_cents / 100.0, e.credit_revenue_usd) is not null)::numeric / nullif(count(*), 0) as customer_revenue_coverage,
+  count(*) filter (where e.provider_cogs_cents is not null)::numeric / nullif(count(*), 0) as provider_cogs_coverage,
+  count(*) filter (where e.margin_cents is not null)::numeric / nullif(count(*), 0) as margin_coverage
 from public.generation_usage_events e
   left join public.generation_models r on r.provider_model = e.model_name
 where e.created_at >= now() - interval '12 weeks'
