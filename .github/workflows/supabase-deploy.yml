@@ -64,13 +64,13 @@ jobs:
         if: ${{ hashFiles('supabase/functions/generation-models/index.ts') != '' }}
         run: supabase functions deploy generation-models --project-ref "$SUPABASE_PROJECT_REF"
 
-      - name: Deploy Edge Function - sync-openai-model-catalog
+      - name: Deploy Edge Function - sync-openai-model-catalog (operator apikey)
         if: ${{ hashFiles('supabase/functions/sync-openai-model-catalog/index.ts') != '' }}
-        run: supabase functions deploy sync-openai-model-catalog --project-ref "$SUPABASE_PROJECT_REF"
+        run: supabase functions deploy sync-openai-model-catalog --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
 
-      - name: Deploy Edge Function - sync-openai-pricing
+      - name: Deploy Edge Function - sync-openai-pricing (operator apikey)
         if: ${{ hashFiles('supabase/functions/sync-openai-pricing/index.ts') != '' }}
-        run: supabase functions deploy sync-openai-pricing --project-ref "$SUPABASE_PROJECT_REF"
+        run: supabase functions deploy sync-openai-pricing --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
 
       - name: Deploy Edge Function - sync-openai-admin-usage
         if: ${{ hashFiles('supabase/functions/sync-openai-admin-usage/index.ts') != '' }}

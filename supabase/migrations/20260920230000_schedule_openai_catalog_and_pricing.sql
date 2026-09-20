@@ -161,7 +161,7 @@ begin
     url := rtrim(project_url, '/') || '/functions/v1/sync-openai-model-catalog',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
-      'Authorization', 'Bearer ' || supabase_service_key
+      'apikey', supabase_service_key
     ),
     body := '{}'::jsonb,
     timeout_milliseconds := 300000
@@ -196,7 +196,7 @@ begin
     url := rtrim(project_url, '/') || '/functions/v1/sync-openai-pricing',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
-      'Authorization', 'Bearer ' || supabase_service_key
+      'apikey', supabase_service_key
     ),
     body := '{}'::jsonb,
     timeout_milliseconds := 300000

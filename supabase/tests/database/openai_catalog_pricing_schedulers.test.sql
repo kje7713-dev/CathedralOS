@@ -1,7 +1,7 @@
 -- Operational scheduler coverage for the OpenAI catalog and pricing syncs.
 \set ON_ERROR_STOP on
 begin;
-select plan(25);
+select plan(31);
 
 select has_function(
   'public',
@@ -76,7 +76,19 @@ select alike(
 );
 select alike(
   pg_get_functiondef('public.invoke_openai_model_catalog_sync()'::regprocedure),
+  '%apikey%'
+);
+select alike(
+  pg_get_functiondef('public.invoke_openai_model_catalog_sync()'::regprocedure),
+  '%Content-Type%'
+);
+select unalike(
+  pg_get_functiondef('public.invoke_openai_model_catalog_sync()'::regprocedure),
   '%Authorization%'
+);
+select unalike(
+  pg_get_functiondef('public.invoke_openai_model_catalog_sync()'::regprocedure),
+  '%Bearer%'
 );
 select alike(
   pg_get_functiondef('public.invoke_openai_model_catalog_sync()'::regprocedure),
@@ -101,7 +113,15 @@ select alike(
 );
 select alike(
   pg_get_functiondef('public.invoke_openai_pricing_sync()'::regprocedure),
+  '%apikey%'
+);
+select unalike(
+  pg_get_functiondef('public.invoke_openai_pricing_sync()'::regprocedure),
   '%Authorization%'
+);
+select unalike(
+  pg_get_functiondef('public.invoke_openai_pricing_sync()'::regprocedure),
+  '%Bearer%'
 );
 select alike(
   pg_get_functiondef('public.invoke_openai_pricing_sync()'::regprocedure),
