@@ -36,24 +36,24 @@ order by 1 desc;
 
 -- ---------------------------------------------------------------------------
 -- 2. Truncation rate by (lengthMode × model).
--- "Truncated" is recorded as error_code = 'output_truncated' on the row;
--- we look for it via the limiter-side status field. Since output_truncated
--- still produces a status='complete' row, this query counts rows whose
--- generation hit the model length cap.
+-- generate-story persists provider finish_reason='length' as a draft
+-- generation_outputs row. Follow the usage event's output FK rather than
+-- reading the nonexistent legacy generation_usage_events.error_code.
 -- ---------------------------------------------------------------------------
 select
-  model_name,
-  generation_length_mode,
+  e.model_name,
+  e.generation_length_mode,
   count(*)                                                     as generations,
-  count(*) filter (where error_code = 'output_truncated')      as truncated,
+  count(*) filter (where o.status = 'draft')                  as truncated,
   case
     when count(*) > 0
-      then count(*) filter (where error_code = 'output_truncated')::numeric / count(*)
+      then count(*) filter (where o.status = 'draft')::numeric / count(*)
     else 0
   end                                                          as truncation_rate
-from public.generation_usage_events
-where created_at >= now() - interval '12 weeks'
-  and status = 'complete'
+from public.generation_usage_events e
+  left join public.generation_outputs o on o.id = e.generation_output_id
+where e.created_at >= now() - interval '12 weeks'
+  and e.status = 'complete'
 group by 1, 2
 order by truncation_rate desc, generations desc;
 
