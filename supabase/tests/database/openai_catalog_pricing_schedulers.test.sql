@@ -1,7 +1,7 @@
 -- Operational scheduler coverage for the OpenAI catalog and pricing syncs.
 \set ON_ERROR_STOP on
 begin;
-select plan(31);
+select plan(30);
 
 select has_function(
   'public',
