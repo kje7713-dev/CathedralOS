@@ -167,9 +167,13 @@ struct ProjectDetailView: View {
     private var refreshProjectReferenceHandler: ((UUID, UUID?) -> Void) {
         var projectBinding = $project
         let context = modelContext
+        let displayedProject = Binding<StoryProject>(
+            get: { projectBinding.wrappedValue },
+            set: { projectBinding.wrappedValue = $0 }
+        )
         return { localProjectID, lineageID in
             ProjectDetailResumeReconciler.rebindCanonicalProject(
-                displayedProject: projectBinding,
+                displayedProject: displayedProject,
                 context: context,
                 localProjectID: localProjectID,
                 lineageID: lineageID
@@ -341,16 +345,20 @@ struct ProjectDetailView: View {
                 currentSectionCount: project.outlines.first?.sections.count ?? 0,
                 runOutlineService: RunOutlineService()
             )
+            let resumeCompletion = ProjectDetailResumeReconciler.makeCompletion(
+                displayedProject: Binding<StoryProject>(
+                    get: { project },
+                    set: { project = $0 }
+                ),
+                context: modelContext,
+                localProjectID: project.id,
+                lineageID: project.stableLineageID
+            )
             durabilityCoordinator.resumePollingIfNeeded(
                 for: project.stableLineageID,
                 runOutlineService: RunOutlineService(),
                 context: modelContext,
-                onSyncCompleted: ProjectDetailResumeReconciler.makeCompletion(
-                    displayedProject: $project,
-                    context: modelContext,
-                    localProjectID: project.id,
-                    lineageID: project.stableLineageID
-                )
+                onSyncCompleted: resumeCompletion
             )
         }
         .sheet(isPresented: $showAddCharacter) {
@@ -519,18 +527,22 @@ struct ProjectDetailView: View {
         do {
             _ = try await runOutlineService.resume(runID: status.run_id)
             let resumed = try await runOutlineService.status(runID: status.run_id)
+            let resumeCompletion = ProjectDetailResumeReconciler.makeCompletion(
+                displayedProject: Binding<StoryProject>(
+                    get: { project },
+                    set: { project = $0 }
+                ),
+                context: modelContext,
+                localProjectID: project.id,
+                lineageID: project.stableLineageID
+            )
             durabilityCoordinator.startPolling(
                 runID: status.run_id,
                 initialStatus: resumed,
                 projectLineageID: project.stableLineageID,
                 runOutlineService: runOutlineService,
                 context: modelContext,
-                onSyncCompleted: ProjectDetailResumeReconciler.makeCompletion(
-                    displayedProject: $project,
-                    context: modelContext,
-                    localProjectID: project.id,
-                    lineageID: project.stableLineageID
-                )
+                onSyncCompleted: resumeCompletion
             )
         } catch {
             durabilityCoordinator.setRunPollingError(error.localizedDescription)
