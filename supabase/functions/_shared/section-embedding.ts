@@ -117,6 +117,45 @@ export class SectionEmbeddingError extends Error {
   }
 }
 
+/**
+ * Try to extract an OpenAI provider-billing-unavailable signal from a
+ * non-ok response. Returns `{ code, message, status }` when the upstream
+ * payload identifies the response as credit_balance_exhausted (or any
+ * sibling we choose to recognize); null otherwise.
+ *
+ * Used by the two OpenAI fetch sites in this module so the caller can
+ * throw SectionEmbeddingError("provider_billing_unavailable", ...) and
+ * the embed-section handler can map it to the canonical friendly user
+ * message + fire the operator alert.
+ */
+export function detectProviderBillingUnavailable(
+  status: number,
+  errText: string,
+): { code?: string; message?: string; status: number } | null {
+  if (!errText) return null;
+  let parsed: { error?: { code?: unknown; message?: unknown } } | null = null;
+  try {
+    parsed = JSON.parse(errText) as { error?: { code?: unknown; message?: unknown } };
+  } catch {
+    // OpenAI sometimes returns non-JSON 4xx bodies. Fall back to substring
+    // check so credit_balance_exhausted in plain text is still recognized.
+  }
+  const code = typeof parsed?.error?.code === "string"
+    ? parsed.error.code
+    : undefined;
+  const message = typeof parsed?.error?.message === "string"
+    ? parsed.error.message
+    : undefined;
+  if (code === "credit_balance_exhausted") {
+    return { code, message, status };
+  }
+  // Plain-text fallback: substring match against the raw errText.
+  if (typeof errText === "string" && errText.includes("credit_balance_exhausted")) {
+    return { code: "credit_balance_exhausted", message, status };
+  }
+  return null;
+}
+
 export interface SectionEmbeddingResult {
   outlineSectionID: string;
   extractedSummary: string;
@@ -326,6 +365,17 @@ export async function processSectionMemory(
       clearTimeout(t);
       if (!r.ok) {
         const errText = await r.text();
+        const billing = detectProviderBillingUnavailable(r.status, errText);
+        if (billing) {
+          // Non-retryable. Caller maps this code to the canonical friendly
+          // user message + fires the operator alert.
+          throw new SectionEmbeddingError(
+            "provider_billing_unavailable",
+            `OpenAI extract ${r.status} (upstream=${billing.code}): ${
+              (billing.message ?? errText).slice(0, 500)
+            }`,
+          );
+        }
         throw new SectionEmbeddingError(
           "provider_error",
           `OpenAI extract ${r.status}: ${errText.slice(0, 500)}`,
@@ -462,6 +512,15 @@ export async function processSectionMemory(
       clearTimeout(t);
       if (!r.ok) {
         const errText = await r.text();
+        const billing = detectProviderBillingUnavailable(r.status, errText);
+        if (billing) {
+          throw new SectionEmbeddingError(
+            "provider_billing_unavailable",
+            `OpenAI embed ${r.status} (upstream=${billing.code}): ${
+              (billing.message ?? errText).slice(0, 500)
+            }`,
+          );
+        }
         console.error(
           `[embed-section] OpenAI embed ${r.status}: ${errText.slice(0, 500)}`,
         );

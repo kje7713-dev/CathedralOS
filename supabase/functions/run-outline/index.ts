@@ -48,6 +48,8 @@ import {
   ensureMemoryPipelineVersion,
   ensureOutputMemory,
 } from "../_shared/section-embedding.ts";
+import { ProviderBillingUnavailableError } from "../generate-story/_provider.ts";
+import { notifyProviderBillingUnavailable } from "../_shared/_operator_alert.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
 import {
   computeMaxChargeCredits,
@@ -1202,6 +1204,81 @@ async function runOutline(
         await queueContinuation(runId, authHeader);
         return;
       }
+      if (err instanceof ProviderBillingUnavailableError) {
+        // Non-retryable. Terminal: mark section + run failed, release the
+        // lease, fire-and-forget the operator alert with full lineage.
+        // Do NOT schedule next_retry_at. Do NOT queueContinuation. The
+        // iOS spinner stops because we returned without scheduling work.
+        const upstream = err.upstream ?? {};
+        await updateSectionStatus(adminClient, runId, {
+          ...section,
+          status: "failed",
+          error: msg,
+          completed_at: new Date().toISOString(),
+        });
+        // Surface the friendly public message on the section error so
+        // iOS / future resume attempts don't leak upstream wording.
+        const publicMessage = "Temporarily unavailable — try again later.";
+        await adminClient.from("chapter_runs").update({
+          status: "failed",
+          next_retry_at: null,
+          worker_lease_until: null,
+          failed_at: new Date().toISOString(),
+          failure_code: "provider_billing_unavailable",
+          // Public-facing message; provider/billing/quota wording scrubbed.
+          failure_message: publicMessage,
+        }).eq("id", runId);
+        await markRunFailed(
+          adminClient,
+          runId,
+          `section ${section.id} (${section.title}) failed: ${publicMessage}`,
+        );
+        await releaseRunLease(adminClient, runId);
+        // Fire-and-forget operator alert with lineage. Dedupe RPC ensures
+        // generate-story's earlier attempt (which has upstream details)
+        // does not produce a duplicate email; this alert carries the
+        // chapter_run / outline / project identifiers the upstream alert
+        // did not have. Whichever fires first wins; the other is a
+        // deduped no-op.
+        try {
+          // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
+          EdgeRuntime.waitUntil(
+            notifyProviderBillingUnavailable(
+              {
+                stableCode: "provider_billing_unavailable",
+                upstreamProviderCode: upstream.code ?? null,
+                upstreamMessage: upstream.message ?? null,
+                upstreamStatus: upstream.status ?? null,
+                providerModel: null,
+                selectedModel: (run.model as string | null) ?? null,
+                requestID: null,
+                chapterRunID: runId,
+                outlineID: run.outline_id ? String(run.outline_id) : null,
+                projectID: projectId ? String(projectId) : null,
+                environment: "production",
+              },
+              { rpcClient: adminClient },
+            ).catch((alertError) => {
+              console.error(
+                `[run-outline] operator alert failed for ${runId}: ${
+                  alertError instanceof Error
+                    ? alertError.message
+                    : String(alertError)
+                }`,
+              );
+            }),
+          );
+        } catch (waitUntilError) {
+          console.error(
+            `[run-outline] EdgeRuntime.waitUntil threw for ${runId}: ${
+              waitUntilError instanceof Error
+                ? waitUntilError.message
+                : String(waitUntilError)
+            }`,
+          );
+        }
+        return;
+      }
       if (err instanceof RetryableGenerationError) {
         const retryAt = new Date(
           Date.now() + err.retryAfterSeconds * 1000,
@@ -2135,6 +2212,24 @@ async function callGenerateStory(
               errBody.slice(0, 200),
           )
         }`,
+      );
+    }
+    // Non-retryable provider billing failure (e.g. OpenAI HTTP 429 with
+    // upstream code credit_balance_exhausted). Surfaced as a dedicated
+    // subclass so the catch chain can take terminal action: clean
+    // chapter_run termination, no retry schedule, no credit charge, alert.
+    if (parsedError?.errorCode === "provider_billing_unavailable") {
+      const upstreamMessage = typeof parsedError.errorMessage === "string"
+        ? parsedError.errorMessage
+        : errBody.slice(0, 200);
+      throw new ProviderBillingUnavailableError(
+        {
+          code: typeof parsedError.upstreamCode === "string"
+            ? parsedError.upstreamCode
+            : undefined,
+          message: upstreamMessage,
+          status: response.status,
+        },
       );
     }
     if (response.status === 429) {

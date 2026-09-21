@@ -33,6 +33,15 @@
 //   OpenAI calls are aborted after PROVIDER_TIMEOUT_MS (90 s). A timed-out
 //   request returns errorCode "provider_timeout" and does NOT charge credits.
 //
+// Provider billing unavailable:
+//   OpenAI HTTP 429 with upstream code "credit_balance_exhausted" maps to
+//   internal "provider_billing_unavailable". NON-RETRYABLE: the operator
+//   account must top up before any future generation can succeed. The
+//   customer sees the friendly public message "Temporarily unavailable —
+//   try again later." — no provider, billing, or quota wording is leaked.
+//   A server-side Resend-backed operator email alert is fired on the first
+//   occurrence within a configurable suppression window.
+//
 // Observability:
 //   Every request is logged to generation_request_logs (no raw prompt text).
 //   The log row is written after the response is determined.
@@ -48,6 +57,7 @@
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { notifyProviderBillingUnavailable } from "../_shared/_operator_alert.ts";
 import { canonicalUUID } from "../_shared/uuid.ts";
 import { verifyRunOutlineToken } from "../_shared/run-outline-auth.ts";
 import {
@@ -277,7 +287,7 @@ function corsResponse(body: string, init: ResponseInit = {}): Response {
   });
 }
 
-function providerErrorResponse(
+export function providerErrorResponse(
   providerErrorCode: string,
   fallbackMessage: string,
 ): {
@@ -286,6 +296,22 @@ function providerErrorResponse(
   headers?: Record<string, string>;
 } {
   switch (providerErrorCode) {
+    case "provider_billing_unavailable":
+      // Non-retryable. Public message must NOT leak provider billing,
+      // quota, organization, API key, or "insufficient" wording. The
+      // trusted backend can map the internal errorCode to its own
+      // operator tooling; the customer sees the friendly service-level
+      // message only.
+      return {
+        httpStatus: 503,
+        body: {
+          status: "failed",
+          errorCode: "provider_billing_unavailable",
+          errorMessage:
+            "Temporarily unavailable — try again later.",
+          retryAfterSeconds: null,
+        },
+      };
     case "provider_insufficient_quota":
       return {
         httpStatus: 402,
@@ -3385,6 +3411,48 @@ async function handler(
         actualCharge: 0,
         durationMs: Date.now() - requestStartMs,
       });
+      // Fire-and-forget operator alert for non-retryable provider billing
+      // failures. Email failure MUST NOT block the user-facing error
+      // response — EdgeRuntime.waitUntil keeps the edge function alive
+      // until Resend delivery finishes (or errors out). The dedupe RPC
+      // ensures one email per provider_billing_unavailable incident per
+      // ~45 minutes.
+      if (err.errorCode === "provider_billing_unavailable") {
+        try {
+          // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
+          EdgeRuntime.waitUntil(
+            notifyProviderBillingUnavailable(
+              {
+                stableCode: "provider_billing_unavailable",
+                upstreamProviderCode: err.upstream?.code ?? null,
+                upstreamMessage: err.upstream?.message ?? null,
+                upstreamStatus: err.upstream?.status ?? null,
+                providerModel: selectedModel.provider_model,
+                selectedModel: selectedModelId ?? null,
+                requestID: requestId ?? null,
+                environment: "production",
+              },
+              { rpcClient: adminClient },
+            ).catch((alertError) => {
+              console.error(
+                `[generate-story] operator alert failed for ${requestId}: ${
+                  alertError instanceof Error
+                    ? alertError.message
+                    : String(alertError)
+                }`,
+              );
+            }),
+          );
+        } catch (waitUntilError) {
+          console.error(
+            `[generate-story] EdgeRuntime.waitUntil threw for ${requestId}: ${
+              waitUntilError instanceof Error
+                ? waitUntilError.message
+                : String(waitUntilError)
+            }`,
+          );
+        }
+      }
       const failureResponse = providerErrorResponse(
         err.errorCode,
         err.message,

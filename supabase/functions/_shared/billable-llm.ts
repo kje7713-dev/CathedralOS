@@ -33,10 +33,12 @@ import {
   availableCredits,
   type CreditStore,
 } from "../generate-story/_credits.ts";
-import type {
-  LLMMessage,
-  LLMProvider,
-  LLMResponse,
+import {
+  ProviderBillingUnavailableError,
+  ProviderError,
+  type LLMMessage,
+  type LLMProvider,
+  type LLMResponse,
 } from "../generate-story/_provider.ts";
 
 // ---------------------------------------------------------------------------
@@ -383,7 +385,32 @@ export async function runBillableLLM<T>(
       req.providerOptions,
     );
   } catch (err) {
-    await updateProviderAttempt(deps.adminClient, attemptID, { status: "provider_failed", completed_at: new Date().toISOString(), provider_error_code: err instanceof Error ? err.name : "provider_error" });
+    // ProviderError carries a stable `errorCode`; persist it on the attempt
+    // row instead of the class name. This fixes the historical bug where
+    // provider_error_code was always "ProviderError" for any provider
+    // failure, hiding the upstream classification from telemetry.
+    const isProviderError = err instanceof ProviderError;
+    const stableCode = isProviderError
+      ? err.errorCode
+      : (err instanceof Error ? err.name : "provider_error");
+    await updateProviderAttempt(deps.adminClient, attemptID, {
+      status: "provider_failed",
+      completed_at: new Date().toISOString(),
+      provider_error_code: stableCode,
+    });
+    // Provider billing unavailable is non-retryable and must not charge
+    // credits. Skip the failed usage event so the billing ledger stays
+    // free of zero-charge rows; the alert module + generation_provider_
+    // attempts row preserve the failure telemetry. Rethrow as the
+    // dedicated subclass so the upstream catch chain (run-outline /
+    // generate-story) can take terminal action.
+    if (isProviderError && err.errorCode === "provider_billing_unavailable") {
+      const upstream = err.upstream ?? {};
+      throw new ProviderBillingUnavailableError(
+        upstream,
+        err.message,
+      );
+    }
     if (req.recordProviderFailureUsage !== false) {
       await recordFailedUsageEvent(deps.adminClient, {
         userID: req.userID,
