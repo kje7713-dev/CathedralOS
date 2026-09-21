@@ -12,6 +12,7 @@
 --   last_alert_status      -- 'sent' | 'failed' | 'skipped'
 --   last_alert_error       -- sanitized, capped at 500 chars
 --   claim_expires_at       -- short-lived in-flight claim lease (NEW)
+--   claim_token            -- opaque owner token required to release lease
 --
 -- Claim/lease semantics (Kevin 2026-09-21 v2):
 --   The advisory lock serializes the should_send transactions but does
@@ -47,6 +48,7 @@ create table if not exists public.provider_billing_alerts (
   last_alert_status text null check (last_alert_status in ('sent','failed','skipped') or last_alert_status is null),
   last_alert_error text null,
   claim_expires_at timestamptz null,
+  claim_token text null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -66,6 +68,9 @@ comment on column public.provider_billing_alerts.last_alert_attempted_at is
 comment on column public.provider_billing_alerts.last_alert_succeeded_at is
   'Most recent successful Resend 2xx response. Gates the 45-minute suppression window. Failed/skipped attempts leave this column unchanged.';
 
+comment on column public.provider_billing_alerts.claim_token is
+  'Opaque per-claim ownership token. Only the claimant holding this token may record an outcome or clear the lease.';
+
 comment on column public.provider_billing_alerts.claim_expires_at is
   'Short-lived in-flight send claim lease (default 2 minutes). Set by should_send when a send is authorized. Cleared by record_outcome on sent/failed/skipped. A pending claim within the future window suppresses other concurrent claimants until the lease expires or the outcome is recorded.';
 
@@ -81,16 +86,16 @@ alter table public.provider_billing_alerts enable row level security;
 revoke all on public.provider_billing_alerts from public, anon, authenticated;
 grant all on public.provider_billing_alerts to service_role;
 
--- should_send_provider_billing_alert: durable short-lived in-flight claim.
--- Returns true IFF no recent successful send AND no unexpired in-flight claim.
--- The advisory lock serializes the claim transaction; the claim_expires_at
--- column spans the network Resend call so concurrent claimants cannot
--- duplicate-send even across separate processes.
+-- should_send_provider_billing_alert returns an opaque ownership token, not a
+-- boolean. NULL means suppressed. The token binds the later outcome write to
+-- the worker that actually acquired the lease.
+drop function if exists public.should_send_provider_billing_alert(text, integer, integer);
+
 create or replace function public.should_send_provider_billing_alert(
   p_stable_code text,
   p_window_minutes integer default 45,
   p_claim_lease_minutes integer default 2
-) returns boolean
+) returns text
 language plpgsql security definer set search_path=public as $$
 declare
   v_now timestamptz := now();
@@ -100,55 +105,38 @@ declare
   v_claim_expiry timestamptz := v_now + (v_claim_lease::text || ' minutes')::interval;
   v_last_succeeded timestamptz;
   v_claim_expires_at timestamptz;
+  v_claim_token text := gen_random_uuid()::text;
 begin
   if p_stable_code is null or length(trim(p_stable_code)) = 0 then
     raise exception 'stable_code is required';
   end if;
-
-  -- Transaction-scoped advisory lock keyed on stable_code. Serializes
-  -- concurrent claimants for the same stable_code across processes.
   perform pg_advisory_xact_lock(hashtext('pba:' || p_stable_code));
-
-  -- Read current row state.
   select last_alert_succeeded_at, claim_expires_at
     into v_last_succeeded, v_claim_expires_at
     from public.provider_billing_alerts
    where stable_code = p_stable_code;
-
-  -- Suppression 1: a successful send is within the 45-minute window.
   if v_last_succeeded is not null and v_last_succeeded > v_threshold then
     update public.provider_billing_alerts
-       set alert_count = coalesce(alert_count, 0) + 1,
-           updated_at = v_now
+       set alert_count = coalesce(alert_count, 0) + 1, updated_at = v_now
      where stable_code = p_stable_code;
-    return false;
+    return null;
   end if;
-
-  -- Suppression 2: an in-flight claim is still unexpired (the other
-  -- caller's Resend send is in progress or crashed but the lease hasn't
-  -- expired). Prevents duplicate emails across concurrent processes.
   if v_claim_expires_at is not null and v_claim_expires_at > v_now then
     update public.provider_billing_alerts
-       set alert_count = coalesce(alert_count, 0) + 1,
-           updated_at = v_now
+       set alert_count = coalesce(alert_count, 0) + 1, updated_at = v_now
      where stable_code = p_stable_code;
-    return false;
+    return null;
   end if;
-
-  -- Claim: set the lease. The caller MUST follow up with record_outcome
-  -- within v_claim_lease minutes or the claim expires naturally.
   insert into public.provider_billing_alerts (
-    stable_code, last_alerted_at, alert_count, claim_expires_at
-  ) values (
-    p_stable_code, v_now, 1, v_claim_expiry
-  )
-  on conflict (stable_code) do update
-    set last_alerted_at = v_now,
-        alert_count = public.provider_billing_alerts.alert_count + 1,
-        claim_expires_at = v_claim_expiry,
-        updated_at = v_now;
-
-  return true;
+    stable_code, last_alerted_at, alert_count, claim_expires_at, claim_token
+  ) values (p_stable_code, v_now, 1, v_claim_expiry, v_claim_token)
+  on conflict (stable_code) do update set
+    last_alerted_at = v_now,
+    alert_count = public.provider_billing_alerts.alert_count + 1,
+    claim_expires_at = v_claim_expiry,
+    claim_token = v_claim_token,
+    updated_at = v_now;
+  return v_claim_token;
 end; $$;
 
 revoke all on function public.should_send_provider_billing_alert(text, integer, integer)
@@ -156,55 +144,45 @@ revoke all on function public.should_send_provider_billing_alert(text, integer, 
 grant execute on function public.should_send_provider_billing_alert(text, integer, integer)
   to service_role;
 
--- record_provider_billing_alert_outcome: clears claim_expires_at in all
--- terminal cases (sent / failed / skipped). The suppression window is
--- driven ONLY by last_alert_succeeded_at — failed/skipped never advance
--- it. last_alert_attempted_at = now() for every actual attempt.
+-- record_provider_billing_alert_outcome may mutate a row only when the
+-- supplied ownership token matches the currently active claim. A stale or
+-- wrong claimant is a no-op and cannot clear a newer worker's lease.
+drop function if exists public.record_provider_billing_alert_outcome(text, text, text);
+drop function if exists public.record_provider_billing_alert_outcome(text, text, text, text);
+
 create or replace function public.record_provider_billing_alert_outcome(
   p_stable_code text,
+  p_claim_token text,
   p_status text,
   p_error text default null
-) returns void
+) returns boolean
 language plpgsql security definer set search_path=public as $$
 declare
   v_error text;
+  v_updated integer;
 begin
   if p_status is null or p_status not in ('sent','failed','skipped') then
     raise exception 'status must be one of sent, failed, skipped';
   end if;
-
-  v_error := case
-    when p_error is null then null
-    when length(p_error) > 500 then left(p_error, 500) || '...'
-    else p_error
-  end;
-
+  if p_claim_token is null or length(trim(p_claim_token)) = 0 then
+    return false;
+  end if;
+  v_error := case when p_error is null then null
+    when length(p_error) > 500 then left(p_error, 500) || '...' else p_error end;
   update public.provider_billing_alerts
-     set last_alert_attempted_at = now(),  -- always now() for each actual attempt
+     set last_alert_attempted_at = now(),
          last_alert_succeeded_at = case when p_status = 'sent' then now() else last_alert_succeeded_at end,
-         -- Always clear the claim lease: sent / failed / skipped are all
-         -- terminal. A subsequent occurrence can re-claim if it needs to.
          claim_expires_at = null,
+         claim_token = null,
          last_alert_status = p_status,
          last_alert_error = v_error,
          updated_at = now()
-   where stable_code = p_stable_code;
-
-  if not found then
-    insert into public.provider_billing_alerts (
-      stable_code, last_alerted_at, alert_count,
-      last_alert_attempted_at, last_alert_succeeded_at, claim_expires_at,
-      last_alert_status, last_alert_error
-    ) values (
-      p_stable_code, now(), 1, now(),
-      case when p_status = 'sent' then now() else null end,
-      null,
-      p_status, v_error
-    );
-  end if;
+   where stable_code = p_stable_code and claim_token = p_claim_token;
+  get diagnostics v_updated = row_count;
+  return v_updated = 1;
 end; $$;
 
-revoke all on function public.record_provider_billing_alert_outcome(text, text, text)
+revoke all on function public.record_provider_billing_alert_outcome(text, text, text, text)
   from public, anon, authenticated;
-grant execute on function public.record_provider_billing_alert_outcome(text, text, text)
+grant execute on function public.record_provider_billing_alert_outcome(text, text, text, text)
   to service_role;

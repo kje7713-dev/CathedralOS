@@ -1109,19 +1109,19 @@ async function runOutline(
           run.id,
           String(section.id),
         );
-        // Lineage fields consumed by generate-story: durable_run_id signals
-        // this is a Run All call (suppresses generate-story's own operator
-        // alert; run-outline fires the alert with full chapter_run / outline
-        // / project lineage after catching the response).
-        // durable_outline_id / durable_project_id / durable_section_id are
-        // included in the alert body for both call sites (defensive).
-        (generationRequest as Record<string, unknown>).durable_run_id = run.id;
-        (generationRequest as Record<string, unknown>).durable_outline_id =
-          run.outline_id;
-        (generationRequest as Record<string, unknown>).durable_project_id =
-          projectId;
-        (generationRequest as Record<string, unknown>).durable_section_id =
-          String(section.id);
+      // Lineage fields consumed by generate-story: durable_run_id signals
+      // this is a Run All call (suppresses generate-story's own operator
+      // alert; run-outline fires the alert with full chapter_run / outline
+      // / project lineage after catching the response).
+      // durable_outline_id / durable_project_id / durable_section_id are
+      // included in the alert body for both call sites (defensive).
+      (generationRequest as Record<string, unknown>).durable_run_id = run.id;
+      (generationRequest as Record<string, unknown>).durable_outline_id =
+        run.outline_id;
+      (generationRequest as Record<string, unknown>).durable_project_id =
+        projectId;
+      (generationRequest as Record<string, unknown>).durable_section_id =
+        String(section.id);
       await renewRunLease(adminClient, runId, workerAttempt);
       const lifecycle = await runOutlineSectionLifecycle({
         generate: async () => {
@@ -1236,8 +1236,7 @@ async function runOutline(
         const upstream = err instanceof ProviderBillingUnavailableError
           ? (err.upstream ?? {})
           : {};
-        const friendlyMessage =
-          "Temporarily unavailable — try again later.";
+        const friendlyMessage = "Temporarily unavailable — try again later.";
         // 1) Mark this section failed with the friendly message; preserve
         //    section.output_id (already set by generation success) and any
         //    other prior fields via the spread.
@@ -2438,6 +2437,22 @@ async function loadActualCredits(
   }, 0);
 }
 
+export function providerBillingTerminalState(
+  error: string,
+  actualCredits: number,
+  completedAt: string,
+): Record<string, unknown> {
+  return {
+    status: "failed",
+    error,
+    credits_reserved: 0,
+    credits_actual: actualCredits,
+    completed_at: completedAt,
+    worker_lease_until: null,
+    next_retry_at: null,
+  };
+}
+
 async function markRunFailed(
   adminClient: ReturnType<typeof createClient>,
   runId: string,
@@ -2451,15 +2466,9 @@ async function markRunFailed(
   const actual = await loadActualCredits(adminClient, sections);
   // generate-story owns the real debit. The orchestrator reports successful
   // section charges and clears its estimate on failure (no failed-call charge).
-  const { error: failError } = await adminClient.from("chapter_runs").update({
-    status: "failed",
-    error,
-    credits_reserved: 0,
-    credits_actual: actual,
-    completed_at: new Date().toISOString(),
-    worker_lease_until: null,
-    next_retry_at: null,
-  }).eq("id", runId).in("status", ["queued", "running"]);
+  const { error: failError } = await adminClient.from("chapter_runs").update(
+    providerBillingTerminalState(error, actual, new Date().toISOString()),
+  ).eq("id", runId).in("status", ["queued", "running"]);
   if (failError) {
     throw new Error(
       `could not persist failed run ${runId}: ${failError.message}`,

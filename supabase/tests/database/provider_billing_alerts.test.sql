@@ -1,5 +1,5 @@
 begin;
-select plan(20);
+select plan(22);
 
 -- =============================================================================
 -- provider_billing_alerts — claim/lease concurrency + retry-aware suppression
@@ -27,8 +27,13 @@ select has_function(
 
 select has_function(
   'public', 'record_provider_billing_alert_outcome',
-  array['text', 'text', 'text'],
-  'outcome RPC exists'
+  array['text', 'text', 'text', 'text'],
+  'outcome RPC exists with ownership token'
+);
+
+select has_column(
+  'public', 'provider_billing_alerts', 'claim_token',
+  'claim_token column binds outcome ownership'
 );
 
 select has_column(
@@ -41,8 +46,13 @@ select has_column(
 -- ===========================================================================
 delete from public.provider_billing_alerts where stable_code = 'lease_test';
 
+do $$
+begin
+  perform set_config('test.claim_token', public.should_send_provider_billing_alert('lease_test', 45, 2), true);
+end $$;
+
 select is(
-  (select public.should_send_provider_billing_alert('lease_test', 45, 2)),
+  current_setting('test.claim_token') <> '',
   true,
   '1. first claimant wins the slot'
 );
@@ -67,8 +77,8 @@ select ok(
 --    successful send and both get true. The short lease closes that gap.
 -- ===========================================================================
 select is(
-  (select public.should_send_provider_billing_alert('lease_test', 45, 2)),
-  false,
+  (select public.should_send_provider_billing_alert('lease_test', 45, 2)) is null,
+  true,
   '2. second claimant before outcome returns false (claim-in-flight)'
 );
 
@@ -80,9 +90,28 @@ select is(
 do $$
 begin
   perform record_provider_billing_alert_outcome(
-    'lease_test', 'failed', 'HTTP 500 from Resend'
+    'lease_test', 'wrong-claimant', 'failed', 'HTTP 500 from Resend'
   );
 end $$;
+
+select isnt(
+  (select claim_token from public.provider_billing_alerts where stable_code = 'lease_test'),
+  null,
+  '3. wrong claimant cannot clear the active lease'
+);
+
+do $$
+begin
+  perform record_provider_billing_alert_outcome(
+    'lease_test', current_setting('test.claim_token'), 'failed', 'HTTP 500 from Resend'
+  );
+end $$;
+
+select is(
+  (select claim_token from public.provider_billing_alerts where stable_code = 'lease_test'),
+  null,
+  '3. owning claimant clears its lease after failed send'
+);
 
 select is(
   (select claim_expires_at from public.provider_billing_alerts
@@ -105,29 +134,39 @@ select is(
   '3. failed outcome recorded in last_alert_status'
 );
 
+do $$
+begin
+  perform set_config('test.claim_token', public.should_send_provider_billing_alert('lease_test', 45, 2), true);
+end $$;
+
 select is(
-  (select public.should_send_provider_billing_alert('lease_test', 45, 2)),
+  current_setting('test.claim_token') <> '',
   true,
   '3. next occurrence after failed outcome returns true (claim released)'
 );
 
 do $$
 begin
-  perform record_provider_billing_alert_outcome('lease_test', 'skipped', 'env missing');
+  perform record_provider_billing_alert_outcome('lease_test', current_setting('test.claim_token'), 'skipped', 'env missing');
 end $$;
 
 -- ===========================================================================
 -- 4. successful outcome → suppresses for 45 minutes.
 -- ===========================================================================
+do $$
+begin
+  perform set_config('test.claim_token', public.should_send_provider_billing_alert('lease_test', 45, 2), true);
+end $$;
+
 select is(
-  (select public.should_send_provider_billing_alert('lease_test', 45, 2)),
+  current_setting('test.claim_token') <> '',
   true,
   '4. next occurrence after skipped returns true (lease released, no successful send yet)'
 );
 
 do $$
 begin
-  perform record_provider_billing_alert_outcome('lease_test', 'sent', null);
+  perform record_provider_billing_alert_outcome('lease_test', current_setting('test.claim_token'), 'sent', null);
 end $$;
 
 select is(
@@ -145,8 +184,8 @@ select isnt(
 );
 
 select is(
-  (select public.should_send_provider_billing_alert('lease_test', 45, 2)),
-  false,
+  (select public.should_send_provider_billing_alert('lease_test', 45, 2)) is null,
+  true,
   '4. next call within 45-minute window returns false (suppression)'
 );
 
@@ -165,15 +204,20 @@ update public.provider_billing_alerts
        claim_expires_at = null
  where stable_code = 'lease_test';
 
+do $$
+begin
+  perform set_config('test.claim_token', public.should_send_provider_billing_alert('lease_test', 45, 2), true);
+end $$;
+
 select is(
-  (select public.should_send_provider_billing_alert('lease_test', 45, 2)),
+  current_setting('test.claim_token') <> '',
   true,
   '5. after success window expiry + cleared claim, next call returns true'
 );
 
 do $$
 begin
-  perform record_provider_billing_alert_outcome('lease_test', 'failed', 'transient');
+  perform record_provider_billing_alert_outcome('lease_test', current_setting('test.claim_token'), 'failed', 'transient');
 end $$;
 
 -- ===========================================================================
@@ -182,22 +226,15 @@ end $$;
 do $$
 begin
   perform record_provider_billing_alert_outcome(
-    'fresh_stable_code', 'failed', 'HTTP 500 from Resend'
+    'fresh_stable_code', 'no-claim', 'failed', 'HTTP 500 from Resend'
   );
 end $$;
 
 select is(
-  (select last_alert_status from public.provider_billing_alerts
+  (select count(*) from public.provider_billing_alerts
     where stable_code = 'fresh_stable_code'),
-  'failed',
-  '6. late outcome RPC still records failure status'
-);
-
-select is(
-  (select claim_expires_at from public.provider_billing_alerts
-    where stable_code = 'fresh_stable_code'),
-  null,
-  '6. late outcome RPC leaves claim_expires_at null'
+  0::bigint,
+  '6. outcome without an ownership claim is ignored'
 );
 
 select * from finish();

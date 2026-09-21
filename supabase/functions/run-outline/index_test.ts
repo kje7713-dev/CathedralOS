@@ -14,6 +14,7 @@ import {
   isInsufficientCreditsError,
   loadRunOutline,
   parseEmbedSectionError,
+  providerBillingTerminalState,
   requireRunOutlineRecipe,
   RunOutlineOutlineError,
   runOutlineSectionLifecycle,
@@ -836,6 +837,81 @@ Deno.test("run-outline: isProviderBillingUnavailable does NOT match a plain HTTP
   const err = new Error("provider_rate_limited: 429 from upstream");
   assertEquals(isProviderBillingUnavailable(err), false);
   const classified = err instanceof Error && err.message.includes("rate");
-  assertEquals(classified, true, "sanity: 429 rate-limit error still looks like a rate limit");
+  assertEquals(
+    classified,
+    true,
+    "sanity: 429 rate-limit error still looks like a rate limit",
+  );
 });
 
+Deno.test("Run All provider billing failure writes the exact terminal database state", () => {
+  const state = providerBillingTerminalState(
+    "Temporarily unavailable — try again later.",
+    12.75,
+    "2026-09-21T16:00:00.000Z",
+  );
+  assertEquals(state, {
+    status: "failed",
+    error: "Temporarily unavailable — try again later.",
+    credits_reserved: 0,
+    credits_actual: 12.75,
+    completed_at: "2026-09-21T16:00:00.000Z",
+    worker_lease_until: null,
+    next_retry_at: null,
+  });
+});
+
+Deno.test("Run All generation-stage billing failure remains terminal before memory", async () => {
+  let pendingWrites = 0;
+  let completedWrites = 0;
+  try {
+    await runOutlineSectionLifecycle({
+      generate: async () => {
+        throw new ProviderBillingUnavailableError({
+          code: "credit_balance_exhausted",
+          message: "upstream detail stays private",
+          status: 429,
+        });
+      },
+      persistPendingOutput: async () => pendingWrites++,
+      ensureMemory: async () => {
+        throw new Error("memory must not run after generation failure");
+      },
+      persistCompleted: async () => completedWrites++,
+      isInsufficientCredits: () => false,
+    });
+    throw new Error("expected generation-stage billing failure");
+  } catch (error) {
+    assertEquals(isProviderBillingUnavailable(error), true);
+    assertEquals(pendingWrites, 0);
+    assertEquals(completedWrites, 0);
+  }
+});
+
+Deno.test("Run All memory-stage billing failure preserves output and skips completion", async () => {
+  let pendingOutput = "";
+  let completedWrites = 0;
+  try {
+    await runOutlineSectionLifecycle({
+      generate: async () => ({
+        outputID: "output-generation-1",
+        status: "complete",
+      }),
+      persistPendingOutput: async (outputID) => pendingOutput = outputID,
+      ensureMemory: async () => {
+        throw new SectionEmbeddingError(
+          "provider_billing_unavailable",
+          "OpenAI embed 429",
+          { code: "credit_balance_exhausted", status: 429 },
+        );
+      },
+      persistCompleted: async () => completedWrites++,
+      isInsufficientCredits: () => false,
+    });
+    throw new Error("expected memory-stage billing failure");
+  } catch (error) {
+    assertEquals(isProviderBillingUnavailable(error), true);
+    assertEquals(pendingOutput, "output-generation-1");
+    assertEquals(completedWrites, 0);
+  }
+});

@@ -24,7 +24,9 @@ interface CapturedRequest {
 function makeFetchStub(): {
   fetchImpl: typeof fetch;
   getCaptured: () => CapturedRequest[];
-  setResponder: (responder: (url: string, init: RequestInit) => Response) => void;
+  setResponder: (
+    responder: (url: string, init: RequestInit) => Response,
+  ) => void;
 } {
   const captured: CapturedRequest[] = [];
   let responder: (url: string, init: RequestInit) => Response = () =>
@@ -68,7 +70,10 @@ function makeRpcStub(
     rpc: (name: string, params: Record<string, unknown>) => {
       calls.push({ name, params });
       if (name === "should_send_provider_billing_alert") {
-        return Promise.resolve({ data: dedupeReturn, error: null });
+        return Promise.resolve({
+          data: dedupeReturn ? "claim-token-1" : null,
+          error: null,
+        });
       }
       if (name === "record_provider_billing_alert_outcome") {
         return Promise.resolve({
@@ -125,7 +130,7 @@ Deno.test("notifyProviderBillingUnavailable: missing env vars skips send + recor
   const outcomeCall = calls.find((c) =>
     c.name === "record_provider_billing_alert_outcome"
   );
-  assertEquals(outcomeCall?.params.p_status, "skipped");
+  assertEquals(outcomeCall, undefined);
 });
 
 Deno.test("notifyProviderBillingUnavailable: dedupe RPC returns false → no Resend call", async () => {
@@ -183,7 +188,10 @@ Deno.test("notifyProviderBillingUnavailable: dedupe RPC returns true → Resend 
     text,
     "Stable internal code: provider_billing_unavailable",
   );
-  assertStringIncludes(text, "Upstream provider code: credit_balance_exhausted");
+  assertStringIncludes(
+    text,
+    "Upstream provider code: credit_balance_exhausted",
+  );
   assertStringIncludes(text, "Upstream status:       429");
   assertStringIncludes(text, "credits remaining");
   assertStringIncludes(
@@ -215,6 +223,7 @@ Deno.test("notifyProviderBillingUnavailable: Resend 4xx → sent=false, status=f
     c.name === "record_provider_billing_alert_outcome"
   );
   assertEquals(outcomeCall?.params.p_status, "failed");
+  assertEquals(outcomeCall?.params.p_claim_token, "claim-token-1");
   assertEquals(outcomeCall?.params.p_error, "HTTP 403");
 });
 
@@ -259,7 +268,11 @@ Deno.test("notifyProviderBillingUnavailable: dedupe RPC throws → fail closed, 
   assertEquals(outcome.attempted, false);
   assertEquals(outcome.sent, false);
   assertEquals(outcome.status, "skipped");
-  assertEquals(stub.getCaptured().length, 0, "Resend must NOT be called when dedupe RPC throws");
+  assertEquals(
+    stub.getCaptured().length,
+    0,
+    "Resend must NOT be called when dedupe RPC throws",
+  );
 });
 
 Deno.test("notifyProviderBillingUnavailable: missing rpcClient → fail closed, no Resend call (v2 #3)", async () => {
@@ -276,7 +289,11 @@ Deno.test("notifyProviderBillingUnavailable: missing rpcClient → fail closed, 
   assertEquals(outcome.attempted, false);
   assertEquals(outcome.sent, false);
   assertEquals(outcome.status, "skipped");
-  assertEquals(stub.getCaptured().length, 0, "Resend must NOT be called when rpcClient is missing");
+  assertEquals(
+    stub.getCaptured().length,
+    0,
+    "Resend must NOT be called when rpcClient is missing",
+  );
 });
 
 Deno.test("notifyProviderBillingUnavailable: subject + body do not leak upstream message verbatim", async () => {

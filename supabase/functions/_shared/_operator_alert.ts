@@ -121,12 +121,8 @@ export async function notifyProviderBillingUnavailable(
         hasFrom: Boolean(from),
       },
     );
-    await recordOutcomeSafe(
-      deps.rpcClient,
-      ctx.stableCode,
-      "skipped",
-      "missing_env_vars",
-    );
+    // No lease was claimed, so there is no ownership token to release.
+    // Never write a tokenless outcome that could clear another worker's in-flight claim.
     return { attempted: false, deduped: false, sent: false, status: "skipped" };
   }
 
@@ -148,7 +144,7 @@ export async function notifyProviderBillingUnavailable(
     };
   }
 
-  let dedupeAllowed = false;
+  let claimToken: string | null = null;
   try {
     const result = await (deps.rpcClient as {
       rpc: (
@@ -165,12 +161,6 @@ export async function notifyProviderBillingUnavailable(
         "[operator-alert] dedupe RPC returned error: fail closed, skipping alert send:",
         sanitizeError(JSON.stringify(result.error)),
       );
-      await recordOutcomeSafe(
-        deps.rpcClient,
-        ctx.stableCode,
-        "skipped",
-        "dedupe_rpc_error",
-      );
       return {
         attempted: false,
         deduped: false,
@@ -178,17 +168,13 @@ export async function notifyProviderBillingUnavailable(
         status: "skipped",
       };
     }
-    dedupeAllowed = Boolean(result?.data);
+    claimToken = typeof result?.data === "string" && result.data.length > 0
+      ? result.data
+      : null;
   } catch (err) {
     console.error(
       "[operator-alert] dedupe RPC threw: fail closed, skipping alert send:",
       sanitizeError(err instanceof Error ? err.message : String(err)),
-    );
-    await recordOutcomeSafe(
-      deps.rpcClient,
-      ctx.stableCode,
-      "skipped",
-      "dedupe_rpc_threw",
     );
     return {
       attempted: false,
@@ -198,7 +184,7 @@ export async function notifyProviderBillingUnavailable(
     };
   }
 
-  if (!dedupeAllowed) {
+  if (!claimToken) {
     // Dedupe returned false — either a recent successful send is still
     // inside the 45-minute suppression window, or an unexpired in-flight
     // claim is held by another concurrent caller. Skip the send.
@@ -245,6 +231,7 @@ export async function notifyProviderBillingUnavailable(
       await recordOutcomeSafe(
         deps.rpcClient,
         ctx.stableCode,
+        claimToken,
         "failed",
         outcome.error,
       );
@@ -257,7 +244,13 @@ export async function notifyProviderBillingUnavailable(
       sent: true,
       status: "sent",
     };
-    await recordOutcomeSafe(deps.rpcClient, ctx.stableCode, "sent", undefined);
+    await recordOutcomeSafe(
+      deps.rpcClient,
+      ctx.stableCode,
+      claimToken,
+      "sent",
+      undefined,
+    );
     return outcome;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -270,7 +263,13 @@ export async function notifyProviderBillingUnavailable(
       status: "failed",
       error: msg,
     };
-    await recordOutcomeSafe(deps.rpcClient, ctx.stableCode, "failed", msg);
+    await recordOutcomeSafe(
+      deps.rpcClient,
+      ctx.stableCode,
+      claimToken,
+      "failed",
+      msg,
+    );
     return outcome;
   }
 }
@@ -283,6 +282,7 @@ export async function notifyProviderBillingUnavailable(
 async function recordOutcomeSafe(
   rpcClient: unknown,
   stableCode: string,
+  claimToken: string,
   status: AlertStatus,
   error: string | undefined,
 ): Promise<void> {
@@ -295,6 +295,7 @@ async function recordOutcomeSafe(
       ) => Promise<{ error?: { message?: string } | null }>;
     }).rpc("record_provider_billing_alert_outcome", {
       p_stable_code: stableCode,
+      p_claim_token: claimToken,
       p_status: status,
       p_error: error ?? null,
     });
@@ -322,24 +323,36 @@ function formatAlertBody(
   lines.push(`Environment:         ${env}`);
   lines.push(`Occurred at:         ${occurredAt.toISOString()}`);
   lines.push("");
-  lines.push(`Upstream provider code: ${
-    sanitizeField(ctx.upstreamProviderCode) ?? "(unknown)"
-  }`);
+  lines.push(
+    `Upstream provider code: ${
+      sanitizeField(ctx.upstreamProviderCode) ?? "(unknown)"
+    }`,
+  );
   lines.push(`Upstream status:       ${ctx.upstreamStatus ?? "(unknown)"}`);
-  lines.push(`Upstream message:      ${
-    sanitizeField(ctx.upstreamMessage) ?? "(unknown)"
-  }`);
-  lines.push(`Provider model:        ${
-    sanitizeField(ctx.providerModel) ?? "(unknown)"
-  }`);
-  lines.push(`Selected model:        ${
-    sanitizeField(ctx.selectedModel) ?? "(unknown)"
-  }`);
+  lines.push(
+    `Upstream message:      ${
+      sanitizeField(ctx.upstreamMessage) ?? "(unknown)"
+    }`,
+  );
+  lines.push(
+    `Provider model:        ${sanitizeField(ctx.providerModel) ?? "(unknown)"}`,
+  );
+  lines.push(
+    `Selected model:        ${sanitizeField(ctx.selectedModel) ?? "(unknown)"}`,
+  );
   lines.push("");
-  lines.push(`Request ID:            ${sanitizeField(ctx.requestID) ?? "(unknown)"}`);
-  lines.push(`Chapter run ID:        ${sanitizeField(ctx.chapterRunID) ?? "(n/a)"}`);
-  lines.push(`Outline ID:            ${sanitizeField(ctx.outlineID) ?? "(n/a)"}`);
-  lines.push(`Project ID:            ${sanitizeField(ctx.projectID) ?? "(n/a)"}`);
+  lines.push(
+    `Request ID:            ${sanitizeField(ctx.requestID) ?? "(unknown)"}`,
+  );
+  lines.push(
+    `Chapter run ID:        ${sanitizeField(ctx.chapterRunID) ?? "(n/a)"}`,
+  );
+  lines.push(
+    `Outline ID:            ${sanitizeField(ctx.outlineID) ?? "(n/a)"}`,
+  );
+  lines.push(
+    `Project ID:            ${sanitizeField(ctx.projectID) ?? "(n/a)"}`,
+  );
   lines.push("");
   lines.push(
     "Automatic retry was suppressed: this is a non-retryable condition.",
