@@ -3417,7 +3417,31 @@ async function handler(
       // until Resend delivery finishes (or errors out). The dedupe RPC
       // ensures one email per provider_billing_unavailable incident per
       // ~45 minutes.
-      if (err.errorCode === "provider_billing_unavailable") {
+      //
+      // Centralized ownership: for Run All requests, run-outline owns the
+      // alert and includes full chapter_run / outline / project lineage.
+      // generate-story suppresses its own alert when durable_run_id is
+      // present in the request body so the two sites do not race for the
+      // dedupe slot (whichever fires first wins, which previously produced
+      // emails without chapter_run lineage). Standalone generation keeps
+      // the original firing path so direct callers are still covered.
+      if (
+        err.errorCode === "provider_billing_unavailable" &&
+        !(typeof body?.durable_run_id === "string" &&
+          body.durable_run_id.length > 0)
+      ) {
+        // Enrich with any lineage the standalone caller happens to pass
+        // (defensive — standalone callers won't, but the field is
+        // available if a future direct caller wants it).
+        const durableRunID = typeof body?.durable_run_id === "string"
+          ? body.durable_run_id
+          : null;
+        const durableOutlineID = typeof body?.durable_outline_id === "string"
+          ? body.durable_outline_id
+          : null;
+        const durableProjectID = typeof body?.durable_project_id === "string"
+          ? body.durable_project_id
+          : null;
         try {
           // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
           EdgeRuntime.waitUntil(
@@ -3430,6 +3454,9 @@ async function handler(
                 providerModel: selectedModel.provider_model,
                 selectedModel: selectedModelId ?? null,
                 requestID: requestId ?? null,
+                chapterRunID: durableRunID,
+                outlineID: durableOutlineID,
+                projectID: durableProjectID,
                 environment: "production",
               },
               { rpcClient: adminClient },

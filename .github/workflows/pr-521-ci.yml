@@ -25,6 +25,11 @@ on:
       - 'supabase/migrations/20260917200000_sync_openai_model_catalog.sql'
       - 'supabase/tests/database/scene_memory_stage_ledger.test.sql'
       - 'supabase/tests/database/openai_model_catalog_sync.test.sql'
+      # PR #609: provider_billing_unavailable non-retryable fix
+      - 'supabase/functions/_shared/_operator_alert.ts'
+      - 'supabase/functions/_shared/_operator_alert_test.ts'
+      - 'supabase/migrations/20260921092700_provider_billing_alerts.sql'
+      - 'supabase/tests/database/provider_billing_alerts.test.sql'
       - '.github/workflows/pr-521-ci.yml'
 
 jobs:
@@ -45,6 +50,7 @@ jobs:
           supabase/functions/_shared/memory-pipeline.ts
           supabase/functions/_shared/memory-state.ts
           supabase/functions/_shared/section-embedding.ts
+          supabase/functions/_shared/_operator_alert.ts
           supabase/functions/embed-section/index.ts
           supabase/functions/generate-story/_provider.ts
           supabase/functions/generate-story/index.ts
@@ -53,6 +59,11 @@ jobs:
           deno test --no-check -A
           supabase/functions/generate-story/_provider_test.ts
           --filter="Responses structured output preserves cache boundary"
+      - name: Test provider billing-unavailable classification + dedicated subclass
+        run: >-
+          deno test --no-check -A
+          supabase/functions/generate-story/_provider_test.ts
+          --filter="provider billing-unavailable"
       - name: Test parser, truncation, semantic contract, and indexing regressions
         run: >-
           deno test --no-check -A
@@ -75,6 +86,19 @@ jobs:
           supabase/functions/_shared/memory-lifecycle_test.ts
           supabase/functions/_shared/memory-pipeline_test.ts
           supabase/functions/run-outline/index_test.ts
+
+      # PR #609: Run All terminal behavior for provider_billing_unavailable
+      - name: Test Run All terminal behavior for provider_billing_unavailable
+        run: >-
+          deno test --no-check -A
+          supabase/functions/run-outline/index_test.ts
+          --filter="provider_billing_unavailable terminal"
+
+      # PR #609: operator alert module (Resend + dedupe + sanitization)
+      - name: Test operator alert module
+        run: >-
+          deno test --no-check -A
+          supabase/functions/_shared/_operator_alert_test.ts
 
       - name: Test outline worker lifecycle and checkpoint recovery
         run: >-
@@ -164,3 +188,8 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/legacy_model_rates_retirement.test.sql
+      # PR #609: provider_billing_alerts dedupe + outcome telemetry
+      - name: Run provider_billing_alerts pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/provider_billing_alerts.test.sql

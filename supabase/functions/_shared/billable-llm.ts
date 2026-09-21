@@ -36,6 +36,7 @@ import {
 import {
   ProviderBillingUnavailableError,
   ProviderError,
+  isProviderBillingUnavailable,
   type LLMMessage,
   type LLMProvider,
   type LLMResponse,
@@ -404,11 +405,19 @@ export async function runBillableLLM<T>(
     // attempts row preserve the failure telemetry. Rethrow as the
     // dedicated subclass so the upstream catch chain (run-outline /
     // generate-story) can take terminal action.
-    if (isProviderError && err.errorCode === "provider_billing_unavailable") {
-      const upstream = err.upstream ?? {};
+    // Canonical predicate catches both the dedicated subclass (which
+    // the OpenAI provider now throws directly) and any other internal
+    // surface carrying the stable code (defensive). Pass through the
+    // dedicated subclass unchanged so upstream catch chains can rely on
+    // instanceof; wrap other surfaces into the dedicated subclass.
+    if (isProviderBillingUnavailable(err)) {
+      if (err instanceof ProviderBillingUnavailableError) {
+        throw err;
+      }
+      const upstream = (err as ProviderError).upstream ?? {};
       throw new ProviderBillingUnavailableError(
         upstream,
-        err.message,
+        err instanceof Error ? err.message : String(err),
       );
     }
     if (req.recordProviderFailureUsage !== false) {

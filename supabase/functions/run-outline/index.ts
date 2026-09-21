@@ -48,7 +48,10 @@ import {
   ensureMemoryPipelineVersion,
   ensureOutputMemory,
 } from "../_shared/section-embedding.ts";
-import { ProviderBillingUnavailableError } from "../generate-story/_provider.ts";
+import {
+  isProviderBillingUnavailable,
+  ProviderBillingUnavailableError,
+} from "../generate-story/_provider.ts";
 import { notifyProviderBillingUnavailable } from "../_shared/_operator_alert.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
 import {
@@ -1106,6 +1109,19 @@ async function runOutline(
           run.id,
           String(section.id),
         );
+        // Lineage fields consumed by generate-story: durable_run_id signals
+        // this is a Run All call (suppresses generate-story's own operator
+        // alert; run-outline fires the alert with full chapter_run / outline
+        // / project lineage after catching the response).
+        // durable_outline_id / durable_project_id / durable_section_id are
+        // included in the alert body for both call sites (defensive).
+        (generationRequest as Record<string, unknown>).durable_run_id = run.id;
+        (generationRequest as Record<string, unknown>).durable_outline_id =
+          run.outline_id;
+        (generationRequest as Record<string, unknown>).durable_project_id =
+          projectId;
+        (generationRequest as Record<string, unknown>).durable_section_id =
+          String(section.id);
       await renewRunLease(adminClient, runId, workerAttempt);
       const lifecycle = await runOutlineSectionLifecycle({
         generate: async () => {
@@ -1204,42 +1220,50 @@ async function runOutline(
         await queueContinuation(runId, authHeader);
         return;
       }
-      if (err instanceof ProviderBillingUnavailableError) {
-        // Non-retryable. Terminal: mark section + run failed, release the
-        // lease, fire-and-forget the operator alert with full lineage.
-        // Do NOT schedule next_retry_at. Do NOT queueContinuation. The
-        // iOS spinner stops because we returned without scheduling work.
-        const upstream = err.upstream ?? {};
+      if (isProviderBillingUnavailable(err)) {
+        // Canonical terminal branch for provider_billing_unavailable.
+        // Catches BOTH the dedicated ProviderBillingUnavailableError from
+        // callGenerateStory (generation stage) AND SectionEmbeddingError
+        // from ensureOutputMemory (memory / embedding stage) since the
+        // canonical predicate inspects the stable code on both surfaces.
+        //
+        // iOS-visible state: chapter_runs.error and sections[].error are
+        // exactly the friendly public message. Raw upstream wording stays
+        // in trusted telemetry / operator alert context only.
+        //
+        // Durable Run All state preserved: already-completed sections stay
+        // intact; only this section's status flips to "failed".
+        const upstream = err instanceof ProviderBillingUnavailableError
+          ? (err.upstream ?? {})
+          : {};
+        const friendlyMessage =
+          "Temporarily unavailable — try again later.";
+        // 1) Mark this section failed with the friendly message; preserve
+        //    section.output_id (already set by generation success) and any
+        //    other prior fields via the spread.
         await updateSectionStatus(adminClient, runId, {
           ...section,
           status: "failed",
-          error: msg,
+          error: friendlyMessage,
           completed_at: new Date().toISOString(),
         });
-        // Surface the friendly public message on the section error so
-        // iOS / future resume attempts don't leak upstream wording.
-        const publicMessage = "Temporarily unavailable — try again later.";
-        await adminClient.from("chapter_runs").update({
-          status: "failed",
-          next_retry_at: null,
-          worker_lease_until: null,
-          failed_at: new Date().toISOString(),
-          failure_code: "provider_billing_unavailable",
-          // Public-facing message; provider/billing/quota wording scrubbed.
-          failure_message: publicMessage,
-        }).eq("id", runId);
-        await markRunFailed(
-          adminClient,
-          runId,
-          `section ${section.id} (${section.title}) failed: ${publicMessage}`,
-        );
+        // 2) Single coherent terminal chapter_runs write via the existing
+        //    markRunFailed helper. It writes the canonical terminal columns
+        //    (status, error, credits_reserved=0, credits_actual=<actual>,
+        //    completed_at, worker_lease_until=null, next_retry_at=null) and
+        //    inspects the returned PostgREST error. NO direct writes to
+        //    non-existent columns like failed_at / failure_code /
+        //    failure_message.
+        await markRunFailed(adminClient, runId, friendlyMessage);
+        // 3) Release the worker lease so the row is claimable for resume
+        //    AFTER the operator tops up OpenAI credits.
         await releaseRunLease(adminClient, runId);
-        // Fire-and-forget operator alert with lineage. Dedupe RPC ensures
-        // generate-story's earlier attempt (which has upstream details)
-        // does not produce a duplicate email; this alert carries the
-        // chapter_run / outline / project identifiers the upstream alert
-        // did not have. Whichever fires first wins; the other is a
-        // deduped no-op.
+        // 4) Fire-and-forget operator alert with full Run All lineage.
+        //    generate-story suppresses its own alert when durable_run_id
+        //    is present in the request body (see generate-story/index.ts),
+        //    so this is the single alert source for Run All incidents.
+        //    The Postgres dedupe RPC serializes concurrent Run Alls and
+        //    collapses them into one email per suppression window.
         try {
           // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
           EdgeRuntime.waitUntil(
