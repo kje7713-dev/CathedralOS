@@ -3425,22 +3425,28 @@ async function handler(
       // dedupe slot (whichever fires first wins, which previously produced
       // emails without chapter_run lineage). Standalone generation keeps
       // the original firing path so direct callers are still covered.
-      if (
-        err.errorCode === "provider_billing_unavailable" &&
-        !(typeof body?.durable_run_id === "string" &&
-          body.durable_run_id.length > 0)
-      ) {
+      // Run All lineage fields are populated by run-outline at request
+      // build time but are not part of GenerateStoryRequest's static
+      // type. Read them via a permissive cast + typeof narrowing so
+      // the check stays type-safe.
+      const rawBody = (body ?? {}) as unknown as Record<string, unknown>;
+      const durableRunIDRaw = rawBody["durable_run_id"];
+      const isRunAllCall = typeof durableRunIDRaw === "string" &&
+        durableRunIDRaw.length > 0;
+      if (err.errorCode === "provider_billing_unavailable" && !isRunAllCall) {
         // Enrich with any lineage the standalone caller happens to pass
         // (defensive — standalone callers won't, but the field is
         // available if a future direct caller wants it).
-        const durableRunID = typeof body?.durable_run_id === "string"
-          ? body.durable_run_id
+        const durableRunID = typeof durableRunIDRaw === "string"
+          ? durableRunIDRaw
           : null;
-        const durableOutlineID = typeof body?.durable_outline_id === "string"
-          ? body.durable_outline_id
+        const durableOutlineID = typeof rawBody["durable_outline_id"] ===
+            "string"
+          ? (rawBody["durable_outline_id"] as string)
           : null;
-        const durableProjectID = typeof body?.durable_project_id === "string"
-          ? body.durable_project_id
+        const durableProjectID = typeof rawBody["durable_project_id"] ===
+            "string"
+          ? (rawBody["durable_project_id"] as string)
           : null;
         try {
           // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
