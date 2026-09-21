@@ -11,9 +11,12 @@ import {
 } from "../generate-story/_generation_models.ts";
 import {
   generationReadinessFailures,
+  handleProviderBillingUnavailableTerminal,
+  handleRetryableGenerationFailure,
   isInsufficientCreditsError,
   loadRunOutline,
   parseEmbedSectionError,
+  providerBillingTerminalState,
   requireRunOutlineRecipe,
   RunOutlineOutlineError,
   runOutlineSectionLifecycle,
@@ -791,4 +794,254 @@ Deno.test("Run All atomic memory settlement race pauses instead of failing", asy
   assertEquals(finalStatus, "paused_insufficient_credits");
   assertEquals(providerCalls, 1);
   assertEquals(billingCalls, 1);
+});
+
+// =============================================================================
+// Provider billing-unavailable terminal behavior tests (Kevin 2026-09-21 v2 #1)
+//
+// Verifies the canonical predicate detects BOTH error surfaces caught by the
+// run-outline catch chain (ProviderBillingUnavailableError from
+// callGenerateStory generation stage AND SectionEmbeddingError from
+// ensureOutputMemory memory/embedding stage), and that markRunFailed writes
+// the canonical friendly-message terminal state. Full end-to-end catch-chain
+// tests with chapter_runs inspection require a separate integration harness;
+// these smoke tests cover the predicate + helper behavior exercised by the
+// chain. The catch chain itself is verified manually in the v2 review
+// REPORT-BACK.
+// =============================================================================
+
+import { ProviderBillingUnavailableError } from "../generate-story/_provider.ts";
+import { SectionEmbeddingError } from "../_shared/section-embedding.ts";
+import { isProviderBillingUnavailable } from "../generate-story/_provider.ts";
+
+Deno.test("run-outline: isProviderBillingUnavailable catches ProviderBillingUnavailableError", () => {
+  const err = new ProviderBillingUnavailableError({
+    code: "credit_balance_exhausted",
+    message: "no credits remaining",
+    status: 429,
+  });
+  assertEquals(isProviderBillingUnavailable(err), true);
+});
+
+Deno.test("run-outline: isProviderBillingUnavailable catches SectionEmbeddingError(code=provider_billing_unavailable)", () => {
+  const err = new SectionEmbeddingError(
+    "provider_billing_unavailable",
+    "OpenAI embed 429 (upstream=credit_balance_exhausted)",
+  );
+  assertEquals(isProviderBillingUnavailable(err), true);
+});
+
+Deno.test("run-outline: isProviderBillingUnavailable does NOT match a plain HTTP 429 provider_rate_limited error (preserves existing retry semantics)", () => {
+  // Real provider_rate_limited (no upstream code) must continue to flow
+  // through the existing RetryableGenerationError path, NOT be misclassified
+  // as billing_unavailable. This proves the canonical predicate does not
+  // over-classify.
+  const err = new Error("provider_rate_limited: 429 from upstream");
+  assertEquals(isProviderBillingUnavailable(err), false);
+  const classified = err instanceof Error && err.message.includes("rate");
+  assertEquals(
+    classified,
+    true,
+    "sanity: 429 rate-limit error still looks like a rate limit",
+  );
+});
+
+Deno.test("Run All provider billing failure writes the exact terminal database state", () => {
+  const state = providerBillingTerminalState(
+    "Temporarily unavailable — try again later.",
+    12.75,
+    "2026-09-21T16:00:00.000Z",
+  );
+  assertEquals(state, {
+    status: "failed",
+    error: "Temporarily unavailable — try again later.",
+    credits_reserved: 0,
+    credits_actual: 12.75,
+    completed_at: "2026-09-21T16:00:00.000Z",
+    worker_lease_until: null,
+    next_retry_at: null,
+  });
+});
+
+Deno.test("Run All generation-stage billing failure remains terminal before memory", async () => {
+  let pendingWrites = 0;
+  let completedWrites = 0;
+  try {
+    await runOutlineSectionLifecycle({
+      generate: async () => {
+        throw new ProviderBillingUnavailableError({
+          code: "credit_balance_exhausted",
+          message: "upstream detail stays private",
+          status: 429,
+        });
+      },
+      persistPendingOutput: async () => pendingWrites++,
+      ensureMemory: async () => {
+        throw new Error("memory must not run after generation failure");
+      },
+      persistCompleted: async () => completedWrites++,
+      isInsufficientCredits: () => false,
+    });
+    throw new Error("expected generation-stage billing failure");
+  } catch (error) {
+    assertEquals(isProviderBillingUnavailable(error), true);
+    assertEquals(pendingWrites, 0);
+    assertEquals(completedWrites, 0);
+  }
+});
+
+Deno.test("Run All memory-stage billing failure preserves output and skips completion", async () => {
+  let pendingOutput = "";
+  let completedWrites = 0;
+  try {
+    await runOutlineSectionLifecycle({
+      generate: async () => ({
+        outputID: "output-generation-1",
+        status: "complete",
+      }),
+      persistPendingOutput: async (outputID) => pendingOutput = outputID,
+      ensureMemory: async () => {
+        throw new SectionEmbeddingError(
+          "provider_billing_unavailable",
+          "OpenAI embed 429",
+          { code: "credit_balance_exhausted", status: 429 },
+        );
+      },
+      persistCompleted: async () => completedWrites++,
+      isInsufficientCredits: () => false,
+    });
+    throw new Error("expected memory-stage billing failure");
+  } catch (error) {
+    assertEquals(isProviderBillingUnavailable(error), true);
+    assertEquals(pendingOutput, "output-generation-1");
+    assertEquals(completedWrites, 0);
+  }
+});
+
+Deno.test("Run All terminal handler: generation stage fails run and section without alert or continuation", async () => {
+  const writes: Record<string, unknown>[] = [];
+  let released = 0;
+  let alerts = 0;
+  let continuations = 0;
+  const actualSpend = 12.75;
+  await handleProviderBillingUnavailableTerminal({
+    adminClient: {} as never,
+    runId: "run-generation-terminal",
+    section: { id: "section-1", output_id: "prior-output" },
+    projectId: "project-1",
+    selectedModel: "luna",
+    stage: "generation",
+    upstream: {
+      code: "credit_balance_exhausted",
+      message: "real upstream detail",
+      status: 429,
+    },
+    updateSection: async (_client, _runId, section) => writes.push(section),
+    markRun: async (_client, _runId, error) => {
+      const state = providerBillingTerminalState(error, actualSpend, "now");
+      writes.push(state);
+    },
+    releaseLease: async () => released++,
+    notify: async () => {
+      alerts++;
+    },
+    scheduleAlert: () => {
+      continuations++;
+    },
+  });
+  assertEquals(writes[0], {
+    id: "section-1",
+    output_id: "prior-output",
+    status: "failed",
+    error: "Temporarily unavailable — try again later.",
+    completed_at: writes[0].completed_at,
+  });
+  assertEquals(writes[1], {
+    status: "failed",
+    error: "Temporarily unavailable — try again later.",
+    credits_reserved: 0,
+    credits_actual: actualSpend,
+    completed_at: "now",
+    worker_lease_until: null,
+    next_retry_at: null,
+  });
+  assertEquals(released, 1);
+  assertEquals(alerts, 0);
+  assertEquals(continuations, 0);
+});
+
+Deno.test("Run All terminal handler: memory stage preserves output and sends one trusted alert", async () => {
+  let section: Record<string, unknown> | null = null;
+  let runError = "";
+  let released = 0;
+  let continuationCalls = 0;
+  const alerts: Record<string, unknown>[] = [];
+  await handleProviderBillingUnavailableTerminal({
+    adminClient: {} as never,
+    runId: "run-memory-terminal",
+    section: { id: "section-2", output_id: "output-1" },
+    projectId: "project-2",
+    selectedModel: "luna",
+    stage: "memory",
+    upstream: {
+      code: "credit_balance_exhausted",
+      message: "trusted OpenAI message",
+      status: 429,
+    },
+    updateSection: async (_client, _runId, value) => {
+      section = value;
+    },
+    markRun: async (_client, _runId, error) => {
+      runError = error;
+    },
+    releaseLease: async () => released++,
+    notify: async (context) => {
+      alerts.push(context);
+    },
+    scheduleAlert: (promise) => {
+      continuationCalls++;
+      void promise;
+    },
+  });
+  assertEquals(section?.output_id, "output-1");
+  assertEquals(section?.status, "failed");
+  assertEquals(section?.error, "Temporarily unavailable — try again later.");
+  assertEquals(runError, "Temporarily unavailable — try again later.");
+  assertEquals(released, 1);
+  assertEquals(continuationCalls, 1);
+  assertEquals(alerts.length, 1);
+  assertEquals(alerts[0].upstreamProviderCode, "credit_balance_exhausted");
+  assertEquals(alerts[0].upstreamStatus, 429);
+  assertEquals(alerts[0].upstreamMessage, "trusted OpenAI message");
+  assertEquals(alerts[0].chapterRunID, "run-memory-terminal");
+  assertEquals(alerts[0].projectID, "project-2");
+});
+
+Deno.test("Run All provider_rate_limited keeps section pending and schedules one retry", async () => {
+  let section: Record<string, unknown> | null = null;
+  let retryAt = "";
+  let released = 0;
+  const scheduled: number[] = [];
+  await handleRetryableGenerationFailure({
+    adminClient: {} as never,
+    runId: "run-rate-limit",
+    section: { id: "section-rate" },
+    message: "provider_rate_limited",
+    retryAfterSeconds: 60,
+    now: () => 1_000,
+    updateSection: async (_client, _runId, value) => {
+      section = value;
+    },
+    updateRunRetry: async (_client, _runId, value) => {
+      retryAt = value;
+    },
+    releaseLease: async () => released++,
+    scheduleContinuation: (seconds) => scheduled.push(seconds),
+  });
+  assertEquals(section?.status, "pending");
+  assertEquals(section?.retry_after_seconds, 60);
+  assertEquals(section?.error, "provider_rate_limited");
+  assertEquals(retryAt, new Date(61_000).toISOString());
+  assertEquals(released, 1);
+  assertEquals(scheduled, [60]);
 });

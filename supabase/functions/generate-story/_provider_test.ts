@@ -253,3 +253,384 @@ Deno.test("OpenAIProvider: responseFormat absent preserves Responses API path", 
     uninstallFetchStub();
   }
 });
+
+// =============================================================================
+// Provider error classification — spec-required cases
+//
+// Kevin 2026-09-21:
+//   - 429 + credit_balance_exhausted → provider_billing_unavailable
+//     (NON-RETRYABLE; treated as its own stable internal condition;
+//      must NOT be classified as provider_rate_limited)
+//   - 429 + insufficient_quota → existing insufficient-quota behavior
+//   - ordinary 429 (no upstream code) → provider_rate_limited
+// =============================================================================
+
+import {
+  classifyOpenAIStatus,
+  extractOpenAIErrorDetails,
+  formatOpenAIError,
+  getProviderBillingUnavailableUpstream,
+  isProviderBillingUnavailable,
+  ProviderBillingUnavailableError,
+  ProviderError,
+} from "./_provider.ts";
+
+Deno.test("classifyOpenAIStatus: 429 + credit_balance_exhausted → provider_billing_unavailable", () => {
+  assertEquals(
+    classifyOpenAIStatus(429, "credit_balance_exhausted"),
+    "provider_billing_unavailable",
+  );
+});
+
+Deno.test("classifyOpenAIStatus: 429 + insufficient_quota → provider_insufficient_quota", () => {
+  assertEquals(
+    classifyOpenAIStatus(429, "insufficient_quota"),
+    "provider_insufficient_quota",
+  );
+});
+
+Deno.test("classifyOpenAIStatus: ordinary 429 without upstream code → provider_rate_limited", () => {
+  assertEquals(classifyOpenAIStatus(429), "provider_rate_limited");
+  assertEquals(classifyOpenAIStatus(429, undefined), "provider_rate_limited");
+  assertEquals(
+    classifyOpenAIStatus(429, "some_other_code"),
+    "provider_rate_limited",
+  );
+});
+
+Deno.test("classifyOpenAIStatus: 401/403 → provider_rejected (preserved)", () => {
+  assertEquals(classifyOpenAIStatus(401), "provider_rejected");
+  assertEquals(classifyOpenAIStatus(403), "provider_rejected");
+});
+
+Deno.test("classifyOpenAIStatus: 5xx → provider_overloaded (preserved)", () => {
+  assertEquals(classifyOpenAIStatus(500), "provider_overloaded");
+  assertEquals(classifyOpenAIStatus(503), "provider_overloaded");
+});
+
+Deno.test("extractOpenAIErrorDetails: parses credit_balance_exhausted from real OpenAI payload", () => {
+  const raw = JSON.stringify({
+    error: {
+      message: "You have no credits remaining...",
+      type: "insufficient_quota",
+      param: null,
+      code: "credit_balance_exhausted",
+    },
+  });
+  const details = extractOpenAIErrorDetails(429, raw);
+  assertEquals(details.status, 429);
+  assertEquals(details.code, "credit_balance_exhausted");
+  assertStringIncludes(details.message, "credits remaining");
+});
+
+Deno.test("formatOpenAIError: includes status, upstream code, and message", () => {
+  const raw = JSON.stringify({
+    error: {
+      message: "no credits",
+      code: "credit_balance_exhausted",
+    },
+  });
+  const formatted = formatOpenAIError(extractOpenAIErrorDetails(429, raw));
+  assertStringIncludes(formatted, "status=429");
+  assertStringIncludes(formatted, "code=credit_balance_exhausted");
+  assertStringIncludes(formatted, "no credits");
+});
+
+// =============================================================================
+// ProviderError / ProviderBillingUnavailableError contract
+// =============================================================================
+
+Deno.test("ProviderError: carries stable errorCode + upstream + retryable flag", () => {
+  const err = new ProviderError(
+    "OpenAI error (status=429, code=credit_balance_exhausted, message=...)",
+    "provider_billing_unavailable",
+    false,
+    { code: "credit_balance_exhausted", message: "no credits", status: 429 },
+  );
+  assertEquals(err.errorCode, "provider_billing_unavailable");
+  assertEquals(err.retryable, false);
+  assertEquals(err.upstream?.code, "credit_balance_exhausted");
+  assertEquals(err.upstream?.status, 429);
+  assertEquals(err.name, "ProviderError");
+});
+
+Deno.test("ProviderBillingUnavailableError: is a ProviderError with stable code + upstream", () => {
+  const err = new ProviderBillingUnavailableError({
+    code: "credit_balance_exhausted",
+    message: "no credits remaining",
+    status: 429,
+  });
+  assertEquals(err instanceof ProviderError, true);
+  assertEquals(err instanceof ProviderBillingUnavailableError, true);
+  assertEquals(err.errorCode, "provider_billing_unavailable");
+  assertEquals(err.retryable, false);
+  assertEquals(err.upstream?.code, "credit_balance_exhausted");
+  assertEquals(err.upstream?.status, 429);
+  assertEquals(err.name, "ProviderBillingUnavailableError");
+  assertStringIncludes(err.message, "billing unavailable");
+});
+
+Deno.test("ProviderBillingUnavailableError: default upstream.code propagates into message", () => {
+  const err = new ProviderBillingUnavailableError({
+    code: "credit_balance_exhausted",
+  });
+  assertStringIncludes(err.message, "credit_balance_exhausted");
+});
+
+// =============================================================================
+// Provider-level mocked-fetch tests (Kevin 2026-09-21 #3):
+//   Mocked OpenAI 429 credit_balance_exhausted response MUST surface as
+//   ProviderBillingUnavailableError with retryable=false and upstream.code
+//   populated from the OpenAI error.code field.
+// =============================================================================
+
+Deno.test("OpenAIProvider: Responses API 429 credit_balance_exhausted → ProviderBillingUnavailableError(retryable=false, upstream.code=credit_balance_exhausted)", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: string | URL | Request, _init?: RequestInit) => {
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "credit_balance_exhausted",
+            message: "You have no credits remaining on this account.",
+            type: "insufficient_quota",
+            param: null,
+          },
+        }),
+        { status: 429, headers: { "content-type": "application/json" } },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider(
+      "test-key",
+      "gpt-5.6-luna",
+      PROVIDER_TIMEOUT_MS,
+    );
+    let caught: unknown;
+    try {
+      await provider.complete(
+        [{ role: "user", content: "hi" }],
+        100,
+        "gpt-5.6-luna",
+      );
+    } catch (e) {
+      caught = e;
+    }
+    assertExists(caught);
+    assertEquals(caught instanceof ProviderBillingUnavailableError, true);
+    assertEquals(
+      (caught as ProviderBillingUnavailableError).errorCode,
+      "provider_billing_unavailable",
+    );
+    assertEquals((caught as ProviderBillingUnavailableError).retryable, false);
+    assertEquals(
+      (caught as ProviderBillingUnavailableError).upstream?.code,
+      "credit_balance_exhausted",
+    );
+    assertEquals(
+      (caught as ProviderBillingUnavailableError).upstream?.status,
+      429,
+    );
+    assertStringIncludes(
+      (caught as ProviderBillingUnavailableError).message,
+      "credit_balance_exhausted",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAIProvider: chat/completions 429 credit_balance_exhausted → ProviderBillingUnavailableError(retryable=false)", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: string | URL | Request, _init?: RequestInit) => {
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "credit_balance_exhausted",
+            message: "no credits",
+            type: "insufficient_quota",
+          },
+        }),
+        { status: 429, headers: { "content-type": "application/json" } },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider(
+      "test-key",
+      "gpt-4o-mini",
+      PROVIDER_TIMEOUT_MS,
+    );
+    let caught: unknown;
+    try {
+      await provider.complete(
+        [{ role: "user", content: "hi" }],
+        100,
+        "gpt-4o-mini",
+        {
+          responseFormat: { type: "json_schema" },
+          responseFormatTarget: "chat",
+        },
+      );
+    } catch (e) {
+      caught = e;
+    }
+    assertExists(caught);
+    assertEquals(caught instanceof ProviderBillingUnavailableError, true);
+    assertEquals(
+      (caught as ProviderBillingUnavailableError).errorCode,
+      "provider_billing_unavailable",
+    );
+    assertEquals((caught as ProviderBillingUnavailableError).retryable, false);
+    assertEquals(
+      (caught as ProviderBillingUnavailableError).upstream?.code,
+      "credit_balance_exhausted",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAIProvider: 429 without upstream code still produces ProviderError (NOT provider_billing_unavailable)", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: string | URL | Request, _init?: RequestInit) => {
+    return Promise.resolve(
+      new Response("rate limited", { status: 429 }),
+    );
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider(
+      "test-key",
+      "gpt-4o-mini",
+      PROVIDER_TIMEOUT_MS,
+    );
+    let caught: unknown;
+    try {
+      await provider.complete(
+        [{ role: "user", content: "hi" }],
+        100,
+        "gpt-4o-mini",
+      );
+    } catch (e) {
+      caught = e;
+    }
+    assertExists(caught);
+    // Must NOT be ProviderBillingUnavailableError (no upstream code).
+    assertEquals(caught instanceof ProviderBillingUnavailableError, false);
+    assertEquals(caught instanceof ProviderError, true);
+    assertEquals((caught as ProviderError).errorCode, "provider_rate_limited");
+    // Retry is NOT the provider's job — the upstream catch chain
+    // (run-outline RetryableGenerationError) handles the delayed retry.
+    // The provider just throws; retryable=false is the correct contract.
+    assertEquals((caught as ProviderError).retryable, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// =============================================================================
+// Canonical predicates (isProviderBillingUnavailable / getProviderBillingUnavailableUpstream)
+// must NOT classify by parsing messages — only stable-code surfaces.
+// =============================================================================
+
+Deno.test("isProviderBillingUnavailable: detects ProviderBillingUnavailableError instance", () => {
+  assertEquals(
+    isProviderBillingUnavailable(
+      new ProviderBillingUnavailableError({
+        code: "credit_balance_exhausted",
+        status: 429,
+      }),
+    ),
+    true,
+  );
+});
+
+Deno.test("isProviderBillingUnavailable: detects ProviderError with errorCode", () => {
+  assertEquals(
+    isProviderBillingUnavailable(
+      new ProviderError("...", "provider_billing_unavailable", false),
+    ),
+    true,
+  );
+});
+
+Deno.test("isProviderBillingUnavailable: detects SectionEmbeddingError-shaped object", () => {
+  assertEquals(
+    isProviderBillingUnavailable({ code: "provider_billing_unavailable" }),
+    true,
+  );
+});
+
+Deno.test("isProviderBillingUnavailable: does NOT match plain string containing 'billing'", () => {
+  // MUST NOT classify by parsing human-readable messages.
+  assertEquals(
+    isProviderBillingUnavailable("provider billing unavailable error"),
+    false,
+  );
+  assertEquals(
+    isProviderBillingUnavailable({ message: "credit_balance_exhausted" }),
+    false,
+  );
+});
+
+Deno.test("isProviderBillingUnavailable: returns false for other ProviderError codes", () => {
+  assertEquals(
+    isProviderBillingUnavailable(
+      new ProviderError("...", "provider_rate_limited", true),
+    ),
+    false,
+  );
+  assertEquals(
+    isProviderBillingUnavailable(
+      new ProviderError("...", "provider_overloaded", true),
+    ),
+    false,
+  );
+});
+
+Deno.test("isProviderBillingUnavailable: returns false for null/undefined", () => {
+  assertEquals(isProviderBillingUnavailable(null), false);
+  assertEquals(isProviderBillingUnavailable(undefined), false);
+});
+
+Deno.test("getProviderBillingUnavailableUpstream: returns upstream from dedicated subclass", () => {
+  const upstream = {
+    code: "credit_balance_exhausted",
+    message: "no credits",
+    status: 429,
+  };
+  assertEquals(
+    getProviderBillingUnavailableUpstream(
+      new ProviderBillingUnavailableError(upstream),
+    ),
+    upstream,
+  );
+});
+
+Deno.test("getProviderBillingUnavailableUpstream: preserves SectionEmbeddingError upstream metadata", () => {
+  const upstream = getProviderBillingUnavailableUpstream({
+    code: "provider_billing_unavailable",
+    upstream: {
+      code: "credit_balance_exhausted",
+      message: "trusted upstream message",
+      status: 429,
+    },
+  });
+  assertEquals(upstream, {
+    code: "credit_balance_exhausted",
+    message: "trusted upstream message",
+    status: 429,
+  });
+});
+
+Deno.test("getProviderBillingUnavailableUpstream: returns undefined for unrelated errors", () => {
+  assertEquals(
+    getProviderBillingUnavailableUpstream(
+      new ProviderError("...", "provider_rate_limited", true),
+    ),
+    undefined,
+  );
+  assertEquals(getProviderBillingUnavailableUpstream(null), undefined);
+});

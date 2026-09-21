@@ -28,6 +28,7 @@ export type ProviderErrorCode =
   | "provider_overloaded"
   | "provider_rejected"
   | "invalid_request"
+  | "provider_billing_unavailable"
   | "unknown";
 
 /**
@@ -40,10 +41,114 @@ export class ProviderError extends Error {
     public readonly errorCode: ProviderErrorCode,
     /** Whether a single retry is safe for this error type. */
     public readonly retryable: boolean = false,
+    /**
+     * Optional upstream OpenAI error details. Used by alert tooling to
+     * surface the upstream code + sanitized message in operator emails
+     * without re-parsing the formatted error message. Not exposed to
+     * end users — kept on the trusted-server side only.
+     */
+    public readonly upstream?: {
+      code?: string;
+      message?: string;
+      status?: number;
+    },
   ) {
     super(message);
     this.name = "ProviderError";
   }
+}
+
+/**
+ * Non-retryable provider billing failure. Subclass of ProviderError so the
+ * existing catch chain that switches on err.errorCode keeps working; the
+ * concrete subclass exists so call sites that need to take a terminal
+ * action (stop the chapter run, refund credits, fire an operator alert)
+ * can pattern-match by `instanceof ProviderBillingUnavailableError`.
+ *
+ * The upstream `{ code, message, status }` is preserved on the parent
+ * ProviderError.upstream field; alert tooling reads it from there.
+ */
+export class ProviderBillingUnavailableError extends ProviderError {
+  constructor(
+    upstream: { code?: string; message?: string; status?: number },
+    message?: string,
+  ) {
+    const upstreamCode = upstream?.code ? String(upstream.code) : undefined;
+    const summary = message ??
+      `OpenAI reports upstream billing unavailable${
+        upstreamCode ? ` (upstream=${upstreamCode})` : ""
+      }`;
+    super(
+      summary,
+      "provider_billing_unavailable",
+      false,
+      upstream,
+    );
+    this.name = "ProviderBillingUnavailableError";
+  }
+}
+
+/**
+ * Canonical predicate: does this error represent a provider_billing_unavailable
+ * condition? Recognizes the dedicated subclass, the stable `errorCode` on any
+ * ProviderError, and other internal surfaces that carry a `code` field
+ * (e.g. SectionEmbeddingError from the embed-section / memory path).
+ *
+ * MUST NOT classify by parsing arbitrary human-readable messages. The
+ * upstream code (e.g. `credit_balance_exhausted`) may change wording across
+ * OpenAI releases; the internal stable code `provider_billing_unavailable`
+ * is the only contract that catches every variant.
+ */
+export function isProviderBillingUnavailable(error: unknown): boolean {
+  if (error instanceof ProviderBillingUnavailableError) return true;
+  if (error instanceof ProviderError) {
+    return error.errorCode === "provider_billing_unavailable";
+  }
+  if (typeof error === "object" && error !== null) {
+    const obj = error as { errorCode?: unknown; code?: unknown };
+    if (obj.errorCode === "provider_billing_unavailable") return true;
+    if (obj.code === "provider_billing_unavailable") return true;
+  }
+  return false;
+}
+
+/**
+ * Extract the upstream OpenAI error details from a provider_billing_unavailable
+ * signal, if the error carries them. Returns undefined for other errors or
+ * for normalized SectionEmbeddingError surfaces that don't preserve the
+ * upstream payload.
+ */
+export function getProviderBillingUnavailableUpstream(
+  error: unknown,
+): { code?: string; message?: string; status?: number } | undefined {
+  if (error instanceof ProviderBillingUnavailableError) return error.upstream;
+  if (
+    error instanceof ProviderError &&
+    error.errorCode === "provider_billing_unavailable"
+  ) return error.upstream;
+  if (typeof error === "object" && error !== null) {
+    const value = error as {
+      code?: unknown;
+      errorCode?: unknown;
+      upstream?: unknown;
+    };
+    if (
+      value.code !== "provider_billing_unavailable" &&
+      value.errorCode !== "provider_billing_unavailable"
+    ) return undefined;
+    if (typeof value.upstream !== "object" || value.upstream === null) {
+      return undefined;
+    }
+    const upstream = value.upstream as Record<string, unknown>;
+    return {
+      code: typeof upstream.code === "string" ? upstream.code : undefined,
+      message: typeof upstream.message === "string"
+        ? upstream.message
+        : undefined,
+      status: typeof upstream.status === "number" ? upstream.status : undefined,
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -55,6 +160,17 @@ export function classifyOpenAIStatus(
   openAIErrorCode?: string,
 ): ProviderErrorCode {
   if (status === 429) {
+    // OpenAI emits distinct stable codes inside the same HTTP 429 envelope.
+    // Each maps to its own internal classification so the catch chain can
+    // make independent retry / alerting decisions. credit_balance_exhausted
+    // is non-retryable: the operator account must top up before any future
+    // generation can succeed. insufficient_quota is its sibling (also
+    // non-retryable, but historically surfaced as a distinct customer-visible
+    // message). Anything else on 429 is a transient rate limit and stays
+    // retryable.
+    if (openAIErrorCode === "credit_balance_exhausted") {
+      return "provider_billing_unavailable";
+    }
     if (openAIErrorCode === "insufficient_quota") {
       return "provider_insufficient_quota";
     }
@@ -440,11 +556,27 @@ export class OpenAIProvider implements LLMProvider {
       const text = await resp.text().catch(() => "");
       const details = extractOpenAIErrorDetails(resp.status, text);
       const code = classifyOpenAIStatus(resp.status, details.code);
+      const upstream = {
+        code: details.code,
+        message: details.message,
+        status: resp.status,
+      };
+      // provider_billing_unavailable is NON-RETRYABLE. Construct the
+      // dedicated subclass directly so the upstream catch chain can
+      // pattern-match on instanceof AND so retryable=false is guaranteed
+      // without relying on the prior (incorrect) `code === "provider_overloaded"
+      // || code === "provider_billing_unavailable"` flag computation.
+      if (code === "provider_billing_unavailable") {
+        throw new ProviderBillingUnavailableError(upstream);
+      }
       console.error("[generate-story] OpenAI request failed", details);
       throw new ProviderError(
         formatOpenAIError(details),
         code,
+        // Only provider_overloaded is retryable. provider_billing_unavailable
+        // is routed to the dedicated subclass above with retryable=false.
         code === "provider_overloaded",
+        upstream,
       );
     }
 
@@ -551,10 +683,22 @@ export class OpenAIProvider implements LLMProvider {
       const text = await resp.text().catch(() => "");
       const details = extractOpenAIErrorDetails(resp.status, text);
       const code = classifyOpenAIStatus(resp.status, details.code);
+      const upstream = {
+        code: details.code,
+        message: details.message,
+        status: resp.status,
+      };
+      // provider_billing_unavailable is NON-RETRYABLE. Dedicated subclass
+      // above; generic ProviderError only carries retryable=true for
+      // provider_overloaded.
+      if (code === "provider_billing_unavailable") {
+        throw new ProviderBillingUnavailableError(upstream);
+      }
       throw new ProviderError(
         formatOpenAIError(details),
         code,
         code === "provider_overloaded",
+        upstream,
       );
     }
 

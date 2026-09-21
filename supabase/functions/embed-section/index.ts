@@ -59,7 +59,17 @@ const errorResponse = (
 const INSUFFICIENT_CREDITS_MESSAGE =
   "Insufficient credits for the next billable stage.";
 
-export function embedSectionErrorResponse(error: unknown): Response {
+const PROVIDER_BILLING_UNAVAILABLE_MESSAGE =
+  "Temporarily unavailable — try again later.";
+
+export function embedSectionErrorResponse(
+  error: unknown,
+  alertDeps?: {
+    rpcClient?: unknown;
+    requestID?: string | null;
+    providerModel?: string | null;
+  },
+): Response {
   const record = error as { code?: unknown } | null;
   if (record?.code === "insufficient_credits") {
     return errorResponse(
@@ -69,6 +79,51 @@ export function embedSectionErrorResponse(error: unknown): Response {
     );
   }
   if (error instanceof SectionEmbeddingError) {
+    if (error.code === "provider_billing_unavailable") {
+      // Non-retryable. Public message is exactly the spec wording; no
+      // provider, billing, or quota wording is leaked. Fire-and-forget
+      // operator alert via EdgeRuntime.waitUntil so email failure never
+      // blocks the user-facing response.
+      try {
+        // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
+        EdgeRuntime.waitUntil(
+          notifyProviderBillingUnavailable(
+            {
+              stableCode: "provider_billing_unavailable",
+              upstreamProviderCode: error.upstream?.code ?? null,
+              upstreamMessage: error.upstream?.message ?? null,
+              upstreamStatus: error.upstream?.status ?? null,
+              providerModel: alertDeps?.providerModel ?? null,
+              selectedModel: alertDeps?.providerModel ?? null,
+              requestID: alertDeps?.requestID ?? null,
+              environment: "production",
+            },
+            { rpcClient: alertDeps?.rpcClient },
+          ).catch((alertError) => {
+            console.error(
+              `[embed-section] operator alert failed: ${
+                alertError instanceof Error
+                  ? alertError.message
+                  : String(alertError)
+              }`,
+            );
+          }),
+        );
+      } catch (waitUntilError) {
+        console.error(
+          `[embed-section] EdgeRuntime.waitUntil threw: ${
+            waitUntilError instanceof Error
+              ? waitUntilError.message
+              : String(waitUntilError)
+          }`,
+        );
+      }
+      return errorResponse(
+        "provider_billing_unavailable",
+        PROVIDER_BILLING_UNAVAILABLE_MESSAGE,
+        503,
+      );
+    }
     const status = error.code === "database_error" ? 500 : 502;
     return errorResponse(error.code, error.message, status);
   }
@@ -80,6 +135,7 @@ import {
   processEmbedSection,
   SectionEmbeddingError,
 } from "../_shared/section-embedding.ts";
+import { notifyProviderBillingUnavailable } from "../_shared/_operator_alert.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsResponse("", { status: 204 });
@@ -164,6 +220,10 @@ Deno.serve(async (req: Request) => {
     );
     return corsResponse(JSON.stringify(result), { status: 200 });
   } catch (err) {
-    return embedSectionErrorResponse(err);
+    return embedSectionErrorResponse(err, {
+      rpcClient: adminClient,
+      requestID: null,
+      providerModel: null,
+    });
   }
 });

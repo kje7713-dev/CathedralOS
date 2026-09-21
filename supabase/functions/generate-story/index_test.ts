@@ -39,7 +39,12 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { handler, parseGeneratedScene } from "./index.ts";
+import {
+  handler,
+  parseGeneratedScene,
+  providerErrorResponse,
+  validatedRunAllAlertLineage,
+} from "./index.ts";
 import {
   checkCredits,
   computeCharge,
@@ -4536,15 +4541,28 @@ Deno.test({
 
 Deno.test("generated outline path is prose-only and waits for durable memory in Run All", async () => {
   const fs = await import("node:fs");
-  const text = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+  const text = fs.readFileSync(
+    "supabase/functions/generate-story/index.ts",
+    "utf8",
+  );
   assertStringIncludes(text, "const effectiveStableBlocks = stableBlocks;");
   assertStringIncludes(text, "responseFormat: undefined");
   const persist = text.indexOf("persistence.insertOutput({");
   const process = text.indexOf("await processSectionMemory(");
-  const lineage = text.indexOf('section_embeddings\n                    .select("generation_output_id")');
+  const lineage = text.indexOf(
+    'section_embeddings\n                    .select("generation_output_id")',
+  );
   assertEquals(persist >= 0, true);
-  assertEquals(process > persist, true, "memory extraction follows output persistence");
-  assertEquals(lineage > process, true, "Run All verifies memory lineage before proceeding");
+  assertEquals(
+    process > persist,
+    true,
+    "memory extraction follows output persistence",
+  );
+  assertEquals(
+    lineage > process,
+    true,
+    "Run All verifies memory lineage before proceeding",
+  );
 });
 
 // Source-level assertion: handler forwards body.outline_outline_section_id to
@@ -5389,9 +5407,10 @@ Deno.test("RAG continuity decodes active fact objects and preserves the output l
   );
 });
 
-
 Deno.test("persisted prose memory failure is not mislabeled as output persistence failure", async () => {
-  const source = await Deno.readTextFile("supabase/functions/generate-story/index.ts");
+  const source = await Deno.readTextFile(
+    "supabase/functions/generate-story/index.ts",
+  );
   assertStringIncludes(source, "hasPersistedGenerationOutput");
   assertStringIncludes(source, ' ? "memory_failed"');
   assertStringIncludes(
@@ -5402,4 +5421,96 @@ Deno.test("persisted prose memory failure is not mislabeled as output persistenc
     source,
     "Generated output ${outputId} persisted; scene memory processing failed",
   );
+});
+
+// =============================================================================
+// providerErrorResponse: provider_billing_unavailable mapping (Kevin 2026-09-21)
+//
+// Public message must be exactly "Temporarily unavailable — try again later."
+// Must NOT leak: OpenAI, credit balance, billing, insufficient quota,
+// organization, API key, provider account details.
+// =============================================================================
+
+Deno.test("providerErrorResponse: provider_billing_unavailable maps to friendly public message", () => {
+  const resp = providerErrorResponse(
+    "provider_billing_unavailable",
+    "OpenAI error (status=429, code=credit_balance_exhausted, message=You have no credits remaining)",
+  );
+  assertEquals(resp.httpStatus, 503);
+  assertEquals(resp.body.status, "failed");
+  assertEquals(resp.body.errorCode, "provider_billing_unavailable");
+  assertEquals(
+    resp.body.errorMessage,
+    "Temporarily unavailable \u2014 try again later.",
+  );
+  assertEquals(resp.body.retryAfterSeconds, null);
+});
+
+Deno.test("providerErrorResponse: provider_billing_unavailable message contains no leaked words", () => {
+  const resp = providerErrorResponse(
+    "provider_billing_unavailable",
+    "OpenAI error (status=429, code=credit_balance_exhausted, message=You have no credits remaining)",
+  );
+  const msg = String(resp.body.errorMessage).toLowerCase();
+  // These words must NEVER appear in the customer-facing message.
+  for (
+    const forbidden of [
+      "openai",
+      "credit",
+      "balance",
+      "billing",
+      "insufficient",
+      "quota",
+      "organization",
+      "api key",
+      "apikey",
+      "provider",
+      "account",
+      "exhaust",
+    ]
+  ) {
+    assertEquals(
+      msg.includes(forbidden),
+      false,
+      `public message must not contain forbidden word "${forbidden}", got: ${resp.body.errorMessage}`,
+    );
+  }
+});
+
+Deno.test("providerErrorResponse: provider_insufficient_quota unchanged", () => {
+  const resp = providerErrorResponse(
+    "provider_insufficient_quota",
+    "fallback",
+  );
+  assertEquals(resp.httpStatus, 402);
+  assertEquals(resp.body.errorCode, "provider_insufficient_quota");
+  // Existing wording preserved — this is the established customer-facing
+  // message for the historical insufficient-quota code, NOT the new code.
+  assertStringIncludes(
+    String(resp.body.errorMessage),
+    "API quota",
+  );
+});
+
+Deno.test("providerErrorResponse: provider_rate_limited still 429 + retryAfterSeconds=60", () => {
+  const resp = providerErrorResponse("provider_rate_limited", "fallback");
+  assertEquals(resp.httpStatus, 429);
+  assertEquals(resp.body.errorCode, "provider_rate_limited");
+  assertEquals(resp.body.retryAfterSeconds, 60);
+  assertEquals(resp.headers?.["Retry-After"], "60");
+});
+
+Deno.test("generation alert ownership uses validated requestClass, not raw durable metadata", () => {
+  const lineage = {
+    chapterRunID: "validated-run",
+    outlineID: "validated-outline",
+    projectID: "validated-project",
+  };
+  assertEquals(validatedRunAllAlertLineage("durable_run", lineage), lineage);
+  assertEquals(
+    validatedRunAllAlertLineage("interactive", lineage),
+    null,
+  );
+  // An arbitrary durable_run_id is intentionally not an input to this
+  // helper. Only the server-derived request class and validated lineage are.
 });

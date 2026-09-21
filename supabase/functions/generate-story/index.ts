@@ -33,6 +33,15 @@
 //   OpenAI calls are aborted after PROVIDER_TIMEOUT_MS (90 s). A timed-out
 //   request returns errorCode "provider_timeout" and does NOT charge credits.
 //
+// Provider billing unavailable:
+//   OpenAI HTTP 429 with upstream code "credit_balance_exhausted" maps to
+//   internal "provider_billing_unavailable". NON-RETRYABLE: the operator
+//   account must top up before any future generation can succeed. The
+//   customer sees the friendly public message "Temporarily unavailable —
+//   try again later." — no provider, billing, or quota wording is leaked.
+//   A server-side Resend-backed operator email alert is fired on the first
+//   occurrence within a configurable suppression window.
+//
 // Observability:
 //   Every request is logged to generation_request_logs (no raw prompt text).
 //   The log row is written after the response is determined.
@@ -48,6 +57,7 @@
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { notifyProviderBillingUnavailable } from "../_shared/_operator_alert.ts";
 import { canonicalUUID } from "../_shared/uuid.ts";
 import { verifyRunOutlineToken } from "../_shared/run-outline-auth.ts";
 import {
@@ -277,7 +287,7 @@ function corsResponse(body: string, init: ResponseInit = {}): Response {
   });
 }
 
-function providerErrorResponse(
+export function providerErrorResponse(
   providerErrorCode: string,
   fallbackMessage: string,
 ): {
@@ -286,6 +296,21 @@ function providerErrorResponse(
   headers?: Record<string, string>;
 } {
   switch (providerErrorCode) {
+    case "provider_billing_unavailable":
+      // Non-retryable. Public message must NOT leak provider billing,
+      // quota, organization, API key, or "insufficient" wording. The
+      // trusted backend can map the internal errorCode to its own
+      // operator tooling; the customer sees the friendly service-level
+      // message only.
+      return {
+        httpStatus: 503,
+        body: {
+          status: "failed",
+          errorCode: "provider_billing_unavailable",
+          errorMessage: "Temporarily unavailable — try again later.",
+          retryAfterSeconds: null,
+        },
+      };
     case "provider_insufficient_quota":
       return {
         httpStatus: 402,
@@ -503,6 +528,19 @@ class SupabaseGenerationPersistenceStore implements GenerationPersistenceStore {
     );
     return { error };
   }
+}
+
+export interface ValidatedRunAllAlertLineage {
+  chapterRunID: string;
+  outlineID: string | null;
+  projectID: string | null;
+}
+
+export function validatedRunAllAlertLineage(
+  requestClass: RateLimitRequestClass,
+  lineage: ValidatedRunAllAlertLineage | null,
+): ValidatedRunAllAlertLineage | null {
+  return requestClass === "durable_run" ? lineage : null;
 }
 
 interface HandlerDependencies {
@@ -1097,7 +1135,10 @@ async function fetchProjectStateContext(
     if (sectionError) return "";
     const order = new Map<string, number>();
     for (const section of sections ?? []) {
-      if (canonicalUUID(String(section.outline_id)) === canonicalUUID(String(current.outline_id))) {
+      if (
+        canonicalUUID(String(section.outline_id)) ===
+          canonicalUUID(String(current.outline_id))
+      ) {
         order.set(String(section.id), Number(section.position ?? 0));
       }
     }
@@ -1921,10 +1962,18 @@ Structural limits:
           ? req.sectionSummary!
           : "(no summary provided)"
       }`,
-      ...(nonEmpty(req.sectionEntryState) ? [`Entry state: ${req.sectionEntryState}`] : []),
-      ...(nonEmpty(req.sectionDramaticEvent) ? [`Dramatic event: ${req.sectionDramaticEvent}`] : []),
-      ...(nonEmpty(req.sectionResultingChange) ? [`Resulting change: ${req.sectionResultingChange}`] : []),
-      ...(nonEmpty(req.sectionTerminalState) ? [`Required terminal state: ${req.sectionTerminalState}`] : []),
+      ...(nonEmpty(req.sectionEntryState)
+        ? [`Entry state: ${req.sectionEntryState}`]
+        : []),
+      ...(nonEmpty(req.sectionDramaticEvent)
+        ? [`Dramatic event: ${req.sectionDramaticEvent}`]
+        : []),
+      ...(nonEmpty(req.sectionResultingChange)
+        ? [`Resulting change: ${req.sectionResultingChange}`]
+        : []),
+      ...(nonEmpty(req.sectionTerminalState)
+        ? [`Required terminal state: ${req.sectionTerminalState}`]
+        : []),
       "",
       "The premise and explicit contract fields describe what must happen in the current section. Begin advancing it immediately. Do not postpone it in order to continue prior plot threads.",
       "",
@@ -2432,6 +2481,7 @@ async function handler(
   // rather than interactive requests. A caller cannot obtain the exemption by
   // merely sending an arbitrary run_id.
   let requestClass: RateLimitRequestClass = "interactive";
+  let validatedRunAllLineage: ValidatedRunAllAlertLineage | null = null;
   const durableRunId = typeof body.run_id === "string"
     ? body.run_id.trim()
     : "";
@@ -2449,7 +2499,7 @@ async function handler(
     const { data: durableRun, error: durableRunError } = adminClient
       ? await adminClient
         .from("chapter_runs")
-        .select("id, status, user_id, sections")
+        .select("id, status, user_id, outline_id, sections")
         .eq("id", durableRunId)
         .eq("user_id", userId)
         .maybeSingle()
@@ -2460,10 +2510,25 @@ async function handler(
     const sectionBelongsToRun = runSections.some((section) =>
       String(section.id ?? "") === String(body.outline_section_id ?? "")
     );
+    let validatedOutline:
+      | { id: string; local_project_id?: string | null }
+      | null = null;
+    let validatedOutlineError: { message?: string } | null = null;
+    if (durableRun && !durableRunError && tokenValid) {
+      const outlineResult = await adminClient.from("outlines")
+        .select("id, local_project_id")
+        .eq("id", durableRun.outline_id)
+        .eq("user_id", userId)
+        .maybeSingle();
+      validatedOutline = outlineResult.data;
+      validatedOutlineError = outlineResult.error;
+    }
     if (
       durableRunError ||
       !tokenValid ||
       !durableRun ||
+      validatedOutlineError ||
+      !validatedOutline ||
       (durableRun.status !== "queued" && durableRun.status !== "running") ||
       !sectionBelongsToRun
     ) {
@@ -2477,6 +2542,11 @@ async function handler(
       );
     }
     requestClass = "durable_run";
+    validatedRunAllLineage = {
+      chapterRunID: durableRun.id,
+      outlineID: validatedOutline.id,
+      projectID: validatedOutline.local_project_id ?? projectID,
+    };
   }
 
   if (!ALLOWED_LENGTH_MODES.includes(body.generationLengthMode as LengthMode)) {
@@ -2612,7 +2682,8 @@ async function handler(
       JSON.stringify({
         status: "failed",
         errorCode: "model_unavailable_or_unpriced",
-        errorMessage: "Selected model is unavailable or has unverified pricing.",
+        errorMessage:
+          "Selected model is unavailable or has unverified pricing.",
       }),
       { status: 400 },
     );
@@ -2791,10 +2862,10 @@ async function handler(
       // isn't part of the token estimate.
       sectionTitle: body.sectionTitle,
       sectionSummary: body.sectionSummary,
-    sectionEntryState: body.sectionEntryState,
-    sectionDramaticEvent: body.sectionDramaticEvent,
-    sectionResultingChange: body.sectionResultingChange,
-    sectionTerminalState: body.sectionTerminalState,
+      sectionEntryState: body.sectionEntryState,
+      sectionDramaticEvent: body.sectionDramaticEvent,
+      sectionResultingChange: body.sectionResultingChange,
+      sectionTerminalState: body.sectionTerminalState,
     });
     // PR-372: concat blocks for token estimation. Hash not computed in the
     // estimate path (no billable call → no telemetry row).
@@ -3385,6 +3456,53 @@ async function handler(
         actualCharge: 0,
         durationMs: Date.now() - requestStartMs,
       });
+      // Generation-stage ownership is explicit: generate-story sends exactly
+      // one alert for standalone and validated Run All requests. Run All
+      // lineage comes only from the validated requestClass + chapter_runs /
+      // outlines lookup above; no duplicate body metadata is trusted here.
+      if (err.errorCode === "provider_billing_unavailable") {
+        const lineage = validatedRunAllAlertLineage(
+          requestClass,
+          validatedRunAllLineage,
+        );
+        try {
+          // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
+          EdgeRuntime.waitUntil(
+            notifyProviderBillingUnavailable(
+              {
+                stableCode: "provider_billing_unavailable",
+                upstreamProviderCode: err.upstream?.code ?? null,
+                upstreamMessage: err.upstream?.message ?? null,
+                upstreamStatus: err.upstream?.status ?? null,
+                providerModel: selectedModel.provider_model,
+                selectedModel: selectedModelId ?? null,
+                requestID: requestId ?? null,
+                chapterRunID: lineage?.chapterRunID ?? null,
+                outlineID: lineage?.outlineID ?? null,
+                projectID: lineage?.projectID ?? null,
+                environment: "production",
+              },
+              { rpcClient: adminClient },
+            ).catch((alertError) => {
+              console.error(
+                `[generate-story] operator alert failed for ${requestId}: ${
+                  alertError instanceof Error
+                    ? alertError.message
+                    : String(alertError)
+                }`,
+              );
+            }),
+          );
+        } catch (waitUntilError) {
+          console.error(
+            `[generate-story] EdgeRuntime.waitUntil threw for ${requestId}: ${
+              waitUntilError instanceof Error
+                ? waitUntilError.message
+                : String(waitUntilError)
+            }`,
+          );
+        }
+      }
       const failureResponse = providerErrorResponse(
         err.errorCode,
         err.message,
@@ -3413,7 +3531,9 @@ async function handler(
       ? `Generated output ${outputId} persisted; scene memory processing failed and can be retried: ${
         err instanceof Error ? err.message : String(err)
       }`
-      : err instanceof Error ? err.message : String(err);
+      : err instanceof Error
+      ? err.message
+      : String(err);
     await limiter.recordRequest(userId, {
       requestId,
       action: generationAction,
