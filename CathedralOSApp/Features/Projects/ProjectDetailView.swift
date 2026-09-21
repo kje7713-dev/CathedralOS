@@ -60,6 +60,48 @@ struct OutlineGenerationLaunch: Identifiable {
     let modelID: String?
 }
 
+/// Shared completion behavior for both ProjectDetailView resume paths. Keeping
+/// the canonical-project rebind in one seam prevents the polling-resume and
+/// already-running-resume callbacks from drifting apart.
+enum ProjectDetailResumeReconciler {
+    @MainActor
+    static func makeCompletion(
+        displayedProject: Binding<StoryProject>,
+        context: ModelContext,
+        localProjectID: UUID,
+        lineageID: UUID?
+    ) -> @MainActor (ModelContext) -> Void {
+        { _ in
+            rebindCanonicalProject(
+                displayedProject: displayedProject,
+                context: context,
+                localProjectID: localProjectID,
+                lineageID: lineageID
+            )
+        }
+    }
+
+    @MainActor
+    static func rebindCanonicalProject(
+        displayedProject: Binding<StoryProject>,
+        context: ModelContext,
+        localProjectID: UUID,
+        lineageID: UUID?
+    ) {
+        guard let projects = try? context.fetch(FetchDescriptor<StoryProject>()) else { return }
+
+        if let lineageID,
+           let canonical = projects.first(where: { $0.stableLineageID == lineageID }) {
+            displayedProject.wrappedValue = canonical
+            return
+        }
+
+        if let local = projects.first(where: { $0.id == localProjectID }) {
+            displayedProject.wrappedValue = local
+        }
+    }
+}
+
 struct ProjectDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var project: StoryProject
@@ -125,18 +167,17 @@ struct ProjectDetailView: View {
     private var refreshProjectReferenceHandler: ((UUID, UUID?) -> Void) {
         var projectBinding = $project
         let context = modelContext
+        let displayedProject = Binding<StoryProject>(
+            get: { projectBinding.wrappedValue },
+            set: { projectBinding.wrappedValue = $0 }
+        )
         return { localProjectID, lineageID in
-            guard let projects = try? context.fetch(FetchDescriptor<StoryProject>()) else { return }
-
-            if let lineageID,
-               let canonical = projects.first(where: { $0.stableLineageID == lineageID }) {
-                projectBinding.wrappedValue = canonical
-                return
-            }
-
-            if let local = projects.first(where: { $0.id == localProjectID }) {
-                projectBinding.wrappedValue = local
-            }
+            ProjectDetailResumeReconciler.rebindCanonicalProject(
+                displayedProject: displayedProject,
+                context: context,
+                localProjectID: localProjectID,
+                lineageID: lineageID
+            )
         }
     }
 
@@ -260,10 +301,7 @@ struct ProjectDetailView: View {
                 isGenerationStarting: $isRunAllStarting,
                 isVisible: storyEditorMode != .outline && !advancedMode,
                 onProjectRefreshed: refreshProjectReferenceHandler,
-                onGenerationCompleted: {
-                    advancedMode = false
-                    storyEditorModeRaw = StoryEditorMode.output.rawValue
-                }
+                onGenerationCompleted: handleGenerationCompleted
             )
         }
         .navigationTitle(project.name)
@@ -304,11 +342,22 @@ struct ProjectDetailView: View {
                 currentSectionCount: project.outlines.first?.sections.count ?? 0,
                 runOutlineService: RunOutlineService()
             )
+            var projectBinding = $project
+            let displayedProject = Binding<StoryProject>(
+                get: { projectBinding.wrappedValue },
+                set: { projectBinding.wrappedValue = $0 }
+            )
+            let resumeCompletion = ProjectDetailResumeReconciler.makeCompletion(
+                displayedProject: displayedProject,
+                context: modelContext,
+                localProjectID: project.id,
+                lineageID: project.stableLineageID
+            )
             durabilityCoordinator.resumePollingIfNeeded(
                 for: project.stableLineageID,
                 runOutlineService: RunOutlineService(),
                 context: modelContext,
-                onSyncCompleted: { _ in }
+                onSyncCompleted: resumeCompletion
             )
         }
         .sheet(isPresented: $showAddCharacter) {
@@ -477,17 +526,33 @@ struct ProjectDetailView: View {
         do {
             _ = try await runOutlineService.resume(runID: status.run_id)
             let resumed = try await runOutlineService.status(runID: status.run_id)
+            var projectBinding = $project
+            let displayedProject = Binding<StoryProject>(
+                get: { projectBinding.wrappedValue },
+                set: { projectBinding.wrappedValue = $0 }
+            )
+            let resumeCompletion = ProjectDetailResumeReconciler.makeCompletion(
+                displayedProject: displayedProject,
+                context: modelContext,
+                localProjectID: project.id,
+                lineageID: project.stableLineageID
+            )
             durabilityCoordinator.startPolling(
                 runID: status.run_id,
                 initialStatus: resumed,
                 projectLineageID: project.stableLineageID,
                 runOutlineService: runOutlineService,
                 context: modelContext,
-                onSyncCompleted: { _ in }
+                onSyncCompleted: resumeCompletion
             )
         } catch {
             durabilityCoordinator.setRunPollingError(error.localizedDescription)
         }
+    }
+
+    private func handleGenerationCompleted() {
+        advancedMode = false
+        storyEditorModeRaw = StoryEditorMode.output.rawValue
     }
 
     private var nextWorkflowStage: NovelWorkflowStage {

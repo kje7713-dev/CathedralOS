@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import SwiftUI
 @testable import CathedralOSApp
 
 private let fixtureSessionValue = ["fixture", "session", "value"].joined(separator: "-")
@@ -1353,5 +1354,142 @@ final class GenerationOutputUploadRequestTests: XCTestCase {
         let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         XCTAssertEqual(obj["project_local_id"] as? String, project.id.uuidString)
+    }
+}
+
+// MARK: - ProjectDetail resume reconciliation
+
+@MainActor
+final class ProjectDetailResumeReconcilerTests: XCTestCase {
+    private var container: ModelContainer!
+
+    override func setUpWithError() throws {
+        let schema = Schema([
+            StoryProject.self,
+            Outline.self,
+            OutlineSection.self,
+            StoryArc.self,
+            StoryArcBeat.self,
+            ProjectSetting.self,
+            StoryCharacter.self,
+            StorySpark.self,
+            Aftertaste.self,
+            PromptPack.self,
+            StoryRelationship.self,
+            ThemeQuestion.self,
+            Motif.self,
+            GenerationOutput.self
+        ])
+        container = try ModelContainer(
+            for: schema,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+    }
+
+    override func tearDownWithError() throws {
+        container = nil
+    }
+
+    func testPollingResumeCompletionRebindsCanonicalProjectAndSurfacesLinkedOutput() throws {
+        let (staleProject, canonicalProject, section, output, context) = try makeScenario()
+        var displayedProject = staleProject
+        let completion = ProjectDetailResumeReconciler.makeCompletion(
+            displayedProject: Binding(
+                get: { displayedProject },
+                set: { displayedProject = $0 }
+            ),
+            context: context,
+            localProjectID: staleProject.id,
+            lineageID: staleProject.stableLineageID
+        )
+
+        completion(context)
+
+        assertReboundSurface(
+            displayedProject: displayedProject,
+            canonicalProject: canonicalProject,
+            section: section,
+            output: output
+        )
+    }
+
+    func testAlreadyRunningResumeCompletionRebindsCanonicalProjectAndSurfacesLinkedOutput() throws {
+        let (staleProject, canonicalProject, section, output, context) = try makeScenario()
+        var displayedProject = staleProject
+        let completion = ProjectDetailResumeReconciler.makeCompletion(
+            displayedProject: Binding(
+                get: { displayedProject },
+                set: { displayedProject = $0 }
+            ),
+            context: context,
+            localProjectID: staleProject.id,
+            lineageID: staleProject.stableLineageID
+        )
+
+        completion(context)
+
+        assertReboundSurface(
+            displayedProject: displayedProject,
+            canonicalProject: canonicalProject,
+            section: section,
+            output: output
+        )
+    }
+
+    private func makeScenario() throws -> (
+        StoryProject,
+        StoryProject,
+        OutlineSection,
+        GenerationOutput,
+        ModelContext
+    ) {
+        let context = ModelContext(container)
+        let lineageID = UUID()
+        let staleProject = StoryProject(name: "Stale project reference")
+        staleProject.lineageID = lineageID
+
+        let canonicalProject = StoryProject(name: "Canonical restored project")
+        canonicalProject.lineageID = lineageID
+        let outline = Outline(name: "Restored outline")
+        let section = OutlineSection(position: 0, title: "Restored section")
+        section.outline = outline
+        outline.project = canonicalProject
+        outline.sections = [section]
+        canonicalProject.outlines = [outline]
+        context.insert(canonicalProject)
+        context.insert(outline)
+        context.insert(section)
+        try context.save()
+
+        // Model the terminal resume path: cloud reconciliation inserts the
+        // linked output after the view still holds the stale project object.
+        let cloudRecord = makeCloudRecord(
+            projectLocalID: canonicalProject.id.uuidString,
+            title: "Restored output",
+            outlineSectionID: section.id.uuidString
+        )
+        SupabaseGenerationOutputSyncService().reconcile([cloudRecord], into: context)
+        try context.save()
+        let output = try XCTUnwrap(try context.fetch(FetchDescriptor<GenerationOutput>()).first)
+        return (staleProject, canonicalProject, section, output, context)
+    }
+
+    private func assertReboundSurface(
+        displayedProject: StoryProject,
+        canonicalProject: StoryProject,
+        section: OutlineSection,
+        output: GenerationOutput
+    ) {
+        XCTAssertTrue(displayedProject === canonicalProject,
+                      "Resume completion must replace the stale project reference")
+        XCTAssertTrue(displayedProject.generations.contains { $0 === output },
+                      "Generated Outputs must use the restored canonical relationship")
+        XCTAssertTrue(displayedProject.outlines
+            .flatMap(\.sections)
+            .contains { $0.id == section.id })
+        XCTAssertTrue(displayedProject.generations
+            .filter { $0.outlineSectionID == section.id }
+            .contains { $0 === output },
+                      "The matching Outline row must resolve the restored output")
     }
 }
