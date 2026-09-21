@@ -111,9 +111,19 @@ export interface EmbedSectionRequest {
 // status, timestamps, and provenance metadata server-side per the locked rules.
 
 export class SectionEmbeddingError extends Error {
-  constructor(readonly code: string, message: string) {
+  /** Trusted upstream OpenAI error details for provider_billing_unavailable
+   *  (and similar non-retryable surfaces). Present on memory-stage errors
+   *  so the operator alert retains credit_balance_exhausted + message + status
+   *  even though the customer-facing response must remain scrubbed. */
+  readonly upstream?: { code?: string; message?: string; status?: number };
+  constructor(
+    readonly code: string,
+    message: string,
+    upstream?: { code?: string; message?: string; status?: number },
+  ) {
     super(message);
     this.name = "SectionEmbeddingError";
+    this.upstream = upstream;
   }
 }
 
@@ -374,6 +384,7 @@ export async function processSectionMemory(
             `OpenAI extract ${r.status} (upstream=${billing.code}): ${
               (billing.message ?? errText).slice(0, 500)
             }`,
+            billing,
           );
         }
         throw new SectionEmbeddingError(
@@ -519,6 +530,7 @@ export async function processSectionMemory(
             `OpenAI embed ${r.status} (upstream=${billing.code}): ${
               (billing.message ?? errText).slice(0, 500)
             }`,
+            billing,
           );
         }
         console.error(

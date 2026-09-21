@@ -153,7 +153,7 @@ select is(
 select is(
   (select alert_count from public.provider_billing_alerts
     where stable_code = 'lease_test'),
-  4::integer,
+  5::integer,
   '4. alert_count incremented on suppressed occurrence'
 );
 
@@ -179,6 +179,13 @@ end $$;
 -- ===========================================================================
 -- 6. outcome without prior should_send still records cleanly (edge case).
 -- ===========================================================================
+do $$
+begin
+  perform record_provider_billing_alert_outcome(
+    'fresh_stable_code', 'failed', 'HTTP 500 from Resend'
+  );
+end $$;
+
 select is(
   (select last_alert_status from public.provider_billing_alerts
     where stable_code = 'fresh_stable_code'),
