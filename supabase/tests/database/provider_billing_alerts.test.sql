@@ -43,8 +43,6 @@ do $$
 begin
   perform record_provider_billing_alert_outcome('provider_billing_unavailable', 'sent', null);
 end $$;
--- (verifying side effects below; void return value can't be compared)
-select ok(true, 'record_outcome sent returns null');
 
 
 select is(
@@ -98,8 +96,6 @@ do $$
 begin
   perform record_provider_billing_alert_outcome('provider_billing_unavailable', 'failed', 'HTTP 500 from Resend');
 end $$;
--- (verifying side effects below; void return value can't be compared)
-select ok(true, 'record_outcome failed returns null');
 
 
 select is(
@@ -183,8 +179,6 @@ do $$
 begin
   perform record_provider_billing_alert_outcome('concurrency_test', 'sent', null);
 end $$;
--- (verifying side effects below; void return value can't be compared)
-select ok(true, 'concurrency: record sent');
 
 
 select is(
@@ -202,8 +196,6 @@ do $$
 begin
   perform record_provider_billing_alert_outcome('fresh_stable_code', 'failed', 'HTTP 500 from Resend');
 end $$;
--- (verifying side effects below; void return value can't be compared)
-select ok(true, 'late outcome RPC creates a row on the fly when dedupe was not called first');
 
 
 select is(
