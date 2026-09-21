@@ -47,7 +47,11 @@ export class ProviderError extends Error {
      * without re-parsing the formatted error message. Not exposed to
      * end users — kept on the trusted-server side only.
      */
-    public readonly upstream?: { code?: string; message?: string; status?: number },
+    public readonly upstream?: {
+      code?: string;
+      message?: string;
+      status?: number;
+    },
   ) {
     super(message);
     this.name = "ProviderError";
@@ -122,6 +126,28 @@ export function getProviderBillingUnavailableUpstream(
     error instanceof ProviderError &&
     error.errorCode === "provider_billing_unavailable"
   ) return error.upstream;
+  if (typeof error === "object" && error !== null) {
+    const value = error as {
+      code?: unknown;
+      errorCode?: unknown;
+      upstream?: unknown;
+    };
+    if (
+      value.code !== "provider_billing_unavailable" &&
+      value.errorCode !== "provider_billing_unavailable"
+    ) return undefined;
+    if (typeof value.upstream !== "object" || value.upstream === null) {
+      return undefined;
+    }
+    const upstream = value.upstream as Record<string, unknown>;
+    return {
+      code: typeof upstream.code === "string" ? upstream.code : undefined,
+      message: typeof upstream.message === "string"
+        ? upstream.message
+        : undefined,
+      status: typeof upstream.status === "number" ? upstream.status : undefined,
+    };
+  }
   return undefined;
 }
 

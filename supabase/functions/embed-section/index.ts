@@ -90,9 +90,9 @@ export function embedSectionErrorResponse(
           notifyProviderBillingUnavailable(
             {
               stableCode: "provider_billing_unavailable",
-              upstreamProviderCode: "credit_balance_exhausted",
-              upstreamMessage: error.message,
-              upstreamStatus: null,
+              upstreamProviderCode: error.upstream?.code ?? null,
+              upstreamMessage: error.upstream?.message ?? null,
+              upstreamStatus: error.upstream?.status ?? null,
               providerModel: alertDeps?.providerModel ?? null,
               selectedModel: alertDeps?.providerModel ?? null,
               requestID: alertDeps?.requestID ?? null,

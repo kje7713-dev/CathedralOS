@@ -39,7 +39,12 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { handler, parseGeneratedScene, providerErrorResponse } from "./index.ts";
+import {
+  handler,
+  parseGeneratedScene,
+  providerErrorResponse,
+  validatedRunAllAlertLineage,
+} from "./index.ts";
 import {
   checkCredits,
   computeCharge,
@@ -4536,15 +4541,28 @@ Deno.test({
 
 Deno.test("generated outline path is prose-only and waits for durable memory in Run All", async () => {
   const fs = await import("node:fs");
-  const text = fs.readFileSync("supabase/functions/generate-story/index.ts", "utf8");
+  const text = fs.readFileSync(
+    "supabase/functions/generate-story/index.ts",
+    "utf8",
+  );
   assertStringIncludes(text, "const effectiveStableBlocks = stableBlocks;");
   assertStringIncludes(text, "responseFormat: undefined");
   const persist = text.indexOf("persistence.insertOutput({");
   const process = text.indexOf("await processSectionMemory(");
-  const lineage = text.indexOf('section_embeddings\n                    .select("generation_output_id")');
+  const lineage = text.indexOf(
+    'section_embeddings\n                    .select("generation_output_id")',
+  );
   assertEquals(persist >= 0, true);
-  assertEquals(process > persist, true, "memory extraction follows output persistence");
-  assertEquals(lineage > process, true, "Run All verifies memory lineage before proceeding");
+  assertEquals(
+    process > persist,
+    true,
+    "memory extraction follows output persistence",
+  );
+  assertEquals(
+    lineage > process,
+    true,
+    "Run All verifies memory lineage before proceeding",
+  );
 });
 
 // Source-level assertion: handler forwards body.outline_outline_section_id to
@@ -5389,9 +5407,10 @@ Deno.test("RAG continuity decodes active fact objects and preserves the output l
   );
 });
 
-
 Deno.test("persisted prose memory failure is not mislabeled as output persistence failure", async () => {
-  const source = await Deno.readTextFile("supabase/functions/generate-story/index.ts");
+  const source = await Deno.readTextFile(
+    "supabase/functions/generate-story/index.ts",
+  );
   assertStringIncludes(source, "hasPersistedGenerationOutput");
   assertStringIncludes(source, ' ? "memory_failed"');
   assertStringIncludes(
@@ -5479,4 +5498,19 @@ Deno.test("providerErrorResponse: provider_rate_limited still 429 + retryAfterSe
   assertEquals(resp.body.errorCode, "provider_rate_limited");
   assertEquals(resp.body.retryAfterSeconds, 60);
   assertEquals(resp.headers?.["Retry-After"], "60");
+});
+
+Deno.test("generation alert ownership uses validated requestClass, not raw durable metadata", () => {
+  const lineage = {
+    chapterRunID: "validated-run",
+    outlineID: "validated-outline",
+    projectID: "validated-project",
+  };
+  assertEquals(validatedRunAllAlertLineage("durable_run", lineage), lineage);
+  assertEquals(
+    validatedRunAllAlertLineage("interactive", lineage),
+    null,
+  );
+  // An arbitrary durable_run_id is intentionally not an input to this
+  // helper. Only the server-derived request class and validated lineage are.
 });

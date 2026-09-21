@@ -49,10 +49,12 @@ import {
   ensureOutputMemory,
 } from "../_shared/section-embedding.ts";
 import {
+  getProviderBillingUnavailableUpstream,
   isProviderBillingUnavailable,
   ProviderBillingUnavailableError,
 } from "../generate-story/_provider.ts";
 import { notifyProviderBillingUnavailable } from "../_shared/_operator_alert.ts";
+import { SectionEmbeddingError } from "../_shared/section-embedding.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
 import {
   computeMaxChargeCredits,
@@ -1109,19 +1111,6 @@ async function runOutline(
           run.id,
           String(section.id),
         );
-      // Lineage fields consumed by generate-story: durable_run_id signals
-      // this is a Run All call (suppresses generate-story's own operator
-      // alert; run-outline fires the alert with full chapter_run / outline
-      // / project lineage after catching the response).
-      // durable_outline_id / durable_project_id / durable_section_id are
-      // included in the alert body for both call sites (defensive).
-      (generationRequest as Record<string, unknown>).durable_run_id = run.id;
-      (generationRequest as Record<string, unknown>).durable_outline_id =
-        run.outline_id;
-      (generationRequest as Record<string, unknown>).durable_project_id =
-        projectId;
-      (generationRequest as Record<string, unknown>).durable_section_id =
-        String(section.id);
       await renewRunLease(adminClient, runId, workerAttempt);
       const lifecycle = await runOutlineSectionLifecycle({
         generate: async () => {
@@ -1233,101 +1222,40 @@ async function runOutline(
         //
         // Durable Run All state preserved: already-completed sections stay
         // intact; only this section's status flips to "failed".
-        const upstream = err instanceof ProviderBillingUnavailableError
-          ? (err.upstream ?? {})
-          : {};
-        const friendlyMessage = "Temporarily unavailable — try again later.";
-        // 1) Mark this section failed with the friendly message; preserve
-        //    section.output_id (already set by generation success) and any
-        //    other prior fields via the spread.
-        await updateSectionStatus(adminClient, runId, {
-          ...section,
-          status: "failed",
-          error: friendlyMessage,
-          completed_at: new Date().toISOString(),
+        const upstream = getProviderBillingUnavailableUpstream(err) ?? {};
+        await handleProviderBillingUnavailableTerminal({
+          adminClient,
+          runId,
+          section,
+          projectId: projectId ? String(projectId) : null,
+          selectedModel: (run.model as string | null) ?? null,
+          stage: err instanceof SectionEmbeddingError ? "memory" : "generation",
+          upstream,
         });
-        // 2) Single coherent terminal chapter_runs write via the existing
-        //    markRunFailed helper. It writes the canonical terminal columns
-        //    (status, error, credits_reserved=0, credits_actual=<actual>,
-        //    completed_at, worker_lease_until=null, next_retry_at=null) and
-        //    inspects the returned PostgREST error. NO direct writes to
-        //    non-existent columns like failed_at / failure_code /
-        //    failure_message.
-        await markRunFailed(adminClient, runId, friendlyMessage);
-        // 3) Release the worker lease so the row is claimable for resume
-        //    AFTER the operator tops up OpenAI credits.
-        await releaseRunLease(adminClient, runId);
-        // 4) Fire-and-forget operator alert with full Run All lineage.
-        //    generate-story suppresses its own alert when durable_run_id
-        //    is present in the request body (see generate-story/index.ts),
-        //    so this is the single alert source for Run All incidents.
-        //    The Postgres dedupe RPC serializes concurrent Run Alls and
-        //    collapses them into one email per suppression window.
-        try {
-          // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
-          EdgeRuntime.waitUntil(
-            notifyProviderBillingUnavailable(
-              {
-                stableCode: "provider_billing_unavailable",
-                upstreamProviderCode: upstream.code ?? null,
-                upstreamMessage: upstream.message ?? null,
-                upstreamStatus: upstream.status ?? null,
-                providerModel: null,
-                selectedModel: (run.model as string | null) ?? null,
-                requestID: null,
-                chapterRunID: runId,
-                outlineID: run.outline_id ? String(run.outline_id) : null,
-                projectID: projectId ? String(projectId) : null,
-                environment: "production",
-              },
-              { rpcClient: adminClient },
-            ).catch((alertError) => {
-              console.error(
-                `[run-outline] operator alert failed for ${runId}: ${
-                  alertError instanceof Error
-                    ? alertError.message
-                    : String(alertError)
-                }`,
-              );
-            }),
-          );
-        } catch (waitUntilError) {
-          console.error(
-            `[run-outline] EdgeRuntime.waitUntil threw for ${runId}: ${
-              waitUntilError instanceof Error
-                ? waitUntilError.message
-                : String(waitUntilError)
-            }`,
-          );
-        }
         return;
       }
       if (err instanceof RetryableGenerationError) {
-        const retryAt = new Date(
-          Date.now() + err.retryAfterSeconds * 1000,
-        ).toISOString();
-        await updateSectionStatus(adminClient, runId, {
-          ...section,
-          status: "pending",
-          error: msg,
-          retry_after_seconds: err.retryAfterSeconds,
-        });
-        await adminClient.from("chapter_runs").update({
-          next_retry_at: retryAt,
-        }).eq("id", runId).eq("status", "running");
-        await releaseRunLease(adminClient, runId);
-        // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
-        EdgeRuntime.waitUntil(
-          queueContinuationAfterDelay(
-            runId,
-            authHeader,
-            err.retryAfterSeconds,
-          ).catch((queueError) => {
-            console.error(
-              `[run-outline] delayed retry queue failed for ${runId}: ${queueError}`,
+        await handleRetryableGenerationFailure({
+          adminClient,
+          runId,
+          section,
+          message: msg,
+          retryAfterSeconds: err.retryAfterSeconds,
+          scheduleContinuation: (retryAfterSeconds) => {
+            // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
+            EdgeRuntime.waitUntil(
+              queueContinuationAfterDelay(
+                runId,
+                authHeader,
+                retryAfterSeconds,
+              ).catch((queueError) => {
+                console.error(
+                  `[run-outline] delayed retry queue failed for ${runId}: ${queueError}`,
+                );
+              }),
             );
-          }),
-        );
+          },
+        });
         return;
       }
       await updateSectionStatus(adminClient, runId, {
@@ -2451,6 +2379,141 @@ export function providerBillingTerminalState(
     worker_lease_until: null,
     next_retry_at: null,
   };
+}
+
+export async function handleRetryableGenerationFailure(input: {
+  adminClient: ReturnType<typeof createClient>;
+  runId: string;
+  section: Record<string, unknown>;
+  message: string;
+  retryAfterSeconds: number;
+  updateSection?: (
+    client: ReturnType<typeof createClient>,
+    runId: string,
+    section: Record<string, unknown>,
+  ) => Promise<void>;
+  updateRunRetry?: (
+    client: ReturnType<typeof createClient>,
+    runId: string,
+    retryAt: string,
+  ) => Promise<void>;
+  releaseLease?: (
+    client: ReturnType<typeof createClient>,
+    runId: string,
+  ) => Promise<void>;
+  scheduleContinuation?: (retryAfterSeconds: number) => void;
+  now?: () => number;
+}): Promise<void> {
+  const update = input.updateSection ?? updateSectionStatus;
+  const updateRetry = input.updateRunRetry ??
+    (async (client, runId, retryAt) => {
+      const { error } = await client.from("chapter_runs").update({
+        next_retry_at: retryAt,
+      }).eq("id", runId).eq("status", "running");
+      if (error) {
+        throw new Error(
+          `could not schedule retry for ${runId}: ${error.message}`,
+        );
+      }
+    });
+  const release = input.releaseLease ?? releaseRunLease;
+  const retryAt = new Date(
+    (input.now ?? Date.now)() + input.retryAfterSeconds * 1000,
+  ).toISOString();
+  await update(input.adminClient, input.runId, {
+    ...input.section,
+    status: "pending",
+    error: input.message,
+    retry_after_seconds: input.retryAfterSeconds,
+  });
+  await updateRetry(input.adminClient, input.runId, retryAt);
+  await release(input.adminClient, input.runId);
+  input.scheduleContinuation?.(input.retryAfterSeconds);
+}
+
+export async function handleProviderBillingUnavailableTerminal(input: {
+  adminClient: ReturnType<typeof createClient>;
+  runId: string;
+  section: Record<string, unknown>;
+  projectId: string | null;
+  selectedModel: string | null;
+  stage: "generation" | "memory";
+  upstream: { code?: string; message?: string; status?: number };
+  updateSection?: (
+    client: ReturnType<typeof createClient>,
+    runId: string,
+    section: Record<string, unknown>,
+  ) => Promise<void>;
+  markRun?: (
+    client: ReturnType<typeof createClient>,
+    runId: string,
+    error: string,
+  ) => Promise<void>;
+  releaseLease?: (
+    client: ReturnType<typeof createClient>,
+    runId: string,
+  ) => Promise<void>;
+  notify?: (
+    context: Parameters<typeof notifyProviderBillingUnavailable>[0],
+  ) => Promise<unknown>;
+  scheduleAlert?: (promise: Promise<unknown>) => void;
+}): Promise<void> {
+  const friendlyMessage = "Temporarily unavailable — try again later.";
+  const update = input.updateSection ?? updateSectionStatus;
+  const mark = input.markRun ?? markRunFailed;
+  const release = input.releaseLease ?? releaseRunLease;
+
+  await update(input.adminClient, input.runId, {
+    ...input.section,
+    status: "failed",
+    error: friendlyMessage,
+    completed_at: new Date().toISOString(),
+  });
+  await mark(input.adminClient, input.runId, friendlyMessage);
+  await release(input.adminClient, input.runId);
+
+  // generate-story owns generation-stage alerts. run-outline owns only the
+  // memory/embedding stage, where it still has the persisted output lineage.
+  if (input.stage !== "memory") return;
+
+  const notify = input.notify ??
+    ((context) =>
+      notifyProviderBillingUnavailable(context, {
+        rpcClient: input.adminClient,
+      }));
+  const alert = notify({
+    stableCode: "provider_billing_unavailable",
+    upstreamProviderCode: input.upstream.code ?? null,
+    upstreamMessage: input.upstream.message ?? null,
+    upstreamStatus: input.upstream.status ?? null,
+    providerModel: null,
+    selectedModel: input.selectedModel,
+    requestID: null,
+    chapterRunID: input.runId,
+    outlineID: null,
+    projectID: input.projectId,
+    environment: "production",
+  }).catch((error) => {
+    console.error(
+      `[run-outline] operator alert failed for ${input.runId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  });
+  if (input.scheduleAlert) {
+    input.scheduleAlert(alert);
+    return;
+  }
+  try {
+    // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
+    EdgeRuntime.waitUntil(alert);
+  } catch (error) {
+    console.error(
+      `[run-outline] EdgeRuntime.waitUntil threw for ${input.runId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 async function markRunFailed(

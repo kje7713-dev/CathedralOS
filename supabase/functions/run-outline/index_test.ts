@@ -11,6 +11,8 @@ import {
 } from "../generate-story/_generation_models.ts";
 import {
   generationReadinessFailures,
+  handleProviderBillingUnavailableTerminal,
+  handleRetryableGenerationFailure,
   isInsufficientCreditsError,
   loadRunOutline,
   parseEmbedSectionError,
@@ -914,4 +916,132 @@ Deno.test("Run All memory-stage billing failure preserves output and skips compl
     assertEquals(pendingOutput, "output-generation-1");
     assertEquals(completedWrites, 0);
   }
+});
+
+Deno.test("Run All terminal handler: generation stage fails run and section without alert or continuation", async () => {
+  const writes: Record<string, unknown>[] = [];
+  let released = 0;
+  let alerts = 0;
+  let continuations = 0;
+  const actualSpend = 12.75;
+  await handleProviderBillingUnavailableTerminal({
+    adminClient: {} as never,
+    runId: "run-generation-terminal",
+    section: { id: "section-1", output_id: "prior-output" },
+    projectId: "project-1",
+    selectedModel: "luna",
+    stage: "generation",
+    upstream: {
+      code: "credit_balance_exhausted",
+      message: "real upstream detail",
+      status: 429,
+    },
+    updateSection: async (_client, _runId, section) => writes.push(section),
+    markRun: async (_client, _runId, error) => {
+      const state = providerBillingTerminalState(error, actualSpend, "now");
+      writes.push(state);
+    },
+    releaseLease: async () => released++,
+    notify: async () => {
+      alerts++;
+    },
+    scheduleAlert: () => {
+      continuations++;
+    },
+  });
+  assertEquals(writes[0], {
+    id: "section-1",
+    output_id: "prior-output",
+    status: "failed",
+    error: "Temporarily unavailable — try again later.",
+    completed_at: writes[0].completed_at,
+  });
+  assertEquals(writes[1], {
+    status: "failed",
+    error: "Temporarily unavailable — try again later.",
+    credits_reserved: 0,
+    credits_actual: actualSpend,
+    completed_at: "now",
+    worker_lease_until: null,
+    next_retry_at: null,
+  });
+  assertEquals(released, 1);
+  assertEquals(alerts, 0);
+  assertEquals(continuations, 0);
+});
+
+Deno.test("Run All terminal handler: memory stage preserves output and sends one trusted alert", async () => {
+  let section: Record<string, unknown> | null = null;
+  let runError = "";
+  let released = 0;
+  let continuationCalls = 0;
+  const alerts: Record<string, unknown>[] = [];
+  await handleProviderBillingUnavailableTerminal({
+    adminClient: {} as never,
+    runId: "run-memory-terminal",
+    section: { id: "section-2", output_id: "output-1" },
+    projectId: "project-2",
+    selectedModel: "luna",
+    stage: "memory",
+    upstream: {
+      code: "credit_balance_exhausted",
+      message: "trusted OpenAI message",
+      status: 429,
+    },
+    updateSection: async (_client, _runId, value) => {
+      section = value;
+    },
+    markRun: async (_client, _runId, error) => {
+      runError = error;
+    },
+    releaseLease: async () => released++,
+    notify: async (context) => {
+      alerts.push(context);
+    },
+    scheduleAlert: (promise) => {
+      continuationCalls++;
+      void promise;
+    },
+  });
+  assertEquals(section?.output_id, "output-1");
+  assertEquals(section?.status, "failed");
+  assertEquals(section?.error, "Temporarily unavailable — try again later.");
+  assertEquals(runError, "Temporarily unavailable — try again later.");
+  assertEquals(released, 1);
+  assertEquals(continuationCalls, 1);
+  assertEquals(alerts.length, 1);
+  assertEquals(alerts[0].upstreamProviderCode, "credit_balance_exhausted");
+  assertEquals(alerts[0].upstreamStatus, 429);
+  assertEquals(alerts[0].upstreamMessage, "trusted OpenAI message");
+  assertEquals(alerts[0].chapterRunID, "run-memory-terminal");
+  assertEquals(alerts[0].projectID, "project-2");
+});
+
+Deno.test("Run All provider_rate_limited keeps section pending and schedules one retry", async () => {
+  let section: Record<string, unknown> | null = null;
+  let retryAt = "";
+  let released = 0;
+  const scheduled: number[] = [];
+  await handleRetryableGenerationFailure({
+    adminClient: {} as never,
+    runId: "run-rate-limit",
+    section: { id: "section-rate" },
+    message: "provider_rate_limited",
+    retryAfterSeconds: 60,
+    now: () => 1_000,
+    updateSection: async (_client, _runId, value) => {
+      section = value;
+    },
+    updateRunRetry: async (_client, _runId, value) => {
+      retryAt = value;
+    },
+    releaseLease: async () => released++,
+    scheduleContinuation: (seconds) => scheduled.push(seconds),
+  });
+  assertEquals(section?.status, "pending");
+  assertEquals(section?.retry_after_seconds, 60);
+  assertEquals(section?.error, "provider_rate_limited");
+  assertEquals(retryAt, new Date(61_000).toISOString());
+  assertEquals(released, 1);
+  assertEquals(scheduled, [60]);
 });
