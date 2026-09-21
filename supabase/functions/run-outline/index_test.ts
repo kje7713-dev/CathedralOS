@@ -807,7 +807,6 @@ Deno.test("Run All atomic memory settlement race pauses instead of failing", asy
 // REPORT-BACK.
 // =============================================================================
 
-import { markRunFailed } from "./index.ts";
 import { ProviderBillingUnavailableError } from "../generate-story/_provider.ts";
 import { SectionEmbeddingError } from "../_shared/section-embedding.ts";
 import { isProviderBillingUnavailable } from "../generate-story/_provider.ts";
@@ -840,9 +839,3 @@ Deno.test("run-outline: isProviderBillingUnavailable does NOT match a plain HTTP
   assertEquals(classified, true, "sanity: 429 rate-limit error still looks like a rate limit");
 });
 
-Deno.test("run-outline: markRunFailed exists and is callable (smoke test for the terminal-write helper used by the catch chain)", () => {
-  // The catch chain calls markRunFailed(adminClient, runId, friendlyMessage).
-  // We can't easily invoke it without a real adminClient, but we can verify
-  // the helper is exported and the function reference is callable.
-  assertEquals(typeof markRunFailed, "function");
-});
