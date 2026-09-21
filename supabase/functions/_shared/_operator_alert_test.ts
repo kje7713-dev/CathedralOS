@@ -238,8 +238,11 @@ Deno.test("notifyProviderBillingUnavailable: Resend fetch throws → never propa
   assertEquals(outcome.error, "network unreachable");
 });
 
-Deno.test("notifyProviderBillingUnavailable: dedupe RPC throws → still attempts Resend", async () => {
+Deno.test("notifyProviderBillingUnavailable: dedupe RPC throws → fail closed, no Resend call (v2 #3)", async () => {
   const stub = makeFetchStub();
+  // Resend would return 200 if called — proves the test is asserting
+  // that the alert path never reaches Resend when dedupe infrastructure
+  // is degraded (otherwise this stub's response would be captured).
   stub.setResponder(() => new Response('{"id":"email_xyz"}', { status: 200 }));
   const rpcClient = {
     rpc: (_name: string, _params: Record<string, unknown>) =>
@@ -252,21 +255,28 @@ Deno.test("notifyProviderBillingUnavailable: dedupe RPC throws → still attempt
     now: () => new Date("2026-09-21T09:23:00Z"),
   };
   const outcome = await notifyProviderBillingUnavailable(baseContext(), deps);
-  assertEquals(outcome.sent, true);
-  assertEquals(stub.getCaptured().length, 1);
+  // Fail-closed contract: dedupe RPC throws → no Resend call, status=skipped.
+  assertEquals(outcome.attempted, false);
+  assertEquals(outcome.sent, false);
+  assertEquals(outcome.status, "skipped");
+  assertEquals(stub.getCaptured().length, 0, "Resend must NOT be called when dedupe RPC throws");
 });
 
-Deno.test("notifyProviderBillingUnavailable: missing rpcClient → still attempts Resend (telemetry-only)", async () => {
+Deno.test("notifyProviderBillingUnavailable: missing rpcClient → fail closed, no Resend call (v2 #3)", async () => {
   const stub = makeFetchStub();
   stub.setResponder(() => new Response('{"id":"email_xyz"}', { status: 200 }));
   const deps: OperatorAlertDeps = {
     fetchImpl: stub.fetchImpl,
     getEnv: (k) => baseEnv[k as keyof typeof baseEnv],
+    // Note: no rpcClient — must NOT result in any Resend call.
     now: () => new Date("2026-09-21T09:23:00Z"),
   };
   const outcome = await notifyProviderBillingUnavailable(baseContext(), deps);
-  assertEquals(outcome.sent, true);
-  assertEquals(stub.getCaptured().length, 1);
+  // Fail-closed contract: missing rpcClient → no Resend call, status=skipped.
+  assertEquals(outcome.attempted, false);
+  assertEquals(outcome.sent, false);
+  assertEquals(outcome.status, "skipped");
+  assertEquals(stub.getCaptured().length, 0, "Resend must NOT be called when rpcClient is missing");
 });
 
 Deno.test("notifyProviderBillingUnavailable: subject + body do not leak upstream message verbatim", async () => {

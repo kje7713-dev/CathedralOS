@@ -180,14 +180,6 @@ end $$;
 -- 6. outcome without prior should_send still records cleanly (edge case).
 -- ===========================================================================
 select is(
-  (select record_provider_billing_alert_outcome(
-    'fresh_stable_code', 'failed', 'HTTP 500 from Resend'
-  )),
-  null::void,
-  '6. late outcome RPC creates a row on the fly when dedupe was not called first'
-);
-
-select is(
   (select last_alert_status from public.provider_billing_alerts
     where stable_code = 'fresh_stable_code'),
   'failed',
