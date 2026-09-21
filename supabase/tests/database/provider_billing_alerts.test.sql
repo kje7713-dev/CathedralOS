@@ -39,12 +39,13 @@ select is(
 -- ===========================================================================
 -- 2. Mark the slot as successfully sent. Now suppression should kick in.
 -- ===========================================================================
-perform record_provider_billing_alert_outcome('provider_billing_unavailable', 'sent', null);
+do $$
+begin
+  perform record_provider_billing_alert_outcome('provider_billing_unavailable', 'sent', null);
+end $$;
 -- (verifying side effects below; void return value can't be compared)
-select ok(
-  true,
-  'record_outcome sent returns null'
-);
+select ok(true, 'record_outcome sent returns null');
+
 
 select is(
   (select last_alert_succeeded_at from public.provider_billing_alerts
@@ -93,12 +94,13 @@ begin
   );
 end; $$;
 
-perform record_provider_billing_alert_outcome('provider_billing_unavailable', 'failed', 'HTTP 500 from Resend');
+do $$
+begin
+  perform record_provider_billing_alert_outcome('provider_billing_unavailable', 'failed', 'HTTP 500 from Resend');
+end $$;
 -- (verifying side effects below; void return value can't be compared)
-select ok(
-  true,
-  'record_outcome failed returns null'
-);
+select ok(true, 'record_outcome failed returns null');
+
 
 select is(
   (select last_alert_succeeded_at from public.provider_billing_alerts
@@ -177,12 +179,13 @@ select is(
 
 -- Test 3: after recording 'sent' for the first call, the second call is
 -- suppressed until the window expires.
-perform record_provider_billing_alert_outcome('concurrency_test', 'sent', null);
+do $$
+begin
+  perform record_provider_billing_alert_outcome('concurrency_test', 'sent', null);
+end $$;
 -- (verifying side effects below; void return value can't be compared)
-select ok(
-  true,
-  'concurrency: record sent'
-);
+select ok(true, 'concurrency: record sent');
+
 
 select is(
   (select public.should_send_provider_billing_alert(
@@ -195,12 +198,13 @@ select is(
 -- ===========================================================================
 -- 7. record_outcome without a prior should_send still records cleanly.
 -- ===========================================================================
-perform record_provider_billing_alert_outcome('fresh_stable_code', 'failed', 'HTTP 500 from Resend');
+do $$
+begin
+  perform record_provider_billing_alert_outcome('fresh_stable_code', 'failed', 'HTTP 500 from Resend');
+end $$;
 -- (verifying side effects below; void return value can't be compared)
-select ok(
-  true,
-  'late outcome RPC creates a row on the fly when dedupe was not called first'
-);
+select ok(true, 'late outcome RPC creates a row on the fly when dedupe was not called first');
+
 
 select is(
   (select last_alert_status from public.provider_billing_alerts
