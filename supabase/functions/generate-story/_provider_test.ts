@@ -486,7 +486,10 @@ Deno.test("OpenAIProvider: 429 without upstream code still produces ProviderErro
     assertEquals(caught instanceof ProviderBillingUnavailableError, false);
     assertEquals(caught instanceof ProviderError, true);
     assertEquals((caught as ProviderError).errorCode, "provider_rate_limited");
-    assertEquals((caught as ProviderError).retryable, true);
+    // Retry is NOT the provider's job — the upstream catch chain
+    // (run-outline RetryableGenerationError) handles the delayed retry.
+    // The provider just throws; retryable=false is the correct contract.
+    assertEquals((caught as ProviderError).retryable, false);
   } finally {
     globalThis.fetch = originalFetch;
   }
