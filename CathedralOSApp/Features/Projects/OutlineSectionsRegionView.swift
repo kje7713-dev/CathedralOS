@@ -1187,6 +1187,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 runOutlineService: runOutlineService,
                 context: modelContext,
                 onSyncCompleted: { [self] context in
+                    // Cloud restore may rebind the canonical project object.
+                    self.onProjectRefreshed?(self.project.id, self.project.stableLineageID)
                     self.refreshAllOutputs()
                     self.recordEyeDebug(context: context)
                 }
@@ -1268,6 +1270,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     runOutlineService: runOutlineService,
                     context: modelContext,
                     onSyncCompleted: { [self] context in
+                        self.onProjectRefreshed?(self.project.id, self.project.stableLineageID)
                         self.refreshAllOutputs()
                         self.recordEyeDebug(context: context)
                         self.isGenerationStarting = false
@@ -1297,6 +1300,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         runOutlineService: runOutlineService,
                         context: modelContext,
                         onSyncCompleted: { [self] context in
+                            self.onProjectRefreshed?(self.project.id, self.project.stableLineageID)
                             self.refreshAllOutputs()
                             self.recordEyeDebug(context: context)
                             self.isGenerationStarting = false
