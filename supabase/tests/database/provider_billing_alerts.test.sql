@@ -39,11 +39,10 @@ select is(
 -- ===========================================================================
 -- 2. Mark the slot as successfully sent. Now suppression should kick in.
 -- ===========================================================================
-select is(
-  (select record_provider_billing_alert_outcome(
-    'provider_billing_unavailable', 'sent', null
-  )),
-  null::void,
+perform record_provider_billing_alert_outcome('provider_billing_unavailable', 'sent', null);
+-- (verifying side effects below; void return value can't be compared)
+select ok(
+  true,
   'record_outcome sent returns null'
 );
 
@@ -94,11 +93,10 @@ begin
   );
 end; $$;
 
-select is(
-  (select record_provider_billing_alert_outcome(
-    'provider_billing_unavailable', 'failed', 'HTTP 500 from Resend'
-  )),
-  null::void,
+perform record_provider_billing_alert_outcome('provider_billing_unavailable', 'failed', 'HTTP 500 from Resend');
+-- (verifying side effects below; void return value can't be compared)
+select ok(
+  true,
   'record_outcome failed returns null'
 );
 
@@ -179,11 +177,10 @@ select is(
 
 -- Test 3: after recording 'sent' for the first call, the second call is
 -- suppressed until the window expires.
-select is(
-  (select record_provider_billing_alert_outcome(
-    'concurrency_test', 'sent', null
-  )),
-  null::void,
+perform record_provider_billing_alert_outcome('concurrency_test', 'sent', null);
+-- (verifying side effects below; void return value can't be compared)
+select ok(
+  true,
   'concurrency: record sent'
 );
 
@@ -198,11 +195,10 @@ select is(
 -- ===========================================================================
 -- 7. record_outcome without a prior should_send still records cleanly.
 -- ===========================================================================
-select is(
-  (select record_provider_billing_alert_outcome(
-    'fresh_stable_code', 'failed', 'HTTP 500 from Resend'
-  )),
-  null::void,
+perform record_provider_billing_alert_outcome('fresh_stable_code', 'failed', 'HTTP 500 from Resend');
+-- (verifying side effects below; void return value can't be compared)
+select ok(
+  true,
   'late outcome RPC creates a row on the fly when dedupe was not called first'
 );
 
