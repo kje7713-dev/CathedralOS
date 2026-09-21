@@ -301,10 +301,7 @@ struct ProjectDetailView: View {
                 isGenerationStarting: $isRunAllStarting,
                 isVisible: storyEditorMode != .outline && !advancedMode,
                 onProjectRefreshed: refreshProjectReferenceHandler,
-                onGenerationCompleted: {
-                    advancedMode = false
-                    storyEditorModeRaw = StoryEditorMode.output.rawValue
-                }
+                onGenerationCompleted: handleGenerationCompleted
             )
         }
         .navigationTitle(project.name)
@@ -345,11 +342,13 @@ struct ProjectDetailView: View {
                 currentSectionCount: project.outlines.first?.sections.count ?? 0,
                 runOutlineService: RunOutlineService()
             )
+            var projectBinding = $project
+            let displayedProject = Binding<StoryProject>(
+                get: { projectBinding.wrappedValue },
+                set: { projectBinding.wrappedValue = $0 }
+            )
             let resumeCompletion = ProjectDetailResumeReconciler.makeCompletion(
-                displayedProject: Binding<StoryProject>(
-                    get: { project },
-                    set: { project = $0 }
-                ),
+                displayedProject: displayedProject,
                 context: modelContext,
                 localProjectID: project.id,
                 lineageID: project.stableLineageID
@@ -527,11 +526,13 @@ struct ProjectDetailView: View {
         do {
             _ = try await runOutlineService.resume(runID: status.run_id)
             let resumed = try await runOutlineService.status(runID: status.run_id)
+            var projectBinding = $project
+            let displayedProject = Binding<StoryProject>(
+                get: { projectBinding.wrappedValue },
+                set: { projectBinding.wrappedValue = $0 }
+            )
             let resumeCompletion = ProjectDetailResumeReconciler.makeCompletion(
-                displayedProject: Binding<StoryProject>(
-                    get: { project },
-                    set: { project = $0 }
-                ),
+                displayedProject: displayedProject,
                 context: modelContext,
                 localProjectID: project.id,
                 lineageID: project.stableLineageID
@@ -547,6 +548,11 @@ struct ProjectDetailView: View {
         } catch {
             durabilityCoordinator.setRunPollingError(error.localizedDescription)
         }
+    }
+
+    private func handleGenerationCompleted() {
+        advancedMode = false
+        storyEditorModeRaw = StoryEditorMode.output.rawValue
     }
 
     private var nextWorkflowStage: NovelWorkflowStage {
