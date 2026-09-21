@@ -59,11 +59,15 @@ jobs:
           deno test --no-check -A
           supabase/functions/generate-story/_provider_test.ts
           --filter="Responses structured output preserves cache boundary"
-      - name: Test provider billing-unavailable classification + dedicated subclass
+      # PR #609 v2: full _provider_test.ts run. The previous --filter
+      # "provider billing-unavailable" matched 0 tests and was removed;
+      # whole-file run executes all 13+ tests (6 spec-required classifier
+      # cases + provider-level mocked OpenAI 429 for both Responses +
+      # chat/completions paths + the canonical predicates).
+      - name: Full generate-story/_provider_test.ts (provider billing-unavailable contract)
         run: >-
           deno test --no-check -A
           supabase/functions/generate-story/_provider_test.ts
-          --filter="provider billing-unavailable"
       - name: Test parser, truncation, semantic contract, and indexing regressions
         run: >-
           deno test --no-check -A
@@ -87,18 +91,27 @@ jobs:
           supabase/functions/_shared/memory-pipeline_test.ts
           supabase/functions/run-outline/index_test.ts
 
-      # PR #609: Run All terminal behavior for provider_billing_unavailable
-      - name: Test Run All terminal behavior for provider_billing_unavailable
-        run: >-
-          deno test --no-check -A
-          supabase/functions/run-outline/index_test.ts
-          --filter="provider_billing_unavailable terminal"
+      # PR #609 v2: full run-outline/index_test.ts is already run by the
+      # "Test lifecycle, pipeline, and Run All behavioral regressions" step
+      # above. New billing-terminal tests (generation-stage,
+      # memory-stage, real provider_rate_limited preserved) added to that
+      # file are exercised by the whole-file run. The previous --filter
+      # "provider_billing_unavailable terminal" matched 0 tests and was
+      # removed.
 
       # PR #609: operator alert module (Resend + dedupe + sanitization)
       - name: Test operator alert module
         run: >-
           deno test --no-check -A
           supabase/functions/_shared/_operator_alert_test.ts
+
+      # PR #609 v2: embed-section billing-unavailable HTTP-boundary test
+      # (full embed-section/index_test.ts run — new test added for the
+      # billing-unavailable friendly 503 + alert-firing surface path).
+      - name: Full embed-section/index_test.ts (billing-unavailable HTTP-boundary)
+        run: >-
+          deno test --no-check -A
+          supabase/functions/embed-section/index_test.ts
 
       - name: Test outline worker lifecycle and checkpoint recovery
         run: >-

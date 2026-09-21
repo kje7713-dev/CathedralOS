@@ -130,39 +130,78 @@ export async function notifyProviderBillingUnavailable(
     return { attempted: false, deduped: false, sent: false, status: "skipped" };
   }
 
-  // 1. Dedupe check. RPC failure does NOT block the send — surface the
-  //    error in logs and proceed; the alternative would be dropping the
-  //    alert on transient DB hiccups.
-  let dedupeAllowed = true;
-  if (deps.rpcClient) {
-    try {
-      const result = await (deps.rpcClient as {
-        rpc: (
-          name: string,
-          params: Record<string, unknown>,
-        ) => Promise<{ data: unknown; error?: { message?: string } | null }>;
-      }).rpc("should_send_provider_billing_alert", {
-        p_stable_code: ctx.stableCode,
-        p_window_minutes: ctx.alertSuppressionWindowMinutes ??
-          DEFAULT_WINDOW_MINUTES,
-      });
-      if (result?.error) {
-        console.error(
-          "[operator-alert] dedupe RPC failed:",
-          sanitizeError(JSON.stringify(result.error)),
-        );
-      } else {
-        dedupeAllowed = Boolean(result?.data);
-      }
-    } catch (err) {
+  // 1. Dedupe check. FAIL CLOSED on ANY error path — do NOT call
+  //    Resend when the dedupe RPC throws, returns an error, or when the
+  //    rpcClient is missing. Email-storm avoidance is more important
+  //    than alert delivery when the dedupe infrastructure is degraded.
+  //    Email delivery failure must never affect the user-facing
+  //    generation response (the caller never awaits this promise).
+  if (!deps.rpcClient) {
+    console.error(
+      `[operator-alert] no rpcClient configured: fail closed, skipping alert send for ${ctx.stableCode}`,
+    );
+    return {
+      attempted: false,
+      deduped: false,
+      sent: false,
+      status: "skipped",
+    };
+  }
+
+  let dedupeAllowed = false;
+  try {
+    const result = await (deps.rpcClient as {
+      rpc: (
+        name: string,
+        params: Record<string, unknown>,
+      ) => Promise<{ data: unknown; error?: { message?: string } | null }>;
+    }).rpc("should_send_provider_billing_alert", {
+      p_stable_code: ctx.stableCode,
+      p_window_minutes: ctx.alertSuppressionWindowMinutes ??
+        DEFAULT_WINDOW_MINUTES,
+    });
+    if (result?.error) {
       console.error(
-        "[operator-alert] dedupe RPC threw:",
-        sanitizeError(err instanceof Error ? err.message : String(err)),
+        "[operator-alert] dedupe RPC returned error: fail closed, skipping alert send:",
+        sanitizeError(JSON.stringify(result.error)),
       );
+      await recordOutcomeSafe(
+        deps.rpcClient,
+        ctx.stableCode,
+        "skipped",
+        "dedupe_rpc_error",
+      );
+      return {
+        attempted: false,
+        deduped: false,
+        sent: false,
+        status: "skipped",
+      };
     }
+    dedupeAllowed = Boolean(result?.data);
+  } catch (err) {
+    console.error(
+      "[operator-alert] dedupe RPC threw: fail closed, skipping alert send:",
+      sanitizeError(err instanceof Error ? err.message : String(err)),
+    );
+    await recordOutcomeSafe(
+      deps.rpcClient,
+      ctx.stableCode,
+      "skipped",
+      "dedupe_rpc_threw",
+    );
+    return {
+      attempted: false,
+      deduped: false,
+      sent: false,
+      status: "skipped",
+    };
   }
 
   if (!dedupeAllowed) {
+    // Dedupe returned false — either a recent successful send is still
+    // inside the 45-minute suppression window, or an unexpired in-flight
+    // claim is held by another concurrent caller. Skip the send.
     console.log(
       `[operator-alert] dedupe suppressed alert for ${ctx.stableCode}`,
     );
