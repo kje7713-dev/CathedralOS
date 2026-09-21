@@ -60,6 +60,48 @@ struct OutlineGenerationLaunch: Identifiable {
     let modelID: String?
 }
 
+/// Shared completion behavior for both ProjectDetailView resume paths. Keeping
+/// the canonical-project rebind in one seam prevents the polling-resume and
+/// already-running-resume callbacks from drifting apart.
+enum ProjectDetailResumeReconciler {
+    @MainActor
+    static func makeCompletion(
+        displayedProject: Binding<StoryProject>,
+        context: ModelContext,
+        localProjectID: UUID,
+        lineageID: UUID?
+    ) -> @MainActor (ModelContext) -> Void {
+        { _ in
+            rebindCanonicalProject(
+                displayedProject: displayedProject,
+                context: context,
+                localProjectID: localProjectID,
+                lineageID: lineageID
+            )
+        }
+    }
+
+    @MainActor
+    static func rebindCanonicalProject(
+        displayedProject: Binding<StoryProject>,
+        context: ModelContext,
+        localProjectID: UUID,
+        lineageID: UUID?
+    ) {
+        guard let projects = try? context.fetch(FetchDescriptor<StoryProject>()) else { return }
+
+        if let lineageID,
+           let canonical = projects.first(where: { $0.stableLineageID == lineageID }) {
+            displayedProject.wrappedValue = canonical
+            return
+        }
+
+        if let local = projects.first(where: { $0.id == localProjectID }) {
+            displayedProject.wrappedValue = local
+        }
+    }
+}
+
 struct ProjectDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var project: StoryProject
@@ -126,17 +168,12 @@ struct ProjectDetailView: View {
         var projectBinding = $project
         let context = modelContext
         return { localProjectID, lineageID in
-            guard let projects = try? context.fetch(FetchDescriptor<StoryProject>()) else { return }
-
-            if let lineageID,
-               let canonical = projects.first(where: { $0.stableLineageID == lineageID }) {
-                projectBinding.wrappedValue = canonical
-                return
-            }
-
-            if let local = projects.first(where: { $0.id == localProjectID }) {
-                projectBinding.wrappedValue = local
-            }
+            ProjectDetailResumeReconciler.rebindCanonicalProject(
+                displayedProject: projectBinding,
+                context: context,
+                localProjectID: localProjectID,
+                lineageID: lineageID
+            )
         }
     }
 
@@ -308,7 +345,12 @@ struct ProjectDetailView: View {
                 for: project.stableLineageID,
                 runOutlineService: RunOutlineService(),
                 context: modelContext,
-                onSyncCompleted: { _ in }
+                onSyncCompleted: ProjectDetailResumeReconciler.makeCompletion(
+                    displayedProject: $project,
+                    context: modelContext,
+                    localProjectID: project.id,
+                    lineageID: project.stableLineageID
+                )
             )
         }
         .sheet(isPresented: $showAddCharacter) {
@@ -483,7 +525,12 @@ struct ProjectDetailView: View {
                 projectLineageID: project.stableLineageID,
                 runOutlineService: runOutlineService,
                 context: modelContext,
-                onSyncCompleted: { _ in }
+                onSyncCompleted: ProjectDetailResumeReconciler.makeCompletion(
+                    displayedProject: $project,
+                    context: modelContext,
+                    localProjectID: project.id,
+                    lineageID: project.stableLineageID
+                )
             )
         } catch {
             durabilityCoordinator.setRunPollingError(error.localizedDescription)
