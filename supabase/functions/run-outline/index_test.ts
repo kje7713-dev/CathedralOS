@@ -479,6 +479,11 @@ Deno.test("Run All recovery reuses exact persisted output before generation or n
     "RetryableMemoryError",
     "memory failure after prose persistence must schedule recovery rather than fail the run",
   );
+  assertEquals(
+    source.includes('select("id, status, was_truncated")'),
+    false,
+    "recovery lookup must select only columns that exist in generation_outputs",
+  );
 });
 
 Deno.test("Run All preserves memory lineage and avoids duplicate prose billing on recovery", async () => {

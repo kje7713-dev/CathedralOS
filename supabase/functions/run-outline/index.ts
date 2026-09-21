@@ -1996,7 +1996,7 @@ async function findRunOutput(
   projectId: string,
 ): Promise<string | null> {
   const { data, error } = await adminClient.from("generation_outputs")
-    .select("id, status, was_truncated")
+    .select("id, status")
     .eq("run_id", runId)
     .eq("run_section_id", sectionId)
     .eq("outline_section_id", sectionId)
@@ -2004,7 +2004,7 @@ async function findRunOutput(
     .eq("project_local_id", projectId)
     .eq("status", "complete")
     .maybeSingle();
-  if (error || !data?.id || data.was_truncated === true) return null;
+  if (error || !data?.id) return null;
   return String(data.id);
 }
 
