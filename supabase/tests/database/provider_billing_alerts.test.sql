@@ -1,5 +1,5 @@
 begin;
-select plan(14);
+select plan(20);
 
 -- =============================================================================
 -- provider_billing_alerts — claim/lease concurrency + retry-aware suppression
