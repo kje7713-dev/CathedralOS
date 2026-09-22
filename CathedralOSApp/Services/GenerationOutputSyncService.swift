@@ -580,18 +580,56 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             if let localID = record.localGenerationId, tombstones.isTombstoned(localID: localID) { continue }
 
             // Skip if the parent project was tombstoned via Delete Everywhere.
-            // The project tombstone is recorded with the project's local UUID as
-            // local_entity_id (and lineage_id), so either match blocks this
-            // orphan output from being restored. Without this, the next sync
-            // would pull the orphan, GenerationOutputRecoveryProjectResolver
-            // would fabricate a fallback StoryProject to hold it, and that
-            // fallback would upload to cloud — appearing as a phantom
-            // resurrection of the deleted project under fresh UUIDs.
-            if let parentID = record.projectLocalID, tombstones.isTombstoned(localID: parentID) { continue }
-            // Name fallback: cover legacy generation_outputs whose parent project
-            // was tombstoned but whose `local_project_id` was never uploaded by
-            // older iOS builds. Matches against tombstone.project_name.
-            if tombstones.isTombstoned(projectName: record.projectName) { continue }
+            // Guard is identity-first; the project-name fallback ONLY applies to
+            // truly legacy cloud rows that carry no project identity at all.
+            //
+            //   a. If the cloud record carries `project_lineage_id`, skip ONLY
+            //      when the project tombstones contain that exact lineage (and,
+            //      when both are present, that exact `project_local_id` too).
+            //      DO NOT consult `tombstones.isTombstoned(projectName:)`.
+            //   b. Else if the cloud record carries `project_local_id`, skip
+            //      ONLY when the project tombstones contain that exact
+            //      `project_local_id`. DO NOT consult project-name either.
+            //   c. Only when the cloud row lacks BOTH lineage and local ID
+            //      (older iOS builds that never uploaded project identity)
+            //      fall back to project-name matching.
+            //
+            // Rationale (Bug: PR-fix/parent-tombstone-identity): rejecting an
+            // identified cloud output merely because an unrelated tombstoned
+            // project happens to share the same name is incorrect. For project
+            // "Brody In Hawkins" the current cloud generation_outputs all carry
+            // project_local_id = 1E658A76-6132-427F-8301-221893DFC9A3 and
+            // project_lineage_id = 1e658a76-6123-427f-8301-221893dfc9a3; a
+            // 2026-09-14 tombstone records a pre-restore copy with
+            // local_entity_id = 9994E72C-A67D-4525-AF2A-C59C0908D643,
+            // lineage_id = 9994e72c-a67d-4525-af2a-c59c0908d643, and the same
+            // project_name. The line-586 name fallback was matching that name
+            // and discarding every one of the 59 live outputs, leaving
+            // Generated Outputs at "No outputs yet".
+            //
+            // Entity-type separation: `SyncTombstoneSet.merged(with:)`
+            // currently unions `localIDs`, `cloudIDs`, and `projectNames`
+            // across output and project tombstones. In practice all
+            // client-minted IDs are UUIDv4 so cross-entity UUID collisions
+            // are vanishingly unlikely and the identity-based checks remain
+            // correct. The `projectNames` union IS what allowed the false
+            // match above; fixing the reconcile semantics is sufficient and
+            // does not require reshaping the set.
+            let trimmedLineage = record.projectLineageID?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let trimmedParentID = record.projectLocalID?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let hasLineage = !trimmedLineage.isEmpty
+            let hasParentID = !trimmedParentID.isEmpty
+            if hasLineage {
+                if tombstones.isTombstoned(lineageID: trimmedLineage) { continue }
+                if hasParentID,
+                   tombstones.isTombstoned(localID: trimmedParentID) { continue }
+            } else if hasParentID {
+                if tombstones.isTombstoned(localID: trimmedParentID) { continue }
+            } else if tombstones.isTombstoned(projectName: record.projectName) {
+                continue
+            }
 
             // First try to match by cloudGenerationOutputID, then by localGenerationId.
             let existing = findLocal(cloudID: record.id, localID: record.localGenerationId, in: context)
