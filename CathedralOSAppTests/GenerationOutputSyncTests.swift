@@ -681,6 +681,255 @@ final class GenerationOutputSyncPullTests: XCTestCase {
     }
 }
 
+// MARK: - Parent-project tombstone guard
+//
+// Regression coverage for PR-fix/parent-tombstone-identity. The bug: project
+// tombstone match in `GenerationOutputSyncService.reconcile` was running a
+// project_name fallback UNCONDITIONALLY after the local-id check, so an
+// unrelated tombstoned project that happened to share a name with the live
+// project caused every one of the live project's cloud outputs to be
+// silently skipped. Fix moves the name fallback behind an "identity missing"
+// gate; the tests below pin that contract.
+
+final class GenerationOutputSyncParentTombstoneTests: XCTestCase {
+
+    private var container: ModelContainer!
+
+    override func setUpWithError() throws {
+        let schema = Schema([GenerationOutput.self, StoryProject.self])
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        container = try ModelContainer(for: schema, configurations: config)
+    }
+
+    override func tearDownWithError() throws {
+        container = nil
+    }
+
+    /// Builds a project tombstone record suitable for `SyncTombstoneSet`.
+    private func makeProjectTombstone(
+        localEntityID: String,
+        lineageID: String?,
+        projectName: String
+    ) -> SyncTombstoneCloudRecord {
+        SyncTombstoneCloudRecord(
+            entityType: "project",
+            localEntityID: localEntityID,
+            cloudEntityID: nil,
+            deletionScope: "everywhere",
+            lineageID: lineageID,
+            projectName: projectName
+        )
+    }
+
+    /// Bug reproduction (PR-fix/parent-tombstone-identity): a project tombstone
+    /// for an UNRELATED project with the SAME project_name must NOT suppress a
+    /// current, identified cloud output. Mirrors the live "Brody In Hawkins"
+    /// incident (project_local_id 1E658A76… / lineage 1e658a76…, with a
+    /// 2026-09-14 tombstone for the unrelated 9994E72C…/9994e72c… copy that
+    /// also named "Brody In Hawkins").
+    func testSameNameUnrelatedProjectTombstoneDoesNotSuppressIdentifiedOutput() throws {
+        let service = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+
+        // Live project whose outputs MUST survive reconciliation.
+        let currentProjectID = UUID()
+        let currentLineage = UUID()
+        let current = StoryProject(name: "Same Name")
+        current.id = currentProjectID
+        current.lineageID = currentLineage
+        context.insert(current)
+        try context.save()
+
+        // Unrelated tombstoned project sharing the same display name.
+        let tombstoneLocalID = UUID()
+        let tombstoneLineage = UUID()
+        let tombstones = SyncTombstoneSet(records: [
+            makeProjectTombstone(
+                localEntityID: tombstoneLocalID.uuidString,
+                lineageID: tombstoneLineage.uuidString,
+                projectName: "Same Name"
+            )
+        ])
+
+        // Cloud generation_output for the LIVE project, carrying full project
+        // identity (lineage + local_id) so the resolver must NOT reach for
+        // the project_name fallback.
+        let sectionID = UUID()
+        let record = makeCloudRecord(
+            projectLocalID: currentProjectID.uuidString,
+            projectLineageID: currentLineage.uuidString,
+            projectName: "Same Name",
+            outlineSectionID: sectionID.uuidString
+        )
+
+        service.reconcile([record], tombstones: tombstones, into: context)
+        try context.save()
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1,
+                       "Identified cloud output must NOT be skipped by an unrelated same-name tombstone")
+        let output = try XCTUnwrap(outputs.first)
+        XCTAssertTrue(output.project === current,
+                      "Output must attach to the live project, not be silently discarded")
+        XCTAssertEqual(output.project?.id, currentProjectID)
+        XCTAssertEqual(output.project?.stableLineageID, currentLineage)
+        XCTAssertEqual(output.outlineSectionID, sectionID,
+                       "outlineSectionID must survive reconciliation")
+        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).count, 1,
+                       "Reconciliation must NOT manufacture a phantom recovery project for the tombstoned name")
+    }
+
+    /// exact `project_local_id` tombstone must STILL suppress the output.
+    func testExactProjectLocalIDTombstoneSuppressesOutput() throws {
+        let service = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+
+        let currentProjectID = UUID()
+        let currentLineage = UUID()
+        let current = StoryProject(name: "Live Project")
+        current.id = currentProjectID
+        current.lineageID = currentLineage
+        context.insert(current)
+        try context.save()
+
+        let tombstones = SyncTombstoneSet(records: [
+            makeProjectTombstone(
+                localEntityID: currentProjectID.uuidString,
+                lineageID: nil,
+                projectName: "Live Project"
+            )
+        ])
+
+        let record = makeCloudRecord(
+            projectLocalID: currentProjectID.uuidString,
+            projectLineageID: currentLineage.uuidString,
+            projectName: "Live Project"
+        )
+
+        service.reconcile([record], tombstones: tombstones, into: context)
+        try context.save()
+
+        XCTAssertEqual(try context.fetch(FetchDescriptor<GenerationOutput>()).count, 0,
+                       "Exact project_local_id tombstone must still suppress the output")
+    }
+
+    /// exact `project_lineage_id` tombstone must STILL suppress the output.
+    func testExactProjectLineageIDTombstoneSuppressesOutput() throws {
+        let service = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+
+        let currentProjectID = UUID()
+        let currentLineage = UUID()
+        let current = StoryProject(name: "Live Project")
+        current.id = currentProjectID
+        current.lineageID = currentLineage
+        context.insert(current)
+        try context.save()
+
+        // Tombstone pins BOTH the local UUID and the lineage to the live
+        // project — reconcile must suppress.
+        let tombstones = SyncTombstoneSet(records: [
+            makeProjectTombstone(
+                localEntityID: currentProjectID.uuidString,
+                lineageID: currentLineage.uuidString,
+                projectName: "Live Project"
+            )
+        ])
+
+        let record = makeCloudRecord(
+            projectLocalID: currentProjectID.uuidString,
+            projectLineageID: currentLineage.uuidString,
+            projectName: "Live Project"
+        )
+
+        service.reconcile([record], tombstones: tombstones, into: context)
+        try context.save()
+
+        XCTAssertEqual(try context.fetch(FetchDescriptor<GenerationOutput>()).count, 0,
+                       "Exact project_lineage_id tombstone must still suppress the output")
+    }
+
+    /// legacy output (nil `project_local_id` AND nil `project_lineage_id`)
+    /// must STILL fall back to the project-name tombstone match.
+    func testLegacyRowWithoutIdentityUsesProjectNameFallback() throws {
+        let service = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+
+        // A local project happens to share the tombstoned name; reconciliation
+        // would otherwise restore this output against it. The test asserts the
+        // legacy fallback STILL suppresses when identity is missing.
+        let otherProject = StoryProject(name: "Legacy Name")
+        otherProject.id = UUID()
+        otherProject.lineageID = UUID()
+        context.insert(otherProject)
+        try context.save()
+
+        let tombstones = SyncTombstoneSet(records: [
+            makeProjectTombstone(
+                localEntityID: UUID().uuidString,
+                lineageID: UUID().uuidString,
+                projectName: "Legacy Name"
+            )
+        ])
+
+        let record = makeCloudRecord(
+            projectLocalID: nil,
+            projectLineageID: nil,
+            projectName: "Legacy Name"
+        )
+
+        service.reconcile([record], tombstones: tombstones, into: context)
+        try context.save()
+
+        XCTAssertEqual(try context.fetch(FetchDescriptor<GenerationOutput>()).count, 0,
+                       "Legacy output lacking project identity must still fall back to project-name tombstone match")
+    }
+
+    /// duplicate project names remain legal: two `StoryProject`s share the
+    /// same display name, and a cloud record carrying the SECOND project's
+    /// lineage/local_id must resolve to the second project by identity, not
+    /// by name (no phantom created, no name-collision damage).
+    func testDuplicateProjectNamesAreLegalAndIdentitySafe() throws {
+        let service = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+
+        let firstProjectID = UUID()
+        let firstLineage = UUID()
+        let first = StoryProject(name: "Twin")
+        first.id = firstProjectID
+        first.lineageID = firstLineage
+        let secondProjectID = UUID()
+        let secondLineage = UUID()
+        let second = StoryProject(name: "Twin")
+        second.id = secondProjectID
+        second.lineageID = secondLineage
+        context.insert(first)
+        context.insert(second)
+        try context.save()
+
+        // Cloud record carries the SECOND project's lineage + local ID;
+        // identity (NOT name) must select the matching project.
+        let record = makeCloudRecord(
+            projectLocalID: secondProjectID.uuidString,
+            projectLineageID: secondLineage.uuidString,
+            projectName: "Twin"
+        )
+
+        service.reconcile([record], into: context)
+        try context.save()
+
+        let outputs = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(outputs.count, 1, "No phantom project must be created; exactly one output inserted")
+        let output = try XCTUnwrap(outputs.first)
+        XCTAssertTrue(output.project === second,
+                      "Identity (lineage/localID), not name, must select the matching project")
+        XCTAssertEqual(output.project?.id, secondProjectID)
+        XCTAssertEqual(output.project?.stableLineageID, secondLineage)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).count, 2,
+                       "No third/recovery project must be fabricated")
+    }
+}
+
 final class LocalGenerationOutputBackupServiceTests: XCTestCase {
 
     private var container: ModelContainer!
