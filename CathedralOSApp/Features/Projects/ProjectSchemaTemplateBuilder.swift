@@ -1154,11 +1154,17 @@ enum GenerationOutputRecoveryProjectResolver {
 
     static func resolveProject(
         projectID: UUID? = nil,
+        projectLineageID: UUID? = nil,
         projectName: String,
         in context: ModelContext,
         recoverySource: String
     ) -> StoryProject {
-        if let existing = existingProject(projectID: projectID, projectName: projectName, in: context) {
+        if let existing = existingProject(
+            projectID: projectID,
+            projectLineageID: projectLineageID,
+            projectName: projectName,
+            in: context
+        ) {
             return existing
         }
 
@@ -1168,6 +1174,9 @@ enum GenerationOutputRecoveryProjectResolver {
         if let projectID {
             project.id = projectID
         }
+        if let projectLineageID {
+            project.lineageID = projectLineageID
+        }
         project.notes = "\(recoveryNotePrefix)\(recoverySource)."
         context.insert(project)
         return project
@@ -1175,10 +1184,22 @@ enum GenerationOutputRecoveryProjectResolver {
 
     static func existingProject(
         projectID: UUID? = nil,
+        projectLineageID: UUID? = nil,
         projectName: String,
         in context: ModelContext
     ) -> StoryProject? {
         let projects = (try? context.fetch(FetchDescriptor<StoryProject>())) ?? []
+        // PR-fix/canonical-rebind-on-cloud-sync: secondary hardening.
+        // Order of preference for canonical-project identity:
+        //   1. Stable lineage identity — authoritative across restored local
+        //      copies and preferred over a transient local UUID.
+        //   2. Local project `id` match.
+        //   3. Name match (legacy/fallback recovery mechanism, retained
+        //      for projects that never had lineage_id set).
+        if let projectLineageID,
+           let byLineage = projects.first(where: { $0.stableLineageID == projectLineageID }) {
+            return byLineage
+        }
         if let projectID, let byID = projects.first(where: { $0.id == projectID }) {
             return byID
         }

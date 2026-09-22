@@ -1484,12 +1484,70 @@ final class ProjectDetailResumeReconcilerTests: XCTestCase {
                       "Resume completion must replace the stale project reference")
         XCTAssertTrue(displayedProject.generations.contains { $0 === output },
                       "Generated Outputs must use the restored canonical relationship")
-        XCTAssertTrue(displayedProject.outlines
-            .flatMap(\.sections)
-            .contains { $0.id == section.id })
+        XCTAssertTrue(displayedProject.outlines.contains { outline in
+            outline.sections.contains { $0.id == section.id }
+        }, "The canonical outline must contain the restored section")
+        XCTAssertEqual(output.outlineSectionID, section.id,
+                       "The reconciled output must retain the section identity")
         XCTAssertTrue(displayedProject.generations
             .filter { $0.outlineSectionID == section.id }
             .contains { $0 === output },
                       "The matching Outline row must resolve the restored output")
+    }
+}
+
+// MARK: - Recovery project lineage identity
+
+@MainActor
+final class GenerationOutputRecoveryProjectResolverTests: XCTestCase {
+    private var container: ModelContainer!
+
+    override func setUpWithError() throws {
+        container = try ModelContainer(
+            for: Schema([StoryProject.self]),
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+    }
+
+    override func tearDownWithError() throws {
+        container = nil
+    }
+
+    func testExistingProjectPrefersLineageIdentityBeforeNameFallback() throws {
+        let context = ModelContext(container)
+        let lineageID = UUID()
+        let sameName = "Brody In Hawkins"
+        let canonical = StoryProject(name: sameName)
+        canonical.lineageID = lineageID
+        let unrelated = StoryProject(name: sameName)
+        unrelated.lineageID = UUID()
+        context.insert(canonical)
+        context.insert(unrelated)
+        try context.save()
+
+        let resolved = GenerationOutputRecoveryProjectResolver.existingProject(
+            projectID: unrelated.id,
+            projectLineageID: lineageID,
+            projectName: sameName,
+            in: context
+        )
+
+        XCTAssertTrue(resolved === canonical)
+    }
+
+    func testResolveProjectCarriesLineageIdentityIntoNewProject() throws {
+        let context = ModelContext(container)
+        let lineageID = UUID()
+
+        let resolved = GenerationOutputRecoveryProjectResolver.resolveProject(
+            projectID: UUID(),
+            projectLineageID: lineageID,
+            projectName: "Recovered project",
+            in: context,
+            recoverySource: "test"
+        )
+
+        XCTAssertEqual(resolved.lineageID, lineageID)
+        XCTAssertEqual(resolved.name, "Recovered project")
     }
 }

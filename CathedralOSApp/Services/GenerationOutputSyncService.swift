@@ -316,6 +316,14 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
             try await MainActor.run {
                 reconcile(records, tombstones: tombstones, into: context)
                 try persistContext(context, stage: "cloud restore")
+                // Notify both the outline renderer and ProjectDetailView after
+                // the canonical reconciliation has been persisted. The existing
+                // coordinator seam also posts this after wrapped operations;
+                // this direct post covers direct pullOutputs callers.
+                NotificationCenter.default.post(
+                    name: .cathedralOSGenerationOutputsChanged,
+                    object: nil
+                )
             }
 
             // === PR-#331: capture sync probe state for Diagnostics surface ===
@@ -689,6 +697,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         if output.project == nil {
             output.project = GenerationOutputRecoveryProjectResolver.resolveProject(
                 projectID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
+                projectLineageID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
                 projectName: record.projectName,
                 in: context,
                 recoverySource: "cloud recovery"
@@ -737,6 +746,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         }
         return GenerationOutputRecoveryProjectResolver.resolveProject(
             projectID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
+            projectLineageID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
             projectName: record.projectName,
             in: context,
             recoverySource: "cloud recovery"
