@@ -55,6 +55,12 @@ export interface RecentRepetitionGuidance {
   avoidSentenceOpenings: string[];
   /** Repeated short phrases / reaction constructions. */
   avoidPhrases: string[];
+  /**
+   * Response families saturated across multiple recent sections.
+   * Capped to ~3 names; absent when no family clears the conservative
+   * multi-section threshold.
+   */
+  saturatedResponseFamilies: string[];
   /** Optional paragraph rhythm guidance (only when dominant). */
   rhythmGuidance?: string;
 }
@@ -170,6 +176,144 @@ const STOPWORDS = new Set<string>([
   "became",
   "remained",
 ]);
+
+/**
+ * Conservative verbs that mark a "[CHARACTER] [gaze-verb]" opening
+ * construction. When the first token of a sentence is non-stopword and the
+ * second token is one of these, the opening is normalized to
+ * "[character] …" so that "Brody looked at", "Mike looked at", and
+ * "Eleven looked at" register as the same general opening pattern.
+ */
+const GAZE_VERBS = new Set<string>([
+  "looked",
+  "stared",
+  "glanced",
+  "watched",
+  "peered",
+  "gazed",
+]);
+
+/**
+ * Limited, conservative response-mode families for the Recent Repetition
+ * Restraint. Saturation is measured in SECTIONS (not occurrences) so a
+ * single long scene cannot trigger guidance alone. Each family requires
+ * its pattern in `minSectionUses` distinct sections inside the
+ * RECENT_REPETITION_LOOKBACK window. The list deliberately stays small
+ * and avoids generic single-word suppression, embeddings, NLP libraries,
+ * or synonym thesaurus expansion.
+ */
+interface ResponseFamily {
+  /** Family label rendered in the volatile guidance block. */
+  readonly name: string;
+  /** Conservative set of regexes for the family. */
+  readonly patterns: readonly RegExp[];
+  /** Minimum distinct sections in the lookback that must match the family. */
+  readonly minSectionUses: number;
+}
+
+const RESPONSE_FAMILIES: readonly ResponseFamily[] = [
+  {
+    name: "gaze/orientation reactions",
+    patterns: [
+      /\b(looked|stared|glanced|watched|peered|gazed)\b/i,
+      /\bturned (toward|to|away from|back to)\b/i,
+    ],
+    minSectionUses: 3,
+  },
+  {
+    name: "swallowing/throat reactions",
+    patterns: [
+      /\b(swallowed|swallow)\b/i,
+      /\b(throat (tightened|constricted|closed)|his throat|her throat)\b/i,
+    ],
+    minSectionUses: 2,
+  },
+  {
+    name: "dry-mouth",
+    patterns: [
+      /\b(dry mouth|mouth went dry|mouth dry)\b/i,
+      /\b(tongue (stuck|stuck to the roof|heavy|tied))\b/i,
+    ],
+    minSectionUses: 2,
+  },
+  {
+    name: "breath reactions",
+    patterns: [
+      /\b(breath|breathed|breathing|exhaled|inhaled)\b/i,
+      /\b(held (his|her) breath|caught (his|her) breath|let out a breath)\b/i,
+    ],
+    minSectionUses: 3,
+  },
+  {
+    name: "freeze/stillness reactions",
+    patterns: [
+      /\b(froze|freeze)\b/i,
+      /\b(stock-still|stock still|rooted (to the spot|in place))\b/i,
+      /\b(didn't move|couldn't move|could not move)\b/i,
+    ],
+    minSectionUses: 2,
+  },
+  {
+    name: "heart/pulse reactions",
+    patterns: [
+      /\b(heart (pounded|raced|leapt|hammered|thudded|skipped|jumped))\b/i,
+      /\b(pulse (pounded|raced|hammered))\b/i,
+    ],
+    minSectionUses: 2,
+  },
+  {
+    name: "stomach/gut reactions",
+    patterns: [
+      /\b(stomach (dropped|clenched|churned|tightened|turned|flipped))\b/i,
+      /\b(gut (dropped|wrenched|twisted))\b/i,
+      /\b(in (his|her) stomach)\b/i,
+    ],
+    minSectionUses: 2,
+  },
+];
+
+const MAX_SATURATED_RESPONSE_FAMILIES = 3;
+
+function sectionMatchesResponseFamily(
+  lowerSection: string,
+  family: ResponseFamily,
+): boolean {
+  return family.patterns.some((p) => p.test(lowerSection));
+}
+
+export function deriveSaturatedResponseFamilies(
+  lowerSections: string[],
+): string[] {
+  if (lowerSections.length < 2) return [];
+  const saturated: string[] = [];
+  for (const family of RESPONSE_FAMILIES) {
+    const sectionCount = lowerSections.filter((s) =>
+      sectionMatchesResponseFamily(s, family)
+    ).length;
+    if (sectionCount >= family.minSectionUses) {
+      saturated.push(family.name);
+    }
+  }
+  return saturated.slice(0, MAX_SATURATED_RESPONSE_FAMILIES);
+}
+
+/**
+ * Conservative opening normalization. Returns the rewritten key if the
+ * first two tokens of the sentence form a "[CHARACTER] [gaze-verb]"
+ * pattern (the user's example shape: "Brody looked at…"). Returns null
+ * otherwise so the caller falls back to the literal first-four-token key.
+ */
+export function normalizeOpeningKey(tokens: string[]): string | null {
+  if (tokens.length < 2) return null;
+  if (STOPWORDS.has(tokens[0])) return null;
+  if (!GAZE_VERBS.has(tokens[1])) return null;
+  // Keep only the gaze verb + the following token so the canonical
+  // "[CHARACTER] looked at" / "[CHARACTER] stared at" / "[CHARACTER]
+  // glanced toward" shape matches across character names. Longer tails
+  // (e.g. "looked at Mike" vs "looked at Eleven") would re-fragment the
+  // normalized key and defeat the substitution.
+  return "[character] " + tokens.slice(1, 3).join(" ");
+}
 
 export interface AnalyzeRecentRepetitionInput {
   /** Recent canonical section prose, in outline order. May be empty. */
@@ -348,7 +492,8 @@ export function deriveRepeatedOpenings(
       const tokens = tokenize(sentence).slice(0, 4);
       if (tokens.length < 2) continue;
       if (tokens.every((t) => STOPWORDS.has(t))) continue;
-      const key = tokens.join(" ");
+      const normalized = normalizeOpeningKey(tokens);
+      const key = normalized ?? tokens.join(" ");
       if (seenInThisSection.has(key)) continue;
       seenInThisSection.add(key);
       counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -444,6 +589,7 @@ export function analyzeRecentRepetition(
     avoidMotifs: deriveAvoidMotifs(selectedMotifs, lowerSections, requiredSet),
     avoidSentenceOpenings: deriveRepeatedOpenings(lowerSections),
     avoidPhrases: deriveRepeatedPhrases(lowerSections),
+    saturatedResponseFamilies: deriveSaturatedResponseFamilies(lowerSections),
     rhythmGuidance: deriveRhythmGuidance(lowerSections),
   };
 }
@@ -485,6 +631,16 @@ export function renderRecentRepetitionBlock(
       );
     }
   }
+  if (g.saturatedResponseFamilies.length > 0) {
+    sections.push(
+      "Recent reaction habits are saturated:",
+      ...g.saturatedResponseFamilies.map((f) => `- ${f}`),
+      "",
+      "Do not merely synonym-swap these reactions. When natural, vary how the response is expressed through dialogue, deliberate action, changed behavior, spatial interaction, internal decision, silence, interruption, or implication. Use the saturated response normally when it is the most physically or dramatically accurate choice.",
+      "Keep this subordinate to the Section Contract. Do not force awkward novelty. Do not distort character voice. Do not prevent necessary physical actions.",
+      "",
+    );
+  }
   if (g.rhythmGuidance) {
     sections.push("Rhythm:", g.rhythmGuidance, "");
   }
@@ -500,6 +656,9 @@ export const _internal = {
   MAX_AVOID_OPENINGS,
   MAX_AVOID_PHRASES,
   SINGLE_SENTENCE_PARAGRAPH_RATIO,
+  MAX_SATURATED_RESPONSE_FAMILIES,
+  RESPONSE_FAMILIES,
+  GAZE_VERBS,
   STOPWORDS,
   SPLIT_SENTENCE_REGEX,
   capitalizeFirst,

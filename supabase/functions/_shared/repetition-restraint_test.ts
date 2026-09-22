@@ -8,6 +8,9 @@ import {
   deriveRepeatedOpenings,
   deriveRepeatedPhrases,
   deriveRhythmGuidance,
+  deriveSaturatedResponseFamilies,
+  normalizeOpeningKey,
+  RECENT_REPETITION_LOOKBACK,
   renderRecentRepetitionBlock,
   sectionMatchesMotif,
   sectionsMentioningMotif,
@@ -145,9 +148,230 @@ Deno.test("rendered restraint is bounded guidance and never includes raw prose o
     avoidMotifs: ["signals"],
     avoidSentenceOpenings: ["she turned toward the"],
     avoidPhrases: ["held the radio"],
+    saturatedResponseFamilies: [],
     rhythmGuidance: "Use fuller paragraph development where natural.",
   });
   assertStringIncludes(block, "## Recent Repetition Restraint");
   assertStringIncludes(block, "Section Contract remains authoritative");
   assertEquals(block.includes("raw_text"), false);
+});
+
+Deno.test("repetition restraint lookback is exactly five sections", () => {
+  assertEquals(RECENT_REPETITION_LOOKBACK, 5);
+  // Helper slices the input to the last 5 entries.
+  const longer = Array.from(
+    { length: 9 },
+    (_, i) => `Opening ${i}. Sentence ${i}. Tail ${i}.`,
+  );
+  const guidance = analyzeRecentRepetition({
+    recentRawText: longer,
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  // Sections 4..8 are the last five. If the helper had read more
+  // than five, it could see indices 0..3; since it can only see the
+  // last 5, no opening key should recur across the lookback window
+  // because every sentence varies by its `${i}` index.
+  assertEquals(guidance.avoidSentenceOpenings.length, 0);
+});
+
+Deno.test("saturated response families are detected when present in multiple recent sections", () => {
+  const sections = [
+    "Brody looked at Mike across the room.",
+    "Mike stared at Eleven by the door.",
+    "Lucas glanced toward Max at the window.",
+    "An entirely different scene with no gaze reaction.",
+  ];
+  const guidance = analyzeRecentRepetition({
+    recentRawText: sections,
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("gaze/orientation reactions"),
+    true,
+  );
+});
+
+Deno.test("isolated reactions in a single section do not trigger family guidance", () => {
+  const sections = [
+    "Brody looked at Mike across the room.",
+    "An entirely different scene with no reactions at all.",
+    "Yet another distinct scene with nothing repeated.",
+    "A final different scene with no overlapping reaction patterns.",
+  ];
+  const guidance = analyzeRecentRepetition({
+    recentRawText: sections,
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  // gaze reaction appears in only one section, below the 3-section
+  // threshold for the gaze/orientation family.
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("gaze/orientation reactions"),
+    false,
+  );
+});
+
+Deno.test("different response families are detected independently", () => {
+  const sections = [
+    "Brody looked at Mike. His throat tightened. His heart pounded.",
+    "Mike looked at Eleven. His throat constricted. His heart hammered.",
+    "Lucas glanced toward Max. His stomach dropped.",
+    "A different scene with no overlapping reactions.",
+  ];
+  const guidance = analyzeRecentRepetition({
+    recentRawText: sections,
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("gaze/orientation reactions"),
+    true,
+  );
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("swallowing/throat reactions"),
+    true,
+  );
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("heart/pulse reactions"),
+    true,
+  );
+  // stomach/gut only appears in one section here - must NOT yet fire.
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("stomach/gut reactions"),
+    false,
+  );
+});
+
+Deno.test("saturated families list is capped to three entries", () => {
+  const sections = [
+    "Brody looked at Mike. His throat tightened. His heart pounded. His stomach dropped.",
+    "Mike stared at Eleven. Her throat closed. Her pulse raced. Her gut wrenched.",
+    "Lucas glanced toward Max. He swallowed. His heart hammered. His stomach churned.",
+    "A different scene with overlapping reaction patterns.",
+  ];
+  const guidance = analyzeRecentRepetition({
+    recentRawText: sections,
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(guidance.saturatedResponseFamilies.length <= 3, true);
+});
+
+Deno.test("character-name substitution recognizes repeated gaze openings", () => {
+  // "Brody looked at", "Mike looked at", "Eleven looked at" — names
+  // differ but the opening construction is the same.
+  const sections = [
+    "Brody looked at Mike across the room. Then he turned away.",
+    "Mike looked at Eleven by the door. He swallowed.",
+    "Eleven looked at the window. Her throat tightened.",
+    "Some other scene to round out the lookback window.",
+  ];
+  const guidance = analyzeRecentRepetition({
+    recentRawText: sections,
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(
+    guidance.avoidSentenceOpenings.includes("[character] looked at"),
+    true,
+  );
+  // The literal "brody looked at" must NOT leak in as a separate entry —
+  // the normalization collapses the name away.
+  assertEquals(
+    guidance.avoidSentenceOpenings.includes("brody looked at"),
+    false,
+  );
+});
+
+Deno.test("normalizeOpeningKey only fires for non-stopword name + gaze verb", () => {
+  // "She looked at" — first token is a stopword; NOT normalized.
+  assertEquals(normalizeOpeningKey(["she", "looked", "at", "him"]), null);
+  // First non-stopword + gaze verb: normalized.
+  assertEquals(
+    normalizeOpeningKey(["brody", "looked", "at", "mike"]),
+    "[character] looked at",
+  );
+  // Verb-then-name pattern: not normalized (we don't generalize).
+  assertEquals(
+    normalizeOpeningKey(["looked", "brody", "in", "the"]),
+    null,
+  );
+  // Non-gaze verb: not normalized.
+  assertEquals(
+    normalizeOpeningKey(["brody", "shrugged", "and", "walked"]),
+    null,
+  );
+  // Single token: not normalized.
+  assertEquals(normalizeOpeningKey(["brody"]), null);
+});
+
+Deno.test("rendered saturated-family guidance discourages synonym swapping", () => {
+  const block = renderRecentRepetitionBlock({
+    requiredMotifs: [],
+    avoidMotifs: [],
+    avoidSentenceOpenings: [],
+    avoidPhrases: [],
+    saturatedResponseFamilies: [
+      "gaze/orientation reactions",
+      "swallowing/throat reactions",
+    ],
+    rhythmGuidance: undefined,
+  });
+  assertStringIncludes(block, "## Recent Repetition Restraint");
+  assertStringIncludes(block, "Recent reaction habits are saturated:");
+  assertStringIncludes(block, "gaze/orientation reactions");
+  assertStringIncludes(block, "swallowing/throat reactions");
+  assertStringIncludes(block, "Do not merely synonym-swap these reactions");
+  assertStringIncludes(block, "subordinate to the Section Contract");
+  // Raw prose must never appear in the prompt block.
+  assertEquals(block.includes("raw_text"), false);
+  assertEquals(block.includes("Brody looked"), false);
+});
+
+Deno.test("existing motif/phrase/rhythm behavior remains intact alongside response families", () => {
+  const sections = [
+    "The radio hissed. Brody looked at Mike.",
+    "The radio hissed again. Brody looked at Eleven.",
+    "The radio answered. Lucas glanced toward Max.",
+    "The radio faded. Eleven watched the window.",
+  ];
+  const guidance = analyzeRecentRepetition({
+    recentRawText: sections,
+    selectedMotifs: [{ label: "radio" }],
+    currentContract: null,
+  });
+  // Motif behavior still fires.
+  assertEquals(guidance.avoidMotifs.includes("radio"), true);
+  // Opening normalization still fires.
+  assertEquals(
+    guidance.avoidSentenceOpenings.includes("[character] looked at") ||
+      guidance.avoidSentenceOpenings.includes("[character] stared at"),
+    true,
+  );
+  // Response-family behavior now also fires.
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("gaze/orientation reactions"),
+    true,
+  );
+  // Rhythm guidance is still absent when not dominant.
+  assertEquals(guidance.rhythmGuidance, undefined);
+});
+
+Deno.test("rendered restraint block is bounded guidance and never includes raw prose", () => {
+  const block = renderRecentRepetitionBlock({
+    requiredMotifs: ["radio"],
+    avoidMotifs: ["signals"],
+    avoidSentenceOpenings: ["she turned toward the"],
+    avoidPhrases: ["held the radio"],
+    saturatedResponseFamilies: [],
+    rhythmGuidance: "Use fuller paragraph development where natural.",
+  });
+  assertStringIncludes(block, "## Recent Repetition Restraint");
+  assertStringIncludes(block, "Section Contract remains authoritative");
+  // Raw prose or internal identifiers must never appear.
+  assertEquals(block.includes("raw_text"), false);
+  assertEquals(block.includes("recentRawText"), false);
+  assertEquals(block.includes("saturatedResponseFamilies"), false);
 });
