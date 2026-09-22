@@ -697,7 +697,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         if output.project == nil {
             output.project = GenerationOutputRecoveryProjectResolver.resolveProject(
                 projectID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
-                projectLineageID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
+                projectLineageID: record.projectLineageID.flatMap(UUID.init(uuidString:)),
                 projectName: record.projectName,
                 in: context,
                 recoverySource: "cloud recovery"
@@ -746,7 +746,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         }
         return GenerationOutputRecoveryProjectResolver.resolveProject(
             projectID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
-            projectLineageID: record.projectLocalID.flatMap(UUID.init(uuidString:)),
+            projectLineageID: record.projectLineageID.flatMap(UUID.init(uuidString:)),
             projectName: record.projectName,
             in: context,
             recoverySource: "cloud recovery"

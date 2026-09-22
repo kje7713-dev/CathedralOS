@@ -140,6 +140,7 @@ private func makeCloudRecord(
     userID: String = "11111111-1111-1111-1111-111111111111",
     localID: String? = nil,
     projectLocalID: String? = nil,
+    projectLineageID: String? = nil,
     projectName: String = "Test Project",
     title: String = "Cloud Story",
     updatedAt: Date = Date(),
@@ -150,6 +151,7 @@ private func makeCloudRecord(
     let createdStr = iso.string(from: updatedAt.addingTimeInterval(-60))
     let localIDField = localID.map { "\"local_generation_id\": \"\($0)\"" } ?? "\"local_generation_id\": null"
     let projectLocalIDField = projectLocalID.map { "\"project_local_id\": \"\($0)\"" } ?? "\"project_local_id\": null"
+    let projectLineageIDField = projectLineageID.map { "\"project_lineage_id\": \"\($0)\"" } ?? "\"project_lineage_id\": null"
     let outlineSectionIDField = outlineSectionID.map { "\"outline_section_id\": \"\($0)\"" } ?? "\"outline_section_id\": null"
     let json = """
     {
@@ -157,6 +159,7 @@ private func makeCloudRecord(
       "user_id": "\(userID)",
       \(localIDField),
       \(projectLocalIDField),
+      \(projectLineageIDField),
       "project_name": "\(projectName)",
       "prompt_pack_name": "Test Pack",
       \(outlineSectionIDField),
@@ -328,6 +331,58 @@ final class GenerationOutputSyncPullTests: XCTestCase {
 
     override func tearDownWithError() throws {
         container = nil
+    }
+
+    func testReconcileUsesCloudLineageWhenLocalIDBelongsToStaleProject() throws {
+        let service = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+        let localIDA = UUID()
+        let localIDB = UUID()
+        let lineageID = UUID()
+        let stale = StoryProject(name: "Same name")
+        stale.id = localIDA
+        stale.lineageID = UUID()
+        let canonical = StoryProject(name: "Same name")
+        canonical.id = localIDB
+        canonical.lineageID = lineageID
+        context.insert(stale)
+        context.insert(canonical)
+        try context.save()
+
+        let record = makeCloudRecord(
+            projectLocalID: localIDA.uuidString,
+            projectLineageID: lineageID.uuidString,
+            projectName: "Same name"
+        )
+        service.reconcile([record], into: context)
+        try context.save()
+
+        let output = try XCTUnwrap(try context.fetch(FetchDescriptor<GenerationOutput>()).first)
+        XCTAssertTrue(output.project === canonical)
+        XCTAssertEqual(output.project?.id, localIDB)
+        XCTAssertEqual(output.project?.stableLineageID, lineageID)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).count, 2,
+                       "Lineage recovery must not manufacture a third project")
+    }
+
+    func testLegacyRecordWithoutLineageKeepsLocalIDFallback() throws {
+        let service = SupabaseGenerationOutputSyncService()
+        let context = ModelContext(container)
+        let localID = UUID()
+        let project = StoryProject(name: "Legacy project")
+        project.id = localID
+        context.insert(project)
+        try context.save()
+
+        let record = makeCloudRecord(
+            projectLocalID: localID.uuidString,
+            projectLineageID: nil,
+            projectName: "Legacy project"
+        )
+        service.reconcile([record], into: context)
+
+        let output = try XCTUnwrap(try context.fetch(FetchDescriptor<GenerationOutput>()).first)
+        XCTAssertTrue(output.project === project)
     }
 
     func testPullCreatesLocalOutputForMissingRecord() async throws {
@@ -1354,6 +1409,7 @@ final class GenerationOutputUploadRequestTests: XCTestCase {
         let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         XCTAssertEqual(obj["project_local_id"] as? String, project.id.uuidString)
+        XCTAssertEqual(obj["project_lineage_id"] as? String, project.stableLineageID.uuidString)
     }
 }
 

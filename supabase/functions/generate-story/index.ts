@@ -422,6 +422,10 @@ interface GenerateStoryRequest {
   // once after body parse into a single canonical `projectID` variable.
   // Optional for backwards compat — omitted => null.
   projectID?: string;
+  // Canonical StoryProject lineage, distinct from projectID/local_project_id.
+  projectLineageID?: string;
+  // Snake_case alias for the canonical lineage.
+  project_lineage_id?: string;
   // Snake_case alias sent by run-outline. Same canonical value as
   // projectID above; the handler prefers project_id ?? projectID.
   project_id?: string;
@@ -455,6 +459,8 @@ interface GenerationOutputInsert {
   project_name: string;
   // Stable local project identity used by iOS output sync.
   project_local_id: string | null;
+  // Canonical StoryProject lineage; nullable for legacy requests/rows.
+  project_lineage_id: string | null;
   prompt_pack_name: string;
   title: string;
   output_text: string;
@@ -2562,6 +2568,8 @@ async function handler(
   // time. Benefit: iOS direct generation now reaches the same project-state
   // RAG retrieval as run-outline (no behavior change for run-outline).
   const projectID: string | null = body.project_id ?? body.projectID ?? null;
+  const projectLineageID: string | null = body.project_lineage_id ??
+    body.projectLineageID ?? null;
 
   // -------------------------------------------------------------------------
   // Server-side validation
@@ -3339,6 +3347,7 @@ async function handler(
                 local_generation_id: body.localGenerationID ?? null,
                 project_name: projectName,
                 project_local_id: projectID || null,
+                project_lineage_id: projectLineageID || null,
                 prompt_pack_name: promptPackName,
                 title,
                 output_text: generatedText,

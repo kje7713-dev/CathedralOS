@@ -206,6 +206,7 @@ final class StoryGenerationService: GenerationService {
             schema: Self.requestSchema,
             version: Self.requestVersion,
             projectID: project.id.uuidString,
+            projectLineageID: project.stableLineageID.uuidString,
             projectName: project.name,
             promptPackID: pack.id.uuidString,
             promptPackName: pack.name,
