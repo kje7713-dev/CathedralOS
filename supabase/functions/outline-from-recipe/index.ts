@@ -1958,7 +1958,15 @@ Selected motifs are supporting material, not a quota. Use a motif in a section o
 Each section must produce a materially new resulting state. Do not create another section merely to restate or reconfirm a relationship change, realization, warning, or trust shift already achieved. Revisit an arc only when a new event escalates, reverses, costs, or transforms it.
 
 ## Section distinctness and necessity
-Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation. If two proposed sections primarily accomplish the same function, combine them or make the later one advance the consequence rather than repeat the function.
+Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation. If two proposed sections primarily accomplish the same function, make the later one advance the consequence, introduce a materially different cost, reversal, decision, relationship change, information change, power shift, or tactical state rather than repeating the earlier function. Preserve the amount of story; increase the amount of distinct story.
+
+Evaluate the WHOLE proposed novel — including sections in other Story Arc beats — when deciding whether a section adds new dramatic value. Dramatic novelty is determined primarily by the dramaticEvent, resultingChange, and terminalState fields; it is NOT established by different characters, locations, imagery, or surface spectacle alone. Two sections with different surface events can still be dramatically redundant if they produce essentially the same story change.
+
+Avoid redundant patterns such as: the group pushes the same threat back twice as two separate victories; the same breach or conflict is effectively closed twice; a character resolves the same belonging or identity question twice; the same relationship realization receives another "final" resolution; or a later climax restages the earlier climax with greater spectacle but substantially the same result.
+
+Do NOT solve redundant dramatic work by reducing the planned novel. Allocation, minimum section coverage, and target novel length remain authoritative. When multiple planned sections would otherwise perform similar dramatic work, redesign the LATER section to create a different change while still fulfilling its Story Arc role, recipe obligations, allocation, and expected length contribution. The amount of story should be preserved; the amount of distinct story should grow.
+
+A later section may revisit the same characters, antagonist, conflict, location, or thematic question, but must advance it through a genuinely new development: a new consequence; an increased or different cost; a reversal; changed knowledge; changed power; transferred agency; a harder decision; resolution of a different thread; a changed relationship; a transformed meaning of the earlier event; or a materially different tactical state. Each section should earn its place by changing something the previous sections have not already changed.
 
 Names from the supplied recipe and enriched story material are canonical. Copy character, institution, and location names exactly. Never rename, merge, abbreviate, or invent a variant of an existing named entity.
 
@@ -2006,7 +2014,11 @@ ${allocationLines}
 ## Semantic Story Arc contracts
 ${contractLines}
 
-The Resurrection must not replay the Ordeal at greater scale. The Ordeal must create a cost, revelation, failure, or changed condition that materially alters how the final confrontation works.
+The Resurrection must not replay the Ordeal at greater scale. The Ordeal must create a cost, revelation, failure, or changed condition that materially alters how the final confrontation works. The Resurrection must depend on that changed condition and must develop or resolve the conflict in a materially different way — not simply replay the Ordeal's essential conflict and solution at greater scale.
+
+A Story Arc beat transition does NOT reset dramatic novelty. The later beat must inherit the changed conditions created by the earlier one. Apply the same principle generally: a climax should not merely repeat crisis at greater intensity; consequence should dramatize what the climax changed; resolution should develop the consequences of victory or loss rather than stage another miniature victory.
+
+Before finalizing the outline, compare the proposed sequence of resultingChange and terminalState values across the whole outline. If two non-adjacent sections produce substantially the same resultingChange or terminalState, redesign the later one so the later section performs distinct dramatic work.
 
 Respond with structured JSON matching the schema. This is the only provider call for Suggest Sections; do not return a plan for another model or defer plot decisions.`;
   const planningView = buildCompactPlanningView(

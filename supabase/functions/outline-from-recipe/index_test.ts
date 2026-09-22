@@ -706,6 +706,67 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Favor specific, memorable events and evocative section titles over functional briefing, regrouping, mapping, or explanatory scenes."), true);
 });
 
+Deno.test("global buildPrompt communicates whole-outline dramatic comparison and resulting-change priority", () => {
+  const { system } = buildPrompt(sparseRequest as any, new Map());
+  // Whole-outline dramatic comparison guidance.
+  assertEquals(
+    system.includes("Evaluate the WHOLE proposed novel"),
+    true,
+    "must compare across the whole proposed novel, not just adjacent sections",
+  );
+  assertEquals(
+    system.includes("primarily by the dramaticEvent, resultingChange, and terminalState fields"),
+    true,
+    "novelty must be anchored in dramaticEvent/resultingChange/terminalState",
+  );
+  // Differentiation guidance must preserve length/allocation.
+  assertEquals(
+    system.includes("Do NOT solve redundant dramatic work by reducing the planned novel"),
+    true,
+    "allocation and novel length must remain authoritative",
+  );
+  assertEquals(
+    system.includes("Allocation, minimum section coverage, and target novel length remain authoritative"),
+    true,
+  );
+  // Earned place principle.
+  assertEquals(
+    system.includes("Each section should earn its place by changing something the previous sections have not already changed"),
+    true,
+  );
+  // Cross-beat continuity.
+  assertEquals(
+    system.includes("A Story Arc beat transition does NOT reset dramatic novelty"),
+    true,
+    "later beat must inherit earlier beat's changed conditions",
+  );
+  // Resurrection must depend on the Ordeal's changed condition.
+  assertEquals(
+    system.includes("The Resurrection must depend on that changed condition"),
+    true,
+  );
+  // Global self-comparison.
+  assertEquals(
+    system.includes("compare the proposed sequence of resultingChange and terminalState values across the whole outline"),
+    true,
+    "planner must compare resultingChange/terminalState across the whole outline",
+  );
+  // PR #617 refinement: the obsolete "combine them" instruction
+  // contradicted the preserve-allocation rule and re-introduced the
+  // exact length-risk this PR is supposed to avoid. It must be gone.
+  assertEquals(
+    system.includes("combine them"),
+    false,
+    "obsolete 'combine them' instruction must be removed from the prompt",
+  );
+  // The replacement anti-shrink phrasing must be present.
+  assertEquals(
+    system.includes("Preserve the amount of story; increase the amount of distinct story"),
+    true,
+    "anti-shrink / preserve-length phrasing must be present",
+  );
+});
+
 Deno.test("allocation parser preserves minimums and rejects malformed plans", () => {
   const beats = sparseRequest.arcTemplate.beats;
   const result = parseAndValidateAllocation(
