@@ -1221,26 +1221,32 @@ export async function fetchRecentRawText(
       .eq("project_id", projectId)
       .neq("outline_section_id", currentOutlineSectionId)
       .eq("outline_sections.outline_id", currentOutlineId)
-      .lt("outline_sections.position", currentPosition);
+      .eq("outline_sections.status", "accepted")
+      .lt("outline_sections.position", currentPosition)
+      .neq("raw_text", "")
+      // PostgREST orders the embedded outline_sections relation, then limits
+      // the parent rows. The query is intentionally newest-first so the
+      // limit selects only the latest canonical prior sections.
+      .order("position", {
+        foreignTable: "outline_sections",
+        ascending: false,
+      })
+      .limit(RECENT_REPETITION_LOOKBACK);
     if (rowsError || !Array.isArray(rows)) return [];
 
-    const usable = rows
+    const recent = rows
       .filter((r: any) =>
-        r?.outline_sections?.status === "accepted" &&
         typeof r?.raw_text === "string" &&
-        r.raw_text.length > 0
+        r.raw_text.length > 0 &&
+        Number.isFinite(Number(r.outline_sections?.position))
       )
       .map((r: any) => ({
-        position: Number(r.outline_sections?.position ?? 0),
+        position: Number(r.outline_sections.position),
         raw_text: String(r.raw_text),
       }))
-      .filter((r: { position: number; raw_text: string }) =>
-        Number.isFinite(r.position)
-      )
+      // The DB query returns newest-first; restore chronological order for
+      // analyzeRecentRepetition(), whose final element is the prior section.
       .sort((a, b) => a.position - b.position);
-
-    // Last N canonical prior sections in outline order.
-    const recent = usable.slice(-RECENT_REPETITION_LOOKBACK);
     return recent.map((r) => r.raw_text);
   } catch (error) {
     console.error(

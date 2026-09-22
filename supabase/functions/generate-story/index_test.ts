@@ -75,6 +75,7 @@ import {
   MAX_SOURCE_PAYLOAD_CHARS,
 } from "./index.ts";
 import type { LLMMessage, LLMProvider, LLMResponse } from "./_provider.ts";
+import { RECENT_REPETITION_LOOKBACK } from "../_shared/repetition-restraint.ts";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -180,32 +181,27 @@ function makeAuthRequest(body: Record<string, unknown>): Request {
   });
 }
 
-Deno.test("fetchRecentRawText requires surviving generation outputs and keeps outline-position chronology", async () => {
+Deno.test("fetchRecentRawText bounds canonical rows in the DB and restores chronology", async () => {
   const selected: string[] = [];
-  const validRows = Array.from({ length: 7 }, (_, i) => ({
-    outline_section_id: `section-${i + 1}`,
-    raw_text: `valid-${i + 1}`,
+  const predicates: Array<[string, string, unknown]> = [];
+  let orderArgs:
+    | { column: string; foreignTable?: string; ascending?: boolean }
+    | null = null;
+  let limitValue: number | null = null;
+  const rowsReturnedByDatabase = [7, 6, 5, 4, 3].map((position) => ({
+    outline_section_id: `section-${position}`,
+    raw_text: `valid-${position}`,
     outline_sections: {
-      id: `section-${i + 1}`,
+      id: `section-${position}`,
       outline_id: "outline-1",
-      position: i + 1,
+      position,
       status: "accepted",
     },
-    generation_outputs: { id: `output-${i + 1}` },
+    generation_outputs: { id: `output-${position}` },
   }));
-  const orphan = {
-    outline_section_id: "orphan-section",
-    raw_text: "orphan-must-not-contribute",
-    outline_sections: {
-      id: "orphan-section",
-      outline_id: "outline-1",
-      position: 99,
-      status: "accepted",
-    },
-  };
   let fromCount = 0;
   const client = {
-    from: (_table: string) => {
+    from: (table: string) => {
       fromCount += 1;
       const isCurrent = fromCount === 1;
       const chain: any = {
@@ -213,33 +209,95 @@ Deno.test("fetchRecentRawText requires surviving generation outputs and keeps ou
           selected.push(value);
           return chain;
         },
-        eq: () => chain,
-        neq: () => chain,
-        lt: () => chain,
+        eq: (column: string, value: unknown) => {
+          predicates.push(["eq", column, value]);
+          return chain;
+        },
+        neq: (column: string, value: unknown) => {
+          predicates.push(["neq", column, value]);
+          return chain;
+        },
+        lt: (column: string, value: unknown) => {
+          predicates.push(["lt", column, value]);
+          return chain;
+        },
+        order: (column: string, options: typeof orderArgs) => {
+          orderArgs = { column, ...options };
+          return chain;
+        },
+        limit: (value: number) => {
+          limitValue = value;
+          return chain;
+        },
         maybeSingle: async () => ({
-          data: { id: "current", outline_id: "outline-1", position: 99 },
+          data: { id: "current", outline_id: "outline-1", position: 8 },
           error: null,
         }),
         then: (resolve: (value: unknown) => unknown) => {
-          const selection = selected[selected.length - 1] ?? "";
-          const rows = selection.includes("generation_outputs!inner(id)")
-            ? validRows
-            : [...validRows, orphan];
+          if (isCurrent) {
+            return Promise.resolve(resolve({ data: null, error: null }));
+          }
           return Promise.resolve(
-            resolve({ data: isCurrent ? null : rows, error: null }),
+            resolve({ data: rowsReturnedByDatabase, error: null }),
           );
         },
       };
       return chain;
     },
   };
+
   const result = await fetchRecentRawText(client, "project-1", "current");
+
   assertEquals(
-    selected.some((value) => value.includes("generation_outputs!inner(id)")),
+    selected.some((value) =>
+      value.includes(
+        "outline_sections!inner(id, outline_id, position, status)",
+      ) &&
+      value.includes("generation_outputs!inner(id)")
+    ),
     true,
   );
+  assertEquals(
+    predicates.some(([kind, column, value]) =>
+      kind === "eq" && column === "project_id" && value === "project-1"
+    ),
+    true,
+  );
+  assertEquals(
+    predicates.some(([kind, column, value]) =>
+      kind === "eq" && column === "outline_sections.outline_id" &&
+      value === "outline-1"
+    ),
+    true,
+  );
+  assertEquals(
+    predicates.some(([kind, column, value]) =>
+      kind === "lt" && column === "outline_sections.position" && value === 8
+    ),
+    true,
+  );
+  assertEquals(
+    predicates.some(([kind, column, value]) =>
+      kind === "eq" && column === "outline_sections.status" &&
+      value === "accepted"
+    ),
+    true,
+  );
+  assertEquals(
+    predicates.some(([kind, column, value]) =>
+      kind === "neq" && column === "raw_text" && value === ""
+    ),
+    true,
+  );
+  assertEquals(orderArgs, {
+    column: "position",
+    foreignTable: "outline_sections",
+    ascending: false,
+  });
+  assertEquals(limitValue, RECENT_REPETITION_LOOKBACK);
+  assertEquals(rowsReturnedByDatabase.length, RECENT_REPETITION_LOOKBACK);
   assertEquals(result, ["valid-3", "valid-4", "valid-5", "valid-6", "valid-7"]);
-  assertEquals(result.includes("orphan-must-not-contribute"), false);
+  assertEquals(result.at(-1), "valid-7");
 });
 
 // Mock LLM provider -- returns a fixed successful response.
