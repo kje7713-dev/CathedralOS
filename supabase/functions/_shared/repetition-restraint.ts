@@ -55,8 +55,6 @@ export interface RecentRepetitionGuidance {
   avoidSentenceOpenings: string[];
   /** Repeated short phrases / reaction constructions. */
   avoidPhrases: string[];
-  /** Repeated sensory / descriptor terms across recent sections. */
-  repeatedDescriptors: string[];
   /** Optional paragraph rhythm guidance (only when dominant). */
   rhythmGuidance?: string;
 }
@@ -67,7 +65,6 @@ export const RECENT_REPETITION_LOOKBACK = 5 as const;
 const MAX_AVOID_MOTIFS = 5;
 const MAX_AVOID_OPENINGS = 3;
 const MAX_AVOID_PHRASES = 3;
-const MAX_REPEATED_DESCRIPTORS = 3;
 
 /**
  * Single-section threshold above which the paragraph-rhythm guidance is
@@ -252,13 +249,19 @@ export function sectionMatchesMotif(
   haystack: string,
   term: string,
 ): boolean {
-  if (!term) return false;
-  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(
-    `(^|[^a-z0-9\'])${escaped}([^a-z0-9\']|$)`,
-    "i",
-  );
-  return re.test(haystack);
+  const haystackTokens = tokenize(haystack);
+  const termTokens = tokenize(term);
+  if (termTokens.length === 0 || termTokens.length > haystackTokens.length) {
+    return false;
+  }
+  for (let i = 0; i <= haystackTokens.length - termTokens.length; i++) {
+    if (
+      termTokens.every((token, offset) => haystackTokens[i + offset] === token)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function sectionsMentioningMotif(
@@ -400,25 +403,6 @@ export function deriveRepeatedPhrases(
   return candidates.slice(0, MAX_AVOID_PHRASES).map((c) => c.phrase);
 }
 
-export function deriveRepeatedDescriptors(lowerSections: string[]): string[] {
-  if (lowerSections.length < 2) return [];
-  const counts = new Map<string, number>();
-  for (const sec of lowerSections) {
-    const seen = new Set<string>();
-    for (const t of tokenize(sec)) {
-      if (t.length < 5) continue;
-      if (STOPWORDS.has(t)) continue;
-      if (seen.has(t)) continue;
-      seen.add(t);
-      counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
-  }
-  const entries = [...counts.entries()]
-    .filter(([, n]) => n >= 2)
-    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length);
-  return entries.slice(0, MAX_REPEATED_DESCRIPTORS).map(([k]) => k);
-}
-
 export function deriveRhythmGuidance(
   lowerSections: string[],
 ): string | undefined {
@@ -460,7 +444,6 @@ export function analyzeRecentRepetition(
     avoidMotifs: deriveAvoidMotifs(selectedMotifs, lowerSections, requiredSet),
     avoidSentenceOpenings: deriveRepeatedOpenings(lowerSections),
     avoidPhrases: deriveRepeatedPhrases(lowerSections),
-    repeatedDescriptors: deriveRepeatedDescriptors(lowerSections),
     rhythmGuidance: deriveRhythmGuidance(lowerSections),
   };
 }
@@ -488,16 +471,12 @@ export function renderRecentRepetitionBlock(
       "",
     );
   }
-  if (
-    g.avoidSentenceOpenings.length > 0 || g.avoidPhrases.length > 0 ||
-    g.repeatedDescriptors.length > 0
-  ) {
+  if (g.avoidSentenceOpenings.length > 0 || g.avoidPhrases.length > 0) {
     const items: string[] = [];
     for (const o of g.avoidSentenceOpenings) {
       items.push(`"${capitalizeFirst(o)}…"`);
     }
     for (const p of g.avoidPhrases) items.push(`"${p}"`);
-    for (const d of g.repeatedDescriptors) items.push(`"${d}"`);
     if (items.length > 0) {
       sections.push(
         "Recent prose patterns to avoid repeating:",
@@ -520,7 +499,6 @@ export const _internal = {
   MAX_AVOID_MOTIFS,
   MAX_AVOID_OPENINGS,
   MAX_AVOID_PHRASES,
-  MAX_REPEATED_DESCRIPTORS,
   SINGLE_SENTENCE_PARAGRAPH_RATIO,
   STOPWORDS,
   SPLIT_SENTENCE_REGEX,

@@ -40,6 +40,7 @@ import {
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import {
+  fetchRecentRawText,
   handler,
   parseGeneratedScene,
   providerErrorResponse,
@@ -78,7 +79,7 @@ import type { LLMMessage, LLMProvider, LLMResponse } from "./_provider.ts";
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
-Deno.test("buildPrompt places recent repetition restraint in volatile context only", () => {
+Deno.test("buildPrompt places recent repetition restraint in volatile context only", async () => {
   const recentRawText =
     "UNIQUE_RAW_PROSE_SENTENCE: The radio hissed. She held the radio close.";
   const result = buildPrompt({
@@ -93,13 +94,24 @@ Deno.test("buildPrompt places recent repetition restraint in volatile context on
     projectName: "Test",
     promptPackName: "Pack",
     sectionTitle: "The Radio Warning",
-    sectionSummary: "The radio must carry a warning.",
+    sectionSummary: "The warning arrives.",
+    sectionDramaticEvent: "The radio must carry a warning.",
     recentRepetitionRawText: [recentRawText, recentRawText],
   });
-  assertStringIncludes(result.volatileBlocks.join("\n"), "Recent Repetition Restraint");
-  assertEquals(result.stableBlocks.join("\n").includes("Recent Repetition Restraint"), false);
+  assertStringIncludes(
+    result.volatileBlocks.join("\n"),
+    "Recent Repetition Restraint",
+  );
+  assertEquals(
+    result.stableBlocks.join("\n").includes("Recent Repetition Restraint"),
+    false,
+  );
   assertEquals(result.volatileBlocks.join("\n").includes(recentRawText), false);
-  assertStringIncludes(result.volatileBlocks.join("\n"), "Required recurring material");
+  assertStringIncludes(
+    result.volatileBlocks.join("\n"),
+    "Required recurring material",
+  );
+  assertStringIncludes(result.volatileBlocks.join("\n"), "radio");
   const withoutRecent = buildPrompt({
     sourcePayloadJSON: {
       selectedMotifs: [{ label: "radio", examples: ["radio"] }],
@@ -115,8 +127,25 @@ Deno.test("buildPrompt places recent repetition restraint in volatile context on
     sectionSummary: "The radio must carry a warning.",
   });
   assertEquals(result.stableBlocks, withoutRecent.stableBlocks);
+  const source = await Deno.readTextFile(
+    "./supabase/functions/generate-story/index.ts",
+  );
+  const productionCall = source.slice(
+    source.lastIndexOf(
+      "const { stableBlocks, volatileBlocks } = buildPrompt({",
+    ),
+  );
+  for (
+    const field of [
+      "sectionEntryState",
+      "sectionDramaticEvent",
+      "sectionResultingChange",
+      "sectionTerminalState",
+    ]
+  ) {
+    assertStringIncludes(productionCall, `${field}: body.${field}`);
+  }
 });
-
 
 const FAKE_USER_ID = "00000000-0000-0000-0000-000000000001";
 const FAKE_OUTPUT_ID = "00000000-0000-0000-0000-000000000002";
@@ -150,6 +179,68 @@ function makeAuthRequest(body: Record<string, unknown>): Request {
     body: JSON.stringify(body),
   });
 }
+
+Deno.test("fetchRecentRawText requires surviving generation outputs and keeps outline-position chronology", async () => {
+  const selected: string[] = [];
+  const validRows = Array.from({ length: 7 }, (_, i) => ({
+    outline_section_id: `section-${i + 1}`,
+    raw_text: `valid-${i + 1}`,
+    outline_sections: {
+      id: `section-${i + 1}`,
+      outline_id: "outline-1",
+      position: i + 1,
+      status: "accepted",
+    },
+    generation_outputs: { id: `output-${i + 1}` },
+  }));
+  const orphan = {
+    outline_section_id: "orphan-section",
+    raw_text: "orphan-must-not-contribute",
+    outline_sections: {
+      id: "orphan-section",
+      outline_id: "outline-1",
+      position: 99,
+      status: "accepted",
+    },
+  };
+  let fromCount = 0;
+  const client = {
+    from: (_table: string) => {
+      fromCount += 1;
+      const isCurrent = fromCount === 1;
+      const chain: any = {
+        select: (value: string) => {
+          selected.push(value);
+          return chain;
+        },
+        eq: () => chain,
+        neq: () => chain,
+        lt: () => chain,
+        maybeSingle: async () => ({
+          data: { id: "current", outline_id: "outline-1", position: 99 },
+          error: null,
+        }),
+        then: (resolve: (value: unknown) => unknown) => {
+          const selection = selected[selected.length - 1] ?? "";
+          const rows = selection.includes("generation_outputs!inner(id)")
+            ? validRows
+            : [...validRows, orphan];
+          return Promise.resolve(
+            resolve({ data: isCurrent ? null : rows, error: null }),
+          );
+        },
+      };
+      return chain;
+    },
+  };
+  const result = await fetchRecentRawText(client, "project-1", "current");
+  assertEquals(
+    selected.some((value) => value.includes("generation_outputs!inner(id)")),
+    true,
+  );
+  assertEquals(result, ["valid-3", "valid-4", "valid-5", "valid-6", "valid-7"]);
+  assertEquals(result.includes("orphan-must-not-contribute"), false);
+});
 
 // Mock LLM provider -- returns a fixed successful response.
 const _mockSuccessProvider: LLMProvider = {

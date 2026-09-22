@@ -108,10 +108,10 @@ import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
 import { formatCanonicalProjectState } from "../_shared/memory-state.ts";
 import {
   analyzeRecentRepetition,
-  renderRecentRepetitionBlock,
-  RECENT_REPETITION_LOOKBACK,
-  type SelectedMotifLike,
   type CurrentSectionContractLike,
+  RECENT_REPETITION_LOOKBACK,
+  renderRecentRepetitionBlock,
+  type SelectedMotifLike,
 } from "../_shared/repetition-restraint.ts";
 
 // ---------------------------------------------------------------------------
@@ -1197,7 +1197,7 @@ function aggregateProjectStateForGeneration(
 //   - Returns "" when no canonical current section can be resolved or
 //     when the query fails (caller proceeds with empty recent prose and
 //     no fabricated restraint guidance renders).
-async function fetchRecentRawText(
+export async function fetchRecentRawText(
   adminClient: any,
   projectId: string,
   currentOutlineSectionId: string | null | undefined,
@@ -1216,7 +1216,7 @@ async function fetchRecentRawText(
     const { data: rows, error: rowsError } = await adminClient
       .from("section_embeddings")
       .select(
-        "outline_section_id, raw_text, outline_sections!inner(id, outline_id, position, status)",
+        "outline_section_id, raw_text, outline_sections!inner(id, outline_id, position, status), generation_outputs!inner(id)",
       )
       .eq("project_id", projectId)
       .neq("outline_section_id", currentOutlineSectionId)
@@ -3143,6 +3143,10 @@ async function handler(
     // the LLM; model continued Ted/Betty from prior accepted scenes).
     sectionTitle: body.sectionTitle,
     sectionSummary: body.sectionSummary,
+    sectionEntryState: body.sectionEntryState,
+    sectionDramaticEvent: body.sectionDramaticEvent,
+    sectionResultingChange: body.sectionResultingChange,
+    sectionTerminalState: body.sectionTerminalState,
     // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): Story Arc Context
     // resolved SERVER-SIDE from outlineSectionCtx (fetched via
     // fetchOutlineSectionContext at the top of the handler). Caller no longer
