@@ -15,7 +15,7 @@
 // =============================================================================
 
 /** Milliseconds before an OpenAI request is aborted with provider_timeout. */
-export const PROVIDER_TIMEOUT_MS = 90_000;
+export const PROVIDER_TIMEOUT_MS = 150_000;
 
 // ---------------------------------------------------------------------------
 // Stable provider error codes

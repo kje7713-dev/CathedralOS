@@ -30,7 +30,7 @@
 //   Exceeded limit → 429 with errorCode "rate_limited" + retryAfterSeconds.
 //
 // Provider timeout:
-//   OpenAI calls are aborted after PROVIDER_TIMEOUT_MS (90 s). A timed-out
+//   OpenAI calls are aborted after PROVIDER_TIMEOUT_MS (150 s). A timed-out
 //   request returns errorCode "provider_timeout" and does NOT charge credits.
 //
 // Provider billing unavailable:
