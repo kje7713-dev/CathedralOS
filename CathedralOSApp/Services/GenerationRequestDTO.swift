@@ -12,6 +12,8 @@ struct GenerationRequest: Codable {
 
     // MARK: Project context
     let projectID: String
+    /// Canonical project lineage, distinct from the local project UUID.
+    let projectLineageID: String?
     let projectName: String
 
     // MARK: Prompt Pack reference
@@ -105,6 +107,7 @@ struct GenerationRequest: Codable {
         case schema
         case version
         case projectID
+        case projectLineageID
         case projectName
         case promptPackID
         case promptPackName
@@ -137,6 +140,7 @@ struct GenerationRequest: Codable {
         schema: String,
         version: Int,
         projectID: String,
+        projectLineageID: String? = nil,
         projectName: String,
         promptPackID: String,
         promptPackName: String,
@@ -177,6 +181,7 @@ struct GenerationRequest: Codable {
         self.schema = schema
         self.version = version
         self.projectID = projectID
+        self.projectLineageID = projectLineageID
         self.projectName = projectName
         self.promptPackID = promptPackID
         self.promptPackName = promptPackName

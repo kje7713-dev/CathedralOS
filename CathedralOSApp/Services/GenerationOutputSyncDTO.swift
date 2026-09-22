@@ -17,6 +17,8 @@ struct GenerationOutputUploadRequest: Codable {
 
     // MARK: Provenance
     let projectLocalID: String?
+    /// Canonical project lineage, distinct from the local project UUID.
+    let projectLineageID: String?
     let projectName: String
     let promptPackName: String
     /// UUID string of the outline section this output is for (server-side `outline_section_id` FK).
@@ -53,6 +55,7 @@ struct GenerationOutputUploadRequest: Codable {
         self.userID               = userID
         self.localGenerationId    = output.id.uuidString
         self.projectLocalID       = output.project?.id.uuidString
+        self.projectLineageID     = output.project?.stableLineageID.uuidString
         self.projectName          = output.project?.name ?? ""
         self.promptPackName       = output.sourcePromptPackName
         self.outlineSectionID     = output.outlineSectionID?.uuidString
@@ -75,6 +78,7 @@ struct GenerationOutputUploadRequest: Codable {
         case userID               = "user_id"
         case localGenerationId    = "local_generation_id"
         case projectLocalID       = "project_local_id"
+        case projectLineageID     = "project_lineage_id"
         case projectName          = "project_name"
         case promptPackName       = "prompt_pack_name"
         case outlineSectionID     = "outline_section_id"
@@ -103,6 +107,8 @@ struct GenerationOutputCloudRecord: Codable {
     let userID: String
     let localGenerationId: String?
     let projectLocalID: String?
+    /// Canonical project lineage, nullable for legacy cloud rows.
+    let projectLineageID: String?
     let projectName: String
     let promptPackName: String
     /// UUID string of the outline section this output is for (server-side `outline_section_id` FK).
@@ -129,6 +135,7 @@ struct GenerationOutputCloudRecord: Codable {
         userID              = try c.decode(String.self, forKey: .userID)
         localGenerationId   = try c.decodeIfPresent(String.self, forKey: .localGenerationId)
         projectLocalID      = try c.decodeIfPresent(String.self, forKey: .projectLocalID)
+        projectLineageID    = try c.decodeIfPresent(String.self, forKey: .projectLineageID)
         projectName         = try c.decodeIfPresent(String.self, forKey: .projectName) ?? ""
         promptPackName      = try c.decodeIfPresent(String.self, forKey: .promptPackName) ?? ""
         outlineSectionID    = try c.decodeIfPresent(String.self, forKey: .outlineSectionID)
@@ -152,6 +159,7 @@ struct GenerationOutputCloudRecord: Codable {
         case userID              = "user_id"
         case localGenerationId   = "local_generation_id"
         case projectLocalID      = "project_local_id"
+        case projectLineageID    = "project_lineage_id"
         case projectName         = "project_name"
         case promptPackName      = "prompt_pack_name"
         case outlineSectionID    = "outline_section_id"

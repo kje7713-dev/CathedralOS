@@ -360,6 +360,12 @@ struct ProjectDetailView: View {
                 onSyncCompleted: resumeCompletion
             )
         }
+        // Rebind after the existing shared sync completion notification.
+        // This covers coordinator-wrapped syncs and direct pullOutputs callers
+        // without adding a second, competing notification seam.
+        .onReceive(NotificationCenter.default.publisher(for: .cathedralOSGenerationOutputsChanged)) { _ in
+            refreshProjectReferenceHandler(project.id, project.stableLineageID)
+        }
         .sheet(isPresented: $showAddCharacter) {
             NavigationStack {
                 CharacterFormView(project: project, character: nil)

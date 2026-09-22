@@ -116,6 +116,8 @@ export function buildGenerateStoryRequest(args: {
     target_words_max?: number | null;
   };
   projectId: string;
+  /** Canonical StoryProject lineage, separate from local_project_id. */
+  projectLineageID?: string;
   runId?: string;
   selectedModelId?: string;
   lengthMode: LengthMode;
@@ -151,6 +153,7 @@ export function buildGenerateStoryRequest(args: {
     sectionResultingChange: args.section.resulting_change ?? undefined,
     sectionTerminalState: args.section.terminal_state ?? undefined,
     projectID: args.projectId,
+    projectLineageID: args.projectLineageID,
     // PR-360-Z Bug A: send BOTH `projectID` (camelCase, what iOS reads)
     // AND `project_id` (snake_case, what run-outline used to send and what
     // generate-story reads via the normalized projectID variable in Commit 1).

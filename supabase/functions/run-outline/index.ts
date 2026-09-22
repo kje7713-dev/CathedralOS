@@ -136,6 +136,7 @@ export type RunOutlineRecord = {
   id?: unknown;
   user_id?: unknown;
   local_project_id: string;
+  lineage_id?: unknown;
   source_recipe_json?: unknown;
   source_recipe_hash?: unknown;
   target_word_count_min?: unknown;
@@ -183,7 +184,7 @@ export async function loadRunOutline(
 ): Promise<RunOutlineRecord> {
   const { data, error } = await (adminClient as any).from("outlines")
     .select(
-      "id, user_id, local_project_id, source_recipe_json, source_recipe_hash, target_word_count_min, projected_word_count, story_arc_id",
+      "id, user_id, local_project_id, lineage_id, source_recipe_json, source_recipe_hash, target_word_count_min, projected_word_count, story_arc_id",
     )
     .eq("id", outlineId).maybeSingle();
   if (error) {
@@ -1097,6 +1098,8 @@ async function runOutline(
         assignedRecipeRequirementIDs: section.recipe_requirement_ids,
         section,
         projectId,
+        projectLineageID: String(outlineRow.lineage_id ?? "").trim() ||
+          undefined,
         runId: run.id,
         selectedModelId: (run.model as string | null) ?? undefined,
         lengthMode: estimateLengthModeFromContainer(
@@ -1581,6 +1584,7 @@ async function estimateRunCost(
         terminal_beat: string | null;
       },
       projectId: String(outline.local_project_id),
+      projectLineageID: String(outline.lineage_id ?? "").trim() || undefined,
       selectedModelId,
       lengthMode: estimateLengthModeFromContainer(
         firstSection.container as string | null,
