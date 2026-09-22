@@ -375,3 +375,125 @@ Deno.test("rendered restraint block is bounded guidance and never includes raw p
   assertEquals(block.includes("recentRawText"), false);
   assertEquals(block.includes("saturatedResponseFamilies"), false);
 });
+
+
+Deno.test("saturated families are ranked by section-count frequency, not declaration order", () => {
+  // 5 sections. Frequencies:
+  //   gaze/orientation   → 5
+  //   heart/pulse        → 3
+  //   dry-mouth          → 2
+  //   stomach/gut        → 2
+  // All four families qualify against their minSectionUses thresholds.
+  // The top-3 cap must pick by descending sectionCount, NOT by
+  // declaration order in RESPONSE_FAMILIES.
+  const sections = [
+    "Brody looked at Mike. His mouth went dry.",
+    "Mike looked at Eleven. His mouth went dry.",
+    "Lucas glanced toward Max. His heart pounded.",
+    "Eleven looked at the window. His heart raced. His stomach dropped.",
+    "Another character looked at the door. His heart hammered. His stomach clenched.",
+  ];
+  const guidance = analyzeRecentRepetition({
+    recentRawText: sections,
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(
+    guidance.saturatedResponseFamilies.length,
+    3,
+    "cap must remain MAX_SATURATED_RESPONSE_FAMILIES (=3)",
+  );
+  assertEquals(
+    guidance.saturatedResponseFamilies[0],
+    "gaze/orientation reactions",
+    "sectionCount=5 must rank first regardless of declaration order",
+  );
+  assertEquals(
+    guidance.saturatedResponseFamilies[1],
+    "heart/pulse reactions",
+    "sectionCount=3 must rank second",
+  );
+  // dry-mouth and stomach/gut both have sectionCount=2; deterministic
+  // ascending-name tie-break picks "dry-mouth" over "stomach/gut reactions".
+  assertEquals(
+    guidance.saturatedResponseFamilies[2],
+    "dry-mouth",
+    "deterministic ascending-name tie-break must apply at sectionCount=2",
+  );
+});
+
+Deno.test("saturated-family tie behavior is deterministic across repeated calls", () => {
+  const sections = [
+    "Brody looked at Mike. His mouth went dry. His stomach dropped.",
+    "Mike looked at Eleven. His mouth went dry. His stomach clenched.",
+    "Lucas glanced toward Max. His heart pounded.",
+    "Eleven looked at the window. His heart raced.",
+    "Another character looked at the door. His heart hammered.",
+  ];
+  const a = analyzeRecentRepetition({
+    recentRawText: sections,
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  const b = analyzeRecentRepetition({
+    recentRawText: sections,
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(a.saturatedResponseFamilies, b.saturatedResponseFamilies);
+});
+
+Deno.test("broad throat / breathing / exhaled / inhaled mentions do NOT trigger saturation", () => {
+  const sections = [
+    "She had a sore throat and was breathing heavily.",
+    "He checked his throat in the mirror and inhaled deeply.",
+    "She breathed out slowly and her throat felt fine.",
+    "He examined his throat and exhaled with relief.",
+    "She mentioned her throat casually during conversation.",
+  ];
+  const guidance = analyzeRecentRepetition({
+    recentRawText: sections,
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("swallowing/throat reactions"),
+    false,
+    "bare 'throat' / 'sore throat' / 'his throat' must NOT trigger swallowing/throat reactions",
+  );
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("breath reactions"),
+    false,
+    "ordinary 'breathing' / 'breathed' / 'inhaled' / 'exhaled' must NOT trigger breath reactions",
+  );
+});
+
+Deno.test("conservative throat and breath reaction constructions DO trigger saturation", () => {
+  const sections = [
+    "His throat tightened as he spoke.",
+    "Her throat constricted when she heard the news.",
+    "She swallowed hard in the dark.",
+    "He caught his breath and waited.",
+    "She held her breath in the silence.",
+    "They let out a breath together.",
+  ];
+  // Helper slices to the last 5; throat matches survive there.
+  const guidance = analyzeRecentRepetition({
+    recentRawText: sections.slice(-5),
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  // throat: constricted (s1), swallowed hard (s2) — 2 sections → SATURATED (min=2).
+  // breath: caught his breath (s3), held her breath (s4), let out a breath
+  // (s5) — 3 sections → SATURATED (min=3).
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("swallowing/throat reactions"),
+    true,
+    "throat tightened / constricted / swallowed hard must trigger swallowing/throat reactions",
+  );
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("breath reactions"),
+    true,
+    "caught / held / let out a breath must trigger breath reactions",
+  );
+});

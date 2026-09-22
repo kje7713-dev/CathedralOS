@@ -1958,7 +1958,7 @@ Selected motifs are supporting material, not a quota. Use a motif in a section o
 Each section must produce a materially new resulting state. Do not create another section merely to restate or reconfirm a relationship change, realization, warning, or trust shift already achieved. Revisit an arc only when a new event escalates, reverses, costs, or transforms it.
 
 ## Section distinctness and necessity
-Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation. If two proposed sections primarily accomplish the same function, combine them or make the later one advance the consequence rather than repeat the function.
+Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation. If two proposed sections primarily accomplish the same function, make the later one advance the consequence, introduce a materially different cost, reversal, decision, relationship change, information change, power shift, or tactical state rather than repeating the earlier function. Preserve the amount of story; increase the amount of distinct story.
 
 Evaluate the WHOLE proposed novel — including sections in other Story Arc beats — when deciding whether a section adds new dramatic value. Dramatic novelty is determined primarily by the dramaticEvent, resultingChange, and terminalState fields; it is NOT established by different characters, locations, imagery, or surface spectacle alone. Two sections with different surface events can still be dramatically redundant if they produce essentially the same story change.
 

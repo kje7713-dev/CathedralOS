@@ -224,7 +224,8 @@ const RESPONSE_FAMILIES: readonly ResponseFamily[] = [
     name: "swallowing/throat reactions",
     patterns: [
       /\b(swallowed|swallow)\b/i,
-      /\b(throat (tightened|constricted|closed)|his throat|her throat)\b/i,
+      /\bswallowed hard\b/i,
+      /\bthroat (tightened|constricted|closed|went dry)\b/i,
     ],
     minSectionUses: 2,
   },
@@ -239,8 +240,9 @@ const RESPONSE_FAMILIES: readonly ResponseFamily[] = [
   {
     name: "breath reactions",
     patterns: [
-      /\b(breath|breathed|breathing|exhaled|inhaled)\b/i,
-      /\b(held (his|her) breath|caught (his|her) breath|let out a breath)\b/i,
+      /\bbreath (caught|hitched|stalled)\b/i,
+      /\b(caught|held) (his|her) breath\b/i,
+      /\b(let out|released) a breath\b/i,
     ],
     minSectionUses: 3,
   },
@@ -285,16 +287,30 @@ export function deriveSaturatedResponseFamilies(
   lowerSections: string[],
 ): string[] {
   if (lowerSections.length < 2) return [];
-  const saturated: string[] = [];
+  const qualified: Array<{ name: string; sectionCount: number }> = [];
   for (const family of RESPONSE_FAMILIES) {
     const sectionCount = lowerSections.filter((s) =>
       sectionMatchesResponseFamily(s, family)
     ).length;
     if (sectionCount >= family.minSectionUses) {
-      saturated.push(family.name);
+      qualified.push({ name: family.name, sectionCount });
     }
   }
-  return saturated.slice(0, MAX_SATURATED_RESPONSE_FAMILIES);
+  // Sort by descending actual section-count frequency. Ties are broken
+  // deterministically by ascending family name so the output is stable
+  // across calls and across runs. We deliberately do NOT score raw
+  // occurrence counts within a single section, so one long scene
+  // cannot dominate the ranking.
+  qualified.sort((a, b) => {
+    if (b.sectionCount !== a.sectionCount) {
+      return b.sectionCount - a.sectionCount;
+    }
+    if (a.name < b.name) return -1;
+    if (a.name > b.name) return 1;
+    return 0;
+  });
+  return qualified.slice(0, MAX_SATURATED_RESPONSE_FAMILIES)
+    .map((q) => q.name);
 }
 
 /**

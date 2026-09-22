@@ -751,6 +751,20 @@ Deno.test("global buildPrompt communicates whole-outline dramatic comparison and
     true,
     "planner must compare resultingChange/terminalState across the whole outline",
   );
+  // PR #617 refinement: the obsolete "combine them" instruction
+  // contradicted the preserve-allocation rule and re-introduced the
+  // exact length-risk this PR is supposed to avoid. It must be gone.
+  assertEquals(
+    system.includes("combine them"),
+    false,
+    "obsolete 'combine them' instruction must be removed from the prompt",
+  );
+  // The replacement anti-shrink phrasing must be present.
+  assertEquals(
+    system.includes("Preserve the amount of story; increase the amount of distinct story"),
+    true,
+    "anti-shrink / preserve-length phrasing must be present",
+  );
 });
 
 Deno.test("allocation parser preserves minimums and rejects malformed plans", () => {
