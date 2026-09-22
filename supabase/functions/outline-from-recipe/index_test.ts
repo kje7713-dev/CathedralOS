@@ -670,6 +670,8 @@ Deno.test("primary outline prompt has no arbitrary section-count instruction", (
   ])).system;
   assertEquals(/\b\d+[-–]\d+\s+distinct sections\b/i.test(prompt), false);
   assertEquals(prompt.includes("minimum is a floor for dramatic coverage, not a target or maximum"), true);
+  assertEquals(prompt.includes("Selected motifs are supporting material, not a quota"), true);
+  assertEquals(prompt.includes("do not repeat a motif merely to prove that the outline remembers it"), true);
   assertEquals(prompt.includes("MAX_PLANNED_SECTIONS"), false);
 });
 

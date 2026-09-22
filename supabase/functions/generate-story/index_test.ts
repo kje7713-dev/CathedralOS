@@ -78,6 +78,45 @@ import type { LLMMessage, LLMProvider, LLMResponse } from "./_provider.ts";
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+Deno.test("buildPrompt places recent repetition restraint in volatile context only", () => {
+  const recentRawText =
+    "UNIQUE_RAW_PROSE_SENTENCE: The radio hissed. She held the radio close.";
+  const result = buildPrompt({
+    sourcePayloadJSON: {
+      selectedMotifs: [{ label: "radio", examples: ["radio"] }],
+    },
+    generationAction: "generate",
+    generationLengthMode: "short",
+    container: "scene",
+    pov: "thirdPersonLimited",
+    outputBudget: 800,
+    projectName: "Test",
+    promptPackName: "Pack",
+    sectionTitle: "The Radio Warning",
+    sectionSummary: "The radio must carry a warning.",
+    recentRepetitionRawText: [recentRawText, recentRawText],
+  });
+  assertStringIncludes(result.volatileBlocks.join("\n"), "Recent Repetition Restraint");
+  assertEquals(result.stableBlocks.join("\n").includes("Recent Repetition Restraint"), false);
+  assertEquals(result.volatileBlocks.join("\n").includes(recentRawText), false);
+  assertStringIncludes(result.volatileBlocks.join("\n"), "Required recurring material");
+  const withoutRecent = buildPrompt({
+    sourcePayloadJSON: {
+      selectedMotifs: [{ label: "radio", examples: ["radio"] }],
+    },
+    generationAction: "generate",
+    generationLengthMode: "short",
+    container: "scene",
+    pov: "thirdPersonLimited",
+    outputBudget: 800,
+    projectName: "Test",
+    promptPackName: "Pack",
+    sectionTitle: "The Radio Warning",
+    sectionSummary: "The radio must carry a warning.",
+  });
+  assertEquals(result.stableBlocks, withoutRecent.stableBlocks);
+});
+
 
 const FAKE_USER_ID = "00000000-0000-0000-0000-000000000001";
 const FAKE_OUTPUT_ID = "00000000-0000-0000-0000-000000000002";
