@@ -40,6 +40,7 @@ import {
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import {
+  fetchRecentRawText,
   handler,
   parseGeneratedScene,
   providerErrorResponse,
@@ -74,10 +75,78 @@ import {
   MAX_SOURCE_PAYLOAD_CHARS,
 } from "./index.ts";
 import type { LLMMessage, LLMProvider, LLMResponse } from "./_provider.ts";
+import { RECENT_REPETITION_LOOKBACK } from "../_shared/repetition-restraint.ts";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+Deno.test("buildPrompt places recent repetition restraint in volatile context only", async () => {
+  const recentRawText =
+    "UNIQUE_RAW_PROSE_SENTENCE: The radio hissed. She held the radio close.";
+  const result = buildPrompt({
+    sourcePayloadJSON: {
+      selectedMotifs: [{ label: "radio", examples: ["radio"] }],
+    },
+    generationAction: "generate",
+    generationLengthMode: "short",
+    container: "scene",
+    pov: "thirdPersonLimited",
+    outputBudget: 800,
+    projectName: "Test",
+    promptPackName: "Pack",
+    sectionTitle: "The Radio Warning",
+    sectionSummary: "The warning arrives.",
+    sectionDramaticEvent: "The radio must carry a warning.",
+    recentRepetitionRawText: [recentRawText, recentRawText],
+  });
+  assertStringIncludes(
+    result.volatileBlocks.join("\n"),
+    "Recent Repetition Restraint",
+  );
+  assertEquals(
+    result.stableBlocks.join("\n").includes("Recent Repetition Restraint"),
+    false,
+  );
+  assertEquals(result.volatileBlocks.join("\n").includes(recentRawText), false);
+  assertStringIncludes(
+    result.volatileBlocks.join("\n"),
+    "Required recurring material",
+  );
+  assertStringIncludes(result.volatileBlocks.join("\n"), "radio");
+  const withoutRecent = buildPrompt({
+    sourcePayloadJSON: {
+      selectedMotifs: [{ label: "radio", examples: ["radio"] }],
+    },
+    generationAction: "generate",
+    generationLengthMode: "short",
+    container: "scene",
+    pov: "thirdPersonLimited",
+    outputBudget: 800,
+    projectName: "Test",
+    promptPackName: "Pack",
+    sectionTitle: "The Radio Warning",
+    sectionSummary: "The radio must carry a warning.",
+  });
+  assertEquals(result.stableBlocks, withoutRecent.stableBlocks);
+  const source = await Deno.readTextFile(
+    "./supabase/functions/generate-story/index.ts",
+  );
+  const productionCall = source.slice(
+    source.lastIndexOf(
+      "const { stableBlocks, volatileBlocks } = buildPrompt({",
+    ),
+  );
+  for (
+    const field of [
+      "sectionEntryState",
+      "sectionDramaticEvent",
+      "sectionResultingChange",
+      "sectionTerminalState",
+    ]
+  ) {
+    assertStringIncludes(productionCall, `${field}: body.${field}`);
+  }
+});
 
 const FAKE_USER_ID = "00000000-0000-0000-0000-000000000001";
 const FAKE_OUTPUT_ID = "00000000-0000-0000-0000-000000000002";
@@ -111,6 +180,125 @@ function makeAuthRequest(body: Record<string, unknown>): Request {
     body: JSON.stringify(body),
   });
 }
+
+Deno.test("fetchRecentRawText bounds canonical rows in the DB and restores chronology", async () => {
+  const selected: string[] = [];
+  const predicates: Array<[string, string, unknown]> = [];
+  let orderArgs:
+    | { column: string; foreignTable?: string; ascending?: boolean }
+    | null = null;
+  let limitValue: number | null = null;
+  const rowsReturnedByDatabase = [7, 6, 5, 4, 3].map((position) => ({
+    outline_section_id: `section-${position}`,
+    raw_text: `valid-${position}`,
+    outline_sections: {
+      id: `section-${position}`,
+      outline_id: "outline-1",
+      position,
+      status: "accepted",
+    },
+    generation_outputs: { id: `output-${position}` },
+  }));
+  let fromCount = 0;
+  const client = {
+    from: (table: string) => {
+      fromCount += 1;
+      const isCurrent = fromCount === 1;
+      const chain: any = {
+        select: (value: string) => {
+          selected.push(value);
+          return chain;
+        },
+        eq: (column: string, value: unknown) => {
+          predicates.push(["eq", column, value]);
+          return chain;
+        },
+        neq: (column: string, value: unknown) => {
+          predicates.push(["neq", column, value]);
+          return chain;
+        },
+        lt: (column: string, value: unknown) => {
+          predicates.push(["lt", column, value]);
+          return chain;
+        },
+        order: (column: string, options: typeof orderArgs) => {
+          orderArgs = { column, ...options };
+          return chain;
+        },
+        limit: (value: number) => {
+          limitValue = value;
+          return chain;
+        },
+        maybeSingle: async () => ({
+          data: { id: "current", outline_id: "outline-1", position: 8 },
+          error: null,
+        }),
+        then: (resolve: (value: unknown) => unknown) => {
+          if (isCurrent) {
+            return Promise.resolve(resolve({ data: null, error: null }));
+          }
+          return Promise.resolve(
+            resolve({ data: rowsReturnedByDatabase, error: null }),
+          );
+        },
+      };
+      return chain;
+    },
+  };
+
+  const result = await fetchRecentRawText(client, "project-1", "current");
+
+  assertEquals(
+    selected.some((value) =>
+      value.includes(
+        "outline_sections!inner(id, outline_id, position, status)",
+      ) &&
+      value.includes("generation_outputs!inner(id)")
+    ),
+    true,
+  );
+  assertEquals(
+    predicates.some(([kind, column, value]) =>
+      kind === "eq" && column === "project_id" && value === "project-1"
+    ),
+    true,
+  );
+  assertEquals(
+    predicates.some(([kind, column, value]) =>
+      kind === "eq" && column === "outline_sections.outline_id" &&
+      value === "outline-1"
+    ),
+    true,
+  );
+  assertEquals(
+    predicates.some(([kind, column, value]) =>
+      kind === "lt" && column === "outline_sections.position" && value === 8
+    ),
+    true,
+  );
+  assertEquals(
+    predicates.some(([kind, column, value]) =>
+      kind === "eq" && column === "outline_sections.status" &&
+      value === "accepted"
+    ),
+    true,
+  );
+  assertEquals(
+    predicates.some(([kind, column, value]) =>
+      kind === "neq" && column === "raw_text" && value === ""
+    ),
+    true,
+  );
+  assertEquals(orderArgs, {
+    column: "position",
+    foreignTable: "outline_sections",
+    ascending: false,
+  });
+  assertEquals(limitValue, RECENT_REPETITION_LOOKBACK);
+  assertEquals(rowsReturnedByDatabase.length, RECENT_REPETITION_LOOKBACK);
+  assertEquals(result, ["valid-3", "valid-4", "valid-5", "valid-6", "valid-7"]);
+  assertEquals(result.at(-1), "valid-7");
+});
 
 // Mock LLM provider -- returns a fixed successful response.
 const _mockSuccessProvider: LLMProvider = {

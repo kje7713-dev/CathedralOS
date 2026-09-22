@@ -106,6 +106,13 @@ import {
 import type { EmbedSectionRequest } from "../_shared/section-embedding.ts";
 import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
 import { formatCanonicalProjectState } from "../_shared/memory-state.ts";
+import {
+  analyzeRecentRepetition,
+  type CurrentSectionContractLike,
+  RECENT_REPETITION_LOOKBACK,
+  renderRecentRepetitionBlock,
+  type SelectedMotifLike,
+} from "../_shared/repetition-restraint.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -839,11 +846,16 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   }
 
   // 5. Selected Motifs — priority element
+  // PR-recent-repetition: motifs are available story material, not a
+  // mandatory scene ingredient. Recurrence only earns inclusion when the
+  // Section Contract, causality, physical continuity, or a meaning
+  // transformation genuinely calls for it. The Section Contract remains
+  // authoritative over whether a motif belongs in this section.
   const motifs = p.selectedMotifs;
   if (motifs?.length) {
     out.push("## Motifs");
     out.push(
-      "(Supporting context only — the current Section Contract always takes precedence. Do not let motifs redirect the section.)",
+      "(Supporting context only — the current Section Contract always takes precedence. These motifs are available story material, not mandatory scene ingredients. Do not include one merely to demonstrate memory or reinforce atmosphere. Recurrence is appropriate when the Section Contract, causality, or physical continuity requires it, or when the motif materially transforms its meaning, function, or consequence. Prefer scene-specific imagery when a familiar motif is unnecessary.)",
     );
     for (const m of motifs) {
       out.push(
@@ -1170,6 +1182,80 @@ function aggregateProjectStateForGeneration(
   previousScene: Record<string, unknown>,
 ): string {
   return formatCanonicalProjectState(scenes, previousScene);
+}
+
+// ---- fetchRecentRawText --------------------------------------------------
+//
+// Recent Repetition Restraint: returns the canonical `raw_text` of the
+// last RECENT_REPETITION_LOOKBACK prior sections in outline order, used
+// by `analyzeRecentRepetition` to derive motif + prose-pattern restraint.
+//
+// Safety:
+//   - INNER-joined to `generation_outputs!inner(id)` so orphan embeddings
+//     (tombstoned outputs) cannot contribute recent prose.
+//   - Ordered by `outline_sections.position`, never by row timestamps.
+//   - Returns "" when no canonical current section can be resolved or
+//     when the query fails (caller proceeds with empty recent prose and
+//     no fabricated restraint guidance renders).
+export async function fetchRecentRawText(
+  adminClient: any,
+  projectId: string,
+  currentOutlineSectionId: string | null | undefined,
+): Promise<string[]> {
+  if (!adminClient || !projectId || !currentOutlineSectionId) return [];
+  try {
+    const { data: current, error: currentError } = await adminClient
+      .from("outline_sections")
+      .select("id, outline_id, position")
+      .eq("id", currentOutlineSectionId)
+      .maybeSingle();
+    if (currentError || !current) return [];
+    const currentOutlineId = String(current.outline_id ?? "");
+    const currentPosition = Number(current.position ?? 0);
+
+    const { data: rows, error: rowsError } = await adminClient
+      .from("section_embeddings")
+      .select(
+        "outline_section_id, raw_text, outline_sections!inner(id, outline_id, position, status), generation_outputs!inner(id)",
+      )
+      .eq("project_id", projectId)
+      .neq("outline_section_id", currentOutlineSectionId)
+      .eq("outline_sections.outline_id", currentOutlineId)
+      .eq("outline_sections.status", "accepted")
+      .lt("outline_sections.position", currentPosition)
+      .neq("raw_text", "")
+      // PostgREST orders the embedded outline_sections relation, then limits
+      // the parent rows. The query is intentionally newest-first so the
+      // limit selects only the latest canonical prior sections.
+      .order("position", {
+        foreignTable: "outline_sections",
+        ascending: false,
+      })
+      .limit(RECENT_REPETITION_LOOKBACK);
+    if (rowsError || !Array.isArray(rows)) return [];
+
+    const recent = rows
+      .filter((r: any) =>
+        typeof r?.raw_text === "string" &&
+        r.raw_text.length > 0 &&
+        Number.isFinite(Number(r.outline_sections?.position))
+      )
+      .map((r: any) => ({
+        position: Number(r.outline_sections.position),
+        raw_text: String(r.raw_text),
+      }))
+      // The DB query returns newest-first; restore chronological order for
+      // analyzeRecentRepetition(), whose final element is the prior section.
+      .sort((a, b) => a.position - b.position);
+    return recent.map((r) => r.raw_text);
+  } catch (error) {
+    console.error(
+      `[generate-story] fetchRecentRawText failed: ${
+        (error as Error).message ?? String(error)
+      }`,
+    );
+    return [];
+  }
 }
 
 export function resolveWithinBeatPosition(
@@ -1508,6 +1594,8 @@ export function buildPrompt(req: {
   storyArcTotalBeats?: number;
   storyArcWithinBeatPosition?: number;
   storyArcWithinBeatTotal?: number;
+  // Ordered recent canonical section prose used only to derive restraint.
+  recentRepetitionRawText?: string[];
 }): {
   // PR-372: stable/volatile split for OpenAI prompt caching.
   //   stableBlocks   — byte-identical for the same projectId + canon +
@@ -1873,6 +1961,32 @@ Structural limits:
     contextLines.push("");
   }
 
+  // PR-recent-repetition: derive a compact restraint block from the recent
+  // canonical section prose window supplied by the caller. Renders into the
+  // volatile suffix so it changes per section and does not perturb the
+  // PR-372 stable-prefix cache.
+  if (req.recentRepetitionRawText && req.recentRepetitionRawText.length > 0) {
+    const contract: CurrentSectionContractLike = {
+      title: req.sectionTitle,
+      summary: req.sectionSummary,
+      entryState: req.sectionEntryState,
+      dramaticEvent: req.sectionDramaticEvent,
+      resultingChange: req.sectionResultingChange,
+      terminalState: req.sectionTerminalState,
+      terminalBeat: req.terminalBeat,
+    };
+    const guidance = analyzeRecentRepetition({
+      recentRawText: req.recentRepetitionRawText,
+      selectedMotifs: (payload.selectedMotifs ?? []) as SelectedMotifLike[],
+      currentContract: contract,
+    });
+    const block = renderRecentRepetitionBlock(guidance);
+    if (block) {
+      contextLines.push(block);
+      contextLines.push("");
+    }
+  }
+
   // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
   // Supporting structural context only. The Section Contract remains
   // authoritative (same deferral rule as Dramatic Seed / Relationships /
@@ -2191,6 +2305,7 @@ Structural limits:
     "- Vary sentence length and paragraph size. Reserve fragments, repetition, and one-line paragraphs for genuine emphasis.",
     "- Do not repeat an image unless its meaning, context, or consequence changes.",
     "- Do not directly reproduce or closely paraphrase section titles, motif labels, theme labels, dramatic-seed labels, ending-residue labels, or structural-beat names.",
+    "- Continuity persists; recent surface phrasing decays. Do not imitate recent sentence openings, stock reactions, or sensory wording merely because they are familiar. Preserve character voice, factual continuity, and required language when story logic calls for it; avoid mechanical novelty for its own sake.",
     "- Preserve character agency. Do not resolve escalation merely because another character appears; depict the response or choice that actually changes it.",
     "- Build one decisive ending. Do not append repeated revelations, explanations, or additional endings after the terminal turn.",
   );
@@ -2992,6 +3107,18 @@ async function handler(
     );
   }
 
+  // PR-recent-repetition: fetch the recent canonical section prose
+  // window for motif + prose-pattern restraint. Pure DB read; no LLM call.
+  // This is always server-derived; clients cannot inject recent prose or
+  // restraint signals into the generation request.
+  const recentRepetitionRawText = adminClient && projectID
+    ? await fetchRecentRawText(
+      adminClient,
+      projectID,
+      body.outline_section_id ?? undefined,
+    )
+    : [];
+
   // PR-372: destructure stable/volatile blocks. Canon is now in stable
   // (per the buildPrompt refactor); Section Contract values + project state
   // + story arc + previous output + terminal beat + writing task are in
@@ -3011,6 +3138,7 @@ async function handler(
     projectName,
     promptPackName,
     projectStateContext,
+    recentRepetitionRawText,
     // PR-360-Z data-path fix (2026-08-21): forward section context to buildPrompt.
     // Both iOS direct generation AND run-outline generation populate these top-level
     // fields on the body (replacing the old "smuggle section into promptPack.notes"
@@ -3021,6 +3149,10 @@ async function handler(
     // the LLM; model continued Ted/Betty from prior accepted scenes).
     sectionTitle: body.sectionTitle,
     sectionSummary: body.sectionSummary,
+    sectionEntryState: body.sectionEntryState,
+    sectionDramaticEvent: body.sectionDramaticEvent,
+    sectionResultingChange: body.sectionResultingChange,
+    sectionTerminalState: body.sectionTerminalState,
     // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): Story Arc Context
     // resolved SERVER-SIDE from outlineSectionCtx (fetched via
     // fetchOutlineSectionContext at the top of the handler). Caller no longer
