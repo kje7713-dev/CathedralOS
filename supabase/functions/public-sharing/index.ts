@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-// @ts-expect-error jszip is a CommonJS-compatible ESM bundle in Deno runtime.
+// jszip is a CommonJS-compatible ESM bundle in Deno runtime.
 import JSZip from "https://esm.sh/jszip@3.10.1";
 
 const CORS_HEADERS: Record<string, string> = {
