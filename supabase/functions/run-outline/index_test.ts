@@ -357,7 +357,11 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
     "./supabase/functions/run-outline/index.ts",
   );
   assertEquals(source.includes('"claim_chapter_run"'), true);
-  assertEquals(source.includes("existing.id, authHeader"), true);
+  assertEquals(source.includes("queueContinuation(existing.id)"), true);
+  assertEquals(
+    source.includes("queueContinuation(existing.id, authHeader)"),
+    false,
+  );
   assertEquals(source.includes("idempotency_key: null"), true);
   assertEquals(source.includes("latest replacement"), false); // replacement lookup is client/server contract
   assertEquals(source.includes("outline_id + start_parent_section_id"), true);
@@ -366,7 +370,8 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
     false,
   );
   assertEquals(source.includes("pending.slice(0, 1)"), true);
-  assertEquals(source.includes("queueContinuation(runId, authHeader)"), true);
+  assertEquals(source.includes("queueContinuation(runId)"), true);
+  assertEquals(source.includes("queueContinuation(runId, authHeader)"), false);
   assertEquals(source.includes("worker_lease_until"), true);
   assertEquals(source.includes("RetryableGenerationError"), true);
   assertEquals(source.includes("retryAfterSeconds"), true);
@@ -390,8 +395,58 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   assertEquals(source.includes("if (!check.allowed)"), false);
   assertStringIncludes(
     prepareRunSource(source),
-    "queueContinuation(runId, authHeader)",
+    "queueContinuation(runId)",
   );
+  assertEquals(prepareRunSource(source).includes("authHeader"), false);
+  assertEquals(
+    source.includes(
+      "queueContinuationAfterDelay(\n                runId,\n                authHeader",
+    ),
+    false,
+  );
+  assertEquals(
+    source.includes(
+      "scheduleTransientOutlineLookupRetry(\n          adminClient,\n          runId,\n          authHeader",
+    ),
+    false,
+  );
+});
+
+Deno.test("durable continuation auth is server-trusted and owner-derived", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/run-outline/index.ts",
+  );
+  const handler = source.slice(
+    source.indexOf("async function handleKickoff"),
+    source.indexOf("// 1. Public auth"),
+  );
+  assertStringIncludes(handler, "trustedResumeRunId(");
+  assertStringIncludes(
+    handler,
+    "loadDurableRunOwner(adminClient, trustedResumeId)",
+  );
+  assertStringIncludes(handler, "run.user_id");
+  assertStringIncludes(
+    handler,
+    'return errorResponse("not_found", "run not found", 404)',
+  );
+  assertEquals(handler.includes("body.user_id"), false);
+
+  const publicAuth = source.slice(
+    source.indexOf("// 1. Public auth"),
+    source.indexOf("// 2. Resume an ordinary user-initiated recovery request."),
+  );
+  assertStringIncludes(publicAuth, 'req.headers.get("Authorization")');
+  assertStringIncludes(publicAuth, "userClient.auth.getUser()");
+
+  const queueStart = source.indexOf("async function queueContinuation(\n");
+  const queue = source.slice(queueStart, source.indexOf("/**", queueStart));
+  assertStringIncludes(
+    queue,
+    'Authorization": internalAuthHeader(SUPABASE_SERVICE_ROLE_KEY)',
+  );
+  assertStringIncludes(queue, "resume_run_id: runId");
+  assertEquals(queue.includes("authHeader"), false);
 });
 
 Deno.test("missing-run recovery is definitive while transient errors remain retryable", async () => {
@@ -619,7 +674,7 @@ Deno.test("credit shortage pauses a resumable run and preserves the exact prose 
   assertStringIncludes(source, "outputID: result.output_id");
   assertStringIncludes(source, "Resume skips whole-run estimate/preflight");
   assertStringIncludes(source, 'run.status === "paused_insufficient_credits"');
-  assertStringIncludes(source, "runOutline(runId, adminClient, authHeader)");
+  assertStringIncludes(source, "runOutline(runId, adminClient)");
   assertEquals(pause.includes('status: "failed"'), false);
 });
 

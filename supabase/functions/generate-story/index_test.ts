@@ -5688,6 +5688,40 @@ Deno.test("providerErrorResponse: provider_rate_limited still 429 + retryAfterSe
   assertEquals(resp.headers?.["Retry-After"], "60");
 });
 
+Deno.test("durable generation auth validates owner, membership, and signed token before durable class", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/generate-story/index.ts",
+  );
+  const authStart = source.indexOf(
+    "// Auth -- public requests use auth.getUser()",
+  );
+  const authEnd = source.indexOf("// Build service-role client", authStart);
+  const auth = source.slice(authStart, authEnd);
+  assertStringIncludes(auth, "isTrustedInternalRequest(req, serviceRoleKey)");
+  assertStringIncludes(
+    auth,
+    "loadDurableRunOwner(internalAdmin, internalRunId)",
+  );
+  assertStringIncludes(auth, "userId = durableRun.user_id");
+  assertEquals(auth.includes("body.user_id"), false);
+  assertStringIncludes(auth, "userClient.auth.getUser()");
+
+  const durableStart = source.indexOf("// Run All is a durable");
+  const durable = source.slice(
+    durableStart,
+    source.indexOf("if (!ALLOWED_LENGTH_MODES", durableStart),
+  );
+  assertStringIncludes(durable, "verifyRunOutlineToken(");
+  assertStringIncludes(durable, "sectionBelongsToRun");
+  assertStringIncludes(durable, '.eq("user_id", userId)');
+  assertStringIncludes(durable, 'requestClass = "durable_run"');
+  assertEquals(
+    durable.indexOf('requestClass = "durable_run"') >
+      durable.indexOf("tokenValid"),
+    true,
+  );
+});
+
 Deno.test("generation alert ownership uses validated requestClass, not raw durable metadata", () => {
   const lineage = {
     chapterRunID: "validated-run",

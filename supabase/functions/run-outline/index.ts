@@ -28,6 +28,12 @@ import { normalizeUserEntitlement } from "../generate-story/_credits.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createRunOutlineToken } from "../_shared/run-outline-auth.ts";
 import {
+  internalAuthHeader,
+  isTrustedInternalRequest,
+  loadDurableRunOwner,
+  trustedResumeRunId,
+} from "../_shared/internal-run-auth.ts";
+import {
   getCreditCost,
   type LengthMode,
   type UserEntitlement,
@@ -182,7 +188,7 @@ export async function loadRunOutline(
   adminClient: any,
   outlineId: string,
 ): Promise<RunOutlineRecord> {
-  const { data, error } = await (adminClient as any).from("outlines")
+  const { data, error } = await adminClient.from("outlines")
     .select(
       "id, user_id, local_project_id, lineage_id, source_recipe_json, source_recipe_hash, target_word_count_min, projected_word_count, story_arc_id",
     )
@@ -308,7 +314,33 @@ Deno.serve(async (req: Request) => {
 
 // ---- POST /functions/v1/run-outline ---------------------------------------
 async function handleKickoff(req: Request): Promise<Response> {
-  // 1. Auth
+  let body: RunOutlineRequest;
+  try {
+    body = await req.json();
+  } catch {
+    return errorResponse("invalid_body", "JSON body required", 400);
+  }
+  const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false },
+  });
+  // Trusted durable continuation: authenticate transport with the service-role
+  // credential, then derive the logical owner from chapter_runs.user_id.
+  const trustedResumeId = trustedResumeRunId(
+    req,
+    SUPABASE_SERVICE_ROLE_KEY,
+    body,
+  );
+  if (trustedResumeId) {
+    const run = await loadDurableRunOwner(adminClient, trustedResumeId);
+    if (!run) return errorResponse("not_found", "run not found", 404);
+    return await handleResume(
+      adminClient,
+      run.user_id,
+      run.id,
+    );
+  }
+
+  // 1. Public auth
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) {
     return errorResponse("unauthorized", "missing Authorization header", 401);
@@ -323,22 +355,12 @@ async function handleKickoff(req: Request): Promise<Response> {
   }
   const userId = userData.user.id;
 
-  // 2. Parse + validate body
-  let body: RunOutlineRequest;
-  try {
-    body = await req.json();
-  } catch {
-    return errorResponse("invalid_body", "JSON body required", 400);
-  }
+  // 2. Resume an ordinary user-initiated recovery request.
   if (body.resume_run_id) {
-    const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-      auth: { persistSession: false },
-    });
     return await handleResume(
       adminClient,
       userId,
       body.resume_run_id,
-      authHeader,
     );
   }
   if (!body.outline_id || !body.start_parent_section_id) {
@@ -350,9 +372,6 @@ async function handleKickoff(req: Request): Promise<Response> {
   }
 
   // 3. Idempotency: try insert; on 23505 return existing run
-  const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { persistSession: false },
-  });
   let readinessOutline: ReadinessOutline;
   try {
     const outline = await loadRunOutline(adminClient, body.outline_id);
@@ -433,8 +452,9 @@ async function handleKickoff(req: Request): Promise<Response> {
     // was offline). Keep the idempotency response, but also use this retry as
     // a recovery trigger. claim_chapter_run makes this safe if a worker is
     // already active.
+    // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
     EdgeRuntime.waitUntil(
-      queueContinuation(existing.id, authHeader).catch((err) => {
+      queueContinuation(existing.id).catch((err) => {
         console.error(
           `[run-outline] resume queue failed for ${existing.id}: ${err}`,
         );
@@ -563,7 +583,7 @@ async function handleKickoff(req: Request): Promise<Response> {
   // the durable worker performs estimates, credit reservation, and generation.
   // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
   EdgeRuntime.waitUntil(
-    prepareRun(run.id, adminClient, authHeader).catch(async (err) => {
+    prepareRun(run.id, adminClient).catch(async (err) => {
       const message = err instanceof Error ? err.message : String(err);
       console.error(
         `[run-outline] preparation ${run.id} crashed: ${message}`,
@@ -670,7 +690,6 @@ async function handleEstimate(
 async function prepareRun(
   runId: string,
   adminClient: ReturnType<typeof createClient>,
-  authHeader: string,
 ): Promise<void> {
   const { data: claimed, error: claimError } = await adminClient.rpc(
     "claim_chapter_run",
@@ -702,17 +721,17 @@ async function prepareRun(
     estimatedCost = await estimateRunCost(
       adminClient,
       String(run.user_id),
-      authHeader,
+      null,
       String(run.outline_id),
       sections,
       (run.model as string | null) ?? undefined,
+      runId,
     );
   } catch (err) {
     if (isRetryableOutlineLookupError(err)) {
       await scheduleTransientOutlineLookupRetry(
         adminClient,
         runId,
-        authHeader,
         err,
       );
     } else {
@@ -741,7 +760,7 @@ async function prepareRun(
     throw new Error(`could not start prepared run: ${startError.message}`);
   }
 
-  await queueContinuation(runId, authHeader);
+  await queueContinuation(runId);
 }
 
 // ---- GET /functions/v1/run-outline?run_id=… ------------------------------
@@ -814,7 +833,7 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
       (!durableRun?.worker_lease_until ||
         new Date(durableRun.worker_lease_until).getTime() < Date.now())
     ) {
-      await queueContinuation(runId, authHeader);
+      await queueContinuation(runId);
     }
   }
 
@@ -905,7 +924,6 @@ export async function runOutlineSectionLifecycle(input: {
 async function runOutline(
   runId: string,
   adminClient: ReturnType<typeof createClient>,
-  authHeader: string,
 ): Promise<void> {
   const { data: claimed, error: claimError } = await adminClient.rpc(
     "claim_chapter_run",
@@ -1087,7 +1105,7 @@ async function runOutline(
           status: "pending",
         });
         await releaseRunLease(adminClient, runId);
-        await queueContinuation(runId, authHeader);
+        await queueContinuation(runId);
         return;
       }
       const generationRequest = buildGenerateStoryRequest({
@@ -1117,7 +1135,7 @@ async function runOutline(
       await renewRunLease(adminClient, runId, workerAttempt);
       const lifecycle = await runOutlineSectionLifecycle({
         generate: async () => {
-          const result = await callGenerateStory(generationRequest, authHeader);
+          const result = await callGenerateStory(generationRequest);
           await renewRunLease(adminClient, runId, workerAttempt);
           return {
             outputID: result.output_id,
@@ -1197,7 +1215,6 @@ async function runOutline(
         await scheduleTransientOutlineLookupRetry(
           adminClient,
           runId,
-          authHeader,
           err,
         );
         return;
@@ -1209,7 +1226,7 @@ async function runOutline(
           error: msg,
         });
         await releaseRunLease(adminClient, runId);
-        await queueContinuation(runId, authHeader);
+        await queueContinuation(runId);
         return;
       }
       if (isProviderBillingUnavailable(err)) {
@@ -1249,7 +1266,6 @@ async function runOutline(
             EdgeRuntime.waitUntil(
               queueContinuationAfterDelay(
                 runId,
-                authHeader,
                 retryAfterSeconds,
               ).catch((queueError) => {
                 console.error(
@@ -1288,7 +1304,7 @@ async function runOutline(
     await adminClient.from("chapter_runs").update({ next_retry_at: null })
       .eq("id", runId).eq("status", "running");
     await releaseRunLease(adminClient, runId);
-    await queueContinuation(runId, authHeader);
+    await queueContinuation(runId);
   } else if (after?.status === "running") {
     await finalizeRun(adminClient, runId, afterSections);
   }
@@ -1298,7 +1314,6 @@ async function handleResume(
   adminClient: ReturnType<typeof createClient>,
   userId: string,
   runId: string,
-  authHeader: string,
 ): Promise<Response> {
   const { data: run } = await adminClient.from("chapter_runs")
     .select("id, outline_id, status").eq("id", runId)
@@ -1333,13 +1348,13 @@ async function handleResume(
     }
     // Resume skips whole-run estimate/preflight; the next billable stage
     // performs its normal authoritative credit check.
+    // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
     EdgeRuntime.waitUntil(
-      runOutline(runId, adminClient, authHeader).catch(async (err) => {
+      runOutline(runId, adminClient).catch(async (err) => {
         if (isRetryableOutlineLookupError(err)) {
           await scheduleTransientOutlineLookupRetry(
             adminClient,
             runId,
-            authHeader,
             err,
           );
         } else if (isInsufficientCreditsError(err)) {
@@ -1363,13 +1378,12 @@ async function handleResume(
   // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
   EdgeRuntime.waitUntil(
     (run.status === "queued"
-      ? prepareRun(runId, adminClient, authHeader)
-      : runOutline(runId, adminClient, authHeader)).catch(async (err) => {
+      ? prepareRun(runId, adminClient)
+      : runOutline(runId, adminClient)).catch(async (err) => {
         if (isRetryableOutlineLookupError(err)) {
           await scheduleTransientOutlineLookupRetry(
             adminClient,
             runId,
-            authHeader,
             err,
           );
         } else {
@@ -1396,17 +1410,15 @@ async function releaseRunLease(
 
 async function queueContinuationAfterDelay(
   runId: string,
-  authHeader: string,
   retryAfterSeconds: number,
 ): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1000));
-  await queueContinuation(runId, authHeader);
+  await queueContinuation(runId);
 }
 
 async function scheduleTransientOutlineLookupRetry(
   adminClient: ReturnType<typeof createClient>,
   runId: string,
-  authHeader: string,
   error: RunOutlineOutlineError,
 ): Promise<void> {
   const { data: run, error: runError } = await adminClient.from("chapter_runs")
@@ -1455,7 +1467,6 @@ async function scheduleTransientOutlineLookupRetry(
   EdgeRuntime.waitUntil(
     queueContinuationAfterDelay(
       runId,
-      authHeader,
       TRANSIENT_OUTLINE_LOOKUP_RETRY_SECONDS,
     ).catch((queueError) => {
       console.error(
@@ -1467,12 +1478,11 @@ async function scheduleTransientOutlineLookupRetry(
 
 async function queueContinuation(
   runId: string,
-  authHeader: string,
 ): Promise<void> {
   const response = await fetch(`${SUPABASE_URL}/functions/v1/run-outline`, {
     method: "POST",
     headers: {
-      "Authorization": authHeader,
+      "Authorization": internalAuthHeader(SUPABASE_SERVICE_ROLE_KEY),
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ resume_run_id: runId }),
@@ -1555,10 +1565,11 @@ function estimateSectionCost(container: string | null): number {
 async function estimateRunCost(
   adminClient: ReturnType<typeof createClient>,
   userId: string,
-  authHeader: string,
+  authHeader: string | null,
   outlineId: string,
   sections: Array<Record<string, unknown>>,
   selectedModelId?: string,
+  durableRunId?: string,
 ): Promise<number> {
   const outline = await loadRunOutline(adminClient, outlineId);
   const { recipe: frozenRecipe, hash: frozenRecipeHash } =
@@ -1593,6 +1604,7 @@ async function estimateRunCost(
     // One server-authoritative estimate request avoids a gateway burst for
     // large Run All queues while retaining per-section container pricing.
     generationAction: "estimate_bulk",
+    ...(durableRunId ? { run_id: durableRunId } : {}),
     estimateSections: sections.map((section) => ({
       id: String(section.id),
       title: String(section.title ?? ""),
@@ -1616,7 +1628,9 @@ async function estimateRunCost(
     response = await fetch(endpoint, {
       method: "POST",
       headers: {
-        "Authorization": authHeader,
+        "Authorization": durableRunId
+          ? internalAuthHeader(SUPABASE_SERVICE_ROLE_KEY)
+          : authHeader,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(request),
@@ -1699,12 +1713,14 @@ async function estimateRunCost(
     row.generation_output_id &&
     !isCurrentMemoryPipelineVersion(row.memory_pipeline_version)
   ).sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
-    (positionById.get(String(a.outline_section_id)) ?? 0) -
-    (positionById.get(String(b.outline_section_id)) ?? 0)
+    Number(positionById.get(String(a.outline_section_id)) ?? 0) -
+    Number(positionById.get(String(b.outline_section_id)) ?? 0)
   );
   let legacyCost = 0;
   if (legacy.length) {
-    const outputIds = legacy.map((row) => String(row.generation_output_id));
+    const outputIds = legacy.map((row: Record<string, unknown>) =>
+      String(row.generation_output_id)
+    );
     const { data: events, error: eventError } = await adminClient
       .from("generation_usage_events")
       .select("generation_output_id, idempotency_key, status")
@@ -1817,6 +1833,10 @@ async function collectSectionsToGenerate(
         container: string | null;
         pov: string | null;
         terminal_beat: string | null;
+        entry_state: string | null;
+        dramatic_event: string | null;
+        resulting_change: string | null;
+        terminal_state: string | null;
         story_arc_beat_id: string | null;
         target_words: number | null;
         target_words_min: number | null;
@@ -1891,7 +1911,15 @@ async function collectSectionsToGenerate(
       container: string | null;
       pov: string | null;
       terminal_beat: string | null;
+      entry_state: string | null;
+      dramatic_event: string | null;
+      resulting_change: string | null;
+      terminal_state: string | null;
       story_arc_beat_id: string | null;
+      target_words: number | null;
+      target_words_min: number | null;
+      target_words_max: number | null;
+      recipe_requirement_ids: string[];
     },
   ];
 }
@@ -2123,7 +2151,6 @@ class RetryableGenerationError extends Error {
 
 async function callGenerateStory(
   payload: Record<string, unknown>,
-  authHeader: string,
 ): Promise<
   {
     output_id: string;
@@ -2136,9 +2163,9 @@ async function callGenerateStory(
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      // Pass the user's JWT through — generate-story validates via auth.getUser(),
-      // which rejects the service role key with 401.
-      "Authorization": authHeader,
+      // Durable Run All calls use trusted server transport. generate-story
+      // derives the logical owner from chapter_runs.user_id.
+      "Authorization": internalAuthHeader(SUPABASE_SERVICE_ROLE_KEY),
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -2253,58 +2280,6 @@ async function fetchRawTextFromOutput(
   return outputText;
 }
 
-// Call embed-section to extract structured memory from the persisted output.
-// Per Rule 8: this happens AFTER the output is persisted to generation_outputs,
-// giving us raw_text. Per Rule 9: raw_text is passed to embed-section for
-// extraction but NOT used in the embedding vector itself.
-async function callEmbedSection(
-  payload: {
-    outline_section_id: string;
-    outline_id: string;
-    project_id: string;
-    position: number;
-    title: string;
-    summary: string;
-    container: string | null;
-    pov: string | null;
-    terminal_beat: string | null;
-    entry_state: string | null;
-    dramatic_event: string | null;
-    resulting_change: string | null;
-    terminal_state: string | null;
-    story_arc_beat_id: string | null;
-    raw_text: string;
-    // Kevin 2026-08-21 12:00 EDT fix: lineage from section memory to the
-    // generation output that produced it. embed-section persists this
-    // on the section_embeddings row; the DELETE trigger on
-    // generation_outputs uses it to clean up orphaned memory when the
-    // output is deleted.
-    output_id: string;
-    // The same prior context that run-outline fetches. Passed to
-    // embed-section so the LLM extraction pass knows what is already
-    // stored and can decide what to add/update/supersede.
-    prior_context: string;
-  },
-  _adminClient: ReturnType<typeof createClient>,
-  authHeader: string,
-): Promise<void> {
-  const url = `${SUPABASE_URL}/functions/v1/embed-section`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      // Pass the user's JWT through — embed-section validates the JWT the same
-      // way generate-story does, and rejects the service role key with 401.
-      "Authorization": authHeader,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const errBody = await response.text();
-    throw parseEmbedSectionError(response.status, errBody);
-  }
-}
-
 async function updateSectionStatus(
   adminClient: ReturnType<typeof createClient>,
   runId: string,
@@ -2336,7 +2311,7 @@ async function renewRunLease(
   runId: string,
   workerAttempt: number,
 ): Promise<void> {
-  const { data, error } = await (adminClient as any).rpc(
+  const { data, error } = await adminClient.rpc(
     "renew_chapter_run_lease",
     {
       p_run_id: runId,
