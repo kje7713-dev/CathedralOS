@@ -117,6 +117,7 @@ struct ExportBookPart: Identifiable, Equatable {
     let position: Int
     let label: String
     let defaultSubtitle: String?
+    let sourceSemanticPartIndex: Int
     let chapterIDs: [UUID]
 
     var displayName: String {
@@ -156,6 +157,7 @@ enum ExportBookPartDeriver {
         let templateID = arc.templateID?.uuidString.lowercased() ?? ""
         let explicit = explicitParts[templateID]
         let roles = explicit?.0 ?? threePartRoles[templateID] ?? []
+        let semanticPartCount = explicit?.0.count ?? (roles.isEmpty ? min(3, beats.count) : 3)
         var desiredByBeat: [UUID: Int] = [:]
         var desiredByRole: [String: Int] = [:]
         if let explicit {
@@ -164,37 +166,52 @@ enum ExportBookPartDeriver {
             for (index, role) in roles.enumerated() { desiredByRole[role] = index < boundaries[0] ? 0 : index < boundaries[1] ? 1 : 2 }
         }
         if roles.isEmpty {
-            let count = min(3, beats.count)
-            for (index, beat) in beats.enumerated() { desiredByBeat[beat.id] = index * count / beats.count }
+            for (index, beat) in beats.enumerated() { desiredByBeat[beat.id] = index * semanticPartCount / beats.count }
         } else {
             var desired = beats.map { desiredByRole[$0.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] as Int? }
-            var next = 0
+            var next = semanticPartCount - 1
             for index in stride(from: desired.count - 1, through: 0, by: -1) {
                 if let value = desired[index] { next = value } else { desired[index] = next }
             }
             var previous: Int = desired.first.flatMap { $0 } ?? 0
             for (index, beat) in beats.enumerated() {
-                if let value = desiredByRole[beat.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] { previous = value } else if index > 0 { desired[index] = previous }
+                if let value = desiredByRole[beat.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] { previous = value }
+                else if index > 0 { desired[index] = previous }
                 desiredByBeat[beat.id] = max(0, desired[index] ?? previous)
             }
         }
 
-        var raw: [Int?] = []
-        for chapter in chapters {
-            let sections = flattenedSections(chapter)
-            raw.append(sections.compactMap { $0.storyArcBeatID }.compactMap { desiredByBeat[$0] }.first)
+        let raw = chapters.map { chapter in
+            flattenedSections(chapter).compactMap { $0.storyArcBeatID }.compactMap { desiredByBeat[$0] }.first
         }
+        let tagged = raw.enumerated().compactMap { $0.element == nil ? nil : $0.offset }
+        let firstTagged = tagged.first
+        let lastTagged = tagged.last
         var normalized: [Int] = []
         var current = 0
-        for value in raw { current = max(current, value ?? current); normalized.append(current) }
+        for (index, value) in raw.enumerated() {
+            let target: Int
+            if let value { target = value }
+            else if firstTagged == nil || index < firstTagged! { target = 0 }
+            else if let lastTagged, index > lastTagged { target = semanticPartCount - 1 }
+            else { target = current }
+            current = max(current, target)
+            normalized.append(current)
+        }
         let used = Array(Set(normalized)).sorted()
-        let compact = Dictionary(uniqueKeysWithValues: used.enumerated().map { ($1, $0) })
-        let partCount = used.count
-
-        return (0..<partCount).map { position in
-            let chapterIDs = chapters.enumerated().compactMap { index, chapter in compact[normalized[index]] == position ? chapter.id : nil }
-            let subtitle: String? = explicit.flatMap { $0.1.indices.contains(position) ? $0.1[position] : nil }
-            return ExportBookPart(id: "part-\(position + 1)", position: position, label: "Part \(roman(position + 1))", defaultSubtitle: subtitle, chapterIDs: chapterIDs)
+        return used.enumerated().map { renderedIndex, sourceIndex in
+            let chapterIDs = chapters.enumerated().compactMap { index, chapter in
+                normalized[index] == sourceIndex ? chapter.id : nil
+            }
+            let subtitle = explicit.flatMap { $0.1.indices.contains(sourceIndex) ? $0.1[sourceIndex] : nil }
+            return ExportBookPart(
+                id: "part-\(sourceIndex + 1)",
+                position: renderedIndex,
+                label: "Part \(roman(renderedIndex + 1))",
+                defaultSubtitle: subtitle,
+                sourceSemanticPartIndex: sourceIndex,
+                chapterIDs: chapterIDs
+            )
         }.filter { !$0.chapterIDs.isEmpty }
     }
 

@@ -107,21 +107,29 @@ export async function writeEpub(
     });
   }
 
-  // Parts are wrappers around the existing ordered sectionFiles. Build the
-  // stable chapter-ID join once; never reconstruct reading order by iterating
-  // Part membership arrays.
-  const activeParts = outline.parts
+  // Derive rendered Parts only after generated-content filtering. Source Part
+  // identity remains available for semantic subtitles and saved custom names.
+  const sourceParts = outline.parts
     .map((part) => ({
-      ...part,
+      source: part,
       chapters: sectionFiles.filter((sf) =>
         part.chapter_ids.includes(sf.chapterId)
       ),
     }))
     .filter((part) => part.chapters.length > 0);
+  const activeParts = sourceParts.map(({ source, chapters }, position) => ({
+    ...source,
+    sourcePartID: source.id,
+    sourcePosition: source.position,
+    id: `part-${position + 1}`,
+    position,
+    label: `Part ${roman(position + 1)}`,
+    chapters,
+  }));
   const activePartByChapterID = new Map<string, typeof activeParts[number]>();
   for (const part of activeParts) {
-    for (const chapterID of part.chapter_ids) {
-      activePartByChapterID.set(chapterID, part);
+    for (const chapter of part.chapters) {
+      activePartByChapterID.set(chapter.chapterId, part);
     }
   }
   const orderedSectionFilesForPart = (partID: string) =>
@@ -136,22 +144,22 @@ export async function writeEpub(
         `generated chapter ${sf.chapterId} has no Part assignment`,
       );
     }
-    if (part && part.position < previousPartPosition) {
+    if (part && part.sourcePosition < previousPartPosition) {
       throw new Error(
         "non-contiguous Part assignment would reorder manuscript content",
       );
     }
-    if (part) previousPartPosition = part.position;
+    if (part) previousPartPosition = part.sourcePosition;
   }
-
-  const partTitle = (part: typeof activeParts[number]): string => {
-    const custom = metadata.part_names?.[part.id]?.trim();
-    if (!custom) return part.default_title;
-    const separator = part.default_title.indexOf(" — ");
-    const label = separator >= 0
-      ? part.default_title.slice(0, separator)
-      : part.default_title;
-    return `${label} — ${custom}`;
+  const resolvedPartSubtitle = (
+    part: typeof activeParts[number],
+  ): string | null => {
+    const custom = metadata.part_names?.[part.sourcePartID]?.trim();
+    return custom || part.default_subtitle || null;
+  };
+  const partTOCTitle = (part: typeof activeParts[number]): string => {
+    const subtitle = resolvedPartSubtitle(part);
+    return subtitle ? `${part.label} — ${subtitle}` : part.label;
   };
 
   // 4. OEBPS/content.opf
@@ -306,7 +314,7 @@ export async function writeEpub(
   const navList = activeParts.length > 0
     ? activeParts.map((part) =>
       `<li><a href="text/${part.id}.xhtml">${
-        escapeXml(partTitle(part))
+        escapeXml(partTOCTitle(part))
       }</a>\n        <ol>\n          ${
         orderedSectionFilesForPart(part.id).map(sectionNav).join("\n          ")
       }\n        </ol>\n      </li>`
@@ -383,7 +391,7 @@ export async function writeEpub(
     ? activeParts.map((part) => {
       const partOrder = playOrder++;
       return `<navPoint id="navPoint-${part.id}" playOrder="${partOrder}"><navLabel><text>${
-        escapeXml(partTitle(part))
+        escapeXml(partTOCTitle(part))
       }</text></navLabel><content src="text/${part.id}.xhtml"/>\n        ${
         orderedSectionFilesForPart(part.id).map(ncxSection).join("\n        ")
       }\n      </navPoint>`;
@@ -452,6 +460,13 @@ p {
 h1 + p,
 h2 + p {
   text-indent: 0;
+}
+.part-page {
+  text-align: center;
+}
+.part-page .part-name {
+  text-indent: 0;
+  margin-top: 0.5em;
 }
 .cover {
   display: flex;
@@ -530,10 +545,15 @@ h2 + p {
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <link rel="stylesheet" type="text/css" href="../styles.css"/>
-<title>${escapeXml(partTitle(part))}</title>
+<title>${escapeXml(partTOCTitle(part))}</title>
 </head>
 <body class="part-page">
-<h1>${escapeXml(partTitle(part))}</h1>
+<h1>${escapeXml(part.label)}</h1>
+${
+        resolvedPartSubtitle(part)
+          ? `<p class="part-name">${escapeXml(resolvedPartSubtitle(part)!)}</p>`
+          : ""
+      }
 </body>
 </html>`,
     );
@@ -588,6 +608,21 @@ ${ackBody.join("\n")}
       compressionOptions: { level: 6 },
     }),
   );
+}
+
+function roman(value: number): string {
+  return [
+    "I",
+    "II",
+    "III",
+    "IV",
+    "V",
+    "VI",
+    "VII",
+    "VIII",
+    "IX",
+    "X",
+  ][value - 1] ?? String(value);
 }
 
 function sectionAnchorId(chapterIndex: number, sectionId: string): string {

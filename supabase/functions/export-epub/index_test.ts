@@ -1313,6 +1313,9 @@ Deno.test("PR4: EPUB writer emits Part dividers and nested child anchors", async
     { book_title: "Parts", author_name: "Author", language: "en", part_names: { "part-1": "The Signal" } }, outline, null,
   ));
   assertExists(zip.file("OEBPS/text/part-1.xhtml"));
+  const divider = await readZipText(zip, "OEBPS/text/part-1.xhtml");
+  assertStringIncludes(divider, "<h1>Part I</h1>");
+  assertStringIncludes(divider, '<p class="part-name">The Signal</p>');
   const nav = await readZipText(zip, "OEBPS/nav.xhtml");
   const ncx = await readZipText(zip, "OEBPS/toc.ncx");
   assertStringIncludes(nav, "Part I — The Signal");
@@ -1410,10 +1413,35 @@ Deno.test("PR4 untagged middle inherits the preceding contiguous Part", () => {
   assertEquals(parts.map((part) => part.chapter_ids), [["custom-chapter-1", "custom-chapter-2"], ["custom-chapter-3"]]);
 });
 
-Deno.test("PR4 untagged ending inherits the final Part", () => {
+Deno.test("PR4 trailing untagged chapters use the final semantic Part", () => {
   const { outline, arc } = makeCustomFixture(2, [true, false, false]);
   const parts = deriveBookParts(outline.chapters, arc);
-  assertEquals(parts.map((part) => part.chapter_ids), [["custom-chapter-1", "custom-chapter-2", "custom-chapter-3"]]);
+  assertEquals(parts.map((part) => part.chapter_ids), [["custom-chapter-1"], ["custom-chapter-2", "custom-chapter-3"]]);
+  assertEquals(parts.flatMap((part) => part.chapter_ids), outline.chapters.map((chapter) => chapter.id));
+});
+
+Deno.test("PR4 final-Part tag keeps trailing untagged chapters in that Part", () => {
+  const { outline, arc } = makeCustomFixture(2, [false, true, false]);
+  const parts = deriveBookParts(outline.chapters, arc);
+  assertEquals(parts.map((part) => part.chapter_ids), [["custom-chapter-1"], ["custom-chapter-2", "custom-chapter-3"]]);
+  assertEquals(parts.flatMap((part) => part.chapter_ids), outline.chapters.map((chapter) => chapter.id));
+});
+
+Deno.test("PR4 sparse Freytag parts preserve source semantic subtitles", () => {
+  for (const roles of [["exposition", "climax"], ["rising_action", "denouement"]]) {
+    const outline = makePartFixture("a0000001-0000-0000-0000-000000000006", roles);
+    assertEquals(outline.parts.map((part) => part.id), roles[0] === "exposition" ? ["part-1", "part-3"] : ["part-2", "part-5"]);
+    assertEquals(outline.parts.map((part) => part.default_subtitle), roles[0] === "exposition" ? ["Exposition", "Climax"] : ["Rising Action", "Denouement"]);
+    assertEquals(outline.parts.flatMap((part) => part.chapter_ids), outline.chapters.map((chapter) => chapter.id));
+  }
+});
+
+Deno.test("PR4 sparse Kishōtenketsu parts preserve source semantic subtitles", () => {
+  for (const roles of [["ki", "ten"], ["sho", "ketsu"]]) {
+    const outline = makePartFixture("a0000001-0000-0000-0000-000000000007", roles);
+    assertEquals(outline.parts.map((part) => part.default_subtitle), roles[0] === "ki" ? ["Ki", "Ten"] : ["Shō", "Ketsu"]);
+    assertEquals(outline.parts.flatMap((part) => part.chapter_ids), outline.chapters.map((chapter) => chapter.id));
+  }
 });
 
 Deno.test("PR4 built-in complete role sequences preserve exact semantic boundaries", () => {
@@ -1514,6 +1542,47 @@ Deno.test("PR4 Part dividers are unique manifest/spine resources at story bounda
     assertEquals((opf.match(new RegExp(`id="${part.id}"`, "g")) ?? []).length, 1);
     assertEquals((opf.match(new RegExp(`idref="${part.id}"`, "g")) ?? []).length, 1);
     assertExists(zip.file(`OEBPS/text/${part.id}.xhtml`));
+  }
+});
+
+Deno.test("PR4 rendered Parts compact generated-content gaps and preserve source names", async () => {
+  const outline = makePartFixture("a0000001-0000-0000-0000-000000000006", ["exposition", "rising_action", "climax", "falling_action", "denouement"]);
+  outline.chapters[1].sections[0].body = "";
+  outline.chapters[3].sections[0].body = "";
+  const zip = await JSZip.loadAsync(await writeEpub({
+    book_title: "Compacted", author_name: "A", language: "en",
+    part_names: { "part-1": "Arrival", "part-3": "The Hunt", "part-5": "Return" },
+  }, outline, null));
+  const opf = await readZipText(zip, "OEBPS/content.opf");
+  const nav = await readZipText(zip, "OEBPS/nav.xhtml");
+  const ncx = await readZipText(zip, "OEBPS/toc.ncx");
+  assertEquals(spineIDs(opf), ["part-1", "section-1", "part-2", "section-3", "part-3", "section-5"]);
+  assertEquals(zip.file("OEBPS/text/part-4.xhtml"), null);
+  assertStringIncludes(nav, "Part I — Arrival");
+  assertStringIncludes(nav, "Part II — The Hunt");
+  assertStringIncludes(nav, "Part III — Return");
+  assertStringIncludes(ncx, "Part III — Return");
+  const story = await Promise.all([1, 3, 5].map((index) => readZipText(zip, `OEBPS/text/section-${index}.xhtml`)));
+  assertEquals(story.map((text, index) => text.includes(`Prose ${[1, 3, 5][index]}.`)), [true, true, true]);
+  const orderedStory = story.join("\n");
+  assertEquals(orderedStory.indexOf("Prose 1.") < orderedStory.indexOf("Prose 3."), true);
+  assertEquals(orderedStory.indexOf("Prose 3.") < orderedStory.indexOf("Prose 5."), true);
+});
+
+Deno.test("PR4 source Part names survive missing first and last generated Parts", async () => {
+  for (const [emptyIndex, expectedLastID] of [[0, "part-4"], [4, "part-4"]] as const) {
+    const outline = makePartFixture("a0000001-0000-0000-0000-000000000006", ["exposition", "rising_action", "climax", "falling_action", "denouement"]);
+    outline.chapters[emptyIndex].sections[0].body = "";
+    const zip = await JSZip.loadAsync(await writeEpub({
+      book_title: "Source Names", author_name: "A", language: "en",
+      part_names: { "part-1": "Arrival", "part-2": "Rising", "part-4": "Falling", "part-5": "Return" },
+    }, outline, null));
+    const nav = await readZipText(zip, "OEBPS/nav.xhtml");
+    const opf = await readZipText(zip, "OEBPS/content.opf");
+    assertStringIncludes(nav, emptyIndex === 0 ? "Part I — Rising" : "Part IV — Falling");
+    assertStringIncludes(nav, emptyIndex === 0 ? "Part IV — Return" : "Part IV — Falling");
+    assertEquals(spineIDs(opf).includes(expectedLastID), true);
+    assertEquals(spineIDs(opf).filter((id) => id.startsWith("part-")).length, 4);
   }
 });
 

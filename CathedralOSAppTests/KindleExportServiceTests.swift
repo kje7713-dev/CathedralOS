@@ -554,3 +554,54 @@ extension KindleExportServiceTests {
         XCTAssertEqual(parts.flatMap(\.chapterIDs), chapters.map(\.id))
     }
 }
+
+// MARK: - PR #622 final Part derivation parity
+
+extension KindleExportServiceTests {
+    func testPartDeriverPreservesSparseSemanticSubtitleAndTrailingAssignment() {
+        let project = StoryProject(name: "Sparse Parts")
+        let arc = StoryArc()
+        arc.templateID = UUID(uuidString: "a0000001-0000-0000-0000-000000000006")
+        let exposition = StoryArcBeat(position: 0, role: "exposition", label: "Exposition")
+        let climax = StoryArcBeat(position: 1, role: "climax", label: "Climax")
+        arc.beats = [exposition, climax]
+        let outline = Outline(name: "Sparse Outline")
+        outline.storyArcID = arc.id
+        let first = OutlineSection(position: 0, title: "First")
+        first.storyArcBeatID = exposition.id
+        let second = OutlineSection(position: 1, title: "Second")
+        let third = OutlineSection(position: 2, title: "Third")
+        outline.sections = [first, second, third]
+        project.storyArcs = [arc]
+        project.outlines = [outline]
+
+        let parts = ExportBookPartDeriver.derive(project: project)
+        XCTAssertEqual(parts.map(\.id), ["part-1", "part-5"])
+        XCTAssertEqual(parts.map(\.label), ["Part I", "Part II"])
+        XCTAssertEqual(parts.map(\.defaultSubtitle), ["Exposition", "Denouement"])
+        XCTAssertEqual(parts.flatMap(\.chapterIDs), [first.id, second.id, third.id])
+    }
+
+    func testPartDeriverPreservesSparseClimaxSourceSubtitle() {
+        let project = StoryProject(name: "Sparse Climax")
+        let arc = StoryArc()
+        arc.templateID = UUID(uuidString: "a0000001-0000-0000-0000-000000000006")
+        let exposition = StoryArcBeat(position: 0, role: "exposition", label: "Exposition")
+        let climax = StoryArcBeat(position: 1, role: "climax", label: "Climax")
+        arc.beats = [exposition, climax]
+        let outline = Outline(name: "Sparse Outline")
+        outline.storyArcID = arc.id
+        let first = OutlineSection(position: 0, title: "First")
+        first.storyArcBeatID = exposition.id
+        let second = OutlineSection(position: 1, title: "Second")
+        second.storyArcBeatID = climax.id
+        outline.sections = [first, second]
+        project.storyArcs = [arc]
+        project.outlines = [outline]
+
+        let parts = ExportBookPartDeriver.derive(project: project)
+        XCTAssertEqual(parts.map(\.id), ["part-1", "part-3"])
+        XCTAssertEqual(parts.map(\.label), ["Part I", "Part II"])
+        XCTAssertEqual(parts.map(\.defaultSubtitle), ["Exposition", "Climax"])
+    }
+}
