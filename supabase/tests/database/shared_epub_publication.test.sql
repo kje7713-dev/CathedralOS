@@ -6,7 +6,7 @@ select plan(18);
 select has_column('public', 'shared_outputs', 'content_type', 'shared outputs identifies text versus EPUB content');
 select has_column('public', 'shared_outputs', 'export_metadata_id', 'shared EPUB links one immutable export');
 select has_column('public', 'shared_outputs', 'book_author_name', 'shared EPUB retains canonical book author');
-select col_default_is('public', 'shared_outputs', 'content_type', '''text''::text', 'legacy rows default to text');
+select col_default_is('public', 'shared_outputs', 'content_type', 'text', 'legacy rows default to text');
 select has_index('public', 'shared_outputs', 'idx_shared_outputs_export_metadata', 'export link lookup index exists');
 select ok(to_regprocedure('public.delete_export_metadata_and_promote(uuid,uuid)') is not null, 'delete RPC remains available');
 select ok(position('shared_outputs' in pg_get_functiondef(to_regprocedure('public.delete_export_metadata_and_promote(uuid,uuid)'))) > 0, 'delete RPC references shared outputs');
