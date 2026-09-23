@@ -41,6 +41,9 @@ struct KindleExportMetadataDraft: Codable {
     // PR #619 (EPUB Acknowledgements): optional for backward compatibility with
     // drafts saved before this field was introduced. Old drafts decode with nil.
     var acknowledgements: String?
+    // PR 4: optional user titles keyed by deterministic Part IDs. Optional keeps
+    // drafts written before Parts backward-compatible.
+    var partNames: [String: String]?
 }
 
 // MARK: - JobState
@@ -110,6 +113,7 @@ struct KindleExportView: View {
     @State private var seriesNumber: String = ""
     // PR #619 (EPUB Acknowledgements): empty string treated as absent on save/send.
     @State private var acknowledgements: String = ""
+    @State private var partNames: [String: String] = [:]
 
     // Cover image
     @State private var coverChoice: CoverChoice = .skip
@@ -191,6 +195,7 @@ struct KindleExportView: View {
                 bookMetadataSection
                 coverImageSection
                 sectionPreviewSection
+                bookPartsSection
                 optionalMetadataSection
                 previousExportsSection
                 statusSection
@@ -340,6 +345,69 @@ struct KindleExportView: View {
                     ForEach(counts.previewTitles, id: \.self) { title in
                         Text(title)
                             .font(CathedralTheme.Typography.body(13))
+                    }
+                }
+            }
+        }
+    }
+
+    private struct ExportPartDraft: Identifiable {
+        let id: String
+        let defaultTitle: String
+    }
+
+    private var exportPartDrafts: [ExportPartDraft] {
+        guard let arc = project.storyArcs.first,
+              !arc.beats.isEmpty,
+              let outline = project.outlines.first,
+              !outline.sections.isEmpty else { return [] }
+        let templateID = arc.templateID?.uuidString.lowercased() ?? ""
+        let knownCounts: [String: Int] = [
+            "a0000001-0000-0000-0000-000000000001": 3,
+            "a0000001-0000-0000-0000-000000000002": 3,
+            "a0000001-0000-0000-0000-000000000003": 3,
+            "a0000001-0000-0000-0000-000000000004": 3,
+            "a0000001-0000-0000-0000-000000000005": 3,
+            "a0000001-0000-0000-0000-000000000006": 5,
+            "a0000001-0000-0000-0000-000000000007": 4
+        ]
+        let count = knownCounts[templateID] ?? min(3, max(1, arc.beats.count))
+        return (0..<count).map { index in
+            let roman = ["I", "II", "III", "IV", "V"][index]
+            let title: String
+            if templateID == "a0000001-0000-0000-0000-000000000006" {
+                title = ["Exposition", "Rising Action", "Climax", "Falling Action", "Denouement"][index]
+            } else if templateID == "a0000001-0000-0000-0000-000000000007" {
+                title = ["Ki", "Shō", "Ten", "Ketsu"][index]
+            } else {
+                title = "Part \(roman)"
+            }
+            return ExportPartDraft(
+                id: "part-\(index + 1)",
+                defaultTitle: title == "Part \(roman)" ? title : "Part \(roman) — \(title)"
+            )
+        }
+    }
+
+    private var bookPartsSection: some View {
+        Group {
+            if !exportPartDrafts.isEmpty {
+                Section("Book Parts") {
+                    Text("Part titles appear as divider pages and in the table of contents.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    ForEach(exportPartDrafts) { part in
+                        HStack {
+                            Text(part.defaultTitle)
+                                .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                            TextField("Optional title", text: Binding(
+                                get: { partNames[part.id] ?? "" },
+                                set: { partNames[part.id] = $0 }
+                            ))
+                        }
+                    }
+                    Button("Save Part Titles", systemImage: "square.and.arrow.down") {
+                        saveMetadata()
                     }
                 }
             }
@@ -545,7 +613,8 @@ struct KindleExportView: View {
             seriesNumber: seriesNumber,
             coverChoice: coverChoice,
             coverUploadPath: coverUploadPath,
-            acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements
+            acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements,
+            partNames: partNames.isEmpty ? nil : partNames
         )
         do {
             UserDefaults.standard.set(try JSONEncoder().encode(draft), forKey: metadataDefaultsKey)
@@ -576,6 +645,7 @@ struct KindleExportView: View {
         coverUploadPath = draft.coverUploadPath
         // PR #619: nil-coalesce so old drafts decode cleanly.
         acknowledgements = draft.acknowledgements ?? ""
+        partNames = draft.partNames ?? [:]
         metadataWasSaved = true
     }
 
@@ -813,7 +883,8 @@ struct KindleExportView: View {
             series_number: Int(seriesNumber),
             cover_image_url: coverUploadPath,
             cover_image_ai_generate: coverChoice == .aiGenerate ? true : nil,
-            acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements
+            acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements,
+            part_names: partNames.isEmpty ? nil : partNames
         )
 
         // The exporter reads project_snapshots.snapshot_json as its source of

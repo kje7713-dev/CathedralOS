@@ -16,6 +16,7 @@
 // =============================================================================
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { deriveBookParts, type StoryArcInfo, type BookPart } from "./_parts.ts";
 
 export type Container = "chapter" | "scene" | "beat" | "set-piece" | "summary";
 
@@ -27,6 +28,8 @@ export interface Section {
   body: string;
   position: number;
   parent_id: string | null;
+  story_arc_beat_id: string | null;
+  story_arc_role: string | null;
 }
 
 export interface Chapter {
@@ -50,6 +53,7 @@ export interface ProjectOutline {
   id: string;
   title: string;
   chapters: Chapter[];
+  parts: BookPart[];
   storyBrief?: StoryBrief;
 }
 
@@ -80,6 +84,17 @@ export async function walkSections(
 
   const rawSections = (currentOutline.sections ?? []) as unknown[];
   const snapshotSections = rawSections as Array<Record<string, unknown>>;
+  const rawArcs = (snapshot.snapshot_json?.storyArcs ?? []) as Array<Record<string, unknown>>;
+  const rawArc = rawArcs.find((arc) => String(arc.id ?? "").toLowerCase() === String(currentOutline.storyArcID ?? "").toLowerCase());
+  const arc: StoryArcInfo | null = rawArc ? {
+    template_id: rawArc.templateID ? String(rawArc.templateID) : null,
+    beats: (Array.isArray(rawArc.beats) ? rawArc.beats : []).map((beat) => {
+      const b = beat as Record<string, unknown>;
+      return { id: String(b.id ?? ""), position: Number(b.position ?? 0), role: String(b.role ?? ""), label: String(b.label ?? "") };
+    }),
+  } : null;
+  const beatRoles = new Map<string, string>();
+  for (const beat of arc?.beats ?? []) beatRoles.set(beat.id.toLowerCase(), beat.role);
 
   const sectionIds = snapshotSections.map((s) => String(s.id));
   const { data: outputs, error: outputsError } = await client
@@ -128,6 +143,8 @@ export async function walkSections(
       body: latestBody.get(sid.toLowerCase()) ?? "",
       position: Number(s.position ?? 0),
       parent_id: s.parentID ? String(s.parentID) : null,
+      story_arc_beat_id: s.storyArcBeatID ? String(s.storyArcBeatID) : null,
+      story_arc_role: s.storyArcBeatID ? beatRoles.get(String(s.storyArcBeatID).toLowerCase()) ?? null : null,
     };
 
     if (section.parent_id === null) {
@@ -154,6 +171,7 @@ export async function walkSections(
     id: String(currentOutline.id ?? snapshotProjectId),
     title: String(currentOutline.name ?? ""),
     chapters,
+    parts: deriveBookParts(chapters, arc),
     storyBrief: buildStoryBrief(snapshot.snapshot_json, currentOutline, snapshotSections),
   };
 }

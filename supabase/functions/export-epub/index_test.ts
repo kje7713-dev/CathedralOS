@@ -27,6 +27,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { walkSections, type ProjectOutline } from "./_section_walker.ts";
 import { writeEpub } from "./_epub_writer.ts";
+import { deriveBookParts, type StoryArcInfo } from "./_parts.ts";
 import JSZip from "https://esm.sh/jszip@3.10.1";
 import { assembleMetadata, type ExportRequest } from "./_metadata.ts";
 import { buildCoverPrompt } from "./_cover_image.ts";
@@ -119,6 +120,7 @@ Deno.test("AI cover prompt uses story-wide recipe signals", () => {
     id: "outline-1",
     title: "The Long Return",
     chapters: [],
+    parts: [],
     storyBrief: {
       projectSummary: "A cartographer returns to a drowned city.",
       recipe: "saltwater gothic; outline signals: the map burns",
@@ -1087,6 +1089,8 @@ function makeAcknowledgementsFixture(): ProjectOutline {
           body: "Story text.",
           position: 0,
           parent_id: null,
+          story_arc_beat_id: null,
+          story_arc_role: null,
         },
         {
           id: "section-2",
@@ -1096,9 +1100,12 @@ function makeAcknowledgementsFixture(): ProjectOutline {
           body: "More story text.",
           position: 1,
           parent_id: "section-1",
+          story_arc_beat_id: null,
+          story_arc_role: null,
         },
       ],
     }],
+    parts: [],
   };
 }
 
@@ -1239,4 +1246,83 @@ Deno.test("EPUB writer: acknowledgements appears after story content in spine an
     true,
     "acknowledgements spine push must follow sectionFiles",
   );
+});
+
+
+// =============================================================================
+// PR 4 (Story Arc Parts + nested navigation)
+// =============================================================================
+function makePartFixture(templateID: string, roles: string[]): ProjectOutline {
+  const chapters = roles.map((role, index) => ({
+    id: `chapter-${index + 1}`,
+    title: `Chapter ${index + 1}`,
+    position: index,
+    sections: [{
+      id: `section-${index + 1}`,
+      title: `Section ${index + 1}`,
+      container: "chapter" as const,
+      pov: null,
+      body: `Prose ${index + 1}.`,
+      position: index,
+      parent_id: null,
+      story_arc_beat_id: `beat-${index + 1}`,
+      story_arc_role: role,
+    }],
+  }));
+  const arc: StoryArcInfo = {
+    template_id: templateID,
+    beats: roles.map((role, index) => ({ id: `beat-${index + 1}`, position: index, role, label: role })),
+  };
+  return { id: "part-fixture", title: "Part Fixture", chapters, parts: deriveBookParts(chapters, arc) };
+}
+
+Deno.test("PR4: built-in Story Arc templates derive the required Part counts", () => {
+  const fixtures: Array<[string, string[], number]> = [
+    ["a0000001-0000-0000-0000-000000000001", ["setup", "rising_action", "climax"], 3],
+    ["a0000001-0000-0000-0000-000000000002", ["ordinary_world", "ordeal", "return_with_elixir"], 3],
+    ["a0000001-0000-0000-0000-000000000003", ["the_crime", "key_revelation", "resolution"], 3],
+    ["a0000001-0000-0000-0000-000000000004", ["opening_image", "midpoint", "final_image"], 3],
+    ["a0000001-0000-0000-0000-000000000005", ["you", "find", "change"], 3],
+    ["a0000001-0000-0000-0000-000000000006", ["exposition", "rising_action", "climax", "falling_action", "denouement"], 5],
+    ["a0000001-0000-0000-0000-000000000007", ["ki", "sho", "ten", "ketsu"], 4],
+  ];
+  for (const [templateID, roles, expected] of fixtures) {
+    const outline = makePartFixture(templateID, roles);
+    assertEquals(outline.parts.length, expected, templateID);
+    const assigned = outline.parts.flatMap((part) => part.chapter_ids);
+    assertEquals(assigned.length, roles.length);
+    assertEquals(new Set(assigned).size, roles.length);
+  }
+});
+
+Deno.test("PR4: custom and untagged chapters remain contiguous and assigned once", () => {
+  const roles = ["", "custom_a", "", "custom_b", "", "custom_c", ""];
+  const chapters = roles.map((role, index) => ({
+    id: `chapter-${index + 1}`, title: `Chapter ${index + 1}`, position: index,
+    sections: [{ id: `section-${index + 1}`, title: `Section ${index + 1}`, container: "chapter" as const,
+      pov: null, body: "Prose.", position: index, parent_id: null,
+      story_arc_beat_id: role ? `beat-${index}` : null, story_arc_role: role || null }],
+  }));
+  const arc: StoryArcInfo = { template_id: "custom", beats: ["custom_a", "custom_b", "custom_c"].map((role, index) => ({ id: `beat-${index}`, position: index, role, label: role })) };
+  const parts = deriveBookParts(chapters, arc);
+  const assigned = parts.flatMap((part) => part.chapter_ids);
+  assertEquals(parts.every((part) => part.chapter_ids.length > 0), true);
+  assertEquals(new Set(assigned).size, chapters.length);
+  assertEquals(assigned, chapters.map((chapter) => chapter.id));
+});
+
+Deno.test("PR4: EPUB writer emits Part dividers and nested child anchors", async () => {
+  const outline = makePartFixture("a0000001-0000-0000-0000-000000000001", ["setup", "rising_action", "climax"]);
+  outline.chapters[0].sections.push({ id: "child-1", title: "Child Title", container: "scene", pov: null,
+    body: "Child prose.", position: 1, parent_id: "section-1", story_arc_beat_id: null, story_arc_role: null });
+  const zip = await JSZip.loadAsync(await writeEpub(
+    { book_title: "Parts", author_name: "Author", language: "en", part_names: { "part-1": "The Signal" } }, outline, null,
+  ));
+  assertExists(zip.file("OEBPS/text/part-1.xhtml"));
+  const nav = await readZipText(zip, "OEBPS/nav.xhtml");
+  const ncx = await readZipText(zip, "OEBPS/toc.ncx");
+  assertStringIncludes(nav, "Part I — The Signal");
+  assertStringIncludes(nav, "section-1-child-1");
+  assertStringIncludes(ncx, '<meta name="dtb:depth" content="3"/>');
+  assertStringIncludes(ncx, "#section-1-child-1");
 });

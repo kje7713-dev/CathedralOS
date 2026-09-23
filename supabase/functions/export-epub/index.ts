@@ -345,6 +345,7 @@ async function processJob(
           // PR #619 (EPUB Acknowledgements): pass through the trimmed back-matter
           // text from assembleMetadata. Null when the user did not provide it.
           p_acknowledgements: metadata.acknowledgements ?? null,
+          p_part_names: metadata.part_names ?? {},
         },
       );
 
