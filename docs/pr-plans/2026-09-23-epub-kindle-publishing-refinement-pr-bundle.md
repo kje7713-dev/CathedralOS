@@ -9,7 +9,7 @@
 
 | PR | Title | Status | Branch | PR # | Head SHA | Notes |
 |----|-------|--------|--------|------|----------|-------|
-| 1 | Acknowledgements + Metadata Completion | ✅ Implemented — awaiting CI/review | `feat/epub-acknowledgements` | [#619](https://github.com/kje7713-dev/CathedralOS/pull/619) | `dc7334f` | Backend 36/36 export-epub tests pass; local Deno typecheck has the pre-existing JSZip default-export mismatch |
+| 1 | Acknowledgements + Metadata Completion | ✅ Hardened — awaiting CI/review | `feat/epub-acknowledgements` | [#619](https://github.com/kje7713-dev/CathedralOS/pull/619) | `268ee6a` | 38/38 behavioral export-epub tests; rolling-safe RPC overloads; Swift/pgTAP regressions added; local DB/Swift/EPUBCheck harness unavailable |
 | 2 | True EPUB History + Correct Filename + Delete | ⬜ Not started | — | — | — | `feat(epub): preserve export history and improve sharing` |
 | 3 | Kindle-Ready EPUB Rendering + Landmarks | ⬜ Not started | — | — | — | `refactor(epub): make reflowable output Kindle-ready` |
 | 4 | Story Arc → Parts + Nested Navigation | ⬜ Not started | — | — | — | `feat(epub): organize books into Story Arc parts` |
