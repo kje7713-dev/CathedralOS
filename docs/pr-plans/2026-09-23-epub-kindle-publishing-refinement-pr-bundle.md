@@ -1,6 +1,6 @@
 # CathedralOS — EPUB / Kindle Publishing Refinement PR Bundle
 
-> **Status**: planning — 0/4 PRs complete
+> **Status**: PR 1 implemented — 1/4 PRs complete; CI/review pending
 > **Source plan**: provided by Kevin via Telegram on 2026-09-23 09:55 EDT
 > **Base branch**: `main` @ `a39417a` (latest after PR #618 merge)
 > **Purpose**: turn CathedralOS's existing validated EPUB exporter into a polished, persistent, Kindle-oriented publishing and sharing workflow without touching the successful novel-generation pipeline.
@@ -9,7 +9,7 @@
 
 | PR | Title | Status | Branch | PR # | Head SHA | Notes |
 |----|-------|--------|--------|------|----------|-------|
-| 1 | Acknowledgements + Metadata Completion | ⬜ Not started | — | — | — | `feat(epub): add acknowledgements back matter` |
+| 1 | Acknowledgements + Metadata Completion | ✅ Implemented — awaiting CI/review | `feat/epub-acknowledgements` | — | `7e5cda3` | Backend 36/36 export-epub tests pass; local Deno typecheck has the pre-existing JSZip default-export mismatch |
 | 2 | True EPUB History + Correct Filename + Delete | ⬜ Not started | — | — | — | `feat(epub): preserve export history and improve sharing` |
 | 3 | Kindle-Ready EPUB Rendering + Landmarks | ⬜ Not started | — | — | — | `refactor(epub): make reflowable output Kindle-ready` |
 | 4 | Story Arc → Parts + Nested Navigation | ⬜ Not started | — | — | — | `feat(epub): organize books into Story Arc parts` |
