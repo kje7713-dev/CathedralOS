@@ -147,10 +147,70 @@ Deno.test("EPUB writer: preserves blank-line paragraph boundaries", () => {
   ]);
 });
 
-Deno.test("EPUB writer: emits spacing between separate paragraphs", () => {
+Deno.test("EPUB writer: emits Kindle-friendly reflowable typography", () => {
   const src = Deno.readTextFileSync(new URL("./_epub_writer.ts", import.meta.url));
-  assertStringIncludes(src, "splitParagraphs(section.body)");
-  assertStringIncludes(src, "p + p");
+  assertStringIncludes(src, "margin: 0;");
+  assertStringIncludes(src, "padding: 0;");
+  assertStringIncludes(src, "text-align: start;");
+  assertStringIncludes(src, "text-indent: 1.2em;");
+  assertStringIncludes(src, "h1 + p,");
+  assertStringIncludes(src, "h2 + p {");
+  if (src.includes('font-family: Georgia') || src.includes('font-family: "Times New Roman"')) {
+    throw new Error("body typography must not force a reading font");
+  }
+  if (src.includes("p + p")) {
+    throw new Error("normal paragraphs must not receive a default blank line");
+  }
+});
+
+Deno.test("EPUB writer: emits conventional landmarks with conditional cover", async () => {
+  const withoutCover = await writeEpub(
+    { book_title: "Landmarks", author_name: "Author", language: "en" },
+    makeAcknowledgementsFixture(),
+    null,
+  );
+  const withoutCoverZip = await JSZip.loadAsync(withoutCover);
+  const withoutCoverNav = await readZipText(withoutCoverZip, "OEBPS/nav.xhtml");
+  assertStringIncludes(withoutCoverNav, '<nav epub:type="landmarks" hidden="">');
+  assertStringIncludes(withoutCoverNav, 'epub:type="toc" href="nav.xhtml"');
+  assertStringIncludes(withoutCoverNav, 'epub:type="bodymatter" href="text/section-1.xhtml"');
+  if (withoutCoverNav.includes('epub:type="cover"')) {
+    throw new Error("cover landmark must be omitted when no cover exists");
+  }
+
+  const withCover = await writeEpub(
+    { book_title: "Landmarks", author_name: "Author", language: "en" },
+    makeAcknowledgementsFixture(),
+    new Uint8Array([0xff, 0xd8, 0xff]),
+  );
+  const withCoverZip = await JSZip.loadAsync(withCover);
+  const withCoverNav = await readZipText(withCoverZip, "OEBPS/nav.xhtml");
+  assertStringIncludes(withCoverNav, 'epub:type="cover" href="cover.xhtml"');
+  assertStringIncludes(withCoverNav, 'epub:type="toc" href="nav.xhtml"');
+  assertStringIncludes(withCoverNav, 'epub:type="bodymatter" href="text/section-1.xhtml"');
+
+  const hrefs = [...withCoverNav.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
+  for (const href of hrefs) {
+    assertExists(withCoverZip.file(`OEBPS/${href}`), `landmark href must exist: ${href}`);
+  }
+});
+
+Deno.test("EPUB writer: heading transitions and child section anchors are structural", async () => {
+  const epub = await writeEpub(
+    { book_title: "Structure", author_name: "Author", language: "en" },
+    makeAcknowledgementsFixture(),
+    null,
+  );
+  const zip = await JSZip.loadAsync(epub);
+  const story = await readZipText(zip, "OEBPS/text/section-1.xhtml");
+  assertStringIncludes(
+    story,
+    '<link rel="stylesheet" type="text/css" href="../styles.css"/>',
+  );
+  assertStringIncludes(story, '<h1 class="section-title">The Story</h1>');
+  assertStringIncludes(story, '<h2 id="section-1-section-2">Continuation</h2>');
+  assertStringIncludes(story, "<h1 class=\"section-title\">The Story</h1>\n<p>Story text.</p>");
+  assertStringIncludes(story, "<h2 id=\"section-1-section-2\">Continuation</h2>\n<p>More story text.</p>");
 });
 
 Deno.test("EPUB writer: puts cover document first in reading order", () => {
@@ -1063,6 +1123,7 @@ Deno.test("writeEpub: emits acknowledgements back matter in the generated ZIP", 
   const nav = await readZipText(zip, "OEBPS/nav.xhtml");
   const ncx = await readZipText(zip, "OEBPS/toc.ncx");
 
+  assertStringIncludes(ack, '<link rel="stylesheet" type="text/css" href="../styles.css"/>');
   assertStringIncludes(ack, "<h1>Acknowledgements</h1>");
   assertStringIncludes(ack, "Thanks &lt;to&gt; &amp; everyone; &quot;truly&quot;.");
   assertStringIncludes(opf, '<item id="acknowledgements" href="text/acknowledgements.xhtml"');

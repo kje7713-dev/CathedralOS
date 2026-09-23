@@ -74,10 +74,16 @@ export async function writeEpub(
     if (generatedSections.length === 0) continue;
 
     // Body: generated chapter root + child sections concatenated as <p> blocks
-    const bodyParts: string[] = [`<h1>${escapeXml(chapterTitle)}</h1>`];
+    const bodyParts: string[] = [
+      `<h1 class="section-title">${escapeXml(chapterTitle)}</h1>`,
+    ];
     for (const section of generatedSections) {
       if (section !== chapterRoot && section.title) {
-        bodyParts.push(`<h2>${escapeXml(section.title)}</h2>`);
+        bodyParts.push(
+          `<h2 id="${sectionAnchorId(ci, section.id)}">${
+            escapeXml(section.title)
+          }</h2>`,
+        );
       }
       for (const paragraph of splitParagraphs(section.body)) {
         bodyParts.push(`<p>${escapeXml(paragraph)}</p>`);
@@ -213,9 +219,24 @@ export async function writeEpub(
   const navList = sectionFiles
     .map((sf) => `<li><a href="${sf.href}">${escapeXml(sf.title)}</a></li>`)
     .join("\n      ");
+  // EPUB landmarks are deliberately derived only from documents emitted above:
+  // no cover landmark without a cover, and no bodymatter landmark without prose.
+  const landmarkItems = [
+    ...(coverBuffer
+      ? ['<li><a epub:type="cover" href="cover.xhtml">Cover</a></li>']
+      : []),
+    ...(sectionFiles[0]
+      ? [
+        `<li><a epub:type="bodymatter" href="${
+          sectionFiles[0].href
+        }">Start of Book</a></li>`,
+      ]
+      : []),
+    '<li><a epub:type="toc" href="nav.xhtml">Table of Contents</a></li>',
+  ].join("\n      ");
   // PR #619: Acknowledgements appears as the last navigation entry when present.
   const navTail = metadata.acknowledgements
-    ? "\n      <li><a href=\"text/acknowledgements.xhtml\">Acknowledgements</a></li>"
+    ? '\n      <li><a href="text/acknowledgements.xhtml">Acknowledgements</a></li>'
     : "";
   zip.file(
     "OEBPS/nav.xhtml",
@@ -228,6 +249,12 @@ export async function writeEpub(
   <h1>Table of Contents</h1>
   <ol>
       ${navList}${navTail}
+  </ol>
+</nav>
+<nav epub:type="landmarks" hidden="">
+  <h2>Landmarks</h2>
+  <ol>
+      ${landmarkItems}
   </ol>
 </nav>
 </body>
@@ -268,11 +295,11 @@ export async function writeEpub(
     "OEBPS/styles.css",
     `@charset "UTF-8";
 body {
-  font-family: Georgia, "Times New Roman", serif;
+  margin: 0;
+  padding: 0;
   font-size: 1em;
-  line-height: 1.3em;
-  text-align: justify;
-  margin: 1em 0.5em;
+  line-height: 1.3;
+  text-align: start;
 }
 h1 {
   font-size: 1.8em;
@@ -282,6 +309,9 @@ h1 {
   page-break-before: always;
   text-align: center;
 }
+h1.section-title {
+  page-break-before: always;
+}
 h2 {
   font-size: 1.3em;
   font-weight: bold;
@@ -289,14 +319,12 @@ h2 {
   margin-bottom: 0.5em;
 }
 p {
-  margin: 0;
-  text-indent: 1.5em;
+  margin-top: 0;
+  margin-bottom: 0;
+  text-indent: 1.2em;
 }
-p + p {
-  margin-top: 1em;
-  text-indent: 0;
-}
-p:first-of-type {
+h1 + p,
+h2 + p {
   text-indent: 0;
 }
 .cover {
@@ -373,7 +401,10 @@ p:first-of-type {
       `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>${escapeXml(sf.title)}</title></head>
+<head>
+<link rel="stylesheet" type="text/css" href="../styles.css"/>
+<title>${escapeXml(sf.title)}</title>
+</head>
 <body>
 ${sf.body}
 </body>
@@ -393,7 +424,10 @@ ${sf.body}
       `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>Acknowledgements</title></head>
+<head>
+<link rel="stylesheet" type="text/css" href="../styles.css"/>
+<title>Acknowledgements</title>
+</head>
 <body>
 ${ackBody.join("\n")}
 </body>
@@ -409,6 +443,11 @@ ${ackBody.join("\n")}
       compressionOptions: { level: 6 },
     }),
   );
+}
+
+function sectionAnchorId(chapterIndex: number, sectionId: string): string {
+  const safeSectionId = sectionId.replace(/[^A-Za-z0-9_-]+/g, "-");
+  return `section-${chapterIndex + 1}-${safeSectionId}`;
 }
 
 function escapeXml(s: string): string {
