@@ -26,6 +26,7 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { walkSections, type ProjectOutline } from "./_section_walker.ts";
+import { assembleMetadata, type ExportRequest } from "./_metadata.ts";
 import { buildCoverPrompt } from "./_cover_image.ts";
 import { splitParagraphs } from "./_paragraphs.ts";
 import {
@@ -1001,4 +1002,94 @@ Deno.test("orchestrator: static grep guards (8+9) — executed by pre-merge vali
   //   grep -rn 'from("projects")' supabase/functions/export-epub/ | wc -l   → 0
   //   grep -rn 'outline_sections.*\.project_id' supabase/functions/export-epub/ | wc -l   → 0
   // See commit-message body for the exact commands.
+});
+
+
+// =============================================================================
+// PR #619 (EPUB Acknowledgements) — back-matter text
+// =============================================================================
+
+Deno.test("assembleMetadata: trims acknowledgements and omits when empty", () => {
+  const req: ExportRequest = {
+    project_id: "p",
+    book_title: "T",
+    author_name: "A",
+    acknowledgements: "  To my family.  \n\nWith love.  ",
+  };
+  const md = assembleMetadata(req);
+  // trim() strips ONLY leading/trailing whitespace — the two spaces before the
+  // paragraph break survive. The empty-acknowledgements path normalizes to
+  // undefined so the writer can omit the page entirely.
+  assertEquals(md.acknowledgements, "To my family.  \n\nWith love.");
+
+  const empty = assembleMetadata({ ...req, acknowledgements: "   " });
+  assertEquals(empty.acknowledgements, undefined);
+
+  const missing = assembleMetadata({ project_id: "p", book_title: "T", author_name: "A" });
+  assertEquals(missing.acknowledgements, undefined);
+});
+
+Deno.test("EPUB writer: omits acknowledgements page when not provided", () => {
+  const src = Deno.readTextFileSync(new URL("./_epub_writer.ts", import.meta.url));
+  // Static assertions: the writer only creates the file when metadata.acknowledgements
+  // is truthy, and only adds manifest/spine/nav/NCX entries under the same guard.
+  // The presence of `if (metadata.acknowledgements) {` blocks near each artefact proves
+  // the omission path exists. The conditional guards prevent unconditional emission.
+  const ifGuards = (src.match(/if \(metadata\.acknowledgements\)/g) ?? []).length;
+  const ternaryGuards = (src.match(/metadata\.acknowledgements[\s\n]*\?/g) ?? []).length;
+  const totalGuards = ifGuards + ternaryGuards;
+  assertEquals(
+    totalGuards >= 5,
+    true,
+    `expected >= 5 conditional guards on metadata.acknowledgements (3 if + 2 ternary), found ${totalGuards} (${ifGuards} if + ${ternaryGuards} ternary)`,
+  );
+  assertEquals(
+    src.includes('<item id="acknowledgements" href="text/acknowledgements.xhtml"'),
+    true,
+    "acknowledgements manifest entry must be present in the writer",
+  );
+  assertEquals(
+    src.includes('<itemref idref="acknowledgements"/>'),
+    true,
+    "acknowledgements spine entry must be present in the writer",
+  );
+  // nav.xhtml / NCX must reference the acknowledgements href when present.
+  // Match on the unambiguous path substring to avoid TypeScript template-literal
+  // quote-escaping mismatches between the source disk form and the test string.
+  assertEquals(
+    src.includes('text/acknowledgements.xhtml'),
+    true,
+    "nav.xhtml / NCX href to acknowledgements page must exist",
+  );
+  // NCX navPoint for acknowledgements must exist. Match on the unambiguous
+  // navPoint id substring to avoid TypeScript template-literal quote-escaping
+  // mismatches between the source disk form and the test string literal.
+  assertEquals(
+    src.includes('navPoint-acknowledgements'),
+    true,
+    "NCX navPoint for acknowledgements must be present in the writer",
+  );
+  // The actual XHTML file is written only under the same guard.
+  assertEquals(
+    src.includes('OEBPS/text/acknowledgements.xhtml'),
+    true,
+    "acknowledgements XHTML file emission must be present in the writer",
+  );
+});
+
+Deno.test("EPUB writer: acknowledgements appears after story content in spine and nav", () => {
+  const src = Deno.readTextFileSync(new URL("./_epub_writer.ts", import.meta.url));
+  // spineEntries pushes sectionFiles first, then conditionally the acknowledgements itemref.
+  // Verify the acknowledgements spine push sits AFTER the sectionFiles spread.
+  const sectionSpineIdx = src.indexOf(
+    "spineEntries.push(...sectionFiles.map((sf) => `<itemref idref=\"${sf.id}\"/>`));",
+  );
+  const ackSpineIdx = src.indexOf('spineEntries.push(`<itemref idref="acknowledgements"/>`);');
+  assertEquals(sectionSpineIdx >= 0, true, "sectionFiles spine push must exist");
+  assertEquals(ackSpineIdx >= 0, true, "acknowledgements spine push must exist");
+  assertEquals(
+    ackSpineIdx > sectionSpineIdx,
+    true,
+    "acknowledgements spine push must follow sectionFiles",
+  );
 });
