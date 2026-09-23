@@ -158,6 +158,14 @@ jobs:
           deno check supabase/functions/export-epub-delete/index.ts
           && deno test --no-check -A
           supabase/functions/export-epub-delete/index_test.ts
+      # PR #623: trusted EPUB publication provenance and public-download boundary.
+      - name: Type check and test public EPUB sharing
+        run: >-
+          deno check supabase/functions/public-sharing/index.ts
+          supabase/functions/public-sharing/index_test.ts
+          && deno test --no-check -A
+          supabase/functions/public-sharing/index_test.ts
+
       # PR #620: list/download history remains readable for old and new rows.
       - name: Type check and test EPUB list/download endpoints
         run: >-
@@ -239,3 +247,8 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/export_history_persistence_rpc.test.sql
+      # PR #623: shared EPUB schema, lifecycle, and RLS provenance contract.
+      - name: Run shared EPUB publication pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/shared_epub_publication.test.sql

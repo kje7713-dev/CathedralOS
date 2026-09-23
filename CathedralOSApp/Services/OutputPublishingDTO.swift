@@ -118,7 +118,6 @@ struct SharedEPUBDownloadResponse: Codable {
     let signedURL: String
     let expiresAt: String
     let sharedOutputID: String
-    let exportMetadataID: String
     let bookTitle: String
     let authorName: String
     let epubSHA256: String
@@ -155,7 +154,7 @@ struct SharedOutputListItem: Codable, Identifiable {
         sharedOutputID       = try c.decode(String.self, forKey: .sharedOutputID)
         shareTitle           = try c.decodeIfPresent(String.self, forKey: .shareTitle) ?? ""
         shareExcerpt         = try c.decodeIfPresent(String.self, forKey: .shareExcerpt) ?? ""
-        contentType          = try c.decodeIfPresent(SharedContentType.self, forKey: .contentType) ?? .text
+        contentType          = (try? c.decodeIfPresent(SharedContentType.self, forKey: .contentType)) ?? .text
         bookAuthorName       = try c.decodeIfPresent(String.self, forKey: .bookAuthorName)
         authorDisplayName    = try c.decodeIfPresent(String.self, forKey: .authorDisplayName)
         createdAt            = try c.decodeIfPresent(Date.self,   forKey: .createdAt) ?? Date()
@@ -213,7 +212,7 @@ struct SharedOutputDetail: Codable {
         sharedOutputID       = try c.decode(String.self, forKey: .sharedOutputID)
         shareTitle           = try c.decodeIfPresent(String.self, forKey: .shareTitle) ?? ""
         shareExcerpt         = try c.decodeIfPresent(String.self, forKey: .shareExcerpt) ?? ""
-        contentType          = try c.decodeIfPresent(SharedContentType.self, forKey: .contentType) ?? .text
+        contentType          = (try? c.decodeIfPresent(SharedContentType.self, forKey: .contentType)) ?? .text
         bookAuthorName       = try c.decodeIfPresent(String.self, forKey: .bookAuthorName)
         outputText           = try c.decodeIfPresent(String.self, forKey: .outputText) ?? ""
         authorDisplayName    = try c.decodeIfPresent(String.self, forKey: .authorDisplayName)

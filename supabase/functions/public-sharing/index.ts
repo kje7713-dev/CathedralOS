@@ -195,6 +195,16 @@ function safeProjectPayload(snapshotJSON: unknown): Record<string, unknown> {
   };
 }
 
+export function epubPublicationOwnerMatches(
+  sharedOwnerUserID: unknown,
+  exportOwnerUserID: unknown,
+): boolean {
+  return typeof sharedOwnerUserID === "string" &&
+    typeof exportOwnerUserID === "string" &&
+    sharedOwnerUserID.length > 0 &&
+    sharedOwnerUserID === exportOwnerUserID;
+}
+
 function publicBookExcerpt(
   bookDescription: unknown,
   snapshotJSON: unknown,
@@ -643,7 +653,7 @@ export async function handler(req: Request): Promise<Response> {
       "shared_outputs",
     )
       .select(
-        "id, content_type, visibility, unpublished_at, export_metadata_id",
+        "id, owner_user_id, content_type, visibility, unpublished_at, export_metadata_id",
       )
       .eq("id", sharedOutputID).maybeSingle();
     if (
@@ -659,11 +669,15 @@ export async function handler(req: Request): Promise<Response> {
     }
     const { data: exportRow } = await adminClient.from("export_metadata")
       .select(
-        "id, book_title, author_name, epub_sha256, epub_storage_path, is_active",
+        "id, book_title, author_name, epub_sha256, epub_storage_path, is_active, exported_by_user_id",
       )
       .eq("id", shared.export_metadata_id).maybeSingle();
     if (
       !exportRow || !exportRow.is_active ||
+      !epubPublicationOwnerMatches(
+        shared.owner_user_id,
+        exportRow.exported_by_user_id,
+      ) ||
       typeof exportRow.epub_storage_path !== "string" ||
       !exportRow.epub_storage_path
     ) {
@@ -687,7 +701,6 @@ export async function handler(req: Request): Promise<Response> {
       signedURL: signed.signedUrl,
       expiresAt: new Date(Date.now() + 300000).toISOString(),
       sharedOutputID,
-      exportMetadataID: exportRow.id,
       bookTitle: exportRow.book_title,
       authorName: exportRow.author_name,
       epubSHA256: exportRow.epub_sha256 ?? "",

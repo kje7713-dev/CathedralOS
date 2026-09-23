@@ -22,6 +22,7 @@ const rows: ExportHistoryItem[] = [
 ];
 
 function client() {
+  let publicationFilter: string[] = [];
   const snapshotChain: Record<string, unknown> = {};
   snapshotChain.select = () => snapshotChain;
   snapshotChain.eq = () => snapshotChain;
@@ -36,7 +37,10 @@ function client() {
   const publicationChain: Record<string, unknown> = {};
   publicationChain.select = () => publicationChain;
   publicationChain.eq = () => publicationChain;
-  publicationChain.in = async () => ({ data: [], error: null });
+  publicationChain.in = async (_column: string, values: string[]) => {
+    publicationFilter = values;
+    return { data: [], error: null };
+  };
   return {
     auth: {
       getUser: async () => ({ data: { user: { id: USER } }, error: null }),
@@ -47,10 +51,12 @@ function client() {
         : table === "shared_outputs"
         ? publicationChain
         : exportChain,
+    publicationFilter: () => publicationFilter,
   } as never;
 }
 
 Deno.test("list returns both active historical exports after regeneration", async () => {
+  const testClient = client();
   const response = await handleListRequest(
     new Request("https://x", {
       method: "POST",
@@ -60,9 +66,13 @@ Deno.test("list returns both active historical exports after regeneration", asyn
       },
       body: JSON.stringify({ project_id: "local-project" }),
     }),
-    client(),
+    testClient,
   );
   assertEquals(response.status, 200);
+  assertEquals(
+    (testClient as { publicationFilter: () => string[] }).publicationFilter(),
+    ["b", "a"],
+  );
   assertEquals(await response.json(), {
     exports: rows.map((row) => ({
       ...row,

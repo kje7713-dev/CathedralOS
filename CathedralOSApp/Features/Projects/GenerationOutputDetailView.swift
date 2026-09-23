@@ -1102,7 +1102,7 @@ struct GenerationOutputDetailView: View {
                     .resizable()
                     .scaledToFill()
                     .frame(maxWidth: .infinity)
-                    .aspectRatio(displayStyle == .book ? (2.0 / 3.0) : sharedOutputCoverAspectRatio, contentMode: .fit)
+                    .aspectRatio(sharedOutputCoverAspectRatio, contentMode: .fit)
                     .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             } else if !removeCoverImageOnPublish,

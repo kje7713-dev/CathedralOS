@@ -83,7 +83,8 @@ export async function handleListRequest(
     const { data, error } = await client
       .from("shared_outputs")
       .select("id, export_metadata_id, visibility, unpublished_at")
-      .eq("content_type", "epub");
+      .eq("content_type", "epub")
+      .in("export_metadata_id", ids);
     if (error) return json({ error: "lookup_failed" }, 500);
     publications = ((data ?? []) as Array<Record<string, unknown>>)
       .filter((row) => ids.includes(String(row.export_metadata_id)));
