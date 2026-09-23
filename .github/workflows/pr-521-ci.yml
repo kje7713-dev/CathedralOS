@@ -31,6 +31,7 @@ on:
       - 'supabase/migrations/20260921092700_provider_billing_alerts.sql'
       - 'supabase/tests/database/provider_billing_alerts.test.sql'
       - 'supabase/tests/database/epub_acknowledgements_rpc.test.sql'
+      - 'supabase/tests/database/export_history_persistence_rpc.test.sql'
       - '.github/workflows/pr-521-ci.yml'
 
 jobs:
@@ -149,6 +150,20 @@ jobs:
           && deno test --no-check -A
           supabase/functions/sync-openai-admin-usage/index_test.ts
           supabase/functions/sync-openai-admin-usage/auth_test.ts
+      # PR #620: endpoint-level transactional delete coverage.
+      - name: Type check and test export-epub-delete
+        run: >-
+          deno check supabase/functions/export-epub-delete/index.ts
+          && deno test --no-check -A
+          supabase/functions/export-epub-delete/index_test.ts
+      # PR #620: list/download history remains readable for old and new rows.
+      - name: Type check and test EPUB list/download endpoints
+        run: >-
+          deno check supabase/functions/export-epub-list/index.ts
+          supabase/functions/export-epub-download/index.ts
+          && deno test --no-check -A
+          supabase/functions/export-epub-list/index_test.ts
+          supabase/functions/export-epub-download/index_test.ts
 
   pricing-database-regression:
     name: Pricing observation pgTAP regression
@@ -212,3 +227,8 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/epub_acknowledgements_rpc.test.sql
+      # PR #620: persistent history lifecycle + current promotion.
+      - name: Run export history persistence pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/export_history_persistence_rpc.test.sql

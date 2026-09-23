@@ -1,0 +1,68 @@
+import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { type ExportHistoryItem, handleListRequest } from "./index.ts";
+
+const USER = "11111111-1111-1111-1111-111111111111";
+const rows: ExportHistoryItem[] = [
+  {
+    id: "b",
+    book_title: "B",
+    author_name: "Author",
+    is_current: true,
+    is_active: true,
+    created_at: "2026-09-23T12:00:00Z",
+  },
+  {
+    id: "a",
+    book_title: "A",
+    author_name: "Author",
+    is_current: false,
+    is_active: true,
+    created_at: "2026-09-23T11:00:00Z",
+  },
+];
+
+function client() {
+  const snapshotChain: Record<string, unknown> = {};
+  snapshotChain.select = () => snapshotChain;
+  snapshotChain.eq = () => snapshotChain;
+  snapshotChain.maybeSingle = async () => ({
+    data: { id: "snapshot" },
+    error: null,
+  });
+  const exportChain: Record<string, unknown> = {};
+  exportChain.select = () => exportChain;
+  exportChain.eq = () => exportChain;
+  exportChain.order = async () => ({ data: rows, error: null });
+  return {
+    auth: {
+      getUser: async () => ({ data: { user: { id: USER } }, error: null }),
+    },
+    from: (table: string) =>
+      table === "project_snapshots" ? snapshotChain : exportChain,
+  } as never;
+}
+
+Deno.test("list returns both active historical exports after regeneration", async () => {
+  const response = await handleListRequest(
+    new Request("https://x", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer jwt",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ project_id: "local-project" }),
+    }),
+    client(),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { exports: rows });
+});
+Deno.test("list rejects missing auth", async () => {
+  assertEquals(
+    (await handleListRequest(
+      new Request("https://x", { method: "POST" }),
+      client(),
+    )).status,
+    401,
+  );
+});

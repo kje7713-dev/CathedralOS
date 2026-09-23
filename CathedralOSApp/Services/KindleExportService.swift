@@ -1,5 +1,73 @@
 import Foundation
 
+/// PR 2 (EPUB History + Filename + Delete): produces a user-facing share
+/// filename for an EPUB. Storage paths and cache filenames stay immutable
+/// (see `KindleExportDownloader.cacheURL(for:)`); only the share-sheet
+/// presentation uses the sanitized title.
+///
+/// Rules (per bundle spec):
+///   * Preserve normal Unicode book titles where the filesystem supports them.
+///   * Strip filesystem-unsafe characters: `/ \ : * ? " < > |`, control chars,
+///     NUL.
+///   * Trim leading/trailing whitespace and dots.
+///   * Cap to a sane filename length (255 chars, the common filesystem limit).
+///   * Fall back to "Untitled.epub" only if the sanitized title is empty.
+enum EPUBShareFilenameSanitizer {
+    private static let extensionName = ".epub"
+    private static let maximumFilenameBytes = 255
+    private static let unsafeCharacters = CharacterSet(charactersIn: "/\\:*?\"<>|")
+
+    /// Returns a complete share filename whose UTF-8 path component is at most
+    /// 255 bytes. Iteration is by Swift Character, so grapheme clusters and
+    /// combining marks are never split.
+    static func shareFilename(title: String) -> String {
+        var characters: [Character] = []
+        for character in title {
+            let scalars = character.unicodeScalars
+            if scalars.contains(where: { $0.value < 0x20 || $0.value == 0 }) {
+                continue
+            }
+            if scalars.contains(where: { unsafeCharacters.contains($0) }) {
+                continue
+            }
+            characters.append(character)
+        }
+
+        while let first = characters.first, isTrimCharacter(first) {
+            characters.removeFirst()
+        }
+        while let last = characters.last, isTrimCharacter(last) {
+            characters.removeLast()
+        }
+
+        let extensionBytes = extensionName.utf8.count
+        let titleByteBudget = maximumFilenameBytes - extensionBytes
+        var title = ""
+        for character in characters {
+            let candidate = title + String(character)
+            if candidate.utf8.count > titleByteBudget {
+                break
+            }
+            title = candidate
+        }
+        while let last = title.last, isTrimCharacter(last) {
+            title.removeLast()
+        }
+        if title.isEmpty {
+            title = "Untitled"
+        }
+        return title + extensionName
+    }
+
+    private static func isTrimCharacter(_ character: Character) -> Bool {
+        character.unicodeScalars.allSatisfy {
+            $0 == "." || $0 == " " || CharacterSet.whitespacesAndNewlines.contains($0)
+        }
+    }
+}
+
+
+
 // MARK: - KindleExportError
 
 enum KindleExportError: Error, LocalizedError {
@@ -105,6 +173,14 @@ struct KindleExportHistoryItem: Codable, Identifiable {
 
 private struct KindleExportHistoryResponse: Codable {
     let exports: [KindleExportHistoryItem]
+}
+
+struct KindleExportDeleteResponse: Codable {
+    let deleted: Bool
+    let export_metadata_id: String
+    let was_current: Bool
+    let promoted_to: String?
+    let storage_object_deleted: Bool
 }
 
 /// Mirrors the backend's CHECK constraint on export_jobs.status.
@@ -351,6 +427,54 @@ final class KindleExportService {
         } catch {
             throw KindleExportError.pollFailed(
                 "Could not decode response: \(error.localizedDescription)")
+        }
+    }
+
+    /// PR 2: explicitly delete a historical EPUB. Ownership is enforced
+    /// server-side; this client returns the response for the UI to react.
+    func deleteExport(
+        exportMetadataId: String,
+        userAccessToken: String,
+    ) async throws -> KindleExportDeleteResponse {
+        let url = backend.edgeFunctionURL(path: "export-epub-delete")
+        var request = backend.authorizedRequest(for: url, userAccessToken: userAccessToken)
+        request.httpMethod = "POST"
+        do {
+            request.httpBody = try JSONEncoder().encode([
+                "export_metadata_id": exportMetadataId
+            ])
+        } catch {
+            throw KindleExportError.invalidResponse(
+                "Could not encode delete request: \(error.localizedDescription)")
+        }
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw KindleExportError.networkError(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw KindleExportError.invalidResponse("Non-HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            if http.statusCode == 401 {
+                throw KindleExportError.notAuthenticated
+            }
+            let body = String(data: data, encoding: .utf8)
+            throw KindleExportError.serverError(
+                statusCode: http.statusCode,
+                message: body,
+            )
+        }
+        do {
+            return try JSONDecoder().decode(
+                KindleExportDeleteResponse.self,
+                from: data,
+            )
+        } catch {
+            throw KindleExportError.invalidResponse(
+                "Could not decode delete response: \(error.localizedDescription)")
         }
     }
 }

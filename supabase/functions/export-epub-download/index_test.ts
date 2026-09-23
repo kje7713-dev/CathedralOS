@@ -23,18 +23,20 @@ import {
   assertExists,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  type ExportMetadataRow,
   generateSignedUrl,
   lookupExportMetadata,
   ownershipError,
   verifyUserJwt,
-  type ExportMetadataRow,
 } from "./index.ts";
 
 const FAKE_USER_ID = "11111111-1111-1111-1111-111111111111";
 const OTHER_USER_ID = "22222222-2222-2222-2222-222222222222";
 const FAKE_METADATA_ID = "metadata-uuid-aaaa";
 
-function makeRow(overrides: Partial<ExportMetadataRow> = {}): ExportMetadataRow {
+function makeRow(
+  overrides: Partial<ExportMetadataRow> = {},
+): ExportMetadataRow {
   return {
     id: FAKE_METADATA_ID,
     project_id: "project-uuid-dddd",
@@ -226,6 +228,23 @@ Deno.test("ownershipError returns 'export_inactive' for inactive", () => {
 // ---------------------------------------------------------------------------
 // 11. Combined ownership-rejection flow (simulates the serve() handler path)
 // ---------------------------------------------------------------------------
+Deno.test("owner can download both historical and current exports", () => {
+  const historical = makeRow({
+    id: "historical-a",
+    is_current: false,
+    is_active: true,
+  });
+  const current = makeRow({
+    id: "current-b",
+    is_current: true,
+    is_active: true,
+  });
+  assertEquals(ownershipError(historical, FAKE_USER_ID), null);
+  assertEquals(ownershipError(current, FAKE_USER_ID), null);
+  assertEquals(historical.is_active, true);
+  assertEquals(current.is_active, true);
+});
+
 Deno.test("ownership-rejection flow returns 403 for non-owner", async () => {
   const userClient = makeMockUserClient({ userId: OTHER_USER_ID });
   const adminClient = makeMockAdminClient({
@@ -243,15 +262,4 @@ Deno.test("ownership-rejection flow returns 403 for non-owner", async () => {
   // Step 3: ownership check — should reject because row.exported_by_user_id != userId
   const ownErr = ownershipError(row!, userId!);
   assertEquals(ownErr, "forbidden");
-
-  // Step 4: signed URL generation would NOT be called in the real handler
-  // because the handler returns 403 before this. Verifying it stays unused:
-  const signedUrl = await generateSignedUrl(
-    adminClient,
-    row!.epub_storage_path,
-    300,
-  );
-  // The mock would still return a URL, but the handler short-circuits.
-  // This test just confirms the rejection path is identified.
-  assertExists(signedUrl); // present but unused in real flow
 });

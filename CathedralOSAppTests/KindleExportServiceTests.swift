@@ -32,7 +32,7 @@ final class KindleExportServiceTests: XCTestCase {
     private final class MockURLProtocol: URLProtocol {
         static var queued: [(status: Int, body: Data, delay: TimeInterval)] = []
         static var captured: [URLRequest] = []
-        static var reset() {
+        static func reset() {
             queued.removeAll()
             captured.removeAll()
         }
@@ -74,6 +74,16 @@ final class KindleExportServiceTests: XCTestCase {
 
     private static let sampleKickoffResponse = """
     {"job_id":"job-abc-123","status":"pending"}
+    """.data(using: .utf8)!
+
+    private static let sampleDeleteResponse = """
+    {
+      "deleted": true,
+      "export_metadata_id": "metadata-id-xyz",
+      "was_current": true,
+      "promoted_to": "new-current-id",
+      "storage_object_deleted": true
+    }
     """.data(using: .utf8)!
 
     private static let sampleStatusRunning = """
@@ -281,5 +291,190 @@ extension KindleExportServiceTests {
             with: JSONEncoder().encode(withoutAcknowledgements)
         ) as? [String: Any])
         XCTAssertNil(withoutJSON["acknowledgements"])
+    }
+
+    // MARK: - 7. deleteExport calls export-epub-delete with correct payload
+
+    func testDeleteExportPostsToDeleteEndpointWithMetadataId() async throws {
+        MockURLProtocol.queued = [(200, Self.sampleDeleteResponse, 0)]
+        let testService = service
+        _ = try await testService.deleteExport(
+            exportMetadataId: "metadata-id-xyz",
+            userAccessToken: "test-jwt",
+        )
+        let captured = MockURLProtocol.captured.last!
+        XCTAssertEqual(captured.url?.path, "/functions/v1/export-epub-delete")
+        XCTAssertEqual(captured.httpMethod, "POST")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(captured.httpBody)) as? [String: Any])
+        XCTAssertEqual(body["export_metadata_id"] as? String, "metadata-id-xyz")
+    }
+
+    func testDeleteExportDecodesPromotedResponse() async throws {
+        MockURLProtocol.queued = [(200, Self.sampleDeleteResponse, 0)]
+        let testService = service
+        let response = try await testService.deleteExport(
+            exportMetadataId: "metadata-id-xyz",
+            userAccessToken: "test-jwt",
+        )
+        XCTAssertTrue(response.deleted)
+        XCTAssertTrue(response.was_current)
+        XCTAssertEqual(response.promoted_to, "new-current-id")
+        XCTAssertEqual(response.export_metadata_id, "metadata-id-xyz")
+    }
+
+    func testDeleteExportMaps401ToNotAuthenticated() async throws {
+        MockURLProtocol.queued = [(401, Data("unauthorized".utf8), 0)]
+        let testService = service
+        do {
+            _ = try await testService.deleteExport(
+                exportMetadataId: "metadata-id-xyz",
+                userAccessToken: "expired-jwt",
+            )
+            XCTFail("Expected notAuthenticated, got success")
+        } catch let err as KindleExportError {
+            guard case .notAuthenticated = err else {
+                XCTFail("Expected notAuthenticated, got: \(err)")
+                return
+            }
+        }
+    }
+
+    func testDeleteExportMapsServerError() async throws {
+        MockURLProtocol.queued = [(500, Data("boom".utf8), 0)]
+        let testService = service
+        do {
+            _ = try await testService.deleteExport(
+                exportMetadataId: "metadata-id-xyz",
+                userAccessToken: "test-jwt",
+            )
+            XCTFail("Expected serverError, got success")
+        } catch let err as KindleExportError {
+            guard case .serverError(let statusCode, _) = err else {
+                XCTFail("Expected serverError, got: \(err)")
+                return
+            }
+            XCTAssertEqual(statusCode, 500)
+        }
+    }
+
+    func testDeleteExportMapsForbidden() async throws {
+        MockURLProtocol.queued = [(403, Data("forbidden".utf8), 0)]
+        let testService = service
+        do {
+            _ = try await testService.deleteExport(
+                exportMetadataId: "metadata-id-xyz",
+                userAccessToken: "test-jwt",
+            )
+            XCTFail("Expected serverError, got success")
+        } catch let err as KindleExportError {
+            guard case .serverError(let statusCode, _) = err else {
+                XCTFail("Expected serverError, got: \(err)")
+                return
+            }
+            XCTAssertEqual(statusCode, 403)
+        }
+    }
+
+    // MARK: - EPUB share filename sanitizer
+
+    func testPreservesUnicodeTitle() {
+        XCTAssertEqual(
+            EPUBShareFilenameSanitizer.shareFilename(title: "Brody in Hawkins"),
+            "Brody in Hawkins.epub"
+        )
+    }
+
+    func testStripsForbiddenCharacters() {
+        XCTAssertEqual(
+            EPUBShareFilenameSanitizer.shareFilename(title: "A/B\\C:D*E?F\"G<H>I|J"),
+            "ABCDEFGHIJ.epub"
+        )
+    }
+
+    func testStripsControlAndNUL() {
+        let raw = "Title\u{0000}\u{0001}\u{001F}End"
+        XCTAssertEqual(
+            EPUBShareFilenameSanitizer.shareFilename(title: raw),
+            "TitleEnd.epub"
+        )
+    }
+
+    func testTrimsLeadingAndTrailingWhitespaceAndDots() {
+        XCTAssertEqual(
+            EPUBShareFilenameSanitizer.shareFilename(title: "   .Book.   "),
+            "Book.epub"
+        )
+    }
+
+    func testFallsBackToUntitledWhenEmpty() {
+        XCTAssertEqual(
+            EPUBShareFilenameSanitizer.shareFilename(title: "////"),
+            "Untitled.epub"
+        )
+    }
+
+    func testCapsAt255UTF8BytesIncludingExtension() {
+        let got = EPUBShareFilenameSanitizer.shareFilename(
+            title: String(repeating: "A", count: 300)
+        )
+        XCTAssertEqual(got.utf8.count, 255)
+        XCTAssertTrue(got.hasSuffix(".epub"))
+    }
+
+    func testLongJapaneseTitleDoesNotSplitCharacters() {
+        let got = EPUBShareFilenameSanitizer.shareFilename(
+            title: String(repeating: "世界", count: 300)
+        )
+        XCTAssertLessThanOrEqual(got.utf8.count, 255)
+        XCTAssertTrue(got.hasSuffix(".epub"))
+    }
+
+    func testEmojiAndCombiningMarksStayWithinByteLimit() {
+        let got = EPUBShareFilenameSanitizer.shareFilename(
+            title: String(repeating: "👩‍💻é", count: 100)
+        )
+        XCTAssertLessThanOrEqual(got.utf8.count, 255)
+        XCTAssertTrue(got.hasSuffix(".epub"))
+    }
+
+    func testUnicodePreserved() {
+        XCTAssertEqual(
+            EPUBShareFilenameSanitizer.shareFilename(title: "ハロー・世界"),
+            "ハロー・世界.epub"
+        )
+    }
+
+    func testShareItemDescriptorAdvertisesEPUBAndKeepsFilename() {
+        let url = URL(fileURLWithPath: "/tmp/ハロー・世界.epub")
+        XCTAssertEqual(
+            EPUBShareItemBuilder.descriptor(for: url),
+            EPUBShareItemDescriptor(
+                filename: "ハロー・世界.epub",
+                typeIdentifier: "org.idpf.epub-container"
+            )
+        )
+    }
+
+    func testShareArtifactUsesTitleAndReplacesExistingCopy() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EPUBShareArtifact-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let cachedURL = directory.appendingPathComponent("metadata-id.epub")
+        try Data("new bytes".utf8).write(to: cachedURL)
+        let staleURL = directory.appendingPathComponent("My Book.epub")
+        try Data("stale bytes".utf8).write(to: staleURL)
+
+        let shareURL = try EPUBShareItemBuilder.makeShareURL(
+            cachedURL: cachedURL,
+            bookTitle: "My Book",
+        )
+        XCTAssertEqual(shareURL.lastPathComponent, "My Book.epub")
+        XCTAssertEqual(try Data(contentsOf: shareURL), Data("new bytes".utf8))
+        XCTAssertEqual(cachedURL.lastPathComponent, "metadata-id.epub")
     }
 }

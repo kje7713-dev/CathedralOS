@@ -127,6 +127,9 @@ struct KindleExportView: View {
     // PR-4100-C: reader/share sheet state for Open / Share buttons.
     @State private var readerURL: URL?
     @State private var shareURL: URL?
+    // PR 2: explicit history-deletion flow. We capture the pending delete
+    // target so the confirmation alert knows which metadata row to remove.
+    @State private var pendingDelete: KindleExportHistoryItem?
     @State private var showReader = false
     @State private var showShare = false
     @State private var readerBookTitle = ""
@@ -243,7 +246,7 @@ struct KindleExportView: View {
             }
             .sheet(isPresented: $showShare) {
                 if let url = shareURL {
-                    KindleExportShareSheet(items: [url])
+                    KindleExportShareSheet(items: [EPUBShareItemBuilder.itemProvider(for: url)])
                 }
             }
         }
@@ -417,7 +420,12 @@ struct KindleExportView: View {
                         .buttonStyle(.plain)
 
                         Button {
-                            Task { await prepareShare(exportMetadataId: export.id) }
+                            Task {
+                                await prepareShare(
+                                    exportMetadataId: export.id,
+                                    title: export.book_title,
+                                )
+                            }
                         } label: {
                             Image(systemName: "square.and.arrow.up")
                                 .foregroundStyle(CathedralTheme.Colors.accent)
@@ -435,6 +443,19 @@ struct KindleExportView: View {
                         .buttonStyle(.bordered)
                         .accessibilityLabel("Regenerate EPUB")
                         .disabled(jobState.isInFlight)
+
+                        // PR 2: explicit delete with mandatory confirmation.
+                        // Server-side ownership is enforced by export-epub-delete;
+                        // the alert prevents accidental swipe-tap deletion.
+                        Button(role: .destructive) {
+                            pendingDelete = export
+                        } label: {
+                            Image(systemName: "trash")
+                                .foregroundStyle(.red)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Delete EPUB")
+                        .disabled(jobState.isInFlight)
                     }
                 }
             }
@@ -449,6 +470,23 @@ struct KindleExportView: View {
                 Task { await loadPreviousExports() }
             }
             .disabled(isLoadingPreviousExports || jobState.isInFlight)
+        }
+        .alert(
+            "Delete EPUB?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { target in
+            Button("Delete", role: .destructive) {
+                Task { await performDelete(target) }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDelete = nil
+            }
+        } message: { target in
+            Text("This permanently removes this exported file. Your story project and generated sections are not affected.")
         }
     }
 
@@ -620,8 +658,14 @@ struct KindleExportView: View {
     }
 
     /// Same fetch as `prepareOpen` but presents the iOS share sheet
-    /// (UIActivityViewController) instead of the reader.
-    private func prepareShare(exportMetadataId metadataId: String?) async {
+    /// (UIActivityViewController) instead of the reader. PR 2 also copies
+    /// the cached EPUB to a sanitized title-based filename so the share
+    /// sheet shows `<Book Title>.epub`, while the immutable cache file keeps
+    /// its `<metadataId>.epub` name for re-open / re-share.
+    private func prepareShare(
+        exportMetadataId metadataId: String?,
+        title: String? = nil,
+    ) async {
         guard let metadataId else {
             jobState = .failure(.invalidResponse("Missing export metadata ID"))
             return
@@ -636,12 +680,42 @@ struct KindleExportView: View {
         }
         let downloader = KindleExportDownloader(backend: service.backend)
         do {
-            let url = try await downloader.downloadOrCache(
+            let cachedURL = try await downloader.downloadOrCache(
                 exportMetadataId: metadataId,
                 userAccessToken: token,
             )
-            shareURL = url
+            // Build a sibling share copy with the sanitized title-based name.
+            self.shareURL = try EPUBShareItemBuilder.makeShareURL(
+                cachedURL: cachedURL,
+                bookTitle: title ?? bookTitle,
+            )
             showShare = true
+        } catch let error as KindleExportError {
+            jobState = .failure(error)
+        } catch {
+            jobState = .failure(.networkError(error.localizedDescription))
+        }
+    }
+
+    /// PR 2: execute the user-confirmed history delete. Removes the
+    /// metadata row + storage object server-side, then refreshes the list.
+    private func performDelete(_ target: KindleExportHistoryItem) async {
+        defer { pendingDelete = nil }
+        guard let token = await currentAccessToken() else {
+            jobState = .failure(.notAuthenticated)
+            return
+        }
+        guard let service else {
+            jobState = .failure(.notConfigured(reason: "BackendClient not initialized"))
+            return
+        }
+        do {
+            _ = try await service.deleteExport(
+                exportMetadataId: target.id,
+                userAccessToken: token,
+            )
+            // PR 2: refresh Previous EPUBs after delete.
+            await loadPreviousExports()
         } catch let error as KindleExportError {
             jobState = .failure(error)
         } catch {

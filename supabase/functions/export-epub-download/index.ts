@@ -242,7 +242,7 @@ serve(async (req: Request) => {
     epub_sha256: row.epub_sha256,
     file_size_bytes: null,
     is_current: row.is_current,
-    is_active: row.is_active,
+    is_active: row.is_active !== false,
     project_id: row.project_id,
     created_at: row.created_at,
   };
