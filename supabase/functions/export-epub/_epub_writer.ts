@@ -401,7 +401,10 @@ h2 + p {
       `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>${escapeXml(sf.title)}</title></head>
+<head>
+<link rel="stylesheet" type="text/css" href="../styles.css"/>
+<title>${escapeXml(sf.title)}</title>
+</head>
 <body>
 ${sf.body}
 </body>
@@ -421,7 +424,10 @@ ${sf.body}
       `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>Acknowledgements</title></head>
+<head>
+<link rel="stylesheet" type="text/css" href="../styles.css"/>
+<title>Acknowledgements</title>
+</head>
 <body>
 ${ackBody.join("\n")}
 </body>

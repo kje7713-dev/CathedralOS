@@ -203,6 +203,10 @@ Deno.test("EPUB writer: heading transitions and child section anchors are struct
   );
   const zip = await JSZip.loadAsync(epub);
   const story = await readZipText(zip, "OEBPS/text/section-1.xhtml");
+  assertStringIncludes(
+    story,
+    '<link rel="stylesheet" type="text/css" href="../styles.css"/>',
+  );
   assertStringIncludes(story, '<h1 class="section-title">The Story</h1>');
   assertStringIncludes(story, '<h2 id="section-1-section-2">Continuation</h2>');
   assertStringIncludes(story, "<h1 class=\"section-title\">The Story</h1>\n<p>Story text.</p>");
@@ -1119,6 +1123,7 @@ Deno.test("writeEpub: emits acknowledgements back matter in the generated ZIP", 
   const nav = await readZipText(zip, "OEBPS/nav.xhtml");
   const ncx = await readZipText(zip, "OEBPS/toc.ncx");
 
+  assertStringIncludes(ack, '<link rel="stylesheet" type="text/css" href="../styles.css"/>');
   assertStringIncludes(ack, "<h1>Acknowledgements</h1>");
   assertStringIncludes(ack, "Thanks &lt;to&gt; &amp; everyone; &quot;truly&quot;.");
   assertStringIncludes(opf, '<item id="acknowledgements" href="text/acknowledgements.xhtml"');
