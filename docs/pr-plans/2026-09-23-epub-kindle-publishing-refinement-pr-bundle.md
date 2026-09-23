@@ -1,6 +1,6 @@
 # CathedralOS — EPUB / Kindle Publishing Refinement PR Bundle
 
-> **Status**: PR 1 implemented — 1/4 PRs complete; CI/review pending
+> **Status**: PR 1 implemented — 1/4 PRs complete; CI green — awaiting review/merge authorization
 > **Source plan**: provided by Kevin via Telegram on 2026-09-23 09:55 EDT
 > **Base branch**: `main` @ `a39417a` (latest after PR #618 merge)
 > **Purpose**: turn CathedralOS's existing validated EPUB exporter into a polished, persistent, Kindle-oriented publishing and sharing workflow without touching the successful novel-generation pipeline.
@@ -9,7 +9,7 @@
 
 | PR | Title | Status | Branch | PR # | Head SHA | Notes |
 |----|-------|--------|--------|------|----------|-------|
-| 1 | Acknowledgements + Metadata Completion | ✅ Hardened — awaiting CI/review | `feat/epub-acknowledgements` | [#619](https://github.com/kje7713-dev/CathedralOS/pull/619) | `05dbd74` | 38/38 behavioral export-epub tests; rolling-safe RPC overloads; Swift/pgTAP regressions added; CI typecheck/build fixes pushed; local DB/Swift/EPUBCheck harness unavailable |
+| 1 | Acknowledgements + Metadata Completion | ✅ Hardened — CI green; awaiting review/merge authorization | `feat/epub-acknowledgements` | [#619](https://github.com/kje7713-dev/CathedralOS/pull/619) | `05dbd74` | 38/38 behavioral export-epub tests; rolling-safe RPC overloads; Swift/pgTAP regressions added; CI typecheck/build fixes pushed; local DB/Swift/EPUBCheck harness unavailable |
 | 2 | True EPUB History + Correct Filename + Delete | ⬜ Not started | — | — | — | `feat(epub): preserve export history and improve sharing` |
 | 3 | Kindle-Ready EPUB Rendering + Landmarks | ⬜ Not started | — | — | — | `refactor(epub): make reflowable output Kindle-ready` |
 | 4 | Story Arc → Parts + Nested Navigation | ⬜ Not started | — | — | — | `feat(epub): organize books into Story Arc parts` |
@@ -65,6 +65,8 @@ Open / native iOS Share Sheet / Delete
 ```
 
 ## Progress Log
+
+- 2026-09-23 11:12 EDT — PR #619 head `5aee9de` is cleanly 8 commits ahead of `main` and all five required CI checks pass: iOS Build, export-epub Deno tests, PR-521 scene-memory, Java validator build, and pricing-observation pgTAP. No deployment or merge was performed; production smoke validation remains intentionally pending.
 
 - 2026-09-23 11:08 EDT — CI exposed two strict compile issues: acknowledgements test fixtures omitted required `language`, and Swift’s defaulted request member suppressed the generated memberwise parameter. Added the missing fixture fields, made the request field explicit, updated legacy request constructors, and pushed `05dbd74`; 38/38 local behavioral export-epub tests pass. CI rerun pending.
 
