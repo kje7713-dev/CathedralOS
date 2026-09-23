@@ -290,6 +290,20 @@ struct KindleExportHistoryItem: Codable, Identifiable {
     let is_current: Bool
     let is_active: Bool
     let created_at: String
+    let shared_output_id: String?
+    let is_publicly_shared: Bool
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        book_title = try c.decodeIfPresent(String.self, forKey: .book_title) ?? ""
+        author_name = try c.decodeIfPresent(String.self, forKey: .author_name) ?? ""
+        is_current = try c.decodeIfPresent(Bool.self, forKey: .is_current) ?? false
+        is_active = try c.decodeIfPresent(Bool.self, forKey: .is_active) ?? true
+        created_at = try c.decodeIfPresent(String.self, forKey: .created_at) ?? ""
+        shared_output_id = try c.decodeIfPresent(String.self, forKey: .shared_output_id)
+        is_publicly_shared = try c.decodeIfPresent(Bool.self, forKey: .is_publicly_shared) ?? false
+    }
 }
 
 private struct KindleExportHistoryResponse: Codable {

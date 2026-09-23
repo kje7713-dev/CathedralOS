@@ -169,7 +169,8 @@ private struct SharedOutputRowView: View {
                     SharedOutputCoverImage(
                         url: url,
                         metadataWidth: item.coverImageWidth,
-                        metadataHeight: item.coverImageHeight
+                        metadataHeight: item.coverImageHeight,
+                        displayStyle: item.contentType == .epub ? .book : .standard
                     )
                 }
 
@@ -204,6 +205,21 @@ private struct SharedOutputRowView: View {
                         Text(author)
                             .font(CathedralTheme.Typography.caption())
                             .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                    }
+
+                    if item.contentType == .epub {
+                        Text("·")
+                            .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                        Label("EPUB", systemImage: "book.closed")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.accent)
+                        if let author = item.bookAuthorName, !author.isEmpty {
+                            Text("·")
+                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                            Text("By \(author)")
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                        }
                     }
 
                     if item.allowRemix {

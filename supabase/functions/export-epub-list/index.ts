@@ -20,6 +20,8 @@ export interface ExportHistoryItem {
   is_current: boolean;
   is_active: boolean;
   created_at: string;
+  shared_output_id?: string | null;
+  is_publicly_shared?: boolean;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -74,7 +76,34 @@ export async function handleListRequest(
     .eq("is_active", true)
     .order("created_at", { ascending: false });
   if (exportError) return json({ error: "lookup_failed" }, 500);
-  return json({ exports: (exports ?? []) as ExportHistoryItem[] });
+  const exportRows = (exports ?? []) as Array<Record<string, unknown>>;
+  const ids = exportRows.map((row) => String(row.id));
+  let publications: Array<Record<string, unknown>> = [];
+  if (ids.length > 0) {
+    const { data, error } = await client
+      .from("shared_outputs")
+      .select("id, export_metadata_id, visibility, unpublished_at")
+      .eq("content_type", "epub");
+    if (error) return json({ error: "lookup_failed" }, 500);
+    publications = ((data ?? []) as Array<Record<string, unknown>>)
+      .filter((row) => ids.includes(String(row.export_metadata_id)));
+  }
+  const publicationByExport = new Map(
+    publications.map((row) => [String(row.export_metadata_id), row]),
+  );
+  return json({
+    exports: exportRows.map((row) => {
+      const publication = publicationByExport.get(String(row.id));
+      const visible = publication &&
+        ["shared", "unlisted"].includes(String(publication.visibility)) &&
+        !publication.unpublished_at;
+      return {
+        ...row,
+        shared_output_id: visible ? String(publication.id) : null,
+        is_publicly_shared: Boolean(visible),
+      };
+    }) as ExportHistoryItem[],
+  });
 }
 
 serve((req) => {

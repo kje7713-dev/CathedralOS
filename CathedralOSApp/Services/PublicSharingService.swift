@@ -68,6 +68,12 @@ protocol PublicSharingService {
     /// Returns a `PublishResponse` on success; throws `PublicSharingServiceError` on failure.
     func publish(output: GenerationOutput) async throws -> PublishResponse
 
+    /// Publishes one immutable owner EPUB by export_metadata identity.
+    func publishEpub(exportMetadataID: String) async throws -> PublishResponse
+
+    /// Fetches a short-lived signed URL for a currently public EPUB.
+    func fetchSharedEpubDownload(sharedOutputID: String) async throws -> SharedEPUBDownloadResponse
+
     /// Unpublishes the output identified by `sharedOutputID`.
     /// Throws `PublicSharingServiceError` on failure.
     func unpublish(sharedOutputID: String) async throws
@@ -186,6 +192,36 @@ final class BackendPublicSharingService: PublicSharingService {
         } catch {
             throw PublicSharingServiceError.decodingError(error)
         }
+    }
+
+    // MARK: EPUB publication
+
+    func publishEpub(exportMetadataID: String) async throws -> PublishResponse {
+        _ = try await requireSignedIn()
+        let accessToken = try await resolvedAccessToken()
+        guard let url = PublicSharingServiceConfiguration.publishEpubURL else { throw PublicSharingServiceError.endpointNotConfigured }
+        guard UUID(uuidString: exportMetadataID) != nil else { throw PublicSharingServiceError.invalidSharedOutputID }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["exportMetadataID": exportMetadataID])
+        decorateAuthenticatedRequestHeaders(&request, accessToken: accessToken)
+        let (data, response) = try await performRequest(request, retryOnExpiredJWT: true)
+        try validateResponse(response, data: data)
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        do { return try decoder.decode(PublishResponse.self, from: data) }
+        catch { throw PublicSharingServiceError.decodingError(error) }
+    }
+
+    func fetchSharedEpubDownload(sharedOutputID: String) async throws -> SharedEPUBDownloadResponse {
+        guard let url = PublicSharingServiceConfiguration.sharedEpubDownloadURL(sharedOutputID: sharedOutputID) else { throw PublicSharingServiceError.endpointNotConfigured }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        decoratePublicRequestHeaders(&request)
+        let (data, response) = try await performRequest(request, retryOnExpiredJWT: false)
+        try validateResponse(response, data: data)
+        do { return try JSONDecoder().decode(SharedEPUBDownloadResponse.self, from: data) }
+        catch { throw PublicSharingServiceError.decodingError(error) }
     }
 
     // MARK: Cover image upload

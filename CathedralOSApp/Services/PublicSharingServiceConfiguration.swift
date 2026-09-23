@@ -39,6 +39,14 @@ enum PublicSharingServiceConfiguration {
         baseURL?.appendingPathComponent("shared-outputs/\(sharedOutputID)")
     }
 
+    static var publishEpubURL: URL? {
+        baseURL?.appendingPathComponent("shared-outputs/epub")
+    }
+
+    static func sharedEpubDownloadURL(sharedOutputID: String) -> URL? {
+        baseURL?.appendingPathComponent("shared-outputs/\(sharedOutputID)/epub")
+    }
+
     static var publicListURL: URL? {
         baseURL?.appendingPathComponent("shared-outputs")
     }

@@ -145,6 +145,9 @@ struct KindleExportView: View {
 
     // Service (created lazily; uses default BackendClient)
     @State private var service: KindleExportService?
+    private let sharingService: PublicSharingService = BackendPublicSharingService()
+    @State private var publishingExportID: String?
+    @State private var sharingError: String?
 
     /// Fetches the current access token via the shared AuthSessionResolver.
     /// Returns nil if the session is missing or expired.
@@ -484,6 +487,16 @@ struct KindleExportView: View {
                         .disabled(jobState.isInFlight)
 
                         Button {
+                            Task { await togglePublicPublication(export) }
+                        } label: {
+                            Image(systemName: export.is_publicly_shared ? "globe" : "globe.badge.chevron.backward")
+                                .foregroundStyle(export.is_publicly_shared ? CathedralTheme.Colors.accent : CathedralTheme.Colors.secondaryText)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel(export.is_publicly_shared ? "Unpublish EPUB" : "Share EPUB publicly")
+                        .disabled(jobState.isInFlight || publishingExportID != nil)
+
+                        Button {
                             regenerate(export)
                         } label: {
                             Image(systemName: "arrow.clockwise")
@@ -535,7 +548,17 @@ struct KindleExportView: View {
                 pendingDelete = nil
             }
         } message: { target in
-            Text("This permanently removes this exported file. Your story project and generated sections are not affected.")
+            Text(target.is_publicly_shared
+                ? "This EPUB is currently shared publicly. Deleting it will also remove it from Shared. Your story project and generated sections are not affected."
+                : "This permanently removes this exported file. Your story project and generated sections are not affected.")
+        }
+        .alert("Public Sharing", isPresented: Binding(
+            get: { sharingError != nil },
+            set: { if !$0 { sharingError = nil } }
+        )) {
+            Button("OK", role: .cancel) { sharingError = nil }
+        } message: {
+            Text(sharingError ?? "")
         }
     }
 
@@ -771,6 +794,21 @@ struct KindleExportView: View {
             jobState = .failure(error)
         } catch {
             jobState = .failure(.networkError(error.localizedDescription))
+        }
+    }
+
+    private func togglePublicPublication(_ export: KindleExportHistoryItem) async {
+        publishingExportID = export.id
+        defer { publishingExportID = nil }
+        do {
+            if export.is_publicly_shared, let sharedID = export.shared_output_id {
+                try await sharingService.unpublish(sharedOutputID: sharedID)
+            } else {
+                _ = try await sharingService.publishEpub(exportMetadataID: export.id)
+            }
+            await loadPreviousExports()
+        } catch {
+            sharingError = PublicSharingServiceError.displayMessage(from: error)
         }
     }
 

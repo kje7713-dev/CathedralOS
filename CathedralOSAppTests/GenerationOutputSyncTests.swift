@@ -1018,6 +1018,14 @@ private final class MockDeletionSharingService: PublicSharingService {
         fatalError("Not used in GenerationOutputDeletionService tests.")
     }
 
+    func publishEpub(exportMetadataID: String) async throws -> PublishResponse {
+        throw PublicSharingServiceError.endpointNotConfigured
+    }
+
+    func fetchSharedEpubDownload(sharedOutputID: String) async throws -> SharedEPUBDownloadResponse {
+        throw PublicSharingServiceError.endpointNotConfigured
+    }
+
     func unpublish(sharedOutputID: String) async throws {
         unpublishCallCount += 1
         lastUnpublishedID = sharedOutputID
