@@ -478,3 +478,79 @@ extension KindleExportServiceTests {
         XCTAssertEqual(cachedURL.lastPathComponent, "metadata-id.epub")
     }
 }
+
+// MARK: - PR 4 Story Arc Part persistence and derivation
+
+extension KindleExportServiceTests {
+    func testLegacyMetadataDraftWithoutPartNamesDecodes() throws {
+        let json = """
+        {
+          "bookTitle":"Legacy", "authorName":"Author", "copyrightYear":"2026",
+          "copyrightHolder":"", "language":"en", "dedication":"",
+          "bookDescription":"", "aboutAuthor":"", "isbn":"", "publisherName":"",
+          "seriesName":"", "seriesNumber":"", "coverChoice":"skip", "coverUploadPath":null
+        }
+        """.data(using: .utf8)!
+        let draft = try JSONDecoder().decode(KindleExportMetadataDraft.self, from: json)
+        XCTAssertNil(draft.partNames)
+    }
+
+    func testPartNamesSurviveMetadataDraftEncodeDecode() throws {
+        let draft = KindleExportMetadataDraft(
+            bookTitle: "Book", authorName: "Author", copyrightYear: "2026",
+            copyrightHolder: "", language: "en", dedication: "", bookDescription: "",
+            aboutAuthor: "", isbn: "", publisherName: "", seriesName: "", seriesNumber: "",
+            coverChoice: .skip, coverUploadPath: nil, acknowledgements: nil,
+            partNames: ["part-1": "The Signal", "part-2": "The Return"]
+        )
+        let decoded = try JSONDecoder().decode(KindleExportMetadataDraft.self, from: JSONEncoder().encode(draft))
+        XCTAssertEqual(decoded.partNames, draft.partNames)
+    }
+
+    func testEmptyPartNamesAreOmittedFromRequestJSON() throws {
+        let request = KindleExportRequest(
+            project_id: "p", book_title: "t", author_name: "a", copyright_year: nil,
+            copyright_holder: nil, language: nil, dedication: nil, book_description: nil,
+            about_author: nil, isbn: nil, publisher_name: nil, series_name: nil,
+            series_number: nil, cover_image_url: nil, cover_image_ai_generate: nil,
+            acknowledgements: nil, part_names: nil
+        )
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertNil(json["part_names"])
+    }
+
+    func testPartNamesSerializeInRequestJSON() throws {
+        let request = KindleExportRequest(
+            project_id: "p", book_title: "t", author_name: "a", copyright_year: nil,
+            copyright_holder: nil, language: nil, dedication: nil, book_description: nil,
+            about_author: nil, isbn: nil, publisher_name: nil, series_name: nil,
+            series_number: nil, cover_image_url: nil, cover_image_ai_generate: nil,
+            acknowledgements: nil, part_names: ["part-1": "The Signal"]
+        )
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertEqual((json["part_names"] as? [String: String])?["part-1"], "The Signal")
+    }
+
+    func testPartDeriverUsesOutlineLinkedArcAndEmptyRoleBeatIdentity() {
+        let project = StoryProject(name: "Parts")
+        let unrelated = StoryArc()
+        let linked = StoryArc()
+        let outline = Outline(name: "Linked Outline")
+        outline.storyArcID = linked.id
+        project.storyArcs = [unrelated, linked]
+        project.outlines = [outline]
+        let beats = (0..<3).map { StoryArcBeat(position: $0, role: "", label: "Beat \($0)") }
+        linked.beats = beats
+        let chapters = (0..<3).map { index -> OutlineSection in
+            let section = OutlineSection(position: index, title: "Section \(index)")
+            section.storyArcBeatID = beats[index].id
+            section.outline = outline
+            return section
+        }
+        outline.sections = chapters
+
+        let parts = ExportBookPartDeriver.derive(project: project)
+        XCTAssertEqual(parts.map(\.id), ["part-1", "part-2", "part-3"])
+        XCTAssertEqual(parts.flatMap(\.chapterIDs), chapters.map(\.id))
+    }
+}

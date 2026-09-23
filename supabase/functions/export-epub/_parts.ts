@@ -1,4 +1,4 @@
-import type { Chapter, Section } from "./_section_walker.ts";
+import type { Chapter } from "./_section_walker.ts";
 
 export interface StoryArcBeat {
   id: string;
@@ -17,7 +17,13 @@ export interface BookPart {
   position: number;
   default_title: string;
   chapter_ids: string[];
+  beat_ids: string[];
   beat_roles: string[];
+}
+
+export interface DerivedPartAssignments {
+  chapterPartById: Map<string, number>;
+  parts: BookPart[];
 }
 
 const TEMPLATE_IDS = {
@@ -131,95 +137,127 @@ const EXPLICIT_PARTS: Record<string, { roles: string[]; titles: string[] }> = {
   },
 };
 
-export function deriveBookParts(
+/** Derive semantic Parts, then normalize their chapter assignments in reading order. */
+export function derivePartAssignments(
   chapters: Chapter[],
   arc: StoryArcInfo | null,
-): BookPart[] {
-  if (!arc || arc.beats.length === 0 || chapters.length === 0) return [];
+): DerivedPartAssignments {
+  const empty: DerivedPartAssignments = {
+    chapterPartById: new Map(),
+    parts: [],
+  };
+  if (!arc || arc.beats.length === 0 || chapters.length === 0) return empty;
 
-  const orderedBeats = [...arc.beats].sort((a, b) => a.position - b.position);
+  const beats = [...arc.beats].sort((a, b) =>
+    a.position - b.position || a.id.localeCompare(b.id)
+  );
   const templateID = arc.template_id?.toLowerCase() ?? "";
   const explicit = EXPLICIT_PARTS[templateID];
-  const threePartRoles = THREE_PART_ROLES[templateID];
-  const roles = explicit?.roles ?? threePartRoles ??
-    orderedBeats.map((b) => b.role);
-  if (roles.length === 0) return [];
+  const semanticRoles = explicit?.roles ?? THREE_PART_ROLES[templateID] ?? [];
+  const desiredByBeat = new Map<string, number>();
+  const desiredByRole = new Map<string, number>();
 
-  const partCount = explicit?.roles.length ??
-    (threePartRoles ? 3 : Math.min(3, roles.length));
-  const roleToPart = new Map<string, number>();
   if (explicit) {
-    explicit.roles.forEach((role, index) => roleToPart.set(role, index));
-  } else if (threePartRoles) {
+    explicit.roles.forEach((role, index) => desiredByRole.set(role, index));
+  } else if (semanticRoles.length > 0) {
     const boundaries = THREE_PART_BOUNDARIES[templateID];
-    threePartRoles.forEach((role, index) => {
-      roleToPart.set(
+    semanticRoles.forEach((role, index) => {
+      desiredByRole.set(
         role,
         index < boundaries[0] ? 0 : index < boundaries[1] ? 1 : 2,
       );
     });
-  } else {
-    // Custom arcs use contiguous thirds of the ordered beats. This is stable,
-    // preserves order, and never invents a fourth hierarchy level.
-    const base = Math.ceil(roles.length / partCount);
-    roles.forEach((role, index) =>
-      roleToPart.set(role, Math.min(partCount - 1, Math.floor(index / base)))
-    );
   }
 
-  const chapterParts = new Map<string, number>();
-  let previousPart = 0;
-  const taggedChapterParts: Array<{ chapterIndex: number; part: number }> = [];
-  for (let index = 0; index < chapters.length; index++) {
-    const role = chapterRole(chapters[index].sections);
-    const part = role ? roleToPart.get(role) : undefined;
-    if (part !== undefined) {
-      previousPart = part;
-      taggedChapterParts.push({ chapterIndex: index, part });
-      chapterParts.set(chapters[index].id, part);
-    } else if (taggedChapterParts.length > 0) {
-      chapterParts.set(chapters[index].id, previousPart);
-    } else {
-      chapterParts.set(chapters[index].id, 0);
+  if (semanticRoles.length === 0) {
+    // Custom arcs use beat ID + position. Role is deliberately ignored: real
+    // user-added beats have role == "".
+    const partCount = Math.min(3, beats.length);
+    for (const [index, beat] of beats.entries()) {
+      desiredByBeat.set(
+        beat.id.toLowerCase(),
+        Math.floor(index * partCount / beats.length),
+      );
+    }
+  } else {
+    // Resolve every actual beat by ID. Unknown/user-added beats inherit the
+    // previous semantic Part, or the next known Part when they precede it.
+    const desired = beats.map((beat) =>
+      desiredByRole.get(beat.role.trim().toLowerCase())
+    );
+    let nextKnown = 0;
+    for (let index = desired.length - 1; index >= 0; index--) {
+      if (desired[index] !== undefined) nextKnown = desired[index]!;
+      else desired[index] = nextKnown;
+    }
+    let previous = desired[0] ?? 0;
+    for (const [index, beat] of beats.entries()) {
+      const rolePart = desiredByRole.get(beat.role.trim().toLowerCase());
+      if (rolePart !== undefined) previous = rolePart;
+      else desired[index] = index === 0 ? desired[index] ?? 0 : previous;
+      desiredByBeat.set(
+        beat.id.toLowerCase(),
+        Math.max(0, desired[index] ?? previous),
+      );
     }
   }
 
-  // If a malformed/custom arc skips a group, compact the result so no empty
-  // Part is emitted and all generated chapters remain assigned exactly once.
-  const used = new Set(chapterParts.values());
-  const remap = new Map<number, number>();
-  [...used].sort((a, b) => a - b).forEach((part, index) =>
-    remap.set(part, index)
-  );
-  const compacted = new Map<string, number>();
-  for (const [chapterID, part] of chapterParts) {
-    compacted.set(chapterID, remap.get(part) ?? 0);
+  const rawChapterParts: Array<number | undefined> = chapters.map((chapter) => {
+    for (const section of chapter.sections) {
+      const beatID = section.story_arc_beat_id?.toLowerCase();
+      if (beatID && desiredByBeat.has(beatID)) return desiredByBeat.get(beatID);
+    }
+    return undefined;
+  });
+
+  // Beginning untagged chapters are Part 0; middle/end untagged chapters
+  // inherit the current Part. Clamping prevents semantic reordering of prose.
+  const normalized: number[] = [];
+  let current = 0;
+  for (const raw of rawChapterParts) {
+    current = Math.max(current, raw ?? current);
+    normalized.push(current);
   }
 
+  const used = [...new Set(normalized)].sort((a, b) => a - b);
+  const compact = new Map(used.map((source, index) => [source, index]));
+  const chapterPartById = new Map<string, number>();
+  chapters.forEach((chapter, index) =>
+    chapterPartById.set(chapter.id, compact.get(normalized[index]) ?? 0)
+  );
+
+  const partCount = used.length;
   const titles = explicit?.titles ??
-    Array.from({ length: partCount }, (_, i) => `Part ${roman(i + 1)}`);
-  return [...remap.entries()].sort((a, b) => a[1] - b[1]).map(
-    ([sourcePart, position]) => {
-      const chapterIDs = chapters.filter((chapter) =>
-        compacted.get(chapter.id) === position
-      ).map((chapter) => chapter.id);
-      const beatRoles = roles.filter((role) =>
-        (roleToPart.get(role) ?? 0) === sourcePart
-      );
-      return {
-        id: `part-${position + 1}`,
-        position,
-        default_title: titles[sourcePart] ?? `Part ${roman(position + 1)}`,
-        chapter_ids: chapterIDs,
-        beat_roles: beatRoles,
-      };
-    },
-  ).filter((part) => part.chapter_ids.length > 0);
+    Array.from({ length: partCount }, (_, index) => `Part ${roman(index + 1)}`);
+  const parts: BookPart[] = Array.from({ length: partCount }, (_, position) => {
+    const sourcePart = used[position];
+    const chapterIDs = chapters.filter((chapter) =>
+      chapterPartById.get(chapter.id) === position
+    ).map((chapter) => chapter.id);
+    const partBeatEntries = beats.filter((beat) => {
+      const source = desiredByBeat.get(beat.id.toLowerCase()) ?? 0;
+      const target = compact.get(source) ??
+        used.findIndex((candidate) => candidate > source);
+      return (target < 0 ? used.length - 1 : target) === position;
+    });
+    return {
+      id: `part-${position + 1}`,
+      position,
+      default_title: titles[position] ?? `Part ${roman(position + 1)}`,
+      chapter_ids: chapterIDs,
+      beat_ids: partBeatEntries.map((beat) => beat.id),
+      beat_roles: partBeatEntries.map((beat) => beat.role).filter(Boolean),
+    };
+  }).filter((part) => part.chapter_ids.length > 0);
+
+  return { chapterPartById, parts };
 }
 
-function chapterRole(sections: Section[]): string | null {
-  return sections.find((section) => section.story_arc_beat_id)
-    ?.story_arc_role ?? null;
+export function deriveBookParts(
+  chapters: Chapter[],
+  arc: StoryArcInfo | null,
+): BookPart[] {
+  return derivePartAssignments(chapters, arc).parts;
 }
 
 function roman(value: number): string {

@@ -32,6 +32,8 @@ on:
       - 'supabase/tests/database/provider_billing_alerts.test.sql'
       - 'supabase/tests/database/epub_acknowledgements_rpc.test.sql'
       - 'supabase/tests/database/export_history_persistence_rpc.test.sql'
+      - 'supabase/migrations/20260923160000_epub_story_arc_parts.sql'
+      - 'supabase/tests/database/epub_story_arc_parts_rpc.test.sql'
       - '.github/workflows/pr-521-ci.yml'
 
 jobs:
@@ -227,6 +229,11 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/epub_acknowledgements_rpc.test.sql
+      # PR 4: Part-name column, 20-argument RPC, privileges, and history semantics.
+      - name: Run EPUB Story Arc Parts RPC pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/epub_story_arc_parts_rpc.test.sql
       # PR #620: persistent history lifecycle + current promotion.
       - name: Run export history persistence pgTAP test
         run: >-

@@ -191,8 +191,8 @@ Deno.test("EPUB writer: emits conventional landmarks with conditional cover", as
   assertStringIncludes(withCoverNav, 'epub:type="toc" href="nav.xhtml"');
   assertStringIncludes(withCoverNav, 'epub:type="bodymatter" href="text/section-1.xhtml"');
 
-  const hrefs = [...withCoverNav.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
-  for (const href of hrefs) {
+  const landmarkHrefs = [...withCoverNav.matchAll(/epub:type="(?:cover|bodymatter|toc)" href="([^"]+)"/g)].map((match) => match[1]);
+  for (const href of landmarkHrefs) {
     assertExists(withCoverZip.file(`OEBPS/${href}`), `landmark href must exist: ${href}`);
   }
 });
@@ -1235,17 +1235,11 @@ Deno.test("EPUB writer: acknowledgements appears after story content in spine an
   const src = Deno.readTextFileSync(new URL("./_epub_writer.ts", import.meta.url));
   // spineEntries pushes sectionFiles first, then conditionally the acknowledgements itemref.
   // Verify the acknowledgements spine push sits AFTER the sectionFiles spread.
-  const sectionSpineIdx = src.indexOf(
-    "spineEntries.push(...sectionFiles.map((sf) => `<itemref idref=\"${sf.id}\"/>`));",
-  );
+  const orderedSpineIdx = src.indexOf("for (const sf of sectionFiles)");
   const ackSpineIdx = src.indexOf('spineEntries.push(`<itemref idref="acknowledgements"/>`);');
-  assertEquals(sectionSpineIdx >= 0, true, "sectionFiles spine push must exist");
+  assertEquals(orderedSpineIdx >= 0, true, "ordered sectionFiles spine loop must exist");
   assertEquals(ackSpineIdx >= 0, true, "acknowledgements spine push must exist");
-  assertEquals(
-    ackSpineIdx > sectionSpineIdx,
-    true,
-    "acknowledgements spine push must follow sectionFiles",
-  );
+  assertEquals(ackSpineIdx > orderedSpineIdx, true, "acknowledgements spine push must follow ordered story loop");
 });
 
 
@@ -1325,4 +1319,230 @@ Deno.test("PR4: EPUB writer emits Part dividers and nested child anchors", async
   assertStringIncludes(nav, "section-1-child-1");
   assertStringIncludes(ncx, '<meta name="dtb:depth" content="3"/>');
   assertStringIncludes(ncx, "#section-1-child-1");
+});
+
+// =============================================================================
+// PR 4 acceptance regressions: order, identity, navigation, and fallbacks
+// =============================================================================
+
+function makeCustomFixture(
+  count: number,
+  tagged: boolean[] = Array.from({ length: count }, () => true),
+): { outline: ProjectOutline; arc: StoryArcInfo } {
+  const arc: StoryArcInfo = {
+    template_id: null,
+    beats: Array.from({ length: count }, (_, index) => ({
+      id: `custom-beat-${index + 1}`,
+      position: index,
+      role: "",
+      label: `Beat ${index + 1}`,
+    })),
+  };
+  const chapters = tagged.map((isTagged, index) => ({
+    id: `custom-chapter-${index + 1}`,
+    title: `Custom Chapter ${index + 1}`,
+    position: index,
+    sections: [{
+      id: `custom-section-${index + 1}`,
+      title: `Custom Section ${index + 1}`,
+      container: "chapter" as const,
+      pov: null,
+      body: `Custom prose ${index + 1}.`,
+      position: 0,
+      parent_id: null,
+      story_arc_beat_id: isTagged ? arc.beats[index % count].id : null,
+      story_arc_role: null,
+    }],
+  }));
+  return {
+    arc,
+    outline: {
+      id: "custom-outline",
+      title: "Custom Outline",
+      chapters,
+      parts: deriveBookParts(chapters, arc),
+    },
+  };
+}
+
+function spineIDs(opf: string): string[] {
+  return [...opf.matchAll(/<itemref idref="([^"]+)"\/>/g)].map((match) => match[1]);
+}
+
+function ncxPlayOrders(ncx: string): number[] {
+  return [...ncx.matchAll(/playOrder="(\d+)"/g)].map((match) => Number(match[1]));
+}
+
+Deno.test("PR4 order invariant: non-monotonic semantic beats never reorder chapters", async () => {
+  const outline = makePartFixture(
+    "a0000001-0000-0000-0000-000000000001",
+    ["setup", "climax", "rising_action", "resolution"],
+  );
+  assertEquals(outline.parts.map((part) => part.chapter_ids), [
+    ["chapter-1"],
+    ["chapter-2", "chapter-3", "chapter-4"],
+  ]);
+  const zip = await JSZip.loadAsync(await writeEpub({ book_title: "Order", author_name: "A", language: "en" }, outline, null));
+  const opf = await readZipText(zip, "OEBPS/content.opf");
+  assertEquals(spineIDs(opf), ["part-1", "section-1", "part-2", "section-2", "section-3", "section-4"]);
+});
+
+Deno.test("PR4 custom arcs use empty-role beat IDs and deterministic grouping", () => {
+  for (const [count, expectedParts] of [[1, 1], [2, 2], [3, 3], [7, 3]] as const) {
+    const first = makeCustomFixture(count).outline;
+    const second = makeCustomFixture(count).outline;
+    assertEquals(first.parts.length, expectedParts);
+    assertEquals(first.parts.map((part) => part.chapter_ids), second.parts.map((part) => part.chapter_ids));
+    assertEquals(first.parts.flatMap((part) => part.chapter_ids), first.chapters.map((chapter) => chapter.id));
+    assertEquals(first.parts.flatMap((part) => part.beat_ids), Array.from({ length: count }, (_, index) => `custom-beat-${index + 1}`));
+  }
+});
+
+Deno.test("PR4 untagged beginning is retained in the first Part", () => {
+  const { outline, arc } = makeCustomFixture(2, [false, false, true, true]);
+  const parts = deriveBookParts(outline.chapters, arc);
+  assertEquals(parts.map((part) => part.chapter_ids), [["custom-chapter-1", "custom-chapter-2", "custom-chapter-3"], ["custom-chapter-4"]]);
+});
+
+Deno.test("PR4 untagged middle inherits the preceding contiguous Part", () => {
+  const { outline, arc } = makeCustomFixture(3, [true, false, true]);
+  const parts = deriveBookParts(outline.chapters, arc);
+  assertEquals(parts.map((part) => part.chapter_ids), [["custom-chapter-1", "custom-chapter-2"], ["custom-chapter-3"]]);
+});
+
+Deno.test("PR4 untagged ending inherits the final Part", () => {
+  const { outline, arc } = makeCustomFixture(2, [true, false, false]);
+  const parts = deriveBookParts(outline.chapters, arc);
+  assertEquals(parts.map((part) => part.chapter_ids), [["custom-chapter-1", "custom-chapter-2", "custom-chapter-3"]]);
+});
+
+Deno.test("PR4 built-in complete role sequences preserve exact semantic boundaries", () => {
+  const fixtures: Array<[string, string[], number[]]> = [
+    ["a0000001-0000-0000-0000-000000000001", ["setup", "inciting_incident", "first_plot_point", "rising_action", "midpoint", "crisis", "climax", "resolution"], [3, 3, 2]],
+    ["a0000001-0000-0000-0000-000000000002", ["ordinary_world", "call_to_adventure", "refusal_of_call", "meeting_mentor", "crossing_threshold", "tests_allies_enemies", "approach_inmost_cave", "ordeal", "reward", "road_back", "resurrection", "return_with_elixir"], [5, 4, 3]],
+    ["a0000001-0000-0000-0000-000000000003", ["the_crime", "investigation_begins", "first_suspect", "rising_tension", "key_revelation", "false_solution", "real_clue", "confrontation", "resolution"], [3, 4, 2]],
+    ["a0000001-0000-0000-0000-000000000004", ["opening_image", "theme_stated", "setup", "catalyst", "debate", "break_into_two", "b_story", "fun_and_games", "midpoint", "bad_guys_close_in", "all_is_lost", "dark_night_of_the_soul", "break_into_three", "finale", "final_image"], [5, 7, 3]],
+    ["a0000001-0000-0000-0000-000000000005", ["you", "need", "go", "search", "find", "take", "return", "change"], [3, 3, 2]],
+    ["a0000001-0000-0000-0000-000000000006", ["exposition", "rising_action", "climax", "falling_action", "denouement"], [1, 1, 1, 1, 1]],
+    ["a0000001-0000-0000-0000-000000000007", ["ki", "sho", "ten", "ketsu"], [1, 1, 1, 1]],
+  ];
+  for (const [templateID, roles, expectedCounts] of fixtures) {
+    const outline = makePartFixture(templateID, roles);
+    assertEquals(outline.parts.map((part) => part.chapter_ids.length), expectedCounts, templateID);
+    assertEquals(outline.parts.flatMap((part) => part.chapter_ids), outline.chapters.map((chapter) => chapter.id));
+  }
+});
+
+Deno.test("PR4 built-in edited beat with empty role inherits the surrounding semantic Part", () => {
+  const outline = makePartFixture("a0000001-0000-0000-0000-000000000001", ["setup", "", "rising_action", "climax", "resolution"]);
+  assertEquals(outline.parts.flatMap((part) => part.chapter_ids), outline.chapters.map((chapter) => chapter.id));
+  assertEquals(outline.parts.map((part) => part.chapter_ids), [["chapter-1", "chapter-2"], ["chapter-3"], ["chapter-4", "chapter-5"]]);
+});
+
+Deno.test("PR4 no-Part fallback keeps child navigation and correct NCX depth", async () => {
+  const outline = makeAcknowledgementsFixture();
+  const zip = await JSZip.loadAsync(await writeEpub({ book_title: "Fallback", author_name: "A", language: "en" }, outline, null));
+  const nav = await readZipText(zip, "OEBPS/nav.xhtml");
+  const ncx = await readZipText(zip, "OEBPS/toc.ncx");
+  const opf = await readZipText(zip, "OEBPS/content.opf");
+  assertStringIncludes(nav, "section-1-section-2");
+  assertStringIncludes(ncx, "section-1-section-2");
+  assertStringIncludes(ncx, '<meta name="dtb:depth" content="2"/>');
+  assertEquals(spineIDs(opf), ["section-1"]);
+});
+
+Deno.test("PR4 root-without-prose still renders and navigates a generated child", async () => {
+  const rootId = "root-empty";
+  const childId = "child-generated";
+  const outline: ProjectOutline = {
+    id: "root-empty-outline",
+    title: "Root Empty",
+    parts: [],
+    chapters: [{
+      id: "root-empty-chapter",
+      title: "Root Chapter",
+      position: 0,
+      sections: [
+        { id: rootId, title: "Root", container: "chapter", pov: null, body: "", position: 0, parent_id: null, story_arc_beat_id: null, story_arc_role: null },
+        { id: childId, title: "Generated Child", container: "scene", pov: null, body: "Child prose.", position: 0, parent_id: rootId, story_arc_beat_id: null, story_arc_role: null },
+      ],
+    }],
+  };
+  const zip = await JSZip.loadAsync(await writeEpub({ book_title: "Root", author_name: "A", language: "en" }, outline, null));
+  const story = await readZipText(zip, "OEBPS/text/section-1.xhtml");
+  const nav = await readZipText(zip, "OEBPS/nav.xhtml");
+  const ncx = await readZipText(zip, "OEBPS/toc.ncx");
+  assertStringIncludes(story, '<h2 id="section-1-child-generated">Generated Child</h2>');
+  assertStringIncludes(nav, "section-1-child-generated");
+  assertStringIncludes(ncx, "section-1-child-generated");
+});
+
+Deno.test("PR4 NCX playOrder is sequential, parent-first, and depth matches hierarchy", async () => {
+  const outline = makePartFixture("a0000001-0000-0000-0000-000000000001", ["setup", "rising_action", "climax"]);
+  outline.chapters[0].sections.push({ id: "child-1", title: "Child", container: "scene", pov: null, body: "Child prose.", position: 1, parent_id: "section-1", story_arc_beat_id: null, story_arc_role: null });
+  const zip = await JSZip.loadAsync(await writeEpub({ book_title: "NCX", author_name: "A", language: "en", acknowledgements: "Thanks" }, outline, null));
+  const ncx = await readZipText(zip, "OEBPS/toc.ncx");
+  assertEquals(ncxPlayOrders(ncx), Array.from({ length: 8 }, (_, index) => index + 1));
+  assertEquals(ncx.indexOf('navPoint-part-1') < ncx.indexOf('navPoint-section-1'), true);
+  assertEquals(ncx.indexOf('navPoint-section-1') < ncx.indexOf('navPoint-child-1'), true);
+  assertStringIncludes(ncx, '<meta name="dtb:depth" content="3"/>');
+  assertStringIncludes(ncx, 'navPoint-acknowledgements" playOrder="8"');
+});
+
+Deno.test("PR4 generated prose is preserved exactly once and divider pages contain no prose", async () => {
+  const outline = makePartFixture("a0000001-0000-0000-0000-000000000001", ["setup", "rising_action", "climax"]);
+  outline.chapters[0].sections.push({ id: "child-1", title: "Child", container: "scene", pov: null, body: "Child unique prose.", position: 1, parent_id: "section-1", story_arc_beat_id: null, story_arc_role: null });
+  const zip = await JSZip.loadAsync(await writeEpub({ book_title: "Prose", author_name: "A", language: "en" }, outline, null));
+  const allStory = await Promise.all(outline.chapters.map((_, index) => readZipText(zip, `OEBPS/text/section-${index + 1}.xhtml`).catch(() => "")));
+  for (const prose of ["Prose 1.", "Child unique prose.", "Prose 2.", "Prose 3."]) {
+    assertEquals(allStory.join("\n").split(prose).length - 1, 1, prose);
+  }
+  for (const part of outline.parts) {
+    const divider = await readZipText(zip, `OEBPS/text/${part.id}.xhtml`);
+    assertEquals(divider.includes("Prose "), false);
+    assertStringIncludes(divider, 'href="../styles.css"');
+  }
+});
+
+Deno.test("PR4 Part dividers are unique manifest/spine resources at story boundaries", async () => {
+  const outline = makePartFixture("a0000001-0000-0000-0000-000000000001", ["setup", "rising_action", "climax"]);
+  const zip = await JSZip.loadAsync(await writeEpub({ book_title: "Boundaries", author_name: "A", language: "en" }, outline, null));
+  const opf = await readZipText(zip, "OEBPS/content.opf");
+  const ids = spineIDs(opf);
+  assertEquals(ids, ["part-1", "section-1", "part-2", "section-2", "part-3", "section-3"]);
+  for (const part of outline.parts) {
+    assertEquals((opf.match(new RegExp(`id="${part.id}"`, "g")) ?? []).length, 1);
+    assertEquals((opf.match(new RegExp(`idref="${part.id}"`, "g")) ?? []).length, 1);
+    assertExists(zip.file(`OEBPS/text/${part.id}.xhtml`));
+  }
+});
+
+Deno.test("PR4 NCX depth covers flat and child hierarchies with and without Parts", async () => {
+  const flat = makeAcknowledgementsFixture();
+  const flatWithParts = makePartFixture("a0000001-0000-0000-0000-000000000001", ["setup"]);
+  const childWithParts = makePartFixture("a0000001-0000-0000-0000-000000000001", ["setup"]);
+  childWithParts.chapters[0].sections.push({ id: "depth-child", title: "Depth Child", container: "scene", pov: null, body: "Child.", position: 1, parent_id: "section-1", story_arc_beat_id: null, story_arc_role: null });
+  for (const [outline, expected] of [[flat, "2"], [flatWithParts, "2"], [childWithParts, "3"]] as const) {
+    const zip = await JSZip.loadAsync(await writeEpub({ book_title: "Depth", author_name: "A", language: "en" }, outline, null));
+    const ncx = await readZipText(zip, "OEBPS/toc.ncx");
+    assertStringIncludes(ncx, `<meta name="dtb:depth" content="${expected}"/>`);
+  }
+  const noHierarchy: ProjectOutline = {
+    ...flat,
+    chapters: [{ ...flat.chapters[0], sections: [flat.chapters[0].sections[0]] }],
+  };
+  const zip = await JSZip.loadAsync(await writeEpub({ book_title: "Depth", author_name: "A", language: "en" }, noHierarchy, null));
+  const ncx = await readZipText(zip, "OEBPS/toc.ncx");
+  assertStringIncludes(ncx, '<meta name="dtb:depth" content="1"/>');
+});
+
+Deno.test("PR4 every generated child fragment in nav resolves in its story XHTML", async () => {
+  const outline = makePartFixture("a0000001-0000-0000-0000-000000000001", ["setup", "rising_action"]);
+  outline.chapters[0].sections.push({ id: "fragment-child", title: "Fragment Child", container: "scene", pov: null, body: "Child.", position: 1, parent_id: "section-1", story_arc_beat_id: null, story_arc_role: null });
+  const zip = await JSZip.loadAsync(await writeEpub({ book_title: "Fragments", author_name: "A", language: "en" }, outline, null));
+  const nav = await readZipText(zip, "OEBPS/nav.xhtml");
+  for (const match of nav.matchAll(/href="(text\/section-[^"]+\.xhtml)#([^"]+)"/g)) {
+    const story = await readZipText(zip, `OEBPS/${match[1]}`);
+    assertStringIncludes(story, `id="${match[2]}"`);
+  }
 });

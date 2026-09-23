@@ -43,7 +43,7 @@ struct KindleExportMetadataDraft: Codable {
     var acknowledgements: String?
     // PR 4: optional user titles keyed by deterministic Part IDs. Optional keeps
     // drafts written before Parts backward-compatible.
-    var partNames: [String: String]?
+    var partNames: [String: String]? = nil
 }
 
 // MARK: - JobState
@@ -329,13 +329,13 @@ struct KindleExportView: View {
         Section("Content") {
             let counts = computeContentCounts()
             HStack {
-                Text("Chapters")
+                Text("Parts")
                 Spacer()
-                Text("\(counts.chapters)")
+                Text("\(counts.parts)")
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
             HStack {
-                Text("Sections")
+                Text("Reading sections")
                 Spacer()
                 Text("\(counts.sections)")
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
@@ -353,39 +353,13 @@ struct KindleExportView: View {
 
     private struct ExportPartDraft: Identifiable {
         let id: String
-        let defaultTitle: String
+        let label: String
+        let defaultSubtitle: String?
     }
 
     private var exportPartDrafts: [ExportPartDraft] {
-        guard let arc = project.storyArcs.first,
-              !arc.beats.isEmpty,
-              let outline = project.outlines.first,
-              !outline.sections.isEmpty else { return [] }
-        let templateID = arc.templateID?.uuidString.lowercased() ?? ""
-        let knownCounts: [String: Int] = [
-            "a0000001-0000-0000-0000-000000000001": 3,
-            "a0000001-0000-0000-0000-000000000002": 3,
-            "a0000001-0000-0000-0000-000000000003": 3,
-            "a0000001-0000-0000-0000-000000000004": 3,
-            "a0000001-0000-0000-0000-000000000005": 3,
-            "a0000001-0000-0000-0000-000000000006": 5,
-            "a0000001-0000-0000-0000-000000000007": 4
-        ]
-        let count = knownCounts[templateID] ?? min(3, max(1, arc.beats.count))
-        return (0..<count).map { index in
-            let roman = ["I", "II", "III", "IV", "V"][index]
-            let title: String
-            if templateID == "a0000001-0000-0000-0000-000000000006" {
-                title = ["Exposition", "Rising Action", "Climax", "Falling Action", "Denouement"][index]
-            } else if templateID == "a0000001-0000-0000-0000-000000000007" {
-                title = ["Ki", "Shō", "Ten", "Ketsu"][index]
-            } else {
-                title = "Part \(roman)"
-            }
-            return ExportPartDraft(
-                id: "part-\(index + 1)",
-                defaultTitle: title == "Part \(roman)" ? title : "Part \(roman) — \(title)"
-            )
+        ExportBookPartDeriver.derive(project: project).map {
+            ExportPartDraft(id: $0.id, label: $0.label, defaultSubtitle: $0.defaultSubtitle)
         }
     }
 
@@ -398,8 +372,15 @@ struct KindleExportView: View {
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                     ForEach(exportPartDrafts) { part in
                         HStack {
-                            Text(part.defaultTitle)
-                                .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(part.label)
+                                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                                if let subtitle = part.defaultSubtitle {
+                                    Text(subtitle)
+                                        .font(CathedralTheme.Typography.caption())
+                                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                                }
+                            }
                             TextField("Optional title", text: Binding(
                                 get: { partNames[part.id] ?? "" },
                                 set: { partNames[part.id] = $0 }
@@ -984,6 +965,7 @@ struct KindleExportView: View {
 
     private struct ContentCountsResult {
         var chapters: Int
+        var parts: Int
         var sections: Int
         var previewTitles: [String]
     }
@@ -1009,6 +991,7 @@ struct KindleExportView: View {
 
         return ContentCountsResult(
             chapters: chapters.count,
+            parts: ExportBookPartDeriver.derive(project: project).count,
             sections: chapters.count + childSections.count,
             previewTitles: previewTitles
         )
