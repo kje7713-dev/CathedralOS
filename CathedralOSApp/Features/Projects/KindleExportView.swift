@@ -41,6 +41,9 @@ struct KindleExportMetadataDraft: Codable {
     // PR #619 (EPUB Acknowledgements): optional for backward compatibility with
     // drafts saved before this field was introduced. Old drafts decode with nil.
     var acknowledgements: String?
+    // PR 4: optional user titles keyed by deterministic Part IDs. Optional keeps
+    // drafts written before Parts backward-compatible.
+    var partNames: [String: String]? = nil
 }
 
 // MARK: - JobState
@@ -110,6 +113,7 @@ struct KindleExportView: View {
     @State private var seriesNumber: String = ""
     // PR #619 (EPUB Acknowledgements): empty string treated as absent on save/send.
     @State private var acknowledgements: String = ""
+    @State private var partNames: [String: String] = [:]
 
     // Cover image
     @State private var coverChoice: CoverChoice = .skip
@@ -191,6 +195,7 @@ struct KindleExportView: View {
                 bookMetadataSection
                 coverImageSection
                 sectionPreviewSection
+                bookPartsSection
                 optionalMetadataSection
                 previousExportsSection
                 statusSection
@@ -324,13 +329,13 @@ struct KindleExportView: View {
         Section("Content") {
             let counts = computeContentCounts()
             HStack {
-                Text("Chapters")
+                Text("Parts")
                 Spacer()
-                Text("\(counts.chapters)")
+                Text("\(counts.parts)")
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
             HStack {
-                Text("Sections")
+                Text("Reading sections")
                 Spacer()
                 Text("\(counts.sections)")
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
@@ -340,6 +345,50 @@ struct KindleExportView: View {
                     ForEach(counts.previewTitles, id: \.self) { title in
                         Text(title)
                             .font(CathedralTheme.Typography.body(13))
+                    }
+                }
+            }
+        }
+    }
+
+    private struct ExportPartDraft: Identifiable {
+        let id: String
+        let label: String
+        let defaultSubtitle: String?
+    }
+
+    private var exportPartDrafts: [ExportPartDraft] {
+        ExportBookPartDeriver.derive(project: project).map {
+            ExportPartDraft(id: $0.id, label: $0.label, defaultSubtitle: $0.defaultSubtitle)
+        }
+    }
+
+    private var bookPartsSection: some View {
+        Group {
+            if !exportPartDrafts.isEmpty {
+                Section("Book Parts") {
+                    Text("Part titles appear as divider pages and in the table of contents.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    ForEach(exportPartDrafts) { part in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(part.label)
+                                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
+                                if let subtitle = part.defaultSubtitle {
+                                    Text(subtitle)
+                                        .font(CathedralTheme.Typography.caption())
+                                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                                }
+                            }
+                            TextField("Optional title", text: Binding(
+                                get: { partNames[part.id] ?? "" },
+                                set: { partNames[part.id] = $0 }
+                            ))
+                        }
+                    }
+                    Button("Save Part Titles", systemImage: "square.and.arrow.down") {
+                        saveMetadata()
                     }
                 }
             }
@@ -545,7 +594,8 @@ struct KindleExportView: View {
             seriesNumber: seriesNumber,
             coverChoice: coverChoice,
             coverUploadPath: coverUploadPath,
-            acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements
+            acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements,
+            partNames: partNames.isEmpty ? nil : partNames
         )
         do {
             UserDefaults.standard.set(try JSONEncoder().encode(draft), forKey: metadataDefaultsKey)
@@ -576,6 +626,7 @@ struct KindleExportView: View {
         coverUploadPath = draft.coverUploadPath
         // PR #619: nil-coalesce so old drafts decode cleanly.
         acknowledgements = draft.acknowledgements ?? ""
+        partNames = draft.partNames ?? [:]
         metadataWasSaved = true
     }
 
@@ -813,7 +864,8 @@ struct KindleExportView: View {
             series_number: Int(seriesNumber),
             cover_image_url: coverUploadPath,
             cover_image_ai_generate: coverChoice == .aiGenerate ? true : nil,
-            acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements
+            acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements,
+            part_names: partNames.isEmpty ? nil : partNames
         )
 
         // The exporter reads project_snapshots.snapshot_json as its source of
@@ -913,6 +965,7 @@ struct KindleExportView: View {
 
     private struct ContentCountsResult {
         var chapters: Int
+        var parts: Int
         var sections: Int
         var previewTitles: [String]
     }
@@ -938,6 +991,7 @@ struct KindleExportView: View {
 
         return ContentCountsResult(
             chapters: chapters.count,
+            parts: ExportBookPartDeriver.derive(project: project).count,
             sections: chapters.count + childSections.count,
             previewTitles: previewTitles
         )

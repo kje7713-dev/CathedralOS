@@ -107,6 +107,126 @@ enum KindleExportError: Error, LocalizedError {
 
 /// Request body for POST /functions/v1/export-epub.
 /// Field order matches the backend `ExportRequest` interface in supabase/functions/export-epub/index.ts.
+
+
+/// The iOS preview uses the same identity/position rules as the export
+/// backend. It is intentionally a pure rendering helper: it never mutates
+/// StoryArc or Outline data.
+struct ExportBookPart: Identifiable, Equatable {
+    let id: String
+    let position: Int
+    let label: String
+    let defaultSubtitle: String?
+    let sourceSemanticPartIndex: Int
+    let chapterIDs: [UUID]
+
+    var displayName: String {
+        guard let defaultSubtitle, !defaultSubtitle.isEmpty else { return label }
+        return "\(label) — \(defaultSubtitle)"
+    }
+}
+
+enum ExportBookPartDeriver {
+    private static let threePartRoles: [String: [String]] = [
+        "a0000001-0000-0000-0000-000000000001": ["setup", "inciting_incident", "first_plot_point", "rising_action", "midpoint", "crisis", "climax", "resolution"],
+        "a0000001-0000-0000-0000-000000000002": ["ordinary_world", "call_to_adventure", "refusal_of_call", "meeting_mentor", "crossing_threshold", "tests_allies_enemies", "approach_inmost_cave", "ordeal", "reward", "road_back", "resurrection", "return_with_elixir"],
+        "a0000001-0000-0000-0000-000000000003": ["the_crime", "investigation_begins", "first_suspect", "rising_tension", "key_revelation", "false_solution", "real_clue", "confrontation", "resolution"],
+        "a0000001-0000-0000-0000-000000000004": ["opening_image", "theme_stated", "setup", "catalyst", "debate", "break_into_two", "b_story", "fun_and_games", "midpoint", "bad_guys_close_in", "all_is_lost", "dark_night_of_the_soul", "break_into_three", "finale", "final_image"],
+        "a0000001-0000-0000-0000-000000000005": ["you", "need", "go", "search", "find", "take", "return", "change"]
+    ]
+    private static let threePartBoundaries: [String: [Int]] = [
+        "a0000001-0000-0000-0000-000000000001": [3, 6, 8],
+        "a0000001-0000-0000-0000-000000000002": [5, 9, 12],
+        "a0000001-0000-0000-0000-000000000003": [3, 7, 9],
+        "a0000001-0000-0000-0000-000000000004": [5, 12, 15],
+        "a0000001-0000-0000-0000-000000000005": [3, 6, 8]
+    ]
+    private static let explicitParts: [String: ([String], [String])] = [
+        "a0000001-0000-0000-0000-000000000006": (["exposition", "rising_action", "climax", "falling_action", "denouement"], ["Exposition", "Rising Action", "Climax", "Falling Action", "Denouement"]),
+        "a0000001-0000-0000-0000-000000000007": (["ki", "sho", "ten", "ketsu"], ["Ki", "Shō", "Ten", "Ketsu"])
+    ]
+
+    static func derive(project: StoryProject) -> [ExportBookPart] {
+        guard let outline = project.outlines.first(where: { $0.storyArcID != nil }),
+              let arcID = outline.storyArcID,
+              let arc = project.storyArcs.first(where: { $0.id == arcID }) else { return [] }
+        let beats = arc.beats.sorted { $0.position == $1.position ? $0.id.uuidString < $1.id.uuidString : $0.position < $1.position }
+        let chapters = outline.sections.filter { $0.parent == nil }.sorted { $0.position < $1.position }
+        guard !beats.isEmpty, !chapters.isEmpty else { return [] }
+
+        let templateID = arc.templateID?.uuidString.lowercased() ?? ""
+        let explicit = explicitParts[templateID]
+        let roles = explicit?.0 ?? threePartRoles[templateID] ?? []
+        let semanticPartCount = explicit?.0.count ?? (roles.isEmpty ? min(3, beats.count) : 3)
+        var desiredByBeat: [UUID: Int] = [:]
+        var desiredByRole: [String: Int] = [:]
+        if let explicit {
+            for (index, role) in explicit.0.enumerated() { desiredByRole[role] = index }
+        } else if !roles.isEmpty, let boundaries = threePartBoundaries[templateID] {
+            for (index, role) in roles.enumerated() { desiredByRole[role] = index < boundaries[0] ? 0 : index < boundaries[1] ? 1 : 2 }
+        }
+        if roles.isEmpty {
+            for (index, beat) in beats.enumerated() { desiredByBeat[beat.id] = index * semanticPartCount / beats.count }
+        } else {
+            var desired = beats.map { desiredByRole[$0.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] as Int? }
+            var next = semanticPartCount - 1
+            for index in stride(from: desired.count - 1, through: 0, by: -1) {
+                if let value = desired[index] { next = value } else { desired[index] = next }
+            }
+            var previous: Int = desired.first.flatMap { $0 } ?? 0
+            for (index, beat) in beats.enumerated() {
+                if let value = desiredByRole[beat.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] { previous = value }
+                else if index > 0 { desired[index] = previous }
+                desiredByBeat[beat.id] = max(0, desired[index] ?? previous)
+            }
+        }
+
+        let raw = chapters.map { chapter in
+            flattenedSections(chapter).compactMap { $0.storyArcBeatID }.compactMap { desiredByBeat[$0] }.first
+        }
+        let tagged = raw.enumerated().compactMap { $0.element == nil ? nil : $0.offset }
+        let firstTagged = tagged.first
+        let lastTagged = tagged.last
+        var normalized: [Int] = []
+        var current = 0
+        for (index, value) in raw.enumerated() {
+            let target: Int
+            if let value { target = value }
+            else if firstTagged == nil || index < firstTagged! { target = 0 }
+            else if let lastTagged, index > lastTagged { target = semanticPartCount - 1 }
+            else { target = current }
+            current = max(current, target)
+            normalized.append(current)
+        }
+        let used = Array(Set(normalized)).sorted()
+        return used.enumerated().map { renderedIndex, sourceIndex in
+            let chapterIDs = chapters.enumerated().compactMap { index, chapter in
+                normalized[index] == sourceIndex ? chapter.id : nil
+            }
+            let subtitle = explicit.flatMap { $0.1.indices.contains(sourceIndex) ? $0.1[sourceIndex] : nil }
+            return ExportBookPart(
+                id: "part-\(sourceIndex + 1)",
+                position: renderedIndex,
+                label: "Part \(roman(renderedIndex + 1))",
+                defaultSubtitle: subtitle,
+                sourceSemanticPartIndex: sourceIndex,
+                chapterIDs: chapterIDs
+            )
+        }.filter { !$0.chapterIDs.isEmpty }
+    }
+
+    private static func flattenedSections(_ root: OutlineSection) -> [OutlineSection] {
+        [root] + root.children.sorted { $0.position < $1.position }.flatMap { flattenedSections($0) }
+    }
+
+    private static func roman(_ value: Int) -> String {
+        ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"][safe: value - 1] ?? "\(value)"
+    }
+}
+
+private extension Array {
+    subscript(safe index: Index) -> Element? { indices.contains(index) ? self[index] : nil }
+}
 struct KindleExportRequest: Codable {
     let project_id: String
     let book_title: String
@@ -125,6 +245,7 @@ struct KindleExportRequest: Codable {
     let cover_image_ai_generate: Bool?
     // PR #619 (EPUB Acknowledgements): optional back-matter text.
     let acknowledgements: String?
+    let part_names: [String: String]?
 }
 
 /// Response from POST /functions/v1/export-epub (HTTP 202).

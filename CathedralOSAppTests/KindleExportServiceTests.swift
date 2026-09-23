@@ -116,7 +116,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil, part_names: nil
         )
         _ = try await service.kickoff(request: req, userAccessToken: "test-jwt")
         let captured = MockURLProtocol.captured.last!
@@ -145,7 +145,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil, part_names: nil
         )
         let resp = try await service.kickoff(request: req, userAccessToken: "test-jwt")
         XCTAssertEqual(resp.job_id, "job-abc-123")
@@ -177,7 +177,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil, part_names: nil
         )
         do {
             _ = try await service.kickoff(request: req, userAccessToken: "expired-jwt")
@@ -272,7 +272,7 @@ extension KindleExportServiceTests {
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
             cover_image_url: nil, cover_image_ai_generate: nil,
-            acknowledgements: "Thanks"
+            acknowledgements: "Thanks", part_names: nil
         )
         let withJSON = try XCTUnwrap(JSONSerialization.jsonObject(
             with: JSONEncoder().encode(withAcknowledgements)
@@ -285,7 +285,7 @@ extension KindleExportServiceTests {
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
             cover_image_url: nil, cover_image_ai_generate: nil,
-            acknowledgements: nil
+            acknowledgements: nil, part_names: nil
         )
         let withoutJSON = try XCTUnwrap(JSONSerialization.jsonObject(
             with: JSONEncoder().encode(withoutAcknowledgements)
@@ -476,5 +476,132 @@ extension KindleExportServiceTests {
         XCTAssertEqual(shareURL.lastPathComponent, "My Book.epub")
         XCTAssertEqual(try Data(contentsOf: shareURL), Data("new bytes".utf8))
         XCTAssertEqual(cachedURL.lastPathComponent, "metadata-id.epub")
+    }
+}
+
+// MARK: - PR 4 Story Arc Part persistence and derivation
+
+extension KindleExportServiceTests {
+    func testLegacyMetadataDraftWithoutPartNamesDecodes() throws {
+        let json = """
+        {
+          "bookTitle":"Legacy", "authorName":"Author", "copyrightYear":"2026",
+          "copyrightHolder":"", "language":"en", "dedication":"",
+          "bookDescription":"", "aboutAuthor":"", "isbn":"", "publisherName":"",
+          "seriesName":"", "seriesNumber":"", "coverChoice":"skip", "coverUploadPath":null
+        }
+        """.data(using: .utf8)!
+        let draft = try JSONDecoder().decode(KindleExportMetadataDraft.self, from: json)
+        XCTAssertNil(draft.partNames)
+    }
+
+    func testPartNamesSurviveMetadataDraftEncodeDecode() throws {
+        let draft = KindleExportMetadataDraft(
+            bookTitle: "Book", authorName: "Author", copyrightYear: "2026",
+            copyrightHolder: "", language: "en", dedication: "", bookDescription: "",
+            aboutAuthor: "", isbn: "", publisherName: "", seriesName: "", seriesNumber: "",
+            coverChoice: .skip, coverUploadPath: nil, acknowledgements: nil,
+            partNames: ["part-1": "The Signal", "part-2": "The Return"]
+        )
+        let decoded = try JSONDecoder().decode(KindleExportMetadataDraft.self, from: JSONEncoder().encode(draft))
+        XCTAssertEqual(decoded.partNames, draft.partNames)
+    }
+
+    func testEmptyPartNamesAreOmittedFromRequestJSON() throws {
+        let request = KindleExportRequest(
+            project_id: "p", book_title: "t", author_name: "a", copyright_year: nil,
+            copyright_holder: nil, language: nil, dedication: nil, book_description: nil,
+            about_author: nil, isbn: nil, publisher_name: nil, series_name: nil,
+            series_number: nil, cover_image_url: nil, cover_image_ai_generate: nil,
+            acknowledgements: nil, part_names: nil
+        )
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertNil(json["part_names"])
+    }
+
+    func testPartNamesSerializeInRequestJSON() throws {
+        let request = KindleExportRequest(
+            project_id: "p", book_title: "t", author_name: "a", copyright_year: nil,
+            copyright_holder: nil, language: nil, dedication: nil, book_description: nil,
+            about_author: nil, isbn: nil, publisher_name: nil, series_name: nil,
+            series_number: nil, cover_image_url: nil, cover_image_ai_generate: nil,
+            acknowledgements: nil, part_names: ["part-1": "The Signal"]
+        )
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertEqual((json["part_names"] as? [String: String])?["part-1"], "The Signal")
+    }
+
+    func testPartDeriverUsesOutlineLinkedArcAndEmptyRoleBeatIdentity() {
+        let project = StoryProject(name: "Parts")
+        let unrelated = StoryArc()
+        let linked = StoryArc()
+        let outline = Outline(name: "Linked Outline")
+        outline.storyArcID = linked.id
+        project.storyArcs = [unrelated, linked]
+        project.outlines = [outline]
+        let beats = (0..<3).map { StoryArcBeat(position: $0, role: "", label: "Beat \($0)") }
+        linked.beats = beats
+        let chapters = (0..<3).map { index -> OutlineSection in
+            let section = OutlineSection(position: index, title: "Section \(index)")
+            section.storyArcBeatID = beats[index].id
+            section.outline = outline
+            return section
+        }
+        outline.sections = chapters
+
+        let parts = ExportBookPartDeriver.derive(project: project)
+        XCTAssertEqual(parts.map(\.id), ["part-1", "part-2", "part-3"])
+        XCTAssertEqual(parts.flatMap(\.chapterIDs), chapters.map(\.id))
+    }
+}
+
+// MARK: - PR #622 final Part derivation parity
+
+extension KindleExportServiceTests {
+    func testPartDeriverPreservesSparseSemanticSubtitleAndTrailingAssignment() {
+        let project = StoryProject(name: "Sparse Parts")
+        let arc = StoryArc()
+        arc.templateID = UUID(uuidString: "a0000001-0000-0000-0000-000000000006")
+        let exposition = StoryArcBeat(position: 0, role: "exposition", label: "Exposition")
+        let climax = StoryArcBeat(position: 1, role: "climax", label: "Climax")
+        arc.beats = [exposition, climax]
+        let outline = Outline(name: "Sparse Outline")
+        outline.storyArcID = arc.id
+        let first = OutlineSection(position: 0, title: "First")
+        first.storyArcBeatID = exposition.id
+        let second = OutlineSection(position: 1, title: "Second")
+        let third = OutlineSection(position: 2, title: "Third")
+        outline.sections = [first, second, third]
+        project.storyArcs = [arc]
+        project.outlines = [outline]
+
+        let parts = ExportBookPartDeriver.derive(project: project)
+        XCTAssertEqual(parts.map(\.id), ["part-1", "part-5"])
+        XCTAssertEqual(parts.map(\.label), ["Part I", "Part II"])
+        XCTAssertEqual(parts.map(\.defaultSubtitle), ["Exposition", "Denouement"])
+        XCTAssertEqual(parts.flatMap(\.chapterIDs), [first.id, second.id, third.id])
+    }
+
+    func testPartDeriverPreservesSparseClimaxSourceSubtitle() {
+        let project = StoryProject(name: "Sparse Climax")
+        let arc = StoryArc()
+        arc.templateID = UUID(uuidString: "a0000001-0000-0000-0000-000000000006")
+        let exposition = StoryArcBeat(position: 0, role: "exposition", label: "Exposition")
+        let climax = StoryArcBeat(position: 1, role: "climax", label: "Climax")
+        arc.beats = [exposition, climax]
+        let outline = Outline(name: "Sparse Outline")
+        outline.storyArcID = arc.id
+        let first = OutlineSection(position: 0, title: "First")
+        first.storyArcBeatID = exposition.id
+        let second = OutlineSection(position: 1, title: "Second")
+        second.storyArcBeatID = climax.id
+        outline.sections = [first, second]
+        project.storyArcs = [arc]
+        project.outlines = [outline]
+
+        let parts = ExportBookPartDeriver.derive(project: project)
+        XCTAssertEqual(parts.map(\.id), ["part-1", "part-3"])
+        XCTAssertEqual(parts.map(\.label), ["Part I", "Part II"])
+        XCTAssertEqual(parts.map(\.defaultSubtitle), ["Exposition", "Climax"])
     }
 }

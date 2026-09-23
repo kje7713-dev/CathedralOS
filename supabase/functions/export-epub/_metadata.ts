@@ -22,6 +22,7 @@ export interface ExportMetadata {
   // the final story section. Empty/whitespace-only input is normalized to
   // undefined so the writer can omit the page entirely.
   acknowledgements?: string;
+  part_names?: Record<string, string>;
 }
 
 export interface ExportRequest {
@@ -43,6 +44,7 @@ export interface ExportRequest {
   estimate_only?: boolean;
   // PR #619 (EPUB Acknowledgements): optional back-matter text.
   acknowledgements?: string;
+  part_names?: Record<string, string>;
 }
 
 export function assembleMetadata(req: ExportRequest): ExportMetadata {
@@ -64,6 +66,7 @@ export function assembleMetadata(req: ExportRequest): ExportMetadata {
     // writer does not produce an empty back-matter page. JavaScript treats
     // non-empty whitespace strings as truthy, so a second trim() check is
     // required to normalize pure-whitespace input to undefined.
+    part_names: Object.fromEntries(Object.entries(req.part_names ?? {}).map(([key, value]) => [key, trim(value)]).filter(([, value]) => value.length > 0)),
     acknowledgements: (() => {
       const trimmed = req.acknowledgements?.trim();
       return trimmed ? trimmed : undefined;

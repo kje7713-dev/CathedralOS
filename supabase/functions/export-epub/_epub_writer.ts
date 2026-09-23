@@ -24,7 +24,7 @@
 // `// @ts-expect-error` directive above this line.
 import JSZip from "https://esm.sh/jszip@3.10.1";
 import type { ExportMetadata } from "./_metadata.ts";
-import type { ProjectOutline } from "./_section_walker.ts";
+import type { ProjectOutline, Section } from "./_section_walker.ts";
 import { splitParagraphs } from "./_paragraphs.ts";
 
 export async function writeEpub(
@@ -58,12 +58,17 @@ export async function writeEpub(
     title: string;
     body: string;
     chapterIdx: number;
+    chapterId: string;
+    chapterRootId: string;
+    sections: Section[];
   }> = [];
 
   for (let ci = 0; ci < outline.chapters.length; ci++) {
     const chapter = outline.chapters[ci];
     const chapterTitle = chapter.title || `Chapter ${ci + 1}`;
-    const chapterRoot = chapter.sections[0];
+    const chapterRoot = chapter.sections.find((section) =>
+      section.parent_id === null
+    );
     const generatedSections = chapter.sections.filter((section) =>
       section.body.trim().length > 0
     );
@@ -78,7 +83,7 @@ export async function writeEpub(
       `<h1 class="section-title">${escapeXml(chapterTitle)}</h1>`,
     ];
     for (const section of generatedSections) {
-      if (section !== chapterRoot && section.title) {
+      if (section.id !== chapterRoot?.id && section.title) {
         bodyParts.push(
           `<h2 id="${sectionAnchorId(ci, section.id)}">${
             escapeXml(section.title)
@@ -96,8 +101,66 @@ export async function writeEpub(
       title: chapterTitle,
       body: bodyParts.join("\n"),
       chapterIdx: ci,
+      chapterId: chapter.id,
+      chapterRootId: chapterRoot?.id ?? chapter.id,
+      sections: generatedSections,
     });
   }
+
+  // Derive rendered Parts only after generated-content filtering. Source Part
+  // identity remains available for semantic subtitles and saved custom names.
+  const sourceParts = outline.parts
+    .map((part) => ({
+      source: part,
+      chapters: sectionFiles.filter((sf) =>
+        part.chapter_ids.includes(sf.chapterId)
+      ),
+    }))
+    .filter((part) => part.chapters.length > 0);
+  const activeParts = sourceParts.map(({ source, chapters }, position) => ({
+    ...source,
+    sourcePartID: source.id,
+    sourcePosition: source.position,
+    id: `part-${position + 1}`,
+    position,
+    label: `Part ${roman(position + 1)}`,
+    chapters,
+  }));
+  const activePartByChapterID = new Map<string, typeof activeParts[number]>();
+  for (const part of activeParts) {
+    for (const chapter of part.chapters) {
+      activePartByChapterID.set(chapter.chapterId, part);
+    }
+  }
+  const orderedSectionFilesForPart = (partID: string) =>
+    sectionFiles.filter((sf) =>
+      activePartByChapterID.get(sf.chapterId)?.id === partID
+    );
+  let previousPartPosition = -1;
+  for (const sf of sectionFiles) {
+    const part = activePartByChapterID.get(sf.chapterId);
+    if (activeParts.length > 0 && !part) {
+      throw new Error(
+        `generated chapter ${sf.chapterId} has no Part assignment`,
+      );
+    }
+    if (part && part.sourcePosition < previousPartPosition) {
+      throw new Error(
+        "non-contiguous Part assignment would reorder manuscript content",
+      );
+    }
+    if (part) previousPartPosition = part.sourcePosition;
+  }
+  const resolvedPartSubtitle = (
+    part: typeof activeParts[number],
+  ): string | null => {
+    const custom = metadata.part_names?.[part.sourcePartID]?.trim();
+    return custom || part.default_subtitle || null;
+  };
+  const partTOCTitle = (part: typeof activeParts[number]): string => {
+    const subtitle = resolvedPartSubtitle(part);
+    return subtitle ? `${part.label} — ${subtitle}` : part.label;
+  };
 
   // 4. OEBPS/content.opf
   const manifestItems = [
@@ -113,6 +176,11 @@ export async function writeEpub(
     );
     manifestItems.push(
       `<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>`,
+    );
+  }
+  for (const part of activeParts) {
+    manifestItems.push(
+      `<item id="${part.id}" href="text/${part.id}.xhtml" media-type="application/xhtml+xml"/>`,
     );
   }
   for (const sf of sectionFiles) {
@@ -131,7 +199,15 @@ export async function writeEpub(
 
   const spineEntries: string[] = [];
   if (coverBuffer) spineEntries.push(`<itemref idref="cover"/>`);
-  spineEntries.push(...sectionFiles.map((sf) => `<itemref idref="${sf.id}"/>`));
+  let previousPartID: string | null = null;
+  for (const sf of sectionFiles) {
+    const part = activePartByChapterID.get(sf.chapterId);
+    if (part && part.id !== previousPartID) {
+      spineEntries.push(`<itemref idref="${part.id}"/>`);
+      previousPartID = part.id;
+    }
+    spineEntries.push(`<itemref idref="${sf.id}"/>`);
+  }
   // PR #619: acknowledgements appears as the last spine entry when present.
   if (metadata.acknowledgements) {
     spineEntries.push(`<itemref idref="acknowledgements"/>`);
@@ -215,12 +291,35 @@ export async function writeEpub(
 </package>`,
   );
 
-  // 5. OEBPS/nav.xhtml
-  const navList = sectionFiles
-    .map((sf) => `<li><a href="${sf.href}">${escapeXml(sf.title)}</a></li>`)
-    .join("\n      ");
-  // EPUB landmarks are deliberately derived only from documents emitted above:
-  // no cover landmark without a cover, and no bodymatter landmark without prose.
+  // 5. OEBPS/nav.xhtml — Parts contain chapter documents, and chapter
+  // documents contain fragment links for child OutlineSections.
+  const sectionNav = (sf: typeof sectionFiles[number]): string => {
+    const childLinks = sf.sections
+      .filter((section) =>
+        section.id !== sf.chapterRootId && section.body.trim().length > 0 &&
+        section.title
+      )
+      .map((section) =>
+        `<li><a href="${sf.href}#${
+          sectionAnchorId(sf.chapterIdx, section.id)
+        }">${escapeXml(section.title)}</a></li>`
+      )
+      .join("\n            ");
+    return `<li><a href="${sf.href}">${escapeXml(sf.title)}</a>${
+      childLinks
+        ? `\n          <ol>\n            ${childLinks}\n          </ol>`
+        : ""
+    }</li>`;
+  };
+  const navList = activeParts.length > 0
+    ? activeParts.map((part) =>
+      `<li><a href="text/${part.id}.xhtml">${
+        escapeXml(partTOCTitle(part))
+      }</a>\n        <ol>\n          ${
+        orderedSectionFilesForPart(part.id).map(sectionNav).join("\n          ")
+      }\n        </ol>\n      </li>`
+    ).join("\n      ")
+    : sectionFiles.map(sectionNav).join("\n      ");
   const landmarkItems = [
     ...(coverBuffer
       ? ['<li><a epub:type="cover" href="cover.xhtml">Cover</a></li>']
@@ -234,7 +333,6 @@ export async function writeEpub(
       : []),
     '<li><a epub:type="toc" href="nav.xhtml">Table of Contents</a></li>',
   ].join("\n      ");
-  // PR #619: Acknowledgements appears as the last navigation entry when present.
   const navTail = metadata.acknowledgements
     ? '\n      <li><a href="text/acknowledgements.xhtml">Acknowledgements</a></li>'
     : "";
@@ -261,27 +359,63 @@ export async function writeEpub(
 </html>`,
   );
 
-  // 6. OEBPS/toc.ncx
-  const navPoints = sectionFiles
-    .map((sf, i) =>
-      `<navPoint id="navPoint-${i + 1}" playOrder="${i + 1}"><navLabel><text>${
-        escapeXml(sf.title)
-      }</text></navLabel><content src="${sf.href}"/></navPoint>`
-    )
-    .join("\n    ");
-  // PR #619: Acknowledgements as the final NCX navPoint when present.
+  // 6. OEBPS/toc.ncx — retain the legacy navigation with the same hierarchy.
+  let playOrder = 1;
+  const ncxSection = (sf: typeof sectionFiles[number]): string => {
+    const parentOrder = playOrder++;
+    const childPoints = sf.sections
+      .filter((section) =>
+        section.id !== sf.chapterRootId && section.body.trim().length > 0 &&
+        section.title
+      )
+      .map((section) => {
+        const childOrder = playOrder++;
+        return `<navPoint id="navPoint-${
+          safeNavID(section.id)
+        }" playOrder="${childOrder}"><navLabel><text>${
+          escapeXml(section.title)
+        }</text></navLabel><content src="${sf.href}#${
+          sectionAnchorId(sf.chapterIdx, section.id)
+        }"/></navPoint>`;
+      })
+      .join("\n        ");
+    return `<navPoint id="navPoint-${
+      safeNavID(sf.id)
+    }" playOrder="${parentOrder}"><navLabel><text>${
+      escapeXml(sf.title)
+    }</text></navLabel><content src="${sf.href}"/>${
+      childPoints ? `\n        ${childPoints}` : ""
+    }</navPoint>`;
+  };
+  const navPoints = activeParts.length > 0
+    ? activeParts.map((part) => {
+      const partOrder = playOrder++;
+      return `<navPoint id="navPoint-${part.id}" playOrder="${partOrder}"><navLabel><text>${
+        escapeXml(partTOCTitle(part))
+      }</text></navLabel><content src="text/${part.id}.xhtml"/>\n        ${
+        orderedSectionFilesForPart(part.id).map(ncxSection).join("\n        ")
+      }\n      </navPoint>`;
+    }).join("\n    ")
+    : sectionFiles.map(ncxSection).join("\n    ");
   const acknowledgementsNavPoint = metadata.acknowledgements
-    ? `\n    <navPoint id="navPoint-acknowledgements" playOrder="${
-      sectionFiles.length + 1
-    }"><navLabel><text>Acknowledgements</text></navLabel><content src=\"text/acknowledgements.xhtml\"/></navPoint>`
+    ? `\n    <navPoint id="navPoint-acknowledgements" playOrder="${playOrder++}"><navLabel><text>Acknowledgements</text></navLabel><content src="text/acknowledgements.xhtml"/></navPoint>`
     : "";
+  const hasChildNavigation = sectionFiles.some((sf) =>
+    sf.sections.some((section) =>
+      section.id !== sf.chapterRootId && section.body.trim().length > 0 &&
+      section.title
+    )
+  );
+  const ncxDepth = activeParts.length > 0
+    ? (hasChildNavigation ? 3 : 2)
+    : (hasChildNavigation ? 2 : 1);
   zip.file(
     "OEBPS/toc.ncx",
     `<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
   <head>
     <meta name="dtb:uid" content="urn:uuid:${uuid}"/>
-    <meta name="dtb:depth" content="1"/>
+    <meta name="dtb:depth" content="${ncxDepth}"/>
   </head>
   <docTitle><text>${escapeXml(metadata.book_title)}</text></docTitle>
   <navMap>
@@ -326,6 +460,13 @@ p {
 h1 + p,
 h2 + p {
   text-indent: 0;
+}
+.part-page {
+  text-align: center;
+}
+.part-page .part-name {
+  text-indent: 0;
+  margin-top: 0.5em;
 }
 .cover {
   display: flex;
@@ -394,6 +535,30 @@ h2 + p {
     );
   }
 
+  // 9b. Part divider pages. They are intentionally minimal and contain no
+  // manuscript prose; the existing chapter documents remain unchanged.
+  for (const part of activeParts) {
+    zip.file(
+      `OEBPS/text/${part.id}.xhtml`,
+      `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<link rel="stylesheet" type="text/css" href="../styles.css"/>
+<title>${escapeXml(partTOCTitle(part))}</title>
+</head>
+<body class="part-page">
+<h1>${escapeXml(part.label)}</h1>
+${
+        resolvedPartSubtitle(part)
+          ? `<p class="part-name">${escapeXml(resolvedPartSubtitle(part)!)}</p>`
+          : ""
+      }
+</body>
+</html>`,
+    );
+  }
+
   // 10. Section files (one per chapter)
   for (const sf of sectionFiles) {
     zip.file(
@@ -445,9 +610,28 @@ ${ackBody.join("\n")}
   );
 }
 
+function roman(value: number): string {
+  return [
+    "I",
+    "II",
+    "III",
+    "IV",
+    "V",
+    "VI",
+    "VII",
+    "VIII",
+    "IX",
+    "X",
+  ][value - 1] ?? String(value);
+}
+
 function sectionAnchorId(chapterIndex: number, sectionId: string): string {
   const safeSectionId = sectionId.replace(/[^A-Za-z0-9_-]+/g, "-");
   return `section-${chapterIndex + 1}-${safeSectionId}`;
+}
+
+function safeNavID(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]+/g, "-");
 }
 
 function escapeXml(s: string): string {
