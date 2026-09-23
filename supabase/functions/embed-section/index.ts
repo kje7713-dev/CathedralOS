@@ -34,6 +34,11 @@
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  durableRunContainsSection,
+  isTrustedInternalRequest,
+  loadDurableRunOwner,
+} from "../_shared/internal-run-auth.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -175,20 +180,46 @@ Deno.serve(async (req: Request) => {
     return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
   }
 
-  const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-    global: { headers: { Authorization: authHeader } },
-    auth: { persistSession: false },
-  });
-  const { data: { user }, error: authErr } = await userClient.auth.getUser();
-  if (authErr || !user) {
-    return errorResponse("not_authenticated", "Invalid token", 401);
-  }
-
   let body: EmbedSectionRequest;
   try {
     body = await req.json();
   } catch {
     return errorResponse("invalid_request", "Body must be JSON", 400);
+  }
+
+  const internalRunId = String(
+    (body as unknown as Record<string, unknown>).run_id ?? "",
+  );
+  const internalSectionId = String(body.outline_section_id ?? "");
+  let logicalUserId: string;
+  const internal = isTrustedInternalRequest(req, supabaseServiceKey) &&
+    internalRunId && internalSectionId;
+  if (internal) {
+    const internalAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { persistSession: false },
+    });
+    const run = await loadDurableRunOwner(internalAdmin, internalRunId);
+    if (
+      !run || (run.status !== "queued" && run.status !== "running") ||
+      !durableRunContainsSection(run, internalSectionId)
+    ) {
+      return errorResponse(
+        "invalid_run",
+        "Invalid or unauthorized Run All request",
+        403,
+      );
+    }
+    logicalUserId = run.user_id;
+  } else {
+    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { persistSession: false },
+    });
+    const { data: { user }, error: authErr } = await userClient.auth.getUser();
+    if (authErr || !user) {
+      return errorResponse("not_authenticated", "Invalid token", 401);
+    }
+    logicalUserId = user.id;
   }
 
   if (
@@ -203,7 +234,7 @@ Deno.serve(async (req: Request) => {
   }
 
   console.log(
-    `[embed-section] start user=${user.id} section=${body.outline_section_id} outline=${body.outline_id} project=${body.project_id}`,
+    `[embed-section] start user=${logicalUserId} section=${body.outline_section_id} outline=${body.outline_id} project=${body.project_id}`,
   );
 
   const adminClient = createClient(supabaseUrl, supabaseServiceKey);
@@ -214,7 +245,7 @@ Deno.serve(async (req: Request) => {
     const publicBody = { ...body, scene_memory: undefined };
     const result = await processEmbedSection(
       publicBody,
-      user.id,
+      logicalUserId,
       adminClient,
       openaiKey,
     );

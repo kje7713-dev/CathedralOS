@@ -61,6 +61,11 @@ import { notifyProviderBillingUnavailable } from "../_shared/_operator_alert.ts"
 import { canonicalUUID } from "../_shared/uuid.ts";
 import { verifyRunOutlineToken } from "../_shared/run-outline-auth.ts";
 import {
+  durableRunContainsSection,
+  isTrustedInternalRequest,
+  loadDurableRunOwner,
+} from "../_shared/internal-run-auth.ts";
+import {
   buildProviderFromEnv,
   LLMContentBlock,
   LLMProvider,
@@ -2432,14 +2437,62 @@ async function handler(
     );
   }
 
+  // Parse before auth so trusted durable invocations can be distinguished
+  // from public JWT requests before auth.getUser().
+  let body: GenerateStoryRequest;
+  try {
+    body = await req.json();
+  } catch {
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "invalid_request",
+        errorMessage: "Invalid JSON body",
+      }),
+      { status: 400 },
+    );
+  }
+
   // -------------------------------------------------------------------------
-  // Auth -- reject unauthenticated requests; derive user_id from JWT
+  // Auth -- public requests use auth.getUser(); durable internal requests
+  // use trusted transport and derive ownership from chapter_runs.user_id.
   // -------------------------------------------------------------------------
 
   const supabaseURL = Deno.env.get("SUPABASE_URL");
   let userId = authenticatedUserId;
+  let internalInvocation = false;
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const internalRunId = typeof body.run_id === "string"
+    ? body.run_id.trim()
+    : "";
+  const internalSectionId = String(body.outline_section_id ?? "");
+  if (
+    isTrustedInternalRequest(req, serviceRoleKey) && internalRunId &&
+    internalSectionId && supabaseURL
+  ) {
+    const internalAdmin = createClient(supabaseURL, serviceRoleKey, {
+      auth: { persistSession: false },
+    });
+    const durableRun = await loadDurableRunOwner(internalAdmin, internalRunId);
+    if (
+      !durableRun ||
+      (durableRun.status !== "queued" && durableRun.status !== "running") ||
+      !durableRunContainsSection(durableRun, internalSectionId)
+    ) {
+      return corsResponse(
+        JSON.stringify({
+          status: "failed",
+          errorCode: "invalid_run",
+          errorMessage: "Invalid or unauthorized Run All request",
+        }),
+        { status: 403 },
+      );
+    }
+    userId = durableRun.user_id;
+    internalInvocation = true;
+  }
 
-  if (!userId) {
+  if (!internalInvocation && !userId) {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return corsResponse(
@@ -2485,6 +2538,16 @@ async function handler(
     }
 
     userId = user.id;
+  }
+  if (!userId) {
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "unauthenticated",
+        errorMessage: "Unauthorized",
+      }),
+      { status: 401 },
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -2538,24 +2601,6 @@ async function handler(
     modelStore = generationModelStore;
   } else {
     modelStore = new SupabaseGenerationModelStore(adminClient);
-  }
-
-  // -------------------------------------------------------------------------
-  // Parse request body
-  // -------------------------------------------------------------------------
-
-  let body: GenerateStoryRequest;
-  try {
-    body = await req.json();
-  } catch {
-    return corsResponse(
-      JSON.stringify({
-        status: "failed",
-        errorCode: "invalid_request",
-        errorMessage: "Invalid JSON body",
-      }),
-      { status: 400 },
-    );
   }
 
   // PR-360-Z Bug A fix: normalize the project identifier across both calling
