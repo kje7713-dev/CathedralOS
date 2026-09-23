@@ -23,7 +23,7 @@ enum CoverChoice: String, CaseIterable, Identifiable, Codable {
 
 // MARK: - Saved Metadata
 
-private struct KindleExportMetadataDraft: Codable {
+struct KindleExportMetadataDraft: Codable {
     var bookTitle: String
     var authorName: String
     var copyrightYear: String
@@ -38,6 +38,9 @@ private struct KindleExportMetadataDraft: Codable {
     var seriesNumber: String
     var coverChoice: CoverChoice
     var coverUploadPath: String?
+    // PR #619 (EPUB Acknowledgements): optional for backward compatibility with
+    // drafts saved before this field was introduced. Old drafts decode with nil.
+    var acknowledgements: String?
 }
 
 // MARK: - JobState
@@ -105,6 +108,8 @@ struct KindleExportView: View {
     @State private var publisherName: String = ""
     @State private var seriesName: String = ""
     @State private var seriesNumber: String = ""
+    // PR #619 (EPUB Acknowledgements): empty string treated as absent on save/send.
+    @State private var acknowledgements: String = ""
 
     // Cover image
     @State private var coverChoice: CoverChoice = .skip
@@ -346,6 +351,10 @@ struct KindleExportView: View {
                 .lineLimit(2...5)
             TextField("About author", text: $aboutAuthor, axis: .vertical)
                 .lineLimit(2...5)
+            // PR #619 (EPUB Acknowledgements): optional back-matter text rendered
+            // after the final story section. Empty content omits the page entirely.
+            TextField("Acknowledgements", text: $acknowledgements, axis: .vertical)
+                .lineLimit(2...5)
             TextField("ISBN", text: $isbn)
             TextField("Publisher name", text: $publisherName)
             HStack {
@@ -497,7 +506,8 @@ struct KindleExportView: View {
             seriesName: seriesName,
             seriesNumber: seriesNumber,
             coverChoice: coverChoice,
-            coverUploadPath: coverUploadPath
+            coverUploadPath: coverUploadPath,
+            acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements
         )
         do {
             UserDefaults.standard.set(try JSONEncoder().encode(draft), forKey: metadataDefaultsKey)
@@ -526,6 +536,8 @@ struct KindleExportView: View {
         seriesNumber = draft.seriesNumber
         coverChoice = draft.coverChoice
         coverUploadPath = draft.coverUploadPath
+        // PR #619: nil-coalesce so old drafts decode cleanly.
+        acknowledgements = draft.acknowledgements ?? ""
         metadataWasSaved = true
     }
 
@@ -726,7 +738,8 @@ struct KindleExportView: View {
             series_name: seriesName.isEmpty ? nil : seriesName,
             series_number: Int(seriesNumber),
             cover_image_url: coverUploadPath,
-            cover_image_ai_generate: coverChoice == .aiGenerate ? true : nil
+            cover_image_ai_generate: coverChoice == .aiGenerate ? true : nil,
+            acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements
         )
 
         // The exporter reads project_snapshots.snapshot_json as its source of

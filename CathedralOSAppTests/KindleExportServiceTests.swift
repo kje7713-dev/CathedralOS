@@ -106,7 +106,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
         )
         _ = try await service.kickoff(request: req, userAccessToken: "test-jwt")
         let captured = MockURLProtocol.captured.last!
@@ -135,7 +135,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
         )
         let resp = try await service.kickoff(request: req, userAccessToken: "test-jwt")
         XCTAssertEqual(resp.job_id, "job-abc-123")
@@ -167,7 +167,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
         )
         do {
             _ = try await service.kickoff(request: req, userAccessToken: "expired-jwt")
@@ -207,5 +207,79 @@ final class KindleExportServiceTests: XCTestCase {
                 return
             }
         }
+    }
+}
+
+
+// MARK: - PR #619 acknowledgements serialization regressions
+
+extension KindleExportServiceTests {
+    func testLegacyMetadataDraftWithoutAcknowledgementsDecodesAndDefaultsToEmptyUIValue() throws {
+        let legacyJSON = """
+        {
+          "bookTitle": "Legacy Book",
+          "authorName": "Legacy Author",
+          "copyrightYear": "2026",
+          "copyrightHolder": "Legacy Author",
+          "language": "en",
+          "dedication": "",
+          "bookDescription": "",
+          "aboutAuthor": "",
+          "isbn": "",
+          "publisherName": "",
+          "seriesName": "",
+          "seriesNumber": "",
+          "coverChoice": "skip",
+          "coverUploadPath": null
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(KindleExportMetadataDraft.self, from: legacyJSON)
+        XCTAssertNil(decoded.acknowledgements)
+        XCTAssertEqual(decoded.acknowledgements ?? "", "")
+    }
+
+    func testMetadataDraftAcknowledgementsSurvivesEncodeDecode() throws {
+        let draft = KindleExportMetadataDraft(
+            bookTitle: "Book", authorName: "Author", copyrightYear: "2026",
+            copyrightHolder: "Author", language: "en", dedication: "",
+            bookDescription: "", aboutAuthor: "", isbn: "", publisherName: "",
+            seriesName: "", seriesNumber: "", coverChoice: .skip,
+            coverUploadPath: nil, acknowledgements: "Thanks <to> & everyone"
+        )
+
+        let roundTripped = try JSONDecoder().decode(
+            KindleExportMetadataDraft.self,
+            from: JSONEncoder().encode(draft)
+        )
+        XCTAssertEqual(roundTripped.acknowledgements, "Thanks <to> & everyone")
+    }
+
+    func testKindleExportRequestSerializesAcknowledgementsAndOmitsNil() throws {
+        let withAcknowledgements = KindleExportRequest(
+            project_id: "p", book_title: "t", author_name: "a",
+            copyright_year: nil, copyright_holder: nil, language: nil,
+            dedication: nil, book_description: nil, about_author: nil,
+            isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
+            cover_image_url: nil, cover_image_ai_generate: nil,
+            acknowledgements: "Thanks"
+        )
+        let withJSON = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(withAcknowledgements)
+        ) as? [String: Any])
+        XCTAssertEqual(withJSON["acknowledgements"] as? String, "Thanks")
+
+        let withoutAcknowledgements = KindleExportRequest(
+            project_id: "p", book_title: "t", author_name: "a",
+            copyright_year: nil, copyright_holder: nil, language: nil,
+            dedication: nil, book_description: nil, about_author: nil,
+            isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
+            cover_image_url: nil, cover_image_ai_generate: nil,
+            acknowledgements: nil
+        )
+        let withoutJSON = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(withoutAcknowledgements)
+        ) as? [String: Any])
+        XCTAssertNil(withoutJSON["acknowledgements"])
     }
 }

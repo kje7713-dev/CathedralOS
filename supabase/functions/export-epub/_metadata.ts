@@ -18,6 +18,10 @@ export interface ExportMetadata {
   publisher_name?: string;
   series_name?: string;
   series_number?: number;
+  // PR #619 (EPUB Acknowledgements): optional back-matter text rendered after
+  // the final story section. Empty/whitespace-only input is normalized to
+  // undefined so the writer can omit the page entirely.
+  acknowledgements?: string;
 }
 
 export interface ExportRequest {
@@ -37,6 +41,8 @@ export interface ExportRequest {
   cover_image_url?: string;
   cover_image_ai_generate?: boolean;
   estimate_only?: boolean;
+  // PR #619 (EPUB Acknowledgements): optional back-matter text.
+  acknowledgements?: string;
 }
 
 export function assembleMetadata(req: ExportRequest): ExportMetadata {
@@ -54,6 +60,14 @@ export function assembleMetadata(req: ExportRequest): ExportMetadata {
     publisher_name: req.publisher_name ? trim(req.publisher_name) : undefined,
     series_name: req.series_name ? trim(req.series_name) : undefined,
     series_number: req.series_number,
+    // PR #619: trim and omit empty/whitespace-only acknowledgements so the
+    // writer does not produce an empty back-matter page. JavaScript treats
+    // non-empty whitespace strings as truthy, so a second trim() check is
+    // required to normalize pure-whitespace input to undefined.
+    acknowledgements: (() => {
+      const trimmed = req.acknowledgements?.trim();
+      return trimmed ? trimmed : undefined;
+    })(),
   };
 }
 

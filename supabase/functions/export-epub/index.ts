@@ -342,6 +342,9 @@ async function processJob(
           p_epub_storage_path: finalPath,
           p_epub_sha256: sha256Hex,
           p_exported_by_user_id: userId,
+          // PR #619 (EPUB Acknowledgements): pass through the trimmed back-matter
+          // text from assembleMetadata. Null when the user did not provide it.
+          p_acknowledgements: metadata.acknowledgements ?? null,
         },
       );
 

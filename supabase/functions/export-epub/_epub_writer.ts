@@ -114,10 +114,22 @@ export async function writeEpub(
       `<item id="${sf.id}" href="${sf.href}" media-type="application/xhtml+xml"/>`,
     );
   }
+  // PR #619 (EPUB Acknowledgements): include the back-matter manifest entry
+  // only when acknowledgements text is present so the writer omits the page
+  // entirely when the user did not provide it.
+  if (metadata.acknowledgements) {
+    manifestItems.push(
+      `<item id="acknowledgements" href="text/acknowledgements.xhtml" media-type="application/xhtml+xml"/>`,
+    );
+  }
 
   const spineEntries: string[] = [];
   if (coverBuffer) spineEntries.push(`<itemref idref="cover"/>`);
   spineEntries.push(...sectionFiles.map((sf) => `<itemref idref="${sf.id}"/>`));
+  // PR #619: acknowledgements appears as the last spine entry when present.
+  if (metadata.acknowledgements) {
+    spineEntries.push(`<itemref idref="acknowledgements"/>`);
+  }
   const spineItems = spineEntries.join("\n    ");
 
   const copyrightLine = metadata.copyright_holder
@@ -201,6 +213,10 @@ export async function writeEpub(
   const navList = sectionFiles
     .map((sf) => `<li><a href="${sf.href}">${escapeXml(sf.title)}</a></li>`)
     .join("\n      ");
+  // PR #619: Acknowledgements appears as the last navigation entry when present.
+  const navTail = metadata.acknowledgements
+    ? "\n      <li><a href=\"text/acknowledgements.xhtml\">Acknowledgements</a></li>"
+    : "";
   zip.file(
     "OEBPS/nav.xhtml",
     `<?xml version="1.0" encoding="UTF-8"?>
@@ -211,7 +227,7 @@ export async function writeEpub(
 <nav epub:type="toc">
   <h1>Table of Contents</h1>
   <ol>
-      ${navList}
+      ${navList}${navTail}
   </ol>
 </nav>
 </body>
@@ -226,6 +242,12 @@ export async function writeEpub(
       }</text></navLabel><content src="${sf.href}"/></navPoint>`
     )
     .join("\n    ");
+  // PR #619: Acknowledgements as the final NCX navPoint when present.
+  const acknowledgementsNavPoint = metadata.acknowledgements
+    ? `\n    <navPoint id="navPoint-acknowledgements" playOrder="${
+      sectionFiles.length + 1
+    }"><navLabel><text>Acknowledgements</text></navLabel><content src=\"text/acknowledgements.xhtml\"/></navPoint>`
+    : "";
   zip.file(
     "OEBPS/toc.ncx",
     `<?xml version="1.0" encoding="UTF-8"?>
@@ -236,7 +258,7 @@ export async function writeEpub(
   </head>
   <docTitle><text>${escapeXml(metadata.book_title)}</text></docTitle>
   <navMap>
-    ${navPoints}
+    ${navPoints}${acknowledgementsNavPoint}
   </navMap>
 </ncx>`,
   );
@@ -354,6 +376,26 @@ p:first-of-type {
 <head><title>${escapeXml(sf.title)}</title></head>
 <body>
 ${sf.body}
+</body>
+</html>`,
+    );
+  }
+
+  // PR #619 (EPUB Acknowledgements): back-matter page after the final story
+  // section. Rendered only when acknowledgements text is non-empty.
+  if (metadata.acknowledgements) {
+    const ackBody: string[] = [`<h1>Acknowledgements</h1>`];
+    for (const paragraph of splitParagraphs(metadata.acknowledgements)) {
+      ackBody.push(`<p>${escapeXml(paragraph)}</p>`);
+    }
+    zip.file(
+      "OEBPS/text/acknowledgements.xhtml",
+      `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Acknowledgements</title></head>
+<body>
+${ackBody.join("\n")}
 </body>
 </html>`,
     );
