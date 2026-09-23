@@ -64,6 +64,10 @@ revoke all on function public.replace_export_metadata(
   uuid, text, text, int, text, text, text, text, text, text, text, text,
   int, text, boolean, text, text, uuid, text, jsonb
 ) from public;
+revoke all on function public.replace_export_metadata(
+  uuid, text, text, int, text, text, text, text, text, text, text, text,
+  int, text, boolean, text, text, uuid, text, jsonb
+) from anon, authenticated;
 grant execute on function public.replace_export_metadata(
   uuid, text, text, int, text, text, text, text, text, text, text, text,
   int, text, boolean, text, text, uuid, text, jsonb
