@@ -56,7 +56,7 @@ struct KindleExportRequest: Codable {
     let cover_image_url: String?
     let cover_image_ai_generate: Bool?
     // PR #619 (EPUB Acknowledgements): optional back-matter text.
-    let acknowledgements: String? = nil
+    let acknowledgements: String?
 }
 
 /// Response from POST /functions/v1/export-epub (HTTP 202).

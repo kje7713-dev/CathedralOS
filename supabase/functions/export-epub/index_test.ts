@@ -1045,6 +1045,7 @@ function makeAcknowledgementsFixture(): ProjectOutline {
 const acknowledgementMetadata = {
   book_title: "Acknowledgements Fixture",
   author_name: "Test Author",
+  language: "en",
   acknowledgements: 'Thanks <to> & everyone; "truly".',
 };
 
@@ -1080,6 +1081,7 @@ Deno.test("writeEpub: omits acknowledgements artifacts when metadata is absent",
   const epub = await writeEpub({
     book_title: "No Acknowledgements",
     author_name: "Test Author",
+    language: "en",
   }, makeAcknowledgementsFixture(), null);
   const zip = await JSZip.loadAsync(epub);
   const opf = await readZipText(zip, "OEBPS/content.opf");

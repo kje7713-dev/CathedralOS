@@ -106,7 +106,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
         )
         _ = try await service.kickoff(request: req, userAccessToken: "test-jwt")
         let captured = MockURLProtocol.captured.last!
@@ -135,7 +135,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
         )
         let resp = try await service.kickoff(request: req, userAccessToken: "test-jwt")
         XCTAssertEqual(resp.job_id, "job-abc-123")
@@ -167,7 +167,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
         )
         do {
             _ = try await service.kickoff(request: req, userAccessToken: "expired-jwt")
