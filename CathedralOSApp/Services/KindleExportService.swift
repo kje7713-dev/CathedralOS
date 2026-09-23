@@ -172,7 +172,7 @@ enum ExportBookPartDeriver {
             for index in stride(from: desired.count - 1, through: 0, by: -1) {
                 if let value = desired[index] { next = value } else { desired[index] = next }
             }
-            var previous = desired.first ?? 0
+            var previous: Int = desired.first.flatMap { $0 } ?? 0
             for (index, beat) in beats.enumerated() {
                 if let value = desiredByRole[beat.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] { previous = value } else if index > 0 { desired[index] = previous }
                 desiredByBeat[beat.id] = max(0, desired[index] ?? previous)
@@ -228,7 +228,7 @@ struct KindleExportRequest: Codable {
     let cover_image_ai_generate: Bool?
     // PR #619 (EPUB Acknowledgements): optional back-matter text.
     let acknowledgements: String?
-    let part_names: [String: String]? = nil
+    let part_names: [String: String]?
 }
 
 /// Response from POST /functions/v1/export-epub (HTTP 202).

@@ -116,7 +116,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil, part_names: nil
         )
         _ = try await service.kickoff(request: req, userAccessToken: "test-jwt")
         let captured = MockURLProtocol.captured.last!
@@ -145,7 +145,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil, part_names: nil
         )
         let resp = try await service.kickoff(request: req, userAccessToken: "test-jwt")
         XCTAssertEqual(resp.job_id, "job-abc-123")
@@ -177,7 +177,7 @@ final class KindleExportServiceTests: XCTestCase {
             copyright_year: nil, copyright_holder: nil, language: nil,
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
-            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil
+            cover_image_url: nil, cover_image_ai_generate: nil, acknowledgements: nil, part_names: nil
         )
         do {
             _ = try await service.kickoff(request: req, userAccessToken: "expired-jwt")
@@ -272,7 +272,7 @@ extension KindleExportServiceTests {
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
             cover_image_url: nil, cover_image_ai_generate: nil,
-            acknowledgements: "Thanks"
+            acknowledgements: "Thanks", part_names: nil
         )
         let withJSON = try XCTUnwrap(JSONSerialization.jsonObject(
             with: JSONEncoder().encode(withAcknowledgements)
@@ -285,7 +285,7 @@ extension KindleExportServiceTests {
             dedication: nil, book_description: nil, about_author: nil,
             isbn: nil, publisher_name: nil, series_name: nil, series_number: nil,
             cover_image_url: nil, cover_image_ai_generate: nil,
-            acknowledgements: nil
+            acknowledgements: nil, part_names: nil
         )
         let withoutJSON = try XCTUnwrap(JSONSerialization.jsonObject(
             with: JSONEncoder().encode(withoutAcknowledgements)
