@@ -13,7 +13,7 @@ select is((select pg_get_expr(d.adbin, d.adrelid)
   join pg_namespace n on n.oid = c.relnamespace
   join pg_attribute a on a.attrelid = c.oid and a.attnum = d.adnum
   where n.nspname = 'public' and c.relname = 'export_metadata' and a.attname = 'part_names'),
-  '{}'::jsonb, 'part_names defaults to an empty object');
+  '{}'::text, 'part_names defaults to an empty object');
 select ok(to_regprocedure('public.replace_export_metadata(uuid,text,text,int,text,text,text,text,text,text,text,text,int,text,boolean,text,text,uuid)') is not null,
   'legacy 18-argument RPC remains');
 select ok(to_regprocedure('public.replace_export_metadata(uuid,text,text,int,text,text,text,text,text,text,text,text,int,text,boolean,text,text,uuid,text)') is not null,
