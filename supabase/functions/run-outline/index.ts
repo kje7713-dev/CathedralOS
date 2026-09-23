@@ -31,6 +31,7 @@ import {
   internalAuthHeader,
   isTrustedInternalRequest,
   loadDurableRunOwner,
+  trustedResumeRunId,
 } from "../_shared/internal-run-auth.ts";
 import {
   getCreditCost,
@@ -187,7 +188,7 @@ export async function loadRunOutline(
   adminClient: any,
   outlineId: string,
 ): Promise<RunOutlineRecord> {
-  const { data, error } = await (adminClient as any).from("outlines")
+  const { data, error } = await adminClient.from("outlines")
     .select(
       "id, user_id, local_project_id, lineage_id, source_recipe_json, source_recipe_hash, target_word_count_min, projected_word_count, story_arc_id",
     )
@@ -324,17 +325,18 @@ async function handleKickoff(req: Request): Promise<Response> {
   });
   // Trusted durable continuation: authenticate transport with the service-role
   // credential, then derive the logical owner from chapter_runs.user_id.
-  if (
-    isTrustedInternalRequest(req, SUPABASE_SERVICE_ROLE_KEY) &&
-    body.resume_run_id
-  ) {
-    const run = await loadDurableRunOwner(adminClient, body.resume_run_id);
+  const trustedResumeId = trustedResumeRunId(
+    req,
+    SUPABASE_SERVICE_ROLE_KEY,
+    body,
+  );
+  if (trustedResumeId) {
+    const run = await loadDurableRunOwner(adminClient, trustedResumeId);
     if (!run) return errorResponse("not_found", "run not found", 404);
     return await handleResume(
       adminClient,
       run.user_id,
       run.id,
-      internalAuthHeader(SUPABASE_SERVICE_ROLE_KEY),
     );
   }
 
@@ -359,7 +361,6 @@ async function handleKickoff(req: Request): Promise<Response> {
       adminClient,
       userId,
       body.resume_run_id,
-      authHeader,
     );
   }
   if (!body.outline_id || !body.start_parent_section_id) {
@@ -452,9 +453,8 @@ async function handleKickoff(req: Request): Promise<Response> {
     // a recovery trigger. claim_chapter_run makes this safe if a worker is
     // already active.
     // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
-    // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
     EdgeRuntime.waitUntil(
-      queueContinuation(existing.id, authHeader).catch((err) => {
+      queueContinuation(existing.id).catch((err) => {
         console.error(
           `[run-outline] resume queue failed for ${existing.id}: ${err}`,
         );
@@ -549,7 +549,7 @@ async function handleKickoff(req: Request): Promise<Response> {
   // The old implementation estimated every section synchronously here. That
   // made a 45-section kickoff exceed the Edge Function request lifetime and
   // return a generic 502 before a run could be polled.
-  const initialSections = sections.map((s: any) => ({
+  const initialSections = sections.map((s) => ({
     id: s.id,
     title: s.title,
     position: s.position,
@@ -582,9 +582,8 @@ async function handleKickoff(req: Request): Promise<Response> {
   // 6. Return quickly. The queued status is visible to iOS immediately, and
   // the durable worker performs estimates, credit reservation, and generation.
   // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-  // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
   EdgeRuntime.waitUntil(
-    prepareRun(run.id, adminClient, authHeader).catch(async (err) => {
+    prepareRun(run.id, adminClient).catch(async (err) => {
       const message = err instanceof Error ? err.message : String(err);
       console.error(
         `[run-outline] preparation ${run.id} crashed: ${message}`,
@@ -616,7 +615,7 @@ async function handleKickoff(req: Request): Promise<Response> {
 
 // ---- authoritative estimate endpoint -------------------------------------
 async function handleEstimate(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   userId: string,
   authHeader: string,
   body: RunOutlineRequest,
@@ -690,8 +689,7 @@ async function handleEstimate(
 // ---- durable estimate/credit preflight ------------------------------------
 async function prepareRun(
   runId: string,
-  adminClient: any,
-  authHeader: string,
+  adminClient: ReturnType<typeof createClient>,
 ): Promise<void> {
   const { data: claimed, error: claimError } = await adminClient.rpc(
     "claim_chapter_run",
@@ -723,7 +721,7 @@ async function prepareRun(
     estimatedCost = await estimateRunCost(
       adminClient,
       String(run.user_id),
-      authHeader,
+      null,
       String(run.outline_id),
       sections,
       (run.model as string | null) ?? undefined,
@@ -734,7 +732,6 @@ async function prepareRun(
       await scheduleTransientOutlineLookupRetry(
         adminClient,
         runId,
-        authHeader,
         err,
       );
     } else {
@@ -763,7 +760,7 @@ async function prepareRun(
     throw new Error(`could not start prepared run: ${startError.message}`);
   }
 
-  await queueContinuation(runId!);
+  await queueContinuation(runId);
 }
 
 // ---- GET /functions/v1/run-outline?run_id=… ------------------------------
@@ -836,7 +833,7 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
       (!durableRun?.worker_lease_until ||
         new Date(durableRun.worker_lease_until).getTime() < Date.now())
     ) {
-      await queueContinuation(runId!);
+      await queueContinuation(runId);
     }
   }
 
@@ -926,8 +923,7 @@ export async function runOutlineSectionLifecycle(input: {
 // ---- outline-walker + per-section loop (Day 2) -------------------------
 async function runOutline(
   runId: string,
-  adminClient: any,
-  authHeader: string,
+  adminClient: ReturnType<typeof createClient>,
 ): Promise<void> {
   const { data: claimed, error: claimError } = await adminClient.rpc(
     "claim_chapter_run",
@@ -973,14 +969,14 @@ async function runOutline(
   }
   // Older runs stored only display fields in sections. Hydrate missing inputs
   // from the authoritative outline so those runs are resumable too.
-  const sectionIds = sections.map((s: any) => String(s.id)).filter(Boolean);
+  const sectionIds = sections.map((s) => String(s.id)).filter(Boolean);
   if (sectionIds.length > 0) {
     const { data: outlineSections } = await adminClient.from("outline_sections")
       .select(
         "id, title, position, summary, container, pov, terminal_beat, entry_state, dramatic_event, resulting_change, terminal_state, story_arc_beat_id, target_words, target_words_min, target_words_max, recipe_requirement_ids",
       )
       .in("id", sectionIds);
-    const byId = new Map((outlineSections ?? []).map((s: any) => [s.id, s]));
+    const byId = new Map((outlineSections ?? []).map((s) => [s.id, s]));
     for (const section of sections) {
       const source = byId.get(String(section.id));
       if (source) Object.assign(section, source);
@@ -993,7 +989,7 @@ async function runOutline(
   }
   await adminClient.from("chapter_runs").update({ sections }).eq("id", runId);
 
-  const pending = sections.filter((s: any) => s.status === "pending");
+  const pending = sections.filter((s) => s.status === "pending");
   if (pending.length === 0) {
     await finalizeRun(adminClient, runId, sections);
     return;
@@ -1118,7 +1114,7 @@ async function runOutline(
         frozenRecipeHash,
         recipeObligations,
         assignedRecipeRequirementIDs: section.recipe_requirement_ids,
-        section: section as any,
+        section,
         projectId,
         projectLineageID: String(outlineRow.lineage_id ?? "").trim() ||
           undefined,
@@ -1139,7 +1135,7 @@ async function runOutline(
       await renewRunLease(adminClient, runId, workerAttempt);
       const lifecycle = await runOutlineSectionLifecycle({
         generate: async () => {
-          const result = await callGenerateStory(generationRequest, authHeader);
+          const result = await callGenerateStory(generationRequest);
           await renewRunLease(adminClient, runId, workerAttempt);
           return {
             outputID: result.output_id,
@@ -1219,7 +1215,6 @@ async function runOutline(
         await scheduleTransientOutlineLookupRetry(
           adminClient,
           runId,
-          authHeader,
           err,
         );
         return;
@@ -1268,12 +1263,9 @@ async function runOutline(
           retryAfterSeconds: err.retryAfterSeconds,
           scheduleContinuation: (retryAfterSeconds) => {
             // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
-            // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
-            // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
             EdgeRuntime.waitUntil(
               queueContinuationAfterDelay(
                 runId,
-                authHeader,
                 retryAfterSeconds,
               ).catch((queueError) => {
                 console.error(
@@ -1319,10 +1311,9 @@ async function runOutline(
 }
 
 async function handleResume(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   userId: string,
   runId: string,
-  authHeader: string,
 ): Promise<Response> {
   const { data: run } = await adminClient.from("chapter_runs")
     .select("id, outline_id, status").eq("id", runId)
@@ -1358,14 +1349,12 @@ async function handleResume(
     // Resume skips whole-run estimate/preflight; the next billable stage
     // performs its normal authoritative credit check.
     // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
-    // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
     EdgeRuntime.waitUntil(
-      runOutline(runId, adminClient, authHeader).catch(async (err) => {
+      runOutline(runId, adminClient).catch(async (err) => {
         if (isRetryableOutlineLookupError(err)) {
           await scheduleTransientOutlineLookupRetry(
             adminClient,
             runId,
-            authHeader,
             err,
           );
         } else if (isInsufficientCreditsError(err)) {
@@ -1387,16 +1376,14 @@ async function handleResume(
     });
   }
   // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
-  // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
   EdgeRuntime.waitUntil(
     (run.status === "queued"
-      ? prepareRun(runId, adminClient, authHeader)
-      : runOutline(runId, adminClient, authHeader)).catch(async (err) => {
+      ? prepareRun(runId, adminClient)
+      : runOutline(runId, adminClient)).catch(async (err) => {
         if (isRetryableOutlineLookupError(err)) {
           await scheduleTransientOutlineLookupRetry(
             adminClient,
             runId,
-            authHeader,
             err,
           );
         } else {
@@ -1414,7 +1401,7 @@ async function handleResume(
 }
 
 async function releaseRunLease(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   runId: string,
 ): Promise<void> {
   await adminClient.from("chapter_runs").update({ worker_lease_until: null })
@@ -1423,7 +1410,6 @@ async function releaseRunLease(
 
 async function queueContinuationAfterDelay(
   runId: string,
-  authHeader: string | null,
   retryAfterSeconds: number,
 ): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1000));
@@ -1431,9 +1417,8 @@ async function queueContinuationAfterDelay(
 }
 
 async function scheduleTransientOutlineLookupRetry(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   runId: string,
-  authHeader: string,
   error: RunOutlineOutlineError,
 ): Promise<void> {
   const { data: run, error: runError } = await adminClient.from("chapter_runs")
@@ -1479,11 +1464,9 @@ async function scheduleTransientOutlineLookupRetry(
   }
 
   // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
-  // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
   EdgeRuntime.waitUntil(
     queueContinuationAfterDelay(
       runId,
-      authHeader,
       TRANSIENT_OUTLINE_LOOKUP_RETRY_SECONDS,
     ).catch((queueError) => {
       console.error(
@@ -1495,7 +1478,6 @@ async function scheduleTransientOutlineLookupRetry(
 
 async function queueContinuation(
   runId: string,
-  _staleAuthHeader?: string | null,
 ): Promise<void> {
   const response = await fetch(`${SUPABASE_URL}/functions/v1/run-outline`, {
     method: "POST",
@@ -1511,7 +1493,7 @@ async function queueContinuation(
 }
 
 async function finalizeRun(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   runId: string,
   sections: Array<Record<string, unknown>>,
 ): Promise<void> {
@@ -1581,9 +1563,9 @@ function estimateSectionCost(container: string | null): number {
  * disagree with model/token pricing and reject an otherwise affordable run.
  */
 async function estimateRunCost(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   userId: string,
-  authHeader: string,
+  authHeader: string | null,
   outlineId: string,
   sections: Array<Record<string, unknown>>,
   selectedModelId?: string,
@@ -1797,7 +1779,7 @@ async function estimateRunCost(
 }
 
 async function collectSectionsToGenerate(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   outlineId: string,
   startParentSectionId: string,
   scope: string = "single",
@@ -1878,7 +1860,7 @@ async function collectSectionsToGenerate(
 
   if (scope === "from_here") {
     // Start + every section that comes after it in outline order (by position)
-    return allSections.filter((s: any) => s.position >= startSection.position);
+    return allSections.filter((s) => s.position >= startSection.position);
   }
 
   if (scope === "chapter") {
@@ -1886,7 +1868,7 @@ async function collectSectionsToGenerate(
     let chapterId = startSection.id;
     let current: { id: string; parent_id: string | null } = startSection;
     while (current.parent_id !== null) {
-      const parent = allSections.find((s: any) => s.id === current.parent_id);
+      const parent = allSections.find((s) => s.id === current.parent_id);
       if (!parent) break;
       chapterId = parent.id;
       current = parent;
@@ -1907,8 +1889,8 @@ async function collectSectionsToGenerate(
       }
     }
     return allSections
-      .filter((s: any) => chapterDescendants.has(s.id))
-      .sort((a: any, b: any) => a.position - b.position);
+      .filter((s) => chapterDescendants.has(s.id))
+      .sort((a, b) => a.position - b.position);
   }
 
   // Unknown scope: fall back to single-section (safe default)
@@ -1920,7 +1902,26 @@ async function collectSectionsToGenerate(
     .eq("id", startParentSectionId)
     .single();
   if (leafErr || !leaf) throw new Error("leaf section not found");
-  return [leaf as any];
+  return [
+    leaf as {
+      id: string;
+      title: string;
+      position: number;
+      summary: string;
+      container: string | null;
+      pov: string | null;
+      terminal_beat: string | null;
+      entry_state: string | null;
+      dramatic_event: string | null;
+      resulting_change: string | null;
+      terminal_state: string | null;
+      story_arc_beat_id: string | null;
+      target_words: number | null;
+      target_words_min: number | null;
+      target_words_max: number | null;
+      recipe_requirement_ids: string[];
+    },
+  ];
 }
 
 // ---- fetchPriorContext (Deep pull, no manual input) -------------------
@@ -1939,7 +1940,7 @@ async function collectSectionsToGenerate(
 //   Rule 6: retrieve by outline order (position), NOT created_at
 //   Rule 8: pipeline order generate → persist → extract → next
 async function fetchPriorContext(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   outlineId: string,
   currentSectionId: string,
 ): Promise<string> {
@@ -1971,8 +1972,8 @@ async function fetchPriorContext(
 
   // 4. Fetch outline positions (Rule 6: outline order, not created_at).
   const outlineSectionIds = allScenes
-    .map((s: any) => s.outline_section_id)
-    .filter((id: any): id is string => typeof id === "string");
+    .map((s) => s.outline_section_id)
+    .filter((id): id is string => typeof id === "string");
   const { data: outlineSections } = await adminClient
     .from("outline_sections")
     .select("id, position")
@@ -1984,11 +1985,11 @@ async function fetchPriorContext(
 
   // 5. Sort by outline position and filter to scenes BEFORE current section.
   const priorScenes = allScenes
-    .filter((s: any) => positionById.has(s.outline_section_id))
-    .filter((s: any) =>
+    .filter((s) => positionById.has(s.outline_section_id))
+    .filter((s) =>
       (positionById.get(s.outline_section_id) ?? 0) < currentPosition
     )
-    .sort((a: any, b: any) =>
+    .sort((a, b) =>
       (positionById.get(a.outline_section_id) ?? 0) -
       (positionById.get(b.outline_section_id) ?? 0)
     );
@@ -2020,7 +2021,7 @@ function aggregateProjectState(
 // ---- Rule 8: pipeline order (generate → persist → extract → next) ------
 
 async function findRunOutput(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   runId: string,
   sectionId: string,
   userId: string,
@@ -2078,7 +2079,7 @@ export function parseEmbedSectionError(
 }
 
 async function reconcileActualCredits(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   runId: string,
 ): Promise<void> {
   const { data: run } = await adminClient.from("chapter_runs")
@@ -2092,7 +2093,7 @@ async function reconcileActualCredits(
 }
 
 async function pauseRunInsufficientCredits(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   runId: string,
   section: Record<string, unknown> | null,
   error: unknown,
@@ -2150,7 +2151,6 @@ class RetryableGenerationError extends Error {
 
 async function callGenerateStory(
   payload: Record<string, unknown>,
-  authHeader: string,
 ): Promise<
   {
     output_id: string;
@@ -2165,9 +2165,7 @@ async function callGenerateStory(
     headers: {
       // Durable Run All calls use trusted server transport. generate-story
       // derives the logical owner from chapter_runs.user_id.
-      "Authorization": payload.run_id
-        ? internalAuthHeader(SUPABASE_SERVICE_ROLE_KEY)
-        : authHeader,
+      "Authorization": internalAuthHeader(SUPABASE_SERVICE_ROLE_KEY),
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -2257,7 +2255,7 @@ async function callGenerateStory(
 // Fetch raw_text from generation_outputs given the output_id returned by
 // generate-story. This is the post-persist read in the Rule 8 pipeline.
 async function fetchRawTextFromOutput(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   outputId: string,
 ): Promise<string> {
   if (!outputId) return "";
@@ -2282,60 +2280,8 @@ async function fetchRawTextFromOutput(
   return outputText;
 }
 
-// Call embed-section to extract structured memory from the persisted output.
-// Per Rule 8: this happens AFTER the output is persisted to generation_outputs,
-// giving us raw_text. Per Rule 9: raw_text is passed to embed-section for
-// extraction but NOT used in the embedding vector itself.
-async function callEmbedSection(
-  payload: {
-    outline_section_id: string;
-    outline_id: string;
-    project_id: string;
-    position: number;
-    title: string;
-    summary: string;
-    container: string | null;
-    pov: string | null;
-    terminal_beat: string | null;
-    entry_state: string | null;
-    dramatic_event: string | null;
-    resulting_change: string | null;
-    terminal_state: string | null;
-    story_arc_beat_id: string | null;
-    raw_text: string;
-    // Kevin 2026-08-21 12:00 EDT fix: lineage from section memory to the
-    // generation output that produced it. embed-section persists this
-    // on the section_embeddings row; the DELETE trigger on
-    // generation_outputs uses it to clean up orphaned memory when the
-    // output is deleted.
-    output_id: string;
-    // The same prior context that run-outline fetches. Passed to
-    // embed-section so the LLM extraction pass knows what is already
-    // stored and can decide what to add/update/supersede.
-    prior_context: string;
-  },
-  _adminClient: any,
-  authHeader: string,
-): Promise<void> {
-  const url = `${SUPABASE_URL}/functions/v1/embed-section`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      // Durable worker transport; embed-section derives ownership from the
-      // canonical run identifiers in the payload.
-      "Authorization": internalAuthHeader(SUPABASE_SERVICE_ROLE_KEY),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const errBody = await response.text();
-    throw parseEmbedSectionError(response.status, errBody);
-  }
-}
-
 async function updateSectionStatus(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   runId: string,
   sectionStatus: Record<string, unknown>,
 ): Promise<void> {
@@ -2361,11 +2307,11 @@ async function updateSectionStatus(
 }
 
 async function renewRunLease(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   runId: string,
   workerAttempt: number,
 ): Promise<void> {
-  const { data, error } = await (adminClient as any).rpc(
+  const { data, error } = await adminClient.rpc(
     "renew_chapter_run_lease",
     {
       p_run_id: runId,
@@ -2381,7 +2327,7 @@ async function renewRunLease(
 }
 
 async function loadActualCredits(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   sections: Array<Record<string, unknown>>,
 ): Promise<number> {
   const outputIds = sections.map((section) => String(section.output_id ?? ""))
@@ -2415,23 +2361,23 @@ export function providerBillingTerminalState(
 }
 
 export async function handleRetryableGenerationFailure(input: {
-  adminClient: any;
+  adminClient: ReturnType<typeof createClient>;
   runId: string;
   section: Record<string, unknown>;
   message: string;
   retryAfterSeconds: number;
   updateSection?: (
-    client: any,
+    client: ReturnType<typeof createClient>,
     runId: string,
     section: Record<string, unknown>,
   ) => Promise<void>;
   updateRunRetry?: (
-    client: any,
+    client: ReturnType<typeof createClient>,
     runId: string,
     retryAt: string,
   ) => Promise<void>;
   releaseLease?: (
-    client: any,
+    client: ReturnType<typeof createClient>,
     runId: string,
   ) => Promise<void>;
   scheduleContinuation?: (retryAfterSeconds: number) => void;
@@ -2465,7 +2411,7 @@ export async function handleRetryableGenerationFailure(input: {
 }
 
 export async function handleProviderBillingUnavailableTerminal(input: {
-  adminClient: any;
+  adminClient: ReturnType<typeof createClient>;
   runId: string;
   section: Record<string, unknown>;
   projectId: string | null;
@@ -2473,17 +2419,17 @@ export async function handleProviderBillingUnavailableTerminal(input: {
   stage: "generation" | "memory";
   upstream: { code?: string; message?: string; status?: number };
   updateSection?: (
-    client: any,
+    client: ReturnType<typeof createClient>,
     runId: string,
     section: Record<string, unknown>,
   ) => Promise<void>;
   markRun?: (
-    client: any,
+    client: ReturnType<typeof createClient>,
     runId: string,
     error: string,
   ) => Promise<void>;
   releaseLease?: (
-    client: any,
+    client: ReturnType<typeof createClient>,
     runId: string,
   ) => Promise<void>;
   notify?: (
@@ -2539,8 +2485,6 @@ export async function handleProviderBillingUnavailableTerminal(input: {
   }
   try {
     // @ts-ignore EdgeRuntime is globally available in Supabase Edge Runtime
-    // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
-    // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
     EdgeRuntime.waitUntil(alert);
   } catch (error) {
     console.error(
@@ -2552,7 +2496,7 @@ export async function handleProviderBillingUnavailableTerminal(input: {
 }
 
 async function markRunFailed(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient>,
   runId: string,
   error: string,
 ): Promise<void> {

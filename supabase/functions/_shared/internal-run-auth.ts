@@ -15,12 +15,25 @@ export function isTrustedInternalRequest(
   return diff === 0;
 }
 
+export function trustedResumeRunId(
+  req: Request,
+  serviceRoleKey: string,
+  body: unknown,
+): string | null {
+  if (!isTrustedInternalRequest(req, serviceRoleKey)) return null;
+  if (typeof body !== "object" || body === null) return null;
+  const resumeRunId = (body as Record<string, unknown>).resume_run_id;
+  return typeof resumeRunId === "string" && resumeRunId.trim()
+    ? resumeRunId.trim()
+    : null;
+}
+
 export function internalAuthHeader(serviceRoleKey: string): string {
   return `Bearer ${serviceRoleKey}`;
 }
 
 export async function loadDurableRunOwner(
-  adminClient: any,
+  adminClient: ReturnType<typeof createClient<any>>,
   runId: string,
 ): Promise<
   {
@@ -38,7 +51,7 @@ export async function loadDurableRunOwner(
     .maybeSingle();
   if (error) throw new Error(`durable run lookup failed: ${error.message}`);
   if (!data) return null;
-  const row = data as any;
+  const row = data as Record<string, unknown>;
   return {
     id: String(row.id),
     user_id: String(row.user_id),
