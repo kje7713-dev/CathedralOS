@@ -9,7 +9,7 @@
 
 | PR | Title | Status | Branch | PR # | Head SHA | Notes |
 |----|-------|--------|--------|------|----------|-------|
-| 1 | Acknowledgements + Metadata Completion | ✅ Hardened — awaiting CI/review | `feat/epub-acknowledgements` | [#619](https://github.com/kje7713-dev/CathedralOS/pull/619) | `268ee6a` | 38/38 behavioral export-epub tests; rolling-safe RPC overloads; Swift/pgTAP regressions added; local DB/Swift/EPUBCheck harness unavailable |
+| 1 | Acknowledgements + Metadata Completion | ✅ Hardened — awaiting CI/review | `feat/epub-acknowledgements` | [#619](https://github.com/kje7713-dev/CathedralOS/pull/619) | `05dbd74` | 38/38 behavioral export-epub tests; rolling-safe RPC overloads; Swift/pgTAP regressions added; CI typecheck/build fixes pushed; local DB/Swift/EPUBCheck harness unavailable |
 | 2 | True EPUB History + Correct Filename + Delete | ⬜ Not started | — | — | — | `feat(epub): preserve export history and improve sharing` |
 | 3 | Kindle-Ready EPUB Rendering + Landmarks | ⬜ Not started | — | — | — | `refactor(epub): make reflowable output Kindle-ready` |
 | 4 | Story Arc → Parts + Nested Navigation | ⬜ Not started | — | — | — | `feat(epub): organize books into Story Arc parts` |
@@ -65,6 +65,8 @@ Open / native iOS Share Sheet / Delete
 ```
 
 ## Progress Log
+
+- 2026-09-23 11:08 EDT — CI exposed two strict compile issues: acknowledgements test fixtures omitted required `language`, and Swift’s defaulted request member suppressed the generated memberwise parameter. Added the missing fixture fields, made the request field explicit, updated legacy request constructors, and pushed `05dbd74`; 38/38 local behavioral export-epub tests pass. CI rerun pending.
 
 - 2026-09-23 09:55 EDT — Plan received from Kevin via Telegram; saved to `docs/pr-plans/2026-09-23-epub-kindle-publishing-refinement-pr-bundle.md` on a detached worktree at `main` HEAD `a39417a` (post-PR #618 merge). No branches created yet, no commits made.
 
