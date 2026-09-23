@@ -7,8 +7,9 @@
 -- Changes:
 --   1. Add `acknowledgements text` to public.export_metadata (nullable; existing
 --      rows receive NULL).
---   2. Drop and recreate replace_export_metadata with an additional
---      `p_acknowledgements text` parameter, propagated into the new row.
+--   2. Keep the existing 18-argument replace_export_metadata overload for
+--      rolling deployment compatibility and add a 19-argument overload with
+--      `p_acknowledgements text`, propagated into the new row.
 --   3. Refresh PostgREST schema cache so the new RPC signature is visible.
 --
 -- No production rows are modified. History is preserved.
@@ -17,13 +18,9 @@
 alter table public.export_metadata
   add column if not exists acknowledgements text;
 
--- The prior migration defined the 18-argument overload. Remove it before
--- creating the 19-argument version so PostgREST has one unambiguous RPC.
-drop function if exists public.replace_export_metadata(
-  uuid, text, text, int, text, text, text, text, text, text, text, text,
-  int, text, boolean, text, text, uuid
-);
-
+-- Keep the prior 18-argument overload intentionally. Old Edge Function
+-- workers may still call it while this migration and the new worker version
+-- roll out; it continues to insert NULL acknowledgements.
 create or replace function public.replace_export_metadata(
   p_project_id uuid,
   p_book_title text,

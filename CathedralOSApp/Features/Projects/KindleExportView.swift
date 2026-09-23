@@ -23,7 +23,7 @@ enum CoverChoice: String, CaseIterable, Identifiable, Codable {
 
 // MARK: - Saved Metadata
 
-private struct KindleExportMetadataDraft: Codable {
+struct KindleExportMetadataDraft: Codable {
     var bookTitle: String
     var authorName: String
     var copyrightYear: String

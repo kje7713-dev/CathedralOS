@@ -26,6 +26,8 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { walkSections, type ProjectOutline } from "./_section_walker.ts";
+import { writeEpub } from "./_epub_writer.ts";
+import JSZip from "https://esm.sh/jszip@3.10.1";
 import { assembleMetadata, type ExportRequest } from "./_metadata.ts";
 import { buildCoverPrompt } from "./_cover_image.ts";
 import { splitParagraphs } from "./_paragraphs.ts";
@@ -1008,6 +1010,88 @@ Deno.test("orchestrator: static grep guards (8+9) — executed by pre-merge vali
 // =============================================================================
 // PR #619 (EPUB Acknowledgements) — back-matter text
 // =============================================================================
+function makeAcknowledgementsFixture(): ProjectOutline {
+  return {
+    id: "outline-ack-1",
+    title: "Acknowledgements Fixture",
+    chapters: [{
+      id: "chapter-1",
+      title: "The Story",
+      position: 0,
+      sections: [
+        {
+          id: "section-1",
+          title: "Opening",
+          container: "chapter",
+          pov: null,
+          body: "Story text.",
+          position: 0,
+          parent_id: null,
+        },
+        {
+          id: "section-2",
+          title: "Continuation",
+          container: "scene",
+          pov: null,
+          body: "More story text.",
+          position: 1,
+          parent_id: "section-1",
+        },
+      ],
+    }],
+  };
+}
+
+const acknowledgementMetadata = {
+  book_title: "Acknowledgements Fixture",
+  author_name: "Test Author",
+  acknowledgements: 'Thanks <to> & everyone; "truly".',
+};
+
+async function readZipText(zip: JSZip, path: string): Promise<string> {
+  const entry = zip.file(path);
+  assertExists(entry, `expected ZIP entry ${path}`);
+  return await entry.async("text");
+}
+
+Deno.test("writeEpub: emits acknowledgements back matter in the generated ZIP", async () => {
+  const epub = await writeEpub(acknowledgementMetadata, makeAcknowledgementsFixture(), null);
+  const zip = await JSZip.loadAsync(epub);
+  const ack = await readZipText(zip, "OEBPS/text/acknowledgements.xhtml");
+  const opf = await readZipText(zip, "OEBPS/content.opf");
+  const nav = await readZipText(zip, "OEBPS/nav.xhtml");
+  const ncx = await readZipText(zip, "OEBPS/toc.ncx");
+
+  assertStringIncludes(ack, "<h1>Acknowledgements</h1>");
+  assertStringIncludes(ack, "Thanks &lt;to&gt; &amp; everyone; &quot;truly&quot;.");
+  assertStringIncludes(opf, '<item id="acknowledgements" href="text/acknowledgements.xhtml"');
+  assertStringIncludes(opf, '<itemref idref="acknowledgements"/>');
+  assertStringIncludes(nav, 'href="text/acknowledgements.xhtml">Acknowledgements</a>');
+  assertStringIncludes(ncx, 'content src="text/acknowledgements.xhtml"');
+  assertStringIncludes(ncx, "<text>Acknowledgements</text>");
+
+  const storyIndex = opf.indexOf('<itemref idref="section-1"/>');
+  const acknowledgementIndex = opf.indexOf('<itemref idref="acknowledgements"/>');
+  assertEquals(storyIndex >= 0, true);
+  assertEquals(acknowledgementIndex > storyIndex, true);
+});
+
+Deno.test("writeEpub: omits acknowledgements artifacts when metadata is absent", async () => {
+  const epub = await writeEpub({
+    book_title: "No Acknowledgements",
+    author_name: "Test Author",
+  }, makeAcknowledgementsFixture(), null);
+  const zip = await JSZip.loadAsync(epub);
+  const opf = await readZipText(zip, "OEBPS/content.opf");
+  const nav = await readZipText(zip, "OEBPS/nav.xhtml");
+  const ncx = await readZipText(zip, "OEBPS/toc.ncx");
+
+  assertEquals(zip.file("OEBPS/text/acknowledgements.xhtml"), null);
+  assertEquals(opf.includes("acknowledgements"), false);
+  assertEquals(nav.includes("acknowledgements"), false);
+  assertEquals(ncx.includes("acknowledgements"), false);
+});
+
 
 Deno.test("assembleMetadata: trims acknowledgements and omits when empty", () => {
   const req: ExportRequest = {
