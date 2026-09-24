@@ -600,11 +600,7 @@ struct GenerationOutputDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            if let estimate = coherenceEstimate {
-                Text("\(estimate.modelDisplayName) may use up to \(estimate.estimatedCredits) credits. Your balance is \(estimate.availableCredits).")
-            } else {
-                Text("The check compares this output against the project's canon and charges actual usage.")
-            }
+            Text(coherenceEstimateMessage)
         }
         .alert(
             output.cloudGenerationOutputID.isEmpty ? "Delete this local output?" : "Delete this output everywhere?",
@@ -1504,6 +1500,16 @@ struct GenerationOutputDetailView: View {
                     .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
         }
+    }
+
+    private var coherenceEstimateMessage: String {
+        guard let estimate = coherenceEstimate else {
+            return "The check compares this output against the project's canon and charges actual usage."
+        }
+        let modelName = estimate.modelDisplayName
+        let estimatedCredits = estimate.estimatedCredits
+        let availableCredits = estimate.availableCredits
+        return "\(modelName) may use up to \(estimatedCredits) credits. Your balance is \(availableCredits)."
     }
 
     private var canExportStandaloneStoryAsEPUB: Bool {
