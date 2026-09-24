@@ -108,6 +108,11 @@ private final class ReadiumEPUBViewController: UIViewController {
             return
         }
 
+        guard !publication.readingOrder.isEmpty else {
+            onError("The EPUB contains no readable content.")
+            return
+        }
+
         do {
             let navigator = try EPUBNavigatorViewController(
                 publication: publication,

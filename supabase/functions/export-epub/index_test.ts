@@ -165,6 +165,40 @@ Deno.test("EPUB writer: emits Kindle-friendly reflowable typography", () => {
   }
 });
 
+Deno.test("EPUB writer: rejects outlines with no readable content", async () => {
+  const emptyOutline: ProjectOutline = {
+    id: "empty",
+    title: "Empty",
+    chapters: [{
+      id: "chapter-1",
+      title: "Chapter 1",
+      position: 0,
+      sections: [{
+        id: "section-1",
+        title: "Empty",
+        container: "chapter",
+        pov: null,
+        body: "",
+        position: 0,
+        parent_id: null,
+        story_arc_beat_id: null,
+        story_arc_role: null,
+      }],
+    }],
+    parts: [],
+  };
+
+  await assertRejects(
+    () => writeEpub(
+      { book_title: "Empty", author_name: "Author", language: "en" },
+      emptyOutline,
+      null,
+    ),
+    Error,
+    "EPUB has no generated readable content",
+  );
+});
+
 Deno.test("EPUB writer: emits conventional landmarks with conditional cover", async () => {
   const withoutCover = await writeEpub(
     { book_title: "Landmarks", author_name: "Author", language: "en" },
