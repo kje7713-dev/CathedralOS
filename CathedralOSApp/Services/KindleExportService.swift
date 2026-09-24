@@ -231,7 +231,7 @@ struct KindleExportRequest: Codable {
     let project_id: String
     /// Cloud generation_outputs.id for standalone story exports; nil preserves
     /// the existing project/outline export path.
-    let generation_output_id: String? = nil
+    var generation_output_id: String? = nil
     let book_title: String
     let author_name: String
     let copyright_year: Int?

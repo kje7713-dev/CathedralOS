@@ -23,7 +23,6 @@ export interface ExportMetadata {
   // undefined so the writer can omit the page entirely.
   acknowledgements?: string;
   part_names?: Record<string, string>;
-  generation_output_id?: string;
 }
 
 export interface ExportRequest {

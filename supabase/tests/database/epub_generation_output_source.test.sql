@@ -18,13 +18,31 @@ select ok(not has_function_privilege('authenticated', to_regprocedure('public.re
 
 insert into auth.users (id, email) values ('00000000-0000-4000-8000-000000006230', 'pr623-standalone@example.invalid');
 insert into public.project_snapshots (id, user_id, local_project_id, snapshot_json) values ('00000000-0000-4000-9000-000000006230', '00000000-0000-4000-8000-000000006230', 'PR623-STORY', '{"project":{"summary":"A premise."}}'::jsonb);
-insert into public.generation_outputs (id, user_id, project_local_id, output_text, status) values ('00000000-0000-4000-8100-000000006230', '00000000-0000-4000-8000-000000006230', 'PR623-STORY', 'Story prose', 'complete');
+insert into public.generation_outputs (id, user_id, project_local_id, output_text, source_payload_json, status) values ('00000000-0000-4000-8100-000000006230', '00000000-0000-4000-8000-000000006230', 'PR623-STORY', 'Story prose', '{}'::jsonb, 'complete');
 
 select public.replace_export_metadata_from_generation_output('00000000-0000-4000-9000-000000006230', 'Story', 'Author', 2026, null, 'en', null, null, null, null, null, null, null, null, false, 'exports/story.epub', repeat('a', 64), '00000000-0000-4000-8000-000000006230', null, '{}'::jsonb, '00000000-0000-4000-8100-000000006230');
 select is((select source_kind from public.export_metadata where project_id = '00000000-0000-4000-9000-000000006230' and is_current), 'generation_output', 'wrapper marks export as standalone');
 select is((select source_generation_output_id from public.export_metadata where project_id = '00000000-0000-4000-9000-000000006230' and is_current), '00000000-0000-4000-8100-000000006230'::uuid, 'wrapper records source output');
 select is((select count(*) from public.export_metadata where project_id = '00000000-0000-4000-9000-000000006230' and is_current), 1::bigint, 'standalone export is current under existing semantics');
 select lives_ok($$select public.replace_export_metadata_from_generation_output('00000000-0000-4000-9000-000000006230', 'Nope', 'Author', 2026, null, 'en', null, null, null, null, null, null, null, null, false, 'exports/nope.epub', repeat('b', 64), '00000000-0000-4000-8000-000000006230', null, '{}'::jsonb, '00000000-0000-4000-8100-000000006230')$$, 'trusted owner can call wrapper');
+
+select throws_ok(
+  $$update public.export_metadata set source_kind = 'bad-value' where project_id = '00000000-0000-4000-9000-000000006230'::uuid$$,
+  '23514', null, 'invalid source_kind is rejected');
+
+select public.replace_export_metadata(
+  '00000000-0000-4000-9000-000000006230', 'Novel', 'Author', 2026, null, 'en', null, null, null, null, null, null, null, null, false,
+  'exports/novel.epub', repeat('c', 64), '00000000-0000-4000-8000-000000006230', null, '{}'::jsonb
+);
+select is((select source_kind from public.export_metadata where project_id = '00000000-0000-4000-9000-000000006230' and book_title = 'Novel'), 'project', 'canonical RPC keeps project provenance');
+select is((select source_generation_output_id from public.export_metadata where project_id = '00000000-0000-4000-9000-000000006230' and book_title = 'Novel'), null::uuid, 'canonical RPC leaves standalone source null');
+
+select public.replace_export_metadata_from_generation_output('00000000-0000-4000-9000-000000006230', 'Standalone', 'Author', 2026, null, 'en', null, null, null, null, null, null, null, null, false, 'exports/standalone.epub', repeat('d', 64), '00000000-0000-4000-8000-000000006230', null, '{}'::jsonb, '00000000-0000-4000-8100-000000006230');
+delete from public.generation_outputs where id = '00000000-0000-4000-8100-000000006230'::uuid;
+select is((select count(*) from public.export_metadata where book_title = 'Standalone'), 1::bigint, 'deleting source preserves EPUB metadata');
+select is((select source_kind from public.export_metadata where book_title = 'Standalone'), 'generation_output', 'source kind remains standalone after source deletion');
+select is((select source_generation_output_id from public.export_metadata where book_title = 'Standalone'), null::uuid, 'source FK is cleared with ON DELETE SET NULL');
+select is((select confdeltype from pg_constraint where conname = 'export_metadata_source_generation_output_id_fkey'), 'n', 'source FK delete action is SET NULL');
 
 select * from finish();
 rollback;

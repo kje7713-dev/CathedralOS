@@ -51,6 +51,9 @@ export async function buildStandaloneOutputOutline(
   }
 
   const output = row as GenerationOutputRow;
+  if (output.user_id !== userId) {
+    throw new StandaloneOutputSourceError("generation_output_not_found");
+  }
   if (!output.project_local_id) {
     throw new StandaloneOutputSourceError("generation_output_project_mismatch");
   }
