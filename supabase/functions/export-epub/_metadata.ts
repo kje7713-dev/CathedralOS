@@ -23,6 +23,7 @@ export interface ExportMetadata {
   // undefined so the writer can omit the page entirely.
   acknowledgements?: string;
   part_names?: Record<string, string>;
+  generation_output_id?: string;
 }
 
 export interface ExportRequest {
@@ -45,6 +46,7 @@ export interface ExportRequest {
   // PR #619 (EPUB Acknowledgements): optional back-matter text.
   acknowledgements?: string;
   part_names?: Record<string, string>;
+  generation_output_id?: string;
 }
 
 export function assembleMetadata(req: ExportRequest): ExportMetadata {
@@ -53,10 +55,14 @@ export function assembleMetadata(req: ExportRequest): ExportMetadata {
     book_title: trim(req.book_title),
     author_name: trim(req.author_name),
     copyright_year: req.copyright_year ?? currentYear,
-    copyright_holder: req.copyright_holder ? trim(req.copyright_holder) : undefined,
+    copyright_holder: req.copyright_holder
+      ? trim(req.copyright_holder)
+      : undefined,
     language: req.language ?? "en",
     dedication: req.dedication ? trim(req.dedication) : undefined,
-    book_description: req.book_description ? trim(req.book_description) : undefined,
+    book_description: req.book_description
+      ? trim(req.book_description)
+      : undefined,
     about_author: req.about_author ? trim(req.about_author) : undefined,
     isbn: req.isbn ? trim(req.isbn) : undefined,
     publisher_name: req.publisher_name ? trim(req.publisher_name) : undefined,
@@ -66,7 +72,11 @@ export function assembleMetadata(req: ExportRequest): ExportMetadata {
     // writer does not produce an empty back-matter page. JavaScript treats
     // non-empty whitespace strings as truthy, so a second trim() check is
     // required to normalize pure-whitespace input to undefined.
-    part_names: Object.fromEntries(Object.entries(req.part_names ?? {}).map(([key, value]) => [key, trim(value)]).filter(([, value]) => value.length > 0)),
+    part_names: Object.fromEntries(
+      Object.entries(req.part_names ?? {}).map((
+        [key, value],
+      ) => [key, trim(value)]).filter(([, value]) => value.length > 0),
+    ),
     acknowledgements: (() => {
       const trimmed = req.acknowledgements?.trim();
       return trimmed ? trimmed : undefined;

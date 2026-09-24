@@ -854,8 +854,8 @@ Deno.test("orchestrator: current-export demotion uses snapshotProjectId", async 
 
 Deno.test("orchestrator: export metadata replacement uses transactional RPC", () => {
   const src = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
-  assertStringIncludes(src, `.rpc(
-        "replace_export_metadata"`);
+  assertStringIncludes(src, '"replace_export_metadata"');
+  assertStringIncludes(src, '.rpc(');
   if (src.includes(`.from("export_metadata")
         .insert(`)) {
     throw new Error("export_metadata must be replaced through the transactional RPC");

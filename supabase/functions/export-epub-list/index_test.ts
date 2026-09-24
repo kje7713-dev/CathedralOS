@@ -10,6 +10,8 @@ const rows: ExportHistoryItem[] = [
     is_current: true,
     is_active: true,
     created_at: "2026-09-23T12:00:00Z",
+    source_kind: "project",
+    source_generation_output_id: null,
   },
   {
     id: "a",
@@ -18,6 +20,8 @@ const rows: ExportHistoryItem[] = [
     is_current: false,
     is_active: true,
     created_at: "2026-09-23T11:00:00Z",
+    source_kind: "project",
+    source_generation_output_id: null,
   },
 ];
 

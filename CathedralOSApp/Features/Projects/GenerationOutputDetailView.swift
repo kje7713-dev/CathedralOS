@@ -172,6 +172,7 @@ struct GenerationOutputDetailView: View {
     @State private var copiedShareLink   = false
     @State private var showPayloadJSON   = false
     @State private var showShareSheet    = false
+    @State private var showStandaloneEPUBExport = false
     @State private var isDeletingOutput  = false
 
     // MARK: Publish / unpublish state
@@ -651,6 +652,11 @@ struct GenerationOutputDetailView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: buildShareItems())
+        }
+        .sheet(isPresented: $showStandaloneEPUBExport) {
+            if let project = output.project {
+                KindleExportView(project: project, sourceOutput: output)
+            }
         }
         .onChange(of: coverPickerItem) { _, _ in
             Task { await loadSelectedCoverImage() }
@@ -1496,10 +1502,33 @@ struct GenerationOutputDetailView: View {
         }
     }
 
+    private var canExportStandaloneStoryAsEPUB: Bool {
+        output.outputType == GenerationOutputType.story.rawValue
+            && output.outlineSectionID == nil
+            && output.project != nil
+            && !output.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && output.status != GenerationStatus.failed.rawValue
+            && output.status != GenerationStatus.generating.rawValue
+    }
+
     // MARK: Action Buttons
 
     private var actionButtons: some View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
+            if canExportStandaloneStoryAsEPUB {
+                CathedralPrimaryButton(
+                    "Export EPUB",
+                    systemImage: "book.closed"
+                ) {
+                    showStandaloneEPUBExport = true
+                }
+                if output.wasTruncated {
+                    Text("This story was truncated at the generation limit. You can export the available prose.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(.orange)
+                }
+            }
+
             if !output.outputText.isEmpty {
                 CathedralPrimaryButton(
                     copiedOutput ? "Copied!" : "Copy Output",

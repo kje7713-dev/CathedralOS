@@ -229,6 +229,9 @@ private extension Array {
 }
 struct KindleExportRequest: Codable {
     let project_id: String
+    /// Cloud generation_outputs.id for standalone story exports; nil preserves
+    /// the existing project/outline export path.
+    let generation_output_id: String? = nil
     let book_title: String
     let author_name: String
     let copyright_year: Int?
@@ -257,6 +260,7 @@ struct KindleExportKickoffResponse: Codable {
 
 private struct KindleExportEstimateRequest: Codable {
     let project_id: String
+    let generation_output_id: String?
     let book_title: String
     let author_name: String
     let cover_image_ai_generate: Bool
@@ -292,6 +296,8 @@ struct KindleExportHistoryItem: Codable, Identifiable {
     let created_at: String
     let shared_output_id: String?
     let is_publicly_shared: Bool
+    let source_kind: String
+    let source_generation_output_id: String?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -303,7 +309,11 @@ struct KindleExportHistoryItem: Codable, Identifiable {
         created_at = try c.decodeIfPresent(String.self, forKey: .created_at) ?? ""
         shared_output_id = try c.decodeIfPresent(String.self, forKey: .shared_output_id)
         is_publicly_shared = try c.decodeIfPresent(Bool.self, forKey: .is_publicly_shared) ?? false
+        source_kind = try c.decodeIfPresent(String.self, forKey: .source_kind) ?? "project"
+        source_generation_output_id = try c.decodeIfPresent(String.self, forKey: .source_generation_output_id)
     }
+
+    var isStandaloneGenerationOutput: Bool { source_kind == "generation_output" }
 }
 
 private struct KindleExportHistoryResponse: Codable {
@@ -439,6 +449,7 @@ final class KindleExportService {
         projectID: String,
         bookTitle: String,
         authorName: String,
+        generationOutputID: String? = nil,
         userAccessToken: String,
     ) async throws -> Int {
         let url = backend.edgeFunctionURL(path: "export-epub")
@@ -446,6 +457,7 @@ final class KindleExportService {
         request.httpMethod = "POST"
         let body = KindleExportEstimateRequest(
             project_id: projectID,
+            generation_output_id: generationOutputID,
             book_title: bookTitle,
             author_name: authorName,
             cover_image_ai_generate: true,

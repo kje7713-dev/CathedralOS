@@ -8,6 +8,10 @@ on:
       - 'supabase/functions/embed-section/**'
       - 'supabase/functions/run-outline/**'
       - 'supabase/functions/outline-from-recipe/**'
+      - 'supabase/functions/export-epub/**'
+      - 'supabase/functions/export-epub-list/**'
+      - 'supabase/migrations/20260924080000_epub_generation_output_source.sql'
+      - 'supabase/tests/database/epub_generation_output_source.test.sql'
       - 'supabase/functions/sync-openai-model-catalog/**'
       - 'supabase/functions/sync-openai-pricing/**'
       - 'supabase/functions/sync-openai-admin-usage/**'
@@ -166,6 +170,15 @@ jobs:
           && deno test --no-check -A
           supabase/functions/public-sharing/index_test.ts
 
+      # Standalone story EPUBs use an explicit generation-output source adapter.
+      - name: Type check and test standalone EPUB source and export regressions
+        run: >-
+          deno check supabase/functions/export-epub/_single_output_source.ts
+          supabase/functions/export-epub-list/index.ts
+          && deno test --no-check -A
+          supabase/functions/export-epub/_single_output_source_test.ts
+          supabase/functions/export-epub/index_test.ts
+
       # PR #620: list/download history remains readable for old and new rows.
       - name: Type check and test EPUB list/download endpoints
         run: >-
@@ -247,6 +260,11 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/export_history_persistence_rpc.test.sql
+      # Standalone generation-output provenance and wrapper privileges.
+      - name: Run standalone EPUB provenance pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/epub_generation_output_source.test.sql
       # PR #623: shared EPUB schema, lifecycle, and RLS provenance contract.
       - name: Run shared EPUB publication pgTAP test
         run: >-
