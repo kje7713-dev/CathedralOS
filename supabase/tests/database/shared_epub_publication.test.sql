@@ -114,7 +114,7 @@ select throws_ok($$insert into public.shared_outputs (
   'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'epub',
   'cccccccc-1111-4111-8111-cccccccccccc', 'EPUB', '', '', '{}'::jsonb,
   '', '', 'generate', 'medium'
-)$$, '42501', 'authenticated cannot INSERT EPUB provenance');
+)$$, 'authenticated cannot INSERT EPUB provenance');
 reset role;
 set local role service_role;
 insert into public.shared_outputs (
@@ -132,7 +132,7 @@ select set_config('request.jwt.claim.sub', 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
 select throws_ok($$update public.shared_outputs
   set content_type = 'epub', export_metadata_id = 'cccccccc-1111-4111-8111-cccccccccccc'
   where id = 'eeeeeeee-1111-4111-8111-eeeeeeeeeeee'$$,
-  '42501', 'authenticated cannot UPDATE text share into EPUB provenance');
+  'authenticated cannot UPDATE text share into EPUB provenance');
 select lives_ok($$insert into public.shared_outputs (
   owner_user_id, content_type, export_metadata_id, share_title, share_excerpt,
   output_text, source_payload_json, source_prompt_pack_name, model_name,
@@ -144,14 +144,16 @@ select lives_ok($$insert into public.shared_outputs (
 reset role;
 
 -- Delete lifecycle fixtures: A is older active history; B is current active export.
+insert into public.project_snapshots (id, user_id, local_project_id, snapshot_json)
+values ('77777777-1111-4111-8111-777777777777', 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'shared-epub-delete', '{}'::jsonb);
 insert into public.export_metadata (
   id, project_id, version_id, book_title, author_name, language, epub_storage_path,
   is_current, is_active, exported_by_user_id, created_at
 ) values
-  ('11111111-1111-4111-8111-111111111111', 'bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb',
+  ('11111111-1111-4111-8111-111111111111', '77777777-1111-4111-8111-777777777777',
    '22222222-1111-4111-8111-222222222222', 'Export A', 'Author', 'en', 'exports/a.epub',
    false, true, 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', '2026-09-23T10:00:00Z'),
-  ('33333333-1111-4111-8111-333333333333', 'bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb',
+  ('33333333-1111-4111-8111-333333333333', '77777777-1111-4111-8111-777777777777',
    '44444444-1111-4111-8111-444444444444', 'Export B', 'Author', 'en', 'exports/b.epub',
    true, true, 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', '2026-09-23T11:00:00Z');
 insert into public.shared_outputs (
