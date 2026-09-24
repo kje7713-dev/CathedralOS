@@ -107,6 +107,12 @@ export async function writeEpub(
     });
   }
 
+  // Readium requires at least one readable spine item. Fail closed here rather
+  // than emitting an EPUB that crashes the reader during pagination setup.
+  if (sectionFiles.length === 0) {
+    throw new Error("EPUB has no generated readable content");
+  }
+
   // Derive rendered Parts only after generated-content filtering. Source Part
   // identity remains available for semantic subtitles and saved custom names.
   const sourceParts = outline.parts
