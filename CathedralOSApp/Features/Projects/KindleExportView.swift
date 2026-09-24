@@ -917,9 +917,12 @@ struct KindleExportView: View {
 
 
         if sourceOutput == nil && computeContentCounts().sections == 0 {
-            throw KindleExportError.invalidResponse(
-                "This project has no outline content. Open the generated story and choose Export EPUB."
+            jobState = .failure(
+                .invalidResponse(
+                    "This project has no outline content. Open the generated story and choose Export EPUB."
+                )
             )
+            return
         }
 
         // The exporter reads project_snapshots.snapshot_json as its source of
