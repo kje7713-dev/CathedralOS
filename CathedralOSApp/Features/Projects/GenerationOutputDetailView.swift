@@ -600,7 +600,11 @@ struct GenerationOutputDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(verbatim: coherenceEstimateMessage)
+            if let estimate = coherenceEstimate {
+                Text("\(estimate.modelDisplayName) may use up to \(estimate.estimatedCredits) credits. Your balance is \(estimate.availableCredits).")
+            } else {
+                Text("The check compares this output against the project's canon and charges actual usage.")
+            }
         }
         .alert(
             output.cloudGenerationOutputID.isEmpty ? "Delete this local output?" : "Delete this output everywhere?",
@@ -632,7 +636,7 @@ struct GenerationOutputDetailView: View {
         ) {
             Button("OK", role: .cancel) { deleteError = nil }
         } message: {
-            Text(verbatim: deleteErrorMessage)
+            Text(deleteError ?? "")
         }
         .confirmationDialog(
             "Publish this output?",
@@ -648,11 +652,6 @@ struct GenerationOutputDetailView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: buildShareItems())
-        }
-        .sheet(isPresented: $showStandaloneEPUBExport) {
-            if let project = output.project {
-                KindleExportView(project: project, sourceOutput: output)
-            }
         }
         .onChange(of: coverPickerItem) { _, _ in
             Task { await loadSelectedCoverImage() }
@@ -1498,20 +1497,6 @@ struct GenerationOutputDetailView: View {
         }
     }
 
-    private var deleteErrorMessage: String {
-        deleteError ?? ""
-    }
-
-    private var coherenceEstimateMessage: String {
-        guard let estimate = coherenceEstimate else {
-            return "The check compares this output against the project's canon and charges actual usage."
-        }
-        let modelName = estimate.modelDisplayName
-        let estimatedCredits = estimate.estimatedCredits
-        let availableCredits = estimate.availableCredits
-        return "\(modelName) may use up to \(estimatedCredits) credits. Your balance is \(availableCredits)."
-    }
-
     private var canExportStandaloneStoryAsEPUB: Bool {
         output.outputType == GenerationOutputType.story.rawValue
             && output.outlineSectionID == nil
@@ -1521,23 +1506,44 @@ struct GenerationOutputDetailView: View {
             && output.status != GenerationStatus.generating.rawValue
     }
 
-    // MARK: Action Buttons
-
-    private var actionButtons: some View {
-        VStack(spacing: CathedralTheme.Spacing.sm) {
-            if canExportStandaloneStoryAsEPUB {
+    @ViewBuilder
+    private var standaloneEPUBExportAction: some View {
+        if canExportStandaloneStoryAsEPUB {
+            VStack(spacing: CathedralTheme.Spacing.xs) {
                 CathedralPrimaryButton(
                     "Export EPUB",
                     systemImage: "book.closed"
                 ) {
                     showStandaloneEPUBExport = true
                 }
+
                 if output.wasTruncated {
                     Text("This story was truncated at the generation limit. You can export the available prose.")
                         .font(CathedralTheme.Typography.caption())
                         .foregroundStyle(.orange)
                 }
             }
+            .sheet(isPresented: $showStandaloneEPUBExport) {
+                standaloneEPUBExportDestination
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var standaloneEPUBExportDestination: some View {
+        if let project = output.project {
+            KindleExportView(
+                project: project,
+                sourceOutput: output
+            )
+        }
+    }
+
+    // MARK: Action Buttons
+
+    private var actionButtons: some View {
+        VStack(spacing: CathedralTheme.Spacing.sm) {
+            standaloneEPUBExportAction
 
             if !output.outputText.isEmpty {
                 CathedralPrimaryButton(
