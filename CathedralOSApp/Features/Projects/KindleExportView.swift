@@ -95,8 +95,22 @@ enum JobState {
 
 struct KindleExportView: View {
     let project: StoryProject
+    /// When present, export this explicitly selected standalone story instead
+    /// of interpreting the project's outline.
+    let sourceOutput: GenerationOutput?
+    let outputSyncService: any GenerationOutputSyncServiceProtocol
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+
+    init(
+        project: StoryProject,
+        sourceOutput: GenerationOutput? = nil,
+        outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
+    ) {
+        self.project = project
+        self.sourceOutput = sourceOutput
+        self.outputSyncService = outputSyncService
+    }
 
     // Book metadata
     @State private var bookTitle: String = ""
@@ -203,7 +217,7 @@ struct KindleExportView: View {
                 previousExportsSection
                 statusSection
                 }
-            .navigationTitle("Export to Kindle")
+            .navigationTitle(sourceOutput == nil ? "Export to Kindle" : "Export Story to EPUB")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 exportToolbar
@@ -262,7 +276,7 @@ struct KindleExportView: View {
         .task {
             if service == nil { service = makeService() }
             loadSavedMetadata()
-            if bookTitle.isEmpty { bookTitle = project.name }
+            if bookTitle.isEmpty { bookTitle = sourceOutput?.title ?? project.name }
             await loadPreviousExports()
         }
         .task(id: jobState.pollToken) {
@@ -332,10 +346,17 @@ struct KindleExportView: View {
         Section("Content") {
             let counts = computeContentCounts()
             HStack {
-                Text("Parts")
-                Spacer()
-                Text("\(counts.parts)")
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                if sourceOutput == nil {
+                    Text("Parts")
+                    Spacer()
+                    Text("\(counts.parts)")
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                } else {
+                    Text("Story")
+                    Spacer()
+                    Text("1")
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
             }
             HStack {
                 Text("Reading sections")
@@ -368,7 +389,7 @@ struct KindleExportView: View {
 
     private var bookPartsSection: some View {
         Group {
-            if !exportPartDrafts.isEmpty {
+            if sourceOutput == nil && !exportPartDrafts.isEmpty {
                 Section("Book Parts") {
                     Text("Part titles appear as divider pages and in the table of contents.")
                         .font(CathedralTheme.Typography.caption())
@@ -496,15 +517,17 @@ struct KindleExportView: View {
                         .accessibilityLabel(export.is_publicly_shared ? "Unpublish EPUB" : "Share EPUB publicly")
                         .disabled(jobState.isInFlight || publishingExportID != nil)
 
-                        Button {
-                            regenerate(export)
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .foregroundStyle(CathedralTheme.Colors.accent)
+                        if !export.isStandaloneGenerationOutput {
+                            Button {
+                                regenerate(export)
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .foregroundStyle(CathedralTheme.Colors.accent)
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel("Regenerate EPUB")
+                            .disabled(jobState.isInFlight)
                         }
-                        .buttonStyle(.bordered)
-                        .accessibilityLabel("Regenerate EPUB")
-                        .disabled(jobState.isInFlight)
 
                         // PR 2: explicit delete with mandatory confirmation.
                         // Server-side ownership is enforced by export-epub-delete;
@@ -598,7 +621,10 @@ struct KindleExportView: View {
     // MARK: - Metadata persistence
 
     private var metadataDefaultsKey: String {
-        "kindleExportMetadata.\(project.id.uuidString)"
+        if let sourceOutput {
+            return "kindleExportMetadata.\(project.id.uuidString).output.\(sourceOutput.id.uuidString)"
+        }
+        return "kindleExportMetadata.\(project.id.uuidString)"
     }
 
     private func saveMetadata() {
@@ -841,10 +867,12 @@ struct KindleExportView: View {
                 project,
                 modelContext: modelContext
             )
+            let sourceID = try await syncStandaloneSourceIfNeeded()
             aiCoverEstimatedCharge = try await service.estimateAICover(
                 projectID: project.id.uuidString,
                 bookTitle: bookTitle.trimmingCharacters(in: .whitespaces),
                 authorName: authorName.trimmingCharacters(in: .whitespaces),
+                generationOutputID: sourceID,
                 userAccessToken: token,
             )
             showAICoverCreditConfirmation = true
@@ -886,25 +914,7 @@ struct KindleExportView: View {
             return
         }
 
-        let request = KindleExportRequest(
-            project_id: project.id.uuidString,
-            book_title: (bookTitleOverride ?? bookTitle).trimmingCharacters(in: .whitespaces),
-            author_name: (authorNameOverride ?? authorName).trimmingCharacters(in: .whitespaces),
-            copyright_year: Int(copyrightYear),
-            copyright_holder: copyrightHolder.isEmpty ? nil : copyrightHolder,
-            language: language.isEmpty ? "en" : language,
-            dedication: dedication.isEmpty ? nil : dedication,
-            book_description: bookDescription.isEmpty ? nil : bookDescription,
-            about_author: aboutAuthor.isEmpty ? nil : aboutAuthor,
-            isbn: isbn.isEmpty ? nil : isbn,
-            publisher_name: publisherName.isEmpty ? nil : publisherName,
-            series_name: seriesName.isEmpty ? nil : seriesName,
-            series_number: Int(seriesNumber),
-            cover_image_url: coverUploadPath,
-            cover_image_ai_generate: coverChoice == .aiGenerate ? true : nil,
-            acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements,
-            part_names: partNames.isEmpty ? nil : partNames
-        )
+
 
         // The exporter reads project_snapshots.snapshot_json as its source of
         // truth. Push the current outline before kickoff so a newly generated
@@ -914,6 +924,30 @@ struct KindleExportView: View {
             try await ProjectCloudSyncService.shared.syncProject(
                 project,
                 modelContext: modelContext
+            )
+            let sourceID = try await syncStandaloneSourceIfNeeded()
+            guard sourceOutput == nil || sourceID != nil else {
+                throw KindleExportError.invalidResponse("Standalone story is not synced to the cloud")
+            }
+            let request = KindleExportRequest(
+                project_id: project.id.uuidString,
+                generation_output_id: sourceID,
+                book_title: (bookTitleOverride ?? bookTitle).trimmingCharacters(in: .whitespaces),
+                author_name: (authorNameOverride ?? authorName).trimmingCharacters(in: .whitespaces),
+                copyright_year: Int(copyrightYear),
+                copyright_holder: copyrightHolder.isEmpty ? nil : copyrightHolder,
+                language: language.isEmpty ? "en" : language,
+                dedication: dedication.isEmpty ? nil : dedication,
+                book_description: bookDescription.isEmpty ? nil : bookDescription,
+                about_author: aboutAuthor.isEmpty ? nil : aboutAuthor,
+                isbn: isbn.isEmpty ? nil : isbn,
+                publisher_name: publisherName.isEmpty ? nil : publisherName,
+                series_name: seriesName.isEmpty ? nil : seriesName,
+                series_number: Int(seriesNumber),
+                cover_image_url: coverUploadPath,
+                cover_image_ai_generate: coverChoice == .aiGenerate ? true : nil,
+                acknowledgements: acknowledgements.isEmpty ? nil : acknowledgements,
+                part_names: sourceOutput == nil && !partNames.isEmpty ? partNames : nil
             )
             let resp = try await service.kickoff(
                 request: request,
@@ -925,6 +959,17 @@ struct KindleExportView: View {
         } catch {
             jobState = .failure(.networkError(error.localizedDescription))
         }
+    }
+
+    private func syncStandaloneSourceIfNeeded() async throws -> String? {
+        guard let sourceOutput else { return nil }
+        if UUID(uuidString: sourceOutput.cloudGenerationOutputID) == nil {
+            try await outputSyncService.pushOutput(sourceOutput)
+        }
+        guard UUID(uuidString: sourceOutput.cloudGenerationOutputID) != nil else {
+            throw KindleExportError.invalidResponse("Could not sync standalone story to the cloud")
+        }
+        return sourceOutput.cloudGenerationOutputID
     }
 
     /// Spinner phase driver — runs the KindleExportPoller loop until terminal /
@@ -1013,6 +1058,15 @@ struct KindleExportView: View {
         let sections: [OutlineSection] = project.outlines
             .flatMap { $0.sections }
             .sorted { $0.position < $1.position }
+        if sourceOutput != nil {
+            return ContentCountsResult(
+                chapters: 1,
+                parts: 0,
+                sections: 1,
+                previewTitles: [sourceOutput?.title ?? bookTitle]
+            )
+        }
+
         let chapters: [OutlineSection] = sections.filter { section in
             // Every top-level outline section = 1 Kindle chapter, regardless of `container`
             // value. Per Kevin 2026-08-25 19:58 EDT: "Each generate section from

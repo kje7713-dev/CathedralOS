@@ -26,6 +26,10 @@ import {
 import { createJob, getJob, updateJobStatus } from "./_job_status.ts";
 import { type ProjectOutline, walkSections } from "./_section_walker.ts";
 import {
+  buildStandaloneOutputOutline,
+  StandaloneOutputSourceError,
+} from "./_single_output_source.ts";
+import {
   assembleMetadata,
   type ExportMetadata,
   type ExportRequest,
@@ -96,6 +100,30 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+async function resolveExportOutline(
+  req: ExportRequest,
+  userId: string,
+  localProjectId: string,
+  snapshotProjectId: string,
+): Promise<ProjectOutline> {
+  if (req.generation_output_id) {
+    return await buildStandaloneOutputOutline(
+      supabaseAdmin,
+      userId,
+      localProjectId,
+      snapshotProjectId,
+      req.generation_output_id,
+      req.book_title,
+    );
+  }
+  return await walkSections(
+    supabaseAdmin,
+    userId,
+    localProjectId,
+    snapshotProjectId,
+  );
+}
+
 async function handleExport(req: Request, userId: string): Promise<Response> {
   const body = (await req.json()) as ExportRequest;
 
@@ -123,12 +151,31 @@ async function handleExport(req: Request, userId: string): Promise<Response> {
   // returning 404 (not 403) avoids leaking existence of other users' projects.
 
   const snapshotProjectId = project.id;
+  if (body.generation_output_id) {
+    try {
+      await resolveExportOutline(
+        body,
+        userId,
+        localProjectId,
+        snapshotProjectId,
+      );
+    } catch (error) {
+      if (error instanceof StandaloneOutputSourceError) {
+        const status = error.code === "generation_output_not_found" ||
+            error.code === "generation_output_project_mismatch"
+          ? 404
+          : 400;
+        return json({ error: error.code }, status);
+      }
+      throw error;
+    }
+  }
   if (body.estimate_only) {
     if (!body.cover_image_ai_generate) {
       return json({ error: "ai_cover_estimate_requires_ai_cover" }, 400);
     }
-    const outline = await walkSections(
-      supabaseAdmin,
+    const outline = await resolveExportOutline(
+      body,
       userId,
       localProjectId,
       snapshotProjectId,
@@ -173,8 +220,8 @@ async function processJob(
       await updateJobStatus(supabaseAdmin, jobId, { status: "writing" });
 
       const metadata = assembleMetadata(req);
-      const outline: ProjectOutline = await walkSections(
-        supabaseAdmin,
+      const outline: ProjectOutline = await resolveExportOutline(
+        req,
         userId,
         localProjectId,
         snapshotProjectId,
@@ -321,33 +368,40 @@ async function processJob(
       // Replace the current/active metadata row inside one database transaction.
       // The partial unique indexes reject a new current/active row if the old one
       // is demoted afterward; the RPC keeps history while making replacement atomic.
-      const { data: metaId, error: metaError } = await supabaseAdmin.rpc(
-        "replace_export_metadata",
-        {
-          p_project_id: snapshotProjectId,
-          p_book_title: metadata.book_title,
-          p_author_name: metadata.author_name,
-          p_copyright_year: metadata.copyright_year ?? null,
-          p_copyright_holder: metadata.copyright_holder ?? null,
-          p_language: metadata.language,
-          p_dedication: metadata.dedication ?? null,
-          p_book_description: metadata.book_description ?? null,
-          p_about_author: metadata.about_author ?? null,
-          p_isbn: metadata.isbn ?? null,
-          p_publisher_name: metadata.publisher_name ?? null,
-          p_series_name: metadata.series_name ?? null,
-          p_series_number: metadata.series_number ?? null,
-          p_cover_image_url: req.cover_image_url ?? null,
-          p_cover_image_ai_generated: req.cover_image_ai_generate ?? false,
-          p_epub_storage_path: finalPath,
-          p_epub_sha256: sha256Hex,
-          p_exported_by_user_id: userId,
-          // PR #619 (EPUB Acknowledgements): pass through the trimmed back-matter
-          // text from assembleMetadata. Null when the user did not provide it.
-          p_acknowledgements: metadata.acknowledgements ?? null,
-          p_part_names: metadata.part_names ?? {},
-        },
-      );
+      const metadataRpcArgs = {
+        p_project_id: snapshotProjectId,
+        p_book_title: metadata.book_title,
+        p_author_name: metadata.author_name,
+        p_copyright_year: metadata.copyright_year ?? null,
+        p_copyright_holder: metadata.copyright_holder ?? null,
+        p_language: metadata.language,
+        p_dedication: metadata.dedication ?? null,
+        p_book_description: metadata.book_description ?? null,
+        p_about_author: metadata.about_author ?? null,
+        p_isbn: metadata.isbn ?? null,
+        p_publisher_name: metadata.publisher_name ?? null,
+        p_series_name: metadata.series_name ?? null,
+        p_series_number: metadata.series_number ?? null,
+        p_cover_image_url: req.cover_image_url ?? null,
+        p_cover_image_ai_generated: req.cover_image_ai_generate ?? false,
+        p_epub_storage_path: finalPath,
+        p_epub_sha256: sha256Hex,
+        p_exported_by_user_id: userId,
+        p_acknowledgements: metadata.acknowledgements ?? null,
+        p_part_names: metadata.part_names ?? {},
+      };
+      const { data: metaId, error: metaError } = req.generation_output_id
+        ? await supabaseAdmin.rpc(
+          "replace_export_metadata_from_generation_output",
+          {
+            ...metadataRpcArgs,
+            p_source_generation_output_id: req.generation_output_id,
+          },
+        )
+        : await supabaseAdmin.rpc(
+          "replace_export_metadata",
+          metadataRpcArgs,
+        );
 
       if (metaError || !metaId) {
         throw new Error(

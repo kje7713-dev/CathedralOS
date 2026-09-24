@@ -22,6 +22,8 @@ export interface ExportHistoryItem {
   created_at: string;
   shared_output_id?: string | null;
   is_publicly_shared?: boolean;
+  source_kind?: string;
+  source_generation_output_id?: string | null;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -70,7 +72,9 @@ export async function handleListRequest(
 
   const { data: exports, error: exportError } = await client
     .from("export_metadata")
-    .select("id, book_title, author_name, is_current, is_active, created_at")
+    .select(
+      "id, book_title, author_name, is_current, is_active, created_at, source_kind, source_generation_output_id",
+    )
     .eq("project_id", snapshot.id)
     .eq("exported_by_user_id", user.id)
     .eq("is_active", true)

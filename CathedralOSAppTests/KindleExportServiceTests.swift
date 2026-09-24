@@ -293,6 +293,42 @@ extension KindleExportServiceTests {
         XCTAssertNil(withoutJSON["acknowledgements"])
     }
 
+    func testStandaloneGenerationOutputIDSerializesWhileNormalRequestOmitsIt() throws {
+        let standalone = KindleExportRequest(
+            project_id: "p", generation_output_id: "11111111-1111-4111-8111-111111111111",
+            book_title: "Story", author_name: "Author", copyright_year: nil,
+            copyright_holder: nil, language: nil, dedication: nil, book_description: nil,
+            about_author: nil, isbn: nil, publisher_name: nil, series_name: nil,
+            series_number: nil, cover_image_url: nil, cover_image_ai_generate: nil,
+            acknowledgements: nil, part_names: nil
+        )
+        let standaloneJSON = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(standalone)
+        ) as? [String: Any])
+        XCTAssertEqual(standaloneJSON["generation_output_id"] as? String, "11111111-1111-4111-8111-111111111111")
+
+        let normal = KindleExportRequest(
+            project_id: "p", book_title: "Novel", author_name: "Author",
+            copyright_year: nil, copyright_holder: nil, language: nil, dedication: nil,
+            book_description: nil, about_author: nil, isbn: nil, publisher_name: nil,
+            series_name: nil, series_number: nil, cover_image_url: nil,
+            cover_image_ai_generate: nil, acknowledgements: nil, part_names: nil
+        )
+        let normalJSON = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(normal)
+        ) as? [String: Any])
+        XCTAssertNil(normalJSON["generation_output_id"])
+    }
+
+    func testHistoryProvenanceDefaultsLegacyRowsToProjectAndDecodesStandalone() throws {
+        let legacy = try JSONDecoder().decode(KindleExportHistoryItem.self, from: Data(#"{"id":"legacy","book_title":"Novel","author_name":"A","is_current":true,"is_active":true,"created_at":""}"#.utf8))
+        XCTAssertEqual(legacy.source_kind, "project")
+        XCTAssertNil(legacy.source_generation_output_id)
+        let standalone = try JSONDecoder().decode(KindleExportHistoryItem.self, from: Data(#"{"id":"story","source_kind":"generation_output","source_generation_output_id":"11111111-1111-4111-8111-111111111111"}"#.utf8))
+        XCTAssertTrue(standalone.isStandaloneGenerationOutput)
+        XCTAssertEqual(standalone.source_generation_output_id, "11111111-1111-4111-8111-111111111111")
+    }
+
     // MARK: - 7. deleteExport calls export-epub-delete with correct payload
 
     func testDeleteExportPostsToDeleteEndpointWithMetadataId() async throws {
