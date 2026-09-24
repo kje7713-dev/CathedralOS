@@ -102,6 +102,16 @@ struct KindleExportView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
+    init(
+        project: StoryProject,
+        sourceOutput: GenerationOutput? = nil,
+        outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
+    ) {
+        self.project = project
+        self.sourceOutput = sourceOutput
+        self.outputSyncService = outputSyncService
+    }
+
     // Book metadata
     @State private var bookTitle: String = ""
     @State private var authorName: String = ""
