@@ -97,8 +97,8 @@ struct KindleExportView: View {
     let project: StoryProject
     /// When present, export this explicitly selected standalone story instead
     /// of interpreting the project's outline.
-    let sourceOutput: GenerationOutput? = nil
-    let outputSyncService: any GenerationOutputSyncServiceProtocol = SupabaseGenerationOutputSyncService.shared
+    let sourceOutput: GenerationOutput?
+    let outputSyncService: any GenerationOutputSyncServiceProtocol
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
