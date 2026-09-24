@@ -632,7 +632,7 @@ struct GenerationOutputDetailView: View {
         ) {
             Button("OK", role: .cancel) { deleteError = nil }
         } message: {
-            Text(deleteErrorMessage)
+            Text(verbatim: deleteErrorMessage)
         }
         .confirmationDialog(
             "Publish this output?",
