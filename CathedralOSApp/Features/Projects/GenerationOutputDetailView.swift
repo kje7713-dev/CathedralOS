@@ -636,7 +636,11 @@ struct GenerationOutputDetailView: View {
         ) {
             Button("OK", role: .cancel) { deleteError = nil }
         } message: {
-            Text(deleteError ?? "")
+            if let deleteError {
+                Text(deleteError)
+            } else {
+                Text("")
+            }
         }
         .confirmationDialog(
             "Publish this output?",
