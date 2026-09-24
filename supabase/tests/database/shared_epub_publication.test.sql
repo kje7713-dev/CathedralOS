@@ -114,7 +114,7 @@ select throws_ok($$insert into public.shared_outputs (
   'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'epub',
   'cccccccc-1111-4111-8111-cccccccccccc', 'EPUB', '', '', '{}'::jsonb,
   '', '', 'generate', 'medium'
-)$$, 'authenticated cannot INSERT EPUB provenance');
+)$$, '42501', 'new row violates row-level security policy "shared_outputs: authenticated text-only insert" for table "shared_outputs"', 'authenticated cannot INSERT EPUB provenance');
 reset role;
 set local role service_role;
 insert into public.shared_outputs (
@@ -132,7 +132,7 @@ select set_config('request.jwt.claim.sub', 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
 select throws_ok($$update public.shared_outputs
   set content_type = 'epub', export_metadata_id = 'cccccccc-1111-4111-8111-cccccccccccc'
   where id = 'eeeeeeee-1111-4111-8111-eeeeeeeeeeee'$$,
-  'authenticated cannot UPDATE text share into EPUB provenance');
+  '42501', 'new row violates row-level security policy "shared_outputs: authenticated text-only update" for table "shared_outputs"', 'authenticated cannot UPDATE text share into EPUB provenance');
 select lives_ok($$insert into public.shared_outputs (
   owner_user_id, content_type, export_metadata_id, share_title, share_excerpt,
   output_text, source_payload_json, source_prompt_pack_name, model_name,
