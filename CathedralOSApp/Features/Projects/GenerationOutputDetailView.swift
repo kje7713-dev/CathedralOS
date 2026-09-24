@@ -600,7 +600,7 @@ struct GenerationOutputDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(coherenceEstimateMessage)
+            Text(verbatim: coherenceEstimateMessage)
         }
         .alert(
             output.cloudGenerationOutputID.isEmpty ? "Delete this local output?" : "Delete this output everywhere?",
