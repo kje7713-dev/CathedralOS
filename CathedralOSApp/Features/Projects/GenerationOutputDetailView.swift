@@ -632,11 +632,7 @@ struct GenerationOutputDetailView: View {
         ) {
             Button("OK", role: .cancel) { deleteError = nil }
         } message: {
-            if let deleteError {
-                Text(deleteError)
-            } else {
-                Text("")
-            }
+            Text(deleteErrorMessage)
         }
         .confirmationDialog(
             "Publish this output?",
@@ -1500,6 +1496,10 @@ struct GenerationOutputDetailView: View {
                     .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
         }
+    }
+
+    private var deleteErrorMessage: String {
+        deleteError ?? ""
     }
 
     private var coherenceEstimateMessage: String {
