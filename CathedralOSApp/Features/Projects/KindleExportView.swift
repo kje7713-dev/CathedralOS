@@ -916,6 +916,12 @@ struct KindleExportView: View {
 
 
 
+        if sourceOutput == nil && computeContentCounts().sections == 0 {
+            throw KindleExportError.invalidResponse(
+                "This project has no outline content. Open the generated story and choose Export EPUB."
+            )
+        }
+
         // The exporter reads project_snapshots.snapshot_json as its source of
         // truth. Push the current outline before kickoff so a newly generated
         // section cannot be missing from the EPUB's snapshot.
