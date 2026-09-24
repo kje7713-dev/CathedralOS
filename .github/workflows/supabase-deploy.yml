@@ -118,6 +118,15 @@ jobs:
         if: ${{ hashFiles('supabase/functions/export-epub-list/index.ts') != '' && success() }}
         run: supabase functions deploy export-epub-list --project-ref "$SUPABASE_PROJECT_REF"
 
+      - name: Deploy Edge Function - export-epub-delete
+        # Added 2026-09-24: iOS Previous EPUBs delete button calls this function
+        # (see KindleExportService.deleteExport). The PR that introduced the
+        # source function shipped without a deploy step, so the iOS smoke test
+        # caught a 404 NOT_FOUND when tapping delete. Without this step the
+        # delete entry-point never reaches production.
+        if: ${{ hashFiles('supabase/functions/export-epub-delete/index.ts') != '' && success() }}
+        run: supabase functions deploy export-epub-delete --project-ref "$SUPABASE_PROJECT_REF"
+
       - name: Deploy Edge Function - export-epub
         # Added 2026-08-25: PR-4100-A Kindle export backend (merge 7012059,
         # folded into PR-4100-B merge 3a77e37) was never listed here, so
