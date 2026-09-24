@@ -34,6 +34,10 @@ struct SharedOutputDetailView: View {
     @State private var loadError: String?
     @State private var copiedText = false
     @State private var showShareSheet = false
+    @State private var showEPUBReader = false
+    @State private var readerURL: URL?
+    @State private var isLoadingEPUB = false
+    @State private var epubReadError: String?
 
     // Remix state
     @State private var showRemixConfirmation = false
@@ -93,6 +97,19 @@ struct SharedOutputDetailView: View {
         }
         .sheet(isPresented: $showReportSheet) {
             reportSheet
+        }
+        .sheet(isPresented: $showEPUBReader) {
+            if let readerURL, let detail {
+                KindleExportReaderView(fileURL: readerURL, bookTitle: detail.shareTitle)
+            }
+        }
+        .alert("Could Not Open Book", isPresented: Binding(
+            get: { epubReadError != nil },
+            set: { if !$0 { epubReadError = nil } }
+        )) {
+            Button("OK", role: .cancel) { epubReadError = nil }
+        } message: {
+            Text(epubReadError ?? "")
         }
         .navigationDestination(item: $remixedProject) { project in
             ProjectDetailView(project: project)
@@ -194,7 +211,9 @@ struct SharedOutputDetailView: View {
 
                 Divider()
 
-                if let author = detail.authorDisplayName, !author.isEmpty {
+                if detail.contentType == .epub, let author = detail.bookAuthorName, !author.isEmpty {
+                    metaRow(label: "Book Author", value: author)
+                } else if let author = detail.authorDisplayName, !author.isEmpty {
                     metaRow(label: "Author", value: author)
                 }
                 if let packName = detail.sourcePromptPackName, !packName.isEmpty {
@@ -247,39 +266,46 @@ struct SharedOutputDetailView: View {
     private func outputSection(_ detail: SharedOutputDetail) -> some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
             if let coverURL = detail.coverImageURL,
-               let url = URL(string: coverURL),
-               !coverURL.isEmpty {
+               let url = URL(string: coverURL), !coverURL.isEmpty {
                 SharedOutputCoverImage(
                     url: url,
                     metadataWidth: detail.coverImageWidth,
-                    metadataHeight: detail.coverImageHeight
+                    metadataHeight: detail.coverImageHeight,
+                    displayStyle: detail.contentType == .epub ? .book : .standard
                 )
             }
 
-            Text("OUTPUT".uppercased())
-                .font(CathedralTheme.Typography.label(10, weight: .semibold))
-                .tracking(1.5)
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-
-            if detail.outputText.isEmpty {
-                CathedralCard {
-                    Text("No output text available.")
-                        .font(CathedralTheme.Typography.body())
-                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+            if detail.contentType == .epub {
+                CathedralPrimaryButton(
+                    isLoadingEPUB ? "Opening…" : "Read Book",
+                    systemImage: "book.closed"
+                ) {
+                    Task { await openSharedEPUB(detail) }
                 }
+                .disabled(isLoadingEPUB)
             } else {
-                Text(detail.outputText)
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(CathedralTheme.Spacing.base)
-                    .background(CathedralTheme.Colors.surface)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                            .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+                Text("OUTPUT".uppercased())
+                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                    .tracking(1.5)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                if detail.outputText.isEmpty {
+                    CathedralCard {
+                        Text("No output text available.")
+                            .font(CathedralTheme.Typography.body())
+                            .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                    }
+                } else {
+                    Text(detail.outputText)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(CathedralTheme.Spacing.base)
+                        .background(CathedralTheme.Colors.surface)
+                        .overlay(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                            .stroke(CathedralTheme.Colors.border, lineWidth: 1))
+                        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+                }
             }
         }
     }
@@ -298,7 +324,7 @@ struct SharedOutputDetailView: View {
 
     private func viewerActionsSection(_ detail: SharedOutputDetail) -> some View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
-            if !detail.outputText.isEmpty {
+            if detail.contentType == .text && !detail.outputText.isEmpty {
                 CathedralPrimaryButton(
                     copiedText ? "Copied!" : "Copy Text",
                     systemImage: "doc.on.doc"
@@ -311,13 +337,14 @@ struct SharedOutputDetailView: View {
                 }
             }
 
-            if let shareURL = detail.shareURL, !shareURL.isEmpty {
+            if detail.contentType == .text,
+               let shareURL = detail.shareURL, !shareURL.isEmpty {
                 CathedralSecondaryButton("Share Link", systemImage: "square.and.arrow.up") {
                     showShareSheet = true
                 }
             }
 
-            if detail.allowRemix {
+            if detail.contentType == .text && detail.allowRemix {
                 if isRemixing {
                     HStack(spacing: CathedralTheme.Spacing.sm) {
                         ProgressView()
@@ -349,7 +376,7 @@ struct SharedOutputDetailView: View {
 
     private func ownerActionsSection(_ detail: SharedOutputDetail) -> some View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
-            if !detail.outputText.isEmpty {
+            if detail.contentType == .text && !detail.outputText.isEmpty {
                 CathedralPrimaryButton(
                     copiedText ? "Copied!" : "Copy Text",
                     systemImage: "doc.on.doc"
@@ -362,7 +389,8 @@ struct SharedOutputDetailView: View {
                 }
             }
 
-            if let shareURL = detail.shareURL, !shareURL.isEmpty {
+            if detail.contentType == .text,
+               let shareURL = detail.shareURL, !shareURL.isEmpty {
                 CathedralSecondaryButton("Copy Share Link", systemImage: "link") {
                     UIPasteboard.general.string = shareURL
                 }
@@ -449,6 +477,21 @@ struct SharedOutputDetailView: View {
     }
 
     // MARK: Remix action
+
+    @MainActor
+    private func openSharedEPUB(_ detail: SharedOutputDetail) async {
+        isLoadingEPUB = true
+        epubReadError = nil
+        defer { isLoadingEPUB = false }
+        do {
+            let url = try await SharedEPUBDownloader(sharingService: sharingService)
+                .downloadOrCache(sharedOutputID: detail.sharedOutputID)
+            readerURL = url
+            showEPUBReader = true
+        } catch {
+            epubReadError = PublicSharingServiceError.displayMessage(from: error)
+        }
+    }
 
     @MainActor
     private func performRemix() async {

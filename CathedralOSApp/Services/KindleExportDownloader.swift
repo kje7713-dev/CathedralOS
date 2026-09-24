@@ -171,3 +171,60 @@ final class KindleExportDownloader {
         }
     }
 }
+
+/// Downloads a publicly shared immutable EPUB through the public-sharing
+/// authorization boundary. The private owner downloader above remains owner-only.
+@MainActor
+final class SharedEPUBDownloader {
+    private let sharingService: PublicSharingService
+    private let session: URLSession
+    private let fileManager: FileManager
+    private let customCacheDirectory: URL?
+
+    init(
+        sharingService: PublicSharingService = BackendPublicSharingService(),
+        session: URLSession = .shared,
+        fileManager: FileManager = .default,
+        customCacheDirectory: URL? = nil
+    ) {
+        self.sharingService = sharingService
+        self.session = session
+        self.fileManager = fileManager
+        self.customCacheDirectory = customCacheDirectory
+    }
+
+    private var cacheDirectory: URL {
+        if let customCacheDirectory { return customCacheDirectory }
+        let base = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("SharedEPUBs", isDirectory: true)
+    }
+
+    private func cacheURL(for sharedOutputID: String) -> URL {
+        cacheDirectory.appendingPathComponent("\(sharedOutputID).epub")
+    }
+
+    func cachedURL(for sharedOutputID: String) -> URL? {
+        let url = cacheURL(for: sharedOutputID)
+        return fileManager.fileExists(atPath: url.path) ? url : nil
+    }
+
+    func downloadOrCache(sharedOutputID: String, forceRefresh: Bool = false) async throws -> URL {
+        if !forceRefresh, let cached = cachedURL(for: sharedOutputID) { return cached }
+        guard !sharedOutputID.isEmpty else { throw PublicSharingServiceError.invalidSharedOutputID }
+        try fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        let response = try await sharingService.fetchSharedEpubDownload(sharedOutputID: sharedOutputID)
+        guard let url = URL(string: response.signedURL) else {
+            throw PublicSharingServiceError.decodingError(NSError(domain: "SharedEPUBDownloader", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid signed URL"]))
+        }
+        let (data, urlResponse) = try await session.data(from: url)
+        guard let http = urlResponse as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw PublicSharingServiceError.serverError(statusCode: (urlResponse as? HTTPURLResponse)?.statusCode ?? 0, message: "EPUB download failed")
+        }
+        try data.write(to: cacheURL(for: sharedOutputID), options: .atomic)
+        return cacheURL(for: sharedOutputID)
+    }
+
+    func invalidate(sharedOutputID: String) {
+        try? fileManager.removeItem(at: cacheURL(for: sharedOutputID))
+    }
+}

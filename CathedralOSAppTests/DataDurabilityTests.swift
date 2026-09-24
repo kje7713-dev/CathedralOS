@@ -922,6 +922,14 @@ private final class StubPublicSharingService: PublicSharingService {
     func publish(output: GenerationOutput) async throws -> PublishResponse {
         throw PublicSharingServiceError.endpointNotConfigured
     }
+    func publishEpub(exportMetadataID: String) async throws -> PublishResponse {
+        throw PublicSharingServiceError.endpointNotConfigured
+    }
+
+    func fetchSharedEpubDownload(sharedOutputID: String) async throws -> SharedEPUBDownloadResponse {
+        throw PublicSharingServiceError.endpointNotConfigured
+    }
+
     func unpublish(sharedOutputID: String) async throws {}
     func fetchPublicList() async throws -> [SharedOutputListItem] { [] }
     func fetchDetail(sharedOutputID: String) async throws -> SharedOutputDetail {

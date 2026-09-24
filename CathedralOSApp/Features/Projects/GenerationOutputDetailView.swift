@@ -17,8 +17,14 @@ struct PostGenWarning: Codable, Identifiable, Hashable {
     let conflicting_section_ids: [String]
 }
 
+enum SharedOutputCoverDisplayStyle: Equatable {
+    case standard
+    case book
+}
+
 struct SharedOutputCoverImage: View {
     let url: URL
+    let displayStyle: SharedOutputCoverDisplayStyle
     let metadataWidth: Int?
     let metadataHeight: Int?
     let showDebugMetadata: Bool
@@ -26,10 +32,12 @@ struct SharedOutputCoverImage: View {
     init(url: URL,
          metadataWidth: Int? = nil,
          metadataHeight: Int? = nil,
+         displayStyle: SharedOutputCoverDisplayStyle = .standard,
          showDebugMetadata: Bool = Self.shouldShowDebugMetadata) {
         self.url = url
         self.metadataWidth = metadataWidth
         self.metadataHeight = metadataHeight
+        self.displayStyle = displayStyle
         self.showDebugMetadata = showDebugMetadata
     }
 
@@ -37,7 +45,8 @@ struct SharedOutputCoverImage: View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
             GeometryReader { proxy in
                 let width = proxy.size.width
-                let height = width / sharedOutputCoverAspectRatio
+                let aspectRatio = displayStyle == .book ? (2.0 / 3.0) : sharedOutputCoverAspectRatio
+                let height = width / aspectRatio
 
                 AsyncImage(url: url) { phase in
                     switch phase {
@@ -48,9 +57,11 @@ struct SharedOutputCoverImage: View {
                             ProgressView()
                         }
                     case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
+                        if displayStyle == .book {
+                            image.resizable().scaledToFit()
+                        } else {
+                            image.resizable().scaledToFill()
+                        }
                     case .failure:
                         fallbackPlaceholder
                     @unknown default:
@@ -62,7 +73,7 @@ struct SharedOutputCoverImage: View {
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
             .frame(maxWidth: .infinity)
-            .aspectRatio(sharedOutputCoverAspectRatio, contentMode: .fit)
+            .aspectRatio(displayStyle == .book ? (2.0 / 3.0) : sharedOutputCoverAspectRatio, contentMode: .fit)
 
             if showDebugMetadata, let metadataWidth, let metadataHeight, metadataHeight > 0 {
                 let aspect = Double(metadataWidth) / Double(metadataHeight)

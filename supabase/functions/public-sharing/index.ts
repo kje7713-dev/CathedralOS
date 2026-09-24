@@ -1,4 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// jszip is a CommonJS-compatible ESM bundle in Deno runtime.
+import * as JSZip from "https://esm.sh/jszip@3.10.1";
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -25,7 +27,7 @@ const ALLOWED_REPORT_REASONS = new Set([
   "other",
 ]);
 const SHARED_OUTPUT_LIST_SELECT =
-  "id, owner_user_id, share_title, share_excerpt, allow_remix, source_payload_json, generation_length_mode, published_at, created_at, cover_image_path, cover_image_url, cover_image_width, cover_image_height, cover_image_content_type";
+  "id, owner_user_id, share_title, share_excerpt, allow_remix, source_payload_json, generation_length_mode, published_at, created_at, cover_image_path, cover_image_url, cover_image_width, cover_image_height, cover_image_content_type, content_type, book_author_name";
 
 interface PublishRequestBody {
   sharedOutputID?: string;
@@ -163,7 +165,71 @@ function normalizeOptionalString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-export async function handler(req: Request): Promise<Response> {
+async function extractCanonicalCover(
+  epubBytes: ArrayBuffer,
+): Promise<Uint8Array | null> {
+  try {
+    const zip = await JSZip.loadAsync(epubBytes);
+    const file = zip.file("OEBPS/cover-image.jpg");
+    return file ? await file.async("uint8array") : null;
+  } catch (error) {
+    console.error("[public-sharing] cover extraction failed:", error);
+    return null;
+  }
+}
+
+function safeProjectPayload(snapshotJSON: unknown): Record<string, unknown> {
+  const snapshot = snapshotJSON as Record<string, unknown> | null;
+  const project = snapshot?.project as Record<string, unknown> | undefined;
+  const stringValue = (key: string): string | null =>
+    typeof project?.[key] === "string" && String(project[key]).trim()
+      ? String(project[key]).trim()
+      : null;
+  return {
+    project: {
+      summary: stringValue("summary"),
+      readingLevel: stringValue("readingLevel"),
+      contentRating: stringValue("contentRating"),
+      audienceNotes: stringValue("audienceNotes"),
+    },
+  };
+}
+
+export function epubPublicationOwnerMatches(
+  sharedOwnerUserID: unknown,
+  exportOwnerUserID: unknown,
+): boolean {
+  return typeof sharedOwnerUserID === "string" &&
+    typeof exportOwnerUserID === "string" &&
+    sharedOwnerUserID.length > 0 &&
+    sharedOwnerUserID === exportOwnerUserID;
+}
+
+function publicBookExcerpt(
+  bookDescription: unknown,
+  snapshotJSON: unknown,
+): string {
+  if (typeof bookDescription === "string" && bookDescription.trim()) {
+    return bookDescription.trim();
+  }
+  const payload = safeProjectPayload(snapshotJSON);
+  const summary = (payload.project as Record<string, unknown>).summary;
+  return typeof summary === "string" ? summary : "";
+}
+
+type SharingClient = any;
+
+interface HandlerOverrides {
+  adminClient?: SharingClient;
+  authenticatedUserId?: string | null;
+  supabaseURL?: string;
+  publicShareBaseURL?: string | null;
+}
+
+export async function handler(
+  req: Request,
+  overrides: HandlerOverrides = {},
+): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
@@ -172,10 +238,13 @@ export async function handler(req: Request): Promise<Response> {
     return jsonResponse({ status: "failed", error: "Method not allowed" }, 405);
   }
 
-  const supabaseURL = Deno.env.get("SUPABASE_URL");
+  const supabaseURL = overrides.supabaseURL ?? Deno.env.get("SUPABASE_URL");
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!supabaseURL || !supabaseAnonKey || !serviceRoleKey) {
+  if (
+    !supabaseURL ||
+    (!overrides.adminClient && (!supabaseAnonKey || !serviceRoleKey))
+  ) {
     return jsonResponse(
       {
         status: "failed",
@@ -186,15 +255,24 @@ export async function handler(req: Request): Promise<Response> {
     );
   }
 
-  const adminClient = createClient(supabaseURL, serviceRoleKey);
-  const authenticatedUserId = await getAuthenticatedUserId(
-    req,
+  const adminClient = overrides.adminClient ?? createClient(
     supabaseURL,
-    supabaseAnonKey,
+    serviceRoleKey!,
   );
+  const authenticatedUserId = Object.prototype.hasOwnProperty.call(
+      overrides,
+      "authenticatedUserId",
+    )
+    ? overrides.authenticatedUserId ?? null
+    : await getAuthenticatedUserId(req, supabaseURL, supabaseAnonKey!);
   const routePath = routePathFromURL(req.url);
   const segments = routePath.split("/").filter(Boolean);
-  const publicShareBaseURL = Deno.env.get("PUBLIC_SHARE_WEB_BASE_URL") ?? null;
+  const publicShareBaseURL = Object.prototype.hasOwnProperty.call(
+      overrides,
+      "publicShareBaseURL",
+    )
+    ? overrides.publicShareBaseURL ?? null
+    : Deno.env.get("PUBLIC_SHARE_WEB_BASE_URL") ?? null;
 
   const requireUser = (): string | Response =>
     authenticatedUserId ?? jsonResponse(
@@ -255,6 +333,10 @@ export async function handler(req: Request): Promise<Response> {
         shareExcerpt: typeof row.share_excerpt === "string"
           ? row.share_excerpt
           : "",
+        contentType: row.content_type === "epub" ? "epub" : "text",
+        bookAuthorName: typeof row.book_author_name === "string"
+          ? row.book_author_name
+          : null,
         authorDisplayName: displayNameByUserId.get(ownerUserID) ?? null,
         createdAt: typeof row.published_at === "string"
           ? row.published_at
@@ -356,13 +438,21 @@ export async function handler(req: Request): Promise<Response> {
         shareExcerpt: typeof sharedOutputRecord.share_excerpt === "string"
           ? sharedOutputRecord.share_excerpt
           : "",
-        outputText: typeof sharedOutputRecord.output_text === "string"
-          ? sharedOutputRecord.output_text
-          : "",
+        contentType: sharedOutputRecord.content_type === "epub"
+          ? "epub"
+          : "text",
+        bookAuthorName: typeof sharedOutputRecord.book_author_name === "string"
+          ? sharedOutputRecord.book_author_name
+          : null,
+        outputText: sharedOutputRecord.content_type === "epub"
+          ? ""
+          : (typeof sharedOutputRecord.output_text === "string"
+            ? sharedOutputRecord.output_text
+            : ""),
         authorDisplayName:
           typeof (profileData as Record<string, unknown> | null)
               ?.display_name === "string"
-            ? (profileData as Record<string, unknown>).display_name
+            ? (profileData as unknown as Record<string, unknown>).display_name
             : null,
         ownerUserID,
         sourcePromptPackName:
@@ -412,6 +502,233 @@ export async function handler(req: Request): Promise<Response> {
       },
       200,
     );
+  }
+
+  if (req.method === "POST" && routePath === "/shared-outputs/epub") {
+    const userIDOrError = requireUser();
+    if (userIDOrError instanceof Response) return userIDOrError;
+    const userID = userIDOrError;
+    let body: { exportMetadataID?: unknown };
+    try {
+      body = await req.json() as { exportMetadataID?: unknown };
+    } catch {
+      return jsonResponse(
+        { status: "failed", error: "Invalid JSON body" },
+        400,
+      );
+    }
+    const exportMetadataID = typeof body.exportMetadataID === "string"
+      ? body.exportMetadataID.trim()
+      : "";
+    if (!isUUID(exportMetadataID)) {
+      return jsonResponse({
+        status: "failed",
+        error: "Invalid exportMetadataID",
+      }, 422);
+    }
+
+    const { data: exportRow, error: exportError } = await adminClient
+      .from("export_metadata")
+      .select(
+        "id, project_id, book_title, author_name, book_description, epub_storage_path, epub_sha256, is_active, exported_by_user_id",
+      )
+      .eq("id", exportMetadataID).maybeSingle();
+    if (exportError) {
+      return jsonResponse(
+        { status: "failed", error: "Could not load export" },
+        500,
+      );
+    }
+    if (!exportRow) {
+      return jsonResponse({ status: "failed", error: "Export not found" }, 404);
+    }
+    if (String(exportRow.exported_by_user_id) !== userID) {
+      return jsonResponse({
+        status: "failed",
+        error: "You do not own this export",
+      }, 403);
+    }
+    if (!exportRow.is_active) {
+      return jsonResponse(
+        { status: "failed", error: "Export is inactive" },
+        410,
+      );
+    }
+    if (
+      typeof exportRow.epub_storage_path !== "string" ||
+      !exportRow.epub_storage_path.trim()
+    ) {
+      return jsonResponse({
+        status: "failed",
+        error: "Export has no EPUB artifact",
+      }, 422);
+    }
+    const { data: snapshot } = await adminClient.from("project_snapshots")
+      .select("snapshot_json").eq("id", exportRow.project_id).maybeSingle();
+    const sourcePayload = safeProjectPayload(snapshot?.snapshot_json);
+    const excerpt = publicBookExcerpt(
+      exportRow.book_description,
+      snapshot?.snapshot_json,
+    );
+    const { data: epubBytes, error: epubReadError } = await adminClient.storage
+      .from("exports").download(exportRow.epub_storage_path);
+    if (epubReadError || !epubBytes) {
+      console.error(
+        "[public-sharing] canonical EPUB read failed:",
+        epubReadError,
+      );
+      return jsonResponse({
+        status: "failed",
+        error: "Could not read EPUB artifact",
+      }, 500);
+    }
+
+    const { data: existing, error: existingError } = await adminClient
+      .from("shared_outputs").select("id").eq(
+        "export_metadata_id",
+        exportMetadataID,
+      ).maybeSingle();
+    if (existingError) {
+      return jsonResponse({
+        status: "failed",
+        error: "Could not load publication",
+      }, 500);
+    }
+    const write = {
+      owner_user_id: userID,
+      generation_output_id: null,
+      content_type: "epub",
+      export_metadata_id: exportMetadataID,
+      book_author_name: exportRow.author_name,
+      share_title: exportRow.book_title,
+      share_excerpt: excerpt,
+      output_text: "",
+      source_payload_json: sourcePayload,
+      source_prompt_pack_name: "",
+      model_name: "",
+      generation_action: "generate",
+      generation_length_mode: "long",
+      allow_remix: false,
+      visibility: "shared",
+      unpublished_at: null,
+      published_at: new Date().toISOString(),
+    };
+    const query = existing
+      ? adminClient.from("shared_outputs").update(write).eq("id", existing.id)
+        .eq("owner_user_id", userID)
+      : adminClient.from("shared_outputs").insert(write);
+    const { data: saved, error: saveError } = await query.select(
+      "id, visibility, published_at",
+    ).single();
+    if (saveError || !saved) {
+      console.error("[public-sharing] EPUB publish error:", saveError);
+      return jsonResponse(
+        { status: "failed", error: "Could not publish EPUB" },
+        500,
+      );
+    }
+
+    // The EPUB remains private. Only its canonical JPEG cover is copied publicly.
+    {
+      const cover = await extractCanonicalCover(await epubBytes.arrayBuffer());
+      if (cover) {
+        const coverPath = `${userID}/${saved.id}/epub-cover.jpg`;
+        const { error: uploadError } = await adminClient.storage.from(
+          "shared-output-images",
+        )
+          .upload(coverPath, cover, {
+            contentType: "image/jpeg",
+            upsert: true,
+          });
+        if (!uploadError) {
+          const coverURL = `${
+            supabaseURL.replace(/\/+$/, "")
+          }/storage/v1/object/public/shared-output-images/${coverPath}`;
+          await adminClient.from("shared_outputs").update({
+            cover_image_path: coverPath,
+            cover_image_url: coverURL,
+            cover_image_content_type: "image/jpeg",
+            cover_image_width: null,
+            cover_image_height: null,
+          }).eq("id", saved.id);
+        } else {console.error(
+            "[public-sharing] cover upload failed:",
+            uploadError,
+          );}
+      }
+    }
+    return jsonResponse({
+      sharedOutputID: String(saved.id),
+      shareURL: buildShareURL(publicShareBaseURL, String(saved.id)),
+      visibility: String(saved.visibility ?? "shared"),
+      publishedAt: saved.published_at ?? new Date().toISOString(),
+    });
+  }
+
+  if (
+    req.method === "GET" && segments[0] === "shared-outputs" &&
+    segments.length === 3 && segments[2] === "epub"
+  ) {
+    const sharedOutputID = segments[1];
+    if (!isUUID(sharedOutputID)) {
+      return jsonResponse({ status: "failed", error: "Not found" }, 404);
+    }
+    const { data: shared, error: sharedError } = await adminClient.from(
+      "shared_outputs",
+    )
+      .select(
+        "id, owner_user_id, content_type, visibility, unpublished_at, export_metadata_id",
+      )
+      .eq("id", sharedOutputID).maybeSingle();
+    if (
+      sharedError || !shared || shared.content_type !== "epub" ||
+      !["shared", "unlisted"].includes(String(shared.visibility)) ||
+      shared.unpublished_at ||
+      !isUUID(shared.export_metadata_id)
+    ) {
+      return jsonResponse(
+        { status: "failed", error: "Shared EPUB not found" },
+        404,
+      );
+    }
+    const { data: exportRow } = await adminClient.from("export_metadata")
+      .select(
+        "id, book_title, author_name, epub_sha256, epub_storage_path, is_active, exported_by_user_id",
+      )
+      .eq("id", shared.export_metadata_id).maybeSingle();
+    if (
+      !exportRow || !exportRow.is_active ||
+      !epubPublicationOwnerMatches(
+        shared.owner_user_id,
+        exportRow.exported_by_user_id,
+      ) ||
+      typeof exportRow.epub_storage_path !== "string" ||
+      !exportRow.epub_storage_path
+    ) {
+      return jsonResponse(
+        { status: "failed", error: "Shared EPUB not found" },
+        404,
+      );
+    }
+    const { data: signed, error: signError } = await adminClient.storage.from(
+      "exports",
+    )
+      .createSignedUrl(exportRow.epub_storage_path, 300);
+    if (signError || !signed?.signedUrl) {
+      console.error("[public-sharing] shared EPUB signing failed:", signError);
+      return jsonResponse(
+        { status: "failed", error: "Could not sign EPUB" },
+        500,
+      );
+    }
+    return jsonResponse({
+      signedURL: signed.signedUrl,
+      expiresAt: new Date(Date.now() + 300000).toISOString(),
+      sharedOutputID,
+      bookTitle: exportRow.book_title,
+      authorName: exportRow.author_name,
+      epubSHA256: exportRow.epub_sha256 ?? "",
+    });
   }
 
   if (req.method === "POST" && routePath === "/shared-outputs") {
@@ -868,4 +1185,6 @@ export async function handler(req: Request): Promise<Response> {
   return jsonResponse({ status: "failed", error: "Not found" }, 404);
 }
 
-Deno.serve((req: Request) => handler(req));
+if (import.meta.main) {
+  Deno.serve((req: Request) => handler(req));
+}

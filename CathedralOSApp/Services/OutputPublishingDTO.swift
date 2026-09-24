@@ -107,6 +107,22 @@ struct PublishResponse: Codable {
     }
 }
 
+// MARK: - Shared content
+
+enum SharedContentType: String, Codable, Equatable {
+    case text
+    case epub
+}
+
+struct SharedEPUBDownloadResponse: Codable {
+    let signedURL: String
+    let expiresAt: String
+    let sharedOutputID: String
+    let bookTitle: String
+    let authorName: String
+    let epubSHA256: String
+}
+
 // MARK: - SharedOutputListItem
 // A single item in the public shared-output list response.
 
@@ -116,6 +132,8 @@ struct SharedOutputListItem: Codable, Identifiable {
     let sharedOutputID: String
     let shareTitle: String
     let shareExcerpt: String
+    let contentType: SharedContentType
+    let bookAuthorName: String?
     let authorDisplayName: String?
     let createdAt: Date
     let allowRemix: Bool
@@ -136,6 +154,8 @@ struct SharedOutputListItem: Codable, Identifiable {
         sharedOutputID       = try c.decode(String.self, forKey: .sharedOutputID)
         shareTitle           = try c.decodeIfPresent(String.self, forKey: .shareTitle) ?? ""
         shareExcerpt         = try c.decodeIfPresent(String.self, forKey: .shareExcerpt) ?? ""
+        contentType          = (try? c.decodeIfPresent(SharedContentType.self, forKey: .contentType)) ?? .text
+        bookAuthorName       = try c.decodeIfPresent(String.self, forKey: .bookAuthorName)
         authorDisplayName    = try c.decodeIfPresent(String.self, forKey: .authorDisplayName)
         createdAt            = try c.decodeIfPresent(Date.self,   forKey: .createdAt) ?? Date()
         allowRemix           = try c.decodeIfPresent(Bool.self,   forKey: .allowRemix) ?? false
@@ -157,6 +177,8 @@ struct SharedOutputDetail: Codable {
     let sharedOutputID: String
     let shareTitle: String
     let shareExcerpt: String
+    let contentType: SharedContentType
+    let bookAuthorName: String?
     let outputText: String
     let authorDisplayName: String?
     /// The UUID of the user who published this output.
@@ -190,6 +212,8 @@ struct SharedOutputDetail: Codable {
         sharedOutputID       = try c.decode(String.self, forKey: .sharedOutputID)
         shareTitle           = try c.decodeIfPresent(String.self, forKey: .shareTitle) ?? ""
         shareExcerpt         = try c.decodeIfPresent(String.self, forKey: .shareExcerpt) ?? ""
+        contentType          = (try? c.decodeIfPresent(SharedContentType.self, forKey: .contentType)) ?? .text
+        bookAuthorName       = try c.decodeIfPresent(String.self, forKey: .bookAuthorName)
         outputText           = try c.decodeIfPresent(String.self, forKey: .outputText) ?? ""
         authorDisplayName    = try c.decodeIfPresent(String.self, forKey: .authorDisplayName)
         ownerUserID          = try c.decodeIfPresent(String.self, forKey: .ownerUserID)

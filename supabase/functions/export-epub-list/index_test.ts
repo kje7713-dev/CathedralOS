@@ -22,6 +22,7 @@ const rows: ExportHistoryItem[] = [
 ];
 
 function client() {
+  let publicationFilter: string[] = [];
   const snapshotChain: Record<string, unknown> = {};
   snapshotChain.select = () => snapshotChain;
   snapshotChain.eq = () => snapshotChain;
@@ -33,16 +34,29 @@ function client() {
   exportChain.select = () => exportChain;
   exportChain.eq = () => exportChain;
   exportChain.order = async () => ({ data: rows, error: null });
+  const publicationChain: Record<string, unknown> = {};
+  publicationChain.select = () => publicationChain;
+  publicationChain.eq = () => publicationChain;
+  publicationChain.in = async (_column: string, values: string[]) => {
+    publicationFilter = values;
+    return { data: [], error: null };
+  };
   return {
     auth: {
       getUser: async () => ({ data: { user: { id: USER } }, error: null }),
     },
     from: (table: string) =>
-      table === "project_snapshots" ? snapshotChain : exportChain,
+      table === "project_snapshots"
+        ? snapshotChain
+        : table === "shared_outputs"
+        ? publicationChain
+        : exportChain,
+    publicationFilter: () => publicationFilter,
   } as never;
 }
 
 Deno.test("list returns both active historical exports after regeneration", async () => {
+  const testClient = client();
   const response = await handleListRequest(
     new Request("https://x", {
       method: "POST",
@@ -52,10 +66,20 @@ Deno.test("list returns both active historical exports after regeneration", asyn
       },
       body: JSON.stringify({ project_id: "local-project" }),
     }),
-    client(),
+    testClient,
   );
   assertEquals(response.status, 200);
-  assertEquals(await response.json(), { exports: rows });
+  assertEquals(
+    (testClient as { publicationFilter: () => string[] }).publicationFilter(),
+    ["b", "a"],
+  );
+  assertEquals(await response.json(), {
+    exports: rows.map((row) => ({
+      ...row,
+      shared_output_id: null,
+      is_publicly_shared: false,
+    })),
+  });
 });
 Deno.test("list rejects missing auth", async () => {
   assertEquals(
