@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // jszip is a CommonJS-compatible ESM bundle in Deno runtime.
-import JSZip from "https://esm.sh/jszip@3.10.1";
+import * as JSZip from "https://esm.sh/jszip@3.10.1";
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -217,7 +217,19 @@ function publicBookExcerpt(
   return typeof summary === "string" ? summary : "";
 }
 
-export async function handler(req: Request): Promise<Response> {
+type SharingClient = any;
+
+interface HandlerOverrides {
+  adminClient?: SharingClient;
+  authenticatedUserId?: string | null;
+  supabaseURL?: string;
+  publicShareBaseURL?: string | null;
+}
+
+export async function handler(
+  req: Request,
+  overrides: HandlerOverrides = {},
+): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
@@ -226,10 +238,13 @@ export async function handler(req: Request): Promise<Response> {
     return jsonResponse({ status: "failed", error: "Method not allowed" }, 405);
   }
 
-  const supabaseURL = Deno.env.get("SUPABASE_URL");
+  const supabaseURL = overrides.supabaseURL ?? Deno.env.get("SUPABASE_URL");
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!supabaseURL || !supabaseAnonKey || !serviceRoleKey) {
+  if (
+    !supabaseURL ||
+    (!overrides.adminClient && (!supabaseAnonKey || !serviceRoleKey))
+  ) {
     return jsonResponse(
       {
         status: "failed",
@@ -240,15 +255,24 @@ export async function handler(req: Request): Promise<Response> {
     );
   }
 
-  const adminClient = createClient(supabaseURL, serviceRoleKey);
-  const authenticatedUserId = await getAuthenticatedUserId(
-    req,
+  const adminClient = overrides.adminClient ?? createClient(
     supabaseURL,
-    supabaseAnonKey,
+    serviceRoleKey!,
   );
+  const authenticatedUserId = Object.prototype.hasOwnProperty.call(
+      overrides,
+      "authenticatedUserId",
+    )
+    ? overrides.authenticatedUserId ?? null
+    : await getAuthenticatedUserId(req, supabaseURL, supabaseAnonKey!);
   const routePath = routePathFromURL(req.url);
   const segments = routePath.split("/").filter(Boolean);
-  const publicShareBaseURL = Deno.env.get("PUBLIC_SHARE_WEB_BASE_URL") ?? null;
+  const publicShareBaseURL = Object.prototype.hasOwnProperty.call(
+      overrides,
+      "publicShareBaseURL",
+    )
+    ? overrides.publicShareBaseURL ?? null
+    : Deno.env.get("PUBLIC_SHARE_WEB_BASE_URL") ?? null;
 
   const requireUser = (): string | Response =>
     authenticatedUserId ?? jsonResponse(
@@ -428,7 +452,7 @@ export async function handler(req: Request): Promise<Response> {
         authorDisplayName:
           typeof (profileData as Record<string, unknown> | null)
               ?.display_name === "string"
-            ? (profileData as Record<string, unknown>).display_name
+            ? (profileData as unknown as Record<string, unknown>).display_name
             : null,
         ownerUserID,
         sourcePromptPackName:
@@ -1161,4 +1185,6 @@ export async function handler(req: Request): Promise<Response> {
   return jsonResponse({ status: "failed", error: "Not found" }, 404);
 }
 
-Deno.serve((req: Request) => handler(req));
+if (import.meta.main) {
+  Deno.serve((req: Request) => handler(req));
+}

@@ -337,7 +337,8 @@ struct SharedOutputDetailView: View {
                 }
             }
 
-            if let shareURL = detail.shareURL, !shareURL.isEmpty {
+            if detail.contentType == .text,
+               let shareURL = detail.shareURL, !shareURL.isEmpty {
                 CathedralSecondaryButton("Share Link", systemImage: "square.and.arrow.up") {
                     showShareSheet = true
                 }
@@ -388,7 +389,8 @@ struct SharedOutputDetailView: View {
                 }
             }
 
-            if let shareURL = detail.shareURL, !shareURL.isEmpty {
+            if detail.contentType == .text,
+               let shareURL = detail.shareURL, !shareURL.isEmpty {
                 CathedralSecondaryButton("Copy Share Link", systemImage: "link") {
                     UIPasteboard.general.string = shareURL
                 }
