@@ -2,7 +2,7 @@
 create extension if not exists pgtap;
 \set ON_ERROR_STOP on
 begin;
-select plan(18);
+select plan(22);
 
 select ok(exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'export_metadata' and column_name = 'source_kind'), 'source_kind exists');
 select is((select pg_get_expr(d.adbin, d.adrelid) from pg_attrdef d join pg_class c on c.oid = d.adrelid join pg_namespace n on n.oid = c.relnamespace join pg_attribute a on a.attrelid = c.oid and a.attnum = d.adnum where n.nspname = 'public' and c.relname = 'export_metadata' and a.attname = 'source_kind'), '''project''::text', 'source_kind defaults to project');
