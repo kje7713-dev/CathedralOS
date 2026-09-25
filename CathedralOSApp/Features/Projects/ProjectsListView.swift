@@ -107,6 +107,7 @@ struct ProjectsListView: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: CathedralTheme.Spacing.sm) {
