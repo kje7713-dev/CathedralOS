@@ -58,7 +58,6 @@ struct ProjectsListView: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
         .padding(.horizontal, CathedralTheme.Spacing.base)
-        .padding(.top, CathedralTheme.Spacing.base)
     }
 
     private var projectsPill: some View {
@@ -105,6 +104,7 @@ struct ProjectsListView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .contentMargins(.top, 0, for: .scrollContent)
             .scrollContentBackground(.hidden)
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
