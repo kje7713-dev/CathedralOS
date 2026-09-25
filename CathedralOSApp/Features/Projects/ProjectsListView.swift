@@ -48,19 +48,15 @@ struct ProjectsListView: View {
     }
 
     private var welcomeSummary: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-            Text("Welcome to CathedralOS")
-                .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                .foregroundStyle(CathedralTheme.Colors.primaryText)
-            Text("Build stories. Compile scenes. Pick up where you left off below.")
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            Image("StoryDonkeyWordmark")
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity)
+            Text("Projects provide organization for your ideas. Click the plus sign in the top right to start a new project.")
                 .font(CathedralTheme.Typography.caption())
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: CathedralTheme.Spacing.sm) {
-                statChip(value: "\(projects.count)", label: "Projects")
-                statChip(value: "\(allOutputs.count)", label: "Outputs")
-            }
-            .padding(.top, CathedralTheme.Spacing.xs)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(CathedralTheme.Spacing.base)
@@ -72,25 +68,6 @@ struct ProjectsListView: View {
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
         .padding(.horizontal, CathedralTheme.Spacing.base)
         .padding(.top, CathedralTheme.Spacing.base)
-    }
-
-    private func statChip(value: String, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value)
-                .font(CathedralTheme.Typography.display(20))
-                .foregroundStyle(CathedralTheme.Colors.primaryText)
-            Text(label)
-                .font(CathedralTheme.Typography.caption())
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(CathedralTheme.Spacing.sm)
-        .background(CathedralTheme.Colors.background)
-        .overlay(
-            RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm)
-                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
     }
 
     private var modePicker: some View {
