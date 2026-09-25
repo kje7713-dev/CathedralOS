@@ -49,7 +49,7 @@ struct HomeView: View {
                 .renderingMode(.template)
                 .resizable()
                 .scaledToFit()
-                .frame(width: 88, height: 88)
+                .frame(maxWidth: .infinity)
                 .foregroundStyle(CathedralTheme.Colors.accent)
             Text("**StoryDonkey carries your ideas from first spark to final page.** Let your imagination run wild. The donkey keeps receipts.")
                 .font(CathedralTheme.Typography.body(15))
