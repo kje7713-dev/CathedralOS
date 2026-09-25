@@ -46,11 +46,9 @@ struct HomeView: View {
     private var welcomeBanner: some View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
             Image("StoryDonkeyWordmark")
-                .renderingMode(.template)
                 .resizable()
                 .scaledToFit()
                 .frame(maxWidth: .infinity)
-                .foregroundStyle(CathedralTheme.Colors.accent)
             Text("**StoryDonkey carries your ideas from first spark to final page.** Let your imagination run wild. The donkey keeps receipts.")
                 .font(CathedralTheme.Typography.body(15))
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
