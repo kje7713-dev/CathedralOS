@@ -38,7 +38,6 @@ struct HomeView: View {
                 .padding(CathedralTheme.Spacing.base)
             }
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
-            .navigationTitle("Home")
         }
     }
 
@@ -50,10 +49,10 @@ struct HomeView: View {
                 .renderingMode(.template)
                 .resizable()
                 .scaledToFit()
-                .frame(width: 44, height: 44)
+                .frame(width: 88, height: 88)
                 .foregroundStyle(CathedralTheme.Colors.accent)
-            Text("Build stories. Compile scenes.")
-                .font(CathedralTheme.Typography.body(15))
+            Text("**You create. StoryDonkey carries the story-building weight.**")
+                .font(CathedralTheme.Typography.body(15, weight: .semibold))
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
                 .multilineTextAlignment(.center)
             Text("Open the Projects tab to start a new story, or pick up something you were working on below.")
