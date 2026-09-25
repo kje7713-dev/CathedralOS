@@ -46,8 +46,11 @@ struct HomeView: View {
 
     private var welcomeBanner: some View {
         VStack(spacing: CathedralTheme.Spacing.sm) {
-            Image(systemName: "books.vertical.fill")
-                .font(.system(size: 36, weight: .light))
+            Image("StoryDonkeyMark")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 44, height: 44)
                 .foregroundStyle(CathedralTheme.Colors.accent)
             Text("Build stories. Compile scenes.")
                 .font(CathedralTheme.Typography.body(15))
