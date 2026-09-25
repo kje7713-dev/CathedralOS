@@ -39,25 +39,27 @@ struct ProjectsListView: View {
     // MARK: - Top-of-list summary
 
     private var welcomeSummary: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+        VStack(spacing: CathedralTheme.Spacing.sm) {
             Image("StoryDonkeyWordmark")
                 .resizable()
                 .scaledToFit()
                 .frame(maxWidth: .infinity)
             Text("Projects provide organization for your ideas. Click the plus sign in the top right to start a new project.")
-                .font(CathedralTheme.Typography.caption())
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .font(CathedralTheme.Typography.body(15))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(CathedralTheme.Spacing.base)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, CathedralTheme.Spacing.md)
+        .padding(.horizontal, CathedralTheme.Spacing.base)
         .background(CathedralTheme.Colors.surface)
         .overlay(
             RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
                 .stroke(CathedralTheme.Colors.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
-        .padding(.horizontal, CathedralTheme.Spacing.base)
     }
 
     private var projectsPill: some View {
