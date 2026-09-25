@@ -36,16 +36,7 @@ struct ProjectsListView: View {
         }
     }
 
-    // MARK: - Top-of-list summary + Generate / Output toggle
-
-    @Query(sort: \GenerationOutput.createdAt, order: .reverse)
-    private var allOutputs: [GenerationOutput]
-
-    @State private var viewMode: ProjectsViewMode = .generate
-
-    private var topOutputs: [GenerationOutput] {
-        Array(allOutputs.prefix(5))
-    }
+    // MARK: - Top-of-list summary
 
     private var welcomeSummary: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
@@ -70,60 +61,20 @@ struct ProjectsListView: View {
         .padding(.top, CathedralTheme.Spacing.base)
     }
 
-    private var modePicker: some View {
-        Picker("Mode", selection: $viewMode) {
-            ForEach(ProjectsViewMode.allCases) { mode in
-                Text(mode.label).tag(mode)
-            }
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, CathedralTheme.Spacing.base)
-        .padding(.top, CathedralTheme.Spacing.sm)
-    }
-
-    private var recentOutputsList: some View {
-        ForEach(topOutputs) { output in
-            recentOutputRow(output)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-        }
-    }
-
-    private func recentOutputRow(_ output: GenerationOutput) -> some View {
-        NavigationLink(value: output) {
-            HStack(alignment: .center, spacing: CathedralTheme.Spacing.sm) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(output.title.isEmpty ? "Untitled" : output.title)
-                        .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                        .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    Text(subtitle(for: output))
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                }
-                Spacer()
-                statusPill(for: output)
-            }
+    private var projectsPill: some View {
+        Text("Projects")
+            .font(CathedralTheme.Typography.body(15, weight: .semibold))
+            .foregroundStyle(CathedralTheme.Colors.primaryText)
+            .frame(maxWidth: .infinity)
             .padding(.vertical, CathedralTheme.Spacing.sm)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func subtitle(for output: GenerationOutput) -> String {
-        let when = output.createdAt.formatted(date: .abbreviated, time: .shortened)
-        let model = output.modelName.isEmpty ? "Unknown model" : output.modelName
-        return "\(when) · \(output.status) · \(model)"
-    }
-
-    private func statusPill(for output: GenerationOutput) -> some View {
-        Text(output.status)
-            .font(CathedralTheme.Typography.caption(11, weight: .medium))
-            .padding(.horizontal, CathedralTheme.Spacing.sm)
-            .padding(.vertical, CathedralTheme.Spacing.xs)
-            .background(CathedralTheme.Colors.background)
+            .background(CathedralTheme.Colors.surface)
             .clipShape(Capsule())
-            .overlay(
-                Capsule().stroke(CathedralTheme.Colors.border, lineWidth: 1)
-            )
+            .padding(.horizontal, CathedralTheme.Spacing.xs)
+            .padding(.vertical, 3)
+            .background(CathedralTheme.Colors.border.opacity(0.45))
+            .clipShape(Capsule())
+            .padding(.horizontal, CathedralTheme.Spacing.base)
+            .padding(.top, CathedralTheme.Spacing.sm)
     }
 
     // MARK: - Dedupe
@@ -140,29 +91,22 @@ struct ProjectsListView: View {
             List {
                 Section {
                     welcomeSummary
-                    modePicker
+                    projectsPill
                 }
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
 
-                switch viewMode {
-                case .generate:
-                    if dedupedProjects.isEmpty {
-                        emptyState
-                            .listRowInsets(EdgeInsets())
-                            .listRowBackground(Color.clear)
-                    } else {
-                        projectList
-                    }
-                case .output:
-                    recentOutputsList
+                if dedupedProjects.isEmpty {
+                    emptyState
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                } else {
+                    projectList
                 }
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
-            .navigationTitle("Projects")
-            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: CathedralTheme.Spacing.sm) {
@@ -200,9 +144,6 @@ struct ProjectsListView: View {
             }
             .navigationDestination(for: StoryProject.self) { project in
                 ProjectDetailView(project: project)
-            }
-            .navigationDestination(for: GenerationOutput.self) { output in
-                GenerationOutputDetailView(output: output, hidePager: true)
             }
         }
         .tint(CathedralTheme.Colors.accent)
@@ -711,19 +652,6 @@ struct ProjectsListView: View {
             await refreshRecoveryAvailability()
         } catch {
             deleteErrorMessage = (error as? ProjectDeletionError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-}
-
-// MARK: - Projects list view mode
-private enum ProjectsViewMode: String, CaseIterable, Identifiable {
-    case generate
-    case output
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .generate: return "Projects"
-        case .output:   return "Outputs"
         }
     }
 }
