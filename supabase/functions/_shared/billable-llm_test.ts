@@ -36,7 +36,10 @@ import {
   recordFailedUsageEvent,
   runBillableLLM,
 } from "./billable-llm.ts";
-import { ProviderError } from "../generate-story/_provider.ts";
+import {
+  ProviderBillingUnavailableError,
+  ProviderError,
+} from "../generate-story/_provider.ts";
 import type {
   LLMMessage,
   LLMProvider,
@@ -477,6 +480,29 @@ Deno.test("runBillableLLM: provider failure records 'failed' usage event + throw
   assertEquals(row.idempotency_key, null);
   assertEquals(row.input_tokens, null);
   assertEquals(row.output_tokens, null);
+});
+
+Deno.test("runBillableLLM: provider_billing_unavailable skips customer charge and failed usage event", async () => {
+  const admin = makeMockAdmin();
+  const creditStore = makeCreditStore();
+  const providerError = new ProviderBillingUnavailableError({
+    code: "organization_spend_limit_exceeded",
+    message: "organization spend limit",
+    status: 429,
+  });
+  const deps: BillableLLMDependencies = {
+    adminClient: admin,
+    provider: makeProvider(providerError),
+    creditStore,
+  };
+
+  await assertRejects(
+    () => runBillableLLM(makeRequest(), deps),
+    ProviderBillingUnavailableError,
+  );
+  assertEquals(creditStore.chargeCalls.length, 0);
+  assertEquals(admin.rpcCalls.length, 0);
+  assertEquals(admin.insertCalls.length, 0);
 });
 
 Deno.test("runBillableLLM: onProviderSuccess callback result is returned in featureResult", async () => {

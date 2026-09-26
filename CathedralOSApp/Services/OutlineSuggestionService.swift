@@ -15,6 +15,7 @@ enum OutlineSuggestionError: Error, LocalizedError {
     case notConfigured(reason: String)
     case notAuthenticated
     case rateLimited
+    case providerBillingUnavailable
     case providerError
     case insufficientCredits(needed: Double?, available: Double?, message: String)
     case invalidResponse(String)
@@ -44,7 +45,8 @@ enum OutlineSuggestionError: Error, LocalizedError {
         case .notConfigured(let r): return "Suggestions backend not configured. \(r)"
         case .notAuthenticated:      return "Sign in to suggest sections."
         case .rateLimited:           return "Too many suggestion requests. Try again in a minute."
-        case .providerError:         return "The AI service is temporarily unavailable. Please try again later."
+        case .providerBillingUnavailable: return "Temporarily unavailable — try again later."
+        case .providerError:         return "The AI suggestion failed. Try again."
         case .insufficientCredits(let needed, let available, let message):
             if let needed, let available { return "Insufficient credits: need \(needed.cleanCreditCount), have \(available.cleanCreditCount)." }
             return message
@@ -274,7 +276,7 @@ struct OutlineSuggestionService {
         // PR 9: recipe_provenance_conflict is not auto-retryable — the
         // outline has persisted sections from a previous recipe hash, so the
         // user must edit the recipe or start a fresh outline.
-        case .notConfigured, .providerError, .insufficientCredits, .invalidResponse, .recipeIntegrityMissing, .recipeProvenanceConflict:
+        case .notConfigured, .providerBillingUnavailable, .providerError, .insufficientCredits, .invalidResponse, .recipeIntegrityMissing, .recipeProvenanceConflict:
             return false
         }
     }
@@ -285,6 +287,7 @@ struct OutlineSuggestionService {
             let numbers = text.split { !$0.isNumber && $0 != "." }.compactMap { Double($0) }
             return .insufficientCredits(needed: numbers.first, available: numbers.dropFirst().first, message: text)
         }
+        if errorCode == "provider_billing_unavailable" { return .providerBillingUnavailable }
         if errorCode == "provider_error" || errorCode == "invalid_response" { return .providerError }
         return .serverError(statusCode: 500, body: text)
     }

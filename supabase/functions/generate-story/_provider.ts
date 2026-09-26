@@ -168,7 +168,8 @@ export function classifyOpenAIStatus(
     // non-retryable, but historically surfaced as a distinct customer-visible
     // message). Anything else on 429 is a transient rate limit and stays
     // retryable.
-    if (openAIErrorCode === "credit_balance_exhausted") {
+    if (openAIErrorCode === "credit_balance_exhausted" ||
+      openAIErrorCode === "organization_spend_limit_exceeded") {
       return "provider_billing_unavailable";
     }
     if (openAIErrorCode === "insufficient_quota") {

@@ -14,12 +14,6 @@ Deno.test("outline suggestion polling contract preserves structured failures and
   assertEquals(source.includes("suggestions: run.suggestions"), true);
 });
 
-Deno.test("organization spend-limit provider failures use safe retry messaging", () => {
-  assertEquals(isOpenAISpendLimitError("OpenAI error (status=429, code=organization_spend_limit_exceeded)"), true);
-  assertEquals(isOpenAISpendLimitError("configured enforced spend limit reached"), true);
-  assertEquals(isOpenAISpendLimitError("OpenAI error (status=500, code=server_error)"), false);
-});
-
 import {
   buildAllocationPrompt,
   buildExpansionPrompt,
@@ -90,8 +84,8 @@ import {
   returnSuggestionRunToPending,
   recoverPendingSuggestionRun,
   runSuggestionJob,
-  isOpenAISpendLimitError,
 } from "./index.ts";
+import { ProviderBillingUnavailableError } from "../generate-story/_provider.ts";
 
 const sparseRequest = {
   recipe: {
@@ -4159,6 +4153,85 @@ Deno.test("successful obligation repair enters novel expansion instead of comple
   assertEquals(db.row.planning_state.phase, "expansion");
   assertEquals(db.row.status === "completed", false);
   assertEquals(actions.slice(0, 2), ["outline-suggestions", "outline-obligation-repair"]);
+});
+
+Deno.test("provider billing unavailable fails Suggest Sections safely and alerts with structured upstream details", async () => {
+  const body = await executableWorkerBody();
+  const existingSuggestion = { title: "Already preserved", summary: "Existing valid suggestion" };
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    suggestions: [existingSuggestion],
+  });
+  const contexts: any[] = [];
+  const scheduled: Promise<unknown>[] = [];
+  const billable = async () => {
+    throw new ProviderBillingUnavailableError({
+      code: "organization_spend_limit_exceeded",
+      message: "Your organization has reached its configured enforced spend limit.",
+      status: 429,
+    }, "OpenAI error (status=429, code=organization_spend_limit_exceeded)");
+  };
+
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: billable as any,
+    notifyProviderBillingUnavailable: async (context) => { contexts.push(context); },
+    scheduleAlert: (promise) => { scheduled.push(promise); },
+  });
+  await Promise.all(scheduled);
+
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "provider_billing_unavailable");
+  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.suggestions, [existingSuggestion]);
+  assertEquals(db.row.completed_at !== null, true);
+  assertEquals(db.row.lease_owner, null);
+  assertEquals(db.row.lease_expires_at, null);
+  assertEquals(JSON.stringify(db.row.diagnostics).includes("organization_spend_limit_exceeded"), false);
+  assertEquals(JSON.stringify(db.row.diagnostics).includes("configured enforced spend limit"), false);
+  assertEquals(contexts, [{
+    stableCode: "provider_billing_unavailable",
+    upstreamProviderCode: "organization_spend_limit_exceeded",
+    upstreamMessage: "Your organization has reached its configured enforced spend limit.",
+    upstreamStatus: 429,
+    providerModel: "fixture-model",
+    chapterRunID: "run-worker-fixture",
+    projectID: "worker-project",
+    environment: "production",
+  }]);
+});
+
+Deno.test("provider alert failure cannot change terminal Suggest Sections state", async () => {
+  const body = await executableWorkerBody();
+  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const scheduled: Promise<unknown>[] = [];
+  const billable = async () => {
+    throw new ProviderBillingUnavailableError({
+      code: "organization_spend_limit_exceeded",
+      message: "upstream spend limit",
+      status: 429,
+    });
+  };
+
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: billable as any,
+    notifyProviderBillingUnavailable: async () => { throw new Error("Resend unavailable"); },
+    scheduleAlert: (promise) => { scheduled.push(promise); },
+  });
+  await Promise.all(scheduled);
+
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "provider_billing_unavailable");
+  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.lease_owner, null);
+  assertEquals(db.row.lease_expires_at, null);
 });
 
 Deno.test("one physical provider call stops the second dispatch before provider execution", async () => {
