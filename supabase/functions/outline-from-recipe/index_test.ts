@@ -85,6 +85,7 @@ import {
   recoverPendingSuggestionRun,
   runSuggestionJob,
 } from "./index.ts";
+import { ProviderBillingUnavailableError } from "../generate-story/_provider.ts";
 
 const sparseRequest = {
   recipe: {
@@ -4152,6 +4153,219 @@ Deno.test("successful obligation repair enters novel expansion instead of comple
   assertEquals(db.row.planning_state.phase, "expansion");
   assertEquals(db.row.status === "completed", false);
   assertEquals(actions.slice(0, 2), ["outline-suggestions", "outline-obligation-repair"]);
+});
+
+Deno.test("provider billing unavailable during allocation bypasses retry and fails safely", async () => {
+  const body = await executableWorkerBody();
+  const existingSuggestion = { title: "Allocation checkpoint", summary: "Preserve this suggestion" };
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    suggestions: [existingSuggestion],
+    planning_state: { version: 2, phase: "enrichment_complete", nextAction: "outline-plan" },
+  });
+  const contexts: any[] = [];
+  const scheduled: Promise<unknown>[] = [];
+  let continuationCount = 0;
+  const billable = async (request: any) => {
+    assertEquals(request.action, "outline-plan");
+    throw new ProviderBillingUnavailableError({
+      code: "organization_spend_limit_exceeded",
+      message: "allocation upstream spend limit",
+      status: 429,
+    });
+  };
+
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: billable as any,
+    scheduleContinuation: async () => { continuationCount++; },
+    notifyProviderBillingUnavailable: async (context) => { contexts.push(context); },
+    scheduleAlert: (promise) => { scheduled.push(promise); },
+  });
+  await Promise.all(scheduled);
+
+  assertEquals(continuationCount, 0);
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "provider_billing_unavailable");
+  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.suggestions, [existingSuggestion]);
+  assertEquals(db.row.planning_state.nextAction, "outline-plan");
+  assertEquals("allocationRetryReason" in db.row.planning_state, false);
+  assertEquals(JSON.stringify(db.row.planning_state).includes("spend limit"), false);
+  assertEquals(JSON.stringify(db.row.diagnostics).includes("spend limit"), false);
+  assertEquals(db.row.lease_owner, null);
+  assertEquals(db.row.lease_expires_at, null);
+  assertEquals(contexts[0].upstreamProviderCode, "organization_spend_limit_exceeded");
+  assertEquals(contexts[0].upstreamMessage, "allocation upstream spend limit");
+  assertEquals(contexts[0].upstreamStatus, 429);
+});
+
+Deno.test("provider billing unavailable during resumed expansion suppresses raw diagnostics", async () => {
+  const baseBody = await executableWorkerBody();
+  const body = { ...baseBody, requestedFormat: "novel", storyMaterialEnrichment: undefined } as any;
+  const recoveredNovelMaterial = repairStoryMaterialFromRecipe(baseBody.recipe as any, {
+    sourceRecipeHash: "worker-fixture",
+    sourceRecipeVersion: 1,
+    sourcePromptPackID: "worker-pack",
+    sourcePromptPackName: "Worker fixture",
+  }, "novel");
+  const plannerItem = (id: string, label: string) => ({
+    id, label, description: `${label} description`, source: "planner", sourceReference: null,
+  });
+  const novelMaterial = attachRecipeProvenance({
+    ...recoveredNovelMaterial,
+    locations: [plannerItem("resume-location-1", "Route"), plannerItem("resume-location-2", "Shelter")],
+    escalationLadder: [
+      plannerItem("resume-escalation-1", "Pressure one"),
+      plannerItem("resume-escalation-2", "Pressure two"),
+      plannerItem("resume-escalation-3", "Pressure three"),
+    ],
+    reversals: [plannerItem("resume-reversal-1", "Reversal")],
+    consequences: [plannerItem("resume-consequence-1", "Consequence")],
+  } as any, await recipeProvenance(baseBody.recipe as any));
+  const suggestions = sceneOutline(37);
+  const completedRound = {
+    round: 1,
+    sectionCountBefore: 27,
+    projectedTokensBefore: 35100,
+    projectedWordsBefore: 27000,
+    additionsReturned: 10,
+    sectionCountAfter: 37,
+    projectedTokensAfter: 48100,
+    projectedWordsAfter: 37000,
+    remainingEstimatedDeficitTokens: 42900,
+    status: "completed",
+  };
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    story_material: novelMaterial,
+    suggestions,
+    planning_state: { version: 2, phase: "expansion", nextAction: "expansion" },
+    diagnostics: {
+      expansionCheckpoint: {
+        stage: "expansion",
+        nextRound: 2,
+        scale: evaluateNovelScale(suggestions),
+        expansionRounds: [completedRound],
+      },
+    },
+  });
+  const contexts: any[] = [];
+  const scheduled: Promise<unknown>[] = [];
+  const billable = async (request: any) => {
+    assertEquals(request.action.startsWith("outline-expansion-"), true);
+    throw new ProviderBillingUnavailableError({
+      code: "organization_spend_limit_exceeded",
+      message: "resumed expansion upstream spend limit",
+      status: 429,
+    });
+  };
+
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: billable as any,
+    notifyProviderBillingUnavailable: async (context) => { contexts.push(context); },
+    scheduleAlert: (promise) => { scheduled.push(promise); },
+  });
+  await Promise.all(scheduled);
+
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "provider_billing_unavailable");
+  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.suggestions, suggestions);
+  assertEquals(db.row.completed_at !== null, true);
+  assertEquals(db.row.lease_owner, null);
+  assertEquals(db.row.lease_expires_at, null);
+  assertEquals(JSON.stringify(db.row.diagnostics).includes("resumed expansion upstream spend limit"), false);
+  assertEquals(JSON.stringify(db.row.diagnostics).includes("expansionError"), false);
+  assertEquals(contexts[0].upstreamProviderCode, "organization_spend_limit_exceeded");
+  assertEquals(contexts[0].upstreamMessage, "resumed expansion upstream spend limit");
+  assertEquals(contexts[0].upstreamStatus, 429);
+});
+
+Deno.test("provider billing unavailable fails Suggest Sections safely and alerts with structured upstream details", async () => {
+  const body = await executableWorkerBody();
+  const existingSuggestion = { title: "Already preserved", summary: "Existing valid suggestion" };
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    suggestions: [existingSuggestion],
+  });
+  const contexts: any[] = [];
+  const scheduled: Promise<unknown>[] = [];
+  const billable = async () => {
+    throw new ProviderBillingUnavailableError({
+      code: "organization_spend_limit_exceeded",
+      message: "Your organization has reached its configured enforced spend limit.",
+      status: 429,
+    }, "OpenAI error (status=429, code=organization_spend_limit_exceeded)");
+  };
+
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: billable as any,
+    notifyProviderBillingUnavailable: async (context) => { contexts.push(context); },
+    scheduleAlert: (promise) => { scheduled.push(promise); },
+  });
+  await Promise.all(scheduled);
+
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "provider_billing_unavailable");
+  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.suggestions, [existingSuggestion]);
+  assertEquals(db.row.completed_at !== null, true);
+  assertEquals(db.row.lease_owner, null);
+  assertEquals(db.row.lease_expires_at, null);
+  assertEquals(JSON.stringify(db.row.diagnostics).includes("organization_spend_limit_exceeded"), false);
+  assertEquals(JSON.stringify(db.row.diagnostics).includes("configured enforced spend limit"), false);
+  assertEquals(contexts, [{
+    stableCode: "provider_billing_unavailable",
+    upstreamProviderCode: "organization_spend_limit_exceeded",
+    upstreamMessage: "Your organization has reached its configured enforced spend limit.",
+    upstreamStatus: 429,
+    providerModel: "fixture-model",
+    chapterRunID: "run-worker-fixture",
+    projectID: "worker-project",
+    environment: "production",
+  }]);
+});
+
+Deno.test("provider alert failure cannot change terminal Suggest Sections state", async () => {
+  const body = await executableWorkerBody();
+  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const scheduled: Promise<unknown>[] = [];
+  const billable = async () => {
+    throw new ProviderBillingUnavailableError({
+      code: "organization_spend_limit_exceeded",
+      message: "upstream spend limit",
+      status: 429,
+    });
+  };
+
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: billable as any,
+    notifyProviderBillingUnavailable: async () => { throw new Error("Resend unavailable"); },
+    scheduleAlert: (promise) => { scheduled.push(promise); },
+  });
+  await Promise.all(scheduled);
+
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "provider_billing_unavailable");
+  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.lease_owner, null);
+  assertEquals(db.row.lease_expires_at, null);
 });
 
 Deno.test("one physical provider call stops the second dispatch before provider execution", async () => {

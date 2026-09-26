@@ -8,6 +8,8 @@ import {
 } from "../generate-story/_generation_models.ts";
 import {
   type LLMMessage,
+  getProviderBillingUnavailableUpstream,
+  isProviderBillingUnavailable,
   OpenAIProvider,
 } from "../generate-story/_provider.ts";
 import {
@@ -27,6 +29,10 @@ import {
   obligationCoverage,
   renderRecipeObligations,
 } from "./_recipe_obligations.ts";
+import {
+  notifyProviderBillingUnavailable,
+  type ProviderBillingUnavailableContext,
+} from "../_shared/_operator_alert.ts";
 
 // =============================================================================
 // index.ts — outline-from-recipe Edge Function
@@ -2526,6 +2532,7 @@ export async function planSectionAllocation(
       );
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
+      if (isProviderBillingUnavailable(error)) throw error;
       if (!(error instanceof Error)) throw error;
       firstError = error;
       if (!correction && options.deferRetry) throw new AllocationRetryRequired(error.message);
@@ -3413,6 +3420,10 @@ export interface SuggestionWorkerDependencies {
   creditStore?: any;
   billableLLM?: typeof runBillableLLM;
   scheduleContinuation?: (body: OutlineFromRecipeRequest, authHeader: string) => Promise<void>;
+  notifyProviderBillingUnavailable?: (
+    context: ProviderBillingUnavailableContext,
+  ) => Promise<unknown>;
+  scheduleAlert?: (promise: Promise<unknown>) => void;
 }
 
 export async function returnSuggestionRunToPending(
@@ -3486,6 +3497,7 @@ export async function runSuggestionJob(
     return await db.from("outline_suggestion_runs").update(patch).eq("id", runId).eq("lease_owner", workerToken);
   };
   let plannedMinimumSections: number | null = null;
+  let providerModelForAlert: string | null = null;
   let latestValidSuggestions: Suggestion[] = Array.isArray(claimedRun.suggestions)
     ? claimedRun.suggestions as Suggestion[]
     : [];
@@ -3495,6 +3507,7 @@ export async function runSuggestionJob(
     if (!model) {
       throw new Error(`Enabled billing model not found: ${OPENAI_MODEL}`);
     }
+    providerModelForAlert = model.provider_model ?? OPENAI_MODEL;
     const creditStore = dependencies.creditStore ?? new SupabaseCreditStore(db);
     const provider = dependencies.provider ?? new OpenAIProvider(openaiKey, OPENAI_MODEL);
     const billableLLM = dependencies.billableLLM ?? runBillableLLM;
@@ -3813,6 +3826,7 @@ export async function runSuggestionJob(
           novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
         };
       } catch (error) {
+        if (isProviderBillingUnavailable(error)) throw error;
         diagnostics = {
           ...diagnostics,
           expansionError: error instanceof Error ? error.message : String(error),
@@ -4112,7 +4126,10 @@ export async function runSuggestionJob(
       );
       return;
     }
-    const errorCode = err instanceof RecipeObligationValidationError
+    const providerBillingUnavailable = isProviderBillingUnavailable(err);
+    const errorCode = providerBillingUnavailable
+      ? "provider_billing_unavailable"
+      : err instanceof RecipeObligationValidationError
       ? err.code
       : err instanceof StoryMaterialSufficiencyError
       ? "insufficient_story_material"
@@ -4125,24 +4142,67 @@ export async function runSuggestionJob(
           ? "provider_error"
           : "server_error"));
     const message = err instanceof Error ? err.message : String(err);
+    const publicError = providerBillingUnavailable
+      ? "Temporarily unavailable — try again later."
+      : message.slice(0, 2000);
+    const failedDiagnostics = {
+      ...diagnostics,
+      stage: "failed",
+      plannedMinimumSections,
+      ...(providerBillingUnavailable ? {} : { error: message.slice(0, 500) }),
+      ...(requestedStoryMaterialFormat(body) === "novel"
+        ? { novelScale: evaluateNovelScale(latestValidSuggestions, body.existingSections ?? []) }
+        : {}),
+    };
     await updateRun({
       status: "failed",
       suggestions: latestValidSuggestions,
       error_code: errorCode,
-      error: message.slice(0, 2000),
-      diagnostics: {
-        ...diagnostics,
-        stage: "failed",
-        plannedMinimumSections,
-        error: message.slice(0, 500),
-        ...(requestedStoryMaterialFormat(body) === "novel"
-          ? { novelScale: evaluateNovelScale(latestValidSuggestions, body.existingSections ?? []) }
-          : {}),
-      },
+      error: publicError,
+      diagnostics: failedDiagnostics,
       completed_at: new Date().toISOString(),
       lease_owner: null,
       lease_expires_at: null,
     });
+    if (providerBillingUnavailable) {
+      const upstream = getProviderBillingUnavailableUpstream(err) ?? {};
+      const context: ProviderBillingUnavailableContext = {
+        stableCode: "provider_billing_unavailable",
+        upstreamProviderCode: upstream.code ?? null,
+        upstreamMessage: upstream.message ?? null,
+        upstreamStatus: upstream.status ?? null,
+        providerModel: providerModelForAlert,
+        chapterRunID: runId,
+        projectID: body.recipe?.project?.id ?? null,
+        environment: "production",
+      };
+      const notify = dependencies.notifyProviderBillingUnavailable ??
+        ((alertContext: ProviderBillingUnavailableContext) =>
+          notifyProviderBillingUnavailable(alertContext, { rpcClient: db }));
+      const alertPromise = Promise.resolve().then(() => notify(context)).catch((alertError) => {
+        console.error(
+          `[outline-from-recipe] operator alert failed for ${runId}: ${
+            alertError instanceof Error ? alertError.message : String(alertError)
+          }`,
+        );
+      });
+      const scheduleAlert = dependencies.scheduleAlert ?? ((promise: Promise<unknown>) => {
+        const runtime = (globalThis as typeof globalThis & {
+          EdgeRuntime?: { waitUntil?: (task: Promise<unknown>) => void };
+        }).EdgeRuntime;
+        if (typeof runtime?.waitUntil === "function") runtime.waitUntil(promise);
+        else void promise;
+      });
+      try {
+        scheduleAlert(alertPromise);
+      } catch (scheduleError) {
+        console.error(
+          `[outline-from-recipe] operator alert scheduling failed for ${runId}: ${
+            scheduleError instanceof Error ? scheduleError.message : String(scheduleError)
+          }`,
+        );
+      }
+    }
   }
 }
 

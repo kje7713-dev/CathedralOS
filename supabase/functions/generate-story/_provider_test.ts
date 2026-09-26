@@ -282,6 +282,13 @@ Deno.test("classifyOpenAIStatus: 429 + credit_balance_exhausted → provider_bil
   );
 });
 
+Deno.test("classifyOpenAIStatus: 429 + organization_spend_limit_exceeded → provider_billing_unavailable", () => {
+  assertEquals(
+    classifyOpenAIStatus(429, "organization_spend_limit_exceeded"),
+    "provider_billing_unavailable",
+  );
+});
+
 Deno.test("classifyOpenAIStatus: 429 + insufficient_quota → provider_insufficient_quota", () => {
   assertEquals(
     classifyOpenAIStatus(429, "insufficient_quota"),
