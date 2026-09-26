@@ -39,7 +39,7 @@ struct ProjectsListView: View {
     // MARK: - Top-of-list summary
 
     private var welcomeSummary: some View {
-        VStack(spacing: CathedralTheme.Spacing.sm) {
+        VStack(spacing: 0) {
             Image("StoryDonkeyWordmark")
                 .resizable()
                 .scaledToFit()
@@ -52,7 +52,7 @@ struct ProjectsListView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, CathedralTheme.Spacing.md)
+        .padding(.vertical, CathedralTheme.Spacing.sm)
         .padding(.horizontal, CathedralTheme.Spacing.base)
         .background(CathedralTheme.Colors.surface)
         .overlay(
@@ -107,6 +107,7 @@ struct ProjectsListView: View {
             }
             .listStyle(.insetGrouped)
             .contentMargins(.top, 0, for: .scrollContent)
+            .listSectionSpacing(0)
             .scrollContentBackground(.hidden)
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
