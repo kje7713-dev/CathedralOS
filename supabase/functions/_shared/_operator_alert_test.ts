@@ -170,14 +170,7 @@ Deno.test("notifyProviderBillingUnavailable: dedupe RPC returns true → Resend 
   const headers = calls[0].init.headers as Record<string, string>;
   assertEquals(headers.Authorization, "Bearer re_test_key_abcdef");
   const body = calls[0].body;
-  assertStringIncludes(
-    String(body.subject),
-    "provider billing unavailable",
-  );
-  assertStringIncludes(
-    String(body.subject),
-    "provider_billing_unavailable",
-  );
+  assertEquals(body.subject, "CathedralOS alert: OpenAI spending limit reached");
   assertEquals(body.from, "alerts@cathedralos.example");
   assertEquals(
     JSON.stringify(body.to),
@@ -186,18 +179,28 @@ Deno.test("notifyProviderBillingUnavailable: dedupe RPC returns true → Resend 
   const text = String(body.text);
   assertStringIncludes(
     text,
-    "Stable internal code: provider_billing_unavailable",
+    "CathedralOS could not complete a request because the OpenAI account has reached its configured spending limit.",
   );
+  assertStringIncludes(text, "What happened");
   assertStringIncludes(
     text,
-    "Upstream provider code: credit_balance_exhausted",
+    "Suggest Sections was blocked by OpenAI at 2026-09-21T09:23:00.000Z.",
   );
-  assertStringIncludes(text, "Upstream status:       429");
-  assertStringIncludes(text, "credits remaining");
+  assertStringIncludes(text, "What you need to do");
   assertStringIncludes(
     text,
-    "Chapter run ID:        576e8dcc-1111-2222-3333-444455556666",
+    "https://platform.openai.com/settings/organization/limits",
   );
+  assertStringIncludes(text, "The user saw: “Temporarily unavailable — try again later.”");
+  assertStringIncludes(text, "No customer credits were charged.");
+  assertStringIncludes(text, "Technical details");
+  assertStringIncludes(text, "Provider: OpenAI");
+  assertStringIncludes(text, "Model: gpt-5.6-luna");
+  assertStringIncludes(text, "HTTP status: 429");
+  assertStringIncludes(text, "Provider code: credit_balance_exhausted");
+  assertStringIncludes(text, "Environment: production");
+  assertStringIncludes(text, "Upstream message: You have no credits remaining on this account.");
+  assertStringIncludes(text, "Chapter run ID: 576e8dcc-1111-2222-3333-444455556666");
   assertStringIncludes(text, "Automatic retry was suppressed");
   assertEquals(text.includes("RESEND_API_KEY"), false);
   assertEquals(text.includes("re_test_key"), false);
@@ -338,13 +341,14 @@ Deno.test("notifyProviderBillingUnavailable: subject + body keep operator-facing
   const call = stub.getCaptured()[0];
   const subject = String(call.body.subject);
   const text = String(call.body.text);
-  // Subject (operator-visible) names the upstream provider + billing.
-  assertStringIncludes(subject, "OpenAI provider billing unavailable");
-  assertStringIncludes(subject, "provider_billing_unavailable");
-  // Body (operator-visible) names the upstream code so the on-call can map
-  // back to OpenAI's actual error.
-  assertStringIncludes(text, "credit_balance_exhausted");
-  assertStringIncludes(text, "Upstream status:       429");
+  assertEquals(subject, "CathedralOS alert: OpenAI spending limit reached");
+  // Technical details remain available to the operator below the human-readable
+  // incident summary.
+  assertStringIncludes(text, "Provider code: credit_balance_exhausted");
+  assertStringIncludes(text, "HTTP status: 429");
+  assertStringIncludes(text, "Model: gpt-5.6-luna");
+  assertStringIncludes(text, "Environment: production");
+  assertStringIncludes(text, "No customer credits were charged.");
   // Body MUST NOT contain the secret API key in any form.
   assertEquals(text.includes("RE_test_key"), false);
   assertEquals(text.includes("re_test_key"), false);

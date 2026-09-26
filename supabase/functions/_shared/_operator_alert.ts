@@ -201,7 +201,7 @@ export async function notifyProviderBillingUnavailable(
 
   // 2. Build sanitized subject + body.
   const subject = sanitizeSubject(
-    `[CathedralOS] OpenAI provider billing unavailable (${ctx.stableCode})`,
+    "CathedralOS alert: OpenAI spending limit reached",
   );
   const body = formatAlertBody(ctx, occurredAt);
 
@@ -315,56 +315,46 @@ function formatAlertBody(
   ctx: ProviderBillingUnavailableContext,
   occurredAt: Date,
 ): string {
-  const env = ctx.environment ?? "production";
   const lines: string[] = [];
-  lines.push("CathedralOS operator alert");
-  lines.push("============================");
+  lines.push("CathedralOS could not complete a request because the OpenAI account has reached its configured spending limit.");
+  lines.push("");
+  lines.push("What happened");
+  lines.push("--------------");
+  lines.push(`Suggest Sections was blocked by OpenAI at ${occurredAt.toISOString()}.`);
+  lines.push("");
+  lines.push("What you need to do");
+  lines.push("-------------------");
+  lines.push("Increase or reset the OpenAI organization spending limit:");
+  lines.push("https://platform.openai.com/settings/organization/limits");
+  lines.push("");
+  lines.push("Customer impact");
+  lines.push("---------------");
+  lines.push('The user saw: “Temporarily unavailable — try again later.”');
+  lines.push("No customer credits were charged.");
+  lines.push("");
+  lines.push("Technical details");
+  lines.push("-----------------");
+  lines.push("Provider: OpenAI");
+  lines.push(`Model: ${sanitizeField(ctx.providerModel) ?? "unknown"}`);
+  lines.push(`HTTP status: ${ctx.upstreamStatus ?? "unknown"}`);
+  lines.push(`Provider code: ${sanitizeField(ctx.upstreamProviderCode) ?? "unknown"}`);
+  lines.push(`Environment: ${sanitizeField(ctx.environment) ?? "production"}`);
+  lines.push(
+    `Upstream message: ${sanitizeField(ctx.upstreamMessage) ?? "unknown"}`,
+  );
   lines.push(`Stable internal code: ${ctx.stableCode}`);
-  lines.push(`Environment:         ${env}`);
-  lines.push(`Occurred at:         ${occurredAt.toISOString()}`);
+  if (ctx.selectedModel && ctx.selectedModel !== ctx.providerModel) {
+    lines.push(`Selected model: ${sanitizeField(ctx.selectedModel) ?? "unknown"}`);
+  }
+  if (ctx.requestID) lines.push(`Request ID: ${sanitizeField(ctx.requestID)}`);
+  if (ctx.chapterRunID) lines.push(`Chapter run ID: ${sanitizeField(ctx.chapterRunID)}`);
+  if (ctx.outlineID) lines.push(`Outline ID: ${sanitizeField(ctx.outlineID)}`);
+  if (ctx.projectID) lines.push(`Project ID: ${sanitizeField(ctx.projectID)}`);
+  lines.push("Automatic retry was suppressed: this is a non-retryable condition.");
   lines.push("");
   lines.push(
-    `Upstream provider code: ${
-      sanitizeField(ctx.upstreamProviderCode) ?? "(unknown)"
-    }`,
+    "This alert is dedupe'd; subsequent occurrences within the suppression window are recorded without firing another email.",
   );
-  lines.push(`Upstream status:       ${ctx.upstreamStatus ?? "(unknown)"}`);
-  lines.push(
-    `Upstream message:      ${
-      sanitizeField(ctx.upstreamMessage) ?? "(unknown)"
-    }`,
-  );
-  lines.push(
-    `Provider model:        ${sanitizeField(ctx.providerModel) ?? "(unknown)"}`,
-  );
-  lines.push(
-    `Selected model:        ${sanitizeField(ctx.selectedModel) ?? "(unknown)"}`,
-  );
-  lines.push("");
-  lines.push(
-    `Request ID:            ${sanitizeField(ctx.requestID) ?? "(unknown)"}`,
-  );
-  lines.push(
-    `Chapter run ID:        ${sanitizeField(ctx.chapterRunID) ?? "(n/a)"}`,
-  );
-  lines.push(
-    `Outline ID:            ${sanitizeField(ctx.outlineID) ?? "(n/a)"}`,
-  );
-  lines.push(
-    `Project ID:            ${sanitizeField(ctx.projectID) ?? "(n/a)"}`,
-  );
-  lines.push("");
-  lines.push(
-    "Automatic retry was suppressed: this is a non-retryable condition.",
-  );
-  lines.push("");
-  lines.push(
-    "This alert is dedupe'd; subsequent occurrences within the suppression",
-  );
-  lines.push(
-    "window are recorded in provider_billing_alerts.alert_count without",
-  );
-  lines.push("firing another email.");
   return lines.join("\n").slice(0, MAX_BODY_LEN);
 }
 
