@@ -136,6 +136,86 @@ const EXPLICIT_PARTS: Record<string, { roles: string[]; subtitles: string[] }> =
       roles: ["ki", "sho", "ten", "ketsu"],
       subtitles: ["Ki", "Shō", "Ten", "Ketsu"],
     },
+    ["a0000001-0000-0000-0000-000000000008"]: {
+      roles: ["ordinary_life", "midpoint_intimacy", "hea_hfn"],
+      subtitles: ["Setup", "Bond", "HEA / HFN"],
+    },
+    ["a0000001-0000-0000-0000-000000000009"]: {
+      roles: ["normal_surface", "midpoint_truth_shift", "aftermath"],
+      subtitles: ["Surface", "Truth Shift", "Aftermath"],
+    },
+    ["a0000001-0000-0000-0000-000000000010"]: {
+      roles: ["ordinary_world", "midpoint_revelation", "new_order_together"],
+      subtitles: ["World", "Revelation", "New Order"],
+    },
+    ["a0000001-0000-0000-0000-000000000011"]: {
+      roles: ["threat_appears", "midpoint_reversal", "aftermath"],
+      subtitles: ["Threat", "Reversal", "Aftermath"],
+    },
+    ["a0000001-0000-0000-0000-000000000012"]: {
+      roles: ["baseline_world", "deeper_discovery", "changed_world"],
+      subtitles: ["Baseline", "Discovery", "Changed World"],
+    },
+    ["a0000001-0000-0000-0000-000000000013"]: {
+      roles: ["controlled_normal", "resistance_builds", "new_order_cost"],
+      subtitles: ["Control", "Resistance", "New Order / Cost"],
+    },
+    ["a0000001-0000-0000-0000-000000000014"]: {
+      roles: ["dangerous_encounter", "vulnerability_revealed", "earned_resolution"],
+      subtitles: ["Encounter", "Vulnerability", "Earned Resolution"],
+    },
+    ["a0000001-0000-0000-0000-000000000015"]: {
+      roles: ["threatened_home", "midpoint_revelation", "return_or_new_age"],
+      subtitles: ["Home", "Revelation", "Return / New Age"],
+    },
+    ["a0000001-0000-0000-0000-000000000016"]: {
+      roles: ["hook", "midpoint", "resolution"],
+      subtitles: ["Hook", "Midpoint", "Resolution"],
+    },
+    ["a0000001-0000-0000-0000-000000000017"]: {
+      roles: ["normal_with_crack", "rules_discovered", "final_image"],
+      subtitles: ["Wrongness", "Rules", "Final Image"],
+    },
+    ["a0000001-0000-0000-0000-000000000018"]: {
+      roles: ["season_setup", "chemistry_builds", "hea_hfn"],
+      subtitles: ["Season Setup", "Chemistry", "HEA / HFN"],
+    },
+    ["a0000001-0000-0000-0000-000000000019"]: {
+      roles: ["danger_hook", "midpoint_reveal", "safety_and_commitment"],
+      subtitles: ["Danger", "Reveal", "Safety / Commitment"],
+    },
+    ["a0000001-0000-0000-0000-000000000020"]: {
+      roles: ["discovery", "hidden_history_reveal", "aftermath"],
+      subtitles: ["Discovery", "Hidden History", "Aftermath"],
+    },
+    ["a0000001-0000-0000-0000-000000000021"]: {
+      roles: ["weak_start", "new_tier", "next_horizon"],
+      subtitles: ["Starting Tier", "New Tier", "Next Horizon"],
+    },
+    ["a0000001-0000-0000-0000-000000000022"]: {
+      roles: ["life_before", "impossible_choice", "aftermath_and_memory"],
+      subtitles: ["Life Before", "Impossible Choice", "Aftermath / Memory"],
+    },
+    ["a0000001-0000-0000-0000-000000000023"]: {
+      roles: ["sheltered_identity", "disillusionment", "integrated_identity"],
+      subtitles: ["Inherited Self", "Disillusionment", "Integrated Identity"],
+    },
+    ["a0000001-0000-0000-0000-000000000024"]: {
+      roles: ["injury", "moral_crossroads", "consequence"],
+      subtitles: ["Injury", "Moral Cost", "Consequence"],
+    },
+    ["a0000001-0000-0000-0000-000000000025"]: {
+      roles: ["target", "plan_breaks", "division_and_aftermath"],
+      subtitles: ["The Target", "The Plan Breaks", "Aftermath"],
+    },
+    ["a0000001-0000-0000-0000-000000000026"]: {
+      roles: ["broken_state", "relapse", "changed_life"],
+      subtitles: ["Broken State", "Relapse", "Changed Life"],
+    },
+    ["a0000001-0000-0000-0000-000000000027"]: {
+      roles: ["founding_choice", "generational_turn", "legacy"],
+      subtitles: ["Founding Choice", "Generational Turn", "Legacy"],
+    },
   };
 
 /** Derive source Parts, then normalize assignments without ever reordering chapters. */

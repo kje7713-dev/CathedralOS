@@ -1304,6 +1304,36 @@ function makePartFixture(templateID: string, roles: string[]): ProjectOutline {
   return { id: "part-fixture", title: "Part Fixture", chapters, parts: deriveBookParts(chapters, arc) };
 }
 
+Deno.test("commercial Story Arc templates derive genre-aware Part subtitles", () => {
+  const fixtures: Array<[string, string[], string[]]> = [
+    ["a0000001-0000-0000-0000-000000000008", ["ordinary_life", "midpoint_intimacy", "hea_hfn"], ["Setup", "Bond", "HEA / HFN"]],
+    ["a0000001-0000-0000-0000-000000000009", ["normal_surface", "midpoint_truth_shift", "aftermath"], ["Surface", "Truth Shift", "Aftermath"]],
+    ["a0000001-0000-0000-0000-000000000010", ["ordinary_world", "midpoint_revelation", "new_order_together"], ["World", "Revelation", "New Order"]],
+    ["a0000001-0000-0000-0000-000000000011", ["threat_appears", "midpoint_reversal", "aftermath"], ["Threat", "Reversal", "Aftermath"]],
+    ["a0000001-0000-0000-0000-000000000012", ["baseline_world", "deeper_discovery", "changed_world"], ["Baseline", "Discovery", "Changed World"]],
+    ["a0000001-0000-0000-0000-000000000013", ["controlled_normal", "resistance_builds", "new_order_cost"], ["Control", "Resistance", "New Order / Cost"]],
+    ["a0000001-0000-0000-0000-000000000014", ["dangerous_encounter", "vulnerability_revealed", "earned_resolution"], ["Encounter", "Vulnerability", "Earned Resolution"]],
+    ["a0000001-0000-0000-0000-000000000015", ["threatened_home", "midpoint_revelation", "return_or_new_age"], ["Home", "Revelation", "Return / New Age"]],
+    ["a0000001-0000-0000-0000-000000000016", ["hook", "midpoint", "resolution"], ["Hook", "Midpoint", "Resolution"]],
+    ["a0000001-0000-0000-0000-000000000017", ["normal_with_crack", "rules_discovered", "final_image"], ["Wrongness", "Rules", "Final Image"]],
+    ["a0000001-0000-0000-0000-000000000018", ["season_setup", "chemistry_builds", "hea_hfn"], ["Season Setup", "Chemistry", "HEA / HFN"]],
+    ["a0000001-0000-0000-0000-000000000019", ["danger_hook", "midpoint_reveal", "safety_and_commitment"], ["Danger", "Reveal", "Safety / Commitment"]],
+    ["a0000001-0000-0000-0000-000000000020", ["discovery", "hidden_history_reveal", "aftermath"], ["Discovery", "Hidden History", "Aftermath"]],
+    ["a0000001-0000-0000-0000-000000000021", ["weak_start", "new_tier", "next_horizon"], ["Starting Tier", "New Tier", "Next Horizon"]],
+    ["a0000001-0000-0000-0000-000000000022", ["life_before", "impossible_choice", "aftermath_and_memory"], ["Life Before", "Impossible Choice", "Aftermath / Memory"]],
+    ["a0000001-0000-0000-0000-000000000023", ["sheltered_identity", "disillusionment", "integrated_identity"], ["Inherited Self", "Disillusionment", "Integrated Identity"]],
+    ["a0000001-0000-0000-0000-000000000024", ["injury", "moral_crossroads", "consequence"], ["Injury", "Moral Cost", "Consequence"]],
+    ["a0000001-0000-0000-0000-000000000025", ["target", "plan_breaks", "division_and_aftermath"], ["The Target", "The Plan Breaks", "Aftermath"]],
+    ["a0000001-0000-0000-0000-000000000026", ["broken_state", "relapse", "changed_life"], ["Broken State", "Relapse", "Changed Life"]],
+    ["a0000001-0000-0000-0000-000000000027", ["founding_choice", "generational_turn", "legacy"], ["Founding Choice", "Generational Turn", "Legacy"]],
+  ];
+  for (const [templateID, roles, subtitles] of fixtures) {
+    const outline = makePartFixture(templateID, roles);
+    assertEquals(outline.parts.map((part) => part.default_subtitle), subtitles);
+    assertEquals(outline.parts.flatMap((part) => part.chapter_ids), outline.chapters.map((chapter) => chapter.id));
+  }
+});
+
 Deno.test("PR4: built-in Story Arc templates derive the required Part counts", () => {
   const fixtures: Array<[string, string[], number]> = [
     ["a0000001-0000-0000-0000-000000000001", ["setup", "rising_action", "climax"], 3],
