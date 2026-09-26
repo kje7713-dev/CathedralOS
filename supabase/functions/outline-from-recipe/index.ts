@@ -2532,6 +2532,7 @@ export async function planSectionAllocation(
       );
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
+      if (isProviderBillingUnavailable(error)) throw error;
       if (!(error instanceof Error)) throw error;
       firstError = error;
       if (!correction && options.deferRetry) throw new AllocationRetryRequired(error.message);
@@ -3825,6 +3826,7 @@ export async function runSuggestionJob(
           novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
         };
       } catch (error) {
+        if (isProviderBillingUnavailable(error)) throw error;
         diagnostics = {
           ...diagnostics,
           expansionError: error instanceof Error ? error.message : String(error),

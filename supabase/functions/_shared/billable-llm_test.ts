@@ -482,8 +482,31 @@ Deno.test("runBillableLLM: provider failure records 'failed' usage event + throw
   assertEquals(row.output_tokens, null);
 });
 
-Deno.test("runBillableLLM: provider_billing_unavailable skips customer charge and failed usage event", async () => {
-  const admin = makeMockAdmin();
+Deno.test("runBillableLLM: provider_billing_unavailable skips outline charge and failed usage event", async () => {
+  const rpcNames: string[] = [];
+  const admin = {
+    rpc: (name: string) => {
+      rpcNames.push(name);
+      if (name === "begin_outline_provider_attempt") {
+        return Promise.resolve({
+          data: [{ attempt_id: "attempt-1", attempt_key: "attempt-key-1", attempt_ordinal: 1 }],
+          error: null,
+        });
+      }
+      if (name === "get_outline_stage_totals") {
+        return Promise.resolve({ data: [{ raw_charge_credits: 0, settled_charge_credits: 0 }], error: null });
+      }
+      if (name === "reconcile_outline_provider_attempts") {
+        return Promise.resolve({ data: null, error: null });
+      }
+      throw new Error(`unexpected RPC ${name}`);
+    },
+    from: (_table: string) => ({
+      update: (_patch: unknown) => ({
+        eq: (_column: string, _value: unknown) => Promise.resolve({ data: null, error: null }),
+      }),
+    }),
+  };
   const creditStore = makeCreditStore();
   const providerError = new ProviderBillingUnavailableError({
     code: "organization_spend_limit_exceeded",
@@ -497,12 +520,23 @@ Deno.test("runBillableLLM: provider_billing_unavailable skips customer charge an
   };
 
   await assertRejects(
-    () => runBillableLLM(makeRequest(), deps),
+    () => runBillableLLM(
+      makeRequest({
+        purpose: "outline-suggestion",
+        action: "outline-plan",
+        usageContext: {
+          ...makeRequest().usageContext,
+          featureRunID: "00000000-0000-0000-0000-0000000000bb",
+          logicalStageKey: "run:allocation",
+        },
+      }),
+      deps,
+    ),
     ProviderBillingUnavailableError,
   );
   assertEquals(creditStore.chargeCalls.length, 0);
-  assertEquals(admin.rpcCalls.length, 0);
-  assertEquals(admin.insertCalls.length, 0);
+  assertEquals(rpcNames.includes("settle_outline_provider_attempt"), false);
+  assertEquals(rpcNames.includes("settle_billable_usage"), false);
 });
 
 Deno.test("runBillableLLM: onProviderSuccess callback result is returned in featureResult", async () => {
