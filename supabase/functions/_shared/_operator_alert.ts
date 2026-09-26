@@ -29,7 +29,7 @@
 export interface ProviderBillingUnavailableContext {
   /** Stable internal error code. Always "provider_billing_unavailable"
    * today; the RPC key is stable_code so future codes dedupe independently. */
-  stableCode: "provider_billing_unavailable";
+  stableCode: "provider_billing_unavailable" | "provider_spend_limit_exceeded";
   /** Upstream OpenAI error.code (e.g. "credit_balance_exhausted"). */
   upstreamProviderCode?: string | null;
   /** Sanitized upstream OpenAI error.message. */

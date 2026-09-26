@@ -14,6 +14,12 @@ Deno.test("outline suggestion polling contract preserves structured failures and
   assertEquals(source.includes("suggestions: run.suggestions"), true);
 });
 
+Deno.test("organization spend-limit provider failures use safe retry messaging", () => {
+  assertEquals(isOpenAISpendLimitError("OpenAI error (status=429, code=organization_spend_limit_exceeded)"), true);
+  assertEquals(isOpenAISpendLimitError("configured enforced spend limit reached"), true);
+  assertEquals(isOpenAISpendLimitError("OpenAI error (status=500, code=server_error)"), false);
+});
+
 import {
   buildAllocationPrompt,
   buildExpansionPrompt,
@@ -84,6 +90,7 @@ import {
   returnSuggestionRunToPending,
   recoverPendingSuggestionRun,
   runSuggestionJob,
+  isOpenAISpendLimitError,
 } from "./index.ts";
 
 const sparseRequest = {

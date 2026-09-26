@@ -27,6 +27,7 @@ import {
   obligationCoverage,
   renderRecipeObligations,
 } from "./_recipe_obligations.ts";
+import { notifyProviderBillingUnavailable } from "../_shared/_operator_alert.ts";
 
 // =============================================================================
 // index.ts — outline-from-recipe Edge Function
@@ -68,6 +69,14 @@ import {
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-5.6-luna";
+
+/** OpenAI's enforced organization limit is an operator incident, not a user
+ * fault. Keep its upstream wording out of the durable user-facing error. */
+export function isOpenAISpendLimitError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes("organization_spend_limit_exceeded") ||
+    normalized.includes("configured enforced spend limit");
+}
 
 /** Maps every physical outline action to one logical billing/cache stage. */
 export function outlineLogicalStageFamily(action: string): string {
@@ -4125,11 +4134,25 @@ export async function runSuggestionJob(
           ? "provider_error"
           : "server_error"));
     const message = err instanceof Error ? err.message : String(err);
+    const spendLimitError = isOpenAISpendLimitError(message);
+    if (spendLimitError) {
+      // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+      EdgeRuntime.waitUntil(notifyProviderBillingUnavailable({
+        stableCode: "provider_spend_limit_exceeded",
+        upstreamProviderCode: "organization_spend_limit_exceeded",
+        upstreamMessage: message,
+        upstreamStatus: 429,
+        providerModel: OPENAI_MODEL,
+        chapterRunID: runId,
+        projectID: body.recipe?.project?.id ?? null,
+        environment: "production",
+      }, { rpcClient: db }));
+    }
     await updateRun({
       status: "failed",
       suggestions: latestValidSuggestions,
       error_code: errorCode,
-      error: message.slice(0, 2000),
+      error: spendLimitError ? "Temporarily unavailable — try again later." : message.slice(0, 2000),
       diagnostics: {
         ...diagnostics,
         stage: "failed",
