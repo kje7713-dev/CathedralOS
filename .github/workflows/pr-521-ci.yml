@@ -121,10 +121,11 @@ jobs:
           deno test --no-check -A
           supabase/functions/embed-section/index_test.ts
 
-      - name: Test outline worker lifecycle and checkpoint recovery
+      - name: Test outline worker lifecycle, checkpoint recovery, and arc catalog
         run: >-
           deno test --no-check -A
           supabase/functions/outline-from-recipe/index_test.ts
+          supabase/functions/outline-from-recipe/commercial_arc_templates_test.ts
 
 
       - name: Type check PR2 OpenAI catalog sync sources
