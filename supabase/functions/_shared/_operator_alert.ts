@@ -82,6 +82,8 @@ const DEFAULT_WINDOW_MINUTES = 45;
 const MAX_SUBJECT_LEN = 200;
 const MAX_BODY_LEN = 8000;
 const MAX_ERROR_LEN = 500;
+const OPENAI_LIMITS_URL =
+  "https://platform.openai.com/settings/organization/limits";
 
 // ---------------------------------------------------------------------------
 // notifyProviderBillingUnavailable
@@ -201,7 +203,7 @@ export async function notifyProviderBillingUnavailable(
 
   // 2. Build sanitized subject + body.
   const subject = sanitizeSubject(
-    `[CathedralOS] OpenAI provider billing unavailable (${ctx.stableCode})`,
+    "CathedralOS alert: OpenAI billing unavailable",
   );
   const body = formatAlertBody(ctx, occurredAt);
 
@@ -315,56 +317,85 @@ function formatAlertBody(
   ctx: ProviderBillingUnavailableContext,
   occurredAt: Date,
 ): string {
-  const env = ctx.environment ?? "production";
+  const providerCode = ctx.upstreamProviderCode;
+  const isOrganizationLimit = providerCode ===
+    "organization_spend_limit_exceeded";
+  const isCreditExhausted = providerCode === "credit_balance_exhausted";
   const lines: string[] = [];
-  lines.push("CathedralOS operator alert");
-  lines.push("============================");
+
+  if (isOrganizationLimit) {
+    lines.push(
+      "CathedralOS could not complete a request because the OpenAI organization spending limit was reached.",
+    );
+  } else if (isCreditExhausted) {
+    lines.push(
+      "CathedralOS could not complete a request because the OpenAI account/API credit balance is exhausted.",
+    );
+  } else {
+    lines.push(
+      "OpenAI rejected the request because provider billing is unavailable.",
+    );
+  }
+  lines.push("");
+
+  lines.push("What happened");
+  lines.push("--------------");
+  if (isOrganizationLimit) {
+    lines.push(
+      `A CathedralOS AI request was blocked by OpenAI at ${occurredAt.toISOString()} because the organization spending limit was reached.`,
+    );
+  } else if (isCreditExhausted) {
+    lines.push(
+      `A CathedralOS AI request was blocked by OpenAI at ${occurredAt.toISOString()} because the account/API credit balance is exhausted.`,
+    );
+  } else {
+    lines.push(
+      `A CathedralOS AI request was blocked by OpenAI at ${occurredAt.toISOString()}.`,
+    );
+  }
+  lines.push("");
+
+  lines.push("What you need to do");
+  lines.push("-------------------");
+  if (isOrganizationLimit) {
+    lines.push("Increase or reset the OpenAI organization spending limit:");
+    lines.push(OPENAI_LIMITS_URL);
+  } else if (isCreditExhausted) {
+    lines.push("Review OpenAI billing and available API credits.");
+  } else {
+    lines.push("Review the OpenAI account billing configuration and available credits.");
+  }
+  lines.push("");
+
+  lines.push("Customer impact");
+  lines.push("---------------");
+  lines.push('The user saw: “Temporarily unavailable — try again later.”');
+  lines.push("No customer credits were charged for the failed provider call.");
+  lines.push("");
+
+  lines.push("Technical details");
+  lines.push("-----------------");
+  lines.push("Provider: OpenAI");
+  lines.push(`Model: ${sanitizeField(ctx.providerModel) ?? "unknown"}`);
+  lines.push(`HTTP status: ${ctx.upstreamStatus ?? "unknown"}`);
+  lines.push(`Provider code: ${sanitizeField(providerCode) ?? "unknown"}`);
+  lines.push(`Environment: ${sanitizeField(ctx.environment) ?? "production"}`);
+  lines.push(
+    `Upstream message: ${sanitizeField(ctx.upstreamMessage) ?? "unknown"}`,
+  );
   lines.push(`Stable internal code: ${ctx.stableCode}`);
-  lines.push(`Environment:         ${env}`);
-  lines.push(`Occurred at:         ${occurredAt.toISOString()}`);
+  if (ctx.selectedModel && ctx.selectedModel !== ctx.providerModel) {
+    lines.push(`Selected model: ${sanitizeField(ctx.selectedModel) ?? "unknown"}`);
+  }
+  if (ctx.requestID) lines.push(`Request ID: ${sanitizeField(ctx.requestID)}`);
+  if (ctx.chapterRunID) lines.push(`Chapter run ID: ${sanitizeField(ctx.chapterRunID)}`);
+  if (ctx.outlineID) lines.push(`Outline ID: ${sanitizeField(ctx.outlineID)}`);
+  if (ctx.projectID) lines.push(`Project ID: ${sanitizeField(ctx.projectID)}`);
+  lines.push("Automatic retry was suppressed: this is a non-retryable condition.");
   lines.push("");
   lines.push(
-    `Upstream provider code: ${
-      sanitizeField(ctx.upstreamProviderCode) ?? "(unknown)"
-    }`,
+    "This alert is dedupe'd; subsequent occurrences within the suppression window are recorded without firing another email.",
   );
-  lines.push(`Upstream status:       ${ctx.upstreamStatus ?? "(unknown)"}`);
-  lines.push(
-    `Upstream message:      ${
-      sanitizeField(ctx.upstreamMessage) ?? "(unknown)"
-    }`,
-  );
-  lines.push(
-    `Provider model:        ${sanitizeField(ctx.providerModel) ?? "(unknown)"}`,
-  );
-  lines.push(
-    `Selected model:        ${sanitizeField(ctx.selectedModel) ?? "(unknown)"}`,
-  );
-  lines.push("");
-  lines.push(
-    `Request ID:            ${sanitizeField(ctx.requestID) ?? "(unknown)"}`,
-  );
-  lines.push(
-    `Chapter run ID:        ${sanitizeField(ctx.chapterRunID) ?? "(n/a)"}`,
-  );
-  lines.push(
-    `Outline ID:            ${sanitizeField(ctx.outlineID) ?? "(n/a)"}`,
-  );
-  lines.push(
-    `Project ID:            ${sanitizeField(ctx.projectID) ?? "(n/a)"}`,
-  );
-  lines.push("");
-  lines.push(
-    "Automatic retry was suppressed: this is a non-retryable condition.",
-  );
-  lines.push("");
-  lines.push(
-    "This alert is dedupe'd; subsequent occurrences within the suppression",
-  );
-  lines.push(
-    "window are recorded in provider_billing_alerts.alert_count without",
-  );
-  lines.push("firing another email.");
   return lines.join("\n").slice(0, MAX_BODY_LEN);
 }
 
