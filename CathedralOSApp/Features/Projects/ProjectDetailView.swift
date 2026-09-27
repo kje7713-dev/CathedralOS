@@ -33,7 +33,7 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
         case .recipe: return "Recipe"
         case .outline: return "Outline"
         case .output: return "Output"
-        case .compile: return "Compile"
+        case .compile: return "Write"
         }
     }
 
@@ -1290,10 +1290,16 @@ struct ProjectDetailView: View {
 
     private var compileGenerateCTA: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
-            Text("Choose a model, then run one section or the whole outline.")
-                .font(CathedralTheme.Typography.caption())
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("WRITE")
+                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                    .tracking(1.5)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Text("Generate prose from your outline.")
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if project.promptPacks.isEmpty {
                 VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
@@ -1313,9 +1319,10 @@ struct ProjectDetailView: View {
                     }
                 }
             } else {
-                VStack(spacing: CathedralTheme.Spacing.sm) {
-                    modelPicker
-                    povPicker
+                VStack(spacing: CathedralTheme.Spacing.md) {
+                    // Model selection belongs to the existing generation
+                    // confirmation sheet. POV is canonical per outline section
+                    // and is surfaced in each section row below.
                     sectionsToRunSection
 
                     if let errorMessage = generationError {
@@ -1330,12 +1337,6 @@ struct ProjectDetailView: View {
                     if let diagnostics = generationDiagnostics {
                         diagnosticsBlock(diagnostics)
                     }
-
-                    Text("Run section opens a quick confirmation. Run all sections starts at the first section and continues through the outline.")
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -1470,20 +1471,9 @@ struct ProjectDetailView: View {
     }
 
     private var sectionsToRunSection: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("RUN SECTIONS")
-                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
-                    .tracking(1.5)
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                Spacer()
-                Text("Choose what to write")
-                    .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-            }
-
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
             if outlineSections.isEmpty {
-                Text("Add sections in Outline before running the novel.")
+                Text("Add sections in Outline before writing the novel.")
                     .font(CathedralTheme.Typography.caption())
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 CathedralPrimaryButton("Open Outline", systemImage: "list.number") {
@@ -1497,65 +1487,81 @@ struct ProjectDetailView: View {
                     Button {
                         launchOutlineGeneration(sectionID: firstSection.id, scope: "from_here")
                     } label: {
-                        HStack(spacing: CathedralTheme.Spacing.sm) {
+                        HStack(spacing: CathedralTheme.Spacing.md) {
                             Image(systemName: "play.fill")
-                                .font(.system(size: 14, weight: .semibold))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Run all sections")
-                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                                Text("Start at \(sectionLabel(firstSection)) and continue through the outline")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(width: 28, height: 28)
+                                .background(CathedralTheme.Colors.accent.opacity(0.16))
+                                .clipShape(Circle())
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Write all sections")
+                                    .font(CathedralTheme.Typography.body(16, weight: .semibold))
+                                Text("Starts with \(sectionLabel(firstSection)) and continues in outline order.")
                                     .font(CathedralTheme.Typography.caption())
                                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                                     .lineLimit(2)
                             }
+
                             Spacer()
+
                             Image(systemName: "arrow.right")
                                 .font(.caption.weight(.semibold))
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
                         }
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(CathedralTheme.Spacing.sm)
-                        .background(CathedralTheme.Colors.accent.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+                        .padding(CathedralTheme.Spacing.md)
+                        .background(CathedralTheme.Colors.accent.opacity(0.10))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                                .stroke(CathedralTheme.Colors.accent.opacity(0.25), lineWidth: 1)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Write all sections")
                     .accessibilityHint("Opens generation confirmation for all sections starting with the first section")
                 }
 
+                Text("INDIVIDUAL SECTIONS")
+                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                    .tracking(1.5)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .padding(.top, CathedralTheme.Spacing.xs)
+
                 ForEach(outlineSections.sorted(by: { $0.position < $1.position })) { section in
-                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-                        HStack(alignment: .firstTextBaseline, spacing: CathedralTheme.Spacing.sm) {
-                            Image(systemName: "list.number")
-                                .foregroundStyle(CathedralTheme.Colors.accent)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(sectionLabel(section))
-                                    .font(CathedralTheme.Typography.body(14, weight: .semibold))
-                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                                    .lineLimit(2)
-                                Text(sectionSettingsLabel(section))
-                                    .font(CathedralTheme.Typography.caption())
-                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                            }
-                            Spacer()
+                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(sectionLabel(section))
+                                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                .lineLimit(2)
+                            Text(sectionSettingsLabel(section))
+                                .font(CathedralTheme.Typography.caption())
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                         HStack(spacing: CathedralTheme.Spacing.sm) {
                             Button {
                                 launchOutlineGeneration(sectionID: section.id, scope: "single")
                             } label: {
-                                Label("Run section", systemImage: "play.fill")
+                                Label("Write", systemImage: "play.fill")
                                     .font(CathedralTheme.Typography.caption(12, weight: .semibold))
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
+                            .accessibilityLabel("Write \(sectionLabel(section))")
 
                             Button {
                                 storyEditorModeRaw = StoryEditorMode.outline.rawValue
                             } label: {
-                                Text("Edit in Outline")
+                                Label("Edit", systemImage: "pencil")
                                     .font(CathedralTheme.Typography.caption(12, weight: .semibold))
                             }
                             .buttonStyle(.bordered)
+                            .accessibilityLabel("Edit \(sectionLabel(section)) in Outline")
                         }
                     }
                     .padding(CathedralTheme.Spacing.sm)
@@ -2063,8 +2069,8 @@ struct TutorialStepBanner: View {
             return ("Step 3 of 4 · Tutorial Mode",
                     "Add at least one spark, aftertaste, or theme question.")
         default:
-            return ("Step 4 of 4 · Ready to Compile",
-                    "Tap Compile to generate your first scene.")
+            return ("Step 4 of 4 · Ready to Write",
+                    "Tap Write to generate your first scene.")
         }
     }
 
