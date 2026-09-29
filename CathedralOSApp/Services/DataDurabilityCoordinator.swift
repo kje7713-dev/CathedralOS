@@ -482,7 +482,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// owns a live server run or surfaces a refusal/error. Prevents duplicate
     /// taps from creating concurrent jobs.
     @Published private(set) var isAcceptRunInitiating: Bool = false
-    private var acceptPollingTask: Task<Void, Never>?
+    internal var acceptPollingTask: Task<Void, Never>?
     private static let acceptRunKey = "cathedralos.acceptOutline.activeRun"
 
     /// Starts the server-owned Accept All job. The task and all completion work

@@ -1110,7 +1110,7 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
             backupService: backupService,
             session: makeSession(),
             clientFactory: {
-                throw BackendClientError.notConfigured
+                throw BackendClientError.notConfigured(reason: "test stub — notConfigured")
             }
         )
 
@@ -1295,7 +1295,7 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         let service = GenerationOutputDeletionService(
             authService: auth, sharingService: MockDeletionSharingService(), backupService: backupService,
             tombstoneService: tombstones, session: makeSession(),
-            clientFactory: { throw BackendClientError.notConfigured }
+            clientFactory: { throw BackendClientError.notConfigured(reason: "test stub — notConfigured") }
         )
 
         do {
