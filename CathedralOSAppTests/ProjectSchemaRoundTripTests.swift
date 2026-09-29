@@ -21,7 +21,8 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
         let original = StoryProject(name: "Lineage")
         let lineageID = try XCTUnwrap(original.lineageID)
 
-        let payload = ProjectSchemaTemplateBuilder.build(project: original)
+        let context = try makeProjectSchemaTestContext()
+        let payload = ProjectSchemaTemplateBuilder.build(project: original, modelContext: context)
         let restored = ProjectImportMapper.map(payload)
 
         XCTAssertEqual(payload.project.lineageID, lineageID.uuidString)
