@@ -90,7 +90,11 @@ final class AcceptAllRequestBuilderTests: XCTestCase {
             selectedThemeQuestions: [],
             selectedMotifs: [],
             promptPack: PromptPackExportPayload.PromptPackPayload(
-                id: "pack-1", name: "R", notes: "", instructionBias: ""
+                id: UUID(uuidString: "00000000-0000-0000-0000-0000000000AA")!,
+                name: "R",
+                includeProjectSetting: false,
+                notes: "",
+                instructionBias: ""
             )
         )
     }

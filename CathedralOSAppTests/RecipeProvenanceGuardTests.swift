@@ -181,8 +181,9 @@ final class RecipeProvenanceGuardTests: XCTestCase {
             selectedThemeQuestions: [],
             selectedMotifs: [],
             promptPack: PromptPackExportPayload.PromptPackPayload(
-                id: "pp-1",
+                id: UUID(uuidString: "00000000-0000-0000-0000-0000000000BB")!,
                 name: promptPackName,
+                includeProjectSetting: false,
                 notes: "",
                 instructionBias: "",
             ),
