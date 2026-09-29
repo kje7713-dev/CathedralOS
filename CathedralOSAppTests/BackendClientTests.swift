@@ -26,7 +26,7 @@ final class BackendClientTests: XCTestCase {
     // MARK: - Error descriptions
 
     func testNotConfiguredErrorIsHumanReadable() {
-        let error = BackendClientError.notConfigured
+        let error = BackendClientError.notConfigured(reason: "test stub — notConfigured")
         let desc = error.errorDescription ?? ""
         XCTAssertFalse(desc.isEmpty, "Error description must not be empty")
         XCTAssertTrue(
@@ -67,7 +67,7 @@ final class BackendClientTests: XCTestCase {
     }
 
     func testDisplayMessageUsesBackendClientErrorDescription() {
-        let error = BackendClientError.notConfigured
+        let error = BackendClientError.notConfigured(reason: "test stub — notConfigured")
         let msg = BackendClientError.displayMessage(from: error)
         XCTAssertFalse(msg.isEmpty)
         XCTAssertEqual(msg, error.errorDescription)
@@ -80,6 +80,9 @@ final class BackendClientTests: XCTestCase {
             projectURL: URL(string: "https://xyz789.supabase.co")!,
             anonKey: "test-anon-key",
             generationEdgeFunctionPath: "generate",
+            outlineFromRecipeEdgeFunctionPath: "outline-from-recipe",
+            embedSectionEdgeFunctionPath: "embed-section",
+            syncStoryArcEdgeFunctionPath: "sync-story-arc",
             sharingEdgeFunctionPath: "share-output",
             creditStateEdgeFunctionPath: "get-credit-state",
             adminGrantCreditsEdgeFunctionPath: "admin-grant-credits",
@@ -99,6 +102,9 @@ final class BackendClientTests: XCTestCase {
             projectURL: URL(string: "https://xyz789.supabase.co")!,
             anonKey: "do-not-embed-me",
             generationEdgeFunctionPath: "generate-story",
+            outlineFromRecipeEdgeFunctionPath: "outline-from-recipe",
+            embedSectionEdgeFunctionPath: "embed-section",
+            syncStoryArcEdgeFunctionPath: "sync-story-arc",
             sharingEdgeFunctionPath: "share-output",
             creditStateEdgeFunctionPath: "get-credit-state",
             adminGrantCreditsEdgeFunctionPath: "admin-grant-credits",

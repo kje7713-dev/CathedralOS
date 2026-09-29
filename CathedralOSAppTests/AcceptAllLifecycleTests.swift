@@ -318,7 +318,8 @@ final class AcceptAllLifecycleTests: XCTestCase {
             )
         ) { error in
             guard case ProjectCloudSyncError.missingCanonicalLineage(let actualID) = error else {
-                return XCTFail("Expected missingCanonicalLineage, got \(error)")
+                XCTFail("Expected missingCanonicalLineage, got \(error)")
+                return
             }
             XCTAssertEqual(actualID, localProjectID.uuidString)
         }
