@@ -48,11 +48,11 @@ final class RecipeIntegrityValidatorTests: XCTestCase {
         character.project = project
         context.insert(character)
 
-        storySpark = StorySpark(name: "Spark")
+        storySpark = StorySpark(title: "Spark")
         storySpark.project = project
         context.insert(storySpark)
 
-        aftertaste = Aftertaste(name: "Aftertaste")
+        aftertaste = Aftertaste(label: "Aftertaste")
         aftertaste.project = project
         context.insert(aftertaste)
 
@@ -228,7 +228,7 @@ final class RecipeIntegrityValidatorTests: XCTestCase {
         let otherChar = StoryCharacter(name: "Other")
         otherChar.project = otherProject
         otherContext.insert(otherChar)
-        try otherContext.save()
+        try? otherContext.save()
 
         pack.selectedCharacterIDs = [otherChar.id]  // irreconcilable
 
@@ -253,7 +253,7 @@ final class RecipeIntegrityValidatorTests: XCTestCase {
         let otherChar = StoryCharacter(name: "Other")
         otherChar.project = otherProject
         otherContext.insert(otherChar)
-        try otherContext.save()
+        try? otherContext.save()
         pack.selectedCharacterIDs = [otherChar.id]
 
         let result = RecipeIntegrityValidator.validate(recipe: pack)
