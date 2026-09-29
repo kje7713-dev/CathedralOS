@@ -56,7 +56,7 @@ final class RecipeReferenceReconcilerTests: XCTestCase {
         themeQuestion.project = project
         context.insert(themeQuestion)
 
-        motif = Motif(name: "Redemption")
+        motif = Motif(label: "Redemption")
         motif.project = project
         context.insert(motif)
 
@@ -350,11 +350,11 @@ final class RecipeReferenceReconcilerTests: XCTestCase {
         ) { error in
             guard case OutlineSuggestionError.recipeIntegrityMissing(let missing) = error else {
                 XCTFail("Expected .recipeIntegrityMissing, got \(error)")
-                return false
+                return
             }
-            return missing.contains(where: {
+            XCTAssertTrue(missing.contains(where: {
                 $0.entityClass == .character && $0.id == otherCharacter.id
-            })
+            }))
         }
     }
 

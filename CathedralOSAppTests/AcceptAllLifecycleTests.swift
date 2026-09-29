@@ -26,6 +26,7 @@ private func makeInMemoryContext() throws -> ModelContext {
     return ModelContext(container)
 }
 
+@MainActor
 private func makeCoordinator() -> DataDurabilityCoordinator {
     let suite = "AcceptAllLifecycleTests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
