@@ -2055,13 +2055,13 @@ final class ProjectCloudSyncTests: XCTestCase {
             accessToken: "fixture"
         )
         let first = StoryProject(name: "Same visible project")
+        let second = StoryProject(name: "Same visible project")
         let context = ModelContext(try makeProjectContainer())
         let firstPayload = ProjectSchemaTemplateBuilder.build(project: first, modelContext: context)
         let secondPayload = ProjectSchemaTemplateBuilder.build(project: second, modelContext: context)
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (first.id, first.stableLineageID, firstPayload, "2026-07-22T17:30:00Z"),
             (second.id, second.stableLineageID, secondPayload, "2026-07-22T17:29:00Z")
-        ])
         ])
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
