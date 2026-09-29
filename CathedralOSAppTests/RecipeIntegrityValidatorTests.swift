@@ -60,11 +60,11 @@ final class RecipeIntegrityValidatorTests: XCTestCase {
         relationship.project = project
         context.insert(relationship)
 
-        themeQuestion = ThemeQuestion(text: "Why?")
+        themeQuestion = ThemeQuestion(question: "Why?")
         themeQuestion.project = project
         context.insert(themeQuestion)
 
-        motif = Motif(name: "Redemption")
+        motif = Motif(label: "Redemption")
         motif.project = project
         context.insert(motif)
 
@@ -187,11 +187,11 @@ final class RecipeIntegrityValidatorTests: XCTestCase {
 
         // Two motifs sharing one UUID (duplicate on motif).
         let sharedMotif = UUID()
-        let m1 = Motif(name: "M1")
+        let m1 = Motif(label: "M1")
         m1.id = sharedMotif
         m1.project = project
         context.insert(m1)
-        let m2 = Motif(name: "M2")
+        let m2 = Motif(label: "M2")
         m2.id = sharedMotif
         m2.project = project
         context.insert(m2)
@@ -304,9 +304,9 @@ final class RecipeIntegrityValidatorTests: XCTestCase {
         ) { error in
             guard case OutlineSuggestionError.recipeIntegrityMissing(let missing) = error else {
                 XCTFail("Expected .recipeIntegrityMissing, got \(error)")
-                return false
+                return
             }
-            return missing.contains(where: { $0.entityClass == .character && $0.id == sharedUUID })
+            XCTAssertTrue(missing.contains(where: { $0.entityClass == .character && $0.id == sharedUUID }))
         }
     }
 }

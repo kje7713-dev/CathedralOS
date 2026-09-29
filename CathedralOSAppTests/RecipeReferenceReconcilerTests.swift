@@ -52,7 +52,7 @@ final class RecipeReferenceReconcilerTests: XCTestCase {
         relationship.project = project
         context.insert(relationship)
 
-        themeQuestion = ThemeQuestion(text: "Why?")
+        themeQuestion = ThemeQuestion(question: "Why?")
         themeQuestion.project = project
         context.insert(themeQuestion)
 
