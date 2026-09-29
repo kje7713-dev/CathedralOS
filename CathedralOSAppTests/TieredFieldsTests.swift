@@ -145,36 +145,7 @@ final class TieredFieldsTests: XCTestCase {
 
     func testSettingPayloadAdvancedFields() {
         let payload = PromptPackExportPayload.SettingPayload(
-            included: true,
-            summary: "summary",
-            domains: [],
-            constraints: [],
-            themes: [],
-            season: "",
-            worldRules: ["rule"],
-            historicalPressure: "history",
-            politicalForces: "politics",
-            socialOrder: "order",
-            environmentalPressure: "env",
-            technologyLevel: "tech",
-            mythicFrame: "myth",
-            instructionBias: "bias",
-            religiousPressure: "",
-            economicPressure: "",
-            taboos: [],
-            institutions: [],
-            dominantValues: [],
-            hiddenTruths: []
-        )
-        XCTAssertEqual(payload.worldRules, ["rule"])
-        XCTAssertEqual(payload.historicalPressure, "history")
-        XCTAssertEqual(payload.technologyLevel, "tech")
-        XCTAssertEqual(payload.mythicFrame, "myth")
-    }
-
-    func testSettingPayloadLiteraryFields() {
-        let payload = PromptPackExportPayload.SettingPayload(
-            included: true,
+            included: false,
             summary: "",
             domains: [],
             constraints: [],
@@ -188,12 +159,45 @@ final class TieredFieldsTests: XCTestCase {
             technologyLevel: "",
             mythicFrame: "",
             instructionBias: "",
-            religiousPressure: "religion",
-            economicPressure: "economy",
-            taboos: ["taboo"],
-            institutions: ["church"],
-            dominantValues: ["honor"],
-            hiddenTruths: ["lie"]
+            religiousPressure: "",
+            economicPressure: "",
+            taboos: [],
+            institutions: [],
+            dominantValues: [],
+            hiddenTruths: [],
+            fieldLevel: "",
+            enabledFieldGroups: []
+        )
+        XCTAssertEqual(payload.worldRules, ["rule"])
+        XCTAssertEqual(payload.historicalPressure, "history")
+        XCTAssertEqual(payload.technologyLevel, "tech")
+        XCTAssertEqual(payload.mythicFrame, "myth")
+    }
+
+    func testSettingPayloadLiteraryFields() {
+        let payload = PromptPackExportPayload.SettingPayload(
+            included: false,
+            summary: "",
+            domains: [],
+            constraints: [],
+            themes: [],
+            season: "",
+            worldRules: [],
+            historicalPressure: "",
+            politicalForces: "",
+            socialOrder: "",
+            environmentalPressure: "",
+            technologyLevel: "",
+            mythicFrame: "",
+            instructionBias: "",
+            religiousPressure: "",
+            economicPressure: "",
+            taboos: [],
+            institutions: [],
+            dominantValues: [],
+            hiddenTruths: [],
+            fieldLevel: "",
+            enabledFieldGroups: []
         )
         XCTAssertEqual(payload.religiousPressure, "religion")
         XCTAssertEqual(payload.economicPressure, "economy")
@@ -360,18 +364,18 @@ final class TieredFieldsTests: XCTestCase {
 
     func testAssemblerIncludesAdvancedSettingFields() {
         let settingPayload = PromptPackExportPayload.SettingPayload(
-            included: true,
-            summary: "world",
+            included: false,
+            summary: "",
             domains: [],
             constraints: [],
             themes: [],
             season: "",
-            worldRules: ["no magic"],
+            worldRules: [],
             historicalPressure: "",
             politicalForces: "",
             socialOrder: "",
             environmentalPressure: "",
-            technologyLevel: "medieval",
+            technologyLevel: "",
             mythicFrame: "",
             instructionBias: "",
             religiousPressure: "",
@@ -379,7 +383,9 @@ final class TieredFieldsTests: XCTestCase {
             taboos: [],
             institutions: [],
             dominantValues: [],
-            hiddenTruths: []
+            hiddenTruths: [],
+            fieldLevel: "",
+            enabledFieldGroups: []
         )
         let payload = PromptPackExportPayload(
             schema: "test",

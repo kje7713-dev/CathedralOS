@@ -51,7 +51,30 @@ final class OutlineSuggestionRecoveryTests: XCTestCase {
             schema: "cathedralos.story_packet",
             version: 1,
             project: projectPayload,
-            setting: PromptPackExportPayload.SettingPayload(included: false),
+            setting: PromptPackExportPayload.SettingPayload(
+            included: false,
+            summary: "",
+            domains: [],
+            constraints: [],
+            themes: [],
+            season: "",
+            worldRules: [],
+            historicalPressure: "",
+            politicalForces: "",
+            socialOrder: "",
+            environmentalPressure: "",
+            technologyLevel: "",
+            mythicFrame: "",
+            instructionBias: "",
+            religiousPressure: "",
+            economicPressure: "",
+            taboos: [],
+            institutions: [],
+            dominantValues: [],
+            hiddenTruths: [],
+            fieldLevel: "",
+            enabledFieldGroups: []
+        ),
             selectedCharacters: [characterPayload],
             selectedStorySpark: nil,
             selectedAftertaste: nil,
@@ -65,7 +88,7 @@ final class OutlineSuggestionRecoveryTests: XCTestCase {
                 instructionBias: ""
             )
         )
-        let beatPayload = ArcTemplateBlob.BeatBlob(
+        let beatPayload = BeatBlob(
             id: beatID,
             role: "opening",
             label: "Opening Image",

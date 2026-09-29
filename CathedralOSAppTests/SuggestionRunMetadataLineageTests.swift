@@ -24,7 +24,30 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             schema: "cathedralos.story_packet",
             version: 1,
             project: projectPayload,
-            setting: PromptPackExportPayload.SettingPayload(included: false),
+            setting: PromptPackExportPayload.SettingPayload(
+            included: false,
+            summary: "",
+            domains: [],
+            constraints: [],
+            themes: [],
+            season: "",
+            worldRules: [],
+            historicalPressure: "",
+            politicalForces: "",
+            socialOrder: "",
+            environmentalPressure: "",
+            technologyLevel: "",
+            mythicFrame: "",
+            instructionBias: "",
+            religiousPressure: "",
+            economicPressure: "",
+            taboos: [],
+            institutions: [],
+            dominantValues: [],
+            hiddenTruths: [],
+            fieldLevel: "",
+            enabledFieldGroups: []
+        ),
             selectedCharacters: [],
             selectedStorySpark: nil,
             selectedAftertaste: nil,
@@ -32,12 +55,16 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             selectedThemeQuestions: [],
             selectedMotifs: [],
             promptPack: PromptPackExportPayload.PromptPackPayload(
-                id: "pack-1", name: "Sparse recipe", notes: "", instructionBias: ""
+                id: UUID(uuidString: "00000000-0000-0000-0000-0000000000AA")!,
+                name: "Sparse recipe",
+                includeProjectSetting: false,
+                notes: "",
+                instructionBias: ""
             )
         )
         let arcPayload = ArcTemplateBlob(
             id: "save-the-cat", name: "Save the Cat!", description: nil,
-            beats: [ArcTemplateBlob.BeatBlob(id: "beat-1", role: "opening", label: "Opening Image", description: "Establish the world.")]
+            beats: [BeatBlob(id: "beat-1", role: "opening", label: "Opening Image", description: "Establish the world.")]
         )
         return OutlineSuggestionRequest(
             recipe: recipePayload,
