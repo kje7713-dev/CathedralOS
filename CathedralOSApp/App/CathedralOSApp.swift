@@ -16,6 +16,10 @@ struct CathedralOSApp: App {
     // See docs/storekit-entitlements.md.
 
     init() {
+        // Production purchases must be server-validated before the transaction
+        // is finished or the UI reports that credits were updated.
+        StoreKitEntitlementService.shared.validationService =
+            BackendStoreKitValidationService(authService: BackendAuthService.shared)
         StoreKitEntitlementService.shared.startTransactionListener()
         persistenceBootstrap = PersistenceBootstrap.bootstrap()
         PersistenceLaunchDiagnosticsStore.shared.update(persistenceBootstrap.diagnostics)

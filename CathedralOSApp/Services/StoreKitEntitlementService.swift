@@ -69,6 +69,7 @@ enum StoreKitEntitlementError: Error, LocalizedError {
     case verificationFailed
     case userCancelled
     case purchasePending
+    case backendValidationFailed(String)
     case unknown
 
     var errorDescription: String? {
@@ -79,6 +80,8 @@ enum StoreKitEntitlementError: Error, LocalizedError {
             return "Purchase was cancelled."
         case .purchasePending:
             return "Purchase is pending approval. Entitlement will be granted once approved."
+        case .backendValidationFailed:
+            return "Your purchase was completed, but StoryDonkey couldn't update your credits yet. Use Restore Purchases to retry."
         case .unknown:
             return "An unknown purchase error occurred. Please try again."
         }
@@ -161,12 +164,15 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
         case .verified(let transaction):
             // Refresh local entitlement to reflect the new transaction state.
             await refreshEntitlement()
-            // Trigger backend validation asynchronously (non-blocking for update listener).
-            Task { [weak self] in
-                _ = try? await self?.validateWithBackend([result])
+            // Keep the transaction unfinished until backend validation succeeds.
+            // StoreKit will redeliver it for a later retry if the server is down.
+            do {
+                _ = try await validateWithBackend([result])
+                await transaction.finish()
+            } catch {
+                backendValidationError = (error as? StoreKitValidationError)?.errorDescription
+                    ?? error.localizedDescription
             }
-            // Finish the transaction to acknowledge receipt.
-            await transaction.finish()
         }
     }
 
@@ -201,12 +207,15 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
                 await refreshEntitlement()
                 // Validate with backend — this is the authoritative grant.
                 do {
-                    try await validateWithBackend([verification])
+                    _ = try await validateWithBackend([verification])
                 } catch {
-                    // Surface the validation error without blocking the UX.
-                    // Local StoreKit state was already applied; the user can retry validation.
                     backendValidationError = (error as? StoreKitValidationError)?.errorDescription
                         ?? error.localizedDescription
+                    // Do not finish: StoreKit will redeliver the verified
+                    // transaction and Restore Purchases can retry it.
+                    throw StoreKitEntitlementError.backendValidationFailed(
+                        backendValidationError ?? "Backend validation failed."
+                    )
                 }
                 await transaction.finish()
             case .unverified:
@@ -243,10 +252,13 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
 
         if !verificationResults.isEmpty {
             do {
-                try await validateWithBackend(verificationResults)
+                _ = try await validateWithBackend(verificationResults)
             } catch {
                 backendValidationError = (error as? StoreKitValidationError)?.errorDescription
                     ?? error.localizedDescription
+                throw StoreKitEntitlementError.backendValidationFailed(
+                    backendValidationError ?? "Backend validation failed."
+                )
             }
         }
     }
@@ -258,7 +270,9 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
     func refreshEntitlement() async {
         var hasActiveSubscription = false
         var subscriptionExpiresAt: Date? = nil
-        var purchasedCreditBalance: Double = 0
+        // Consumable credit packs are not persistent current entitlements.
+        // Their unused balance comes only from the backend credit ledger.
+        let purchasedCreditBalance: Double = 0
 
         for await result in Transaction.currentEntitlements {
             guard case .verified(let transaction) = result else {
@@ -278,8 +292,6 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
                         subscriptionExpiresAt = expires
                     }
                 }
-            } else if StoreKitProductIDs.creditPackIDs.contains(transaction.productID) {
-                purchasedCreditBalance += Double(StoreKitProductIDs.creditAmount(for: transaction.productID))
             }
         }
 

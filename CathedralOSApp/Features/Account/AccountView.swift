@@ -94,7 +94,8 @@ struct AccountView: View {
             .sheet(isPresented: $showPaywall) {
                 PaywallView(
                     entitlementService: entitlementService,
-                    usageLimitService: usageLimitService
+                    usageLimitService: usageLimitService,
+                    creditStateService: creditStateService
                 )
                 .onDisappear {
                     // Refresh entitlement state after paywall is dismissed.
