@@ -207,10 +207,19 @@
 		AABBCCDD000000000000E005 /* KindleExportShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABBCCDD000000000000E006 /* KindleExportShareSheet.swift */; };
 		7EDD7D6456B247229EF219F0 /* KindleExportServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C80967683CED4FC99C3473F1 /* KindleExportServiceTests.swift */; };
 		AABBCCDD000000000000B001 /* KindleExportPollerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABBCCDD000000000000B002 /* KindleExportPollerTests.swift */; };
+		SKTESTSOURCES00000000000001 /* StoreKitEntitlementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SKTESTFILES00000000000001 /* StoreKitEntitlementTests.swift */; };
+		SKTESTSOURCES00000000000002 /* StoreKitServerValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SKTESTFILES00000000000002 /* StoreKitServerValidationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
 		000000000000000000000016 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000000000004;
+			remoteInfo = CathedralOSApp;
+		};
+		SKTESTPROXY00000000000001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 000000000000000000000001 /* Project object */;
 			proxyType = 1;
@@ -420,6 +429,9 @@
 		AABBCCDD000000000000A002 /* KindleExportPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportPoller.swift; sourceTree = "<group>"; };
 		C80967683CED4FC99C3473F1 /* KindleExportServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportServiceTests.swift; sourceTree = "<group>"; };
 		AABBCCDD000000000000B002 /* KindleExportPollerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KindleExportPollerTests.swift; sourceTree = "<group>"; };
+		SKTESTPRODUCT00000000000001 /* CathedralOSStoreKitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CathedralOSStoreKitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		SKTESTFILES00000000000001 /* StoreKitEntitlementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitEntitlementTests.swift; sourceTree = "<group>"; };
+		SKTESTFILES00000000000002 /* StoreKitServerValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitServerValidationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -440,6 +452,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		SKTESTFRAMEWORKS00000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -448,6 +467,7 @@
 			children = (
 				000000000000000000000020 /* CathedralOSApp */,
 				000000000000000000000027 /* CathedralOSAppTests */,
+				SKTESTGROUP00000000000001 /* CathedralOSStoreKitTests */,
 				000000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -457,6 +477,7 @@
 			children = (
 				000000000000000000000006 /* CathedralOSApp.app */,
 				000000000000000000000007 /* CathedralOSAppTests.xctest */,
+				SKTESTPRODUCT00000000000001 /* CathedralOSStoreKitTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -589,6 +610,15 @@
 				0000000000000000000000FE /* StringExtensions.swift */,
 			);
 			path = Utils;
+			sourceTree = "<group>";
+		};
+		SKTESTGROUP00000000000001 /* CathedralOSStoreKitTests */ = {
+			isa = PBXGroup;
+			children = (
+				SKTESTFILES00000000000001 /* StoreKitEntitlementTests.swift */,
+				SKTESTFILES00000000000002 /* StoreKitServerValidationTests.swift */,
+			);
+			path = CathedralOSStoreKitTests;
 			sourceTree = "<group>";
 		};
 		000000000000000000000027 /* CathedralOSAppTests */ = {
@@ -845,6 +875,23 @@
 			productReference = 000000000000000000000007 /* CathedralOSAppTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		SKTESTTARGET00000000000001 /* CathedralOSStoreKitTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = SKTESTCONFIGLIST00000000000001 /* Build configuration list for PBXNativeTarget "CathedralOSStoreKitTests" */;
+			buildPhases = (
+				SKTESTSOURCESPHASE00000001 /* Sources */,
+				SKTESTFRAMEWORKS00000001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				SKTESTDEPENDENCY00000000000001 /* PBXTargetDependency */,
+			);
+			name = CathedralOSStoreKitTests;
+			productName = CathedralOSStoreKitTests;
+			productReference = SKTESTPRODUCT00000000000001 /* CathedralOSStoreKitTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -891,6 +938,10 @@
 						CreatedOnToolsVersion = 16.0;
 						TestTargetID = 000000000000000000000004;
 					};
+					SKTESTTARGET00000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 000000000000000000000004;
+					};
 				};
 			};
 			buildConfigurationList = 00000000000000000000000A /* Build configuration list for PBXProject "CathedralOSApp" */;
@@ -911,6 +962,7 @@
 			targets = (
 				000000000000000000000004 /* CathedralOSApp */,
 				000000000000000000000005 /* CathedralOSAppTests */,
+				SKTESTTARGET00000000000001 /* CathedralOSStoreKitTests */,
 			);
 		};
 /* End PBXProject section */
@@ -1159,6 +1211,15 @@ echo \"Runtime config plist injection completed: keys present\"";
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		SKTESTSOURCESPHASE00000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				SKTESTSOURCES00000000000001 /* StoreKitEntitlementTests.swift in Sources */,
+				SKTESTSOURCES00000000000002 /* StoreKitServerValidationTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -1166,6 +1227,11 @@ echo \"Runtime config plist injection completed: keys present\"";
 			isa = PBXTargetDependency;
 			target = 000000000000000000000004 /* CathedralOSApp */;
 			targetProxy = 000000000000000000000016 /* PBXContainerItemProxy */;
+		};
+		SKTESTDEPENDENCY00000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000000000004 /* CathedralOSApp */;
+			targetProxy = SKTESTPROXY00000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1380,6 +1446,38 @@ echo \"Runtime config plist injection completed: keys present\"";
 			};
 			name = Release;
 		};
+		SKTESTDEBUG00000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "$(APPLE_TEAM_ID)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.savagesbydesign.CathedralOSStoreKitTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CathedralOSApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/CathedralOSApp";
+			};
+			name = Debug;
+		};
+		SKTESTRELEASE000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "$(APPLE_TEAM_ID)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.savagesbydesign.CathedralOSStoreKitTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CathedralOSApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/CathedralOSApp";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1406,6 +1504,15 @@ echo \"Runtime config plist injection completed: keys present\"";
 			buildConfigurations = (
 				00000000000000000000000F /* Debug */,
 				000000000000000000000010 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		SKTESTCONFIGLIST00000000000001 /* Build configuration list for PBXNativeTarget "CathedralOSStoreKitTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				SKTESTDEBUG00000000000001 /* Debug */,
+				SKTESTRELEASE000000000001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

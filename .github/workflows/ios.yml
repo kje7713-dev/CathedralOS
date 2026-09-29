@@ -69,21 +69,7 @@ jobs:
           set -o pipefail
           xcodebuild test \
             -project CathedralOSApp.xcodeproj \
-            -scheme CathedralOSApp \
+            -scheme CathedralOSStoreKitTests \
             -sdk iphonesimulator \
             -destination "$DESTINATION" \
-            -only-testing:CathedralOSAppTests/StoreKitValidationErrorTests \
-            -only-testing:CathedralOSAppTests/StoreKitValidationResponseTests \
-            -only-testing:CathedralOSAppTests/StubStoreKitValidationServiceTests \
-            -only-testing:CathedralOSAppTests/StubEntitlementServiceBackendValidationTests \
-            -only-testing:CathedralOSAppTests/SupabaseConfigurationStoreKitValidationTests \
-            -only-testing:CathedralOSAppTests/ValidationIdempotencyBehaviorTests \
-            -only-testing:CathedralOSAppTests/CreditStateRefreshAfterValidationTests \
-            -only-testing:CathedralOSAppTests/StoreKitRestoreSelectionTests \
-            -only-testing:CathedralOSAppTests/StoreKitPurchaseMessagingTests \
-            -only-testing:CathedralOSAppTests/StoreKitTransactionProcessorTests \
-            -only-testing:CathedralOSAppTests/ProductIDTests \
-            -only-testing:CathedralOSAppTests/EntitlementStateModelTests \
-            -only-testing:CathedralOSAppTests/StubEntitlementServiceBehaviorTests \
-            -only-testing:CathedralOSAppTests/StoreKitEntitlementErrorTests \
             CODE_SIGNING_ALLOWED=NO
