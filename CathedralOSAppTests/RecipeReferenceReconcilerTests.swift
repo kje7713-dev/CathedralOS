@@ -40,11 +40,11 @@ final class RecipeReferenceReconcilerTests: XCTestCase {
         character.project = project
         context.insert(character)
 
-        storySpark = StorySpark(name: "Spark")
+        storySpark = StorySpark(title: "Spark")
         storySpark.project = project
         context.insert(storySpark)
 
-        aftertaste = Aftertaste(name: "Aftertaste")
+        aftertaste = Aftertaste(label: "Aftertaste")
         aftertaste.project = project
         context.insert(aftertaste)
 
