@@ -84,10 +84,10 @@ struct AccountView: View {
             .task {
                 await authService.checkSession()
                 authState = authService.authState
-                // Refresh StoreKit entitlement and seed local credit state.
+                // Refresh StoreKit subscription projection. Credit state is
+                // only changed by a successful backend fetch below.
                 await entitlementService.refreshEntitlement()
                 entitlementState = entitlementService.entitlementState
-                usageLimitService.applyEntitlement(entitlementState)
                 // Overlay with backend-authoritative balance when signed in.
                 await refreshBackendCreditState()
             }
@@ -337,7 +337,7 @@ struct AccountView: View {
 
                 if state.source != .backend {
                     #if DEBUG
-                    Text("Credit tracking is local only. Backend enforcement is required before public monetized release.")
+                    Text("Credit tracking is cached locally for display; backend credit state is authoritative.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -697,7 +697,8 @@ struct AccountView: View {
         do {
             try await entitlementService.restorePurchases()
             entitlementState = entitlementService.entitlementState
-            usageLimitService.applyEntitlement(entitlementState)
+            // StoreKit may update subscription UI, but never overwrites the
+            // backend-owned generation-credit snapshot.
             // Restore itself succeeded; keep that success separate from a
             // best-effort balance-display refresh.
             let refreshed = await refreshBackendCreditState()

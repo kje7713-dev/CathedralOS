@@ -119,9 +119,11 @@ User taps "Restore Purchases"
 
 Backend validation failure:
   ├─ network/transient server failure → leave transaction unfinished;
-  │  StoreKit.updates and a later Restore Purchases retry it
-  └─ terminal rejection/auth/configuration failure → finish without granting,
-     record a diagnostic, and surface the deliberate terminal error
+  ├─ auth, session, configuration, decoding, unknown, and ordinary 4xx
+  │  failures → also leave transaction unfinished conservatively; and
+  └─ only an explicit server-confirmed permanent Apple rejection (revoked
+     transaction or bundle mismatch) → finish without granting, record a
+     diagnostic, and surface the deliberate terminal error
 
 A successful purchase/restore is not turned into a failure when the separate
 credit-state display refresh fails. The UI reports completion with a stale-
@@ -268,7 +270,7 @@ Add the product IDs from `StoreKitProductIDs.swift` to the configuration file.
 | `PaywallView.swift` | Subscribe, buy credit pack, restore UI |
 | `StoreKitEntitlementTests.swift` | Unit tests (no live App Store calls) |
 | `StoreKitServerValidationTests.swift` | Unit tests for backend validation flow |
-| `UsageLimitService.swift` | `applyEntitlement(_:)` feeds StoreKit state into local credit scaffold |
+| `UsageLimitService.swift` | Backend credit-state application remains the production credit authority |
 | `AccountView.swift` | Subscription section, restore action, paywall sheet |
 | `CathedralOSApp.swift` | Starts transaction listener at launch |
 | `sync-storekit-entitlement/index.ts` | Edge Function: validates transaction + applies grant |

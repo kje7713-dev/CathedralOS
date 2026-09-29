@@ -70,6 +70,7 @@ enum StoreKitEntitlementError: Error, LocalizedError {
     case userCancelled
     case purchasePending
     case backendValidationFailed(String)
+    case permanentTransactionRejection(String)
     case unknown
 
     var errorDescription: String? {
@@ -82,6 +83,8 @@ enum StoreKitEntitlementError: Error, LocalizedError {
             return "Purchase is pending approval. Entitlement will be granted once approved."
         case .backendValidationFailed:
             return "Your purchase was completed, but StoryDonkey couldn't update your credits yet. Use Restore Purchases to retry."
+        case .permanentTransactionRejection(let reason):
+            return "Purchase was rejected by the server and was not credited: \(reason)"
         case .unknown:
             return "An unknown purchase error occurred. Please try again."
         }
@@ -136,15 +139,18 @@ actor StoreKitTransactionProcessor {
                     error: nil
                 )
             } catch {
-                let retryable = (error as? StoreKitValidationError)?.isRetryable ?? false
-                if !retryable {
-                    // Terminal rejection/configuration/auth errors must not be
-                    // redelivered forever. No credit was granted, so finish is
-                    // safe and the diagnostic remains available to the caller.
+                let classification = (error as? StoreKitValidationError)?.disposition
+                    ?? .retryLater
+                if classification == .permanentRejection {
+                    // Only an explicit server-confirmed permanent rejection
+                    // may finish without a grant. Everything else remains
+                    // unfinished for recovery, including unknown errors.
                     await finish()
                 }
                 return StoreKitTransactionProcessingResult(
-                    disposition: retryable ? .retryableFailure : .terminalFailure,
+                    disposition: classification == .permanentRejection
+                        ? .terminalFailure
+                        : .retryableFailure,
                     response: nil,
                     error: error
                 )
@@ -319,9 +325,13 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
                 switch await processVerifiedTransaction(verification, refreshLocalState: true) {
                 case .succeeded:
                     return
-                case .retryableFailure(let error), .terminalFailure(let error):
+                case .retryableFailure(let error):
                     throw StoreKitEntitlementError.backendValidationFailed(
                         error.errorDescription ?? "Backend validation failed."
+                    )
+                case .terminalFailure(let error):
+                    throw StoreKitEntitlementError.permanentTransactionRejection(
+                        error.errorDescription ?? "The transaction was permanently rejected."
                     )
                 }
             case .unverified:
@@ -350,13 +360,51 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
 
         var retryableError: StoreKitValidationError?
         var terminalError: StoreKitValidationError?
+        var unfinishedIdentities: [StoreKitTransactionIdentity] = []
+        var currentEntitlementIdentities: [StoreKitTransactionIdentity] = []
+        var transactionsByID: [String: VerificationResult<Transaction>] = [:]
 
+        // A. Drain unfinished transactions first. This is the recovery path
+        // for failed consumable grants and other transactions not yet finished.
         for await result in Transaction.unfinished {
-            guard case .verified = result else {
-                // Unverified transactions are not safe to submit or finish.
-                terminalError = .unverifiedTransaction
+            guard case .verified(let transaction) = result else {
+                terminalError = terminalError ?? .unverifiedTransaction
                 continue
             }
+            let identity = StoreKitTransactionIdentity(
+                transactionID: String(transaction.id),
+                productID: transaction.productID
+            )
+            unfinishedIdentities.append(identity)
+            transactionsByID[identity.transactionID] = result
+        }
+
+        // B. Reconcile active subscription entitlements as well. This repairs
+        // subscriptions that an older app version finished before backend grant.
+        // Consumables are intentionally excluded: they are not current
+        // entitlements and must never be reconstructed client-side.
+        for await result in Transaction.currentEntitlements {
+            guard case .verified(let transaction) = result,
+                  transaction.revocationDate == nil,
+                  StoreKitProductIDs.subscriptionIDs.contains(transaction.productID) else {
+                continue
+            }
+            let identity = StoreKitTransactionIdentity(
+                transactionID: String(transaction.id),
+                productID: transaction.productID
+            )
+            currentEntitlementIdentities.append(identity)
+            if transactionsByID[identity.transactionID] == nil {
+                transactionsByID[identity.transactionID] = result
+            }
+        }
+
+        let identities = StoreKitRestoreTransactionSelection.uniqueTransactions(
+            unfinished: unfinishedIdentities,
+            currentEntitlements: currentEntitlementIdentities
+        )
+        for identity in identities {
+            guard let result = transactionsByID[identity.transactionID] else { continue }
             switch await processVerifiedTransaction(result, refreshLocalState: false) {
             case .succeeded:
                 break
@@ -371,16 +419,21 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
         // credit balance remains owned by the backend ledger.
         await refreshEntitlement()
 
-        if let error = retryableError ?? terminalError {
+        if let error = retryableError {
             throw StoreKitEntitlementError.backendValidationFailed(
                 error.errorDescription ?? "Backend validation failed."
             )
         }
+        if let error = terminalError {
+            throw StoreKitEntitlementError.permanentTransactionRejection(
+                error.errorDescription ?? "The transaction was permanently rejected."
+            )
+        }
 
-        // An empty unfinished stream is a valid restore: already-finished
-        // subscriptions are represented by currentEntitlements and do not need
-        // to be re-granted. The explicit drain above is what makes failed
-        // consumable purchases recoverable.
+        // An empty candidate set is a valid restore. Active subscriptions are
+        // reconciled from currentEntitlements; consumables are never inferred
+        // from that stream. The unfinished drain makes failed consumable
+        // purchases recoverable.
     }
 
     // MARK: - Entitlement Refresh
@@ -450,6 +503,26 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
         let response = try await validationService.validateTransactions(verificationResults)
         lastBackendValidation = response
         return response
+    }
+}
+
+enum StoreKitRestoreTransactionSelection {
+    static func uniqueTransactions(
+        unfinished: [StoreKitTransactionIdentity],
+        currentEntitlements: [StoreKitTransactionIdentity]
+    ) -> [StoreKitTransactionIdentity] {
+        var seen = Set<String>()
+        var result: [StoreKitTransactionIdentity] = []
+        for identity in unfinished {
+            guard seen.insert(identity.transactionID).inserted else { continue }
+            result.append(identity)
+        }
+        for identity in currentEntitlements {
+            guard StoreKitProductIDs.subscriptionIDs.contains(identity.productID),
+                  seen.insert(identity.transactionID).inserted else { continue }
+            result.append(identity)
+        }
+        return result
     }
 }
 

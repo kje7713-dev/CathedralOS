@@ -370,6 +370,12 @@ final class StoreKitEntitlementErrorTests: XCTestCase {
         XCTAssertFalse(error.errorDescription!.isEmpty)
     }
 
+    func testPermanentTransactionRejectionDoesNotSuggestRestore() {
+        let error = StoreKitEntitlementError.permanentTransactionRejection("revoked")
+        XCTAssertTrue(error.errorDescription?.contains("not credited") ?? false)
+        XCTAssertFalse(error.errorDescription?.contains("Restore Purchases") ?? true)
+    }
+
     func testUnknownHasDescription() {
         let error = StoreKitEntitlementError.unknown
         XCTAssertNotNil(error.errorDescription)

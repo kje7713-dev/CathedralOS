@@ -37,7 +37,7 @@ final class StoreKitValidationErrorTests: XCTestCase {
             .serverError(statusCode: 503, message: "upstream error"),
             .serverError(statusCode: 400, message: nil),
             .decodingError(NSError(domain: "test", code: 2)),
-            .transactionRejected("Purchase refunded"),
+            .permanentTransactionRejection("Transaction has been revoked"),
         ]
         for error in errors {
             let description = error.errorDescription ?? ""
@@ -55,27 +55,31 @@ final class StoreKitValidationErrorTests: XCTestCase {
         XCTAssertTrue(error.isRetryable)
     }
 
-    func testNotConfiguredIsNotRetryable() {
-        XCTAssertFalse(StoreKitValidationError.notConfigured.isRetryable)
+    func testNotConfiguredRemainsRetryableForRecovery() {
+        XCTAssertTrue(StoreKitValidationError.notConfigured.isRetryable)
+        XCTAssertEqual(StoreKitValidationError.notConfigured.disposition, .retryLater)
     }
 
-    func testNotSignedInIsNotRetryable() {
-        XCTAssertFalse(StoreKitValidationError.notSignedIn.isRetryable)
+    func testNotSignedInRemainsRetryableForRecovery() {
+        XCTAssertTrue(StoreKitValidationError.notSignedIn.isRetryable)
+        XCTAssertEqual(StoreKitValidationError.notSignedIn.disposition, .retryLater)
     }
 
-    func testTransactionRejectedIsNotRetryable() {
-        XCTAssertFalse(StoreKitValidationError.transactionRejected("refund").isRetryable)
+    func testPermanentTransactionRejectionIsNotRetryable() {
+        let error = StoreKitValidationError.permanentTransactionRejection("Transaction has been revoked")
+        XCTAssertEqual(error.disposition, .permanentRejection)
+        XCTAssertFalse(error.isRetryable)
     }
 
-    func testDecodingErrorIsNotRetryable() {
-        XCTAssertFalse(
+    func testDecodingErrorRemainsRetryableForRecovery() {
+        XCTAssertTrue(
             StoreKitValidationError.decodingError(NSError(domain: "test", code: 1)).isRetryable
         )
     }
 
-    func testClientErrorIsNotRetryable() {
-        XCTAssertFalse(StoreKitValidationError.serverError(statusCode: 400, message: "bad request").isRetryable)
-        XCTAssertFalse(StoreKitValidationError.serverError(statusCode: 403, message: "rejected").isRetryable)
+    func testUnclassifiedClientErrorsRemainRetryableForRecovery() {
+        XCTAssertTrue(StoreKitValidationError.serverError(statusCode: 400, message: "bad request").isRetryable)
+        XCTAssertTrue(StoreKitValidationError.serverError(statusCode: 403, message: "rejected").isRetryable)
     }
 
     func testServerErrorDescriptionIncludesStatusCode() {
@@ -415,6 +419,26 @@ final class CreditStateRefreshAfterValidationTests: XCTestCase {
 
 // MARK: - Canonical transaction processing regression tests
 
+final class StoreKitRestoreSelectionTests: XCTestCase {
+    func testRestoreIncludesUnfinishedAndActiveSubscriptionsOnce() {
+        let unfinished = [
+            StoreKitTransactionIdentity(transactionID: "consumable-1", productID: StoreKitProductIDs.creditsSmall),
+            StoreKitTransactionIdentity(transactionID: "subscription-1", productID: StoreKitProductIDs.proMonthly)
+        ]
+        let current = [
+            StoreKitTransactionIdentity(transactionID: "subscription-1", productID: StoreKitProductIDs.proMonthly),
+            StoreKitTransactionIdentity(transactionID: "subscription-2", productID: StoreKitProductIDs.proMonthly),
+            StoreKitTransactionIdentity(transactionID: "historical-consumable", productID: StoreKitProductIDs.creditsMedium),
+        ]
+
+        let selected = StoreKitRestoreTransactionSelection.uniqueTransactions(
+            unfinished: unfinished,
+            currentEntitlements: current
+        )
+        XCTAssertEqual(selected.map(\.transactionID), ["consumable-1", "subscription-1", "subscription-2"])
+    }
+}
+
 final class StoreKitPurchaseMessagingTests: XCTestCase {
     func testPurchaseRefreshFailureStillReportsCompletedPurchase() {
         let message = StoreKitPurchaseMessaging.purchaseSuccess(balanceRefreshed: false)
@@ -451,6 +475,56 @@ final class StoreKitTransactionProcessorTests: XCTestCase {
 
         XCTAssertEqual(result.disposition, .retryableFailure)
         XCTAssertEqual(finishCount, 0)
+    }
+
+    func testAuthConfigDecodingAndUnknownFailuresRemainUnfinished() async {
+        let errors: [Error] = [
+            StoreKitValidationError.notSignedIn,
+            StoreKitValidationError.sessionExpired,
+            StoreKitValidationError.notConfigured,
+            StoreKitValidationError.decodingError(NSError(domain: "decode", code: 1)),
+            NSError(domain: "unknown", code: 1)
+        ]
+
+        for error in errors {
+            let processor = StoreKitTransactionProcessor()
+            var finishCount = 0
+            let result = await processor.process(
+                identity: identity,
+                validate: { throw error },
+                finish: { finishCount += 1 }
+            )
+            XCTAssertEqual(result.disposition, .retryableFailure, "Unexpected classification for \(error)")
+            XCTAssertEqual(finishCount, 0, "Recoverable error must not finish: \(error)")
+        }
+    }
+
+    func testFailedAttemptCanBeRetriedAndFinishedExactlyOnce() async {
+        let processor = StoreKitTransactionProcessor()
+        var shouldSucceed = false
+        var finishCount = 0
+
+        let first = await processor.process(
+            identity: identity,
+            validate: {
+                guard shouldSucceed else {
+                    throw StoreKitValidationError.networkError(NSError(domain: "offline", code: 1))
+                }
+                return .stubFree(creditBalance: 20)
+            },
+            finish: { finishCount += 1 }
+        )
+        XCTAssertEqual(first.disposition, .retryableFailure)
+        XCTAssertEqual(finishCount, 0)
+
+        shouldSucceed = true
+        let recovered = await processor.process(
+            identity: identity,
+            validate: { .stubFree(creditBalance: 20) },
+            finish: { finishCount += 1 }
+        )
+        XCTAssertEqual(recovered.disposition, .finished)
+        XCTAssertEqual(finishCount, 1)
     }
 
     func testRetryableFailureLeavesConsumableTransactionRecoverable() async {
@@ -511,7 +585,7 @@ final class StoreKitTransactionProcessorTests: XCTestCase {
 
         let result = await processor.process(
             identity: identity,
-            validate: { throw StoreKitValidationError.transactionRejected("refunded") },
+            validate: { throw StoreKitValidationError.permanentTransactionRejection("Transaction has been revoked") },
             finish: { finishCount += 1 }
         )
 

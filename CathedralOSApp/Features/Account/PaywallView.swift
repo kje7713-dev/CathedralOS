@@ -248,6 +248,8 @@ struct PaywallView: View {
             successMessage = "Purchase is pending approval. Credits will be granted once approved."
         } catch StoreKitEntitlementError.backendValidationFailed {
             successMessage = "Your purchase was completed, but StoryDonkey couldn't update your credits yet. Use Restore Purchases to retry."
+        } catch StoreKitEntitlementError.permanentTransactionRejection {
+            actionError = "Purchase was rejected by the server and was not credited. Contact support if you believe this is incorrect."
         } catch {
             actionError = (error as? StoreKitEntitlementError)?.errorDescription
                 ?? error.localizedDescription
@@ -268,7 +270,9 @@ struct PaywallView: View {
                 successMessage = StoreKitPurchaseMessaging.restoreSuccess(balanceRefreshed: false)
             }
         } catch StoreKitEntitlementError.backendValidationFailed {
-            successMessage = "Your purchase was completed, but StoryDonkey couldn't update your credits yet. Use Restore Purchases to retry."
+            successMessage = "The restore could not finish yet because backend validation is recoverable. Use Restore Purchases to retry."
+        } catch StoreKitEntitlementError.permanentTransactionRejection {
+            actionError = "A restored transaction was permanently rejected by the server and was not credited. Contact support if you believe this is incorrect."
         } catch {
             actionError = (error as? StoreKitEntitlementError)?.errorDescription
                 ?? error.localizedDescription
