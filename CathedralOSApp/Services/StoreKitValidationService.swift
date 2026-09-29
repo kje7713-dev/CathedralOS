@@ -95,8 +95,12 @@ enum StoreKitValidationError: Error, LocalizedError {
     /// True when the user should be shown a generic retry prompt.
     var isRetryable: Bool {
         switch self {
-        case .networkError, .serverError:
+        case .networkError:
             return true
+        case .serverError(let statusCode, _):
+            // Retry transient transport/server failures, but do not redeliver
+            // malformed or rejected requests forever.
+            return statusCode == 408 || statusCode == 429 || (500...599).contains(statusCode)
         default:
             return false
         }

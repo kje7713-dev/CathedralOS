@@ -90,8 +90,9 @@ User taps "Subscribe" / "Buy Credits"
        └─ StoreKitEntitlementService.purchase(product)
             └─ product.purchase() → VerificationResult<Transaction>
                  └─ .verified(transaction):
-                      ├─ refreshEntitlement()        ← local StoreKit (fast UI update)
-                      ├─ validateWithBackend([transaction])
+                      ├─ refreshEntitlement()        ← subscription UI projection only
+                      ├─ canonical transaction processor:
+                      │    ├─ validateWithBackend([transaction])
                       │    └─ BackendStoreKitValidationService.validateTransactions([tx])
                       │         └─ POST sync-storekit-entitlement
                       │              {mode: "validate_transaction",
@@ -104,21 +105,27 @@ User taps "Subscribe" / "Buy Credits"
                       │                   └─ Backend: insert user_credit_ledger
                       │                   └─ Backend: insert app_store_transactions
                       │                   └─ Returns: {planName, isPro, availableCredits, ...}
-                      └─ transaction.finish()
-                 └─ .unverified → throw .verificationFailed (no grant)
+                      │    └─ transaction.finish() only after backend success
+                 └─ .unverified → no grant and no finish
 
 User taps "Restore Purchases"
   └─ StoreKitEntitlementService.restorePurchases()
        └─ AppStore.sync()
-       └─ refreshEntitlement()
-       └─ validateWithBackend(allCurrentEntitlementTransactions)
-            └─ Same backend path as above (idempotent for each tx)
+       └─ explicitly drain Transaction.unfinished
+            └─ each verified transaction uses the same canonical processor
+                 ├─ backend grant (idempotent, including already_applied)
+                 └─ finish only after success
+       └─ refreshEntitlement() for subscription UI projection
 
-Backend validation failure (network/server error):
-  └─ backendValidationError is set on the service
-  └─ Local StoreKit state was already applied (UI shows purchase)
-  └─ User can retry; backend credit state may lag until next validation
-  └─ Show a recoverable error (see PaywallView error handling)
+Backend validation failure:
+  ├─ network/transient server failure → leave transaction unfinished;
+  │  StoreKit.updates and a later Restore Purchases retry it
+  └─ terminal rejection/auth/configuration failure → finish without granting,
+     record a diagnostic, and surface the deliberate terminal error
+
+A successful purchase/restore is not turned into a failure when the separate
+credit-state display refresh fails. The UI reports completion with a stale-
+balance message and can refresh later.
 ```
 
 ---
@@ -132,7 +139,8 @@ Backend validation failure (network/server error):
 The iOS client derives entitlement state from StoreKit 2 locally verified transactions.
 
 - Provides **fast UI feedback** after purchase
-- Seeds the local `GenerationCreditState` with plan-appropriate credits
+- Projects subscription state locally for responsive UI
+- Does not reconstruct consumable credit balances from `Transaction.currentEntitlements`
 - Can be bypassed by a determined user (jailbreak, network proxy, etc.)
 - **Must NOT be trusted for billing enforcement**
 

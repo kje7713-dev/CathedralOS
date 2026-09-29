@@ -698,9 +698,12 @@ struct AccountView: View {
             try await entitlementService.restorePurchases()
             entitlementState = entitlementService.entitlementState
             usageLimitService.applyEntitlement(entitlementState)
-            // Overlay with backend-authoritative balance after purchase restore.
-            await refreshBackendCreditState()
-            restoreSuccess = "Purchases restored successfully."
+            // Restore itself succeeded; keep that success separate from a
+            // best-effort balance-display refresh.
+            let refreshed = await refreshBackendCreditState()
+            restoreSuccess = refreshed
+                ? "Purchases restored successfully."
+                : "Purchases restored successfully, but the balance display could not refresh yet."
         } catch {
             restoreError = (error as? StoreKitEntitlementError)?.errorDescription
                 ?? error.localizedDescription
@@ -786,14 +789,18 @@ struct AccountView: View {
 
     /// Fetches the backend-authoritative credit state and applies it to the local service.
     /// Silently ignores errors so that the UI remains functional when the backend is unavailable.
-    private func refreshBackendCreditState() async {
-        guard SupabaseConfiguration.isConfigured else { return }
-        guard authService.authState.isSignedIn else { return }
+    @discardableResult
+    private func refreshBackendCreditState() async -> Bool {
+        guard SupabaseConfiguration.isConfigured else { return false }
+        guard authService.authState.isSignedIn else { return false }
         do {
             let state = try await creditStateService.fetchCreditState()
             usageLimitService.applyBackendCreditState(state)
+            return true
         } catch {
-            // Non-fatal: local state remains in use when backend is unavailable.
+            // Non-fatal: the purchase/restore result remains successful while
+            // the displayed balance is stale until the next refresh.
+            return false
         }
     }
 }

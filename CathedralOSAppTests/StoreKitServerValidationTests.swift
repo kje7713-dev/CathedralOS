@@ -73,6 +73,11 @@ final class StoreKitValidationErrorTests: XCTestCase {
         )
     }
 
+    func testClientErrorIsNotRetryable() {
+        XCTAssertFalse(StoreKitValidationError.serverError(statusCode: 400, message: "bad request").isRetryable)
+        XCTAssertFalse(StoreKitValidationError.serverError(statusCode: 403, message: "rejected").isRetryable)
+    }
+
     func testServerErrorDescriptionIncludesStatusCode() {
         let error = StoreKitValidationError.serverError(statusCode: 402, message: nil)
         XCTAssertTrue(error.errorDescription?.contains("402") ?? false)
@@ -405,5 +410,157 @@ final class CreditStateRefreshAfterValidationTests: XCTestCase {
         // In the production service, purchase() sets backendValidationError on catch.
         // The stub exposes the flag so tests can verify the error path is wired.
         XCTAssertTrue(stub.shouldThrowOnBackendValidation)
+    }
+}
+
+// MARK: - Canonical transaction processing regression tests
+
+final class StoreKitPurchaseMessagingTests: XCTestCase {
+    func testPurchaseRefreshFailureStillReportsCompletedPurchase() {
+        let message = StoreKitPurchaseMessaging.purchaseSuccess(balanceRefreshed: false)
+        XCTAssertTrue(message.contains("completed successfully"))
+        XCTAssertTrue(message.contains("could not refresh"))
+        XCTAssertFalse(message.lowercased().contains("purchase failed"))
+    }
+
+    func testRestoreRefreshFailureStillReportsCompletedRestore() {
+        let message = StoreKitPurchaseMessaging.restoreSuccess(balanceRefreshed: false)
+        XCTAssertTrue(message.contains("restored successfully"))
+        XCTAssertTrue(message.contains("could not refresh"))
+    }
+}
+
+final class StoreKitTransactionProcessorTests: XCTestCase {
+
+    private let identity = StoreKitTransactionIdentity(
+        transactionID: "txn-credit-pack-001",
+        productID: StoreKitProductIDs.creditsSmall
+    )
+
+    func testValidationFailurePreventsFinish() async {
+        let processor = StoreKitTransactionProcessor()
+        var finishCount = 0
+
+        let result = await processor.process(
+            identity: identity,
+            validate: {
+                throw StoreKitValidationError.serverError(statusCode: 503, message: "offline")
+            },
+            finish: { finishCount += 1 }
+        )
+
+        XCTAssertEqual(result.disposition, .retryableFailure)
+        XCTAssertEqual(finishCount, 0)
+    }
+
+    func testRetryableFailureLeavesConsumableTransactionRecoverable() async {
+        let processor = StoreKitTransactionProcessor()
+        var finishCount = 0
+        var validationCount = 0
+
+        let first = await processor.process(
+            identity: identity,
+            validate: {
+                validationCount += 1
+                throw StoreKitValidationError.networkError(NSError(domain: "offline", code: 1))
+            },
+            finish: { finishCount += 1 }
+        )
+
+        XCTAssertEqual(first.disposition, .retryableFailure)
+        XCTAssertEqual(finishCount, 0)
+        XCTAssertEqual(validationCount, 1)
+    }
+
+    func testSuccessfulBackendValidationFinishesAfterGrant() async {
+        let processor = StoreKitTransactionProcessor()
+        var events: [String] = []
+
+        let result = await processor.process(
+            identity: identity,
+            validate: {
+                events.append("validated")
+                return .stubFree(creditBalance: 20)
+            },
+            finish: { events.append("finished") }
+        )
+
+        XCTAssertEqual(result.disposition, .finished)
+        XCTAssertEqual(result.response?.purchasedCreditBalance, 20)
+        XCTAssertEqual(events, ["validated", "finished"])
+    }
+
+    func testAlreadyAppliedBackendResponseFinishesTransaction() async {
+        let processor = StoreKitTransactionProcessor()
+        var finishCount = 0
+
+        let result = await processor.process(
+            identity: identity,
+            validate: { .stubFree(alreadyApplied: true, creditBalance: 20) },
+            finish: { finishCount += 1 }
+        )
+
+        XCTAssertEqual(result.disposition, .finished)
+        XCTAssertTrue(result.response?.alreadyApplied ?? false)
+        XCTAssertEqual(finishCount, 1)
+    }
+
+    func testTerminalValidationErrorFinishesAndPreservesDiagnostic() async {
+        let processor = StoreKitTransactionProcessor()
+        var finishCount = 0
+
+        let result = await processor.process(
+            identity: identity,
+            validate: { throw StoreKitValidationError.transactionRejected("refunded") },
+            finish: { finishCount += 1 }
+        )
+
+        XCTAssertEqual(result.disposition, .terminalFailure)
+        XCTAssertEqual(finishCount, 1)
+    }
+
+    func testConcurrentRecoverySharesOneValidationAndFinish() async {
+        let processor = StoreKitTransactionProcessor()
+        let counter = LockedCounter()
+
+        async let first = processor.process(
+            identity: identity,
+            validate: {
+                counter.increment()
+                try? await Task.sleep(nanoseconds: 1_000_000)
+                return .stubFree(creditBalance: 20)
+            },
+            finish: { counter.increment() }
+        )
+        async let second = processor.process(
+            identity: identity,
+            validate: {
+                counter.increment()
+                return .stubFree(creditBalance: 20)
+            },
+            finish: { counter.increment() }
+        )
+
+        let results = await (first, second)
+        XCTAssertEqual(results.0.disposition, .finished)
+        XCTAssertEqual(results.1.disposition, .finished)
+        XCTAssertEqual(counter.value, 2, "one validation and one finish should occur")
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
     }
 }

@@ -11,8 +11,8 @@ struct CathedralOSApp: App {
     // Starts at app launch to handle renewals, revocations, and refunds
     // while the app is running. The listener runs for the lifetime of the app.
     //
-    // ⚠️ Authority: entitlement state derived here is client-side only.
-    // Backend receipt validation must be added before production monetized release.
+    // Backend validation and the credit ledger are authoritative for monetized
+    // purchases; local StoreKit state is only a responsive UI projection.
     // See docs/storekit-entitlements.md.
 
     init() {

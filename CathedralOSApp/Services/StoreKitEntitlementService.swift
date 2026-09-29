@@ -88,6 +88,75 @@ enum StoreKitEntitlementError: Error, LocalizedError {
     }
 }
 
+// MARK: - Canonical transaction grant pipeline
+
+/// The smallest transaction identity needed to coordinate StoreKit recovery and
+/// to test the backend-grant-before-finish invariant without live StoreKit.
+struct StoreKitTransactionIdentity: Hashable {
+    let transactionID: String
+    let productID: String
+}
+
+enum StoreKitTransactionProcessingDisposition: Equatable {
+    case finished
+    case retryableFailure
+    case terminalFailure
+}
+
+struct StoreKitTransactionProcessingResult {
+    let disposition: StoreKitTransactionProcessingDisposition
+    let response: StoreKitValidationResponse?
+    let error: Error?
+}
+
+/// Serializes work for one transaction ID. Purchase(), Transaction.updates,
+/// and restore can all observe the same unfinished transaction; the first
+/// caller owns the backend call and the other callers await its result.
+actor StoreKitTransactionProcessor {
+    private var inFlight: [String: Task<StoreKitTransactionProcessingResult, Never>] = [:]
+
+    func process(
+        identity: StoreKitTransactionIdentity,
+        validate: @escaping () async throws -> StoreKitValidationResponse,
+        finish: @escaping () async -> Void
+    ) async -> StoreKitTransactionProcessingResult {
+        if let existing = inFlight[identity.transactionID] {
+            return await existing.value
+        }
+
+        let task = Task {
+            do {
+                let response = try await validate()
+                // A fresh grant and an idempotent already_applied response both
+                // prove that the backend ledger accepted this transaction.
+                await finish()
+                return StoreKitTransactionProcessingResult(
+                    disposition: .finished,
+                    response: response,
+                    error: nil
+                )
+            } catch {
+                let retryable = (error as? StoreKitValidationError)?.isRetryable ?? false
+                if !retryable {
+                    // Terminal rejection/configuration/auth errors must not be
+                    // redelivered forever. No credit was granted, so finish is
+                    // safe and the diagnostic remains available to the caller.
+                    await finish()
+                }
+                return StoreKitTransactionProcessingResult(
+                    disposition: retryable ? .retryableFailure : .terminalFailure,
+                    response: nil,
+                    error: error
+                )
+            }
+        }
+        inFlight[identity.transactionID] = task
+        let result = await task.value
+        inFlight.removeValue(forKey: identity.transactionID)
+        return result
+    }
+}
+
 // MARK: - StoreKitEntitlementService
 // Production implementation using StoreKit 2.
 //
@@ -127,6 +196,8 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
     // MARK: Private
 
     private var transactionListenerTask: Task<Void, Never>?
+    private let transactionProcessor = StoreKitTransactionProcessor()
+    private(set) var terminalTransactionErrors: [String: String] = [:]
 
     // MARK: Init / deinit
 
@@ -157,22 +228,64 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
 
     /// Processes a single verified/unverified transaction result from the update stream.
     private func handleVerificationResult(_ result: VerificationResult<Transaction>) async {
-        switch result {
-        case .unverified:
-            // Do not grant entitlement for unverified transactions.
-            break
-        case .verified(let transaction):
-            // Refresh local entitlement to reflect the new transaction state.
+        guard case .verified = result else {
+            // Do not grant or finish unverified transactions.
+            return
+        }
+        _ = await processVerifiedTransaction(result, refreshLocalState: true)
+    }
+
+    private enum VerifiedTransactionOutcome {
+        case succeeded(StoreKitValidationResponse)
+        case retryableFailure(StoreKitValidationError)
+        case terminalFailure(StoreKitValidationError)
+    }
+
+    /// The one production path used by direct purchase, updates, and restore.
+    /// It validates first, finishes only after backend success, and records
+    /// terminal failures so support can distinguish them from retryable outages.
+    private func processVerifiedTransaction(
+        _ result: VerificationResult<Transaction>,
+        refreshLocalState: Bool
+    ) async -> VerifiedTransactionOutcome {
+        guard case .verified(let transaction) = result else {
+            return .terminalFailure(.unverifiedTransaction)
+        }
+
+        if refreshLocalState {
             await refreshEntitlement()
-            // Keep the transaction unfinished until backend validation succeeds.
-            // StoreKit will redeliver it for a later retry if the server is down.
-            do {
-                _ = try await validateWithBackend([result])
+        }
+
+        let identity = StoreKitTransactionIdentity(
+            transactionID: String(transaction.id),
+            productID: transaction.productID
+        )
+        let processing = await transactionProcessor.process(
+            identity: identity,
+            validate: { [weak self] in
+                guard let self else { throw StoreKitValidationError.notConfigured }
+                return try await self.validateWithBackend([result])
+            },
+            finish: {
                 await transaction.finish()
-            } catch {
-                backendValidationError = (error as? StoreKitValidationError)?.errorDescription
-                    ?? error.localizedDescription
             }
+        )
+
+        switch processing.disposition {
+        case .finished:
+            if let response = processing.response {
+                return .succeeded(response)
+            }
+            return .succeeded(.stubFree())
+        case .retryableFailure:
+            let error = normalizedStoreKitValidationError(processing.error)
+            backendValidationError = error.errorDescription
+            return .retryableFailure(error)
+        case .terminalFailure:
+            let error = normalizedStoreKitValidationError(processing.error)
+            terminalTransactionErrors[String(transaction.id)] = error.errorDescription ?? "Unknown terminal validation error."
+            backendValidationError = error.errorDescription
+            return .terminalFailure(error)
         }
     }
 
@@ -202,22 +315,15 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
         switch result {
         case .success(let verification):
             switch verification {
-            case .verified(let transaction):
-                // Update local state immediately for UI responsiveness.
-                await refreshEntitlement()
-                // Validate with backend — this is the authoritative grant.
-                do {
-                    _ = try await validateWithBackend([verification])
-                } catch {
-                    backendValidationError = (error as? StoreKitValidationError)?.errorDescription
-                        ?? error.localizedDescription
-                    // Do not finish: StoreKit will redeliver the verified
-                    // transaction and Restore Purchases can retry it.
+            case .verified:
+                switch await processVerifiedTransaction(verification, refreshLocalState: true) {
+                case .succeeded:
+                    return
+                case .retryableFailure(let error), .terminalFailure(let error):
                     throw StoreKitEntitlementError.backendValidationFailed(
-                        backendValidationError ?? "Backend validation failed."
+                        error.errorDescription ?? "Backend validation failed."
                     )
                 }
-                await transaction.finish()
             case .unverified:
                 // Do not grant entitlement. Server validation would also reject this.
                 throw StoreKitEntitlementError.verificationFailed
@@ -236,31 +342,45 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
 
     func restorePurchases() async throws {
         backendValidationError = nil
-        // AppStore.sync() re-delivers all prior transactions to the update listener
-        // and surfaces them via Transaction.currentEntitlements.
+        // AppStore.sync() makes Apple's recoverable transactions available.
+        // Do not depend on Transaction.updates racing this method: explicitly
+        // drain Transaction.unfinished and run every item through the same
+        // canonical validation -> grant -> finish pipeline.
         try await AppStore.sync()
+
+        var retryableError: StoreKitValidationError?
+        var terminalError: StoreKitValidationError?
+
+        for await result in Transaction.unfinished {
+            guard case .verified = result else {
+                // Unverified transactions are not safe to submit or finish.
+                terminalError = .unverifiedTransaction
+                continue
+            }
+            switch await processVerifiedTransaction(result, refreshLocalState: false) {
+            case .succeeded:
+                break
+            case .retryableFailure(let error):
+                retryableError = retryableError ?? error
+            case .terminalFailure(let error):
+                terminalError = terminalError ?? error
+            }
+        }
+
+        // Subscription projection is still refreshed locally, but consumable
+        // credit balance remains owned by the backend ledger.
         await refreshEntitlement()
 
-        // Collect verified entitlement transactions for backend validation.
-        // Unverified transactions are skipped; the backend would reject them anyway.
-        var verificationResults: [VerificationResult<Transaction>] = []
-        for await result in Transaction.currentEntitlements {
-            if case .verified = result {
-                verificationResults.append(result)
-            }
+        if let error = retryableError ?? terminalError {
+            throw StoreKitEntitlementError.backendValidationFailed(
+                error.errorDescription ?? "Backend validation failed."
+            )
         }
 
-        if !verificationResults.isEmpty {
-            do {
-                _ = try await validateWithBackend(verificationResults)
-            } catch {
-                backendValidationError = (error as? StoreKitValidationError)?.errorDescription
-                    ?? error.localizedDescription
-                throw StoreKitEntitlementError.backendValidationFailed(
-                    backendValidationError ?? "Backend validation failed."
-                )
-            }
-        }
+        // An empty unfinished stream is a valid restore: already-finished
+        // subscriptions are represented by currentEntitlements and do not need
+        // to be re-granted. The explicit drain above is what makes failed
+        // consumable purchases recoverable.
     }
 
     // MARK: - Entitlement Refresh
@@ -331,6 +451,13 @@ final class StoreKitEntitlementService: StoreKitEntitlementServiceProtocol {
         lastBackendValidation = response
         return response
     }
+}
+
+private func normalizedStoreKitValidationError(_ error: Error?) -> StoreKitValidationError {
+    if let error = error as? StoreKitValidationError {
+        return error
+    }
+    return .networkError(error ?? StoreKitValidationError.notConfigured)
 }
 
 // MARK: - StubStoreKitEntitlementService

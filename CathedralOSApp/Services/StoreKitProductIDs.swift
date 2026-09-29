@@ -18,7 +18,7 @@ import Foundation
 // "Run > Options > StoreKit Configuration" setting.
 //
 // ⚠️ Backend authority: StoreKit entitlement is client-side convenience only.
-// The backend must validate transactions server-side before production
+// The backend validates transactions server-side before granting credits.
 // monetized release. See docs/storekit-entitlements.md.
 
 enum StoreKitProductIDs {
