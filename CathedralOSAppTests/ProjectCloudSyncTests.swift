@@ -127,6 +127,19 @@ private final class SpyProjectCloudSyncService: ProjectCloudSyncServiceProtocol 
             duplicateWarnings: []
         )
     }
+
+    @MainActor
+    func reconcileProjectTombstonesBeforeUpload(
+        backupDeletionService: any ProjectBackupDeletionServiceProtocol,
+        in context: ModelContext
+    ) async throws -> ProjectReconciliationReport {
+        ProjectReconciliationReport(
+            deletedCount: 0,
+            deletedLocalIDs: [],
+            deletedLineageIDs: [],
+            skippedBackupFailureIDs: []
+        )
+    }
 }
 
 private final class NoOpProjectOutputSyncService: GenerationOutputSyncServiceProtocol {

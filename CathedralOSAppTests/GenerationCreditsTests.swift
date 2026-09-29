@@ -291,7 +291,15 @@ private final class SpyGenerationService: GenerationService {
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedModelId: String? = nil,
+        pov: String? = nil,
+        sectionTitle: String? = nil,
+        sectionSummary: String? = nil,
+        sectionEntryState: String? = nil,
+        sectionDramaticEvent: String? = nil,
+        sectionResultingChange: String? = nil,
+        sectionTerminalState: String? = nil,
+        outlineSectionID: String? = nil
     ) async throws -> GenerationResponse {
         generateCallCount += 1
         if shouldThrow {
@@ -331,7 +339,7 @@ private final class ControllableUsageLimitService: UsageLimitServiceProtocol {
         return preflightResult
     }
 
-    func recordSuccessfulGeneration(creditCost: Int, lengthMode: GenerationLengthMode) {
+    func recordSuccessfulGeneration(creditCost: Double, lengthMode: GenerationLengthMode) {
         recordCallCount += 1
         let newCredits = max(0, currentState.availableCredits - creditCost)
         currentState = GenerationCreditState(

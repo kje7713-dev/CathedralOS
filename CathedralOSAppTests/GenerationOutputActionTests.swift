@@ -26,7 +26,15 @@ final class MockOutputActionService: GenerationService {
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedModelId: String? = nil,
+        pov: String? = nil,
+        sectionTitle: String? = nil,
+        sectionSummary: String? = nil,
+        sectionEntryState: String? = nil,
+        sectionDramaticEvent: String? = nil,
+        sectionResultingChange: String? = nil,
+        sectionTerminalState: String? = nil,
+        outlineSectionID: String? = nil
     ) async throws -> GenerationResponse {
         throw GenerationServiceError.endpointNotConfigured
     }
@@ -41,7 +49,10 @@ final class MockOutputActionService: GenerationService {
         selectedContainer: Container? = nil,
         selectedPOV: POV? = nil,
         terminalBeat: String? = nil,
-        selectedModelId: String? = nil
+        selectedModelId: String? = nil,
+        pov: String? = nil,
+        sectionTitle: String? = nil,
+        sectionSummary: String? = nil
     ) async throws -> GenerationResponse {
         actionCallCount += 1
         lastAction = action
