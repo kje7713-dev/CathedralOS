@@ -128,7 +128,8 @@ final class GenerationResponseCreditFieldsTests: XCTestCase {
     }
 
     func testBackendCreditStateDecodesFractionalBalancesAndLedgerDelta() throws {
-        let data = """        {"planName":"free","isPro":false,"monthlyCreditAllowance":90.72848,"purchasedCreditBalance":5.5,"availableCredits":96.22848,"isAdmin":false,"recentLedger":[{"id":"ledger-1","delta":-9.27152,"reason":"generation_charge","created_at":"2026-09-15T18:00:00Z"}]}
+        let data = """
+        {"planName":"free","isPro":false,"monthlyCreditAllowance":90.72848,"purchasedCreditBalance":5.5,"availableCredits":96.22848,"isAdmin":false,"recentLedger":[{"id":"ledger-1","delta":-9.27152,"reason":"generation_charge","created_at":"2026-09-15T18:00:00Z"}]}
         """.data(using: .utf8)!
         let state = try JSONDecoder().decode(BackendCreditState.self, from: data)
         XCTAssertEqual(state.monthlyCreditAllowance, 90.72848, accuracy: 0.000001)

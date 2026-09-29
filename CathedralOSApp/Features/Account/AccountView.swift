@@ -84,17 +84,18 @@ struct AccountView: View {
             .task {
                 await authService.checkSession()
                 authState = authService.authState
-                // Refresh StoreKit entitlement and seed local credit state.
+                // Refresh StoreKit subscription projection. Credit state is
+                // only changed by a successful backend fetch below.
                 await entitlementService.refreshEntitlement()
                 entitlementState = entitlementService.entitlementState
-                usageLimitService.applyEntitlement(entitlementState)
                 // Overlay with backend-authoritative balance when signed in.
                 await refreshBackendCreditState()
             }
             .sheet(isPresented: $showPaywall) {
                 PaywallView(
                     entitlementService: entitlementService,
-                    usageLimitService: usageLimitService
+                    usageLimitService: usageLimitService,
+                    creditStateService: creditStateService
                 )
                 .onDisappear {
                     // Refresh entitlement state after paywall is dismissed.
@@ -336,7 +337,7 @@ struct AccountView: View {
 
                 if state.source != .backend {
                     #if DEBUG
-                    Text("Credit tracking is local only. Backend enforcement is required before public monetized release.")
+                    Text("Credit tracking is cached locally for display; backend credit state is authoritative.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -696,10 +697,14 @@ struct AccountView: View {
         do {
             try await entitlementService.restorePurchases()
             entitlementState = entitlementService.entitlementState
-            usageLimitService.applyEntitlement(entitlementState)
-            // Overlay with backend-authoritative balance after purchase restore.
-            await refreshBackendCreditState()
-            restoreSuccess = "Purchases restored successfully."
+            // StoreKit may update subscription UI, but never overwrites the
+            // backend-owned generation-credit snapshot.
+            // Restore itself succeeded; keep that success separate from a
+            // best-effort balance-display refresh.
+            let refreshed = await refreshBackendCreditState()
+            restoreSuccess = refreshed
+                ? "Purchases restored successfully."
+                : "Purchases restored successfully, but the balance display could not refresh yet."
         } catch {
             restoreError = (error as? StoreKitEntitlementError)?.errorDescription
                 ?? error.localizedDescription
@@ -785,14 +790,18 @@ struct AccountView: View {
 
     /// Fetches the backend-authoritative credit state and applies it to the local service.
     /// Silently ignores errors so that the UI remains functional when the backend is unavailable.
-    private func refreshBackendCreditState() async {
-        guard SupabaseConfiguration.isConfigured else { return }
-        guard authService.authState.isSignedIn else { return }
+    @discardableResult
+    private func refreshBackendCreditState() async -> Bool {
+        guard SupabaseConfiguration.isConfigured else { return false }
+        guard authService.authState.isSignedIn else { return false }
         do {
             let state = try await creditStateService.fetchCreditState()
             usageLimitService.applyBackendCreditState(state)
+            return true
         } catch {
-            // Non-fatal: local state remains in use when backend is unavailable.
+            // Non-fatal: the purchase/restore result remains successful while
+            // the displayed balance is stale until the next refresh.
+            return false
         }
     }
 }

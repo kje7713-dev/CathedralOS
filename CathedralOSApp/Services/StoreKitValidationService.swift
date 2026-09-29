@@ -56,6 +56,11 @@ struct StoreKitValidationResponse: Decodable, Equatable {
 
 // MARK: - StoreKitValidationError
 
+enum StoreKitValidationDisposition: Equatable {
+    case retryLater
+    case permanentRejection
+}
+
 enum StoreKitValidationError: Error, LocalizedError {
     case notConfigured
     case notSignedIn
@@ -65,7 +70,9 @@ enum StoreKitValidationError: Error, LocalizedError {
     case networkError(Error)
     case serverError(statusCode: Int, message: String?)
     case decodingError(Error)
-    case transactionRejected(String)
+    /// Only emitted for an explicit Apple/backend-confirmed permanent
+    /// rejection (for example, a revoked transaction or bundle mismatch).
+    case permanentTransactionRejection(String)
 
     var errorDescription: String? {
         switch self {
@@ -87,20 +94,27 @@ enum StoreKitValidationError: Error, LocalizedError {
             return base
         case .decodingError(let underlying):
             return "Could not parse validation response: \(underlying.localizedDescription)"
-        case .transactionRejected(let reason):
-            return "Purchase was rejected by the server: \(reason)"
+        case .permanentTransactionRejection(let reason):
+            return "Purchase was permanently rejected by the server: \(reason)"
         }
     }
 
-    /// True when the user should be shown a generic retry prompt.
-    var isRetryable: Bool {
+    /// Classification is deliberately conservative. Unknown and all
+    /// non-explicit errors remain recoverable so a paid Apple transaction is
+    /// never lost because the client guessed that a failure was terminal.
+    var disposition: StoreKitValidationDisposition {
         switch self {
-        case .networkError, .serverError:
-            return true
+        case .permanentTransactionRejection:
+            return .permanentRejection
         default:
-            return false
+            return .retryLater
         }
     }
+
+    var isRetryable: Bool {
+        disposition == .retryLater
+    }
+
 }
 
 // MARK: - StoreKitValidationServiceProtocol
@@ -272,11 +286,11 @@ final class BackendStoreKitValidationService: StoreKitValidationServiceProtocol 
                    let detail = json["detail"] as? String ?? json["error"] as? String {
                     message = detail
                 }
-                // Surface rejection messages as a distinct error type.
-                if statusCode == 402 || statusCode == 403 {
-                    throw StoreKitValidationError.transactionRejected(
-                        message ?? "Transaction was rejected by the server."
-                    )
+                // Only known, explicit permanent Apple/backend outcomes may
+                // finish without a grant. Verification outages, auth/config
+                // failures, and unknown 4xx responses remain recoverable.
+                if let message, isExplicitPermanentTransactionRejection(message) {
+                    throw StoreKitValidationError.permanentTransactionRejection(message)
                 }
                 throw StoreKitValidationError.serverError(statusCode: statusCode, message: message)
             }
@@ -288,6 +302,12 @@ final class BackendStoreKitValidationService: StoreKitValidationServiceProtocol 
             throw StoreKitValidationError.decodingError(error)
         }
     }
+}
+
+private func isExplicitPermanentTransactionRejection(_ message: String) -> Bool {
+    let normalized = message.lowercased()
+    return normalized.contains("transaction has been revoked")
+        || normalized.contains("bundle id does not match")
 }
 
 // MARK: - StubStoreKitValidationService

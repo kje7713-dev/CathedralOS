@@ -20,15 +20,11 @@ enum StoreKitPlan: String, Equatable {
 }
 
 // MARK: - StoreKitEntitlementState
-// Client-side entitlement derived from StoreKit 2 verified transactions.
+// Local subscription projection derived from StoreKit 2 verified transactions.
 //
-// ⚠️ Authority note: this state is LOCAL and must not be used as billing truth.
-// The backend MUST enforce credit balances server-side before any monetized
-// public release. See docs/storekit-entitlements.md for the full authority model.
-//
-// This model exists so the UI can reflect purchase state immediately after a
-// transaction, and so the local credit scaffold can be seeded with appropriate
-// initial values while backend enforcement is being built.
+// This state is for responsive UI only. The backend validates purchases and owns
+// the authoritative generation-credit ledger; consumable balances must not be
+// reconstructed from StoreKit entitlements. See docs/storekit-entitlements.md.
 
 struct StoreKitEntitlementState: Equatable {
 

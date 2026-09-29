@@ -437,6 +437,7 @@ final class RecipeReferenceReconcilerTests: XCTestCase {
             XCTAssertTrue(missing.contains { $0.entityClass == .character && $0.id == foreignCharacter.id })
         }
     }
+}
 
 // MARK: - Test helpers
 

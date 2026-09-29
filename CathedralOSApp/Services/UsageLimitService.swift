@@ -21,10 +21,10 @@ enum PreflightResult: Equatable {
 // MARK: - UsageLimitServiceProtocol
 // Primary interface for generation credit checking and usage recording.
 //
-// ⚠️ Scaffold only: this service enforces credits locally.
-// Backend enforcement is required before public monetized release.
-// StoreKit entitlement is fed in via `applyEntitlement(_:)` to seed local state;
-// the backend must still validate before trusting paid credits in production.
+// Local state is a cached UX snapshot. Backend enforcement and
+// `applyBackendCreditState(_:)` are authoritative for monetized credits.
+// StoreKit entitlement projection must not be used to reconstruct consumable
+// balances in production purchase/restore paths.
 // See docs/storekit-entitlements.md.
 
 protocol UsageLimitServiceProtocol: AnyObject {
@@ -48,14 +48,10 @@ protocol UsageLimitServiceProtocol: AnyObject {
     ///   - lengthMode: The output length mode used for this generation.
     func recordSuccessfulGeneration(creditCost: Double, lengthMode: GenerationLengthMode)
 
-    /// Seeds local credit state from a verified StoreKit entitlement.
-    ///
-    /// Call this after a purchase, restore, or app-foreground entitlement refresh.
-    /// The entitlement grants the plan's monthly credit allowance plus any
-    /// purchased credit pack balance. Existing usage counters are preserved.
-    ///
-    /// ⚠️ This is client-side convenience only — the backend must independently
-    /// validate entitlement before honoring credits in a monetized release.
+    /// Applies a local StoreKit projection for legacy/local-only callers.
+    /// Production purchase, restore, and foreground paths must use
+    /// `applyBackendCreditState(_:)` instead so consumable balances remain
+    /// backend-authoritative.
     func applyEntitlement(_ entitlement: StoreKitEntitlementState)
 
     /// Replaces local credit state with the backend-authoritative values.

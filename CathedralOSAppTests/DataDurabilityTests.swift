@@ -133,6 +133,18 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
         if let restoreError { throw restoreError }
         return restoreResult
     }
+    @MainActor
+    func reconcileProjectTombstonesBeforeUpload(
+        backupDeletionService: any ProjectBackupDeletionServiceProtocol,
+        in context: ModelContext
+    ) async throws -> ProjectReconciliationReport {
+        ProjectReconciliationReport(
+            deletedCount: 0,
+            deletedLocalIDs: [],
+            deletedLineageIDs: [],
+            skippedBackupFailureIDs: []
+        )
+    }
 }
 
 private final class SpyOutputSyncService: GenerationOutputSyncServiceProtocol {

@@ -11,14 +11,28 @@ import StoreKit
 //  - Restore purchases action
 //  - Human-readable error feedback
 //
-// ⚠️ Authority: purchases made here update LOCAL entitlement state only.
-// Backend receipt validation must be added before production monetized release.
-// See docs/storekit-entitlements.md for the full authority model.
+// Backend validation and the credit ledger are authoritative for monetized
+// purchases. Local StoreKit state is only a transient UI projection.
+
+enum StoreKitPurchaseMessaging {
+    static func purchaseSuccess(balanceRefreshed: Bool) -> String {
+        balanceRefreshed
+            ? "Purchase complete. Credits updated."
+            : "Purchase completed successfully, but the balance display could not refresh yet. Use Refresh or Restore Purchases to retry."
+    }
+
+    static func restoreSuccess(balanceRefreshed: Bool) -> String {
+        balanceRefreshed
+            ? "Purchases restored successfully."
+            : "Purchases restored successfully, but the balance display could not refresh yet. Use Refresh or Restore Purchases to retry."
+    }
+}
 
 struct PaywallView: View {
 
     let entitlementService: any StoreKitEntitlementServiceProtocol
     let usageLimitService: any UsageLimitServiceProtocol
+    let creditStateService: any CreditStateServiceProtocol
 
     @Environment(\.dismiss) private var dismiss
 
@@ -40,7 +54,6 @@ struct PaywallView: View {
                     creditPacksSection
                 }
                 restoreSection
-                authorityNoteSection
             }
             .navigationTitle("Upgrade")
             .navigationBarTitleDisplayMode(.large)
@@ -168,17 +181,6 @@ struct PaywallView: View {
         }
     }
 
-    /// Brief note reminding users (and developers) that this is client-side.
-    private var authorityNoteSection: some View {
-        Section {
-            #if DEBUG
-            Text("⚠️ In-app purchase entitlement is client-side only. Backend enforcement is required before production monetized release.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            #endif
-        }
-    }
-
     // MARK: - Purchase Row
 
     @ViewBuilder
@@ -232,14 +234,22 @@ struct PaywallView: View {
         defer { isWorking = false }
         do {
             try await entitlementService.purchase(product)
-            entitlementState = entitlementService.entitlementState
-            // Feed the new entitlement into the local credit scaffold.
-            usageLimitService.applyEntitlement(entitlementState)
-            successMessage = "Purchase complete. Credits updated."
+            // The purchase is already complete once the StoreKit service
+            // returns. A display refresh failure must not make it look failed.
+            do {
+                try await refreshBackendCreditState()
+                successMessage = StoreKitPurchaseMessaging.purchaseSuccess(balanceRefreshed: true)
+            } catch {
+                successMessage = StoreKitPurchaseMessaging.purchaseSuccess(balanceRefreshed: false)
+            }
         } catch StoreKitEntitlementError.userCancelled {
             // User tapped cancel — not an error worth surfacing.
         } catch StoreKitEntitlementError.purchasePending {
             successMessage = "Purchase is pending approval. Credits will be granted once approved."
+        } catch StoreKitEntitlementError.backendValidationFailed {
+            successMessage = "Your purchase was completed, but StoryDonkey couldn't update your credits yet. Use Restore Purchases to retry."
+        } catch StoreKitEntitlementError.permanentTransactionRejection {
+            actionError = "Purchase was rejected by the server and was not credited. Contact support if you believe this is incorrect."
         } catch {
             actionError = (error as? StoreKitEntitlementError)?.errorDescription
                 ?? error.localizedDescription
@@ -253,10 +263,16 @@ struct PaywallView: View {
         defer { isRestoring = false }
         do {
             try await entitlementService.restorePurchases()
-            entitlementState = entitlementService.entitlementState
-            // Feed restored entitlement into the local credit scaffold.
-            usageLimitService.applyEntitlement(entitlementState)
-            successMessage = "Purchases restored successfully."
+            do {
+                try await refreshBackendCreditState()
+                successMessage = StoreKitPurchaseMessaging.restoreSuccess(balanceRefreshed: true)
+            } catch {
+                successMessage = StoreKitPurchaseMessaging.restoreSuccess(balanceRefreshed: false)
+            }
+        } catch StoreKitEntitlementError.backendValidationFailed {
+            successMessage = "The restore could not finish yet because backend validation is recoverable. Use Restore Purchases to retry."
+        } catch StoreKitEntitlementError.permanentTransactionRejection {
+            actionError = "A restored transaction was permanently rejected by the server and was not credited. Contact support if you believe this is incorrect."
         } catch {
             actionError = (error as? StoreKitEntitlementError)?.errorDescription
                 ?? error.localizedDescription
@@ -264,6 +280,12 @@ struct PaywallView: View {
     }
 
     // MARK: - Helpers
+
+    private func refreshBackendCreditState() async throws {
+        let state = try await creditStateService.fetchCreditState()
+        usageLimitService.applyBackendCreditState(state)
+        entitlementState = entitlementService.entitlementState
+    }
 
     private func shortDate(_ date: Date) -> String {
         let formatter = DateFormatter()

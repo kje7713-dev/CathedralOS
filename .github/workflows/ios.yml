@@ -63,3 +63,13 @@ jobs:
             -sdk iphonesimulator \
             -destination "$DESTINATION" \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: StoreKit regression XCTest suites
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project CathedralOSApp.xcodeproj \
+            -scheme CathedralOSStoreKitTests \
+            -sdk iphonesimulator \
+            -destination "$DESTINATION" \
+            CODE_SIGNING_ALLOWED=NO

@@ -1,5 +1,19 @@
 import XCTest
+import SwiftData
 @testable import CathedralOSApp
+
+private func makeProjectSchemaTestContext() throws -> ModelContext {
+    let schema = Schema([
+        StoryProject.self,
+        PromptPack.self,
+        StoryArc.self,
+        Outline.self,
+        OutlineSection.self
+    ])
+    let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+    let container = try ModelContainer(for: schema, configurations: [configuration])
+    return ModelContext(container)
+}
 
 final class ProjectSchemaRoundTripTests: XCTestCase {
 
@@ -7,7 +21,8 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
         let original = StoryProject(name: "Lineage")
         let lineageID = try XCTUnwrap(original.lineageID)
 
-        let payload = ProjectSchemaTemplateBuilder.build(project: original)
+        let context = try makeProjectSchemaTestContext()
+        let payload = ProjectSchemaTemplateBuilder.build(project: original, modelContext: context)
         let restored = ProjectImportMapper.map(payload)
 
         XCTAssertEqual(payload.project.lineageID, lineageID.uuidString)
@@ -32,7 +47,10 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             aftertastes: [],
             relationships: [],
             themeQuestions: [],
-            motifs: []
+            motifs: [],
+            storyArcs: [],
+            outlines: [],
+            promptPacks: []
         )
 
         XCTAssertEqual(ProjectImportMapper.map(payload).lineageID, projectID)
@@ -362,7 +380,10 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             aftertastes: [],
             relationships: [],
             themeQuestions: [],
-            motifs: []
+            motifs: [],
+            storyArcs: [],
+            outlines: [],
+            promptPacks: []
         )
         let json = encodeToJSON(payload)
         let result = ProjectImportValidator.validate(jsonString: json)
@@ -387,7 +408,10 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             aftertastes: [],
             relationships: [],
             themeQuestions: [],
-            motifs: []
+            motifs: [],
+            storyArcs: [],
+            outlines: [],
+            promptPacks: []
         )
         let json = encodeToJSON(payload)
         let result = ProjectImportValidator.validate(jsonString: json)
@@ -412,7 +436,10 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             aftertastes: [],
             relationships: [],
             themeQuestions: [],
-            motifs: []
+            motifs: [],
+            storyArcs: [],
+            outlines: [],
+            promptPacks: []
         )
         let json = encodeToJSON(payload)
         let result = ProjectImportValidator.validate(jsonString: json)
@@ -500,7 +527,10 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             aftertastes: [],
             relationships: [],
             themeQuestions: [],
-            motifs: []
+            motifs: [],
+            storyArcs: [],
+            outlines: [],
+            promptPacks: []
         )
 
         let project = ProjectImportMapper.map(payload)
@@ -542,7 +572,10 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
             aftertastes: [makeAftertastePayload()],
             relationships: [makeRelationshipPayload(source: charID1, target: charID2)],
             themeQuestions: [makeThemePayload()],
-            motifs: [makeMotifPayload()]
+            motifs: [makeMotifPayload()],
+            storyArcs: [],
+            outlines: [],
+            promptPacks: []
         )
 
         let project = ProjectImportMapper.map(payload)
@@ -574,7 +607,10 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
                 makeRelationshipPayload(source: unknownID, target: knownID, name: "Rel B")
             ],
             themeQuestions: [],
-            motifs: []
+            motifs: [],
+            storyArcs: [],
+            outlines: [],
+            promptPacks: []
         )
 
         let project = ProjectImportMapper.map(payload)
@@ -619,7 +655,8 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
         motif.meaning = "Fragility of trust"
         originalProject.motifs = [motif]
 
-        let exported = ProjectSchemaTemplateBuilder.build(project: originalProject)
+        let context = try! makeProjectSchemaTestContext()
+        let exported = ProjectSchemaTemplateBuilder.build(project: originalProject, modelContext: context)
         let reimported = ProjectImportMapper.map(exported)
 
         XCTAssertEqual(reimported.name, "Round Trip Project")

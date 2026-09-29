@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import CathedralOSApp
 
 final class AudienceControlsTests: XCTestCase {
@@ -33,7 +34,8 @@ final class AudienceControlsTests: XCTestCase {
         project.contentRating = "pg_13"
         project.audienceNotes = "Teen protagonists only."
 
-        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let context = try makeAudienceControlsTestContext()
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
 
         XCTAssertEqual(payload.project.readingLevel, "young_adult")
         XCTAssertEqual(payload.project.contentRating, "pg_13")
@@ -46,7 +48,8 @@ final class AudienceControlsTests: XCTestCase {
         project.contentRating = "r"
         project.audienceNotes = "Dark themes allowed."
 
-        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let context = try makeAudienceControlsTestContext()
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(payload)
@@ -241,7 +244,8 @@ final class AudienceControlsTests: XCTestCase {
         project.contentRating = "pg_13"
         project.audienceNotes = "No adult content."
 
-        let payload = ProjectSchemaTemplateBuilder.build(project: project)
+        let context = try makeAudienceControlsTestContext()
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(payload)
@@ -252,4 +256,26 @@ final class AudienceControlsTests: XCTestCase {
         XCTAssertEqual(imported.contentRating, "pg_13")
         XCTAssertEqual(imported.audienceNotes, "No adult content.")
     }
+}
+
+private func makeAudienceControlsTestContext() throws -> ModelContext {
+    let schema = Schema([
+        StoryProject.self,
+        Outline.self,
+        OutlineSection.self,
+        ProjectSetting.self,
+        StoryCharacter.self,
+        StorySpark.self,
+        Aftertaste.self,
+        PromptPack.self,
+        StoryArc.self,
+        StoryArcBeat.self,
+        StoryRelationship.self,
+        ThemeQuestion.self,
+        Motif.self,
+        GenerationOutput.self
+    ])
+    let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+    let container = try ModelContainer(for: schema, configurations: configuration)
+    return ModelContext(container)
 }
