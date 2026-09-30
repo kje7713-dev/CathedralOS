@@ -344,7 +344,7 @@ final class ProjectCloudSyncTests: XCTestCase {
                 return (response, Data(#"[{"id":"\#(rowID)"}]"#.utf8))
             }
             XCTAssertEqual(queryItems.first(where: { $0.name == "id" })?.value, "eq.\(rowID)")
-            return (response, Data("[{\"deleted_count\":0}]".utf8))
+            return (response, Data("[]".utf8))
         }
 
         let service = ProjectCloudSyncService(
@@ -418,8 +418,9 @@ final class ProjectCloudSyncTests: XCTestCase {
                     Data(#"[{"id":"\#(snapshotRowID)","user_id":"\#(userID)","local_project_id":"\#(projectID.uuidString)","snapshot_json":{"project":{"id":"\#(projectID.uuidString)"}}}]"#.utf8)
                 )
             }
-            XCTAssertEqual(request.httpMethod, "DELETE")
-            return (response, Data("[{\"deleted_count\":0}]".utf8))
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertTrue(request.url?.path.hasSuffix("/rest/v1/rpc/delete_project_lineage") == true)
+            return (response, Data("[{\"deleted_count\":0,\"deletion_confirmed\":false}]".utf8))
         }
 
         let cloudSyncService = ProjectCloudSyncService(
@@ -464,132 +465,42 @@ final class ProjectCloudSyncTests: XCTestCase {
         let projectID = project.id
         let fixtureContext = ModelContext(try makeProjectContainer())
         let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
-        let authService = MockProjectCloudSyncAuthService(
-            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
-            accessToken: "test-auth-token"
-        )
-        let tombstoneService = MockProjectTombstoneService()
-        let context = ModelContext(try makeProjectContainer())
-        context.insert(project)
-        try context.save()
-        var deleteRequestCount = 0
-
+        let authService = MockProjectCloudSyncAuthService(authState: .signedIn(AuthUser(id: userID, email: nil)), accessToken: "test-auth-token")
+        let tombstones = MockProjectTombstoneService()
+        var deleteCount = 0
         ProjectCloudSyncURLProtocol.requestHandler = { request in
-            let response = HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            if request.httpMethod == "DELETE" {
-                deleteRequestCount += 1
-                return (response, Data("[{\"deleted_count\":0}]".utf8))
-            }
-            return (
-                response,
-                try self.makeIdentityPreflightResponse(rows: [
-                    (UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, payload),
-                    (UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, payload)
-                ])
-            )
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            if request.httpMethod == "DELETE" { deleteCount += 1 }
+            return (response, try self.makeIdentityPreflightResponse(rows: [
+                (UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, payload),
+                (UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, payload)
+            ]))
         }
-
-        let cloudSyncService = ProjectCloudSyncService(
-            authService: authService,
-            session: makeSession(),
-            configuration: .makeForTesting(),
-            tombstoneService: tombstoneService
-        )
-        let deletionService = ProjectDeletionService(
-            authService: authService,
-            cloudSyncService: cloudSyncService,
-            tombstoneService: tombstoneService
-        )
-
-        do {
-            try await deletionService.deleteEverywhere(project: project, context: context)
-            XCTFail("Expected ambiguous drifted snapshots to fail deletion")
-        } catch let error as ProjectDeletionError {
-            guard case .syncError(let underlying) = error,
-                  let cloudError = underlying as? ProjectCloudSyncError,
-                  case .ambiguousSnapshotIdentity = cloudError else {
-                XCTFail("Expected ambiguousSnapshotIdentity, got \(error)")
-                return
-            }
-        }
-
-        XCTAssertEqual(deleteRequestCount, 0)
-        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.id), [projectID])
+        let service = ProjectCloudSyncService(authService: authService, session: makeSession(), configuration: .makeForTesting(), tombstoneService: tombstones)
+        do { try await service.deleteSnapshot(forLocalProjectID: projectID.uuidString, matching: payload); XCTFail("Expected ambiguity") }
+        catch let error as ProjectCloudSyncError { guard case .ambiguousSnapshotIdentity = error else { XCTFail("Expected ambiguousSnapshotIdentity, got \(error)"); return } }
+        XCTAssertEqual(deleteCount, 0)
     }
 
     @MainActor
     func testDeleteEverywhereKeepsLocalProjectWhenCloudRowsHaveNoPlausibleMatch() async throws {
         let userID = "11111111-1111-1111-1111-111111111111"
         let project = StoryProject(name: "Intended project")
-        let projectID = project.id
-        let differentProject = StoryProject(name: "  INTENDED PROJECT  ")
-        differentProject.summary = "Unrelated content"
-        let authService = MockProjectCloudSyncAuthService(
-            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
-            accessToken: "test-auth-token"
-        )
-        let tombstoneService = MockProjectTombstoneService()
         let context = ModelContext(try makeProjectContainer())
-        context.insert(project)
-        try context.save()
-        var deleteRequestCount = 0
-
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let other = StoryProject(name: "Unrelated")
+        let otherPayload = ProjectSchemaTemplateBuilder.build(project: other, modelContext: context)
+        let auth = MockProjectCloudSyncAuthService(authState: .signedIn(AuthUser(id: userID, email: nil)), accessToken: "test-auth-token")
+        var deleteCount = 0
         ProjectCloudSyncURLProtocol.requestHandler = { request in
-            let response = HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            if request.httpMethod == "DELETE" {
-                deleteRequestCount += 1
-                return (response, Data("[{\"deleted_count\":0}]".utf8))
-            }
-            return (
-                response,
-                try self.makeIdentityPreflightResponse(rows: [
-                    (
-                        UUID().uuidString,
-                        userID,
-                        UUID().uuidString,
-                        UUID().uuidString,
-                        ProjectSchemaTemplateBuilder.build(project: differentProject, modelContext: context)
-                    )
-                ])
-            )
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            if request.httpMethod == "DELETE" { deleteCount += 1 }
+            return (response, try self.makeIdentityPreflightResponse(rows: [(UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, otherPayload)]))
         }
-
-        let cloudSyncService = ProjectCloudSyncService(
-            authService: authService,
-            session: makeSession(),
-            configuration: .makeForTesting(),
-            tombstoneService: tombstoneService
-        )
-        let deletionService = ProjectDeletionService(
-            authService: authService,
-            cloudSyncService: cloudSyncService,
-            tombstoneService: tombstoneService
-        )
-
-        do {
-            try await deletionService.deleteEverywhere(project: project, context: context)
-            XCTFail("Expected an unexplained nonempty cloud snapshot set to fail deletion")
-        } catch let error as ProjectDeletionError {
-            guard case .syncError(let underlying) = error,
-                  let cloudError = underlying as? ProjectCloudSyncError,
-                  case .snapshotDeletionNotConfirmed = cloudError else {
-                XCTFail("Expected snapshotDeletionNotConfirmed, got \(error)")
-                return
-            }
-        }
-
-        XCTAssertEqual(deleteRequestCount, 0)
-        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.id), [projectID])
+        let service = ProjectCloudSyncService(authService: auth, session: makeSession(), configuration: .makeForTesting(), tombstoneService: MockProjectTombstoneService())
+        do { try await service.deleteSnapshot(forLocalProjectID: project.id.uuidString, matching: payload); XCTFail("Expected deletion not confirmed") }
+        catch let error as ProjectCloudSyncError { guard case .snapshotDeletionNotConfirmed = error else { XCTFail("Expected snapshotDeletionNotConfirmed, got \(error)"); return } }
+        XCTAssertEqual(deleteCount, 0)
     }
 
     @MainActor
@@ -1384,11 +1295,11 @@ final class ProjectCloudSyncTests: XCTestCase {
     /// Round-trip a payload through the production restore path into a fresh
     /// SwiftData context and return the restored project so the caller can
     /// assert on every field.
-    private func roundTripRestore(
+    private func roundTripRestoreWithContext(
         payload: ProjectImportExportPayload,
         localProjectID: UUID,
         lineageID: UUID
-    ) async throws -> (ProjectRestoreReport, StoryProject?) {
+    ) async throws -> (ProjectRestoreReport, StoryProject?, ModelContext) {
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (localProjectID, lineageID, payload, "2026-09-11T19:00:00Z")
         ])
@@ -1413,7 +1324,18 @@ final class ProjectCloudSyncTests: XCTestCase {
             includeTombstoned: false
         )
         let restoredProject = try restoreContext.fetch(FetchDescriptor<StoryProject>()).first
-        return (report, restoredProject)
+        return (report, restoredProject, restoreContext)
+    }
+
+    private func roundTripRestore(
+        payload: ProjectImportExportPayload,
+        localProjectID: UUID,
+        lineageID: UUID
+    ) async throws -> (ProjectRestoreReport, StoryProject?) {
+        let (report, project, _) = try await roundTripRestoreWithContext(
+            payload: payload, localProjectID: localProjectID, lineageID: lineageID
+        )
+        return (report, project)
     }
 
     /// Build a payload whose child section's `parentID` is rewritten (set to a
@@ -1485,7 +1407,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let expectedArcBeatID = UUID(uuidString: arcBeatIDString)
         let expectedRecipeIDs = try XCTUnwrap(payload.outlines.first?.sections.first?.recipeRequirementIDs)
 
-        let (report, restoredProject) = try await roundTripRestore(
+        let (report, restoredProject, restoreContext) = try await roundTripRestoreWithContext(
             payload: payload, localProjectID: project.id, lineageID: lineageID
         )
         XCTAssertEqual(report.insertedCount, 1)
@@ -1514,7 +1436,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         // because each makeProjectContainer() builds an isolated in-memory store.
         // Build the re-encode context by reusing the restored project's model.
         let reEncodedProject = try XCTUnwrap(restoredProject)
-        let reEncoded = ProjectSchemaTemplateBuilder.build(project: reEncodedProject, modelContext: ModelContext(try makeProjectContainer()))
+        let reEncoded = ProjectSchemaTemplateBuilder.build(project: reEncodedProject, modelContext: restoreContext)
         let reSection = try XCTUnwrap(reEncoded.outlines.first?.sections.first)
         assertReEncodedSectionContract(
             reSection,
@@ -1907,12 +1829,17 @@ final class ProjectCloudSyncTests: XCTestCase {
         let localProjectID = UUID()
         let payloadProject = StoryProject(name: "Missing cloud lineage")
         payloadProject.id = localProjectID
-        payloadProject.lineageID = nil
         let fixtureContext = ModelContext(try makeProjectContainer())
-        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: fixtureContext)
-        let responseData = try makeRestoreResponse(rows: [
-            (localProjectID, payload, "2026-09-14T14:00:00Z")
-        ])
+        let validPayload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: fixtureContext)
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: try JSONEncoder().encode(validPayload)) as? [String: Any])
+        var projectJSON = try XCTUnwrap(root["project"] as? [String: Any])
+        projectJSON.removeValue(forKey: "lineageID")
+        root["project"] = projectJSON
+        let payload = try JSONDecoder().decode(ProjectImportExportPayload.self, from: JSONSerialization.data(withJSONObject: root))
+        var responseData = try makeRestoreResponse(rows: [(localProjectID, payload, "2026-09-14T14:00:00Z")])
+        var rows = try XCTUnwrap(JSONSerialization.jsonObject(with: responseData) as? [[String: Any]])
+        rows[0].removeValue(forKey: "lineage_id")
+        responseData = try JSONSerialization.data(withJSONObject: rows)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
@@ -2108,7 +2035,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let report = try await service.restoreAllProjects(into: context)
         let storedProjects = try context.fetch(FetchDescriptor<StoryProject>())
 
-        XCTAssertEqual(report.insertedCount, 1)
+        XCTAssertEqual(report.insertedCount, 2)
         XCTAssertTrue(report.duplicateWarnings.isEmpty)
         XCTAssertEqual(Set(storedProjects.map(\.id)), Set([first.id, second.id]))
         XCTAssertEqual(Set(storedProjects.compactMap(\.lineageID)), Set([first.stableLineageID, second.stableLineageID]))
@@ -2300,7 +2227,7 @@ final class ProjectCloudSyncTests: XCTestCase {
                 httpVersion: nil,
                 headerFields: nil
             )!
-            return (response, Data("[{\"deleted_count\":0}]".utf8))
+            return (response, Data("[]".utf8))
         }
 
         let presence = await service.cloudSnapshotPresence()
@@ -2530,10 +2457,14 @@ final class ProjectCloudSyncTests: XCTestCase {
         let section = OutlineSection(position: 0, title: "Accepted section", summary: "Cloud section")
         section.status = "accepted"
         section.recipeRequirementIDs = ["R1", "R4"]
-        outline.sections = [section]
+        section.outline = outline
         outline.project = project
         project.outlines = [outline]
         let context = ModelContext(try makeProjectContainer())
+        context.insert(project)
+        context.insert(outline)
+        context.insert(section)
+        try context.save()
         let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
         let cloudOutlineID = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(payload.outlines.first?.id)))

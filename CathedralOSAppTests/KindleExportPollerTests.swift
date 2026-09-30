@@ -259,15 +259,17 @@ final class KindleExportPollerTests: XCTestCase {
         // Many pending responses — loop would run forever without cancellation.
         // fastSleep still calls Task.checkCancellation() so the next poll cycle
         // detects the cancelled state and exits the loop.
-        MockURLProtocol.queued = Array(repeating: (200, statusJSON(status: "pending"), 0), count: 100)
-        let poller = makePoller()
+        MockURLProtocol.queued = [(200, statusJSON(status: "pending"), 0)]
+        let sleepEntered = expectation(description: "poller entered sleep")
+        let poller = makePoller(sleepOverride: { _ in
+            sleepEntered.fulfill()
+            try await Task.sleep(nanoseconds: 60_000_000_000)
+        })
 
         let task = Task { @MainActor in
             await poller.run()
         }
-        // Let it run for a brief moment so the loop has started
-        try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
-        // Cancel
+        await fulfillment(of: [sleepEntered], timeout: 1)
         task.cancel()
         // Wait for completion
         _ = await task.value

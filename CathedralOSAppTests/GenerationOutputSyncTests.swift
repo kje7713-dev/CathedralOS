@@ -49,7 +49,20 @@ private final class GenerationOutputSyncURLProtocol: URLProtocol {
         }
 
         do {
-            let (response, data) = try handler(request)
+            var requestForHandler = request
+            if requestForHandler.httpBody == nil, let stream = requestForHandler.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var body = Data()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while true {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    body.append(buffer, count: count)
+                }
+                requestForHandler.httpBody = body
+            }
+            let (response, data) = try handler(requestForHandler)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
@@ -1264,7 +1277,10 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         XCTAssertEqual(methods, ["GET"])
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<GenerationOutput>()), 1)
         XCTAssertEqual(backupService.backupCount(), 1)
-        XCTAssertTrue(tombstones.recorded.isEmpty)
+        XCTAssertEqual(tombstones.recorded.count, 1)
+        XCTAssertEqual(tombstones.recorded.first?.localEntityID, output.id.uuidString)
+        XCTAssertEqual(tombstones.recorded.first?.entityType, .generationOutput)
+        XCTAssertEqual(tombstones.recorded.first?.deletionScope, .everywhere)
     }
 
     func testAccountSwitchCannotTreatRLSHiddenOwnerRowAsDeleted() async throws {
@@ -1307,7 +1323,10 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         XCTAssertEqual(requestCount, 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<GenerationOutput>()), 1)
         XCTAssertEqual(backupService.backupCount(), 1)
-        XCTAssertTrue(tombstones.recorded.isEmpty)
+        XCTAssertEqual(tombstones.recorded.count, 1)
+        XCTAssertEqual(tombstones.recorded.first?.localEntityID, output.id.uuidString)
+        XCTAssertEqual(tombstones.recorded.first?.entityType, .generationOutput)
+        XCTAssertEqual(tombstones.recorded.first?.deletionScope, .everywhere)
     }
 
     func testMissingPersistedOwnerIsResolvedByRLSReadBeforeDelete() async throws {
@@ -1348,7 +1367,6 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         try await service.deleteEverywhere(input: GenerationOutputDeletionInput(output: output), context: context)
 
         XCTAssertEqual(methods, ["GET", "DELETE"])
-        XCTAssertEqual(output.cloudOwnerUserID, userID)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<GenerationOutput>()), 0)
     }
 

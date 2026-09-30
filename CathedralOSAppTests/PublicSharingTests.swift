@@ -599,7 +599,7 @@ final class PublicSharingTests: XCTestCase {
         // In the test bundle the key is absent, so endpointURL returns nil.
         // Provide a signed-in auth so the test reaches the endpoint check.
         let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
-        let service = BackendPublicSharingService(authService: auth)
+        let service = BackendPublicSharingService(authService: auth, baseURLProvider: { nil })
         let gen = makeOutput()
         gen.cloudGenerationOutputID = "11111111-1111-1111-1111-111111111111"
         gen.outputText = "Publishable story"
@@ -629,7 +629,7 @@ final class PublicSharingTests: XCTestCase {
     func testMissingBackendConfigForUnpublishProducesClearError() async {
         // Provide a signed-in auth so the test reaches the endpoint check.
         let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
-        let service = BackendPublicSharingService(authService: auth)
+        let service = BackendPublicSharingService(authService: auth, baseURLProvider: { nil })
 
         do {
             try await service.unpublish(sharedOutputID: "some-id")
@@ -642,7 +642,7 @@ final class PublicSharingTests: XCTestCase {
     }
 
     func testMissingBackendConfigForListProducesClearError() async {
-        let service = BackendPublicSharingService()
+        let service = BackendPublicSharingService(baseURLProvider: { nil })
 
         do {
             _ = try await service.fetchPublicList()
@@ -695,7 +695,7 @@ final class PublicSharingTests: XCTestCase {
     func testPublishFailsWhenNotSignedIn() async {
         // Auth check fires before endpoint check, so no configured URL is needed.
         let auth = MockPublicSharingAuthService(authState: .signedOut)
-        let service = BackendPublicSharingService(authService: auth)
+        let service = BackendPublicSharingService(authService: auth, baseURLProvider: { nil })
         let gen = makeOutput()
 
         do {
@@ -711,7 +711,7 @@ final class PublicSharingTests: XCTestCase {
     func testPublishFailsWhenAuthStateIsUnknown() async {
         // `.unknown` resolves to signed-out when `checkSession` does nothing.
         let auth = MockPublicSharingAuthService(authState: .unknown)
-        let service = BackendPublicSharingService(authService: auth)
+        let service = BackendPublicSharingService(authService: auth, baseURLProvider: { nil })
         let gen = makeOutput()
 
         do {
@@ -726,7 +726,7 @@ final class PublicSharingTests: XCTestCase {
 
     func testUnpublishFailsWhenNotSignedIn() async {
         let auth = MockPublicSharingAuthService(authState: .signedOut)
-        let service = BackendPublicSharingService(authService: auth)
+        let service = BackendPublicSharingService(authService: auth, baseURLProvider: { nil })
 
         do {
             try await service.unpublish(sharedOutputID: "srv-abc")
@@ -745,7 +745,7 @@ final class PublicSharingTests: XCTestCase {
     }
 
     func testPublicBrowseHeadersOmitAuthorization() {
-        let service = BackendPublicSharingService()
+        let service = BackendPublicSharingService(baseURLProvider: { URL(string: "https://sharing.test")! })
         var request = URLRequest(url: URL(string: "https://example.com/shared-outputs")!)
 
         service.decoratePublicRequestHeaders(&request)
@@ -754,7 +754,7 @@ final class PublicSharingTests: XCTestCase {
     }
 
     func testAuthenticatedHeadersTrimBearerToken() {
-        let service = BackendPublicSharingService()
+        let service = BackendPublicSharingService(baseURLProvider: { URL(string: "https://sharing.test")! })
         var request = URLRequest(url: URL(string: "https://example.com/shared-outputs")!)
 
         service.decorateAuthenticatedRequestHeaders(&request, accessToken: "  user-jwt-token  ")
@@ -765,7 +765,7 @@ final class PublicSharingTests: XCTestCase {
     }
 
     func testAuthenticatedHeadersOmitAuthorizationWhenTokenBlank() {
-        let service = BackendPublicSharingService()
+        let service = BackendPublicSharingService(baseURLProvider: { URL(string: "https://sharing.test")! })
         var request = URLRequest(url: URL(string: "https://example.com/shared-outputs")!)
 
         service.decorateAuthenticatedRequestHeaders(&request, accessToken: "   ")
@@ -777,7 +777,7 @@ final class PublicSharingTests: XCTestCase {
 
     func testPublishFailsWhenOutputTextIsEmpty() async {
         let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
-        let service = BackendPublicSharingService(authService: auth)
+        let service = BackendPublicSharingService(authService: auth, baseURLProvider: { nil })
         let gen = makeOutput()
         gen.outputText = ""
 
@@ -817,7 +817,7 @@ final class PublicSharingTests: XCTestCase {
         let expectedCloudID = UUID().uuidString    // must be a valid UUID to pass the publish guard
         sync.cloudIDToReturn = expectedCloudID
 
-        let service = BackendPublicSharingService(authService: auth, syncService: sync)
+        let service = BackendPublicSharingService(authService: auth, syncService: sync, baseURLProvider: { URL(string: "https://sharing.test")! })
         let gen = makeOutput()
         gen.cloudGenerationOutputID = ""
         gen.syncStatus = SyncStatus.localOnly.rawValue
@@ -841,7 +841,7 @@ final class PublicSharingTests: XCTestCase {
         let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
         let sync = MockSyncServiceForPublishing()
 
-        let service = BackendPublicSharingService(authService: auth, syncService: sync)
+        let service = BackendPublicSharingService(authService: auth, syncService: sync, baseURLProvider: { URL(string: "https://sharing.test")! })
         let gen = makeOutput()
         gen.cloudGenerationOutputID = UUID().uuidString   // valid UUID — sync must be skipped
 
@@ -863,7 +863,7 @@ final class PublicSharingTests: XCTestCase {
         let sync = MockSyncServiceForPublishing()
         sync.errorToThrow = GenerationOutputSyncError.notSignedIn   // sync fails
 
-        let service = BackendPublicSharingService(authService: auth, syncService: sync)
+        let service = BackendPublicSharingService(authService: auth, syncService: sync, baseURLProvider: { nil })
         let gen = makeOutput()
         gen.cloudGenerationOutputID = ""
 
@@ -905,7 +905,7 @@ final class PublicSharingTests: XCTestCase {
         // When no sync service is provided and cloudGenerationOutputID is empty,
         // publish must throw missingCloudGenerationOutputID without contacting the backend.
         let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
-        let service = BackendPublicSharingService(authService: auth, syncService: nil)
+        let service = BackendPublicSharingService(authService: auth, syncService: nil, baseURLProvider: { nil })
         let gen = makeOutput()
         gen.cloudGenerationOutputID = ""
 
@@ -924,7 +924,7 @@ final class PublicSharingTests: XCTestCase {
         // and must proceed to the endpoint check (failing with endpointNotConfigured in tests).
         let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
         let sync = MockSyncServiceForPublishing()
-        let service = BackendPublicSharingService(authService: auth, syncService: sync)
+        let service = BackendPublicSharingService(authService: auth, syncService: sync, baseURLProvider: { URL(string: "https://sharing.test")! })
         let gen = makeOutput()
         gen.cloudGenerationOutputID = UUID().uuidString    // already a valid UUID
 
@@ -1387,7 +1387,7 @@ final class PublicSharingTests: XCTestCase {
     }
 
     func testMissingBackendConfigForDetailProducesClearError() async {
-        let service = BackendPublicSharingService()
+        let service = BackendPublicSharingService(baseURLProvider: { nil })
         do {
             _ = try await service.fetchDetail(sharedOutputID: "some-id")
             XCTFail("Expected endpointNotConfigured error")

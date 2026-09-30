@@ -31,6 +31,14 @@ final class MockAuthService: AuthService {
     }
 }
 
+
+private final class InMemoryAuthCredentialStore: AuthCredentialStore {
+    var values: [String: String] = [:]
+    func loadString(key: String) -> String? { values[key] }
+    func saveString(key: String, value: String) throws { values[key] = value }
+    func delete(key: String) throws { values.removeValue(forKey: key) }
+}
+
 // MARK: - AuthUserTests
 
 final class AuthServiceTests: XCTestCase {
@@ -110,7 +118,14 @@ final class AuthServiceTests: XCTestCase {
 
     func testCheckSessionSetsSignedOutWhenNotConfigured() async {
         // In tests, SupabaseConfiguration.isConfigured is false — expect .signedOut.
-        let service = BackendAuthService(configurationPredicate: { true })
+        let credentials = InMemoryAuthCredentialStore()
+        credentials.values = [
+            "supabase.session.user_id": "test-user-id",
+            "supabase.session.access_token": "test-access-token",
+            "supabase.session.user_email": "test@example.com",
+            "supabase.session.refresh_token": "test-refresh-token"
+        ]
+        let service = BackendAuthService(configurationPredicate: { true }, credentialStore: credentials)
         await service.checkSession()
         XCTAssertEqual(service.authState, .signedOut,
                        "checkSession must set .signedOut when backend is not configured")

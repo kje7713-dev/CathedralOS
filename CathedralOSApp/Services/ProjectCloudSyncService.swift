@@ -383,8 +383,11 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             // semantics for signed-out/misconfigured callers.
             _ = try await validatedClientAndSession()
             let tombstones = try await tombstoneService.fetchProjectTombstones()
-            let lineageID = payload.project.lineageID ?? localProjectID
-            guard !tombstones.isTombstoned(lineageID: lineageID) else {
+            let localID = localProjectID
+            let lineageID = payload.project.lineageID ?? localID
+            let isDeleted = tombstones.isTombstoned(localID: localID)
+                || tombstones.isTombstoned(lineageID: lineageID)
+            guard !isDeleted else {
                 logger.log("Skipped tombstoned project upload \(localProjectID, privacy: .public)")
                 return
             }
@@ -413,8 +416,11 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         try await mutationGate.run {
             let tombstones = try await tombstoneService.fetchProjectTombstones()
             let snapshots = candidates.compactMap { candidate -> ProjectSnapshotSyncInput? in
-                let lineageID = candidate.payload.project.lineageID ?? candidate.localProjectID
-                guard !tombstones.isTombstoned(lineageID: lineageID) else {
+                let localID = candidate.localProjectID
+                let lineageID = candidate.payload.project.lineageID ?? localID
+                let isDeleted = tombstones.isTombstoned(localID: localID)
+                    || tombstones.isTombstoned(lineageID: lineageID)
+                guard !isDeleted else {
                     logger.log("Skipped tombstoned project upload \(candidate.localProjectID, privacy: .public)")
                     return nil
                 }

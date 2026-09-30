@@ -113,6 +113,18 @@ final class BackendPublicSharingService: PublicSharingService {
     /// public-sharing backend.
     private let syncService: GenerationOutputSyncServiceProtocol?
     private let session: URLSession
+    private let baseURLProvider: () -> URL?
+
+    private func endpoint(_ path: String) -> URL? {
+        baseURLProvider()?.appendingPathComponent(path)
+    }
+    private var publishEndpoint: URL? { endpoint("shared-outputs") }
+    private var publishEpubEndpoint: URL? { endpoint("shared-outputs/epub") }
+    private func sharedEpubDownloadEndpoint(_ id: String) -> URL? { endpoint("shared-outputs/\(id)/epub") }
+    private func unpublishEndpoint(_ id: String) -> URL? { endpoint("shared-outputs/\(id)") }
+    private var publicListEndpoint: URL? { endpoint("shared-outputs") }
+    private func publicDetailEndpoint(_ id: String) -> URL? { endpoint("shared-outputs/\(id)") }
+    private func reportEndpoint(_ id: String) -> URL? { endpoint("shared-outputs/\(id)/reports") }
 
     var hasOutputSyncService: Bool {
         syncService != nil
@@ -122,11 +134,13 @@ final class BackendPublicSharingService: PublicSharingService {
         authService: AuthService = BackendAuthService.shared,
         sessionProvider: SupabaseSessionProvider? = nil,
         syncService: GenerationOutputSyncServiceProtocol? = nil,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        baseURLProvider: @escaping () -> URL? = { PublicSharingServiceConfiguration.baseURL }
     ) {
         self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.syncService = syncService
         self.session = session
+        self.baseURLProvider = baseURLProvider
     }
 
     // MARK: Publish
@@ -161,7 +175,7 @@ final class BackendPublicSharingService: PublicSharingService {
         }
 
         // 5. Confirm backend is configured.
-        guard let url = PublicSharingServiceConfiguration.publishURL else {
+        guard let url = publishEndpoint else {
             throw PublicSharingServiceError.endpointNotConfigured
         }
         let dto = OutputPublishingDTO(output: output, sharedOutputID: output.sharedOutputID.nilIfEmpty)
@@ -199,7 +213,7 @@ final class BackendPublicSharingService: PublicSharingService {
     func publishEpub(exportMetadataID: String) async throws -> PublishResponse {
         _ = try await requireSignedIn()
         let accessToken = try await resolvedAccessToken()
-        guard let url = PublicSharingServiceConfiguration.publishEpubURL else { throw PublicSharingServiceError.endpointNotConfigured }
+        guard let url = publishEpubEndpoint else { throw PublicSharingServiceError.endpointNotConfigured }
         guard UUID(uuidString: exportMetadataID) != nil else { throw PublicSharingServiceError.invalidSharedOutputID }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -214,7 +228,7 @@ final class BackendPublicSharingService: PublicSharingService {
     }
 
     func fetchSharedEpubDownload(sharedOutputID: String) async throws -> SharedEPUBDownloadResponse {
-        guard let url = PublicSharingServiceConfiguration.sharedEpubDownloadURL(sharedOutputID: sharedOutputID) else { throw PublicSharingServiceError.endpointNotConfigured }
+        guard let url = sharedEpubDownloadEndpoint(sharedOutputID) else { throw PublicSharingServiceError.endpointNotConfigured }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         decoratePublicRequestHeaders(&request)
@@ -297,7 +311,7 @@ final class BackendPublicSharingService: PublicSharingService {
         _ = try await requireSignedIn()
         let accessToken = try await resolvedAccessToken()
 
-        guard let url = PublicSharingServiceConfiguration.unpublishURL(sharedOutputID: sharedOutputID) else {
+        guard let url = unpublishEndpoint(sharedOutputID) else {
             throw PublicSharingServiceError.endpointNotConfigured
         }
 
@@ -312,7 +326,7 @@ final class BackendPublicSharingService: PublicSharingService {
     // MARK: Fetch public list
 
     func fetchPublicList() async throws -> [SharedOutputListItem] {
-        guard let url = PublicSharingServiceConfiguration.publicListURL else {
+        guard let url = publicListEndpoint else {
             throw PublicSharingServiceError.endpointNotConfigured
         }
 
@@ -336,7 +350,7 @@ final class BackendPublicSharingService: PublicSharingService {
     // MARK: Fetch detail
 
     func fetchDetail(sharedOutputID: String) async throws -> SharedOutputDetail {
-        guard let url = PublicSharingServiceConfiguration.publicDetailURL(sharedOutputID: sharedOutputID) else {
+        guard let url = publicDetailEndpoint(sharedOutputID) else {
             throw PublicSharingServiceError.endpointNotConfigured
         }
 
@@ -363,7 +377,7 @@ final class BackendPublicSharingService: PublicSharingService {
         _ = try await requireSignedIn()
         let accessToken = try await resolvedAccessToken()
 
-        guard let url = PublicSharingServiceConfiguration.reportURL(sharedOutputID: sharedOutputID) else {
+        guard let url = reportEndpoint(sharedOutputID) else {
             throw PublicSharingServiceError.endpointNotConfigured
         }
 
