@@ -405,7 +405,7 @@ final class AcceptAllLifecycleTests: XCTestCase {
     func testCrossOutlineAcceptAll_ReportsConflict() async throws {
         let coordinator = makeCoordinator()
         let service = FakeAcceptAllService()
-        service.startResponse = .hang
+        service.statusResponse = .hang
         let context = try makeInMemoryContext()
         let projectID = UUID()
         let outlineA = UUID()
