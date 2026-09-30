@@ -54,6 +54,7 @@ struct PaywallView: View {
                     creditPacksSection
                 }
                 restoreSection
+                legalSection
             }
             .navigationTitle("Upgrade")
             .navigationBarTitleDisplayMode(.large)
@@ -143,6 +144,29 @@ struct PaywallView: View {
                 }
             }
             .padding(.vertical, 4)
+        }
+    }
+
+    private var legalSection: some View {
+        Section("Legal") {
+            if let privacyPolicyURL = AppLegalLinks.privacyPolicyURL {
+                Link("Privacy Policy", destination: privacyPolicyURL)
+            } else {
+                Text("Privacy Policy link will be configured before App Store submission.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let termsOfUseURL = AppLegalLinks.termsOfUseURL {
+                Link("Terms of Use", destination: termsOfUseURL)
+            } else {
+                Text("Terms of Use link will be configured before App Store submission.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } footer: {
+            Text("Subscription terms and renewal details are provided by Apple and the App Store listing.")
+                .font(.caption2)
         }
     }
 
@@ -292,5 +316,20 @@ struct PaywallView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: date)
+    }
+}
+
+private enum AppLegalLinks {
+    static var privacyPolicyURL: URL? { configuredURL(forInfoKey: "PrivacyPolicyURL") }
+    static var termsOfUseURL: URL? { configuredURL(forInfoKey: "TermsOfUseURL") }
+
+    private static func configuredURL(forInfoKey key: String) -> URL? {
+        guard let rawValue = Bundle.main.object(forInfoDictionaryKey: key) as? String,
+              let url = URL(string: rawValue),
+              url.scheme == "https",
+              !url.host.isNil else {
+            return nil
+        }
+        return url
     }
 }
