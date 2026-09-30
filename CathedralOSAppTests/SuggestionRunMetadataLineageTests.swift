@@ -12,6 +12,7 @@ import XCTest
 // The UserDefaults key migration (lineage-owned slot, legacy fallback) is
 // covered by DataDurabilityTests' existing coordinator lifecycle suite.
 
+@MainActor
 final class SuggestionRunMetadataLineageTests: XCTestCase {
 
     private func makeRequest() -> OutlineSuggestionRequest {
@@ -37,7 +38,7 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         )
         let arcPayload = ArcTemplateBlob(
             id: "save-the-cat", name: "Save the Cat!", description: nil,
-            beats: [ArcTemplateBlob.BeatBlob(id: "beat-1", role: "opening", label: "Opening Image", description: "Establish the world.")]
+            beats: [BeatBlob(id: "beat-1", role: "opening", label: "Opening Image", description: "Establish the world.")]
         )
         return OutlineSuggestionRequest(
             recipe: recipePayload,

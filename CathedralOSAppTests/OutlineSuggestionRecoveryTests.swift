@@ -65,7 +65,7 @@ final class OutlineSuggestionRecoveryTests: XCTestCase {
                 instructionBias: ""
             )
         )
-        let beatPayload = ArcTemplateBlob.BeatBlob(
+        let beatPayload = BeatBlob(
             id: beatID,
             role: "opening",
             label: "Opening Image",
