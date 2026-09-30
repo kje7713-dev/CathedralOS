@@ -191,25 +191,23 @@ final class ProjectCloudSyncTests: XCTestCase {
         ProjectCloudSyncURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.url?.host, "example.supabase.co")
-            XCTAssertEqual(request.url?.path, "/rest/v1/project_snapshots")
-            XCTAssertEqual(request.url?.query, "on_conflict=user_id,local_project_id")
+            XCTAssertEqual(request.url?.path, "/rest/v1/rpc/write_project_snapshot_canonical")
+            XCTAssertNil(request.url?.query)
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt-token")
             XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "anon-key")
-            XCTAssertEqual(
-                request.value(forHTTPHeaderField: "Prefer"),
-                "resolution=merge-duplicates,return=representation"
-            )
 
             let body = try XCTUnwrap(request.httpBody)
             let payloads = try XCTUnwrap(
                 JSONSerialization.jsonObject(with: body) as? [[String: Any]]
             )
             XCTAssertEqual(payloads.count, 1)
-            XCTAssertEqual(payloads.first?["user_id"] as? String, userID)
-            XCTAssertEqual(payloads.first?["local_project_id"] as? String, project.id.uuidString)
-            XCTAssertEqual(payloads.first?["source"] as? String, "sync")
+            XCTAssertEqual(payloads.first?["p_user_id"] as? String, userID)
+            XCTAssertEqual(payloads.first?["p_local_project_id"] as? String, project.id.uuidString)
+            XCTAssertEqual(payloads.first?["p_schema"] as? String, "cathedralos.project_schema")
+            XCTAssertEqual(payloads.first?["p_version"] as? Int, 1)
+            XCTAssertEqual(payloads.first?["p_deleted_section_ids"] as? [String], [])
 
-            let snapshotJSON = try XCTUnwrap(payloads.first?["snapshot_json"] as? [String: Any])
+            let snapshotJSON = try XCTUnwrap(payloads.first?["p_snapshot_json"] as? [String: Any])
             let projectJSON = try XCTUnwrap(snapshotJSON["project"] as? [String: Any])
             XCTAssertEqual(projectJSON["name"] as? String, "Cloud Story")
             XCTAssertEqual(projectJSON["notes"] as? String, "Keep these notes")
@@ -725,12 +723,13 @@ final class ProjectCloudSyncTests: XCTestCase {
         ProjectCloudSyncURLProtocol.requestHandler = { request in
             uploadRequestCount += 1
             XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/rest/v1/rpc/write_project_snapshot_canonical")
             let body = try XCTUnwrap(request.httpBody)
             let payloads = try XCTUnwrap(
                 JSONSerialization.jsonObject(with: body) as? [[String: Any]]
             )
             XCTAssertEqual(payloads.count, 1)
-            XCTAssertEqual(payloads.first?["local_project_id"] as? String, activeProject.id.uuidString)
+            XCTAssertEqual(payloads.first?["p_local_project_id"] as? String, activeProject.id.uuidString)
 
             let response = HTTPURLResponse(
                 url: try XCTUnwrap(request.url),

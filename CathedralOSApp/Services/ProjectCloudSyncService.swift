@@ -955,6 +955,13 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                 newProject.id = projectID
                 newProject.lineageID = lineageID
                 context.insert(newProject)
+                // `ProjectImportMapper` constructs the legacy top-level graph,
+                // while the canonical restore contract also includes grouped
+                // outline sections and authoritative replacement semantics.
+                // Reconcile the full payload for newly inserted projects too;
+                // otherwise child sections disappear on the first restore and
+                // only become visible after a later update restore.
+                reconcileProject(newProject, with: row.snapshotJSON, in: context)
                 project = newProject
                 isUpdate = false
             }
