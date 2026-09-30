@@ -33,7 +33,7 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             selectedThemeQuestions: [],
             selectedMotifs: [],
             promptPack: PromptPackExportPayload.PromptPackPayload(
-                id: "pack-1", name: "Sparse recipe", notes: "", instructionBias: ""
+                id: fixtureUUID(11), name: "Sparse recipe", notes: "", instructionBias: ""
             )
         )
         let arcPayload = ArcTemplateBlob(

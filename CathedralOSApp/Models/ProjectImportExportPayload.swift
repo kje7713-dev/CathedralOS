@@ -59,9 +59,9 @@ struct ProjectImportExportPayload: Codable {
         relationships: [RelationshipPayload],
         themeQuestions: [ThemeQuestionPayload],
         motifs: [MotifPayload],
-        storyArcs: [StoryArcPayload] = [],
-        outlines: [OutlinePayload] = [],
-        promptPacks: [PromptPackPayload] = []
+        storyArcs: [StoryArcPayload],
+        outlines: [OutlinePayload],
+        promptPacks: [PromptPackPayload]
     ) {
         self.schema = schema
         self.version = version

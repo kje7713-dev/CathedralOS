@@ -145,7 +145,7 @@ final class RecipeProvenanceGuardTests: XCTestCase {
             setting: PromptPackExportPayload.SettingPayload(included: false),
             selectedCharacters: Array(0..<characterCount).map { idx in
                 PromptPackExportPayload.CharacterPayload(
-                    id: "char-\(idx)",
+                    id: fixtureUUID(100 + idx),
                     name: "Character \(idx)",
                     roles: [],
                     goals: [],
@@ -158,7 +158,7 @@ final class RecipeProvenanceGuardTests: XCTestCase {
             selectedThemeQuestions: [],
             selectedMotifs: [],
             promptPack: PromptPackExportPayload.PromptPackPayload(
-                id: "pp-1",
+                id: fixtureUUID(12),
                 name: promptPackName,
                 notes: "",
                 instructionBias: "",

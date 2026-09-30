@@ -132,15 +132,6 @@ struct PromptPackExportPayload: Codable {
     }
 
     struct SettingPayload: Codable {
-        init(included: Bool) {
-            self.included = included
-            self.summary = ""; self.domains = []; self.constraints = []; self.themes = []; self.season = ""
-            self.worldRules = []; self.historicalPressure = ""; self.politicalForces = ""; self.socialOrder = ""
-            self.environmentalPressure = ""; self.technologyLevel = ""; self.mythicFrame = ""; self.instructionBias = ""
-            self.religiousPressure = ""; self.economicPressure = ""; self.taboos = []; self.institutions = []
-            self.dominantValues = []; self.hiddenTruths = []
-        }
-
         /// Mirrors `promptPack.includeProjectSetting`.
         let included: Bool
         // Basic
@@ -169,17 +160,6 @@ struct PromptPackExportPayload: Codable {
     }
 
     struct CharacterPayload: Codable {
-        init(id: String, name: String, roles: [String], goals: [String], fears: [String]) {
-            self.id = UUID(uuidString: id) ?? UUID()
-            self.name = name; self.roles = roles; self.goals = goals
-            self.preferences = []; self.resources = []; self.failurePatterns = []
-            self.fears = fears; self.flaws = []; self.secrets = []; self.wounds = []; self.contradictions = []
-            self.needs = []; self.obsessions = []; self.attachments = []; self.notes = ""; self.instructionBias = ""
-            self.selfDeceptions = []; self.identityConflicts = []; self.moralLines = []; self.breakingPoints = []
-            self.virtues = []; self.publicMask = ""; self.privateLogic = ""; self.speechStyle = ""; self.arcStart = ""
-            self.arcEnd = ""; self.coreLie = ""; self.coreTruth = ""; self.reputation = ""; self.status = ""
-        }
-
         let id: UUID
         // Basic
         let name: String
@@ -310,10 +290,6 @@ struct PromptPackExportPayload: Codable {
         let notes: String
         /// Always present — empty string when not set.
         let instructionBias: String
-
-        init(id: String, name: String, notes: String, instructionBias: String) {
-            self.init(id: UUID(uuidString: id) ?? UUID(), name: name, includeProjectSetting: true, notes: notes, instructionBias: instructionBias)
-        }
 
         init(id: UUID, name: String, includeProjectSetting: Bool, notes: String, instructionBias: String) {
             self.id = id

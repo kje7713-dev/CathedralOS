@@ -41,7 +41,7 @@ final class OutlineSuggestionRecoveryTests: XCTestCase {
             summary: recipeSummary
         )
         let characterPayload = PromptPackExportPayload.CharacterPayload(
-            id: "character-1",
+            id: fixtureUUID(21),
             name: characterName,
             roles: [],
             goals: [],
@@ -59,7 +59,7 @@ final class OutlineSuggestionRecoveryTests: XCTestCase {
             selectedThemeQuestions: [],
             selectedMotifs: [],
             promptPack: PromptPackExportPayload.PromptPackPayload(
-                id: "pack-1",
+                id: fixtureUUID(11),
                 name: "Sparse recipe",
                 notes: "",
                 instructionBias: ""
