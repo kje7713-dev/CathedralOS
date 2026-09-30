@@ -2,20 +2,11 @@
 
 ## Implemented in PR 3
 
-- Added the app privacy manifest at `CathedralOSApp/Privacy/PrivacyInfo.xcprivacy`.
-- Declared the UserDefaults access reason used by the app (`CA92.1`).
-- Added Paywall links that only become active when valid HTTPS URLs are supplied through the generated Info.plist keys `PrivacyPolicyURL` and `TermsOfUseURL`.
-- Added explicit in-app configuration-required messaging instead of inventing public URLs.
+- Added and registered `PrivacyInfo.xcprivacy` with UserDefaults (`CA92.1`) and File Timestamp (`C617.1`) reasons used by first-party code.
+- Added Paywall links that activate only for valid HTTPS URLs supplied through generated Info.plist keys.
+- Added dynamic StoreKit subscription disclosures for product title, localized renewal price, billing duration, Pro/credit benefit, auto-renewal, and introductory-offer price/period when present.
+- Added TestFlight release validation that refuses an archive when Privacy Policy or Terms of Use secrets are missing or not HTTPS URLs.
 
 ## Operator release dependencies
 
-Before App Store submission, configure and verify:
-
-- `PRIVACY_POLICY_URL` with the production Privacy Policy URL.
-- `TERMS_OF_USE_URL` with the production Terms of Use URL.
-- App Store Connect Privacy Policy URL and Terms/EULA configuration match the app.
-- App Store Connect subscription metadata matches the localized StoreKit product names, prices, billing periods, renewal behavior, and Pro benefits.
-- App Store Connect support URL and abuse/support contact path are configured.
-- The archived IPA contains `PrivacyInfo.xcprivacy` and the generated Info.plist contains both legal URLs.
-
-No production URLs were present in the repository, so none were fabricated.
+Configure `PRIVACY_POLICY_URL` and `TERMS_OF_USE_URL` as production GitHub Actions secrets. Verify App Store Connect Privacy Policy, Terms/EULA, subscription metadata, support URL, and first-party data-collection disclosures match actual behavior. The repository does not contain production legal URLs, so none were fabricated.

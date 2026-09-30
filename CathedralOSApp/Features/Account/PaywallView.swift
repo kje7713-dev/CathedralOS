@@ -125,10 +125,38 @@ struct PaywallView: View {
 
                 ForEach(subscriptionProducts, id: \.id) { product in
                     purchaseRow(product: product, isSubscription: true)
+                    subscriptionDisclosure(for: product)
                 }
             }
             .padding(.vertical, 4)
         }
+    }
+
+    @ViewBuilder
+    private func subscriptionDisclosure(for product: Product) -> some View {
+        if let subscription = product.subscription {
+            Text("Includes Pro features and the displayed monthly credit allowance for each billing period.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Renews every \(subscriptionPeriodDescription(subscription.subscriptionPeriod)) at \(product.displayPrice) until canceled.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let offer = subscription.introductoryOffer {
+                Text("Introductory offer: \(subscriptionPeriodDescription(offer.period)) at \(offer.displayPrice), then \(product.displayPrice) per \(subscriptionPeriodDescription(subscription.subscriptionPeriod)).")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func subscriptionPeriodDescription(_ period: Product.SubscriptionPeriod) -> String {
+        let unit = period.value == 1 ? period.unit.singularName : period.unit.pluralName
+        return "\(period.value) \(unit)"
     }
 
     private var creditPacksSection: some View {
@@ -332,4 +360,19 @@ private enum AppLegalLinks {
         }
         return url
     }
+}
+
+
+private extension Product.SubscriptionPeriod.Unit {
+    var singularName: String {
+        switch self {
+        case .day: return "day"
+        case .week: return "week"
+        case .month: return "month"
+        case .year: return "year"
+        @unknown default: return "billing period"
+        }
+    }
+
+    var pluralName: String { singularName + "s" }
 }
