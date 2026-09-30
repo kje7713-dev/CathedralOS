@@ -1442,7 +1442,7 @@ Anything beyond that is post-MVP unless it directly prevents the above workflow 
 
 ## Execution Bookmark
 
-Updated 2026-09-30 08:07 EDT.
+Updated 2026-09-30 08:11 EDT.
 
 - **Starting SHA:** `83a9b10d66affba4dc5e794fa268bead1cecf331` (`main`, PR #654 merged and deployed).
 - **Plan saved:** this file is the canonical MVP release-blocker remediation plan.
@@ -1454,8 +1454,10 @@ Updated 2026-09-30 08:07 EDT.
 - **PR 3 validation:** privacy manifest parsed as a plist; `git diff --check` passed; iOS build not available on this Linux host.
 - **PR 4 status:** implementation committed as `79b7845` on `feat/mvp-private-sharing`; PR #657 is open for review. No merge, Supabase deployment, or TestFlight deployment performed.
 - **PR 4 validation:** `deno check` passed; public-sharing tests passed 8/8; `git diff --check` passed; iOS build not available on this Linux host.
-- **Next PR:** **PR 5 — XCTest / CI Release Gate**.
-- **Next action:** leave PRs #655–#657 open for review and prepare PR 5 from latest `main` without merging or deploying.
+- **PR 5 status:** implementation committed as `5585194` on `feat/xctest-ci-release-gate`; PR #658 is open for review. No merge, deployment, or workflow run performed.
+- **PR 5 validation:** workflow structure check passed; `git diff --check` passed; local iOS execution unavailable on this Linux host.
+- **Next PR:** **PR 6 — Release/Deployment Hardening**.
+- **Next action:** leave PRs #655–#658 open for review and audit the latest `main` for concrete release/deployment omissions before preparing PR 6.
 
 ### Bookmark rules
 
