@@ -23,4 +23,6 @@ After successful server deletion, the iOS flow deletes local `StoryProject` and 
 
 ## Sign in with Apple
 
-Supabase Auth user deletion invalidates the Supabase account/session. Apple authorization revocation is not currently executable by the app because the repository does not persist an Apple refresh token or an operator-configured Apple revoke credential. This remains an external release requirement: configure and verify Apple credential revocation if Apple requires it for the production Sign in with Apple account lifecycle.
+The sign-in flow sends Apple’s one-time authorization code to the authenticated `link-apple-credential` Edge Function. That function exchanges it server-side and stores only the Apple refresh token in the service-role-only `apple_account_tokens` table. The `delete-account` Edge Function revokes that token at Apple before deleting the Supabase Auth user, and fails closed when an Apple identity has no stored credential.
+
+The Apple client ID, team ID, key ID, private key, and generated revoke client secret remain operator-managed secrets. Live Apple revocation proof remains a later operator-configuration/release-checklist item; no credential is committed to the repository or shipped in the iOS app.

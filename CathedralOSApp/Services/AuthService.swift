@@ -290,6 +290,7 @@ final class BackendAuthService: AuthService {
               let idToken = String(data: idTokenData, encoding: .utf8) else {
             throw AuthServiceError.signInFailed("Could not extract Apple identity token.")
         }
+        let appleAuthorizationCode = credential.authorizationCode.flatMap { String(data: $0, encoding: .utf8) }
 
         // Exchange the Apple identity token for a Supabase session.
         let response = try await Self.exchangeAppleToken(
@@ -315,6 +316,12 @@ final class BackendAuthService: AuthService {
         }
 
         currentAccessToken = response.accessToken
+        if let appleAuthorizationCode {
+            // Best effort: the server exchanges and stores the Apple refresh token
+            // for later account-deletion revocation. Sign-in itself remains usable
+            // while operator-side Apple credentials are being configured.
+            try? await Self.linkAppleCredential(authorizationCode: appleAuthorizationCode, accessToken: response.accessToken)
+        }
         authState = .signedIn(AuthUser(id: userID, email: email))
     }
 
@@ -421,6 +428,21 @@ final class BackendAuthService: AuthService {
         } catch {
             throw AuthServiceError.signInFailed("Could not parse auth response: \(error.localizedDescription)")
         }
+    }
+
+    /// Sends the one-time Apple authorization code to the server so it can
+    /// exchange/store a refresh token for later account-deletion revocation.
+    private static func linkAppleCredential(authorizationCode: String, accessToken: String) async throws {
+        guard let config = try? SupabaseConfiguration.validatedConfiguration() else { throw AuthServiceError.notConfigured }
+        let url = config.projectURL.appendingPathComponent("functions").appendingPathComponent("v1").appendingPathComponent("link-apple-credential")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["authorization_code": authorizationCode])
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw AuthServiceError.serverRejectedAuth("Apple credential linking failed.") }
     }
 
     /// Exchanges an Apple identity token for a Supabase session.

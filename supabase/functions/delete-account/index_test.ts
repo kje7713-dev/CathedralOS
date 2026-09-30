@@ -8,15 +8,17 @@ function fakeAdmin(overrides: Record<string, unknown> = {}, projectRows: unknown
     from(table: string) {
       return {
         select() { return this; },
+        maybeSingle() { return this; },
         eq() { return this; },
         delete() { calls.push(`delete:${table}`); return this; },
         async then(resolve: (value: unknown) => unknown) {
+          if (table === "apple_account_tokens") return resolve({ data: null, error: null });
           if (table === "export_metadata") return resolve({ data: [], error: null });
           if (table === "shared_outputs") return resolve({ data: [], error: null });
           if (table === "project_snapshots") return resolve({ data: projectRows, error: null });
           return resolve({ data: null, error: null });
         },
-        ...overrides,
+        ...(table === "apple_account_tokens" ? {} : overrides),
       };
     },
     storage: { from(bucket: string) { return {
@@ -26,7 +28,10 @@ function fakeAdmin(overrides: Record<string, unknown> = {}, projectRows: unknown
       },
       async remove(paths: string[]) { calls.push(`storage:remove:${bucket}:${paths.join(",")}`); return { error: null }; },
     }; } },
-    auth: { admin: { async deleteUser(id: string) { calls.push(`auth:${id}`); return { error: null }; } } },
+    auth: { admin: {
+      async getUserById() { return { data: { user: { identities: [] } }, error: null }; },
+      async deleteUser(id: string) { calls.push(`auth:${id}`); return { error: null }; }
+    } },
   } as any;
   return client;
 }

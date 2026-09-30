@@ -95,10 +95,30 @@ async function collectOwnedArtifacts(
   };
 }
 
+
+async function revokeAppleCredential(adminClient: SupabaseClient, userId: string): Promise<void> {
+  const { data, error } = await adminClient.from("apple_account_tokens").select("refresh_token").eq("user_id", userId).maybeSingle();
+  if (error) throw new Error("apple_token_lookup_failed");
+  if (!data?.refresh_token) {
+    const { data: authData, error: authLookupError } = await adminClient.auth.admin.getUserById(userId);
+    if (authLookupError) throw new Error("apple_identity_lookup_failed");
+    const hasAppleIdentity = (authData.user?.identities ?? []).some((identity: { provider?: string }) => identity.provider === "apple");
+    if (hasAppleIdentity) throw new Error("apple_credential_missing");
+    return;
+  }
+  const clientId = Deno.env.get("APPLE_CLIENT_ID");
+  const clientSecret = Deno.env.get("APPLE_CLIENT_SECRET");
+  if (!clientId || !clientSecret) throw new Error("apple_revocation_not_configured");
+  const body = new URLSearchParams({ client_id: clientId, client_secret: clientSecret, token: data.refresh_token, token_type_hint: "refresh_token" });
+  const response = await fetch("https://appleid.apple.com/auth/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+  if (!response.ok) throw new Error("apple_revocation_failed");
+}
+
 export async function deleteOwnedAccount(
   adminClient: SupabaseClient,
   userId: string,
 ): Promise<void> {
+  await revokeAppleCredential(adminClient, userId);
   const artifacts = await collectOwnedArtifacts(adminClient, userId);
   await removeObjects(adminClient, "exports", artifacts.exports);
   await removeObjects(adminClient, "covers", artifacts.covers);
