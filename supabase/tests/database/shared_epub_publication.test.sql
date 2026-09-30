@@ -1,6 +1,6 @@
 -- Shared EPUB publication schema, RLS, and lifecycle contract.
 begin;
-select plan(34);
+select plan(37);
 
 select has_column('public', 'shared_outputs', 'content_type', 'shared outputs identifies text versus EPUB content');
 select has_column('public', 'shared_outputs', 'export_metadata_id', 'shared EPUB links one immutable export');
@@ -17,8 +17,26 @@ select has_index('public', 'shared_outputs', 'idx_shared_outputs_export_metadata
 select ok(to_regprocedure('public.delete_export_metadata_and_promote(uuid,uuid)') is not null, 'delete RPC remains available');
 select ok(position('shared_outputs' in pg_get_functiondef(to_regprocedure('public.delete_export_metadata_and_promote(uuid,uuid)'))) > 0, 'delete RPC references shared outputs');
 select ok(position('unpublished_at' in pg_get_functiondef(to_regprocedure('public.delete_export_metadata_and_promote(uuid,uuid)'))) > 0, 'delete RPC unpublishes linked EPUBs');
-select ok(has_table_privilege('anon', 'public.shared_outputs', 'select'), 'anonymous browse privilege remains available');
-select ok(has_table_privilege('authenticated', 'public.shared_outputs', 'select'), 'authenticated browse privilege remains available');
+select ok(not has_table_privilege('anon', 'public.shared_outputs', 'select'), 'anonymous browse privilege is disabled for MVP');
+select ok(has_table_privilege('authenticated', 'public.shared_outputs', 'select'), 'authenticated owner access privilege remains available');
+select ok(not exists (
+  select 1 from pg_catalog.pg_policy pol
+  join pg_catalog.pg_class c on c.oid = pol.polrelid
+  join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = 'public' and c.relname = 'shared_outputs'
+    and pol.polname in ('shared_outputs: anon can read public rows', 'shared_outputs: authenticated can read public rows')
+), 'public browse policies are removed for MVP');
+select ok(exists (
+  select 1 from storage.buckets
+  where id = 'shared-output-images' and public = false
+), 'shared output images bucket is private for MVP');
+select ok(exists (
+  select 1 from pg_catalog.pg_policy pol
+  join pg_catalog.pg_class c on c.oid = pol.polrelid
+  join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = 'public' and c.relname = 'shared_outputs'
+    and pol.polname = 'shared_outputs: owner can select own rows'
+), 'owners retain private shared-output access');
 select ok(exists (select 1 from pg_constraint where conname = 'shared_outputs_content_type_check'), 'content type check exists');
 select ok(exists (select 1 from pg_constraint where conname = 'shared_outputs_export_metadata_id_unique'), 'one shared row per immutable export is enforced');
 select ok(position('service_role' in coalesce(pg_get_functiondef(to_regprocedure('public.delete_export_metadata_and_promote(uuid,uuid)')), '')) = 0, 'delete RPC body does not grant customer access');

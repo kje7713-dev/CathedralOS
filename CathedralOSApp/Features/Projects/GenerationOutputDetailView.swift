@@ -559,7 +559,9 @@ struct GenerationOutputDetailView: View {
                 metadataSection
                 provenanceSection
                 outputTextSection
-                publishingSection
+                if PublicSharingServiceConfiguration.isEnabled {
+                    publishingSection
+                }
                 if output.notes?.nilIfEmpty != nil {
                     notesSection
                 }
