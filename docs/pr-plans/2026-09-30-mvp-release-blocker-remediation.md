@@ -1442,22 +1442,18 @@ Anything beyond that is post-MVP unless it directly prevents the above workflow 
 
 ## Execution Bookmark
 
-Updated 2026-09-30 08:11 EDT.
+Updated 2026-09-30 08:15 EDT.
 
 - **Starting SHA:** `83a9b10d66affba4dc5e794fa268bead1cecf331` (`main`, PR #654 merged and deployed).
 - **Plan saved:** this file is the canonical MVP release-blocker remediation plan.
 - **Completed before this plan:** StoreKit backend-authority work (#649), XCTest realignment (#650–#652), and AI-cover pricing follow-up (#654).
-- **Current plan status:** PR 1 (StoreKit Production Authority) is satisfied by the existing shipped work; this must be re-verified against current `main` before marking the blocker closed.
-- **PR 2 status:** implementation committed as `43ab15f` plus bookmark update `44ae274` on `feat/account-deletion`; PR #655 is open for review. No merge, Supabase deployment, or TestFlight deployment performed.
-- **PR 2 validation:** Edge Function `deno check` passed; focused Edge Function tests passed 2/2; iOS build not available on this Linux host.
-- **PR 3 status:** implementation committed as `60c5bc6` on `feat/app-store-compliance`; PR #656 is open for review. No merge, Supabase deployment, or TestFlight deployment performed.
-- **PR 3 validation:** privacy manifest parsed as a plist; `git diff --check` passed; iOS build not available on this Linux host.
-- **PR 4 status:** implementation committed as `79b7845` on `feat/mvp-private-sharing`; PR #657 is open for review. No merge, Supabase deployment, or TestFlight deployment performed.
-- **PR 4 validation:** `deno check` passed; public-sharing tests passed 8/8; `git diff --check` passed; iOS build not available on this Linux host.
-- **PR 5 status:** implementation committed as `5585194` on `feat/xctest-ci-release-gate`; PR #658 is open for review. No merge, deployment, or workflow run performed.
-- **PR 5 validation:** workflow structure check passed; `git diff --check` passed; local iOS execution unavailable on this Linux host.
-- **Next PR:** **PR 6 — Release/Deployment Hardening**.
-- **Next action:** leave PRs #655–#658 open for review and audit the latest `main` for concrete release/deployment omissions before preparing PR 6.
+- **Current plan status:** PRs #655–#659 are open for review; none has been merged or deployed. Final release readiness still requires review/merge decisions and CI/deployment evidence.
+- **PR 2:** commit `43ab15f` plus bookmark updates `44ae274`, `91f0742`, `c7ef711`, `0e909aa` on `feat/account-deletion`; PR #655 open. Edge Function check/tests passed 2/2; iOS build unavailable on Linux.
+- **PR 3:** commit `60c5bc6` on `feat/app-store-compliance`; PR #656 open. Privacy manifest parsed; `git diff --check` passed; iOS build unavailable on Linux.
+- **PR 4:** commit `79b7845` on `feat/mvp-private-sharing`; PR #657 open. `deno check` passed; public-sharing tests passed 8/8; iOS build unavailable on Linux.
+- **PR 5:** commit `5585194` on `feat/xctest-ci-release-gate`; PR #658 open. Workflow structure check passed; macOS XCTest execution remains CI-only.
+- **PR 6:** commit `a5cb1d5` on `feat/release-deployment-hardening`; PR #659 open. Deployment coverage guard passed for 21/21 Edge Functions; `git diff --check` passed.
+- **Next action:** review PRs #655–#659 as a bundle; do not merge, deploy, or mark the MVP ready from this turn. After explicit merge authorization, run the final current-main release audit required by the plan.
 
 ### Bookmark rules
 
