@@ -17,6 +17,10 @@ function request(method: string, path: string, body?: unknown): Request {
   });
 }
 
+async function enabledHandler(requestValue: Request, overrides: Record<string, unknown> = {}) {
+  return await handler(requestValue, { sharingEnabled: true, ...overrides });
+}
+
 function mockClient(options: {
   owner?: string;
   exportOwner?: string;
@@ -142,7 +146,7 @@ Deno.test("EPUB download provenance rejects cross-owner linkage", () => {
 });
 
 Deno.test("EPUB publish rejects non-owner and inactive exports", async () => {
-  const nonOwner = await handler(
+  const nonOwner = await enabledHandler(
     request("POST", "/shared-outputs/epub", { exportMetadataID: EXPORT_ID }),
     {
       adminClient: mockClient({ exportOwner: OTHER }),
@@ -152,7 +156,7 @@ Deno.test("EPUB publish rejects non-owner and inactive exports", async () => {
   );
   assertEquals(nonOwner.status, 403);
 
-  const inactive = await handler(
+  const inactive = await enabledHandler(
     request("POST", "/shared-outputs/epub", { exportMetadataID: EXPORT_ID }),
     {
       adminClient: mockClient({ active: false }),
@@ -171,11 +175,11 @@ Deno.test("EPUB publish uses canonical metadata and reuses the same shared row",
     supabaseURL: "https://example.test",
     publicShareBaseURL: "https://share.example.test",
   };
-  const first = await handler(
+  const first = await enabledHandler(
     request("POST", "/shared-outputs/epub", { exportMetadataID: EXPORT_ID }),
     overrides,
   );
-  const second = await handler(
+  const second = await enabledHandler(
     request("POST", "/shared-outputs/epub", { exportMetadataID: EXPORT_ID }),
     overrides,
   );
@@ -194,7 +198,7 @@ Deno.test("EPUB publish uses canonical metadata and reuses the same shared row",
 
 Deno.test("valid public EPUB returns a five-minute signed URL", async () => {
   const client = mockClient({ existing: true });
-  const response = await handler(
+  const response = await enabledHandler(
     request("GET", `/shared-outputs/${SHARED_ID}/epub`),
     { adminClient: client, supabaseURL: "https://example.test" },
   );
@@ -216,7 +220,7 @@ Deno.test("unavailable EPUB states never sign a URL", async () => {
     ]
   ) {
     const client = mockClient({ ...options, existing: true });
-    const response = await handler(
+    const response = await enabledHandler(
       request("GET", `/shared-outputs/${SHARED_ID}/epub`),
       { adminClient: client, supabaseURL: "https://example.test" },
     );
@@ -230,10 +234,19 @@ Deno.test("unpublished EPUB is unavailable", async () => {
     unpublishedAt: "2026-09-23T00:00:00Z",
     existing: true,
   });
-  const response = await handler(
+  const response = await enabledHandler(
     request("GET", `/shared-outputs/${SHARED_ID}/epub`),
     { adminClient: client, supabaseURL: "https://example.test" },
   );
   assertEquals(response.status, 404);
   assert(client.state.createdSignedURLCalls === 0);
+});
+
+Deno.test("public sharing is fail-closed when the release gate is disabled", async () => {
+  const response = await handler(
+    request("GET", "/shared-outputs"),
+    { sharingEnabled: false },
+  );
+  assertEquals(response.status, 404);
+  assertEquals((await response.json()).errorCode, "public_sharing_disabled");
 });

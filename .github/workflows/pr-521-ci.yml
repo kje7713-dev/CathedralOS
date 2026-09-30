@@ -36,6 +36,9 @@ on:
       - 'supabase/tests/database/provider_billing_alerts.test.sql'
       - 'supabase/tests/database/epub_acknowledgements_rpc.test.sql'
       - 'supabase/tests/database/export_history_persistence_rpc.test.sql'
+      # PR #657: enforce the MVP private-sharing schema/RLS contract in CI.
+      - 'supabase/migrations/20260930120000_disable_public_shared_outputs_for_mvp.sql'
+      - 'supabase/tests/database/shared_epub_publication.test.sql'
       - 'supabase/migrations/20260923160000_epub_story_arc_parts.sql'
       - 'supabase/tests/database/epub_story_arc_parts_rpc.test.sql'
       - '.github/workflows/pr-521-ci.yml'

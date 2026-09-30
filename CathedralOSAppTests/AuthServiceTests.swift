@@ -224,6 +224,47 @@ final class AuthServiceTests: XCTestCase {
                       "Description must include the failure reason: \(desc)")
     }
 
+    func testDestroyLocalSessionClearsAllSupabaseCredentials() async throws {
+        let keys = [
+            "supabase.session.user_id",
+            "supabase.session.access_token",
+            "supabase.session.user_email",
+            "supabase.session.refresh_token"
+        ]
+        for (index, key) in keys.enumerated() {
+            try KeychainService.saveString(key: key, value: "credential-\(index)")
+        }
+        defer { for key in keys { try? KeychainService.delete(key: key) } }
+
+        let service = BackendAuthService()
+        try service.destroyLocalSession()
+
+        XCTAssertEqual(service.authState, .signedOut)
+        XCTAssertNil(service.currentAccessToken)
+        for key in keys { XCTAssertNil(KeychainService.loadString(key: key), key) }
+    }
+
+    func testLocalAccountPurgeRemovesSwiftDataAndLifecycleDefaults() throws {
+        let schema = Schema([
+            Role.self, Domain.self, Goal.self, Constraint.self,
+            CathedralProfile.self, Secret.self, StoryProject.self,
+            ProjectSetting.self, StoryCharacter.self, StorySpark.self,
+            Aftertaste.self, PromptPack.self, StoryRelationship.self,
+            ThemeQuestion.self, Motif.self, GenerationOutput.self,
+            StoryArc.self, StoryArcBeat.self, Outline.self, OutlineSection.self
+        ])
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let context = ModelContext(container)
+        context.insert(StoryProject(name: "Delete me"))
+        let defaults = UserDefaults(suiteName: "account-deletion-\(UUID().uuidString)")!
+        defaults.set("pending", forKey: "cathedralos.output_sync.pending")
+
+        try LocalAccountDeletionCleanupService(defaults: defaults).purgeLocalAccountData(in: context)
+
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<StoryProject>()), 0)
+        XCTAssertNil(defaults.object(forKey: "cathedralos.output_sync.pending"))
+    }
+
     func testBackendSignOutDoesNotDeleteSwiftDataProjectRows() async throws {
         let schema = Schema([
             StoryProject.self,

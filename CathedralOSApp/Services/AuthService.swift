@@ -43,6 +43,7 @@ enum AuthServiceError: Error, LocalizedError {
     case cancelled
     case signInFailed(String)
     case signOutFailed(String)
+    case localCredentialRemovalFailed([String])
     case sessionExpired
     case networkFailure(String)
     case serverRejectedAuth(String)
@@ -59,6 +60,8 @@ enum AuthServiceError: Error, LocalizedError {
             return "Sign in failed: \(reason)"
         case .signOutFailed(let reason):
             return "Sign out failed: \(reason)"
+        case .localCredentialRemovalFailed(let keys):
+            return "The account was deleted, but local sign-in credentials could not be removed (\(keys.joined(separator: ", "))). Please contact support."
         case .sessionExpired:
             return "Your session has expired. Please sign in again."
         case .networkFailure(let reason):
@@ -202,18 +205,6 @@ private final class AppleSignInHandler: NSObject,
 }
 
 // MARK: - BackendAuthService
-protocol AuthCredentialStore {
-    func loadString(key: String) -> String?
-    func saveString(key: String, value: String) throws
-    func delete(key: String) throws
-}
-
-struct KeychainAuthCredentialStore: AuthCredentialStore {
-    func loadString(key: String) -> String? { KeychainService.loadString(key: key) }
-    func saveString(key: String, value: String) throws { try KeychainService.saveString(key: key, value: value) }
-    func delete(key: String) throws { try KeychainService.delete(key: key) }
-}
-
 
 /// Production auth service. Persists session credentials via `KeychainService`.
 /// Sign in with Apple exchanges the Apple identity token for a Supabase JWT via the
@@ -230,16 +221,6 @@ final class BackendAuthService: AuthService {
 
     private(set) var authState: AuthState = .unknown
     private(set) var currentAccessToken: String?
-    private let configurationPredicate: () -> Bool
-    private let credentialStore: any AuthCredentialStore
-
-    init(
-        configurationPredicate: @escaping () -> Bool = { SupabaseConfiguration.isConfigured },
-        credentialStore: any AuthCredentialStore = KeychainAuthCredentialStore()
-    ) {
-        self.configurationPredicate = configurationPredicate
-        self.credentialStore = credentialStore
-    }
 
     // MARK: Keychain keys
 
@@ -251,14 +232,14 @@ final class BackendAuthService: AuthService {
     // MARK: - Session check
 
     func checkSession() async {
-        guard configurationPredicate() else {
+        guard SupabaseConfiguration.isConfigured else {
             authState = .signedOut
             currentAccessToken = nil
             return
         }
-        if let storedID = credentialStore.loadString(key: Self.keychainUserID) {
-            let email = credentialStore.loadString(key: Self.keychainEmail)
-            currentAccessToken = credentialStore.loadString(key: Self.keychainAccessToken)
+        if let storedID = KeychainService.loadString(key: Self.keychainUserID) {
+            let email = KeychainService.loadString(key: Self.keychainEmail)
+            currentAccessToken = KeychainService.loadString(key: Self.keychainAccessToken)
             authState = .signedIn(AuthUser(id: storedID, email: email))
         } else {
             authState = .signedOut
@@ -273,7 +254,7 @@ final class BackendAuthService: AuthService {
     /// When the backend is configured, throws `.notImplemented` because the concrete
     /// sign-in path for this service is `signInWithApple()`, not this method.
     func signIn() async throws {
-        guard configurationPredicate() else {
+        guard SupabaseConfiguration.isConfigured else {
             throw AuthServiceError.notConfigured
         }
         // The real entry point is signInWithApple(). This method exists only to
@@ -286,7 +267,7 @@ final class BackendAuthService: AuthService {
     /// Initiates Sign in with Apple, then exchanges the Apple identity token for a
     /// Supabase session via `POST /auth/v1/token?grant_type=id_token`.
     func signInWithApple() async throws {
-        guard configurationPredicate() else {
+        guard SupabaseConfiguration.isConfigured else {
             throw AuthServiceError.notConfigured
         }
 
@@ -309,6 +290,7 @@ final class BackendAuthService: AuthService {
               let idToken = String(data: idTokenData, encoding: .utf8) else {
             throw AuthServiceError.signInFailed("Could not extract Apple identity token.")
         }
+        let appleAuthorizationCode = credential.authorizationCode.flatMap { String(data: $0, encoding: .utf8) }
 
         // Exchange the Apple identity token for a Supabase session.
         let response = try await Self.exchangeAppleToken(
@@ -324,16 +306,22 @@ final class BackendAuthService: AuthService {
         }
 
         // Persist session to keychain.
-        try? credentialStore.saveString(key: Self.keychainUserID, value: userID)
-        try? credentialStore.saveString(key: Self.keychainAccessToken, value: response.accessToken)
+        try? KeychainService.saveString(key: Self.keychainUserID, value: userID)
+        try? KeychainService.saveString(key: Self.keychainAccessToken, value: response.accessToken)
         if let email {
-            try? credentialStore.saveString(key: Self.keychainEmail, value: email)
+            try? KeychainService.saveString(key: Self.keychainEmail, value: email)
         }
         if let refreshToken = response.refreshToken {
-            try? credentialStore.saveString(key: Self.keychainRefreshToken, value: refreshToken)
+            try? KeychainService.saveString(key: Self.keychainRefreshToken, value: refreshToken)
         }
 
         currentAccessToken = response.accessToken
+        if let appleAuthorizationCode {
+            // Best effort: the server exchanges and stores the Apple refresh token
+            // for later account-deletion revocation. Sign-in itself remains usable
+            // while operator-side Apple credentials are being configured.
+            try? await Self.linkAppleCredential(authorizationCode: appleAuthorizationCode, accessToken: response.accessToken)
+        }
         authState = .signedIn(AuthUser(id: userID, email: email))
     }
 
@@ -342,10 +330,10 @@ final class BackendAuthService: AuthService {
     /// Exchanges the stored refresh token for a new access token.
     /// Throws `.sessionExpired` when no refresh token is available.
     func refreshSession() async throws {
-        guard configurationPredicate() else {
+        guard SupabaseConfiguration.isConfigured else {
             throw AuthServiceError.notConfigured
         }
-        guard let refreshToken = credentialStore.loadString(key: Self.keychainRefreshToken),
+        guard let refreshToken = KeychainService.loadString(key: Self.keychainRefreshToken),
               !refreshToken.isEmpty else {
             authState = .signedOut
             currentAccessToken = nil
@@ -392,9 +380,9 @@ final class BackendAuthService: AuthService {
         let userID = response.user?.id ?? (authState.currentUser?.id ?? "")
         let email = response.user?.email ?? authState.currentUser?.email
 
-        try? credentialStore.saveString(key: Self.keychainAccessToken, value: response.accessToken)
+        try? KeychainService.saveString(key: Self.keychainAccessToken, value: response.accessToken)
         if let refreshToken = response.refreshToken {
-            try? credentialStore.saveString(key: Self.keychainRefreshToken, value: refreshToken)
+            try? KeychainService.saveString(key: Self.keychainRefreshToken, value: refreshToken)
         }
 
         currentAccessToken = response.accessToken
@@ -407,14 +395,29 @@ final class BackendAuthService: AuthService {
 
     func signOut() async throws {
         guard case .signedIn = authState else { return }
-        do {
-            try credentialStore.delete(key: Self.keychainUserID)
-        } catch { throw AuthServiceError.signOutFailed(error.localizedDescription) }
-        try? credentialStore.delete(key: Self.keychainAccessToken)
-        try? credentialStore.delete(key: Self.keychainEmail)
-        try? credentialStore.delete(key: Self.keychainRefreshToken)
+        try destroyLocalSession()
+    }
+
+    /// Destroys the local Supabase session after destructive account deletion.
+    /// This intentionally does not call a remote logout endpoint: the remote
+    /// account is already gone, so local credential removal is authoritative.
+    func destroyLocalSession() throws {
+        let credentials = [
+            (Self.keychainUserID, "user_id"),
+            (Self.keychainAccessToken, "access_token"),
+            (Self.keychainEmail, "user_email"),
+            (Self.keychainRefreshToken, "refresh_token")
+        ]
+        var failures: [String] = []
+        for (key, label) in credentials {
+            do { try KeychainService.delete(key: key) }
+            catch { failures.append(label) }
+        }
         currentAccessToken = nil
         authState = .signedOut
+        if !failures.isEmpty {
+            throw AuthServiceError.localCredentialRemovalFailed(failures)
+        }
     }
 
     // MARK: - Private helpers
@@ -425,6 +428,21 @@ final class BackendAuthService: AuthService {
         } catch {
             throw AuthServiceError.signInFailed("Could not parse auth response: \(error.localizedDescription)")
         }
+    }
+
+    /// Sends the one-time Apple authorization code to the server so it can
+    /// exchange/store a refresh token for later account-deletion revocation.
+    private static func linkAppleCredential(authorizationCode: String, accessToken: String) async throws {
+        guard let config = try? SupabaseConfiguration.validatedConfiguration() else { throw AuthServiceError.notConfigured }
+        let url = config.projectURL.appendingPathComponent("functions").appendingPathComponent("v1").appendingPathComponent("link-apple-credential")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["authorization_code": authorizationCode])
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw AuthServiceError.serverRejectedAuth("Apple credential linking failed.") }
     }
 
     /// Exchanges an Apple identity token for a Supabase session.

@@ -14,6 +14,15 @@ import Foundation
 
 enum PublicSharingServiceConfiguration {
 
+    /// Public discovery and publication are disabled unless explicitly enabled
+    /// by the production build configuration for a later release.
+    static var isEnabled: Bool {
+        let raw = (Bundle.main.infoDictionary?["PublicSharingEnabled"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return raw == "1" || raw == "true" || raw == "yes"
+    }
+
     // MARK: - Base URL
 
     /// The backend sharing base URL, read from Info.plist.

@@ -58,10 +58,12 @@ private struct AppRootView: View {
                 .tabItem {
                     Label("Projects", systemImage: "books.vertical")
                 }
-            SharedOutputsView()
-                .tabItem {
-                    Label("Shared", systemImage: "globe")
-                }
+            if PublicSharingServiceConfiguration.isEnabled {
+                SharedOutputsView()
+                    .tabItem {
+                        Label("Shared", systemImage: "globe")
+                    }
+            }
             AccountView(recoveryContext: recoveryContext)
                 .tabItem {
                     Label("Account", systemImage: "person.circle")
@@ -347,6 +349,10 @@ enum PersistenceBootstrap {
         }
         defaults.set(recoveryStoreURL.path, forKey: activeStoreURLDefaultsKey)
         logger.log("Promoted recovered SwiftData store for next launch: \(recoveryStoreURL.path, privacy: .public)")
+    }
+
+    static func clearSelectedStoreSelection(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: activeStoreURLDefaultsKey)
     }
 
     static func selectedStoreURL(
