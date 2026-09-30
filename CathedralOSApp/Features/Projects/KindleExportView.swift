@@ -232,7 +232,7 @@ struct KindleExportView: View {
                 }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("Creating an AI cover is a paid image-generation call. Estimated charge: approximately \(aiCoverEstimatedCharge ?? 0) credits. Credits will be held based on estimated usage and charged based on actual usage.")
+                Text("Creating an AI cover costs exactly \(aiCoverEstimatedCharge ?? 20) credits. Credits are held before generation and charged once when the cover is successfully included in the export.")
             }
             .alert(
                 "Export Failed",

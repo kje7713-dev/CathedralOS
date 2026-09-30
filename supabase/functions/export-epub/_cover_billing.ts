@@ -4,7 +4,6 @@ import {
   SupabaseCreditStore,
 } from "../generate-story/_credits.ts";
 import {
-  computeActualChargeCredits,
   computeMarginCents,
   computeProviderCogsCents,
   DEFAULT_PRICING,
@@ -27,7 +26,7 @@ const AI_COVER_TEXT_INPUT_USD_PER_1M = 5;
 const AI_COVER_IMAGE_OUTPUT_USD_PER_1M = 40;
 const AI_COVER_BILLING_MULTIPLIER = 2;
 const AI_COVER_CREDIT_VALUE_USD = DEFAULT_PRICING.creditValueUsd;
-const AI_COVER_MINIMUM_CHARGE_CREDITS = 0.25;
+export const AI_COVER_CHARGE_CREDITS = 20;
 
 export class AiCoverInsufficientCreditsError extends Error {
   constructor(message: string) {
@@ -51,7 +50,7 @@ export function aiCoverPricing(): PricingSnapshot {
     outputCreditRatePer1k: (AI_COVER_IMAGE_OUTPUT_USD_PER_1M / 1000) *
       AI_COVER_BILLING_MULTIPLIER / AI_COVER_CREDIT_VALUE_USD,
     billingMultiplier: AI_COVER_BILLING_MULTIPLIER,
-    minimumChargeCredits: AI_COVER_MINIMUM_CHARGE_CREDITS,
+    minimumChargeCredits: AI_COVER_CHARGE_CREDITS,
     creditValueUsd: AI_COVER_CREDIT_VALUE_USD,
     effectiveAt: new Date().toISOString(),
     providerInputUsdPer1m: AI_COVER_TEXT_INPUT_USD_PER_1M,
@@ -93,10 +92,9 @@ export function actualAiCoverBilling(
 
 function computeAiCoverBilling(usage: GenerationUsage): AiCoverBilling {
   const pricing = aiCoverPricing();
-  // Credit balances and the public credit ledger are whole-credit units; use
-  // the established generation-path ceiling after calculating usage-based
-  // provider cost plus markup. Telemetry retains the exact COGS/revenue cents.
-  const actualCharge = Math.ceil(computeActualChargeCredits(usage, pricing));
+  // AI-cover pricing is a fixed product charge. Provider usage remains in
+  // telemetry for margin analysis, but it never changes the customer debit.
+  const actualCharge = AI_COVER_CHARGE_CREDITS;
   const cogs = computeProviderCogsCents(usage, pricing);
   const margin = computeMarginCents(
     actualCharge,
