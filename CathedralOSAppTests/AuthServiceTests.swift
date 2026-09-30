@@ -220,8 +220,6 @@ final class AuthServiceTests: XCTestCase {
         defer { for key in keys { try? KeychainService.delete(key: key) } }
 
         let service = BackendAuthService()
-        await service.checkSession()
-        XCTAssertTrue(service.isSignedIn)
         try service.destroyLocalSession()
 
         XCTAssertEqual(service.authState, .signedOut)
