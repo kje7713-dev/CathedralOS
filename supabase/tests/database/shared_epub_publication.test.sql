@@ -1,6 +1,6 @@
 -- Shared EPUB publication schema, RLS, and lifecycle contract.
 begin;
-select plan(34);
+select plan(37);
 
 select has_column('public', 'shared_outputs', 'content_type', 'shared outputs identifies text versus EPUB content');
 select has_column('public', 'shared_outputs', 'export_metadata_id', 'shared EPUB links one immutable export');
