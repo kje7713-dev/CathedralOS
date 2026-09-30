@@ -16,6 +16,7 @@ import XCTest
 
 private final class MockReportAuthService: AuthService {
     var authState: AuthState
+    var currentAccessToken: String? = "test-user-jwt"
     init(authState: AuthState = .signedOut) { self.authState = authState }
     func checkSession() async {}
     func signIn() async throws {}

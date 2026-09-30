@@ -39,7 +39,19 @@ final class KindleExportServiceTests: XCTestCase {
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
         override func startLoading() {
-            let capture = self.request
+            var capture = self.request
+            if capture.httpBody == nil, let stream = capture.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var bytes = Data()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while true {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    bytes.append(buffer, count: count)
+                }
+                capture.httpBody = bytes
+            }
             Self.captured.append(capture)
             let next = Self.queued.isEmpty ? (status: 500, body: Data("{}".utf8), delay: 0.0) : Self.queued.removeFirst()
             DispatchQueue.global().asyncAfter(deadline: .now() + next.delay) { [weak self] in

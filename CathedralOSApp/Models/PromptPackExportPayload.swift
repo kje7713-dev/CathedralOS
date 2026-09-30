@@ -157,6 +157,37 @@ struct PromptPackExportPayload: Codable {
         let institutions: [String]
         let dominantValues: [String]
         let hiddenTruths: [String]
+
+        private enum CodingKeys: String, CodingKey {
+            case included, summary, domains, constraints, themes, season, worldRules
+            case historicalPressure, politicalForces, socialOrder, environmentalPressure
+            case technologyLevel, mythicFrame, instructionBias, religiousPressure
+            case economicPressure, taboos, institutions, dominantValues, hiddenTruths
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            included = try c.decodeIfPresent(Bool.self, forKey: .included) ?? false
+            summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+            domains = try c.decodeIfPresent([String].self, forKey: .domains) ?? []
+            constraints = try c.decodeIfPresent([String].self, forKey: .constraints) ?? []
+            themes = try c.decodeIfPresent([String].self, forKey: .themes) ?? []
+            season = try c.decodeIfPresent(String.self, forKey: .season) ?? ""
+            worldRules = try c.decodeIfPresent([String].self, forKey: .worldRules) ?? []
+            historicalPressure = try c.decodeIfPresent(String.self, forKey: .historicalPressure) ?? ""
+            politicalForces = try c.decodeIfPresent(String.self, forKey: .politicalForces) ?? ""
+            socialOrder = try c.decodeIfPresent(String.self, forKey: .socialOrder) ?? ""
+            environmentalPressure = try c.decodeIfPresent(String.self, forKey: .environmentalPressure) ?? ""
+            technologyLevel = try c.decodeIfPresent(String.self, forKey: .technologyLevel) ?? ""
+            mythicFrame = try c.decodeIfPresent(String.self, forKey: .mythicFrame) ?? ""
+            instructionBias = try c.decodeIfPresent(String.self, forKey: .instructionBias) ?? ""
+            religiousPressure = try c.decodeIfPresent(String.self, forKey: .religiousPressure) ?? ""
+            economicPressure = try c.decodeIfPresent(String.self, forKey: .economicPressure) ?? ""
+            taboos = try c.decodeIfPresent([String].self, forKey: .taboos) ?? []
+            institutions = try c.decodeIfPresent([String].self, forKey: .institutions) ?? []
+            dominantValues = try c.decodeIfPresent([String].self, forKey: .dominantValues) ?? []
+            hiddenTruths = try c.decodeIfPresent([String].self, forKey: .hiddenTruths) ?? []
+        }
     }
 
     struct CharacterPayload: Codable {

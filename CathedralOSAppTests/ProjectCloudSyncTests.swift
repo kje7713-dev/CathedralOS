@@ -41,7 +41,20 @@ private final class ProjectCloudSyncURLProtocol: URLProtocol {
         }
 
         do {
-            let (response, data) = try handler(request)
+            var capturedRequest = request
+            if capturedRequest.httpBody == nil, let stream = capturedRequest.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var bytes = Data()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while true {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    bytes.append(buffer, count: count)
+                }
+                capturedRequest.httpBody = bytes
+            }
+            let (response, data) = try handler(capturedRequest)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)

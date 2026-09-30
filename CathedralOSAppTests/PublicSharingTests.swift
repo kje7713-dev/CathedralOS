@@ -98,6 +98,7 @@ final class MockPublicSharingService: PublicSharingService {
 /// Minimal `AuthService` stub for injection into `BackendPublicSharingService` in tests.
 private final class MockPublicSharingAuthService: AuthService {
     var authState: AuthState
+    var currentAccessToken: String? = "test-user-jwt"
     init(authState: AuthState = .signedOut) { self.authState = authState }
     func checkSession() async {}
     func signIn() async throws {}

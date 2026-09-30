@@ -10,6 +10,7 @@ import SwiftData
 
 final class MockAuthService: AuthService {
     var authState: AuthState = .signedOut
+    var currentAccessToken: String? = "test-user-jwt"
     private(set) var checkSessionCalled = false
     var signInResult: Result<Void, Error> = .failure(
         AuthServiceError.signInFailed("stub")

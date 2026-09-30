@@ -1065,6 +1065,19 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             }
         }
 
+        let persistedOwnerID = input.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ownerID: String
+        if !persistedOwnerID.isEmpty {
+            // Reject a persisted owner mismatch before client construction or
+            // network access; this is an identity failure, not notConfigured.
+            guard persistedOwnerID.caseInsensitiveCompare(userID) == .orderedSame else {
+                throw GenerationOutputDeletionError.cloudOwnershipNotVerified
+            }
+            ownerID = persistedOwnerID
+        } else {
+            ownerID = ""
+        }
+
         let client: SupabaseBackendClient
         do {
             client = try clientFactory()
@@ -1084,17 +1097,15 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             try await sharingService.unpublish(sharedOutputID: sharedOutputID)
         }()
 
-        try await establishLegacyOwnershipIfNeeded(
-            input: input,
-            cloudID: cloudID,
-            userID: userID,
-            accessToken: accessToken,
-            client: client
-        )
-        let ownerID = input.cloudOwnerUserID
-        guard ownerID.caseInsensitiveCompare(userID) == .orderedSame else {
-            throw GenerationOutputDeletionError.cloudOwnershipNotVerified
-        }
+        let resolvedOwnerID = ownerID.isEmpty
+            ? try await establishLegacyOwnershipIfNeeded(
+                input: input,
+                cloudID: cloudID,
+                userID: userID,
+                accessToken: accessToken,
+                client: client
+            )
+            : ownerID
 
         // Wait for unpublish before declaring success. By now the task
         // is likely already done — it started in parallel with the
@@ -1110,7 +1121,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         )
         components?.queryItems = [
             URLQueryItem(name: "id", value: "eq.\(cloudID)"),
-            URLQueryItem(name: "user_id", value: "eq.\(ownerID)")
+            URLQueryItem(name: "user_id", value: "eq.\(resolvedOwnerID)")
         ]
         guard let url = components?.url else {
             throw GenerationOutputDeletionError.notConfigured
@@ -1156,13 +1167,13 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         userID: String,
         accessToken: String,
         client: SupabaseBackendClient
-    ) async throws {
+    ) async throws -> String {
         let persistedOwnerID = input.cloudOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard persistedOwnerID.isEmpty else {
             guard persistedOwnerID.caseInsensitiveCompare(userID) == .orderedSame else {
                 throw GenerationOutputDeletionError.cloudOwnershipNotVerified
             }
-            return
+            return persistedOwnerID
         }
 
         var components = URLComponents(
@@ -1211,8 +1222,9 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         }
 
         // Note: legacy ownership backfill (model.save + backup) is intentionally omitted here.
-        // resolveLegacyOwnership now operates from `input` primitives only — it cannot reach
-        // back into a SwiftData context. The caller will use the returned ownerID directly.
+        // resolveLegacyOwnership operates from `input` primitives only — it cannot reach
+        // back into a SwiftData context. Return the verified owner directly to the caller.
+        return rows[0].userID
     }
 
     /// 19:16 EDT Kevin: orchestrates delete-everywhere as three discrete
@@ -1258,7 +1270,7 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
         } catch {
             throw GenerationOutputDeletionError.notConfigured
         }
-        try await establishLegacyOwnershipIfNeeded(
+        _ = try await establishLegacyOwnershipIfNeeded(
             input: input,
             cloudID: cloudID,
             userID: userID,

@@ -84,8 +84,16 @@ final class KindleExportPoller {
             do {
                 response = try await service.status(jobId: jobId, userAccessToken: token)
             } catch let err as KindleExportError {
+                let isTransient: Bool
                 switch err {
                 case .networkError, .pollFailed:
+                    isTransient = true
+                case .serverError(let statusCode, _):
+                    isTransient = (500...599).contains(statusCode)
+                default:
+                    isTransient = false
+                }
+                if isTransient {
                     // Transient — apply bounded backoff
                     if transientFailures >= Self.transientBackoffNs.count {
                         // Budget exhausted
@@ -101,7 +109,8 @@ final class KindleExportPoller {
                     }
                     if Task.isCancelled { return }
                     continue
-                default:
+                }
+                if !isTransient {
                     onTerminal(.failure(err))
                     return
                 }
