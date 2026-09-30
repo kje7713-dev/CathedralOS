@@ -1458,3 +1458,12 @@ Updated 2026-09-30 08:50 EDT.
 ### Bookmark rules
 
 Update this section after each meaningful milestone with the current SHA, PR number, tests, deployment status, and the next unfinished PR. Do not mark a blocker complete without current-main evidence.
+
+## 2026-09-30 continued repair checkpoint
+
+- Current open heads: #655 `7fc600f`, #656 `4f3fbf0`, #657 `c209cbf`, #658 `d9a1bce`, #659 `32af178`. <!-- project: path:/home/kevbot/.openclaw/workspace -->
+- #655 now has fail-closed local cleanup, correct Caches paths, deterministic local Supabase credential destruction, explicit subscription-deletion warning, orphan project-scoped Storage enumeration, and local/backend regression coverage. Apple authorization revocation remains unresolved and blocks release readiness. <!-- project: path:/home/kevbot/.openclaw/workspace -->
+- #657 pending hardening is committed; #659 now parses executable workflow `run:` blocks, rejects missing/nonexistent/duplicate deploys, ignores comments/documentation, and runs in PR CI. <!-- project: path:/home/kevbot/.openclaw/workspace -->
+- #658 removed production payload compatibility shims and moved fixture adapters into tests; CI verification remains pending. <!-- project: path:/home/kevbot/.openclaw/workspace -->
+- Temporary local integration composition succeeded after one expected `project.pbxproj` settings conflict was resolved by retaining both legal-link and sharing settings. Combined Deno account/public-sharing tests: 11/11; deployment guard fixtures: 5/5; coverage: 22/22. Xcode build/XCTest/pgTAP cannot run on Linux. <!-- project: path:/home/kevbot/.openclaw/workspace -->
+- No PR merge, Supabase deployment, TestFlight upload, or manual workflow trigger occurred. <!-- project: path:/home/kevbot/.openclaw/workspace -->
