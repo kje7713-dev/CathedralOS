@@ -25,6 +25,7 @@ struct AccountView: View {
     let recoveryContext: PersistenceRecoveryContext?
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openURL) private var openURL
     @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator
     @Query private var localProjects: [StoryProject]
     @Query private var localGenerations: [GenerationOutput]
@@ -111,11 +112,20 @@ struct AccountView: View {
             }
             .alert("Delete your StoryDonkey account?", isPresented: $showDeleteAccountConfirmation) {
                 Button("Cancel", role: .cancel) {}
+                if entitlementState.isPro {
+                    Button("Manage Subscription") {
+                        openURL(URL(string: "https://apps.apple.com/account/subscriptions")!)
+                    }
+                }
                 Button("Delete Account", role: .destructive) {
                     Task { await attemptDeleteAccount() }
                 }
             } message: {
-                Text("This permanently removes your account, cloud data, and local drafts on this device. This cannot be undone.")
+                if entitlementState.isPro {
+                    Text("This permanently removes your account, cloud data, and local drafts on this device. Deleting your StoryDonkey account does not cancel your Apple subscription; auto-renewal continues until you cancel it in Apple subscription settings. This cannot be undone.")
+                } else {
+                    Text("This permanently removes your account, cloud data, and local drafts on this device. This cannot be undone.")
+                }
             }
         }
     }
