@@ -240,8 +240,6 @@ export async function handler(
       "sharingEnabled",
     )
     ? overrides.sharingEnabled === true
-    : overrides.adminClient
-    ? true
     : ["1", "true", "yes"].includes(
       (Deno.env.get("PUBLIC_SHARING_ENABLED") ?? "").trim().toLowerCase(),
     );
