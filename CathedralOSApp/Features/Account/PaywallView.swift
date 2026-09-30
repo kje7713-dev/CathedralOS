@@ -161,6 +161,10 @@ struct PaywallView: View {
                 }
                 .disabled(isWorking || isRestoring)
 
+                Link(destination: URL(string: "https://apps.apple.com/account/subscriptions")!) {
+                    Label("Manage Subscription", systemImage: "arrow.up.forward.app")
+                }
+
                 if let successMessage {
                     Text(successMessage)
                         .font(.caption)

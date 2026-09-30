@@ -21,6 +21,7 @@ struct AccountView: View {
     let entitlementService: any StoreKitEntitlementServiceProtocol
     let creditStateService: any CreditStateServiceProtocol
     let accountDeletionService: any AccountDeletionServiceProtocol
+    let accountDeletionCleanupService: any AccountDeletionCleanupServiceProtocol
     let recoveryContext: PersistenceRecoveryContext?
 
     @Environment(\.modelContext) private var modelContext
@@ -36,6 +37,7 @@ struct AccountView: View {
         entitlementService: any StoreKitEntitlementServiceProtocol = StoreKitEntitlementService.shared,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
         accountDeletionService: any AccountDeletionServiceProtocol = BackendAccountDeletionService(),
+        accountDeletionCleanupService: any AccountDeletionCleanupServiceProtocol = LocalAccountDeletionCleanupService(),
         recoveryContext: PersistenceRecoveryContext? = nil,
         durabilityCoordinator: DataDurabilityCoordinator = .shared
     ) {
@@ -46,6 +48,7 @@ struct AccountView: View {
         self.entitlementService = entitlementService
         self.creditStateService = creditStateService
         self.accountDeletionService = accountDeletionService
+        self.accountDeletionCleanupService = accountDeletionCleanupService
         self.recoveryContext = recoveryContext
         _durabilityCoordinator = ObservedObject(wrappedValue: durabilityCoordinator)
     }
@@ -269,6 +272,10 @@ struct AccountView: View {
                     )
                 }
                 .disabled(isWorking || isRestoring)
+
+                Link(destination: URL(string: "https://apps.apple.com/account/subscriptions")!) {
+                    Label("Manage Subscription", systemImage: "arrow.up.forward.app")
+                }
 
                 if let restoreSuccess {
                     Text(restoreSuccess)
@@ -775,14 +782,22 @@ struct AccountView: View {
         defer { isWorking = false }
         do {
             try await accountDeletionService.deleteAccount()
-            // The server deletion is authoritative. Remove local drafts too so
-            // a newly-created account cannot re-upload the deleted account's data.
-            for project in localProjects { modelContext.delete(project) }
-            for output in localGenerations { modelContext.delete(output) }
-            try? modelContext.save()
+            // The server deletion is authoritative. Purge every local store,
+            // backup, cache, resume state, and secret before allowing a future
+            // account to sign in on this device.
+            var cleanupError: Error?
+            do {
+                try accountDeletionCleanupService.purgeLocalAccountData(in: modelContext)
+            } catch {
+                cleanupError = error
+            }
+            // Always terminate the deleted session, even if local cleanup needs
+            // operator-visible follow-up. A deleted backend account must never
+            // remain authenticated in the app.
             try? await authService.signOut()
             durabilityCoordinator.performSignOut(context: modelContext)
             authState = .signedOut
+            if let cleanupError { throw cleanupError }
         } catch {
             actionError = (error as? AccountDeletionError)?.errorDescription ?? error.localizedDescription
         }

@@ -349,6 +349,10 @@ enum PersistenceBootstrap {
         logger.log("Promoted recovered SwiftData store for next launch: \(recoveryStoreURL.path, privacy: .public)")
     }
 
+    static func clearSelectedStoreSelection(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: activeStoreURLDefaultsKey)
+    }
+
     static func selectedStoreURL(
         defaultStoreURL: URL,
         defaults: UserDefaults = .standard
