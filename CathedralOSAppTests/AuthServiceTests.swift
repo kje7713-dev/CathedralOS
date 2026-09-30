@@ -231,17 +231,17 @@ final class AuthServiceTests: XCTestCase {
             "supabase.session.user_email",
             "supabase.session.refresh_token"
         ]
-        for (index, key) in keys.enumerated() {
-            try KeychainService.saveString(key: key, value: "credential-\(index)")
-        }
-        defer { for key in keys { try? KeychainService.delete(key: key) } }
-
-        let service = BackendAuthService()
+        let credentials = InMemoryAuthCredentialStore(values: Dictionary(
+            uniqueKeysWithValues: keys.enumerated().map { index, key in
+                (key, "credential-\(index)")
+            }
+        ))
+        let service = BackendAuthService(configurationPredicate: { true }, credentialStore: credentials)
         try service.destroyLocalSession()
 
         XCTAssertEqual(service.authState, .signedOut)
         XCTAssertNil(service.currentAccessToken)
-        for key in keys { XCTAssertNil(KeychainService.loadString(key: key), key) }
+        for key in keys { XCTAssertNil(credentials.values[key], key) }
     }
 
     func testLocalAccountPurgeRemovesSwiftDataAndLifecycleDefaults() throws {
