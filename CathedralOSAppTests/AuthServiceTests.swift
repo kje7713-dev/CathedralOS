@@ -33,7 +33,8 @@ final class MockAuthService: AuthService {
 
 
 private final class InMemoryAuthCredentialStore: AuthCredentialStore {
-    var values: [String: String] = [:]
+    var values: [String: String]
+    init(values: [String: String] = [:]) { self.values = values }
     func loadString(key: String) -> String? { values[key] }
     func saveString(key: String, value: String) throws { values[key] = value }
     func delete(key: String) throws { values.removeValue(forKey: key) }
@@ -125,7 +126,7 @@ final class AuthServiceTests: XCTestCase {
             "supabase.session.user_email": "test@example.com",
             "supabase.session.refresh_token": "test-refresh-token"
         ]
-        let service = BackendAuthService(configurationPredicate: { true }, credentialStore: credentials)
+        let service = BackendAuthService(configurationPredicate: { false }, credentialStore: credentials)
         await service.checkSession()
         XCTAssertEqual(service.authState, .signedOut,
                        "checkSession must set .signedOut when backend is not configured")
@@ -269,7 +270,13 @@ final class AuthServiceTests: XCTestCase {
             try? KeychainService.delete(key: refreshTokenKey)
         }
 
-        let service = BackendAuthService(configurationPredicate: { true })
+        let credentialStore = InMemoryAuthCredentialStore(values: [
+            userIDKey: "test-user-id",
+            accessTokenKey: "test-access-token",
+            emailKey: "test@example.com",
+            refreshTokenKey: "test-refresh-token"
+        ])
+        let service = BackendAuthService(configurationPredicate: { true }, credentialStore: credentialStore)
         await service.checkSession()
         XCTAssertTrue(service.isSignedIn, "Precondition failed: service should be signed in before signOut")
 

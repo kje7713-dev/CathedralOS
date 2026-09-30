@@ -777,7 +777,7 @@ final class PublicSharingTests: XCTestCase {
 
     func testPublishFailsWhenOutputTextIsEmpty() async {
         let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
-        let service = BackendPublicSharingService(authService: auth, baseURLProvider: { nil })
+        let service = BackendPublicSharingService(authService: auth, baseURLProvider: { URL(string: "https://sharing.test")! })
         let gen = makeOutput()
         gen.outputText = ""
 
@@ -817,7 +817,7 @@ final class PublicSharingTests: XCTestCase {
         let expectedCloudID = UUID().uuidString    // must be a valid UUID to pass the publish guard
         sync.cloudIDToReturn = expectedCloudID
 
-        let service = BackendPublicSharingService(authService: auth, syncService: sync, baseURLProvider: { URL(string: "https://sharing.test")! })
+        let service = BackendPublicSharingService(authService: auth, syncService: sync, baseURLProvider: { nil })
         let gen = makeOutput()
         gen.cloudGenerationOutputID = ""
         gen.syncStatus = SyncStatus.localOnly.rawValue
@@ -841,7 +841,7 @@ final class PublicSharingTests: XCTestCase {
         let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
         let sync = MockSyncServiceForPublishing()
 
-        let service = BackendPublicSharingService(authService: auth, syncService: sync, baseURLProvider: { URL(string: "https://sharing.test")! })
+        let service = BackendPublicSharingService(authService: auth, syncService: sync, baseURLProvider: { nil })
         let gen = makeOutput()
         gen.cloudGenerationOutputID = UUID().uuidString   // valid UUID — sync must be skipped
 
@@ -924,7 +924,7 @@ final class PublicSharingTests: XCTestCase {
         // and must proceed to the endpoint check (failing with endpointNotConfigured in tests).
         let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
         let sync = MockSyncServiceForPublishing()
-        let service = BackendPublicSharingService(authService: auth, syncService: sync, baseURLProvider: { URL(string: "https://sharing.test")! })
+        let service = BackendPublicSharingService(authService: auth, syncService: sync, baseURLProvider: { nil })
         let gen = makeOutput()
         gen.cloudGenerationOutputID = UUID().uuidString    // already a valid UUID
 
