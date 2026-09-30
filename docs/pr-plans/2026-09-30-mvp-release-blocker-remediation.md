@@ -1442,18 +1442,18 @@ Anything beyond that is post-MVP unless it directly prevents the above workflow 
 
 ## Execution Bookmark
 
-Updated 2026-09-30 08:15 EDT.
+Updated 2026-09-30 08:50 EDT.
 
 - **Starting SHA:** `83a9b10d66affba4dc5e794fa268bead1cecf331` (`main`, PR #654 merged and deployed).
 - **Plan saved:** this file is the canonical MVP release-blocker remediation plan.
 - **Completed before this plan:** StoreKit backend-authority work (#649), XCTest realignment (#650–#652), and AI-cover pricing follow-up (#654).
 - **Current plan status:** PRs #655–#659 are open for review; none has been merged or deployed. Final release readiness still requires review/merge decisions and CI/deployment evidence.
-- **PR 2:** commit `43ab15f` plus bookmark updates `44ae274`, `91f0742`, `c7ef711`, `0e909aa` on `feat/account-deletion`; PR #655 open. Edge Function check/tests passed 2/2; iOS build unavailable on Linux.
+- **PR 2:** commit `4769a6c` on `feat/account-deletion`; PR #655 remains open. Added deterministic local account purge for SwiftData roots/orphans, keychain secrets, backup/recovery/export directories, UserDefaults resume/credit/tombstone state, active-store selection, and post-delete subscription-management links. Backend deletion tests had passed 2/2 earlier; local Xcode build remains unavailable on Linux. CI verification is still required.
 - **PR 3:** commit `60c5bc6` on `feat/app-store-compliance`; PR #656 open. Privacy manifest parsed; `git diff --check` passed; iOS build unavailable on Linux.
 - **PR 4:** commit `79b7845` on `feat/mvp-private-sharing`; PR #657 open. `deno check` passed; public-sharing tests passed 8/8; iOS build unavailable on Linux.
 - **PR 5:** commit `5585194` on `feat/xctest-ci-release-gate`; PR #658 open. Workflow structure check passed; macOS XCTest execution remains CI-only.
 - **PR 6:** commit `a5cb1d5` on `feat/release-deployment-hardening`; PR #659 open. Deployment coverage guard passed for 21/21 Edge Functions; `git diff --check` passed.
-- **Next action:** review PRs #655–#659 as a bundle; do not merge, deploy, or mark the MVP ready from this turn. After explicit merge authorization, run the final current-main release audit required by the plan.
+- **Next action:** continue current-head review/repair of PRs #656–#659, then verify the combined integration branch and all required CI gates. Keep every PR open; do not merge, deploy, upload TestFlight, or manually trigger workflows.
 
 ### Bookmark rules
 
