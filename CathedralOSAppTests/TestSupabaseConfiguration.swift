@@ -104,4 +104,4 @@ extension ProjectImportExportPayload {
     }
 }
 
-private func fixtureUUID(_ value: Int) -> String { String(format: "00000000-0000-0000-0000-%012d", value) }
+func fixtureUUID(_ value: Int) -> String { String(format: "00000000-0000-0000-0000-%012d", value) }
