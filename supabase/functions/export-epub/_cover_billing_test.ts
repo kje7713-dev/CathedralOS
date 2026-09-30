@@ -8,17 +8,16 @@ import {
   estimateAiCoverBilling,
 } from "./_cover_billing.ts";
 
-Deno.test("AI cover pricing charges actual image-token usage plus markup", () => {
+Deno.test("AI cover pricing charges exactly 20 credits", () => {
   const billing = actualAiCoverBilling(
     1000,
     AI_COVER_IMAGE_OUTPUT_TOKENS,
     "cover prompt",
   );
 
-  // gpt-image-1 high portrait output: 6,240 × $40/1M × 2x / $0.05
-  // plus 1,000 text input tokens at $5/1M × 2x / $0.05 = 25.5 credits,
-  // rounded up to the whole-credit cover reservation: 26 credits.
-  assertEquals(billing.actualCharge, 11);
+  // Provider usage affects telemetry only; the authoritative customer charge
+  // is the fixed 20-credit AI-cover product price.
+  assertEquals(billing.actualCharge, 20);
   assertGreater(billing.customerRevenueCents, billing.providerCogsCents);
   assertEquals(billing.providerCogsCents, 25.46);
 });
@@ -26,11 +25,11 @@ Deno.test("AI cover pricing charges actual image-token usage plus markup", () =>
 Deno.test("AI cover preflight covers the configured portrait output budget", () => {
   const billing = estimateAiCoverBilling("A cohesive story-wide cover prompt.");
   assertEquals(billing.usage.outputTokens, AI_COVER_IMAGE_OUTPUT_TOKENS);
-  assertEquals(billing.actualCharge, 10);
+  assertEquals(billing.actualCharge, 20);
 });
 
 Deno.test("AI cover billing falls back to conservative usage when provider omits it", () => {
   const billing = actualAiCoverBilling(undefined, undefined, "A short prompt");
   assertEquals(billing.usage.outputTokens, AI_COVER_IMAGE_OUTPUT_TOKENS);
-  assertGreater(billing.actualCharge, 9);
+  assertEquals(billing.actualCharge, 20);
 });

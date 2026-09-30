@@ -200,7 +200,9 @@ declare
   monthly_cost numeric(18,6);
   purchased_cost numeric(18,6);
 begin
-  if p_cost <= 0 then raise exception 'AI cover cost must be positive'; end if;
+  if p_cost <> 20 then
+    raise exception 'AI cover cost must be exactly 20 credits';
+  end if;
 
   select * into prior
     from public.user_credit_ledger
@@ -304,7 +306,9 @@ declare
   actual_monthly numeric(18,6);
   actual_purchased numeric(18,6);
 begin
-  if p_actual_cost < 0 then raise exception 'AI cover actual cost cannot be negative'; end if;
+  if p_actual_cost <> 20 then
+    raise exception 'AI cover actual cost must be exactly 20 credits';
+  end if;
 
   if exists (
     select 1 from public.user_credit_ledger
