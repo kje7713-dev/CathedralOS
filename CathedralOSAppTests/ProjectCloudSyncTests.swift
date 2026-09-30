@@ -184,6 +184,9 @@ final class ProjectCloudSyncTests: XCTestCase {
 
         let project = StoryProject(name: "Cloud Story")
         project.notes = "Keep these notes"
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(project)
+        try context.save()
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
@@ -221,7 +224,7 @@ final class ProjectCloudSyncTests: XCTestCase {
             return (response, data)
         }
 
-        try await service.syncProject(project)
+        try await service.syncProject(project, modelContext: context)
     }
 
     func testFetchCanonicalOutlineLineageUsesServerOutlineIdentity() async throws {
@@ -1971,13 +1974,14 @@ final class ProjectCloudSyncTests: XCTestCase {
             accessToken: "user-jwt-token"
         )
         let localProjectID = UUID()
+        let fixtureContext = ModelContext(try makeProjectContainer())
         let original = StoryProject(name: "Story")
         original.notes = "Newest"
-        let newerPayload = ProjectSchemaTemplateBuilder.build(project: original, modelContext: context)
+        let newerPayload = ProjectSchemaTemplateBuilder.build(project: original, modelContext: fixtureContext)
 
         let older = StoryProject(name: "Story")
         older.notes = "Older"
-        let olderPayload = ProjectSchemaTemplateBuilder.build(project: older, modelContext: context)
+        let olderPayload = ProjectSchemaTemplateBuilder.build(project: older, modelContext: fixtureContext)
 
         let responseData = try makeRestoreResponse(rows: [
             (localProjectID, newerPayload, "2026-05-16T14:00:00Z"),
@@ -2106,7 +2110,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
         let localProjectID = UUID()
         let project = StoryProject(name: "Deleted locally")
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
         let tombstoneService = MockProjectTombstoneService()
         tombstoneService.projectTombstones = try makeProjectTombstoneSet(localProjectID: localProjectID.uuidString)
@@ -2301,7 +2306,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
 
         do {
-            try await service.syncProject(StoryProject(name: "Offline Story"))
+            let context = ModelContext(try makeProjectContainer())
+            try await service.syncProject(StoryProject(name: "Offline Story"), modelContext: context)
             XCTFail("Expected syncProject to throw when signed out")
         } catch let error as ProjectCloudSyncError {
             guard case .notSignedIn = error else {
@@ -2590,10 +2596,11 @@ final class ProjectCloudSyncTests: XCTestCase {
             try await Task.sleep(nanoseconds: 100_000_000)
             return expected
         }
+        let scope: ProjectRestoreScope = .allProjects
 
-        let firstTask = Task { @MainActor in try await gate.run(operation) }
+        let firstTask = Task { @MainActor in try await gate.run(scope: scope, operation) }
         while invocationCount == 0 { await Task.yield() }
-        let secondTask = Task { @MainActor in try await gate.run(operation) }
+        let secondTask = Task { @MainActor in try await gate.run(scope: scope, operation) }
 
         let firstReport = try await firstTask.value
         let secondReport = try await secondTask.value

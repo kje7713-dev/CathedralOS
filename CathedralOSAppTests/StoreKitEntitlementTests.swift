@@ -327,7 +327,7 @@ final class EntitlementPreflightIntegrationTests: XCTestCase {
         switch result {
         case .insufficientCredits(let available, let required):
             XCTAssertEqual(available, 0)
-            XCTAssertEqual(required, GenerationLengthMode.chapter.creditCost)
+            XCTAssertEqual(required, Double(GenerationLengthMode.chapter.creditCost))
         case .backendConfigMissing:
             break // Expected in test bundle (Supabase not configured).
         default:

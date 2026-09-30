@@ -61,7 +61,7 @@ final class KindleExportPollerTests: XCTestCase {
                     httpVersion: "HTTP/1.1",
                     headerFields: ["Content-Type": "application/json"]
                 )!
-                self.client?.urlProtocol(self, didReceive: http)
+                self.client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
                 self.client?.urlProtocol(self, didLoad: next.body)
                 self.client?.urlProtocolDidFinishLoading(self)
             }

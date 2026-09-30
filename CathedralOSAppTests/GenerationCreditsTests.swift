@@ -419,7 +419,7 @@ final class BackendNotCalledWhenBlockedTests: XCTestCase {
         usageService.preflightResult = .allowed
 
         usageService.recordSuccessfulGeneration(
-            creditCost: GenerationLengthMode.medium.creditCost,
+            creditCost: Double(GenerationLengthMode.medium.creditCost),
             lengthMode: .medium
         )
 
