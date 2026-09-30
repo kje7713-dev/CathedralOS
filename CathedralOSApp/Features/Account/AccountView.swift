@@ -20,6 +20,7 @@ struct AccountView: View {
     let usageLimitService: any UsageLimitServiceProtocol
     let entitlementService: any StoreKitEntitlementServiceProtocol
     let creditStateService: any CreditStateServiceProtocol
+    let accountDeletionService: any AccountDeletionServiceProtocol
     let recoveryContext: PersistenceRecoveryContext?
 
     @Environment(\.modelContext) private var modelContext
@@ -34,6 +35,7 @@ struct AccountView: View {
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
         entitlementService: any StoreKitEntitlementServiceProtocol = StoreKitEntitlementService.shared,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
+        accountDeletionService: any AccountDeletionServiceProtocol = BackendAccountDeletionService(),
         recoveryContext: PersistenceRecoveryContext? = nil,
         durabilityCoordinator: DataDurabilityCoordinator = .shared
     ) {
@@ -43,6 +45,7 @@ struct AccountView: View {
         self.usageLimitService = usageLimitService
         self.entitlementService = entitlementService
         self.creditStateService = creditStateService
+        self.accountDeletionService = accountDeletionService
         self.recoveryContext = recoveryContext
         _durabilityCoordinator = ObservedObject(wrappedValue: durabilityCoordinator)
     }
@@ -63,6 +66,7 @@ struct AccountView: View {
     @State private var restoreSuccess: String?
     @State private var showPaywall = false
     @State private var copiedRecoverySummary = false
+    @State private var showDeleteAccountConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -101,6 +105,14 @@ struct AccountView: View {
                     // Refresh entitlement state after paywall is dismissed.
                     entitlementState = entitlementService.entitlementState
                 }
+            }
+            .alert("Delete your StoryDonkey account?", isPresented: $showDeleteAccountConfirmation) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete Account", role: .destructive) {
+                    Task { await attemptDeleteAccount() }
+                }
+            } message: {
+                Text("This permanently removes your account, cloud data, and local drafts on this device. This cannot be undone.")
             }
         }
     }
@@ -165,6 +177,12 @@ struct AccountView: View {
                 Task { await attemptSignOut() }
             } label: {
                 Label("Sign Out", systemImage: "person.badge.minus")
+            }
+            .disabled(isWorking || durabilityCoordinator.isRunning)
+            Button(role: .destructive) {
+                showDeleteAccountConfirmation = true
+            } label: {
+                Label("Delete Account", systemImage: "trash")
             }
             .disabled(isWorking || durabilityCoordinator.isRunning)
         }
@@ -746,6 +764,27 @@ struct AccountView: View {
             durabilityCoordinator.performSignOut(context: modelContext)
         } catch {
             actionError = (error as? AuthServiceError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func attemptDeleteAccount() async {
+        isWorking = true
+        actionError = nil
+        profileBootstrapWarning = nil
+        defer { isWorking = false }
+        do {
+            try await accountDeletionService.deleteAccount()
+            // The server deletion is authoritative. Remove local drafts too so
+            // a newly-created account cannot re-upload the deleted account's data.
+            for project in localProjects { modelContext.delete(project) }
+            for output in localGenerations { modelContext.delete(output) }
+            try? modelContext.save()
+            try? await authService.signOut()
+            durabilityCoordinator.performSignOut(context: modelContext)
+            authState = .signedOut
+        } catch {
+            actionError = (error as? AccountDeletionError)?.errorDescription ?? error.localizedDescription
         }
     }
 

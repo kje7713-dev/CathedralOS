@@ -56,6 +56,10 @@ jobs:
         if: ${{ hashFiles('supabase/functions/admin-grant-credits/index.ts') != '' }}
         run: supabase functions deploy admin-grant-credits --project-ref "$SUPABASE_PROJECT_REF"
 
+      - name: Deploy Edge Function - delete-account
+        if: ${{ hashFiles('supabase/functions/delete-account/index.ts') != '' }}
+        run: supabase functions deploy delete-account --project-ref "$SUPABASE_PROJECT_REF"
+
       - name: Deploy Edge Function - backend-health
         if: ${{ hashFiles('supabase/functions/backend-health/index.ts') != '' }}
         run: supabase functions deploy backend-health --project-ref "$SUPABASE_PROJECT_REF"
