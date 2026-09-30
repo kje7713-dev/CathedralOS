@@ -64,6 +64,16 @@ jobs:
             -destination "$DESTINATION" \
             CODE_SIGNING_ALLOWED=NO
 
+      - name: Complete CathedralOSApp XCTest suite
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project CathedralOSApp.xcodeproj \
+            -scheme CathedralOSApp \
+            -sdk iphonesimulator \
+            -destination "$DESTINATION" \
+            CODE_SIGNING_ALLOWED=NO
+
       - name: StoreKit regression XCTest suites
         run: |
           set -o pipefail
