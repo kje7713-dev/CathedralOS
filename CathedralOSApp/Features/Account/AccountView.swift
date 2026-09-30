@@ -785,19 +785,27 @@ struct AccountView: View {
             // The server deletion is authoritative. Purge every local store,
             // backup, cache, resume state, and secret before allowing a future
             // account to sign in on this device.
-            var cleanupError: Error?
+            var postDeletionError: Error?
             do {
                 try accountDeletionCleanupService.purgeLocalAccountData(in: modelContext)
             } catch {
-                cleanupError = error
+                postDeletionError = error
             }
-            // Always terminate the deleted session, even if local cleanup needs
-            // operator-visible follow-up. A deleted backend account must never
-            // remain authenticated in the app.
-            try? await authService.signOut()
+            // Always destroy the deleted session locally, even if another local
+            // cleanup portion needs operator-visible follow-up. The remote
+            // account is gone, so local credential destruction is authoritative.
+            do {
+                if let backendAuth = authService as? BackendAuthService {
+                    try backendAuth.destroyLocalSession()
+                } else {
+                    try await authService.signOut()
+                }
+            } catch {
+                postDeletionError = postDeletionError ?? error
+            }
             durabilityCoordinator.performSignOut(context: modelContext)
-            authState = .signedOut
-            if let cleanupError { throw cleanupError }
+            authState = authService.authState
+            if let postDeletionError { throw postDeletionError }
         } catch {
             actionError = (error as? AccountDeletionError)?.errorDescription ?? error.localizedDescription
         }

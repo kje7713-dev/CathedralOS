@@ -43,6 +43,7 @@ enum AuthServiceError: Error, LocalizedError {
     case cancelled
     case signInFailed(String)
     case signOutFailed(String)
+    case localCredentialRemovalFailed([String])
     case sessionExpired
     case networkFailure(String)
     case serverRejectedAuth(String)
@@ -59,6 +60,8 @@ enum AuthServiceError: Error, LocalizedError {
             return "Sign in failed: \(reason)"
         case .signOutFailed(let reason):
             return "Sign out failed: \(reason)"
+        case .localCredentialRemovalFailed(let keys):
+            return "The account was deleted, but local sign-in credentials could not be removed (\(keys.joined(separator: ", "))). Please contact support."
         case .sessionExpired:
             return "Your session has expired. Please sign in again."
         case .networkFailure(let reason):
@@ -385,14 +388,29 @@ final class BackendAuthService: AuthService {
 
     func signOut() async throws {
         guard case .signedIn = authState else { return }
-        do {
-            try KeychainService.delete(key: Self.keychainUserID)
-        } catch { throw AuthServiceError.signOutFailed(error.localizedDescription) }
-        try? KeychainService.delete(key: Self.keychainAccessToken)
-        try? KeychainService.delete(key: Self.keychainEmail)
-        try? KeychainService.delete(key: Self.keychainRefreshToken)
+        try destroyLocalSession()
+    }
+
+    /// Destroys the local Supabase session after destructive account deletion.
+    /// This intentionally does not call a remote logout endpoint: the remote
+    /// account is already gone, so local credential removal is authoritative.
+    func destroyLocalSession() throws {
+        let credentials = [
+            (Self.keychainUserID, "user_id"),
+            (Self.keychainAccessToken, "access_token"),
+            (Self.keychainEmail, "user_email"),
+            (Self.keychainRefreshToken, "refresh_token")
+        ]
+        var failures: [String] = []
+        for (key, label) in credentials {
+            do { try KeychainService.delete(key: key) }
+            catch { failures.append(label) }
+        }
         currentAccessToken = nil
         authState = .signedOut
+        if !failures.isEmpty {
+            throw AuthServiceError.localCredentialRemovalFailed(failures)
+        }
     }
 
     // MARK: - Private helpers
