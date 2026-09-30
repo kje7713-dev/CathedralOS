@@ -448,7 +448,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let userID = "11111111-1111-1111-1111-111111111111"
         let project = StoryProject(name: "Ambiguous project")
         let projectID = project.id
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let authService = MockProjectCloudSyncAuthService(
             authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
             accessToken: "test-auth-token"
@@ -757,7 +758,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
         let localProjectID = UUID()
         let project = StoryProject(name: "Targeted Restore")
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
@@ -799,6 +801,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let driftedLocalID = UUID()
         let canonicalLineageID = UUID()
         let project = StoryProject(name: "Drifted Restore")
+        let context = ModelContext(try makeProjectContainer())
         let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
         // Cloud row carries the drifted local_project_id; canonical lineage is
         // preserved so the Accept All refresh can still reconcile the project
@@ -817,7 +820,6 @@ final class ProjectCloudSyncTests: XCTestCase {
             session: session,
             configuration: .makeForTesting()
         )
-        let context = ModelContext(try makeProjectContainer())
         // The Accept All caller passes the canonical lineage id plus its known
         // local id. The cloud row's local_project_id is drifted; the lineage
         // filter is what allows the restore to fetch it.
@@ -843,6 +845,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let targetedLineageID = UUID()
         let unrelatedLocalID = UUID()
         let unrelatedLineageID = UUID()
+        let context = ModelContext(try makeProjectContainer())
         let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Target"), modelContext: context)
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (targetedLocalID, targetedLineageID, payload, "2026-09-11T14:00:00Z"),
@@ -859,7 +862,6 @@ final class ProjectCloudSyncTests: XCTestCase {
             session: session,
             configuration: .makeForTesting()
         )
-        let context = ModelContext(try makeProjectContainer())
         // Note: with the OR filter, only the targeted lineage row would be
         // fetched server-side. To prove the client refuses leaked rows anyway,
         // we manually inject an unrelated row and assert it is rejected.
@@ -886,7 +888,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
         let targetedLocalID = UUID()
         let targetedLineageID = UUID()
-        let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Targeted"), modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Targeted"), modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (targetedLocalID, targetedLineageID, payload, "2026-09-11T14:00:00Z")
         ])
@@ -977,7 +980,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let targetedLocalID = UUID()
         let targetedLineageID = UUID()
         let impostorLineageID = UUID()
-        let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Impostor"), modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Impostor"), modelContext: fixtureContext)
         // Cloud row matches the targeted local id but carries a different
         // lineage. The identity pre-flight must reject this row so a future
         // ambiguous upstream read cannot leak a different project's snapshot.
@@ -1303,7 +1307,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(payload.targetWords, 1200)
         XCTAssertEqual(payload.targetWordsMin, 900)
         XCTAssertEqual(payload.targetWordsMax, 1500)
-        XCTAssertEqual(payload.storyArcBeatID, expectedArcBeatID.uuidString)
+        XCTAssertEqual(payload.storyArcBeatID, expectedArcBeatID)
         XCTAssertEqual(payload.recipeRequirementIDs, expectedRecipeIDs)
         XCTAssertEqual(payload.container, "scene")
         XCTAssertEqual(payload.pov, "thirdPersonLimited")
@@ -1393,7 +1397,7 @@ final class ProjectCloudSyncTests: XCTestCase {
             into: restoreContext,
             includeTombstoned: false
         )
-        let restoredProject = restoreContext.fetch(FetchDescriptor<StoryProject>()).first
+        let restoredProject = try restoreContext.fetch(FetchDescriptor<StoryProject>()).first
         return (report, restoredProject)
     }
 
@@ -1491,7 +1495,6 @@ final class ProjectCloudSyncTests: XCTestCase {
 
         // Re-encode the restored graph and verify every Section Contract field
         // survives the second encode pass (round trip).
-        let restoreContext = ModelContext(try makeProjectContainer())
         // We need to re-insert the restored project into the re-encode context
         // because each makeProjectContainer() builds an isolated in-memory store.
         // Build the re-encode context by reusing the restored project's model.
@@ -1787,6 +1790,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let localProjectID = UUID()
         let project = StoryProject(name: "Restored Story")
         project.notes = "Recovered from cloud"
+        let restoreContext = ModelContext(try makeProjectContainer())
         let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: restoreContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
@@ -1838,7 +1842,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let payloadProject = StoryProject(name: "Restored with canonical identity")
         payloadProject.id = localProjectID
         payloadProject.lineageID = localProjectID
-        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (localProjectID, canonicalLineageID, payload, "2026-09-14T14:00:00Z")
         ])
@@ -1888,7 +1893,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let payloadProject = StoryProject(name: "Missing cloud lineage")
         payloadProject.id = localProjectID
         payloadProject.lineageID = nil
-        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(rows: [
             (localProjectID, payload, "2026-09-14T14:00:00Z")
         ])
@@ -1932,7 +1938,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let localProjectID = UUID()
         let project = StoryProject(name: "Restored Story")
         project.notes = "Recovered once"
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
@@ -2012,7 +2019,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let olderLocalID = UUID()
         let project = StoryProject(name: "Historical alias")
         project.notes = "Canonical newest snapshot"
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (newestLocalID, canonicalLineageID, payload, "2026-07-22T17:30:00Z"),
             (olderLocalID, canonicalLineageID, payload, "2026-07-20T12:00:00Z")
@@ -2056,9 +2064,9 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
         let first = StoryProject(name: "Same visible project")
         let second = StoryProject(name: "Same visible project")
-        let context = ModelContext(try makeProjectContainer())
-        let firstPayload = ProjectSchemaTemplateBuilder.build(project: first, modelContext: context)
-        let secondPayload = ProjectSchemaTemplateBuilder.build(project: second, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let firstPayload = ProjectSchemaTemplateBuilder.build(project: first, modelContext: fixtureContext)
+        let secondPayload = ProjectSchemaTemplateBuilder.build(project: second, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (first.id, first.stableLineageID, firstPayload, "2026-07-22T17:30:00Z"),
             (second.id, second.stableLineageID, secondPayload, "2026-07-22T17:29:00Z")
@@ -2141,7 +2149,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         project.storySparks = [spark]
         project.relationships = [relationship]
         project.motifs = [motif]
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
@@ -2177,7 +2186,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let localProjectID = UUID()
         let payloadProject = StoryProject(name: "Canonical")
         payloadProject.notes = "Cloud truth"
-        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
@@ -2356,10 +2366,10 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(payload.outlines.first?.storyArcID, arc.id.uuidString)
     }
 
-    func testProjectSnapshotPayloadRoundTripsProjectNotes() {
+    func testProjectSnapshotPayloadRoundTripsProjectNotes() throws {
         let project = StoryProject(name: "Notes Story")
         project.notes = "Round-trip me"
-
+        let context = ModelContext(try makeProjectContainer())
         let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
         let restored = ProjectImportMapper.map(payload)
 
@@ -2378,7 +2388,8 @@ final class ProjectCloudSyncTests: XCTestCase {
 
         let localProjectID = UUID()
         let project = StoryProject(name: "Restored Story")
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
         var requestCount = 0
 
@@ -2504,6 +2515,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         outline.sections = [section]
         outline.project = project
         project.outlines = [outline]
+        let context = ModelContext(try makeProjectContainer())
         let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
         let cloudOutlineID = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(payload.outlines.first?.id)))
@@ -2640,7 +2652,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         char2.id = sharedCharacterID
         project.characters = [char1, char2]
 
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
@@ -2653,7 +2666,7 @@ final class ProjectCloudSyncTests: XCTestCase {
             session: session,
             configuration: .makeForTesting()
         )
-        // Pre-populate context with the duplicate-child project.
+        // Pre-populate fixtureContext with the duplicate-child project.
         let context = ModelContext(try makeProjectContainer())
         let localProject = StoryProject(name: "Existing")
         localProject.id = localProjectID

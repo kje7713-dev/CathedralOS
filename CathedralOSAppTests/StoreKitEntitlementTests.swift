@@ -340,7 +340,7 @@ final class EntitlementPreflightIntegrationTests: XCTestCase {
         let result = PreflightResult.insufficientCredits(available: 0, required: 8)
         if case .insufficientCredits(let available, let required) = result {
             XCTAssertEqual(available, 0)
-            XCTAssertEqual(required, 8)
+            XCTAssertEqual(required, 8.0)
             // The view should display the paywall/upgrade path when this result is returned.
         } else {
             XCTFail("Expected .insufficientCredits")

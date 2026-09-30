@@ -52,7 +52,7 @@ final class KindleExportPollerTests: XCTestCase {
         override func startLoading() {
             let capture = self.request
             Self.captured.append(capture)
-            let next = Self.queued.isEmpty ? (500, Data("{}".utf8), 0.0) : Self.queued.removeFirst()
+            let next = Self.queued.isEmpty ? (status: 500, body: Data("{}".utf8), delay: 0.0) : Self.queued.removeFirst()
             DispatchQueue.global().asyncAfter(deadline: .now() + next.delay) { [weak self] in
                 guard let self = self else { return }
                 let http = HTTPURLResponse(

@@ -320,7 +320,7 @@ private final class ControllableUsageLimitService: UsageLimitServiceProtocol {
     var preflightResult: PreflightResult = .allowed
     private(set) var recordCallCount = 0
 
-    init(availableCredits: Int = 10) {
+    init(availableCredits: Double = 10.0) {
         currentState = GenerationCreditState(
             availableCredits: availableCredits,
             monthlyGenerationCount: 0,
@@ -424,7 +424,7 @@ final class BackendNotCalledWhenBlockedTests: XCTestCase {
         )
 
         XCTAssertEqual(usageService.recordCallCount, 1)
-        XCTAssertEqual(usageService.currentState.availableCredits, 8)
+        XCTAssertEqual(usageService.currentState.availableCredits, 8.0)
     }
 
     func testUsageNotRecordedOnFailure() {

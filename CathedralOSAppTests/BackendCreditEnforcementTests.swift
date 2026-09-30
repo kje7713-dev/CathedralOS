@@ -31,8 +31,8 @@ final class GenerationResponseCreditFieldsTests: XCTestCase {
         """
         let response = try decode(json)
         XCTAssertEqual(response.errorCode, "insufficient_credits")
-        XCTAssertEqual(response.requiredCredits, 8)
-        XCTAssertEqual(response.availableCredits, 3)
+        XCTAssertEqual(try XCTUnwrap(response.requiredCredits), 8)
+        XCTAssertEqual(try XCTUnwrap(response.availableCredits), 3)
         XCTAssertEqual(response.status, "failed")
         XCTAssertEqual(response.errorMessage, "Insufficient credits for this generation.")
     }
@@ -47,8 +47,8 @@ final class GenerationResponseCreditFieldsTests: XCTestCase {
         }
         """
         let response = try decode(json)
-        XCTAssertEqual(response.requiredCredits, 4)
-        XCTAssertEqual(response.availableCredits, 1)
+        XCTAssertEqual(try XCTUnwrap(response.requiredCredits), 4)
+        XCTAssertEqual(try XCTUnwrap(response.availableCredits), 1)
     }
 
     func testDecodesFractionalGenerationCreditFieldsWithoutTruncation() throws {
@@ -62,10 +62,10 @@ final class GenerationResponseCreditFieldsTests: XCTestCase {
         }
         """
         let response = try decode(json)
-        XCTAssertEqual(response.requiredCredits, 1.57, accuracy: 0.000001)
-        XCTAssertEqual(response.availableCredits, 1.25, accuracy: 0.000001)
-        XCTAssertEqual(response.creditCostCharged, 0.25, accuracy: 0.000001)
-        XCTAssertEqual(response.remainingCredits, 1.0, accuracy: 0.000001)
+        XCTAssertEqual(try XCTUnwrap(response.requiredCredits), 1.57, accuracy: 0.000001)
+        XCTAssertEqual(try XCTUnwrap(response.availableCredits), 1.25, accuracy: 0.000001)
+        XCTAssertEqual(try XCTUnwrap(response.creditCostCharged), 0.25, accuracy: 0.000001)
+        XCTAssertEqual(try XCTUnwrap(response.remainingCredits), 1.0, accuracy: 0.000001)
     }
 
     // MARK: Successful generation response
@@ -81,8 +81,8 @@ final class GenerationResponseCreditFieldsTests: XCTestCase {
         }
         """
         let response = try decode(json)
-        XCTAssertEqual(response.creditCostCharged, 2)
-        XCTAssertEqual(response.remainingCredits, 8)
+        XCTAssertEqual(try XCTUnwrap(response.creditCostCharged), 2)
+        XCTAssertEqual(try XCTUnwrap(response.remainingCredits), 8)
         XCTAssertNil(response.errorCode)
     }
 
@@ -122,8 +122,8 @@ final class GenerationResponseCreditFieldsTests: XCTestCase {
         """
         let response = try decode(json)
         XCTAssertEqual(response.generatedText, "A great story begins here.")
-        XCTAssertEqual(response.creditCostCharged, 2)
-        XCTAssertEqual(response.remainingCredits, 8)
+        XCTAssertEqual(try XCTUnwrap(response.creditCostCharged), 2)
+        XCTAssertEqual(try XCTUnwrap(response.remainingCredits), 8)
         XCTAssertNil(response.errorCode)
     }
 
