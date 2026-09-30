@@ -334,6 +334,16 @@ final class AuthHardeningTests: XCTestCase {
         }
     }
 
+    func testCloudAuthErrorFromLocalCredentialRemovalIsNotSessionExpired() {
+        let mapped = CloudAuthError.from(
+            AuthServiceError.localCredentialRemovalFailed(["refresh_token"])
+        )
+        guard case .unknownBackendError = mapped else {
+            return XCTFail("Local credential cleanup must not map to an auth retry case")
+        }
+        XCTAssertFalse(mapped.errorDescription?.localizedStandardContains("sign in") ?? true)
+    }
+
     func testCloudAuthErrorFromSessionExpired() {
         let mapped = CloudAuthError.from(AuthServiceError.sessionExpired)
         if case .sessionExpired = mapped {

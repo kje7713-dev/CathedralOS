@@ -45,6 +45,7 @@
 		0000000000000000000000A8 /* TemplatesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000A7 /* TemplatesTests.swift */; };
 		0000000000000000000000D4 /* PromptPackAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000E5 /* PromptPackAssemblerTests.swift */; };
 		0000000000000000000000B1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B0 /* Assets.xcassets */; };
+		0000000000000000000001C1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001C0 /* PrivacyInfo.xcprivacy */; };
 		0000000000000000000000B2 /* CathedralTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B3 /* CathedralTheme.swift */; };
 		0000000000000000000000B6 /* StoryProject.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B5 /* StoryProject.swift */; };
 		0000000000000000000000B8 /* StoryCharacter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B7 /* StoryCharacter.swift */; };
@@ -116,6 +117,8 @@
 		000000000000000000000149 /* SupabaseConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000148 /* SupabaseConfiguration.swift */; };
 		00000000000000000000014B /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000014A /* BackendClient.swift */; };
 		00000000000000000000014D /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000014C /* AuthService.swift */; };
+		A1B2C3D4E5F600000000014F /* AccountDeletionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600000000014E /* AccountDeletionService.swift */; };
+		D4E5F6A7B8C90000000001C3 /* AccountDeletionCleanupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F6A7B8C90000000001C2 /* AccountDeletionCleanupService.swift */; };
 		00000000000000000000014F /* GenerationBackendService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000014E /* GenerationBackendService.swift */; };
 		000000000000000000000151 /* UsageSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000150 /* UsageSyncService.swift */; };
 		000000000000000000000153 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000152 /* AccountView.swift */; };
@@ -336,6 +339,8 @@
 		000000000000000000000148 /* SupabaseConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseConfiguration.swift; sourceTree = "<group>"; };
 		00000000000000000000014A /* BackendClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendClient.swift; sourceTree = "<group>"; };
 		00000000000000000000014C /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F600000000014E /* AccountDeletionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountDeletionService.swift; sourceTree = "<group>"; };
+		D4E5F6A7B8C90000000001C2 /* AccountDeletionCleanupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountDeletionCleanupService.swift; sourceTree = "<group>"; };
 		00000000000000000000014E /* GenerationBackendService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationBackendService.swift; sourceTree = "<group>"; };
 		000000000000000000000150 /* UsageSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageSyncService.swift; sourceTree = "<group>"; };
 		000000000000000000000152 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
@@ -377,6 +382,7 @@
 		000000000000000000000183 /* StoreKitEntitlementModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitEntitlementModel.swift; sourceTree = "<group>"; };
 		000000000000000000000185 /* StoreKitEntitlementService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitEntitlementService.swift; sourceTree = "<group>"; };
 		000000000000000000000187 /* PaywallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaywallView.swift; sourceTree = "<group>"; };
+		0000000000000000000001C0 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		000000000000000000000189 /* StoreKitEntitlementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitEntitlementTests.swift; sourceTree = "<group>"; };
 		00000000000000000000018B /* CreditStateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreditStateService.swift; sourceTree = "<group>"; };
 		00000000000000000000018D /* BackendCreditEnforcementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendCreditEnforcementTests.swift; sourceTree = "<group>"; };
@@ -482,6 +488,14 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		0000000000000000000001C2 /* Privacy */ = {
+			isa = PBXGroup;
+			children = (
+				0000000000000000000001C0 /* PrivacyInfo.xcprivacy */,
+			);
+			path = Privacy;
+			sourceTree = "<group>";
+		};
 		000000000000000000000020 /* CathedralOSApp */ = {
 			isa = PBXGroup;
 			children = (
@@ -493,6 +507,7 @@
 				000000000000000000000093 /* Services */,
 				0000000000000000000000A9 /* Templates */,
 				0000000000000000000000B0 /* Assets.xcassets */,
+				0000000000000000000001C2 /* Privacy */,
 				0000000000000000000001A1 /* CathedralOSApp.entitlements */,
 			);
 			path = CathedralOSApp;
@@ -711,6 +726,8 @@
 				000000000000000000000148 /* SupabaseConfiguration.swift */,
 				00000000000000000000014A /* BackendClient.swift */,
 				00000000000000000000014C /* AuthService.swift */,
+				A1B2C3D4E5F600000000014E /* AccountDeletionService.swift */,
+				D4E5F6A7B8C90000000001C2 /* AccountDeletionCleanupService.swift */,
 				00000000000000000000014E /* GenerationBackendService.swift */,
 				000000000000000000000150 /* UsageSyncService.swift */,
 				00000000000000000000015B /* SharedOutputRemixMapper.swift */,
@@ -973,6 +990,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0000000000000000000000B1 /* Assets.xcassets in Resources */,
+				0000000000000000000001C1 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1105,6 +1123,8 @@ echo \"Runtime config plist injection completed: keys present\"";
 				000000000000000000000149 /* SupabaseConfiguration.swift in Sources */,
 				00000000000000000000014B /* BackendClient.swift in Sources */,
 				00000000000000000000014D /* AuthService.swift in Sources */,
+				A1B2C3D4E5F600000000014F /* AccountDeletionService.swift in Sources */,
+				D4E5F6A7B8C90000000001C3 /* AccountDeletionCleanupService.swift in Sources */,
 				00000000000000000000014F /* GenerationBackendService.swift in Sources */,
 				000000000000000000000151 /* UsageSyncService.swift in Sources */,
 				000000000000000000000153 /* AccountView.swift in Sources */,
@@ -1248,6 +1268,8 @@ echo \"Runtime config plist injection completed: keys present\"";
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_PublicSharingBaseURL = "$(PUBLIC_SHARING_BASE_URL)";
+				INFOPLIST_KEY_PrivacyPolicyURL = "$(PRIVACY_POLICY_URL)";
+				INFOPLIST_KEY_TermsOfUseURL = "$(TERMS_OF_USE_URL)";
 				INFOPLIST_KEY_PublicSharingEnabled = "$(PUBLIC_SHARING_ENABLED)";
 				INFOPLIST_KEY_SupabaseAnonKey = "$(SUPABASE_ANON_KEY)";
 				INFOPLIST_KEY_SupabaseProjectURL = "$(SUPABASE_PROJECT_URL)";
@@ -1280,6 +1302,8 @@ echo \"Runtime config plist injection completed: keys present\"";
 				DEVELOPMENT_TEAM = "$(APPLE_TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_PublicSharingBaseURL = "$(PUBLIC_SHARING_BASE_URL)";
+				INFOPLIST_KEY_PrivacyPolicyURL = "$(PRIVACY_POLICY_URL)";
+				INFOPLIST_KEY_TermsOfUseURL = "$(TERMS_OF_USE_URL)";
 				INFOPLIST_KEY_PublicSharingEnabled = "$(PUBLIC_SHARING_ENABLED)";
 				INFOPLIST_KEY_SupabaseAnonKey = "$(SUPABASE_ANON_KEY)";
 				INFOPLIST_KEY_SupabaseProjectURL = "$(SUPABASE_PROJECT_URL)";

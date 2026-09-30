@@ -54,6 +54,7 @@ struct PaywallView: View {
                     creditPacksSection
                 }
                 restoreSection
+                legalSection
             }
             .navigationTitle("Upgrade")
             .navigationBarTitleDisplayMode(.large)
@@ -124,10 +125,38 @@ struct PaywallView: View {
 
                 ForEach(subscriptionProducts, id: \.id) { product in
                     purchaseRow(product: product, isSubscription: true)
+                    subscriptionDisclosure(for: product)
                 }
             }
             .padding(.vertical, 4)
         }
+    }
+
+    @ViewBuilder
+    private func subscriptionDisclosure(for product: Product) -> some View {
+        if let subscription = product.subscription {
+            Text("Includes Pro features and the displayed monthly credit allowance for each billing period.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Renews every \(subscriptionPeriodDescription(subscription.subscriptionPeriod)) at \(product.displayPrice) until canceled.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let offer = subscription.introductoryOffer {
+                Text("Introductory offer: \(subscriptionPeriodDescription(offer.period)) at \(offer.displayPrice), then \(product.displayPrice) per \(subscriptionPeriodDescription(subscription.subscriptionPeriod)).")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func subscriptionPeriodDescription(_ period: Product.SubscriptionPeriod) -> String {
+        let unit = period.value == 1 ? period.unit.singularName : period.unit.pluralName
+        return "\(period.value) \(unit)"
     }
 
     private var creditPacksSection: some View {
@@ -146,6 +175,31 @@ struct PaywallView: View {
         }
     }
 
+    private var legalSection: some View {
+        Section {
+            if let privacyPolicyURL = AppLegalLinks.privacyPolicyURL {
+                Link("Privacy Policy", destination: privacyPolicyURL)
+            } else {
+                Text("Privacy Policy link will be configured before App Store submission.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let termsOfUseURL = AppLegalLinks.termsOfUseURL {
+                Link("Terms of Use", destination: termsOfUseURL)
+            } else {
+                Text("Terms of Use link will be configured before App Store submission.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Legal")
+        } footer: {
+            Text("Subscription terms and renewal details are provided by Apple and the App Store listing.")
+                .font(.caption2)
+        }
+    }
+
     private var restoreSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
@@ -160,6 +214,10 @@ struct PaywallView: View {
                     )
                 }
                 .disabled(isWorking || isRestoring)
+
+                Link(destination: URL(string: "https://apps.apple.com/account/subscriptions")!) {
+                    Label("Manage Subscription", systemImage: "arrow.up.forward.app")
+                }
 
                 if let successMessage {
                     Text(successMessage)
@@ -293,4 +351,34 @@ struct PaywallView: View {
         formatter.timeStyle = .none
         return formatter.string(from: date)
     }
+}
+
+private enum AppLegalLinks {
+    static var privacyPolicyURL: URL? { configuredURL(forInfoKey: "PrivacyPolicyURL") }
+    static var termsOfUseURL: URL? { configuredURL(forInfoKey: "TermsOfUseURL") }
+
+    private static func configuredURL(forInfoKey key: String) -> URL? {
+        guard let rawValue = Bundle.main.object(forInfoDictionaryKey: key) as? String,
+              let url = URL(string: rawValue),
+              url.scheme == "https",
+              url.host != nil else {
+            return nil
+        }
+        return url
+    }
+}
+
+
+private extension Product.SubscriptionPeriod.Unit {
+    var singularName: String {
+        switch self {
+        case .day: return "day"
+        case .week: return "week"
+        case .month: return "month"
+        case .year: return "year"
+        @unknown default: return "billing period"
+        }
+    }
+
+    var pluralName: String { singularName + "s" }
 }

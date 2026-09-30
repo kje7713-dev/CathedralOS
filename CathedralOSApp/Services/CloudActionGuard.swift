@@ -55,6 +55,11 @@ enum CloudAuthError: Error, LocalizedError {
                 return .serverRejectedAuth(r)
             case .signOutFailed:
                 return .unknownBackendError(authError.localizedDescription)
+            case .localCredentialRemovalFailed:
+                // Account deletion cleanup is not an authentication retry or
+                // session-expiration condition. Do not send the user into a
+                // sign-in loop after the remote account has been deleted.
+                return .unknownBackendError(authError.localizedDescription)
             case .sessionExpired:
                 return .sessionExpired
             case .networkFailure(let r):

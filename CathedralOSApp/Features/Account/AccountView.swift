@@ -20,9 +20,12 @@ struct AccountView: View {
     let usageLimitService: any UsageLimitServiceProtocol
     let entitlementService: any StoreKitEntitlementServiceProtocol
     let creditStateService: any CreditStateServiceProtocol
+    let accountDeletionService: any AccountDeletionServiceProtocol
+    let accountDeletionCleanupService: any AccountDeletionCleanupServiceProtocol
     let recoveryContext: PersistenceRecoveryContext?
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openURL) private var openURL
     @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator
     @Query private var localProjects: [StoryProject]
     @Query private var localGenerations: [GenerationOutput]
@@ -34,6 +37,8 @@ struct AccountView: View {
         usageLimitService: any UsageLimitServiceProtocol = LocalUsageLimitService.shared,
         entitlementService: any StoreKitEntitlementServiceProtocol = StoreKitEntitlementService.shared,
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
+        accountDeletionService: any AccountDeletionServiceProtocol = BackendAccountDeletionService(),
+        accountDeletionCleanupService: any AccountDeletionCleanupServiceProtocol = LocalAccountDeletionCleanupService(),
         recoveryContext: PersistenceRecoveryContext? = nil,
         durabilityCoordinator: DataDurabilityCoordinator = .shared
     ) {
@@ -43,6 +48,8 @@ struct AccountView: View {
         self.usageLimitService = usageLimitService
         self.entitlementService = entitlementService
         self.creditStateService = creditStateService
+        self.accountDeletionService = accountDeletionService
+        self.accountDeletionCleanupService = accountDeletionCleanupService
         self.recoveryContext = recoveryContext
         _durabilityCoordinator = ObservedObject(wrappedValue: durabilityCoordinator)
     }
@@ -63,6 +70,7 @@ struct AccountView: View {
     @State private var restoreSuccess: String?
     @State private var showPaywall = false
     @State private var copiedRecoverySummary = false
+    @State private var showDeleteAccountConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -100,6 +108,23 @@ struct AccountView: View {
                 .onDisappear {
                     // Refresh entitlement state after paywall is dismissed.
                     entitlementState = entitlementService.entitlementState
+                }
+            }
+            .alert("Delete your StoryDonkey account?", isPresented: $showDeleteAccountConfirmation) {
+                Button("Cancel", role: .cancel) {}
+                if entitlementState.isPro {
+                    Button("Manage Subscription") {
+                        openURL(URL(string: "https://apps.apple.com/account/subscriptions")!)
+                    }
+                }
+                Button("Delete Account", role: .destructive) {
+                    Task { await attemptDeleteAccount() }
+                }
+            } message: {
+                if entitlementState.isPro {
+                    Text("This permanently removes your account, cloud data, and local drafts on this device. Deleting your StoryDonkey account does not cancel your Apple subscription; auto-renewal continues until you cancel it in Apple subscription settings. This cannot be undone.")
+                } else {
+                    Text("This permanently removes your account, cloud data, and local drafts on this device. This cannot be undone.")
                 }
             }
         }
@@ -165,6 +190,12 @@ struct AccountView: View {
                 Task { await attemptSignOut() }
             } label: {
                 Label("Sign Out", systemImage: "person.badge.minus")
+            }
+            .disabled(isWorking || durabilityCoordinator.isRunning)
+            Button(role: .destructive) {
+                showDeleteAccountConfirmation = true
+            } label: {
+                Label("Delete Account", systemImage: "trash")
             }
             .disabled(isWorking || durabilityCoordinator.isRunning)
         }
@@ -251,6 +282,10 @@ struct AccountView: View {
                     )
                 }
                 .disabled(isWorking || isRestoring)
+
+                Link(destination: URL(string: "https://apps.apple.com/account/subscriptions")!) {
+                    Label("Manage Subscription", systemImage: "arrow.up.forward.app")
+                }
 
                 if let restoreSuccess {
                     Text(restoreSuccess)
@@ -746,6 +781,43 @@ struct AccountView: View {
             durabilityCoordinator.performSignOut(context: modelContext)
         } catch {
             actionError = (error as? AuthServiceError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func attemptDeleteAccount() async {
+        isWorking = true
+        actionError = nil
+        profileBootstrapWarning = nil
+        defer { isWorking = false }
+        do {
+            try await accountDeletionService.deleteAccount()
+            // The server deletion is authoritative. Purge every local store,
+            // backup, cache, resume state, and secret before allowing a future
+            // account to sign in on this device.
+            var postDeletionError: Error?
+            do {
+                try accountDeletionCleanupService.purgeLocalAccountData(in: modelContext)
+            } catch {
+                postDeletionError = error
+            }
+            // Always destroy the deleted session locally, even if another local
+            // cleanup portion needs operator-visible follow-up. The remote
+            // account is gone, so local credential destruction is authoritative.
+            do {
+                if let backendAuth = authService as? BackendAuthService {
+                    try backendAuth.destroyLocalSession()
+                } else {
+                    try await authService.signOut()
+                }
+            } catch {
+                postDeletionError = postDeletionError ?? error
+            }
+            durabilityCoordinator.performSignOut(context: modelContext)
+            authState = authService.authState
+            if let postDeletionError { throw postDeletionError }
+        } catch {
+            actionError = (error as? AccountDeletionError)?.errorDescription ?? error.localizedDescription
         }
     }
 
