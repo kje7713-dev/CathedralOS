@@ -20,6 +20,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify Edge Function deployment coverage
+        run: python3 scripts/verify-supabase-deploy-coverage.py
+
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v2
         with:
