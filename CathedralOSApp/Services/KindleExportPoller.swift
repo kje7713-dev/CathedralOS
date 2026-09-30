@@ -110,10 +110,8 @@ final class KindleExportPoller {
                     if Task.isCancelled { return }
                     continue
                 }
-                if !isTransient {
-                    onTerminal(.failure(err))
-                    return
-                }
+                onTerminal(.failure(err))
+                return
             } catch {
                 // Unknown error — treat as transient (same backoff budget)
                 if transientFailures >= Self.transientBackoffNs.count {
