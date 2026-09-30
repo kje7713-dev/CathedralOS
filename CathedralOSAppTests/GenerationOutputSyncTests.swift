@@ -1429,6 +1429,7 @@ final class SupabaseGenerationOutputSyncServiceRequestTests: XCTestCase {
         let service = SupabaseGenerationOutputSyncService(
             authService: authService,
             session: makeSession(),
+            configuration: .makeForTesting(),
             tombstoneService: MockOutputTombstoneService()
         )
         let output = GenerationOutput(title: "Local Story")
@@ -1493,7 +1494,8 @@ final class SupabaseGenerationOutputSyncServiceRequestTests: XCTestCase {
         authService.refreshedAccessToken = "fresh-token"
         let service = SupabaseGenerationOutputSyncService(
             authService: authService,
-            session: makeSession()
+            session: makeSession(),
+            configuration: .makeForTesting()
         )
 
         var requestCount = 0
@@ -1524,7 +1526,8 @@ final class SupabaseGenerationOutputSyncServiceRequestTests: XCTestCase {
         authService.shouldFailRefresh = true
         let service = SupabaseGenerationOutputSyncService(
             authService: authService,
-            session: makeSession()
+            session: makeSession(),
+            configuration: .makeForTesting()
         )
 
         GenerationOutputSyncURLProtocol.requestHandler = { request in

@@ -344,7 +344,7 @@ final class ProjectCloudSyncTests: XCTestCase {
                 return (response, Data(#"[{"id":"\#(rowID)"}]"#.utf8))
             }
             XCTAssertEqual(queryItems.first(where: { $0.name == "id" })?.value, "eq.\(rowID)")
-            return (response, Data("[]".utf8))
+            return (response, Data("[{\"deleted_count\":0}]".utf8))
         }
 
         let service = ProjectCloudSyncService(
@@ -419,7 +419,7 @@ final class ProjectCloudSyncTests: XCTestCase {
                 )
             }
             XCTAssertEqual(request.httpMethod, "DELETE")
-            return (response, Data("[]".utf8))
+            return (response, Data("[{\"deleted_count\":0}]".utf8))
         }
 
         let cloudSyncService = ProjectCloudSyncService(
@@ -483,7 +483,7 @@ final class ProjectCloudSyncTests: XCTestCase {
             )!
             if request.httpMethod == "DELETE" {
                 deleteRequestCount += 1
-                return (response, Data("[]".utf8))
+                return (response, Data("[{\"deleted_count\":0}]".utf8))
             }
             return (
                 response,
@@ -548,7 +548,7 @@ final class ProjectCloudSyncTests: XCTestCase {
             )!
             if request.httpMethod == "DELETE" {
                 deleteRequestCount += 1
-                return (response, Data("[]".utf8))
+                return (response, Data("[{\"deleted_count\":0}]".utf8))
             }
             return (
                 response,
@@ -1597,7 +1597,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: payload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 2, "Both parent and child must be restored.")
+        XCTAssertEqual(report.insertedCount, 1, "Restore report counts projects, not nested sections.")
         let sections = try XCTUnwrap(restoredProject?.outlines.first?.sections)
         let restoredChild = try XCTUnwrap(sections.first(where: { $0.title == "Scene 1" }))
         assertRestoredSectionContract(
@@ -1641,7 +1641,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 2)
+        XCTAssertEqual(report.insertedCount, 1)
         let restoredScene = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Scene" }))
         XCTAssertNil(restoredScene.parent, "parentID = nil must clear the stale parent.")
     }
@@ -1673,7 +1673,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 3)
+        XCTAssertEqual(report.insertedCount, 1)
         let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
         XCTAssertNotNil(restoredChild.parent)
         XCTAssertEqual(restoredChild.parent?.id.uuidString, parentBID, "Child must be reparented to Parent B.")
@@ -1703,7 +1703,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 2)
+        XCTAssertEqual(report.insertedCount, 1)
         let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
         XCTAssertNil(restoredChild.parent, "Missing parent must result in orphan (parent = nil).")
     }
@@ -1729,7 +1729,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: reorderedPayload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 2)
+        XCTAssertEqual(report.insertedCount, 1)
         let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
         XCTAssertNotNil(restoredChild.parent, "Child must resolve its parent even when the payload delivers child-before-parent.")
         XCTAssertEqual(restoredChild.parent?.id.uuidString, parentID, "Child must point to the correct parent.")
@@ -1758,7 +1758,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: payload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 3, "All three levels must be restored.")
+        XCTAssertEqual(report.insertedCount, 1, "Restore report counts projects, not nested sections.")
         let sections = try XCTUnwrap(restoredProject?.outlines.first?.sections)
         let restoredParent = try XCTUnwrap(sections.first(where: { $0.title == "Parent" }))
         let restoredChild = try XCTUnwrap(sections.first(where: { $0.title == "Child" }))
@@ -2108,7 +2108,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let report = try await service.restoreAllProjects(into: context)
         let storedProjects = try context.fetch(FetchDescriptor<StoryProject>())
 
-        XCTAssertEqual(report.insertedCount, 2)
+        XCTAssertEqual(report.insertedCount, 1)
         XCTAssertTrue(report.duplicateWarnings.isEmpty)
         XCTAssertEqual(Set(storedProjects.map(\.id)), Set([first.id, second.id]))
         XCTAssertEqual(Set(storedProjects.compactMap(\.lineageID)), Set([first.stableLineageID, second.stableLineageID]))
@@ -2300,7 +2300,7 @@ final class ProjectCloudSyncTests: XCTestCase {
                 httpVersion: nil,
                 headerFields: nil
             )!
-            return (response, Data("[]".utf8))
+            return (response, Data("[{\"deleted_count\":0}]".utf8))
         }
 
         let presence = await service.cloudSnapshotPresence()

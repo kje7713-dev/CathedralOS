@@ -601,6 +601,8 @@ final class PublicSharingTests: XCTestCase {
         let auth = MockPublicSharingAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
         let service = BackendPublicSharingService(authService: auth)
         let gen = makeOutput()
+        gen.cloudGenerationOutputID = "11111111-1111-1111-1111-111111111111"
+        gen.outputText = "Publishable story"
 
         do {
             _ = try await service.publish(output: gen)
@@ -1404,8 +1406,8 @@ final class PublicSharingTests: XCTestCase {
         let processed = try CoverImageProcessor().normalizeCoverImage(data: imageData)
 
         XCTAssertEqual(processed.contentType, "image/jpeg")
-        XCTAssertEqual(processed.width, 1200)
-        XCTAssertEqual(processed.height, 675)
+        XCTAssertEqual(processed.width, 1600)
+        XCTAssertEqual(processed.height, 900)
         XCTAssertNotNil(UIImage(data: processed.data))
     }
 
@@ -1414,8 +1416,8 @@ final class PublicSharingTests: XCTestCase {
         let imageData = try XCTUnwrap(image.pngData())
         let processed = try CoverImageProcessor().normalizeCoverImage(data: imageData)
 
-        XCTAssertEqual(processed.width, 900)
-        XCTAssertEqual(processed.height, 506)
+        XCTAssertEqual(processed.width, 1600)
+        XCTAssertEqual(processed.height, 900)
         XCTAssertLessThanOrEqual(processed.width, 1600)
         XCTAssertLessThanOrEqual(processed.height, 900)
     }

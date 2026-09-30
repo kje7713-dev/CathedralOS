@@ -110,7 +110,7 @@ final class AuthServiceTests: XCTestCase {
 
     func testCheckSessionSetsSignedOutWhenNotConfigured() async {
         // In tests, SupabaseConfiguration.isConfigured is false — expect .signedOut.
-        let service = BackendAuthService()
+        let service = BackendAuthService(configurationPredicate: { true })
         await service.checkSession()
         XCTAssertEqual(service.authState, .signedOut,
                        "checkSession must set .signedOut when backend is not configured")
@@ -254,7 +254,7 @@ final class AuthServiceTests: XCTestCase {
             try? KeychainService.delete(key: refreshTokenKey)
         }
 
-        let service = BackendAuthService()
+        let service = BackendAuthService(configurationPredicate: { true })
         await service.checkSession()
         XCTAssertTrue(service.isSignedIn, "Precondition failed: service should be signed in before signOut")
 

@@ -218,6 +218,11 @@ final class BackendAuthService: AuthService {
 
     private(set) var authState: AuthState = .unknown
     private(set) var currentAccessToken: String?
+    private let configurationPredicate: () -> Bool
+
+    init(configurationPredicate: @escaping () -> Bool = { SupabaseConfiguration.isConfigured }) {
+        self.configurationPredicate = configurationPredicate
+    }
 
     // MARK: Keychain keys
 
@@ -229,7 +234,7 @@ final class BackendAuthService: AuthService {
     // MARK: - Session check
 
     func checkSession() async {
-        guard SupabaseConfiguration.isConfigured else {
+        guard configurationPredicate() else {
             authState = .signedOut
             currentAccessToken = nil
             return
@@ -251,7 +256,7 @@ final class BackendAuthService: AuthService {
     /// When the backend is configured, throws `.notImplemented` because the concrete
     /// sign-in path for this service is `signInWithApple()`, not this method.
     func signIn() async throws {
-        guard SupabaseConfiguration.isConfigured else {
+        guard configurationPredicate() else {
             throw AuthServiceError.notConfigured
         }
         // The real entry point is signInWithApple(). This method exists only to
@@ -264,7 +269,7 @@ final class BackendAuthService: AuthService {
     /// Initiates Sign in with Apple, then exchanges the Apple identity token for a
     /// Supabase session via `POST /auth/v1/token?grant_type=id_token`.
     func signInWithApple() async throws {
-        guard SupabaseConfiguration.isConfigured else {
+        guard configurationPredicate() else {
             throw AuthServiceError.notConfigured
         }
 

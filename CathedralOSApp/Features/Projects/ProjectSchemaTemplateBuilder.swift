@@ -497,7 +497,7 @@ enum ProjectSchemaTemplateBuilder {
         )
 
         let setting = ProjectImportExportPayload.SettingPayload(
-            id: UUID().uuidString,
+            id: "setting_1",
             summary: "A near-future surveillance state where military intelligence and civilian research overlap uncomfortably. Cold, bureaucratic, technically advanced.",
             domains: ["Military Intelligence", "Signal Research", "Surveillance Infrastructure"],
             constraints: ["All civilian research is subject to military review", "Signal frequencies above a certain range require clearance"],
@@ -525,7 +525,7 @@ enum ProjectSchemaTemplateBuilder {
             schema: schemaIdentifier,
             version: schemaVersion,
             project: .init(
-                id: UUID().uuidString,
+                id: "project_1",
                 name: "The Signal",
                 summary: "A suspended researcher races to decode a reactivated military signal before the man who shut down her lab buries it permanently — and discovers the signal has been responding to her all along.",
                 notes: "",
@@ -820,7 +820,19 @@ enum ProjectSchemaTemplateBuilder {
                     section.outline?.id == outlineID
                 }
             )
-            let authoritativeSections = (try? modelContext.fetch(descriptor)) ?? []
+            let fetchedSections = (try? modelContext.fetch(descriptor)) ?? []
+            // SwiftData may expose child rows through the parent relationship
+            // before the inverse outline query is refreshed. Merge both views
+            // so grouped sections cannot disappear from a snapshot.
+            var authoritativeSections = fetchedSections
+            var seenSectionIDs = Set(fetchedSections.map(\.id))
+            func appendDescendants(_ section: OutlineSection) {
+                for child in section.children where seenSectionIDs.insert(child.id).inserted {
+                    authoritativeSections.append(child)
+                    appendDescendants(child)
+                }
+            }
+            for section in outline.sections { appendDescendants(section) }
             // Stable deterministic ordering: top-level sections first (by
             // position, then UUID as tie-breaker), then child sections grouped
             // by parent (by parent-UUID, position, UUID). Identical project

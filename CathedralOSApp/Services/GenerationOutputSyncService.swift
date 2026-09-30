@@ -268,6 +268,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
 
     private let sessionProvider: SupabaseSessionProvider
     private let session: URLSession
+    private let configuration: ValidatedSupabaseConfiguration?
 
     private let tombstoneService: any SyncTombstoneServiceProtocol
     private let mutationGate: GenerationOutputCloudMutationGate
@@ -276,11 +277,13 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         authService: AuthService = BackendAuthService.shared,
         sessionProvider: SupabaseSessionProvider? = nil,
         session: URLSession = .shared,
+        configuration: ValidatedSupabaseConfiguration? = nil,
         tombstoneService: any SyncTombstoneServiceProtocol = SupabaseSyncTombstoneService.shared,
         mutationGate: GenerationOutputCloudMutationGate = .shared
     ) {
         self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
         self.session = session
+        self.configuration = configuration
         self.tombstoneService = tombstoneService
         self.mutationGate = mutationGate
     }
@@ -502,7 +505,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
     // MARK: - Private helpers
 
     private func validatedClientAndUser() async throws -> (SupabaseBackendClient, AuthUser, String) {
-        guard SupabaseConfiguration.isConfigured else {
+        guard configuration != nil || SupabaseConfiguration.isConfigured else {
             throw GenerationOutputSyncError.notConfigured
         }
         let user: AuthUser
@@ -520,7 +523,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
         }
         let client: SupabaseBackendClient
         do {
-            client = try SupabaseBackendClient()
+            client = try configuration.map(SupabaseBackendClient.init(configuration:)) ?? SupabaseBackendClient()
         } catch {
             throw GenerationOutputSyncError.notConfigured
         }

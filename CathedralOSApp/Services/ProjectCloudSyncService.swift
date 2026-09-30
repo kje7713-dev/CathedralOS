@@ -871,9 +871,10 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             if let mismatch = rows.first(where: { row in
                 let rowLineage = row.lineageID?.uuidString.lowercased()
                 let identities = self.claimedIdentities(for: row)
-                let lineageMatches = rowLineage == canonicalLineage
-                let localMatches = identities.contains(canonicalLocal)
-                return !(lineageMatches || localMatches)
+                // An explicit lineage is authoritative. A matching local alias
+                // must not allow a different canonical lineage through.
+                if let rowLineage { return rowLineage != canonicalLineage }
+                return !identities.contains(canonicalLocal)
             }) {
                 throw ProjectCloudSyncError.ambiguousSnapshotIdentity(
                     localProjectID: mismatch.localProjectID
@@ -934,7 +935,10 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                     localProjectID: projectID.uuidString
                 )
             }
-            if !includeTombstoned, tombstones.isTombstoned(lineageID: lineageID.uuidString) {
+            if !includeTombstoned, (
+                tombstones.isTombstoned(lineageID: lineageID.uuidString)
+                    || tombstones.isTombstoned(localID: row.localProjectID)
+            ) {
                 skippedTombstonedCount += 1
                 logger.log("Skipped tombstoned project \(projectID.uuidString, privacy: .public)")
                 continue
