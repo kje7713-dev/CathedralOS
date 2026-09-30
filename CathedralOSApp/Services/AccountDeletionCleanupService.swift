@@ -78,7 +78,7 @@ final class LocalAccountDeletionCleanupService: AccountDeletionCleanupServicePro
         PersistenceBootstrap.clearSelectedStoreSelection(defaults: defaults)
     }
 
-    private func deleteAll<T>(tryFetch: () throws -> [T], in context: ModelContext) {
+    private func deleteAll<T: PersistentModel>(tryFetch: () throws -> [T], in context: ModelContext) {
         for model in (try? tryFetch()) ?? [] {
             context.delete(model)
         }
