@@ -1442,17 +1442,19 @@ Anything beyond that is post-MVP unless it directly prevents the above workflow 
 
 ## Execution Bookmark
 
-Updated 2026-09-30 07:59 EDT.
+Updated 2026-09-30 08:03 EDT.
 
 - **Starting SHA:** `83a9b10d66affba4dc5e794fa268bead1cecf331` (`main`, PR #654 merged and deployed).
 - **Plan saved:** this file is the canonical MVP release-blocker remediation plan.
 - **Completed before this plan:** StoreKit backend-authority work (#649), XCTest realignment (#650–#652), and AI-cover pricing follow-up (#654).
 - **Current plan status:** PR 1 (StoreKit Production Authority) is satisfied by the existing shipped work; this must be re-verified against current `main` before marking the blocker closed.
-- **PR 2 status:** implementation committed as `43ab15f` on `feat/account-deletion`; PR #655 is open for review. No merge, Supabase deployment, or TestFlight deployment performed.
-- **PR 2 files:** `supabase/functions/delete-account/`, `CathedralOSApp/Services/AccountDeletionService.swift`, `CathedralOSApp/Features/Account/AccountView.swift`, Xcode target registration, Supabase deploy workflow, and `docs/release/account-deletion-data-audit.md`.
+- **PR 2 status:** implementation committed as `43ab15f` plus bookmark update `44ae274` on `feat/account-deletion`; PR #655 is open for review. No merge, Supabase deployment, or TestFlight deployment performed.
 - **PR 2 validation:** Edge Function `deno check` passed; focused Edge Function tests passed 2/2; iOS build not available on this Linux host.
-- **Next PR:** **PR 3 — App Store Compliance Surface**.
-- **Next action:** leave PR #655 open for review and prepare PR 3 from latest `main` without merging or deploying.
+- **PR 3 status:** implementation committed as `60c5bc6` on `feat/app-store-compliance`; PR #656 is open for review. No merge, Supabase deployment, or TestFlight deployment performed.
+- **PR 3 scope:** registered `PrivacyInfo.xcprivacy`, added configurable legal-link slots and truthful missing-URL messaging, and documented App Store Connect/archive dependencies.
+- **PR 3 validation:** privacy manifest parsed as a plist; `git diff --check` passed; iOS build not available on this Linux host.
+- **Next PR:** **PR 4 — Public UGC Decision**.
+- **Next action:** leave PRs #655 and #656 open for review and prepare the PR 4 decision/implementation from latest `main` without merging or deploying.
 
 ### Bookmark rules
 
