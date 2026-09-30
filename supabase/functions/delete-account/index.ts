@@ -41,7 +41,7 @@ async function removeObjects(
 async function collectOwnedArtifacts(
   adminClient: SupabaseClient,
   userId: string,
-): Promise<{ exports: string[]; covers: string[]; sharedImages: string[] }> {
+ ): Promise<{ exports: string[]; covers: string[]; sharedImages: string[] }> {
   const { data: exportRows, error: exportError } = await adminClient
     .from("export_metadata")
     .select("epub_storage_path, cover_image_url")
@@ -54,9 +54,43 @@ async function collectOwnedArtifacts(
     .eq("owner_user_id", userId);
   if (sharedError) throw new Error("shared_outputs_lookup_failed");
 
+  // Cover uploads historically used exports/<project-id>/... before export
+  // metadata existed. Enumerate every owned project prefix so failed or
+  // abandoned exports cannot leave user-owned objects behind.
+  const { data: projectRows, error: projectError } = await adminClient
+    .from("project_snapshots")
+    .select("local_project_id")
+    .eq("user_id", userId);
+  if (projectError) throw new Error("project_snapshots_lookup_failed");
+
+  const orphanedExports: string[] = [];
+  const orphanedCovers: string[] = [];
+  for (const row of projectRows ?? []) {
+    if (typeof row.local_project_id !== "string" || !row.local_project_id) continue;
+    const prefix = `exports/${row.local_project_id}`;
+    for (const [bucket, destination] of [["exports", orphanedExports], ["covers", orphanedCovers]] as const) {
+      const { data, error } = await adminClient.storage.from(bucket).list(prefix, {
+        limit: 1000,
+        offset: 0,
+      });
+      if (error) throw new Error(`storage_list_failed:${bucket}`);
+      for (const object of data ?? []) {
+        if (typeof object.name === "string" && object.name) {
+          destination.push(`${prefix}/${object.name}`);
+        }
+      }
+    }
+  }
+
   return {
-    exports: (exportRows ?? []).map((row) => row.epub_storage_path).filter(isStoragePath),
-    covers: (exportRows ?? []).map((row) => row.cover_image_url).filter(isStoragePath),
+    exports: [
+      ...(exportRows ?? []).map((row) => row.epub_storage_path).filter(isStoragePath),
+      ...orphanedExports,
+    ],
+    covers: [
+      ...(exportRows ?? []).map((row) => row.cover_image_url).filter(isStoragePath),
+      ...orphanedCovers,
+    ],
     sharedImages: (sharedRows ?? []).map((row) => row.cover_image_path).filter(isStoragePath),
   };
 }
