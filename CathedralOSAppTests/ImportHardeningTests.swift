@@ -166,7 +166,7 @@ final class ImportHardeningTests: XCTestCase {
     // MARK: - Validator: Placeholder Text Detection
 
     func testValidatorRejectsPlaceholderProjectName() {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "(fill: your story project title)", summary: "", notes: "", tags: []),
@@ -192,7 +192,7 @@ final class ImportHardeningTests: XCTestCase {
     }
 
     func testValidatorWarnsForPlaceholderCharacterName() {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "Real Project", summary: "", notes: "", tags: []),
@@ -216,7 +216,7 @@ final class ImportHardeningTests: XCTestCase {
     // MARK: - Validator: fieldLevel Validation
 
     func testValidatorWarnsForInvalidFieldLevel() {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "Test", summary: "", notes: "", tags: []),
@@ -237,7 +237,7 @@ final class ImportHardeningTests: XCTestCase {
 
     func testValidatorDoesNotWarnForValidFieldLevels() {
         for level in ["basic", "advanced", "literary"] {
-            let payload = ProjectImportExportPayload(
+            let payload = ProjectImportExportPayload.makeForTesting(
                 schema: "cathedralos.project_schema",
                 version: 1,
                 project: .init(name: "Test", summary: "", notes: "", tags: []),
@@ -264,7 +264,7 @@ final class ImportHardeningTests: XCTestCase {
         let unknownSourceID = UUID()
         let unknownTargetID = UUID()
 
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "Test", summary: "", notes: "", tags: []),
@@ -300,7 +300,7 @@ final class ImportHardeningTests: XCTestCase {
     // MARK: - Validator: Schema and Version Errors
 
     func testValidatorGivesActionableVersionError() {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 99,
             project: .init(name: "Test", summary: "", notes: "", tags: []),
@@ -318,7 +318,7 @@ final class ImportHardeningTests: XCTestCase {
     }
 
     func testValidatorGivesActionableSchemaError() {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "wrong.schema",
             version: 1,
             project: .init(name: "Test", summary: "", notes: "", tags: []),
@@ -422,7 +422,7 @@ final class ImportHardeningTests: XCTestCase {
     }
 
     private func makeMinimalPayload(name: String) -> ProjectImportExportPayload {
-        ProjectImportExportPayload(
+        ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: name, summary: "", notes: "", tags: []),

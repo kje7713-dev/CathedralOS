@@ -31,7 +31,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
 
     func testLegacyImportBackfillsLineageFromProjectID() throws {
         let projectID = UUID()
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(
@@ -370,7 +370,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
     // MARK: 3. Validator Rejects Wrong Schema
 
     func testSchemaValidation_wrongSchema() {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "some.other_schema",
             version: 1,
             project: .init(name: "Test", summary: "", notes: "", tags: []),
@@ -398,7 +398,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
     // MARK: 4. Validator Rejects Wrong Version
 
     func testSchemaValidation_wrongVersion() {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 99,
             project: .init(name: "Test", summary: "", notes: "", tags: []),
@@ -426,7 +426,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
     // MARK: 5. Validator Returns Error For Empty Project Name
 
     func testSchemaValidation_emptyProjectName() {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "   ", summary: "summary", notes: "", tags: []),
@@ -498,7 +498,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
 
     func testNormalizationOfMissingOptionalFields() {
         let charID = UUID()
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "Minimal", summary: "", notes: "", tags: []),
@@ -559,7 +559,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
     func testMappingCreatesExpectedEntityCounts() {
         let charID1 = UUID()
         let charID2 = UUID()
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "Counted", summary: "s", notes: "", tags: []),
@@ -594,7 +594,7 @@ final class ProjectSchemaRoundTripTests: XCTestCase {
         let knownID = UUID()
         let unknownID = UUID()
 
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "Rel Test", summary: "s", notes: "", tags: []),

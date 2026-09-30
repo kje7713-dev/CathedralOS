@@ -80,7 +80,7 @@ extension PromptPackExportPayload.PromptPackPayload {
 }
 
 extension ProjectImportExportPayload {
-    init(
+    static func makeForTesting(
         schema: String,
         version: Int,
         project: ProjectPayload,
@@ -94,8 +94,8 @@ extension ProjectImportExportPayload {
         storyArcs: [StoryArcPayload] = [],
         outlines: [OutlinePayload] = [],
         promptPacks: [PromptPackPayload] = []
-    ) {
-        self.init(
+    ) -> Self {
+        Self(
             schema: schema, version: version, project: project, setting: setting,
             characters: characters, storySparks: storySparks, aftertastes: aftertastes,
             relationships: relationships, themeQuestions: themeQuestions, motifs: motifs,
