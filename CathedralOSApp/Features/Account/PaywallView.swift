@@ -176,7 +176,7 @@ struct PaywallView: View {
     }
 
     private var legalSection: some View {
-        Section("Legal") {
+        Section {
             if let privacyPolicyURL = AppLegalLinks.privacyPolicyURL {
                 Link("Privacy Policy", destination: privacyPolicyURL)
             } else {
@@ -192,6 +192,8 @@ struct PaywallView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        } header: {
+            Text("Legal")
         } footer: {
             Text("Subscription terms and renewal details are provided by Apple and the App Store listing.")
                 .font(.caption2)
@@ -355,7 +357,7 @@ private enum AppLegalLinks {
         guard let rawValue = Bundle.main.object(forInfoDictionaryKey: key) as? String,
               let url = URL(string: rawValue),
               url.scheme == "https",
-              !url.host.isNil else {
+              url.host != nil else {
             return nil
         }
         return url
