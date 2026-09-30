@@ -158,6 +158,35 @@ struct PromptPackExportPayload: Codable {
         let dominantValues: [String]
         let hiddenTruths: [String]
 
+        init(
+            included: Bool, summary: String, domains: [String], constraints: [String], themes: [String], season: String,
+            worldRules: [String], historicalPressure: String, politicalForces: String, socialOrder: String,
+            environmentalPressure: String, technologyLevel: String, mythicFrame: String, instructionBias: String,
+            religiousPressure: String, economicPressure: String, taboos: [String], institutions: [String],
+            dominantValues: [String], hiddenTruths: [String]
+        ) {
+            self.included = included
+            self.summary = summary
+            self.domains = domains
+            self.constraints = constraints
+            self.themes = themes
+            self.season = season
+            self.worldRules = worldRules
+            self.historicalPressure = historicalPressure
+            self.politicalForces = politicalForces
+            self.socialOrder = socialOrder
+            self.environmentalPressure = environmentalPressure
+            self.technologyLevel = technologyLevel
+            self.mythicFrame = mythicFrame
+            self.instructionBias = instructionBias
+            self.religiousPressure = religiousPressure
+            self.economicPressure = economicPressure
+            self.taboos = taboos
+            self.institutions = institutions
+            self.dominantValues = dominantValues
+            self.hiddenTruths = hiddenTruths
+        }
+
         private enum CodingKeys: String, CodingKey {
             case included, summary, domains, constraints, themes, season, worldRules
             case historicalPressure, politicalForces, socialOrder, environmentalPressure
