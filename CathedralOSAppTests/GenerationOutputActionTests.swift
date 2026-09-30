@@ -515,7 +515,7 @@ final class GenerationOutputActionTests: XCTestCase {
         let data = try JSONEncoder().encode(request)
         let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
-        XCTAssertEqual(obj["action"] as? String, "regenerate")
+        XCTAssertEqual(obj["generationAction"] as? String, "regenerate")
         XCTAssertEqual(obj["parentGenerationID"] as? String, parentID.uuidString)
     }
 
@@ -541,7 +541,7 @@ final class GenerationOutputActionTests: XCTestCase {
         let data = try JSONEncoder().encode(request)
         let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
-        XCTAssertEqual(obj["action"] as? String, "generate",
+        XCTAssertEqual(obj["generationAction"] as? String, "generate",
                        "Default action must be 'generate' to preserve backward compatibility")
     }
 
@@ -571,7 +571,7 @@ final class GenerationOutputActionTests: XCTestCase {
         let data = try JSONEncoder().encode(request)
         let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
-        XCTAssertEqual(obj["action"] as? String, "continue")
+        XCTAssertEqual(obj["generationAction"] as? String, "continue")
         XCTAssertEqual(obj["previousOutputText"] as? String, priorText)
     }
 
