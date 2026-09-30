@@ -507,15 +507,17 @@ struct KindleExportView: View {
                         .accessibilityLabel("Share EPUB")
                         .disabled(jobState.isInFlight)
 
-                        Button {
-                            Task { await togglePublicPublication(export) }
-                        } label: {
+                        if PublicSharingServiceConfiguration.isEnabled {
+                            Button {
+                                Task { await togglePublicPublication(export) }
+                            } label: {
                             Image(systemName: export.is_publicly_shared ? "globe" : "globe.badge.chevron.backward")
                                 .foregroundStyle(export.is_publicly_shared ? CathedralTheme.Colors.accent : CathedralTheme.Colors.secondaryText)
                         }
                         .buttonStyle(.bordered)
-                        .accessibilityLabel(export.is_publicly_shared ? "Unpublish EPUB" : "Share EPUB publicly")
-                        .disabled(jobState.isInFlight || publishingExportID != nil)
+                            .accessibilityLabel(export.is_publicly_shared ? "Unpublish EPUB" : "Share EPUB publicly")
+                            .disabled(jobState.isInFlight || publishingExportID != nil)
+                        }
 
                         if !export.isStandaloneGenerationOutput {
                             Button {

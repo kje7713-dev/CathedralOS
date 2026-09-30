@@ -58,10 +58,12 @@ private struct AppRootView: View {
                 .tabItem {
                     Label("Projects", systemImage: "books.vertical")
                 }
-            SharedOutputsView()
-                .tabItem {
-                    Label("Shared", systemImage: "globe")
-                }
+            if PublicSharingServiceConfiguration.isEnabled {
+                SharedOutputsView()
+                    .tabItem {
+                        Label("Shared", systemImage: "globe")
+                    }
+            }
             AccountView(recoveryContext: recoveryContext)
                 .tabItem {
                     Label("Account", systemImage: "person.circle")

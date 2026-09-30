@@ -237,3 +237,12 @@ Deno.test("unpublished EPUB is unavailable", async () => {
   assertEquals(response.status, 404);
   assert(client.state.createdSignedURLCalls === 0);
 });
+
+Deno.test("public sharing is fail-closed when the release gate is disabled", async () => {
+  const response = await handler(
+    request("GET", "/shared-outputs"),
+    { sharingEnabled: false },
+  );
+  assertEquals(response.status, 404);
+  assertEquals((await response.json()).errorCode, "public_sharing_disabled");
+});

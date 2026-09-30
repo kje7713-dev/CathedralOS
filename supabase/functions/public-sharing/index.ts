@@ -224,6 +224,7 @@ interface HandlerOverrides {
   authenticatedUserId?: string | null;
   supabaseURL?: string;
   publicShareBaseURL?: string | null;
+  sharingEnabled?: boolean;
 }
 
 export async function handler(
@@ -232,6 +233,23 @@ export async function handler(
 ): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
+
+  const sharingEnabled = Object.prototype.hasOwnProperty.call(
+      overrides,
+      "sharingEnabled",
+    )
+    ? overrides.sharingEnabled === true
+    : overrides.adminClient
+    ? true
+    : ["1", "true", "yes"].includes(
+      (Deno.env.get("PUBLIC_SHARING_ENABLED") ?? "").trim().toLowerCase(),
+    );
+  if (!sharingEnabled) {
+    return jsonResponse(
+      { status: "failed", errorCode: "public_sharing_disabled", error: "Public sharing is disabled for this release" },
+      404,
+    );
   }
 
   if (!["GET", "POST", "DELETE"].includes(req.method)) {
