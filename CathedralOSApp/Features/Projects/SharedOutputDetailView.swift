@@ -52,6 +52,8 @@ struct SharedOutputDetailView: View {
     @State private var isSubmittingReport = false
     @State private var reportError: String?
     @State private var reportSubmittedSuccess = false
+    @State private var showBlockConfirmation = false
+    @State private var blockError: String?
 
     // Owner / unpublish state
     @State private var isUnpublishing = false
@@ -142,6 +144,30 @@ struct SharedOutputDetailView: View {
             Button("OK", role: .cancel) { unpublishError = nil }
         } message: {
             Text(unpublishError ?? "")
+        }
+        .alert("Block This Creator?", isPresented: $showBlockConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Block Creator", role: .destructive) {
+                guard let ownerID = detail?.ownerUserID else { return }
+                Task {
+                    do {
+                        try await sharingService.blockCreator(userID: ownerID)
+                        dismiss()
+                    } catch {
+                        blockError = PublicSharingServiceError.displayMessage(from: error)
+                    }
+                }
+            }
+        } message: {
+            Text("Stories from this creator will no longer appear for you.")
+        }
+        .alert("Block Creator Failed", isPresented: Binding(
+            get: { blockError != nil },
+            set: { if !$0 { blockError = nil } }
+        )) {
+            Button("OK", role: .cancel) { blockError = nil }
+        } message: {
+            Text(blockError ?? "")
         }
         .alert("Unpublish This Output?", isPresented: $showUnpublishConfirmation) {
             Button("Cancel", role: .cancel) {}
@@ -364,6 +390,12 @@ struct SharedOutputDetailView: View {
             CathedralSecondaryButton("Hide", systemImage: "eye.slash") {
                 hiddenService.hide(sharedOutputID: detail.sharedOutputID)
                 dismiss()
+            }
+
+            if detail.ownerUserID != nil {
+                CathedralSecondaryButton("Block Creator", systemImage: "person.crop.circle.badge.xmark") {
+                    showBlockConfirmation = true
+                }
             }
 
             CathedralSecondaryButton("Report", systemImage: "flag") {

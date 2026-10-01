@@ -105,7 +105,10 @@ platform :ios do
     xcargs_parts = [
       "SUPABASE_PROJECT_URL=#{ENV['SUPABASE_PROJECT_URL'].to_s.shellescape}",
       "SUPABASE_ANON_KEY=#{ENV['SUPABASE_ANON_KEY'].to_s.shellescape}",
-      "PUBLIC_SHARING_BASE_URL=#{ENV['PUBLIC_SHARING_BASE_URL'].to_s.shellescape}"
+      "PUBLIC_SHARING_BASE_URL=#{ENV['PUBLIC_SHARING_BASE_URL'].to_s.shellescape}",
+      "PRIVACY_POLICY_URL=#{ENV['PRIVACY_POLICY_URL'].to_s.shellescape}",
+      "TERMS_OF_USE_URL=#{ENV['TERMS_OF_USE_URL'].to_s.shellescape}",
+      "SUPPORT_URL=#{ENV['SUPPORT_URL'].to_s.shellescape}"
     ]
     xcargs = xcargs_parts.join(" ")
 

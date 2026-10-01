@@ -89,6 +89,10 @@ protocol PublicSharingService {
     /// Throws `PublicSharingServiceError` on failure.
     func reportSharedOutput(sharedOutputID: String, reason: ReportReason, details: String) async throws
 
+    func blockCreator(userID: String) async throws
+    func unblockCreator(userID: String) async throws
+    func fetchBlockedCreatorIDs() async throws -> [String]
+
     /// Uploads a cover image for a pending shared output and returns persisted metadata.
     func uploadCoverImage(
         sharedOutputID: String,
@@ -97,6 +101,20 @@ protocol PublicSharingService {
         height: Int,
         contentType: String
     ) async throws -> OutputCoverImageUploadMetadata
+}
+
+extension PublicSharingService {
+    func blockCreator(userID: String) async throws {
+        throw PublicSharingServiceError.serverError(statusCode: 501, message: "Creator blocking is unavailable")
+    }
+
+    func unblockCreator(userID: String) async throws {
+        throw PublicSharingServiceError.serverError(statusCode: 501, message: "Creator blocking is unavailable")
+    }
+
+    func fetchBlockedCreatorIDs() async throws -> [String] {
+        throw PublicSharingServiceError.serverError(statusCode: 501, message: "Creator blocking is unavailable")
+    }
 }
 
 // MARK: - BackendPublicSharingService
@@ -125,6 +143,8 @@ final class BackendPublicSharingService: PublicSharingService {
     private var publicListEndpoint: URL? { endpoint("shared-outputs") }
     private func publicDetailEndpoint(_ id: String) -> URL? { endpoint("shared-outputs/\(id)") }
     private func reportEndpoint(_ id: String) -> URL? { endpoint("shared-outputs/\(id)/reports") }
+    private var blocksEndpoint: URL? { endpoint("blocks") }
+    private func blockEndpoint(_ id: String) -> URL? { endpoint("blocks/\(id)") }
 
     var hasOutputSyncService: Bool {
         syncService != nil
@@ -406,6 +426,40 @@ final class BackendPublicSharingService: PublicSharingService {
 
         let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: true)
         try validateResponse(urlResponse, data: data)
+    }
+
+    func blockCreator(userID: String) async throws {
+        let token = try await resolvedAccessToken()
+        guard let url = blocksEndpoint else { throw PublicSharingServiceError.endpointNotConfigured }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["blockedUserID": userID])
+        decorateAuthenticatedRequestHeaders(&request, accessToken: token)
+        let (data, response) = try await performRequest(request, retryOnExpiredJWT: true)
+        try validateResponse(response, data: data)
+    }
+
+    func unblockCreator(userID: String) async throws {
+        let token = try await resolvedAccessToken()
+        guard let url = blockEndpoint(userID) else { throw PublicSharingServiceError.endpointNotConfigured }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        decorateAuthenticatedRequestHeaders(&request, accessToken: token)
+        let (data, response) = try await performRequest(request, retryOnExpiredJWT: true)
+        try validateResponse(response, data: data)
+    }
+
+    func fetchBlockedCreatorIDs() async throws -> [String] {
+        let token = try await resolvedAccessToken()
+        guard let url = blocksEndpoint else { throw PublicSharingServiceError.endpointNotConfigured }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        decorateAuthenticatedRequestHeaders(&request, accessToken: token)
+        let (data, response) = try await performRequest(request, retryOnExpiredJWT: true)
+        try validateResponse(response, data: data)
+        let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return (payload?["blocks"] as? [[String: Any]] ?? []).compactMap { $0["blocked_user_id"] as? String }
     }
 
     // MARK: - Private helpers

@@ -1,6 +1,13 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // jszip is a CommonJS-compatible ESM bundle in Deno runtime.
 import * as JSZip from "https://esm.sh/jszip@3.10.1";
+import {
+  checkPublicSharingEligibility,
+  PUBLIC_SHARING_RESTRICTION_REASON,
+  requireCurrentProjectEligibility,
+  requireCurrentSectionEligibility,
+} from "../_shared/public-sharing-eligibility.ts";
+import { notifySharedOutputReport } from "../_shared/_report_alert.ts";
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -240,8 +247,8 @@ export async function handler(
       "sharingEnabled",
     )
     ? overrides.sharingEnabled === true
-    : ["1", "true", "yes"].includes(
-      (Deno.env.get("PUBLIC_SHARING_ENABLED") ?? "").trim().toLowerCase(),
+    : !["0", "false", "no"].includes(
+      (Deno.env.get("PUBLIC_SHARING_ENABLED") ?? "true").trim().toLowerCase(),
     );
   if (!sharingEnabled) {
     return jsonResponse(
@@ -313,7 +320,15 @@ export async function handler(
       }, 500);
     }
 
-    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    let rows = (data ?? []) as Array<Record<string, unknown>>;
+    if (authenticatedUserId && rows.length > 0) {
+      const { data: blocks } = await adminClient.from("user_blocks")
+        .select("blocked_user_id")
+        .eq("blocker_user_id", authenticatedUserId);
+      const blocked = new Set((blocks ?? []).map((row: Record<string, unknown>) =>
+        String(row.blocked_user_id ?? "")));
+      rows = rows.filter((row) => !blocked.has(String(row.owner_user_id ?? "")));
+    }
     const ownerIds = [
       ...new Set(
         rows.map((row) => row.owner_user_id).filter((id): id is string =>
@@ -419,6 +434,16 @@ export async function handler(
     const ownerUserID = String(
       (data as Record<string, unknown>).owner_user_id ?? "",
     );
+    if (authenticatedUserId && authenticatedUserId !== ownerUserID) {
+      const { data: block } = await adminClient.from("user_blocks")
+        .select("blocked_user_id")
+        .eq("blocker_user_id", authenticatedUserId)
+        .eq("blocked_user_id", ownerUserID)
+        .maybeSingle();
+      if (block) {
+        return jsonResponse({ status: "failed", error: "Shared output not found" }, 404);
+      }
+    }
     const visibility = String(
       (data as Record<string, unknown>).visibility ?? "private",
     );
@@ -569,6 +594,20 @@ export async function handler(
         { status: "failed", error: "Export is inactive" },
         410,
       );
+    }
+    const epubEligibility = await requireCurrentProjectEligibility(
+      adminClient,
+      String(exportRow.project_id),
+    );
+    if (!epubEligibility.ok) {
+      return jsonResponse({
+        status: "failed",
+        errorCode: epubEligibility.reason,
+        error: epubEligibility.reason === PUBLIC_SHARING_RESTRICTION_REASON
+          ? "This EPUB cannot be published publicly because a section contains sexual content involving a minor."
+          : "Public-sharing eligibility is not yet available for every section.",
+        sectionIDs: epubEligibility.sectionIDs,
+      }, 422);
     }
     if (
       typeof exportRow.epub_storage_path !== "string" ||
@@ -802,7 +841,7 @@ export async function handler(
     const { data: generationOutput, error: generationLookupError } =
       await adminClient
         .from("generation_outputs")
-        .select("id, user_id")
+        .select("id, user_id, outline_section_id")
         .eq("id", generationOutputID)
         .maybeSingle();
     if (generationLookupError) {
@@ -829,6 +868,42 @@ export async function handler(
         status: "failed",
         error: "You do not own this generation output",
       }, 403);
+    }
+
+    const sectionID = String((generationOutput as Record<string, unknown>).outline_section_id ?? "");
+    if (isUUID(sectionID)) {
+      const textEligibility = await requireCurrentSectionEligibility(
+        adminClient,
+        sectionID,
+      );
+      if (!textEligibility.ok) {
+        return jsonResponse({
+          status: "failed",
+          errorCode: textEligibility.reason,
+          error: textEligibility.reason === PUBLIC_SHARING_RESTRICTION_REASON
+            ? "This output cannot be published publicly because a section contains sexual content involving a minor."
+            : "Public-sharing eligibility is not yet available for every section.",
+          sectionIDs: textEligibility.sectionIDs,
+        }, 422);
+      }
+    } else {
+      const openaiKey = Deno.env.get("OPENAI_API_KEY");
+      if (!openaiKey) {
+        return jsonResponse({ status: "failed", errorCode: "public_sharing_eligibility_missing", error: "Public-sharing eligibility is not yet available." }, 503);
+      }
+      try {
+        const directEligibility = await checkPublicSharingEligibility(outputText, openaiKey);
+        if (!directEligibility.eligible) {
+          return jsonResponse({
+            status: "failed",
+            errorCode: PUBLIC_SHARING_RESTRICTION_REASON,
+            error: "This output cannot be published publicly because it contains sexual content involving a minor.",
+          }, 422);
+        }
+      } catch (error) {
+        console.error("[public-sharing] direct-output eligibility failed:", error);
+        return jsonResponse({ status: "failed", errorCode: "public_sharing_eligibility_missing", error: "Public-sharing eligibility is not yet available." }, 503);
+      }
     }
 
     const {
@@ -1129,12 +1204,12 @@ export async function handler(
       }, 404);
     }
 
-    const { error } = await adminClient.from("shared_output_reports").insert({
+    const { data: report, error } = await adminClient.from("shared_output_reports").insert({
       shared_output_id: sharedOutputID,
       reporter_user_id: userID,
       reason,
       details: typeof body.details === "string" ? body.details : "",
-    });
+    }).select("id, created_at").single();
 
     if (error) {
       console.error("[public-sharing] report insert error:", error);
@@ -1143,7 +1218,48 @@ export async function handler(
         error: "Could not submit report",
       }, 500);
     }
+    const reportID = String((report as Record<string, unknown> | null)?.id ?? "");
+    const createdAt = String((report as Record<string, unknown> | null)?.created_at ?? new Date().toISOString());
+    const alert = notifySharedOutputReport({ reportID, sharedOutputID, reason, createdAt });
+    const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void } }).EdgeRuntime;
+    if (runtime?.waitUntil) runtime.waitUntil(alert);
+    else void alert;
     return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
+
+  if (routePath === "/blocks" || (segments[0] === "blocks" && segments.length === 2)) {
+    const userIDOrError = requireUser();
+    if (userIDOrError instanceof Response) return userIDOrError;
+    const userID = userIDOrError;
+    if (req.method === "GET") {
+      const { data, error } = await adminClient.from("user_blocks")
+        .select("blocked_user_id, created_at")
+        .eq("blocker_user_id", userID);
+      if (error) return jsonResponse({ status: "failed", error: "Could not load blocked creators" }, 500);
+      return jsonResponse({ blocks: data ?? [] });
+    }
+    if (req.method === "POST" && routePath === "/blocks") {
+      let body: { blockedUserID?: unknown };
+      try { body = await req.json() as { blockedUserID?: unknown }; }
+      catch { return jsonResponse({ status: "failed", error: "Invalid JSON body" }, 400); }
+      const blockedUserID = typeof body.blockedUserID === "string" ? body.blockedUserID.trim() : "";
+      if (!isUUID(blockedUserID)) return jsonResponse({ status: "failed", error: "blockedUserID must be a UUID" }, 422);
+      if (blockedUserID === userID) return jsonResponse({ status: "failed", error: "You cannot block yourself" }, 422);
+      const { error } = await adminClient.from("user_blocks").upsert({
+        blocker_user_id: userID, blocked_user_id: blockedUserID,
+      }, { onConflict: "blocker_user_id,blocked_user_id", ignoreDuplicates: true });
+      if (error) return jsonResponse({ status: "failed", error: "Could not block creator" }, 500);
+      return jsonResponse({ status: "ok", blockedUserID });
+    }
+    if (req.method === "DELETE") {
+      const blockedUserID = segments[1];
+      if (!isUUID(blockedUserID)) return jsonResponse({ status: "failed", error: "Invalid blocked user ID" }, 422);
+      const { error } = await adminClient.from("user_blocks").delete()
+        .eq("blocker_user_id", userID).eq("blocked_user_id", blockedUserID);
+      if (error) return jsonResponse({ status: "failed", error: "Could not unblock creator" }, 500);
+      return jsonResponse({ status: "ok", blockedUserID });
+    }
+    return jsonResponse({ status: "failed", error: "Method not allowed" }, 405);
   }
 
   if (req.method === "POST" && routePath === "/remix-events") {

@@ -74,6 +74,20 @@ function mockClient(options: {
     chain.is = () => chain;
     chain.order = () => chain;
     chain.limit = () => chain;
+    chain.then = (resolve: (value: unknown) => unknown) => {
+      if (table === "section_embeddings") {
+        return resolve({
+          data: [{
+            outline_section_id: "66666666-6666-4666-8666-666666666666",
+            raw_text: "eligible section",
+            public_sharing_eligible: true,
+            public_sharing_checked_content_hash: "bc01b0b1c3725bc34ac150fe980818c1d8c2ad9047a4aa55425f0a9a686dfd66",
+          }],
+          error: null,
+        });
+      }
+      return resolve({ data: [], error: null });
+    };
     chain.insert = (row: Record<string, unknown>) => {
       state.writes.push(row);
       state.existing = true;

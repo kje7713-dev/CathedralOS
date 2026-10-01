@@ -192,6 +192,14 @@ struct PaywallView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            if let supportURL = AppLegalLinks.supportURL {
+                Link("Contact Support", destination: supportURL)
+            } else {
+                Text("Support contact will be configured before App Store submission.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         } header: {
             Text("Legal")
         } footer: {
@@ -356,6 +364,7 @@ struct PaywallView: View {
 private enum AppLegalLinks {
     static var privacyPolicyURL: URL? { configuredURL(forInfoKey: "PrivacyPolicyURL") }
     static var termsOfUseURL: URL? { configuredURL(forInfoKey: "TermsOfUseURL") }
+    static var supportURL: URL? { configuredURL(forInfoKey: "SupportURL") }
 
     private static func configuredURL(forInfoKey key: String) -> URL? {
         guard let rawValue = Bundle.main.object(forInfoDictionaryKey: key) as? String,
