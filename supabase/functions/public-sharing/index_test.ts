@@ -352,7 +352,7 @@ Deno.test("remix-events rejects a blocked creator without inserting an event", a
     { adminClient: client, authenticatedUserId: OTHER, supabaseURL: "https://example.test" },
   );
   assertEquals(response.status, 404);
-  assertEquals(client.state.writes.filter((row) => row.shared_output_id === SHARED_ID), []);
+  assertEquals(client.state.writes.filter((row: Record<string, unknown>) => row.shared_output_id === SHARED_ID), []);
 });
 
 Deno.test("remix-events inserts an event for an unblocked creator", async () => {
@@ -362,5 +362,5 @@ Deno.test("remix-events inserts an event for an unblocked creator", async () => 
     { adminClient: client, authenticatedUserId: OTHER, supabaseURL: "https://example.test" },
   );
   assertEquals(response.status, 204);
-  assertEquals(client.state.writes.filter((row) => row.shared_output_id === SHARED_ID).length, 1);
+  assertEquals(client.state.writes.filter((row: Record<string, unknown>) => row.shared_output_id === SHARED_ID).length, 1);
 });
