@@ -130,8 +130,11 @@ struct OutlineSectionsRegionView: View {
         do {
             let statuses = try await BackendPublicSharingService().fetchSectionEligibility(sectionIDs: ids)
             for section in sectionsOrder {
-                guard let eligible = statuses[section.id.uuidString] else { continue }
-                publicSharingStatuses[section.id] = eligible.map { $0 ? .eligible : .restricted } ?? .notYetChecked
+                guard let status = restoredPublicSharingEligibilityStatus(
+                    for: section.id,
+                    statuses: statuses
+                ) else { continue }
+                publicSharingStatuses[section.id] = status
             }
         } catch {
             // A missing persisted check is a visible, non-blocking state.

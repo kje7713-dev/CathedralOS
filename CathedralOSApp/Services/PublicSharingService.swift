@@ -377,7 +377,7 @@ final class BackendPublicSharingService: PublicSharingService {
         try validateResponse(response, data: data)
         struct Item: Decodable { let sectionID: String; let eligible: Bool? }
         struct Envelope: Decodable { let items: [Item] }
-        do { return Dictionary(uniqueKeysWithValues: try JSONDecoder().decode(Envelope.self, from: data).items.map { ($0.sectionID, $0.eligible) }) }
+        do { return Dictionary(uniqueKeysWithValues: try JSONDecoder().decode(Envelope.self, from: data).items.map { ($0.sectionID.lowercased(), $0.eligible) }) }
         catch { throw PublicSharingServiceError.decodingError(error) }
     }
 

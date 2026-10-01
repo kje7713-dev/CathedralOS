@@ -270,6 +270,14 @@ struct EmbedSectionRequest: Codable {
     let output_id: String?
 }
 
+func restoredPublicSharingEligibilityStatus(
+    for sectionID: UUID,
+    statuses: [String: Bool?]
+) -> PublicSharingEligibilityStatus? {
+    guard let eligible = statuses[sectionID.uuidString.lowercased()] else { return nil }
+    return eligible.map { $0 ? .eligible : .restricted } ?? .notYetChecked
+}
+
 enum PublicSharingEligibilityStatus: Equatable {
     case notYetChecked
     case checking
