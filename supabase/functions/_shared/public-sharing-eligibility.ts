@@ -109,40 +109,70 @@ export async function requireCurrentSectionEligibility(
 
 export async function requireCurrentProjectEligibility(
   adminClient: any,
-  projectID: string,
+  snapshotProjectID: string,
 ): Promise<{ ok: true } | { ok: false; reason: string; sectionIDs: string[] }> {
-  const { data, error } = await adminClient.from("section_embeddings")
-    .select(
-      "outline_section_id, raw_text, public_sharing_eligible, public_sharing_checked_content_hash",
-    )
-    .eq("project_id", projectID);
-  if (error) throw new Error(error.message);
-  const rows = (data ?? []) as Array<Record<string, unknown>>;
-  if (rows.length === 0) {
+  // EPUB export is built from project_snapshots.snapshot_json, which is the
+  // authoritative current manuscript. Do not inspect accumulated historical
+  // section_embeddings rows: deleted/stale sections must not block publication.
+  const { data: snapshot, error: snapshotError } = await adminClient
+    .from("project_snapshots")
+    .select("snapshot_json")
+    .eq("id", snapshotProjectID)
+    .maybeSingle();
+  if (snapshotError) throw new Error(snapshotError.message);
+  const outlines = Array.isArray(snapshot?.snapshot_json?.outlines)
+    ? snapshot.snapshot_json.outlines as Array<Record<string, unknown>>
+    : [];
+  const sectionIDs = outlines.flatMap((outline) =>
+    Array.isArray(outline.sections)
+      ? (outline.sections as Array<Record<string, unknown>>).map((section) =>
+        String(section.id ?? "")
+      )
+      : []
+  ).filter((id) => id.length > 0);
+  if (sectionIDs.length === 0) {
     return {
       ok: false,
       reason: "public_sharing_eligibility_missing",
       sectionIDs: [],
     };
   }
-  const stale: Array<Record<string, unknown>> = [];
-  for (const row of rows) {
+
+  const { data, error } = await adminClient.from("section_embeddings")
+    .select(
+      "outline_section_id, raw_text, public_sharing_eligible, public_sharing_checked_content_hash",
+    )
+    .in("outline_section_id", sectionIDs);
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const rowsBySectionID = new Map(
+    rows.map((
+      row,
+    ) => [String(row.outline_section_id ?? "").toLowerCase(), row]),
+  );
+  const invalid: Array<Record<string, unknown>> = [];
+  for (const sectionID of sectionIDs) {
+    const row = rowsBySectionID.get(sectionID.toLowerCase());
+    if (!row) {
+      invalid.push({ outline_section_id: sectionID });
+      continue;
+    }
     const rawText = typeof row.raw_text === "string" ? row.raw_text : "";
     const currentHash = await sha256Hex(rawText);
     if (
       row.public_sharing_eligible !== true ||
       row.public_sharing_checked_content_hash !== currentHash
     ) {
-      stale.push(row);
+      invalid.push(row);
     }
   }
-  if (stale.length > 0) {
+  if (invalid.length > 0) {
     return {
       ok: false,
-      reason: stale.some((row) => row.public_sharing_eligible === false)
+      reason: invalid.some((row) => row.public_sharing_eligible === false)
         ? PUBLIC_SHARING_RESTRICTION_REASON
         : "public_sharing_eligibility_missing",
-      sectionIDs: stale.map((row) => String(row.outline_section_id ?? "")),
+      sectionIDs: invalid.map((row) => String(row.outline_section_id ?? "")),
     };
   }
   return { ok: true };

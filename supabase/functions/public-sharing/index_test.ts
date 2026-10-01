@@ -17,7 +17,10 @@ function request(method: string, path: string, body?: unknown): Request {
   });
 }
 
-async function enabledHandler(requestValue: Request, overrides: Record<string, unknown> = {}) {
+async function enabledHandler(
+  requestValue: Request,
+  overrides: Record<string, unknown> = {},
+) {
   return await handler(requestValue, { sharingEnabled: true, ...overrides });
 }
 
@@ -30,6 +33,7 @@ function mockClient(options: {
   unpublishedAt?: string | null;
   existing?: boolean;
   signed?: boolean;
+  eligible?: boolean;
 } = {}) {
   const state = {
     owner: options.owner ?? OWNER,
@@ -40,6 +44,7 @@ function mockClient(options: {
     unpublishedAt: options.unpublishedAt ?? null,
     existing: options.existing ?? false,
     signed: options.signed ?? true,
+    eligible: options.eligible ?? true,
     createdSignedURLCalls: 0,
     writes: [] as Record<string, unknown>[],
   };
@@ -80,8 +85,9 @@ function mockClient(options: {
           data: [{
             outline_section_id: "66666666-6666-4666-8666-666666666666",
             raw_text: "eligible section",
-            public_sharing_eligible: true,
-            public_sharing_checked_content_hash: "bc01b0b1c3725bc34ac150fe980818c1d8c2ad9047a4aa55425f0a9a686dfd66",
+            public_sharing_eligible: state.eligible,
+            public_sharing_checked_content_hash:
+              "bc01b0b1c3725bc34ac150fe980818c1d8c2ad9047a4aa55425f0a9a686dfd66",
           }],
           error: null,
         });
@@ -103,7 +109,14 @@ function mockClient(options: {
       }
       if (table === "project_snapshots") {
         return {
-          data: { snapshot_json: { project: { summary: "Fallback summary" } } },
+          data: {
+            snapshot_json: {
+              project: { summary: "Fallback summary" },
+              outlines: [{
+                sections: [{ id: "66666666-6666-4666-8666-666666666666" }],
+              }],
+            },
+          },
           error: null,
         };
       }
@@ -208,6 +221,23 @@ Deno.test("EPUB publish uses canonical metadata and reuses the same shared row",
   );
   assertEquals((await first.json()).sharedOutputID, SHARED_ID);
   assertEquals((await second.json()).sharedOutputID, SHARED_ID);
+});
+
+Deno.test("EPUB publication rejects a current restricted section", async () => {
+  const response = await enabledHandler(
+    request("POST", "/shared-outputs/epub", { exportMetadataID: EXPORT_ID }),
+    {
+      adminClient: mockClient({ eligible: false }),
+      authenticatedUserId: OWNER,
+      supabaseURL: "https://example.test",
+      publicShareBaseURL: "https://share.example.test",
+    },
+  );
+  assertEquals(response.status, 422);
+  assertEquals(
+    (await response.json()).errorCode,
+    "sexual_content_involving_minors",
+  );
 });
 
 Deno.test("valid public EPUB returns a five-minute signed URL", async () => {

@@ -6,6 +6,7 @@ import {
   checkPublicSharingEligibility,
   PUBLIC_SHARING_MODERATION_MODEL,
   PUBLIC_SHARING_RESTRICTION_REASON,
+  requireCurrentProjectEligibility,
   sha256Hex,
 } from "./public-sharing-eligibility.ts";
 
@@ -69,5 +70,102 @@ Deno.test("provider failure is not converted into an eligible result", async () 
       ),
     Error,
     "moderation request failed",
+  );
+});
+
+Deno.test("project eligibility uses current snapshot sections, not stale embeddings", async () => {
+  const currentText = "current section";
+  const currentHash = await sha256Hex(currentText);
+  const client = {
+    from(table: string) {
+      if (table === "project_snapshots") {
+        return {
+          select() {
+            return {
+              eq() {
+                return {
+                  maybeSingle: async () => ({
+                    data: {
+                      snapshot_json: {
+                        outlines: [{ sections: [{ id: "section-current" }] }],
+                      },
+                    },
+                    error: null,
+                  }),
+                };
+              },
+            };
+          },
+        };
+      }
+      return {
+        select() {
+          return {
+            in: async () => ({
+              data: [{
+                outline_section_id: "section-current",
+                raw_text: currentText,
+                public_sharing_eligible: true,
+                public_sharing_checked_content_hash: currentHash,
+              }, {
+                outline_section_id: "stale-deleted-section",
+                raw_text: "old text",
+                public_sharing_eligible: false,
+                public_sharing_checked_content_hash: "old-hash",
+              }],
+              error: null,
+            }),
+          };
+        },
+      };
+    },
+  };
+
+  assertEquals(
+    await requireCurrentProjectEligibility(client, "snapshot-id"),
+    { ok: true },
+  );
+});
+
+Deno.test("project eligibility reports missing current snapshot sections", async () => {
+  const client = {
+    from(table: string) {
+      if (table === "project_snapshots") {
+        return {
+          select() {
+            return {
+              eq() {
+                return {
+                  maybeSingle: async () => ({
+                    data: {
+                      snapshot_json: {
+                        outlines: [{ sections: [{ id: "section-current" }] }],
+                      },
+                    },
+                    error: null,
+                  }),
+                };
+              },
+            };
+          },
+        };
+      }
+      return {
+        select() {
+          return {
+            in: async () => ({ data: [], error: null }),
+          };
+        },
+      };
+    },
+  };
+
+  assertEquals(
+    await requireCurrentProjectEligibility(client, "snapshot-id"),
+    {
+      ok: false,
+      reason: "public_sharing_eligibility_missing",
+      sectionIDs: ["section-current"],
+    },
   );
 });

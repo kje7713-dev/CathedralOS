@@ -923,6 +923,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 
     private var sectionsList: some View {
         List {
+            DisclosureGroup("Public Sharing Eligibility") {
+                Text("StoryDonkey checks sections for content that cannot be shared publicly. This does not restrict what you can write, save, edit, or privately export.")
+                    .font(CathedralTheme.Typography.caption(12))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .listRowBackground(CathedralTheme.Colors.background)
+
             ForEach(sectionsOrder, id: \.id) { section in
                 if section.parent == nil {
                     // Chapter row (top-level) -- wrap in NavigationLink to chapter reader.

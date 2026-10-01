@@ -50,6 +50,7 @@ platform :ios do
       APPLE_TEAM_ID APP_IDENTIFIER
       MATCH_GIT_URL MATCH_PASSWORD MATCH_GIT_TOKEN
       SUPABASE_PROJECT_URL SUPABASE_ANON_KEY PUBLIC_SHARING_BASE_URL
+      PRIVACY_POLICY_URL TERMS_OF_USE_URL SUPPORT_URL
     ])
 
     ci_environment = is_ci
@@ -173,14 +174,23 @@ platform :ios do
     url_present = !read_plist_value.call("SupabaseProjectURL").empty?
     anon_present = !read_plist_value.call("SupabaseAnonKey").empty?
     public_sharing_present = !read_plist_value.call("PublicSharingBaseURL").empty?
+    privacy_policy_present = !read_plist_value.call("PrivacyPolicyURL").empty?
+    terms_of_use_present = !read_plist_value.call("TermsOfUseURL").empty?
+    support_present = !read_plist_value.call("SupportURL").empty?
 
     UI.message("Built IPA SupabaseProjectURL present: #{url_present ? 'yes' : 'no'}")
     UI.message("Built IPA SupabaseAnonKey present: #{anon_present ? 'yes' : 'no'}")
     UI.message("Built IPA PublicSharingBaseURL present: #{public_sharing_present ? 'yes' : 'no'}")
+    UI.message("Built IPA PrivacyPolicyURL present: #{privacy_policy_present ? 'yes' : 'no'}")
+    UI.message("Built IPA TermsOfUseURL present: #{terms_of_use_present ? 'yes' : 'no'}")
+    UI.message("Built IPA SupportURL present: #{support_present ? 'yes' : 'no'}")
 
     UI.user_error!("Built IPA is missing SupabaseProjectURL") unless url_present
     UI.user_error!("Built IPA is missing SupabaseAnonKey") unless anon_present
     UI.user_error!("Built IPA is missing PublicSharingBaseURL") unless public_sharing_present
+    UI.user_error!("Built IPA is missing PrivacyPolicyURL") unless privacy_policy_present
+    UI.user_error!("Built IPA is missing TermsOfUseURL") unless terms_of_use_present
+    UI.user_error!("Built IPA is missing SupportURL") unless support_present
 
     # --- Upload to TestFlight ---
     upload_to_testflight(
