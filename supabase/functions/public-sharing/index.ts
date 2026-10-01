@@ -1423,6 +1423,34 @@ export async function handler(
       );
     }
 
+    const { data: sharedOutput, error: sharedOutputError } = await adminClient
+      .from("shared_outputs")
+      .select("owner_user_id, visibility, unpublished_at, allow_remix")
+      .eq("id", body.sharedOutputID)
+      .maybeSingle();
+    if (sharedOutputError || !sharedOutput) {
+      return jsonResponse({ status: "failed", error: "Shared output not found" }, 404);
+    }
+
+    const sharedOutputRecord = sharedOutput as Record<string, unknown>;
+    const ownerUserID = String(sharedOutputRecord.owner_user_id ?? "");
+    const isPublicVisible =
+      (sharedOutputRecord.visibility === "shared" ||
+        sharedOutputRecord.visibility === "unlisted") &&
+      !sharedOutputRecord.unpublished_at;
+    if (!isPublicVisible || sharedOutputRecord.allow_remix !== true) {
+      return jsonResponse({ status: "failed", error: "Shared output not found" }, 404);
+    }
+
+    const { data: block } = await adminClient.from("user_blocks")
+      .select("blocked_user_id")
+      .eq("blocker_user_id", userID)
+      .eq("blocked_user_id", ownerUserID)
+      .maybeSingle();
+    if (block) {
+      return jsonResponse({ status: "failed", error: "Shared output not found" }, 404);
+    }
+
     const createdProjectLocalID = typeof body.createdProjectLocalID === "string"
       ? body.createdProjectLocalID
       : "";

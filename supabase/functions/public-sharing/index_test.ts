@@ -34,6 +34,7 @@ function mockClient(options: {
   existing?: boolean;
   signed?: boolean;
   eligible?: boolean;
+  blocked?: boolean;
 } = {}) {
   const state = {
     owner: options.owner ?? OWNER,
@@ -45,6 +46,7 @@ function mockClient(options: {
     existing: options.existing ?? false,
     signed: options.signed ?? true,
     eligible: options.eligible ?? true,
+    blocked: options.blocked ?? false,
     createdSignedURLCalls: 0,
     writes: [] as Record<string, unknown>[],
   };
@@ -66,6 +68,7 @@ function mockClient(options: {
     visibility: state.visibility,
     unpublished_at: state.unpublishedAt,
     export_metadata_id: EXPORT_ID,
+    allow_remix: true,
   });
   const query = (
     table: string,
@@ -145,6 +148,9 @@ function mockClient(options: {
       }
       if (table === "shared_outputs") {
         return { data: state.existing ? sharedRow() : null, error: null };
+      }
+      if (table === "user_blocks") {
+        return { data: state.blocked ? { blocked_user_id: state.owner } : null, error: null };
       }
       return { data: null, error: null };
     };
@@ -336,4 +342,25 @@ Deno.test("public sharing is fail-closed when the release gate is disabled", asy
   );
   assertEquals(response.status, 404);
   assertEquals((await response.json()).errorCode, "public_sharing_disabled");
+});
+
+
+Deno.test("remix-events rejects a blocked creator without inserting an event", async () => {
+  const client = mockClient({ existing: true, blocked: true });
+  const response = await enabledHandler(
+    request("POST", "/remix-events", { sharedOutputID: SHARED_ID }),
+    { adminClient: client, authenticatedUserId: OTHER, supabaseURL: "https://example.test" },
+  );
+  assertEquals(response.status, 404);
+  assertEquals(client.state.writes.filter((row) => row.shared_output_id === SHARED_ID), []);
+});
+
+Deno.test("remix-events inserts an event for an unblocked creator", async () => {
+  const client = mockClient({ existing: true, blocked: false });
+  const response = await enabledHandler(
+    request("POST", "/remix-events", { sharedOutputID: SHARED_ID }),
+    { adminClient: client, authenticatedUserId: OTHER, supabaseURL: "https://example.test" },
+  );
+  assertEquals(response.status, 204);
+  assertEquals(client.state.writes.filter((row) => row.shared_output_id === SHARED_ID).length, 1);
 });
