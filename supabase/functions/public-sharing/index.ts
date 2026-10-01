@@ -4,6 +4,7 @@ import * as JSZip from "https://esm.sh/jszip@3.10.1";
 import {
   checkPublicSharingEligibility,
   PUBLIC_SHARING_RESTRICTION_REASON,
+  requireCurrentGenerationOutputEligibility,
   requireCurrentProjectEligibility,
   requireCurrentSectionEligibility,
 } from "../_shared/public-sharing-eligibility.ts";
@@ -571,7 +572,7 @@ export async function handler(
     const { data: exportRow, error: exportError } = await adminClient
       .from("export_metadata")
       .select(
-        "id, project_id, book_title, author_name, book_description, epub_storage_path, epub_sha256, is_active, exported_by_user_id",
+        "id, project_id, book_title, author_name, book_description, epub_storage_path, epub_sha256, is_active, exported_by_user_id, source_kind, source_generation_output_id",
       )
       .eq("id", exportMetadataID).maybeSingle();
     if (exportError) {
@@ -595,10 +596,48 @@ export async function handler(
         410,
       );
     }
-    const epubEligibility = await requireCurrentProjectEligibility(
-      adminClient,
-      String(exportRow.project_id),
+    const sourceKind = String(exportRow.source_kind ?? "project");
+    const sourceGenerationOutputID = normalizeOptionalString(
+      exportRow.source_generation_output_id,
     );
+    let epubEligibility;
+    if (sourceKind === "generation_output" && sourceGenerationOutputID) {
+      const { data: sourceOutput, error: sourceOutputError } = await adminClient
+        .from("generation_outputs")
+        .select("id, user_id, output_text")
+        .eq("id", sourceGenerationOutputID)
+        .maybeSingle();
+      if (sourceOutputError) throw new Error(sourceOutputError.message);
+      if (!sourceOutput || String(sourceOutput.user_id ?? "") !== userID) {
+        return jsonResponse({ status: "failed", error: "Generation output not found" }, 404);
+      }
+      const sourceText = String(sourceOutput.output_text ?? "").trim();
+      if (!sourceText) {
+        return jsonResponse({ status: "failed", errorCode: "public_sharing_eligibility_missing", error: "Public-sharing eligibility is not yet available." }, 503);
+      }
+      epubEligibility = await requireCurrentGenerationOutputEligibility(
+        adminClient,
+        sourceGenerationOutputID,
+        sourceText,
+      );
+      if (!epubEligibility.ok && epubEligibility.reason === "public_sharing_eligibility_missing") {
+        const key = Deno.env.get("OPENAI_API_KEY");
+        if (!key) return jsonResponse({ status: "failed", errorCode: "public_sharing_eligibility_missing", error: "Public-sharing eligibility is not yet available." }, 503);
+        try {
+          const direct = await checkPublicSharingEligibility(sourceText, key);
+          if (direct.eligible) epubEligibility = { ok: true };
+          else epubEligibility = { ok: false, reason: PUBLIC_SHARING_RESTRICTION_REASON, sectionIDs: epubEligibility.sectionIDs };
+        } catch (error) {
+          console.error("[public-sharing] standalone EPUB eligibility failed:", error);
+          return jsonResponse({ status: "failed", errorCode: "public_sharing_eligibility_missing", error: "Public-sharing eligibility is not yet available." }, 503);
+        }
+      }
+    } else {
+      epubEligibility = await requireCurrentProjectEligibility(
+        adminClient,
+        String(exportRow.project_id),
+      );
+    }
     if (!epubEligibility.ok) {
       return jsonResponse({
         status: "failed",
@@ -801,16 +840,6 @@ export async function handler(
       );
     }
 
-    const outputText = typeof body.outputText === "string"
-      ? body.outputText.trim()
-      : "";
-    if (!outputText) {
-      return jsonResponse({
-        status: "failed",
-        error: "outputText must not be empty",
-      }, 422);
-    }
-
     const requestedSharedOutputID = normalizeOptionalString(
       body.sharedOutputID,
     );
@@ -841,7 +870,7 @@ export async function handler(
     const { data: generationOutput, error: generationLookupError } =
       await adminClient
         .from("generation_outputs")
-        .select("id, user_id, outline_section_id")
+        .select("id, user_id, outline_section_id, output_text")
         .eq("id", generationOutputID)
         .maybeSingle();
     if (generationLookupError) {
@@ -870,12 +899,35 @@ export async function handler(
       }, 403);
     }
 
+    const outputText = String(
+      (generationOutput as Record<string, unknown>).output_text ?? "",
+    ).trim();
+    if (!outputText) {
+      return jsonResponse({
+        status: "failed",
+        error: "Generation output has no text to publish",
+      }, 422);
+    }
+
     const sectionID = String((generationOutput as Record<string, unknown>).outline_section_id ?? "");
     if (isUUID(sectionID)) {
-      const textEligibility = await requireCurrentSectionEligibility(
+      let textEligibility = await requireCurrentSectionEligibility(
         adminClient,
         sectionID,
+        outputText,
       );
+      if (!textEligibility.ok && textEligibility.reason === "public_sharing_eligibility_missing") {
+        const key = Deno.env.get("OPENAI_API_KEY");
+        if (!key) return jsonResponse({ status: "failed", errorCode: "public_sharing_eligibility_missing", error: "Public-sharing eligibility is not yet available." }, 503);
+        try {
+          const direct = await checkPublicSharingEligibility(outputText, key);
+          if (direct.eligible) textEligibility = { ok: true };
+          else textEligibility = { ok: false, reason: PUBLIC_SHARING_RESTRICTION_REASON, sectionIDs: [sectionID] };
+        } catch (error) {
+          console.error("[public-sharing] exact output eligibility failed:", error);
+          return jsonResponse({ status: "failed", errorCode: "public_sharing_eligibility_missing", error: "Public-sharing eligibility is not yet available." }, 503);
+        }
+      }
       if (!textEligibility.ok) {
         return jsonResponse({
           status: "failed",

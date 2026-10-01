@@ -352,9 +352,10 @@ final class BackendPublicSharingService: PublicSharingService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        decoratePublicRequestHeaders(&request)
+        let accessToken = try await optionalAccessToken()
+        decorateAuthenticatedRequestHeaders(&request, accessToken: accessToken)
 
-        let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: false)
+        let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: accessToken != nil)
         try validateResponse(urlResponse, data: data)
 
         let decoder = JSONDecoder()
@@ -376,9 +377,10 @@ final class BackendPublicSharingService: PublicSharingService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        decoratePublicRequestHeaders(&request)
+        let accessToken = try await optionalAccessToken()
+        decorateAuthenticatedRequestHeaders(&request, accessToken: accessToken)
 
-        let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: false)
+        let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: accessToken != nil)
         try validateResponse(urlResponse, data: data)
 
         let decoder = JSONDecoder()
@@ -472,6 +474,19 @@ final class BackendPublicSharingService: PublicSharingService {
             switch error {
             case .notSignedIn:
                 throw PublicSharingServiceError.notSignedIn
+            case .sessionExpired:
+                throw PublicSharingServiceError.sessionExpired
+            }
+        }
+    }
+
+    private func optionalAccessToken() async throws -> String? {
+        do {
+            return try await sessionProvider.validAccessToken(forceRefresh: false)
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn:
+                return nil
             case .sessionExpired:
                 throw PublicSharingServiceError.sessionExpired
             }

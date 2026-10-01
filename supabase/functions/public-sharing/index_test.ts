@@ -104,8 +104,31 @@ function mockClient(options: {
       return query(table, "update", row);
     };
     chain.maybeSingle = async () => {
+      if (table === "section_embeddings") {
+        return {
+          data: {
+            outline_section_id: "66666666-6666-4666-8666-666666666666",
+            raw_text: "eligible section",
+            public_sharing_eligible: state.eligible,
+            public_sharing_checked_content_hash:
+              "bc01b0b1c3725bc34ac150fe980818c1d8c2ad9047a4aa55425f0a9a686dfd66",
+          },
+          error: null,
+        };
+      }
       if (table === "export_metadata") {
         return { data: exportRow(), error: null };
+      }
+      if (table === "generation_outputs") {
+        return {
+          data: {
+            id: "77777777-7777-4777-8777-777777777777",
+            user_id: state.owner,
+            outline_section_id: "66666666-6666-4666-8666-666666666666",
+            output_text: "eligible section",
+          },
+          error: null,
+        };
       }
       if (table === "project_snapshots") {
         return {
@@ -221,6 +244,26 @@ Deno.test("EPUB publish uses canonical metadata and reuses the same shared row",
   );
   assertEquals((await first.json()).sharedOutputID, SHARED_ID);
   assertEquals((await second.json()).sharedOutputID, SHARED_ID);
+});
+
+
+Deno.test("normal publication uses persisted generation output text, not client text", async () => {
+  const client = mockClient();
+  const response = await enabledHandler(
+    request("POST", "/shared-outputs", {
+      cloudGenerationOutputID: "77777777-7777-4777-8777-777777777777",
+      outputText: "attacker-controlled text",
+      shareTitle: "Test",
+    }),
+    {
+      adminClient: client,
+      authenticatedUserId: OWNER,
+      supabaseURL: "https://example.test",
+      publicShareBaseURL: "https://share.example.test",
+    },
+  );
+  assertEquals(response.status, 200);
+  assertEquals(client.state.writes[0]?.output_text, "eligible section");
 });
 
 Deno.test("EPUB publication rejects a current restricted section", async () => {

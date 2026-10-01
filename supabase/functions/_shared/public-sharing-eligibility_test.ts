@@ -6,6 +6,7 @@ import {
   checkPublicSharingEligibility,
   PUBLIC_SHARING_MODERATION_MODEL,
   PUBLIC_SHARING_RESTRICTION_REASON,
+  requireCurrentGenerationOutputEligibility,
   requireCurrentProjectEligibility,
   sha256Hex,
 } from "./public-sharing-eligibility.ts";
@@ -70,6 +71,53 @@ Deno.test("provider failure is not converted into an eligible result", async () 
       ),
     Error,
     "moderation request failed",
+  );
+});
+
+Deno.test("generation-output eligibility requires the exact reviewed prose hash", async () => {
+  const reviewed = "exact generated prose";
+  const hash = await sha256Hex(reviewed);
+  const client = {
+    from() {
+      return {
+        select() {
+          return {
+            eq() {
+              return {
+                maybeSingle: async () => ({
+                  data: {
+                    outline_section_id: "section-1",
+                    public_sharing_eligible: true,
+                    public_sharing_checked_content_hash: hash,
+                  },
+                  error: null,
+                }),
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+  assertEquals(
+    await requireCurrentGenerationOutputEligibility(
+      client,
+      "output-1",
+      reviewed,
+    ),
+    { ok: true },
+  );
+  assertEquals(
+    await requireCurrentGenerationOutputEligibility(
+      client,
+      "output-1",
+      "different prose",
+    ),
+    {
+      ok: false,
+      reason: "public_sharing_eligibility_missing",
+      sectionIDs: ["section-1"],
+    },
   );
 });
 

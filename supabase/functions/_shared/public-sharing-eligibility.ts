@@ -81,6 +81,7 @@ export async function persistPublicSharingEligibility(
 export async function requireCurrentSectionEligibility(
   adminClient: any,
   sectionID: string,
+  reviewedContent?: string,
 ): Promise<{ ok: true } | { ok: false; reason: string; sectionIDs: string[] }> {
   const { data, error } = await adminClient.from("section_embeddings")
     .select(
@@ -90,7 +91,7 @@ export async function requireCurrentSectionEligibility(
     .maybeSingle();
   if (error) throw new Error(error.message);
   const rawText = typeof data?.raw_text === "string" ? data.raw_text : "";
-  const currentHash = await sha256Hex(rawText);
+  const currentHash = await sha256Hex(reviewedContent ?? rawText);
   const isCurrent = Boolean(
     data &&
       data.public_sharing_checked_content_hash === currentHash,
@@ -102,6 +103,43 @@ export async function requireCurrentSectionEligibility(
         ? PUBLIC_SHARING_RESTRICTION_REASON
         : "public_sharing_eligibility_missing",
       sectionIDs: [sectionID],
+    };
+  }
+  return { ok: true };
+}
+
+export async function requireCurrentGenerationOutputEligibility(
+  adminClient: any,
+  generationOutputID: string,
+  reviewedContent: string,
+): Promise<{ ok: true } | { ok: false; reason: string; sectionIDs: string[] }> {
+  const { data, error } = await adminClient.from("section_embeddings")
+    .select(
+      "outline_section_id, raw_text, public_sharing_eligible, public_sharing_checked_content_hash",
+    )
+    .eq("generation_output_id", generationOutputID)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) {
+    return {
+      ok: false,
+      reason: "public_sharing_eligibility_missing",
+      sectionIDs: [generationOutputID],
+    };
+  }
+  const contentHash = await sha256Hex(reviewedContent);
+  if (data.public_sharing_checked_content_hash !== contentHash) {
+    return {
+      ok: false,
+      reason: "public_sharing_eligibility_missing",
+      sectionIDs: [String(data.outline_section_id ?? generationOutputID)],
+    };
+  }
+  if (data.public_sharing_eligible !== true) {
+    return {
+      ok: false,
+      reason: PUBLIC_SHARING_RESTRICTION_REASON,
+      sectionIDs: [String(data.outline_section_id ?? generationOutputID)],
     };
   }
   return { ok: true };
