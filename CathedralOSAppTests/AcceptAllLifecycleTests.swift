@@ -500,9 +500,12 @@ final class AcceptAllLifecycleTests: XCTestCase {
                 })
             }
         )
-        // The coordinator polls every three seconds; allow the initial poll,
-        // terminal reconciliation, and canonical project callback to complete.
-        try await Task.sleep(nanoseconds: 8_000_000_000)
+        // The coordinator polls every three seconds. Wait for the actual
+        // canonical-project callback instead of racing it with a fixed sleep;
+        // simulator scheduling can delay the initial POST and terminal poll.
+        for _ in 0..<30 where refreshedProject == nil {
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
 
         XCTAssertEqual(refreshedProject?.outlines.first?.sections.count, 56,
                        "The section view must see all 56 restored sections immediately.")
