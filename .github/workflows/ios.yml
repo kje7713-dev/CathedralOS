@@ -76,8 +76,11 @@ jobs:
             -sdk iphonesimulator \
             -destination "$DESTINATION" \
             -parallel-testing-enabled NO \
-            SUPABASE_PROJECT_URL="$SUPABASE_PROJECT_URL" \
-            SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
+            # XCTest includes negative configuration tests; keep CI runtime defaults
+            # out of the test bundle while the production build still receives them.
+            SUPABASE_PROJECT_URL="" \
+            SUPABASE_ANON_KEY="" \
+            PUBLIC_SHARING_BASE_URL="" \
             CODE_SIGNING_ALLOWED=NO
 
       - name: StoreKit regression XCTest suites
@@ -89,6 +92,9 @@ jobs:
             -sdk iphonesimulator \
             -destination "$DESTINATION" \
             -parallel-testing-enabled NO \
-            SUPABASE_PROJECT_URL="$SUPABASE_PROJECT_URL" \
-            SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
+            # XCTest includes negative configuration tests; keep CI runtime defaults
+            # out of the test bundle while the production build still receives them.
+            SUPABASE_PROJECT_URL="" \
+            SUPABASE_ANON_KEY="" \
+            PUBLIC_SHARING_BASE_URL="" \
             CODE_SIGNING_ALLOWED=NO
