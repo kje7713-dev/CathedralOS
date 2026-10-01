@@ -17,7 +17,10 @@ function request(method: string, path: string, body?: unknown): Request {
   });
 }
 
-async function enabledHandler(requestValue: Request, overrides: Record<string, unknown> = {}) {
+async function enabledHandler(
+  requestValue: Request,
+  overrides: Record<string, unknown> = {},
+) {
   return await handler(requestValue, { sharingEnabled: true, ...overrides });
 }
 
@@ -30,6 +33,8 @@ function mockClient(options: {
   unpublishedAt?: string | null;
   existing?: boolean;
   signed?: boolean;
+  eligible?: boolean;
+  blocked?: boolean;
 } = {}) {
   const state = {
     owner: options.owner ?? OWNER,
@@ -40,6 +45,8 @@ function mockClient(options: {
     unpublishedAt: options.unpublishedAt ?? null,
     existing: options.existing ?? false,
     signed: options.signed ?? true,
+    eligible: options.eligible ?? true,
+    blocked: options.blocked ?? false,
     createdSignedURLCalls: 0,
     writes: [] as Record<string, unknown>[],
   };
@@ -61,6 +68,7 @@ function mockClient(options: {
     visibility: state.visibility,
     unpublished_at: state.unpublishedAt,
     export_metadata_id: EXPORT_ID,
+    allow_remix: true,
   });
   const query = (
     table: string,
@@ -74,6 +82,21 @@ function mockClient(options: {
     chain.is = () => chain;
     chain.order = () => chain;
     chain.limit = () => chain;
+    chain.then = (resolve: (value: unknown) => unknown) => {
+      if (table === "section_embeddings") {
+        return resolve({
+          data: [{
+            outline_section_id: "66666666-6666-4666-8666-666666666666",
+            raw_text: "eligible section",
+            public_sharing_eligible: state.eligible,
+            public_sharing_checked_content_hash:
+              "bc01b0b1c3725bc34ac150fe980818c1d8c2ad9047a4aa55425f0a9a686dfd66",
+          }],
+          error: null,
+        });
+      }
+      return resolve({ data: [], error: null });
+    };
     chain.insert = (row: Record<string, unknown>) => {
       state.writes.push(row);
       state.existing = true;
@@ -84,17 +107,50 @@ function mockClient(options: {
       return query(table, "update", row);
     };
     chain.maybeSingle = async () => {
+      if (table === "section_embeddings") {
+        return {
+          data: {
+            outline_section_id: "66666666-6666-4666-8666-666666666666",
+            raw_text: "eligible section",
+            public_sharing_eligible: state.eligible,
+            public_sharing_checked_content_hash:
+              "bc01b0b1c3725bc34ac150fe980818c1d8c2ad9047a4aa55425f0a9a686dfd66",
+          },
+          error: null,
+        };
+      }
       if (table === "export_metadata") {
         return { data: exportRow(), error: null };
       }
+      if (table === "generation_outputs") {
+        return {
+          data: {
+            id: "77777777-7777-4777-8777-777777777777",
+            user_id: state.owner,
+            outline_section_id: "66666666-6666-4666-8666-666666666666",
+            output_text: "eligible section",
+          },
+          error: null,
+        };
+      }
       if (table === "project_snapshots") {
         return {
-          data: { snapshot_json: { project: { summary: "Fallback summary" } } },
+          data: {
+            snapshot_json: {
+              project: { summary: "Fallback summary" },
+              outlines: [{
+                sections: [{ id: "66666666-6666-4666-8666-666666666666" }],
+              }],
+            },
+          },
           error: null,
         };
       }
       if (table === "shared_outputs") {
         return { data: state.existing ? sharedRow() : null, error: null };
+      }
+      if (table === "user_blocks") {
+        return { data: state.blocked ? { blocked_user_id: state.owner } : null, error: null };
       }
       return { data: null, error: null };
     };
@@ -196,6 +252,43 @@ Deno.test("EPUB publish uses canonical metadata and reuses the same shared row",
   assertEquals((await second.json()).sharedOutputID, SHARED_ID);
 });
 
+
+Deno.test("normal publication uses persisted generation output text, not client text", async () => {
+  const client = mockClient();
+  const response = await enabledHandler(
+    request("POST", "/shared-outputs", {
+      cloudGenerationOutputID: "77777777-7777-4777-8777-777777777777",
+      outputText: "attacker-controlled text",
+      shareTitle: "Test",
+    }),
+    {
+      adminClient: client,
+      authenticatedUserId: OWNER,
+      supabaseURL: "https://example.test",
+      publicShareBaseURL: "https://share.example.test",
+    },
+  );
+  assertEquals(response.status, 200);
+  assertEquals(client.state.writes[0]?.output_text, "eligible section");
+});
+
+Deno.test("EPUB publication rejects a current restricted section", async () => {
+  const response = await enabledHandler(
+    request("POST", "/shared-outputs/epub", { exportMetadataID: EXPORT_ID }),
+    {
+      adminClient: mockClient({ eligible: false }),
+      authenticatedUserId: OWNER,
+      supabaseURL: "https://example.test",
+      publicShareBaseURL: "https://share.example.test",
+    },
+  );
+  assertEquals(response.status, 422);
+  assertEquals(
+    (await response.json()).errorCode,
+    "sexual_content_involving_minors",
+  );
+});
+
 Deno.test("valid public EPUB returns a five-minute signed URL", async () => {
   const client = mockClient({ existing: true });
   const response = await enabledHandler(
@@ -249,4 +342,25 @@ Deno.test("public sharing is fail-closed when the release gate is disabled", asy
   );
   assertEquals(response.status, 404);
   assertEquals((await response.json()).errorCode, "public_sharing_disabled");
+});
+
+
+Deno.test("remix-events rejects a blocked creator without inserting an event", async () => {
+  const client = mockClient({ existing: true, blocked: true });
+  const response = await enabledHandler(
+    request("POST", "/remix-events", { sharedOutputID: SHARED_ID }),
+    { adminClient: client, authenticatedUserId: OTHER, supabaseURL: "https://example.test" },
+  );
+  assertEquals(response.status, 404);
+  assertEquals(client.state.writes.filter((row: Record<string, unknown>) => row.shared_output_id === SHARED_ID), []);
+});
+
+Deno.test("remix-events inserts an event for an unblocked creator", async () => {
+  const client = mockClient({ existing: true, blocked: false });
+  const response = await enabledHandler(
+    request("POST", "/remix-events", { sharedOutputID: SHARED_ID }),
+    { adminClient: client, authenticatedUserId: OTHER, supabaseURL: "https://example.test" },
+  );
+  assertEquals(response.status, 204);
+  assertEquals(client.state.writes.filter((row: Record<string, unknown>) => row.shared_output_id === SHARED_ID).length, 1);
 });

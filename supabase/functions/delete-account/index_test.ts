@@ -69,3 +69,12 @@ Deno.test("deleteOwnedAccount removes project-scoped orphan exports and covers",
     "auth:user-1",
   ]);
 });
+
+
+Deno.test("user block relationships cascade with auth account deletion", async () => {
+  const migration = await Deno.readTextFile(
+    "supabase/migrations/20261001091000_add_user_blocks.sql",
+  );
+  assertEquals(migration.includes("blocker_user_id uuid not null references auth.users(id) on delete cascade"), true);
+  assertEquals(migration.includes("blocked_user_id uuid not null references auth.users(id) on delete cascade"), true);
+});

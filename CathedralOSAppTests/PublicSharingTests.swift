@@ -20,6 +20,7 @@ final class MockPublicSharingService: PublicSharingService {
     var detailResult: Result<SharedOutputDetail, Error> = .failure(
         PublicSharingServiceError.endpointNotConfigured
     )
+    var sectionEligibilityResult: Result<[String: Bool?], Error> = .success([:])
     var reportResult: Result<Void, Error> = .success(())
 
     private(set) var publishCallCount = 0
@@ -62,6 +63,10 @@ final class MockPublicSharingService: PublicSharingService {
 
     func fetchDetail(sharedOutputID: String) async throws -> SharedOutputDetail {
         return try detailResult.get()
+    }
+
+    func fetchSectionEligibility(sectionIDs: [String]) async throws -> [String: Bool?] {
+        return try sectionEligibilityResult.get()
     }
 
     func reportSharedOutput(sharedOutputID: String, reason: ReportReason, details: String) async throws {

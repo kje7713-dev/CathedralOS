@@ -17,19 +17,19 @@ select has_index('public', 'shared_outputs', 'idx_shared_outputs_export_metadata
 select ok(to_regprocedure('public.delete_export_metadata_and_promote(uuid,uuid)') is not null, 'delete RPC remains available');
 select ok(position('shared_outputs' in pg_get_functiondef(to_regprocedure('public.delete_export_metadata_and_promote(uuid,uuid)'))) > 0, 'delete RPC references shared outputs');
 select ok(position('unpublished_at' in pg_get_functiondef(to_regprocedure('public.delete_export_metadata_and_promote(uuid,uuid)'))) > 0, 'delete RPC unpublishes linked EPUBs');
-select ok(not has_table_privilege('anon', 'public.shared_outputs', 'select'), 'anonymous browse privilege is disabled for MVP');
+select ok(has_table_privilege('anon', 'public.shared_outputs', 'select'), 'anonymous browse privilege remains available for public sharing');
 select ok(has_table_privilege('authenticated', 'public.shared_outputs', 'select'), 'authenticated owner access privilege remains available');
-select ok(not exists (
+select ok(exists (
   select 1 from pg_catalog.pg_policy pol
   join pg_catalog.pg_class c on c.oid = pol.polrelid
   join pg_catalog.pg_namespace n on n.oid = c.relnamespace
   where n.nspname = 'public' and c.relname = 'shared_outputs'
-    and pol.polname in ('shared_outputs: anon can read public rows', 'shared_outputs: authenticated can read public rows')
-), 'public browse policies are removed for MVP');
+    and pol.polname = 'shared_outputs: anon can read public rows'
+), 'public browse policy remains available for public sharing');
 select ok(exists (
   select 1 from storage.buckets
-  where id = 'shared-output-images' and public = false
-), 'shared output images bucket is private for MVP');
+  where id = 'shared-output-images' and public = true
+), 'shared output images remain publicly retrievable for public sharing');
 select ok(exists (
   select 1 from pg_catalog.pg_policy pol
   join pg_catalog.pg_class c on c.oid = pol.polrelid

@@ -62,6 +62,10 @@ import {
   isCurrentMemoryPipelineVersion,
   memoryPipelineVersion,
 } from "./memory-pipeline.ts";
+import {
+  persistPublicSharingEligibility,
+  type PublicSharingEligibility,
+} from "./public-sharing-eligibility.ts";
 
 const OPENAI_MODEL_DEFAULT = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
   "gpt-4o-mini";
@@ -170,6 +174,8 @@ export interface SectionEmbeddingResult {
   outlineSectionID: string;
   extractedSummary: string;
   embeddingDim: number;
+  publicSharingEligible?: boolean | null;
+  publicSharingCheckedAt?: string | null;
 }
 
 export async function ensureOutlineAndSection(
@@ -626,6 +632,25 @@ export async function processSectionMemory(
     );
     throw new SectionEmbeddingError("database_error", upsertErr.message);
   }
+
+  // Attach the non-billable, single-policy public-sharing check after the
+  // canonical embedding is saved. A failed check leaves private writing and
+  // embedding intact; publication fails closed until it is current.
+  // Eligibility hashes the actual section prose only. An absent prose value
+  // is not silently replaced with title/summary metadata.
+  const eligibilityInput = typeof body.raw_text === "string"
+    ? body.raw_text.replace(/\r\n?/g, "\n").trim()
+    : "";
+  let eligibility: PublicSharingEligibility | null = null;
+  if (eligibilityInput) {
+    eligibility = await persistPublicSharingEligibility(
+      adminClient,
+      body.outline_section_id!,
+      eligibilityInput,
+      openaiKey,
+    );
+  }
+
   // Only settle after valid extraction, valid embedding, and canonical
   // persistence. Malformed/truncated output, invalid vectors, or a failed
   // upsert therefore cannot become successful billing stages.
@@ -659,6 +684,8 @@ export async function processSectionMemory(
     outlineSectionID: body.outline_section_id!,
     extractedSummary: sceneMemory.extracted_summary,
     embeddingDim: embedding.length,
+    publicSharingEligible: eligibility?.eligible ?? null,
+    publicSharingCheckedAt: eligibility?.checkedAt ?? null,
   };
 }
 

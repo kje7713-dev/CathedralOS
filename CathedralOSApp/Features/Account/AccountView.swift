@@ -22,6 +22,7 @@ struct AccountView: View {
     let creditStateService: any CreditStateServiceProtocol
     let accountDeletionService: any AccountDeletionServiceProtocol
     let accountDeletionCleanupService: any AccountDeletionCleanupServiceProtocol
+    let publicSharingService: any PublicSharingService
     let recoveryContext: PersistenceRecoveryContext?
 
     @Environment(\.modelContext) private var modelContext
@@ -39,6 +40,7 @@ struct AccountView: View {
         creditStateService: any CreditStateServiceProtocol = BackendCreditStateService(),
         accountDeletionService: any AccountDeletionServiceProtocol = BackendAccountDeletionService(),
         accountDeletionCleanupService: any AccountDeletionCleanupServiceProtocol = LocalAccountDeletionCleanupService(),
+        publicSharingService: any PublicSharingService = BackendPublicSharingService(),
         recoveryContext: PersistenceRecoveryContext? = nil,
         durabilityCoordinator: DataDurabilityCoordinator = .shared
     ) {
@@ -50,6 +52,7 @@ struct AccountView: View {
         self.creditStateService = creditStateService
         self.accountDeletionService = accountDeletionService
         self.accountDeletionCleanupService = accountDeletionCleanupService
+        self.publicSharingService = publicSharingService
         self.recoveryContext = recoveryContext
         _durabilityCoordinator = ObservedObject(wrappedValue: durabilityCoordinator)
     }
@@ -71,6 +74,8 @@ struct AccountView: View {
     @State private var showPaywall = false
     @State private var copiedRecoverySummary = false
     @State private var showDeleteAccountConfirmation = false
+    @State private var blockedCreatorIDs: [String] = []
+    @State private var blockedCreatorsError: String?
 
     var body: some View {
         NavigationStack {
@@ -80,6 +85,7 @@ struct AccountView: View {
                     recoverySection
                 }
                 cloudFeaturesSection
+                blockedCreatorsSection
                 subscriptionSection
                 usageSection
                 syncSection
@@ -388,6 +394,48 @@ struct AccountView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: date)
+    }
+
+    private var blockedCreatorsSection: some View {
+        Section("Blocked Creators") {
+            if blockedCreatorIDs.isEmpty {
+                Text("No blocked creators.")
+                    .font(.caption)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            } else {
+                ForEach(blockedCreatorIDs, id: \.self) { creatorID in
+                    HStack {
+                        Text(creatorID)
+                            .font(.caption)
+                            .lineLimit(1)
+                        Spacer()
+                        Button("Unblock") {
+                            Task { await unblockCreator(creatorID) }
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+            if let blockedCreatorsError {
+                Text(blockedCreatorsError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .task {
+            guard authState.isSignedIn else { return }
+            do { blockedCreatorIDs = try await publicSharingService.fetchBlockedCreatorIDs() }
+            catch { blockedCreatorsError = PublicSharingServiceError.displayMessage(from: error) }
+        }
+    }
+
+    private func unblockCreator(_ creatorID: String) async {
+        do {
+            try await publicSharingService.unblockCreator(userID: creatorID)
+            blockedCreatorIDs.removeAll { $0 == creatorID }
+        } catch {
+            blockedCreatorsError = PublicSharingServiceError.displayMessage(from: error)
+        }
     }
 
     // MARK: - Cloud features section

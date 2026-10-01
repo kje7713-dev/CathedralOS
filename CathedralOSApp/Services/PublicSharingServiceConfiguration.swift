@@ -14,13 +14,13 @@ import Foundation
 
 enum PublicSharingServiceConfiguration {
 
-    /// Public discovery and publication are disabled unless explicitly enabled
-    /// by the production build configuration for a later release.
+    /// Public sharing remains enabled unless an explicit release kill switch
+    /// is supplied. Publication itself is protected by server eligibility.
     static var isEnabled: Bool {
         let raw = (Bundle.main.infoDictionary?["PublicSharingEnabled"] as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        return raw == "1" || raw == "true" || raw == "yes"
+        return !["0", "false", "no"].contains(raw)
     }
 
     // MARK: - Base URL
@@ -54,6 +54,10 @@ enum PublicSharingServiceConfiguration {
 
     static func sharedEpubDownloadURL(sharedOutputID: String) -> URL? {
         baseURL?.appendingPathComponent("shared-outputs/\(sharedOutputID)/epub")
+    }
+
+    static var sectionEligibilityURL: URL? {
+        baseURL?.appendingPathComponent("section-eligibility")
     }
 
     static var publicListURL: URL? {

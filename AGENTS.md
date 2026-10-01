@@ -5,7 +5,8 @@
 2. Inspect the relevant files.
 3. Make the smallest safe change. Preserve existing work.
 4. Run the repo-local validation in **Repo Notes** below.
-5. Report files changed, validation performed, and any risks or follow-ups.
+5. Before concluding that work is ready for review, derive a checklist from the user's complete ask and validate every requirement against the actual current source/diff and a defect-specific regression or other concrete evidence. Mark each item pass, blocked, or not implemented; do not infer completion from a prior summary, intended design, neighboring code, or green unrelated tests.
+6. Report files changed, validation performed, and any risks or follow-ups.
    Do not commit, push, open a PR, branch, create a worktree, or touch
    unrelated files unless the user explicitly asks for the action by name.
 

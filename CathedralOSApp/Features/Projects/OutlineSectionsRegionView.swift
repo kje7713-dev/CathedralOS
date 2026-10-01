@@ -123,6 +123,24 @@ struct OutlineSectionsRegionView: View {
         allOutputs = (try? modelContext.fetch(descriptor)) ?? []
     }
 
+    @MainActor
+    private func restorePersistedPublicSharingEligibility() async {
+        let ids = sectionsOrder.map { $0.id.uuidString }
+        guard !ids.isEmpty else { return }
+        do {
+            let statuses = try await BackendPublicSharingService().fetchSectionEligibility(sectionIDs: ids)
+            for section in sectionsOrder {
+                guard let eligible = statuses[section.id.uuidString] else { continue }
+                publicSharingStatuses[section.id] = eligible.map { $0 ? .eligible : .restricted } ?? .notYetChecked
+            }
+        } catch {
+            // A missing persisted check is a visible, non-blocking state.
+            for section in sectionsOrder where publicSharingStatuses[section.id] == nil {
+                publicSharingStatuses[section.id] = .notYetChecked
+            }
+        }
+    }
+
     /// Eye-debug snapshot record. Invoked from the coordinator's polling Task
     /// on the main actor after `performManualSyncAll` completes. Compares the
     /// view's `@State` snapshot against a fresh `modelContext.fetch` and
@@ -189,6 +207,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestionsFeedback: String?
     @State private var showingSuggestionChargeWarning = false
     @State private var acceptingSectionID: UUID?
+    @State private var publicSharingStatuses: [UUID: PublicSharingEligibilityStatus] = [:]
     @State private var embedError: String?
     @State private var deleteError: String?
     @State private var showingDeleteAllConfirm = false
@@ -262,6 +281,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             ensureOutline()
             syncSectionsOrder()
             refreshAllOutputs()
+            await restorePersistedPublicSharingEligibility()
             consumeGenerationLaunch()
             // PR 6 refactor: build the current request identity BEFORE
             // resuming any persisted/active run. Stale runs (recipe/arc/
@@ -890,7 +910,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             },
             onAccept: { Task { await acceptSection(section) } },
             onTapOutput: { output in generationToView = output },
-            isAccepting: acceptingSectionID == section.id
+            isAccepting: acceptingSectionID == section.id,
+            publicSharingStatus: publicSharingStatuses[section.id] ?? .notYetChecked
         )
         .listRowBackground(CathedralTheme.Colors.background)
         .listRowSeparator(.hidden)
@@ -921,6 +942,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 
     private var sectionsList: some View {
         List {
+            DisclosureGroup("Public Sharing Eligibility") {
+                Text("StoryDonkey checks sections for content that cannot be shared publicly. This does not restrict what you can write, save, edit, or privately export.")
+                    .font(CathedralTheme.Typography.caption(12))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .listRowBackground(CathedralTheme.Colors.background)
+
             ForEach(sectionsOrder, id: \.id) { section in
                 if section.parent == nil {
                     // Chapter row (top-level) -- wrap in NavigationLink to chapter reader.
@@ -1124,6 +1153,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         let sectionOutputs = outputsBySection[section.id] ?? []
         guard !sectionOutputs.isEmpty else { return }
         let latestOutputID = sectionOutputs.first?.id.uuidString
+        publicSharingStatuses[section.id] = .checking
         Task {
             await self.fireSceneMemoryExtraction(
                 section: section,
@@ -1157,10 +1187,17 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 section: section,
                 outputID: outputID,
             )
+            if let eligible = response.publicSharingEligible {
+                publicSharingStatuses[section.id] = eligible ? .eligible : .restricted
+            } else {
+                publicSharingStatuses[section.id] = .notYetChecked
+            }
             print("[OutlineSections] Embed OK: section=\(section.id.uuidString.prefix(8)) dim=\(response.embedding_dim) summary.len=\(response.extracted_summary.count)")
         } catch let error as SectionEmbedError {
+            publicSharingStatuses[section.id] = .notYetChecked
             embedError = "Section accepted; scene memory extract failed: \(error.localizedDescription)"
         } catch {
+            publicSharingStatuses[section.id] = .notYetChecked
             embedError = "Section accepted; scene memory extract failed: \(error.localizedDescription)"
         }
     }
@@ -1345,6 +1382,7 @@ struct OutlineSectionRow: View {
     var onAccept: (() async -> Void)? = nil
     var onTapOutput: ((GenerationOutput) -> Void)? = nil
     var isAccepting: Bool = false
+    var publicSharingStatus: PublicSharingEligibilityStatus = .notYetChecked
 
     var body: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
@@ -1367,6 +1405,17 @@ struct OutlineSectionRow: View {
                         .lineLimit(1)
                 }
                 Spacer()
+            }
+
+            Text(publicSharingStatus.label)
+                .font(CathedralTheme.Typography.caption(11, weight: .semibold))
+                .foregroundStyle(publicSharingStatus == .restricted ? .orange : CathedralTheme.Colors.secondaryText)
+                .accessibilityLabel(publicSharingStatus.label)
+            if publicSharingStatus == .restricted {
+                Text("This section can’t be shared publicly because the automated safety check identified sexual content involving a minor. This does not affect private writing or export.")
+                    .font(CathedralTheme.Typography.caption(11))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // Row 3: Summary (full width, 1-2 lines).

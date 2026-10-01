@@ -948,6 +948,9 @@ private final class StubPublicSharingService: PublicSharingService {
     func fetchDetail(sharedOutputID: String) async throws -> SharedOutputDetail {
         throw PublicSharingServiceError.endpointNotConfigured
     }
+    func fetchSectionEligibility(sectionIDs: [String]) async throws -> [String: Bool?] {
+        [:]
+    }
     func reportSharedOutput(sharedOutputID: String, reason: ReportReason, details: String) async throws {}
     func uploadCoverImage(
         sharedOutputID: String,

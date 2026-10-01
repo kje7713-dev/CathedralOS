@@ -270,10 +270,34 @@ struct EmbedSectionRequest: Codable {
     let output_id: String?
 }
 
+enum PublicSharingEligibilityStatus: Equatable {
+    case notYetChecked
+    case checking
+    case eligible
+    case restricted
+
+    var label: String {
+        switch self {
+        case .notYetChecked: return "Public Sharing: Not yet checked"
+        case .checking: return "Public Sharing: Checking…"
+        case .eligible: return "Public Sharing: Eligible"
+        case .restricted: return "Public Sharing: Restricted"
+        }
+    }
+}
+
 struct EmbedSectionResponse: Codable {
     let outline_section_id: String
     let extracted_summary: String
     let embedding_dim: Int
+    let publicSharingEligible: Bool?
+    let publicSharingCheckedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case outline_section_id, extracted_summary, embedding_dim
+        case publicSharingEligible = "publicSharingEligible"
+        case publicSharingCheckedAt = "publicSharingCheckedAt"
+    }
 }
 
 // MARK: - Durable Accept All

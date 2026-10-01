@@ -4,7 +4,7 @@ import os
 import sys
 from urllib.parse import urlparse
 
-required = ("PRIVACY_POLICY_URL", "TERMS_OF_USE_URL")
+required = ("PRIVACY_POLICY_URL", "TERMS_OF_USE_URL", "SUPPORT_URL")
 errors = []
 for name in required:
     value = os.environ.get(name, "").strip()
@@ -15,4 +15,4 @@ if errors:
     print("Release configuration invalid:", file=sys.stderr)
     print("\n".join(f"- {error}" for error in errors), file=sys.stderr)
     raise SystemExit(1)
-print("Required legal URLs are valid HTTPS URLs.")
+print("Required legal and support URLs are valid HTTPS URLs.")

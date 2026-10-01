@@ -32,6 +32,7 @@ jobs:
           PUBLIC_SHARING_BASE_URL: ${{ secrets.PUBLIC_SHARING_BASE_URL }}
           PRIVACY_POLICY_URL: ${{ secrets.PRIVACY_POLICY_URL }}
           TERMS_OF_USE_URL: ${{ secrets.TERMS_OF_USE_URL }}
+          SUPPORT_URL: ${{ secrets.SUPPORT_URL }}
         run: |
           echo "SUPABASE_PROJECT_URL present: $([[ -n "$SUPABASE_PROJECT_URL" ]] && echo yes || echo no)"
           echo "SUPABASE_ANON_KEY present: $([[ -n "$SUPABASE_ANON_KEY" ]] && echo yes || echo no)"
@@ -41,6 +42,7 @@ jobs:
         env:
           PRIVACY_POLICY_URL: ${{ secrets.PRIVACY_POLICY_URL }}
           TERMS_OF_USE_URL: ${{ secrets.TERMS_OF_USE_URL }}
+          SUPPORT_URL: ${{ secrets.SUPPORT_URL }}
         run: python3 scripts/validate-ios-release-config.py
 
       - name: Archive and Upload to TestFlight
@@ -58,6 +60,7 @@ jobs:
           PUBLIC_SHARING_BASE_URL: ${{ secrets.PUBLIC_SHARING_BASE_URL }}
           PRIVACY_POLICY_URL: ${{ secrets.PRIVACY_POLICY_URL }}
           TERMS_OF_USE_URL: ${{ secrets.TERMS_OF_USE_URL }}
+          SUPPORT_URL: ${{ secrets.SUPPORT_URL }}
         run: |
           set -o pipefail
           bundle exec fastlane beta 2>&1 | tee fastlane_output.txt
