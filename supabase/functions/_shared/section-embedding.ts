@@ -636,8 +636,11 @@ export async function processSectionMemory(
   // Attach the non-billable, single-policy public-sharing check after the
   // canonical embedding is saved. A failed check leaves private writing and
   // embedding intact; publication fails closed until it is current.
-  const eligibilityInput = body.raw_text?.trim() ||
-    `${body.title ?? ""}\n${body.summary ?? ""}`.trim();
+  // Eligibility hashes the actual section prose only. An absent prose value
+  // is not silently replaced with title/summary metadata.
+  const eligibilityInput = typeof body.raw_text === "string"
+    ? body.raw_text.replace(/\r\n?/g, "\n").trim()
+    : "";
   let eligibility: PublicSharingEligibility | null = null;
   if (eligibilityInput) {
     eligibility = await persistPublicSharingEligibility(

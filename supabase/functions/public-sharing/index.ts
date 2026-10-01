@@ -3,10 +3,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as JSZip from "https://esm.sh/jszip@3.10.1";
 import {
   checkPublicSharingEligibility,
+  checkPublicSharingImageEligibility,
   PUBLIC_SHARING_RESTRICTION_REASON,
   requireCurrentGenerationOutputEligibility,
   requireCurrentProjectEligibility,
   requireCurrentSectionEligibility,
+  canonicalPublicSharingProse,
+  sha256Hex,
 } from "../_shared/public-sharing-eligibility.ts";
 import { notifySharedOutputReport } from "../_shared/_report_alert.ts";
 
@@ -186,6 +189,19 @@ async function extractCanonicalCover(
   }
 }
 
+async function moderateCoverBytes(bytes: Uint8Array, contentType: string): Promise<"eligible" | "restricted" | "unavailable"> {
+  const key = Deno.env.get("OPENAI_API_KEY");
+  if (!key) return "unavailable";
+  try {
+    const dataURL = `data:${contentType};base64,${btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""))}`;
+    const result = await checkPublicSharingImageEligibility(dataURL, key);
+    return result.eligible ? "eligible" : "restricted";
+  } catch (error) {
+    console.error("[public-sharing] cover moderation failed:", error);
+    return "unavailable";
+  }
+}
+
 function safeProjectPayload(snapshotJSON: unknown): Record<string, unknown> {
   const snapshot = snapshotJSON as Record<string, unknown> | null;
   const project = snapshot?.project as Record<string, unknown> | undefined;
@@ -303,6 +319,24 @@ export async function handler(
       { status: "failed", errorCode: "unauthenticated", error: "Unauthorized" },
       401,
     );
+
+  if (req.method === "GET" && routePath === "/section-eligibility") {
+    const userIDOrError = requireUser();
+    if (userIDOrError instanceof Response) return userIDOrError;
+    const ids = new URL(req.url).searchParams.getAll("section_id").filter(isUUID);
+    if (ids.length === 0) return jsonResponse({ items: [] });
+    const { data, error } = await adminClient.from("section_embeddings")
+      .select("outline_section_id, raw_text, public_sharing_eligible, public_sharing_checked_content_hash, public_sharing_checked_at")
+      .in("outline_section_id", ids);
+    if (error) return jsonResponse({ status: "failed", error: "Could not load eligibility" }, 500);
+    const items = [];
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const rawText = typeof row.raw_text === "string" ? row.raw_text : "";
+      const currentHash = await sha256Hex(canonicalPublicSharingProse(rawText));
+      items.push({ sectionID: String(row.outline_section_id), eligible: row.public_sharing_checked_content_hash === currentHash ? row.public_sharing_eligible : null, checkedAt: row.public_sharing_checked_at ?? null });
+    }
+    return jsonResponse({ items });
+  }
 
   if (req.method === "GET" && routePath === "/shared-outputs") {
     const { data, error } = await adminClient
@@ -546,6 +580,36 @@ export async function handler(
     );
   }
 
+  if (req.method === "POST" && routePath === "/cover-images") {
+    const userIDOrError = requireUser();
+    if (userIDOrError instanceof Response) return userIDOrError;
+    let body: { sharedOutputID?: unknown; imageBase64?: unknown; width?: unknown; height?: unknown; contentType?: unknown };
+    try { body = await req.json(); } catch { return jsonResponse({ status: "failed", error: "Invalid JSON body" }, 400); }
+    const sharedOutputID = typeof body.sharedOutputID === "string" ? body.sharedOutputID.trim() : "";
+    const imageBase64 = typeof body.imageBase64 === "string" ? body.imageBase64.trim() : "";
+    const contentType = typeof body.contentType === "string" ? body.contentType.trim().toLowerCase() : "";
+    const width = body.width; const height = body.height;
+    if (!isUUID(sharedOutputID) || !imageBase64 || !contentType.startsWith("image/") ||
+        typeof width !== "number" || !Number.isInteger(width) || width <= 0 ||
+        typeof height !== "number" || !Number.isInteger(height) || height <= 0) {
+      return jsonResponse({ status: "failed", error: "Invalid cover image payload" }, 422);
+    }
+    const key = Deno.env.get("OPENAI_API_KEY");
+    if (!key) return jsonResponse({ status: "failed", errorCode: "public_sharing_eligibility_missing", error: "Cover moderation is not available." }, 503);
+    const dataURL = `data:${contentType};base64,${imageBase64}`;
+    let eligibility;
+    try { eligibility = await checkPublicSharingImageEligibility(dataURL, key); }
+    catch (error) { console.error("[public-sharing] cover moderation failed:", error); return jsonResponse({ status: "failed", errorCode: "public_sharing_eligibility_missing", error: "Cover moderation is not available." }, 503); }
+    if (!eligibility.eligible) return jsonResponse({ status: "failed", errorCode: PUBLIC_SHARING_RESTRICTION_REASON, error: "This cover cannot be published publicly." }, 422);
+    let bytes: Uint8Array;
+    try { bytes = Uint8Array.from(atob(imageBase64), (character) => character.charCodeAt(0)); }
+    catch { return jsonResponse({ status: "failed", error: "Invalid cover image encoding" }, 422); }
+    const coverPath = `${userIDOrError}/${sharedOutputID}/${crypto.randomUUID()}.${contentType.split("/")[1] || "bin"}`;
+    const { error: uploadError } = await adminClient.storage.from("shared-output-images").upload(coverPath, bytes, { contentType, upsert: false });
+    if (uploadError) return jsonResponse({ status: "failed", error: "Could not store cover image" }, 500);
+    return jsonResponse({ sharedOutputID, coverImagePath: coverPath, coverImageURL: `${supabaseURL!.replace(/\/+$/, "")}/storage/v1/object/public/shared-output-images/${coverPath}`, coverImageWidth: width, coverImageHeight: height, coverImageContentType: contentType });
+  }
+
   if (req.method === "POST" && routePath === "/shared-outputs/epub") {
     const userIDOrError = requireUser();
     if (userIDOrError instanceof Response) return userIDOrError;
@@ -726,6 +790,10 @@ export async function handler(
     {
       const cover = await extractCanonicalCover(await epubBytes.arrayBuffer());
       if (cover) {
+        const coverModeration = await moderateCoverBytes(cover, "image/jpeg");
+        if (coverModeration !== "eligible") {
+          console.warn("[public-sharing] EPUB cover withheld:", coverModeration);
+        } else {
         const coverPath = `${userID}/${saved.id}/epub-cover.jpg`;
         const { error: uploadError } = await adminClient.storage.from(
           "shared-output-images",
@@ -749,6 +817,7 @@ export async function handler(
             "[public-sharing] cover upload failed:",
             uploadError,
           );}
+        }
       }
     }
     return jsonResponse({
@@ -1077,6 +1146,24 @@ export async function handler(
           status: "failed",
           error: "coverImageURL does not match expected public storage URL",
         }, 422);
+      }
+    }
+
+    if (hasAnyCoverField) {
+      const { data: coverBytes, error: coverReadError } = await adminClient.storage
+        .from("shared-output-images").download(coverImagePath!);
+      if (coverReadError || !coverBytes) {
+        return jsonResponse({ status: "failed", error: "Could not verify cover image" }, 422);
+      }
+      const coverModeration = await moderateCoverBytes(
+        new Uint8Array(await coverBytes.arrayBuffer()),
+        coverImageContentType!,
+      );
+      if (coverModeration === "restricted") {
+        return jsonResponse({ status: "failed", errorCode: PUBLIC_SHARING_RESTRICTION_REASON, error: "This cover cannot be published publicly." }, 422);
+      }
+      if (coverModeration !== "eligible") {
+        return jsonResponse({ status: "failed", errorCode: "public_sharing_eligibility_missing", error: "Cover moderation is not yet available." }, 503);
       }
     }
 

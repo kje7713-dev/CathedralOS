@@ -56,6 +56,10 @@ enum PublicSharingServiceConfiguration {
         baseURL?.appendingPathComponent("shared-outputs/\(sharedOutputID)/epub")
     }
 
+    static var sectionEligibilityURL: URL? {
+        baseURL?.appendingPathComponent("section-eligibility")
+    }
+
     static var publicListURL: URL? {
         baseURL?.appendingPathComponent("shared-outputs")
     }

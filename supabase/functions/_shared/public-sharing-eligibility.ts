@@ -12,20 +12,26 @@ export interface PublicSharingEligibility {
   restrictionReason: typeof PUBLIC_SHARING_RESTRICTION_REASON | null;
 }
 
+export function canonicalPublicSharingProse(input: unknown): string {
+  if (typeof input !== "string") return "";
+  return input.replace(/\r\n?/g, "\n").trim();
+}
+
 export async function sha256Hex(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input);
+  const bytes = new TextEncoder().encode(canonicalPublicSharingProse(input));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest)).map((byte) =>
     byte.toString(16).padStart(2, "0")
   ).join("");
 }
 
-export async function checkPublicSharingEligibility(
-  content: string,
+async function checkModerationInput(
+  input: unknown,
+  hashInput: string,
   openaiKey: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<PublicSharingEligibility> {
-  const contentHash = await sha256Hex(content);
+  const contentHash = await sha256Hex(canonicalPublicSharingProse(hashInput));
   const checkedAt = new Date().toISOString();
   const response = await fetchImpl("https://api.openai.com/v1/moderations", {
     method: "POST",
@@ -33,25 +39,39 @@ export async function checkPublicSharingEligibility(
       "Authorization": `Bearer ${openaiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model: PUBLIC_SHARING_MODERATION_MODEL,
-      input: content,
-    }),
+    body: JSON.stringify({ model: PUBLIC_SHARING_MODERATION_MODEL, input }),
   });
-  if (!response.ok) {
-    throw new Error(`moderation request failed: ${response.status}`);
+  if (!response.ok) throw new Error(`moderation request failed: ${response.status}`);
+  let payload: unknown;
+  try { payload = await response.json(); } catch { throw new Error("moderation response was not valid JSON"); }
+  const results = (payload as { results?: unknown } | null)?.results;
+  const categories = Array.isArray(results) && results.length > 0
+    ? (results[0] as { categories?: unknown } | null)?.categories
+    : null;
+  if (!Array.isArray(results) || results.length === 0 || !categories ||
+      typeof categories !== "object" ||
+      typeof (categories as Record<string, unknown>)["sexual/minors"] !== "boolean") {
+    throw new Error("moderation response was malformed");
   }
-  const payload = await response.json() as {
-    results?: Array<{ categories?: Record<string, unknown> }>;
-  };
-  const sexualMinors =
-    payload.results?.[0]?.categories?.["sexual/minors"] === true;
-  return {
-    eligible: !sexualMinors,
-    contentHash,
-    checkedAt,
-    restrictionReason: sexualMinors ? PUBLIC_SHARING_RESTRICTION_REASON : null,
-  };
+  const sexualMinors = (categories as Record<string, boolean>)["sexual/minors"];
+  return { eligible: !sexualMinors, contentHash, checkedAt,
+    restrictionReason: sexualMinors ? PUBLIC_SHARING_RESTRICTION_REASON : null };
+}
+
+export async function checkPublicSharingEligibility(
+  content: string,
+  openaiKey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<PublicSharingEligibility> {
+  return checkModerationInput(canonicalPublicSharingProse(content), content, openaiKey, fetchImpl);
+}
+
+export async function checkPublicSharingImageEligibility(
+  imageDataURL: string,
+  openaiKey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<PublicSharingEligibility> {
+  return checkModerationInput([{ type: "image_url", image_url: { url: imageDataURL } }], imageDataURL, openaiKey, fetchImpl);
 }
 
 export async function persistPublicSharingEligibility(
@@ -91,7 +111,8 @@ export async function requireCurrentSectionEligibility(
     .maybeSingle();
   if (error) throw new Error(error.message);
   const rawText = typeof data?.raw_text === "string" ? data.raw_text : "";
-  const currentHash = await sha256Hex(reviewedContent ?? rawText);
+  const canonicalContent = canonicalPublicSharingProse(reviewedContent ?? rawText);
+  const currentHash = await sha256Hex(canonicalContent);
   const isCurrent = Boolean(
     data &&
       data.public_sharing_checked_content_hash === currentHash,
@@ -127,7 +148,7 @@ export async function requireCurrentGenerationOutputEligibility(
       sectionIDs: [generationOutputID],
     };
   }
-  const contentHash = await sha256Hex(reviewedContent);
+  const contentHash = await sha256Hex(canonicalPublicSharingProse(reviewedContent));
   if (data.public_sharing_checked_content_hash !== contentHash) {
     return {
       ok: false,
@@ -196,7 +217,7 @@ export async function requireCurrentProjectEligibility(
       continue;
     }
     const rawText = typeof row.raw_text === "string" ? row.raw_text : "";
-    const currentHash = await sha256Hex(rawText);
+    const currentHash = await sha256Hex(canonicalPublicSharingProse(rawText));
     if (
       row.public_sharing_eligible !== true ||
       row.public_sharing_checked_content_hash !== currentHash

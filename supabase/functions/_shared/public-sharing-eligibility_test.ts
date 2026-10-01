@@ -56,6 +56,28 @@ Deno.test("non-minors moderation categories remain eligible", async () => {
   assertEquals(result.restrictionReason, null);
 });
 
+for (const malformed of [
+  {},
+  { results: [] },
+  { results: [{}] },
+  { results: [{ categories: {} }] },
+  { results: [{ categories: { "sexual/minors": "true" } }] },
+]) {
+  Deno.test(`malformed moderation response fails closed: ${JSON.stringify(malformed)}`, async () => {
+    await assertRejects(
+      () => checkPublicSharingEligibility("prose", "test-key", async () => new Response(JSON.stringify(malformed))),
+      Error,
+      "moderation response",
+    );
+  });
+}
+
+Deno.test("canonical hashing normalizes line endings and does not invent prose", async () => {
+  assertEquals(await sha256Hex("a\r\nb"), await sha256Hex("a\nb"));
+  const emptyHash = await sha256Hex("");
+  assertEquals(emptyHash !== await sha256Hex("Title\nSummary"), true);
+});
+
 Deno.test("content hash is deterministic", async () => {
   assertEquals(await sha256Hex("same"), await sha256Hex("same"));
   assertEquals((await sha256Hex("same")) !== await sha256Hex("changed"), true);

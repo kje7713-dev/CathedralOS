@@ -83,6 +83,7 @@ protocol PublicSharingService {
 
     /// Fetches the full detail of a single shared output.
     func fetchDetail(sharedOutputID: String) async throws -> SharedOutputDetail
+    func fetchSectionEligibility(sectionIDs: [String]) async throws -> [String: Bool?]
 
     /// Submits a report against a public shared output.
     /// Requires a signed-in user.
@@ -138,6 +139,7 @@ final class BackendPublicSharingService: PublicSharingService {
     }
     private var publishEndpoint: URL? { endpoint("shared-outputs") }
     private var publishEpubEndpoint: URL? { endpoint("shared-outputs/epub") }
+    private var coverImagesEndpoint: URL? { endpoint("cover-images") }
     private func sharedEpubDownloadEndpoint(_ id: String) -> URL? { endpoint("shared-outputs/\(id)/epub") }
     private func unpublishEndpoint(_ id: String) -> URL? { endpoint("shared-outputs/\(id)") }
     private var publicListEndpoint: URL? { endpoint("shared-outputs") }
@@ -267,61 +269,29 @@ final class BackendPublicSharingService: PublicSharingService {
         height: Int,
         contentType: String = "image/jpeg"
     ) async throws -> OutputCoverImageUploadMetadata {
-        let user = try await requireSignedIn()
+        _ = try await requireSignedIn()
         let token = try await resolvedAccessToken()
-        guard let projectURL = SupabaseConfiguration.projectURL,
-              let anonKey = SupabaseConfiguration.anonKey else {
-            throw PublicSharingServiceError.backendNotConfigured
-        }
-        let userID = user.id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !userID.isEmpty else { throw PublicSharingServiceError.notSignedIn }
-        guard UUID(uuidString: sharedOutputID) != nil else {
-            throw PublicSharingServiceError.invalidSharedOutputID
-        }
-
-        let fileExtension = Self.fileExtension(for: contentType)
-        let coverImageFileName = "\(UUID().uuidString.lowercased()).\(fileExtension)"
-        let objectPathSegments = [userID, sharedOutputID, coverImageFileName]
-        let objectPath = objectPathSegments.joined(separator: "/")
-
-        var uploadURL = projectURL
-            .appendingPathComponent("storage")
-            .appendingPathComponent("v1")
-            .appendingPathComponent("object")
-            .appendingPathComponent("shared-output-images")
-        objectPathSegments.forEach { segment in
-            uploadURL.appendPathComponent(segment)
-        }
-
-        var request = URLRequest(url: uploadURL)
+        guard let url = coverImagesEndpoint else { throw PublicSharingServiceError.endpointNotConfigured }
+        guard UUID(uuidString: sharedOutputID) != nil else { throw PublicSharingServiceError.invalidSharedOutputID }
+        let body: [String: Any] = [
+            "sharedOutputID": sharedOutputID,
+            "imageBase64": imageData.base64EncodedString(),
+            "width": width,
+            "height": height,
+            "contentType": contentType
+        ]
+        let bodyData: Data
+        do { bodyData = try JSONSerialization.data(withJSONObject: body) }
+        catch { throw PublicSharingServiceError.encodingError(error) }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue(anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        request.setValue("false", forHTTPHeaderField: "x-upsert")
-        request.httpBody = imageData
-
-        let (data, urlResponse) = try await performRequest(request, retryOnExpiredJWT: true)
-        try validateResponse(urlResponse, data: data)
-
-        var publicURL = projectURL
-            .appendingPathComponent("storage")
-            .appendingPathComponent("v1")
-            .appendingPathComponent("object")
-            .appendingPathComponent("public")
-            .appendingPathComponent("shared-output-images")
-        objectPathSegments.forEach { segment in
-            publicURL.appendPathComponent(segment)
-        }
-
-        return OutputCoverImageUploadMetadata(
-            sharedOutputID: sharedOutputID,
-            coverImagePath: objectPath,
-            coverImageURL: publicURL.absoluteString,
-            coverImageWidth: width,
-            coverImageHeight: height,
-            coverImageContentType: contentType
-        )
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = bodyData
+        decorateAuthenticatedRequestHeaders(&request, accessToken: token)
+        let (data, response) = try await performRequest(request, retryOnExpiredJWT: true)
+        try validateResponse(response, data: data)
+        do { return try JSONDecoder().decode(OutputCoverImageUploadMetadata.self, from: data) }
+        catch { throw PublicSharingServiceError.decodingError(error) }
     }
 
     // MARK: Unpublish
@@ -393,6 +363,23 @@ final class BackendPublicSharingService: PublicSharingService {
     }
 
     // MARK: Report
+
+    func fetchSectionEligibility(sectionIDs: [String]) async throws -> [String: Bool?] {
+        guard var url = PublicSharingServiceConfiguration.sectionEligibilityURL else { throw PublicSharingServiceError.endpointNotConfigured }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.queryItems = sectionIDs.map { URLQueryItem(name: "section_id", value: $0) }
+        guard let resolvedURL = components?.url else { throw PublicSharingServiceError.endpointNotConfigured }
+        url = resolvedURL
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        decorateAuthenticatedRequestHeaders(&request, accessToken: try await resolvedAccessToken())
+        let (data, response) = try await performRequest(request, retryOnExpiredJWT: true)
+        try validateResponse(response, data: data)
+        struct Item: Decodable { let sectionID: String; let eligible: Bool? }
+        struct Envelope: Decodable { let items: [Item] }
+        do { return Dictionary(uniqueKeysWithValues: try JSONDecoder().decode(Envelope.self, from: data).items.map { ($0.sectionID, $0.eligible) }) }
+        catch { throw PublicSharingServiceError.decodingError(error) }
+    }
 
     func reportSharedOutput(sharedOutputID: String, reason: ReportReason, details: String) async throws {
         // Require a signed-in session.

@@ -123,6 +123,24 @@ struct OutlineSectionsRegionView: View {
         allOutputs = (try? modelContext.fetch(descriptor)) ?? []
     }
 
+    @MainActor
+    private func restorePersistedPublicSharingEligibility() async {
+        let ids = sectionsOrder.map { $0.id.uuidString }
+        guard !ids.isEmpty else { return }
+        do {
+            let statuses = try await BackendPublicSharingService().fetchSectionEligibility(sectionIDs: ids)
+            for section in sectionsOrder {
+                guard let eligible = statuses[section.id.uuidString] else { continue }
+                publicSharingStatuses[section.id] = eligible.map { $0 ? .eligible : .restricted } ?? .notYetChecked
+            }
+        } catch {
+            // A missing persisted check is a visible, non-blocking state.
+            for section in sectionsOrder where publicSharingStatuses[section.id] == nil {
+                publicSharingStatuses[section.id] = .notYetChecked
+            }
+        }
+    }
+
     /// Eye-debug snapshot record. Invoked from the coordinator's polling Task
     /// on the main actor after `performManualSyncAll` completes. Compares the
     /// view's `@State` snapshot against a fresh `modelContext.fetch` and
@@ -263,6 +281,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             ensureOutline()
             syncSectionsOrder()
             refreshAllOutputs()
+            await restorePersistedPublicSharingEligibility()
             consumeGenerationLaunch()
             // PR 6 refactor: build the current request identity BEFORE
             // resuming any persisted/active run. Stale runs (recipe/arc/
