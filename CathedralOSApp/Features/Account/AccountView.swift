@@ -28,8 +28,6 @@ struct AccountView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
     @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator
-    @Query private var localProjects: [StoryProject]
-    @Query private var localGenerations: [GenerationOutput]
 
     init(
         authService: any AuthService = BackendAuthService.shared,
@@ -62,17 +60,12 @@ struct AccountView: View {
     @State private var actionError: String?
     @State private var profileBootstrapWarning: String?
 
-    // MARK: Sync state
-    @State private var localRecoveryMessage: String?
-    @State private var localRecoveryError: String?
-
     // MARK: Entitlement state
     @State private var entitlementState: StoreKitEntitlementState = .freeTier()
     @State private var isRestoring = false
     @State private var restoreError: String?
     @State private var restoreSuccess: String?
     @State private var showPaywall = false
-    @State private var copiedRecoverySummary = false
     @State private var showDeleteAccountConfirmation = false
     @State private var blockedCreatorIDs: [String] = []
     @State private var blockedCreatorsError: String?
@@ -81,15 +74,9 @@ struct AccountView: View {
         NavigationStack {
             List {
                 accountSection
-                if shouldShowRecoveryPanel || recoveryContext != nil {
-                    recoverySection
-                }
-                cloudFeaturesSection
                 blockedCreatorsSection
                 subscriptionSection
-                usageSection
                 syncSection
-                backendStatusSection
                 diagnosticsSection
             }
             .navigationTitle("Account")
@@ -198,6 +185,8 @@ struct AccountView: View {
                 Label("Sign Out", systemImage: "person.badge.minus")
             }
             .disabled(isWorking || durabilityCoordinator.isRunning)
+            Divider()
+                .padding(.vertical, 6)
             Button(role: .destructive) {
                 showDeleteAccountConfirmation = true
             } label: {
@@ -308,87 +297,6 @@ struct AccountView: View {
         }
     }
 
-    // MARK: - Usage section
-
-    private var usageSection: some View {
-        let state = usageLimitService.currentState
-        return Section("Generation Credits") {
-            VStack(alignment: .leading, spacing: 8) {
-
-                // Plan row
-                HStack {
-                    Text("Plan")
-                        .font(.body)
-                    Spacer()
-                    Text(state.planName)
-                        .font(.body)
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    if state.source == .mock {
-                        Text("(dev)")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                    }
-                }
-
-                // Credits remaining
-                HStack {
-                    Text("Credits remaining")
-                        .font(.body)
-                    Spacer()
-                    Text("\(state.availableCredits)")
-                        .font(.body)
-                        .foregroundStyle(
-                            state.availableCredits > 0
-                                ? CathedralTheme.Colors.primaryText
-                                : CathedralTheme.Colors.destructive
-                        )
-                    if state.source == .local {
-                        Text("(local)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                // Monthly count
-                HStack {
-                    Text("Generations this month")
-                        .font(.body)
-                    Spacer()
-                    Text("\(state.monthlyGenerationCount)")
-                        .font(.body)
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                }
-
-                // Reset date
-                HStack {
-                    Text("Resets on")
-                        .font(.body)
-                    Spacer()
-                    Text(usageResetDateString(state.resetDate))
-                        .font(.body)
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                }
-
-                // Explanation
-                Text("Credits are used when you generate content. Cost depends on output length: Short = 1, Medium = 2, Long = 4, Chapter = 8.")
-                    .font(.caption)
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 4)
-
-                if state.source != .backend {
-                    #if DEBUG
-                    Text("Credit tracking is cached locally for display; backend credit state is authoritative.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    #endif
-                }
-            }
-            .padding(.vertical, 4)
-        }
-    }
-
     private func usageResetDateString(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -438,188 +346,17 @@ struct AccountView: View {
         }
     }
 
-    // MARK: - Cloud features section
-
-    private var cloudFeaturesSection: some View {
-        Section("Cloud Features") {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("The following actions require a signed-in account:")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ForEach(cloudFeatureItems, id: \.self) { item in
-                    Label(item, systemImage: authState.isSignedIn ? "checkmark.circle.fill" : "lock.fill")
-                        .font(.caption)
-                        .foregroundStyle(authState.isSignedIn ? CathedralTheme.Colors.accent : .secondary)
-                }
-            }
-            .padding(.vertical, 4)
-        }
-    }
-
-    private let cloudFeatureItems = [
-        "Generate content via backend",
-        "Sync outputs across devices",
-        "Publish shared outputs",
-        "Report shared content",
-        "Record remix events"
-    ]
-
-    private var recoverySection: some View {
-        Section("Recovery (TestFlight)") {
-            if let recoveryContext {
-                Text("CathedralOS is currently running with a recovery database because the original SwiftData store could not be opened.")
-                    .font(.caption)
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                Text("Primary store: \(recoveryContext.primaryStoreURL.lastPathComponent)")
-                    .font(.caption2)
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                if let recoveryStoreURL = recoveryContext.recoveryStoreURL {
-                    Text("Recovery store: \(recoveryStoreURL.lastPathComponent)")
-                        .font(.caption2)
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                }
-                if let preservedArtifactDirectory = recoveryContext.preservedArtifactDirectory {
-                    Text("Preserved artifacts: \(preservedArtifactDirectory.path)")
-                        .font(.caption2)
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                }
-                if let storeLoadErrorMessage = recoveryContext.storeLoadErrorMessage {
-                    Text("Original load error: \(storeLoadErrorMessage)")
-                        .font(.caption2)
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                }
-                Button {
-                    restoreProjectsFromLocalBackup()
-                } label: {
-                    Label("Restore Latest Local Project Backup", systemImage: "clock.arrow.circlepath")
-                }
-                .disabled(durabilityCoordinator.isRunning || isWorking)
-                Button {
-                    restoreOutputsFromLocalBackup()
-                } label: {
-                    Label("Restore Outputs from Local Backup", systemImage: "externaldrive.badge.timemachine")
-                }
-                .disabled(durabilityCoordinator.isRunning || isWorking)
-                if let localRecoveryError {
-                    Text(localRecoveryError).font(.caption).foregroundStyle(.red)
-                } else if let localRecoveryMessage {
-                    Text(localRecoveryMessage).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            HStack {
-                Text("Local projects")
-                Spacer()
-                Text("\(localProjects.count)")
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            }
-            HStack {
-                Text("Local generations")
-                Spacer()
-                Text("\(localGenerations.count)")
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            }
-            HStack {
-                Text("Current user ID")
-                Spacer()
-                Text(authState.currentUser?.id ?? "Signed out")
-                    .font(.caption)
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .multilineTextAlignment(.trailing)
-            }
-            HStack {
-                Text("App build")
-                Spacer()
-                Text(appVersionBuildLabel)
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            }
-            HStack {
-                Text("Local backups")
-                Spacer()
-                Text("\(LocalProjectBackupService.shared.backupCount())")
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            }
-            Button {
-                UIPasteboard.general.string = recoveryDiagnosticSummary
-                copiedRecoverySummary = true
-                Task {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    copiedRecoverySummary = false
-                }
-            } label: {
-                Label(
-                    copiedRecoverySummary ? "Recovery Summary Copied" : "Export Local DB Diagnostic Summary",
-                    systemImage: copiedRecoverySummary ? "checkmark.circle.fill" : "doc.on.doc"
-                )
-            }
-        }
-    }
-
     // MARK: - Sync section
 
     private var syncSection: some View {
-        Section("Sync") {
+        Section("Cloud Sync") {
             VStack(alignment: .leading, spacing: 8) {
                 syncStatusRow
-                Button {
-                    Task { await attemptSyncEverything() }
-                } label: {
-                    Label(
-                        durabilityCoordinator.isRunning ? "Working on server…" : "Sync Everything",
-                        systemImage: durabilityCoordinator.isRunning ? "arrow.trianglehead.2.clockwise" : "arrow.triangle.2.circlepath"
-                    )
-                }
-                .disabled(durabilityCoordinator.isRunning || !authState.isSignedIn)
-
-                Button {
-                    Task { await attemptSync() }
-                } label: {
-                    Label("Sync Outputs", systemImage: "square.and.arrow.up")
-                }
-                .disabled(durabilityCoordinator.isRunning || !authState.isSignedIn)
-
-                Button {
-                    Task { await attemptRestoreFromCloud() }
-                } label: {
-                    Label("Restore Everything From Cloud", systemImage: "icloud.and.arrow.down")
-                }
-                .disabled(durabilityCoordinator.isRunning || !authState.isSignedIn)
-
-                Button {
-                    Task { await attemptRestoreDeletedProjectsFromCloud() }
-                } label: {
-                    Label("Restore Deleted Cloud Projects", systemImage: "trash.circle")
-                }
-                .disabled(durabilityCoordinator.isRunning || !authState.isSignedIn)
-
-                Button {
-                    Task { await attemptRefreshSession() }
-                } label: {
-                    Label("Refresh Session", systemImage: "arrow.clockwise")
-                }
-                .disabled(durabilityCoordinator.isRunning || !authState.isSignedIn)
-
-                if !authState.isSignedIn {
-                    Text("Sign in to sync data between devices.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Sync Everything uploads the project snapshot. The server reconciles its outline sections before reporting success.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                switch durabilityCoordinator.operationState {
-                case .succeeded(_, let message):
-                    Label(message, systemImage: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                case .failed(_, let message):
-                    Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                case .idle, .running:
-                    EmptyView()
-                }
+                Text(authState.isSignedIn
+                    ? "Your account syncs automatically when cloud changes are available."
+                    : "Sign in to enable cloud sync.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
         }
@@ -647,36 +384,9 @@ struct AccountView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
-            Label("Ready to sync", systemImage: "arrow.triangle.2.circlepath")
+            Label("Cloud sync active", systemImage: "checkmark.icloud")
                 .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: - Backend status section
-
-    private var backendStatusSection: some View {
-        Section("Backend") {
-            if SupabaseConfiguration.isConfigured {
-                Label("Backend configured", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Backend not configured", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text("Set SupabaseProjectURL and SupabaseAnonKey in Info.plist.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            HStack {
-                Text("App build")
-                Spacer()
-                Text(appVersionBuildLabel)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                .foregroundStyle(CathedralTheme.Colors.accent)
         }
     }
 
@@ -685,71 +395,6 @@ struct AccountView: View {
         let version = info?["CFBundleShortVersionString"] as? String ?? "?"
         let build = info?["CFBundleVersion"] as? String ?? "?"
         return "\(version) (\(build))"
-    }
-
-    private var recoveryDiagnosticSummary: String {
-        let launch = PersistenceLaunchDiagnosticsStore.shared.latest
-        let firstLaunch = launch.firstLaunchAfterUpdate ? "yes" : "no"
-        let storeURL = launch.swiftDataStoreURL ?? "unavailable"
-        let projectCount = launch.projectCount.map(String.init) ?? "unavailable"
-        let generationCount = launch.generationCount.map(String.init) ?? "unavailable"
-        let userID = authState.currentUser?.id ?? "signed_out"
-        let loadStatus = launch.failedToLoadStore ? "failed" : "ok"
-        var lines = [
-            "=== CathedralOS Recovery Diagnostics ===",
-            "App: \(launch.appVersion) (\(launch.appBuild))",
-            "Current build label: \(appVersionBuildLabel)",
-            "First launch after update: \(firstLaunch)",
-            "Store load status: \(loadStatus)",
-            "SwiftData store URL: \(storeURL)",
-            "Launch StoryProject count: \(projectCount)",
-            "Launch GenerationOutput count: \(generationCount)",
-            "Current StoryProject count: \(localProjects.count)",
-            "Current GenerationOutput count: \(localGenerations.count)",
-            "Current signed-in user ID: \(userID)",
-            "Local project backup file count: \(LocalProjectBackupService.shared.backupCount())",
-            "Local generated-output backup file count: \(LocalGenerationOutputBackupService.shared.backupCount())"
-        ]
-        if let error = launch.storeLoadErrorMessage, !error.isEmpty {
-            lines.append("Store load error: \(error)")
-        }
-        lines.append("=== End Recovery Diagnostics ===")
-        return lines.joined(separator: "\n")
-    }
-
-    private var shouldShowRecoveryPanel: Bool {
-        #if DEBUG
-        true
-        #else
-        guard let receiptURL = Bundle.main.appStoreReceiptURL else { return false }
-        return receiptURL.lastPathComponent == "sandboxReceipt"
-        #endif
-    }
-
-    private func restoreProjectsFromLocalBackup() {
-        localRecoveryError = nil
-        do {
-            _ = try LocalProjectBackupService.shared.restoreLatestProject(into: modelContext)
-            let formatter = DateFormatter()
-            formatter.timeStyle = .short
-            localRecoveryMessage = "Local project backup restored at \(formatter.string(from: Date()))."
-        } catch {
-            localRecoveryMessage = nil
-            localRecoveryError = (error as? LocalProjectBackupError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-
-    private func restoreOutputsFromLocalBackup() {
-        localRecoveryError = nil
-        do {
-            let restoredCount = try LocalGenerationOutputBackupService.shared.restoreLatestOutputs(into: modelContext)
-            localRecoveryMessage = restoredCount == 1
-                ? "Restored 1 generated output from local backup."
-                : "Restored \(restoredCount) generated outputs from local backup."
-        } catch {
-            localRecoveryMessage = nil
-            localRecoveryError = (error as? LocalGenerationOutputBackupError)?.errorDescription ?? error.localizedDescription
-        }
     }
 
     // MARK: - Diagnostics section
@@ -869,33 +514,6 @@ struct AccountView: View {
         }
     }
 
-    private func attemptSync() async {
-        guard authState.isSignedIn else { return }
-        _ = await durabilityCoordinator.performOutputSync(context: modelContext)
-    }
-
-    private func attemptSyncEverything() async {
-        guard authState.isSignedIn else { return }
-        _ = await durabilityCoordinator.performManualSyncAll(context: modelContext)
-    }
-
-    private func attemptRestoreFromCloud() async {
-        guard authState.isSignedIn else { return }
-        _ = await durabilityCoordinator.performCloudRestore(context: modelContext)
-    }
-
-    private func attemptRestoreDeletedProjectsFromCloud() async {
-        guard authState.isSignedIn else { return }
-        _ = await durabilityCoordinator.performCloudRestore(context: modelContext, includeDeletedProjects: true)
-    }
-
-    private func attemptRefreshSession() async {
-        guard authState.isSignedIn else { return }
-        _ = await durabilityCoordinator.performSessionRefresh()
-    }
-
-    /// Attempts to bootstrap a profile row after sign-in.
-    /// Failure is non-fatal: shows a recoverable warning but does not block the UI.
     private func attemptProfileBootstrap() async {
         guard let service = profileBootstrapService,
               let userID = authService.currentUserID else { return }
