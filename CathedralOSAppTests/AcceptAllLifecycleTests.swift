@@ -500,9 +500,9 @@ final class AcceptAllLifecycleTests: XCTestCase {
                 })
             }
         )
-        // Targeted restore can legitimately outlive the initial poll under the
-        // full XCTest suite; wait long enough for the canonical project callback.
-        try await Task.sleep(nanoseconds: 2_000_000_000)
+        // The coordinator polls every three seconds; allow the initial poll,
+        // terminal reconciliation, and canonical project callback to complete.
+        try await Task.sleep(nanoseconds: 8_000_000_000)
 
         XCTAssertEqual(refreshedProject?.outlines.first?.sections.count, 56,
                        "The section view must see all 56 restored sections immediately.")
