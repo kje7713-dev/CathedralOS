@@ -1403,6 +1403,18 @@ final class PublicSharingTests: XCTestCase {
         }
     }
 
+    func testLowercaseBackendEligibilityKeyRestoresEligibleForUppercaseSwiftUUID() {
+        let sectionID = UUID(uuidString: "9CF8E627-C547-5473-8E8B-391FD426C56F")!
+        let statuses: [String: Bool?] = [
+            "9cf8e627-c547-5473-8e8b-391fd426c56f": true
+        ]
+
+        XCTAssertEqual(
+            restoredPublicSharingEligibilityStatus(for: sectionID, statuses: statuses),
+            .eligible
+        )
+    }
+
     // MARK: CoverImageProcessor normalization
 
     func testCoverImageProcessorNormalizesSquareImageTo16By9JPEG() throws {
