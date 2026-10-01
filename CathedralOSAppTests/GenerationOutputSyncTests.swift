@@ -1052,6 +1052,10 @@ private final class MockDeletionSharingService: PublicSharingService {
         fatalError("Not used in GenerationOutputDeletionService tests.")
     }
 
+    func fetchSectionEligibility(sectionIDs: [String]) async throws -> [String: Bool?] {
+        [:]
+    }
+
     func reportSharedOutput(sharedOutputID: String, reason: ReportReason, details: String) async throws {}
 
     func uploadCoverImage(
