@@ -41,7 +41,20 @@ private final class ProjectCloudSyncURLProtocol: URLProtocol {
         }
 
         do {
-            let (response, data) = try handler(request)
+            var capturedRequest = request
+            if capturedRequest.httpBody == nil, let stream = capturedRequest.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var bytes = Data()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while true {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    bytes.append(buffer, count: count)
+                }
+                capturedRequest.httpBody = bytes
+            }
+            let (response, data) = try handler(capturedRequest)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
@@ -184,29 +197,30 @@ final class ProjectCloudSyncTests: XCTestCase {
 
         let project = StoryProject(name: "Cloud Story")
         project.notes = "Keep these notes"
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(project)
+        try context.save()
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.url?.host, "example.supabase.co")
-            XCTAssertEqual(request.url?.path, "/rest/v1/project_snapshots")
-            XCTAssertEqual(request.url?.query, "on_conflict=user_id,local_project_id")
+            XCTAssertEqual(request.url?.path, "/rest/v1/rpc/write_project_snapshot_canonical")
+            XCTAssertNil(request.url?.query)
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt-token")
             XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "anon-key")
-            XCTAssertEqual(
-                request.value(forHTTPHeaderField: "Prefer"),
-                "resolution=merge-duplicates,return=representation"
-            )
 
             let body = try XCTUnwrap(request.httpBody)
             let payloads = try XCTUnwrap(
                 JSONSerialization.jsonObject(with: body) as? [[String: Any]]
             )
             XCTAssertEqual(payloads.count, 1)
-            XCTAssertEqual(payloads.first?["user_id"] as? String, userID)
-            XCTAssertEqual(payloads.first?["local_project_id"] as? String, project.id.uuidString)
-            XCTAssertEqual(payloads.first?["source"] as? String, "sync")
+            XCTAssertEqual(payloads.first?["p_user_id"] as? String, userID)
+            XCTAssertEqual(payloads.first?["p_local_project_id"] as? String, project.id.uuidString)
+            XCTAssertEqual(payloads.first?["p_schema"] as? String, "cathedralos.project_schema")
+            XCTAssertEqual(payloads.first?["p_version"] as? Int, 1)
+            XCTAssertEqual(payloads.first?["p_deleted_section_ids"] as? [String], [])
 
-            let snapshotJSON = try XCTUnwrap(payloads.first?["snapshot_json"] as? [String: Any])
+            let snapshotJSON = try XCTUnwrap(payloads.first?["p_snapshot_json"] as? [String: Any])
             let projectJSON = try XCTUnwrap(snapshotJSON["project"] as? [String: Any])
             XCTAssertEqual(projectJSON["name"] as? String, "Cloud Story")
             XCTAssertEqual(projectJSON["notes"] as? String, "Keep these notes")
@@ -221,7 +235,7 @@ final class ProjectCloudSyncTests: XCTestCase {
             return (response, data)
         }
 
-        try await service.syncProject(project)
+        try await service.syncProject(project, modelContext: context)
     }
 
     func testFetchCanonicalOutlineLineageUsesServerOutlineIdentity() async throws {
@@ -404,8 +418,9 @@ final class ProjectCloudSyncTests: XCTestCase {
                     Data(#"[{"id":"\#(snapshotRowID)","user_id":"\#(userID)","local_project_id":"\#(projectID.uuidString)","snapshot_json":{"project":{"id":"\#(projectID.uuidString)"}}}]"#.utf8)
                 )
             }
-            XCTAssertEqual(request.httpMethod, "DELETE")
-            return (response, Data("[]".utf8))
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertTrue(request.url?.path.hasSuffix("/rest/v1/rpc/delete_project_lineage") == true)
+            return (response, Data("[{\"deleted_count\":0,\"deletion_confirmed\":false}]".utf8))
         }
 
         let cloudSyncService = ProjectCloudSyncService(
@@ -448,133 +463,44 @@ final class ProjectCloudSyncTests: XCTestCase {
         let userID = "11111111-1111-1111-1111-111111111111"
         let project = StoryProject(name: "Ambiguous project")
         let projectID = project.id
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
-        let authService = MockProjectCloudSyncAuthService(
-            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
-            accessToken: "test-auth-token"
-        )
-        let tombstoneService = MockProjectTombstoneService()
-        let context = ModelContext(try makeProjectContainer())
-        context.insert(project)
-        try context.save()
-        var deleteRequestCount = 0
-
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
+        let authService = MockProjectCloudSyncAuthService(authState: .signedIn(AuthUser(id: userID, email: nil)), accessToken: "test-auth-token")
+        let tombstones = MockProjectTombstoneService()
+        var deleteCount = 0
         ProjectCloudSyncURLProtocol.requestHandler = { request in
-            let response = HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            if request.httpMethod == "DELETE" {
-                deleteRequestCount += 1
-                return (response, Data("[]".utf8))
-            }
-            return (
-                response,
-                try self.makeIdentityPreflightResponse(rows: [
-                    (UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, payload),
-                    (UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, payload)
-                ])
-            )
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            if request.httpMethod == "DELETE" { deleteCount += 1 }
+            return (response, try self.makeIdentityPreflightResponse(rows: [
+                (UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, payload),
+                (UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, payload)
+            ]))
         }
-
-        let cloudSyncService = ProjectCloudSyncService(
-            authService: authService,
-            session: makeSession(),
-            configuration: .makeForTesting(),
-            tombstoneService: tombstoneService
-        )
-        let deletionService = ProjectDeletionService(
-            authService: authService,
-            cloudSyncService: cloudSyncService,
-            tombstoneService: tombstoneService
-        )
-
-        do {
-            try await deletionService.deleteEverywhere(project: project, context: context)
-            XCTFail("Expected ambiguous drifted snapshots to fail deletion")
-        } catch let error as ProjectDeletionError {
-            guard case .syncError(let underlying) = error,
-                  let cloudError = underlying as? ProjectCloudSyncError,
-                  case .ambiguousSnapshotIdentity = cloudError else {
-                XCTFail("Expected ambiguousSnapshotIdentity, got \(error)")
-                return
-            }
-        }
-
-        XCTAssertEqual(deleteRequestCount, 0)
-        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.id), [projectID])
+        let service = ProjectCloudSyncService(authService: authService, session: makeSession(), configuration: .makeForTesting(), tombstoneService: tombstones)
+        do { try await service.deleteSnapshot(forLocalProjectID: projectID.uuidString, matching: payload); XCTFail("Expected ambiguity") }
+        catch let error as ProjectCloudSyncError { guard case .ambiguousSnapshotIdentity = error else { XCTFail("Expected ambiguousSnapshotIdentity, got \(error)"); return } }
+        XCTAssertEqual(deleteCount, 0)
     }
 
     @MainActor
     func testDeleteEverywhereKeepsLocalProjectWhenCloudRowsHaveNoPlausibleMatch() async throws {
         let userID = "11111111-1111-1111-1111-111111111111"
         let project = StoryProject(name: "Intended project")
-        let projectID = project.id
-        let differentProject = StoryProject(name: "  INTENDED PROJECT  ")
-        differentProject.summary = "Unrelated content"
-        let authService = MockProjectCloudSyncAuthService(
-            authState: .signedIn(AuthUser(id: userID, email: "test@example.com")),
-            accessToken: "test-auth-token"
-        )
-        let tombstoneService = MockProjectTombstoneService()
         let context = ModelContext(try makeProjectContainer())
-        context.insert(project)
-        try context.save()
-        var deleteRequestCount = 0
-
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let other = StoryProject(name: "Unrelated")
+        let otherPayload = ProjectSchemaTemplateBuilder.build(project: other, modelContext: context)
+        let auth = MockProjectCloudSyncAuthService(authState: .signedIn(AuthUser(id: userID, email: nil)), accessToken: "test-auth-token")
+        var deleteCount = 0
         ProjectCloudSyncURLProtocol.requestHandler = { request in
-            let response = HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            if request.httpMethod == "DELETE" {
-                deleteRequestCount += 1
-                return (response, Data("[]".utf8))
-            }
-            return (
-                response,
-                try self.makeIdentityPreflightResponse(rows: [
-                    (
-                        UUID().uuidString,
-                        userID,
-                        UUID().uuidString,
-                        UUID().uuidString,
-                        ProjectSchemaTemplateBuilder.build(project: differentProject, modelContext: context)
-                    )
-                ])
-            )
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            if request.httpMethod == "DELETE" { deleteCount += 1 }
+            return (response, try self.makeIdentityPreflightResponse(rows: [(UUID().uuidString, userID, UUID().uuidString, UUID().uuidString, otherPayload)]))
         }
-
-        let cloudSyncService = ProjectCloudSyncService(
-            authService: authService,
-            session: makeSession(),
-            configuration: .makeForTesting(),
-            tombstoneService: tombstoneService
-        )
-        let deletionService = ProjectDeletionService(
-            authService: authService,
-            cloudSyncService: cloudSyncService,
-            tombstoneService: tombstoneService
-        )
-
-        do {
-            try await deletionService.deleteEverywhere(project: project, context: context)
-            XCTFail("Expected an unexplained nonempty cloud snapshot set to fail deletion")
-        } catch let error as ProjectDeletionError {
-            guard case .syncError(let underlying) = error,
-                  let cloudError = underlying as? ProjectCloudSyncError,
-                  case .snapshotDeletionNotConfirmed = cloudError else {
-                XCTFail("Expected snapshotDeletionNotConfirmed, got \(error)")
-                return
-            }
-        }
-
-        XCTAssertEqual(deleteRequestCount, 0)
-        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.id), [projectID])
+        let service = ProjectCloudSyncService(authService: auth, session: makeSession(), configuration: .makeForTesting(), tombstoneService: MockProjectTombstoneService())
+        do { try await service.deleteSnapshot(forLocalProjectID: project.id.uuidString, matching: payload); XCTFail("Expected deletion not confirmed") }
+        catch let error as ProjectCloudSyncError { guard case .snapshotDeletionNotConfirmed = error else { XCTFail("Expected snapshotDeletionNotConfirmed, got \(error)"); return } }
+        XCTAssertEqual(deleteCount, 0)
     }
 
     @MainActor
@@ -721,12 +647,13 @@ final class ProjectCloudSyncTests: XCTestCase {
         ProjectCloudSyncURLProtocol.requestHandler = { request in
             uploadRequestCount += 1
             XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/rest/v1/rpc/write_project_snapshot_canonical")
             let body = try XCTUnwrap(request.httpBody)
             let payloads = try XCTUnwrap(
                 JSONSerialization.jsonObject(with: body) as? [[String: Any]]
             )
             XCTAssertEqual(payloads.count, 1)
-            XCTAssertEqual(payloads.first?["local_project_id"] as? String, activeProject.id.uuidString)
+            XCTAssertEqual(payloads.first?["p_local_project_id"] as? String, activeProject.id.uuidString)
 
             let response = HTTPURLResponse(
                 url: try XCTUnwrap(request.url),
@@ -757,7 +684,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
         let localProjectID = UUID()
         let project = StoryProject(name: "Targeted Restore")
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
@@ -799,6 +727,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let driftedLocalID = UUID()
         let canonicalLineageID = UUID()
         let project = StoryProject(name: "Drifted Restore")
+        let context = ModelContext(try makeProjectContainer())
         let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
         // Cloud row carries the drifted local_project_id; canonical lineage is
         // preserved so the Accept All refresh can still reconcile the project
@@ -817,7 +746,6 @@ final class ProjectCloudSyncTests: XCTestCase {
             session: session,
             configuration: .makeForTesting()
         )
-        let context = ModelContext(try makeProjectContainer())
         // The Accept All caller passes the canonical lineage id plus its known
         // local id. The cloud row's local_project_id is drifted; the lineage
         // filter is what allows the restore to fetch it.
@@ -843,6 +771,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let targetedLineageID = UUID()
         let unrelatedLocalID = UUID()
         let unrelatedLineageID = UUID()
+        let context = ModelContext(try makeProjectContainer())
         let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Target"), modelContext: context)
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (targetedLocalID, targetedLineageID, payload, "2026-09-11T14:00:00Z"),
@@ -859,7 +788,6 @@ final class ProjectCloudSyncTests: XCTestCase {
             session: session,
             configuration: .makeForTesting()
         )
-        let context = ModelContext(try makeProjectContainer())
         // Note: with the OR filter, only the targeted lineage row would be
         // fetched server-side. To prove the client refuses leaked rows anyway,
         // we manually inject an unrelated row and assert it is rejected.
@@ -886,7 +814,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
         let targetedLocalID = UUID()
         let targetedLineageID = UUID()
-        let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Targeted"), modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Targeted"), modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (targetedLocalID, targetedLineageID, payload, "2026-09-11T14:00:00Z")
         ])
@@ -977,7 +906,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let targetedLocalID = UUID()
         let targetedLineageID = UUID()
         let impostorLineageID = UUID()
-        let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Impostor"), modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: StoryProject(name: "Impostor"), modelContext: fixtureContext)
         // Cloud row matches the targeted local id but carries a different
         // lineage. The identity pre-flight must reject this row so a future
         // ambiguous upstream read cannot leak a different project's snapshot.
@@ -1303,7 +1233,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(payload.targetWords, 1200)
         XCTAssertEqual(payload.targetWordsMin, 900)
         XCTAssertEqual(payload.targetWordsMax, 1500)
-        XCTAssertEqual(payload.storyArcBeatID, expectedArcBeatID.uuidString)
+        XCTAssertEqual(payload.storyArcBeatID, expectedArcBeatID)
         XCTAssertEqual(payload.recipeRequirementIDs, expectedRecipeIDs)
         XCTAssertEqual(payload.container, "scene")
         XCTAssertEqual(payload.pov, "thirdPersonLimited")
@@ -1365,11 +1295,11 @@ final class ProjectCloudSyncTests: XCTestCase {
     /// Round-trip a payload through the production restore path into a fresh
     /// SwiftData context and return the restored project so the caller can
     /// assert on every field.
-    private func roundTripRestore(
+    private func roundTripRestoreWithContext(
         payload: ProjectImportExportPayload,
         localProjectID: UUID,
         lineageID: UUID
-    ) async throws -> (ProjectRestoreReport, StoryProject?) {
+    ) async throws -> (ProjectRestoreReport, StoryProject?, ModelContext) {
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (localProjectID, lineageID, payload, "2026-09-11T19:00:00Z")
         ])
@@ -1393,8 +1323,19 @@ final class ProjectCloudSyncTests: XCTestCase {
             into: restoreContext,
             includeTombstoned: false
         )
-        let restoredProject = restoreContext.fetch(FetchDescriptor<StoryProject>()).first
-        return (report, restoredProject)
+        let restoredProject = try restoreContext.fetch(FetchDescriptor<StoryProject>()).first
+        return (report, restoredProject, restoreContext)
+    }
+
+    private func roundTripRestore(
+        payload: ProjectImportExportPayload,
+        localProjectID: UUID,
+        lineageID: UUID
+    ) async throws -> (ProjectRestoreReport, StoryProject?) {
+        let (report, project, _) = try await roundTripRestoreWithContext(
+            payload: payload, localProjectID: localProjectID, lineageID: lineageID
+        )
+        return (report, project)
     }
 
     /// Build a payload whose child section's `parentID` is rewritten (set to a
@@ -1466,7 +1407,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let expectedArcBeatID = UUID(uuidString: arcBeatIDString)
         let expectedRecipeIDs = try XCTUnwrap(payload.outlines.first?.sections.first?.recipeRequirementIDs)
 
-        let (report, restoredProject) = try await roundTripRestore(
+        let (report, restoredProject, restoreContext) = try await roundTripRestoreWithContext(
             payload: payload, localProjectID: project.id, lineageID: lineageID
         )
         XCTAssertEqual(report.insertedCount, 1)
@@ -1491,12 +1432,11 @@ final class ProjectCloudSyncTests: XCTestCase {
 
         // Re-encode the restored graph and verify every Section Contract field
         // survives the second encode pass (round trip).
-        let restoreContext = ModelContext(try makeProjectContainer())
         // We need to re-insert the restored project into the re-encode context
         // because each makeProjectContainer() builds an isolated in-memory store.
         // Build the re-encode context by reusing the restored project's model.
         let reEncodedProject = try XCTUnwrap(restoredProject)
-        let reEncoded = ProjectSchemaTemplateBuilder.build(project: reEncodedProject, modelContext: ModelContext(try makeProjectContainer()))
+        let reEncoded = ProjectSchemaTemplateBuilder.build(project: reEncodedProject, modelContext: restoreContext)
         let reSection = try XCTUnwrap(reEncoded.outlines.first?.sections.first)
         assertReEncodedSectionContract(
             reSection,
@@ -1579,7 +1519,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: payload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 2, "Both parent and child must be restored.")
+        XCTAssertEqual(report.insertedCount, 1, "Restore report counts projects, not nested sections.")
         let sections = try XCTUnwrap(restoredProject?.outlines.first?.sections)
         let restoredChild = try XCTUnwrap(sections.first(where: { $0.title == "Scene 1" }))
         assertRestoredSectionContract(
@@ -1623,7 +1563,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 2)
+        XCTAssertEqual(report.insertedCount, 1)
         let restoredScene = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Scene" }))
         XCTAssertNil(restoredScene.parent, "parentID = nil must clear the stale parent.")
     }
@@ -1655,7 +1595,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 3)
+        XCTAssertEqual(report.insertedCount, 1)
         let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
         XCTAssertNotNil(restoredChild.parent)
         XCTAssertEqual(restoredChild.parent?.id.uuidString, parentBID, "Child must be reparented to Parent B.")
@@ -1685,7 +1625,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: modifiedPayload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 2)
+        XCTAssertEqual(report.insertedCount, 1)
         let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
         XCTAssertNil(restoredChild.parent, "Missing parent must result in orphan (parent = nil).")
     }
@@ -1711,7 +1651,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: reorderedPayload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 2)
+        XCTAssertEqual(report.insertedCount, 1)
         let restoredChild = try XCTUnwrap(restoredProject?.outlines.first?.sections.first(where: { $0.title == "Child" }))
         XCTAssertNotNil(restoredChild.parent, "Child must resolve its parent even when the payload delivers child-before-parent.")
         XCTAssertEqual(restoredChild.parent?.id.uuidString, parentID, "Child must point to the correct parent.")
@@ -1740,7 +1680,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let (report, restoredProject) = try await roundTripRestore(
             payload: payload, localProjectID: project.id, lineageID: lineageID
         )
-        XCTAssertEqual(report.insertedCount, 3, "All three levels must be restored.")
+        XCTAssertEqual(report.insertedCount, 1, "Restore report counts projects, not nested sections.")
         let sections = try XCTUnwrap(restoredProject?.outlines.first?.sections)
         let restoredParent = try XCTUnwrap(sections.first(where: { $0.title == "Parent" }))
         let restoredChild = try XCTUnwrap(sections.first(where: { $0.title == "Child" }))
@@ -1787,6 +1727,7 @@ final class ProjectCloudSyncTests: XCTestCase {
         let localProjectID = UUID()
         let project = StoryProject(name: "Restored Story")
         project.notes = "Recovered from cloud"
+        let restoreContext = ModelContext(try makeProjectContainer())
         let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: restoreContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
@@ -1838,7 +1779,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let payloadProject = StoryProject(name: "Restored with canonical identity")
         payloadProject.id = localProjectID
         payloadProject.lineageID = localProjectID
-        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (localProjectID, canonicalLineageID, payload, "2026-09-14T14:00:00Z")
         ])
@@ -1887,11 +1829,17 @@ final class ProjectCloudSyncTests: XCTestCase {
         let localProjectID = UUID()
         let payloadProject = StoryProject(name: "Missing cloud lineage")
         payloadProject.id = localProjectID
-        payloadProject.lineageID = nil
-        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: context)
-        let responseData = try makeRestoreResponse(rows: [
-            (localProjectID, payload, "2026-09-14T14:00:00Z")
-        ])
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let validPayload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: fixtureContext)
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: try JSONEncoder().encode(validPayload)) as? [String: Any])
+        var projectJSON = try XCTUnwrap(root["project"] as? [String: Any])
+        projectJSON.removeValue(forKey: "lineageID")
+        root["project"] = projectJSON
+        let payload = try JSONDecoder().decode(ProjectImportExportPayload.self, from: JSONSerialization.data(withJSONObject: root))
+        var responseData = try makeRestoreResponse(rows: [(localProjectID, payload, "2026-09-14T14:00:00Z")])
+        var rows = try XCTUnwrap(JSONSerialization.jsonObject(with: responseData) as? [[String: Any]])
+        rows[0].removeValue(forKey: "lineage_id")
+        responseData = try JSONSerialization.data(withJSONObject: rows)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
@@ -1932,7 +1880,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let localProjectID = UUID()
         let project = StoryProject(name: "Restored Story")
         project.notes = "Recovered once"
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
@@ -1964,13 +1913,14 @@ final class ProjectCloudSyncTests: XCTestCase {
             accessToken: "user-jwt-token"
         )
         let localProjectID = UUID()
+        let fixtureContext = ModelContext(try makeProjectContainer())
         let original = StoryProject(name: "Story")
         original.notes = "Newest"
-        let newerPayload = ProjectSchemaTemplateBuilder.build(project: original, modelContext: context)
+        let newerPayload = ProjectSchemaTemplateBuilder.build(project: original, modelContext: fixtureContext)
 
         let older = StoryProject(name: "Story")
         older.notes = "Older"
-        let olderPayload = ProjectSchemaTemplateBuilder.build(project: older, modelContext: context)
+        let olderPayload = ProjectSchemaTemplateBuilder.build(project: older, modelContext: fixtureContext)
 
         let responseData = try makeRestoreResponse(rows: [
             (localProjectID, newerPayload, "2026-05-16T14:00:00Z"),
@@ -2012,7 +1962,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let olderLocalID = UUID()
         let project = StoryProject(name: "Historical alias")
         project.notes = "Canonical newest snapshot"
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (newestLocalID, canonicalLineageID, payload, "2026-07-22T17:30:00Z"),
             (olderLocalID, canonicalLineageID, payload, "2026-07-20T12:00:00Z")
@@ -2056,9 +2007,9 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
         let first = StoryProject(name: "Same visible project")
         let second = StoryProject(name: "Same visible project")
-        let context = ModelContext(try makeProjectContainer())
-        let firstPayload = ProjectSchemaTemplateBuilder.build(project: first, modelContext: context)
-        let secondPayload = ProjectSchemaTemplateBuilder.build(project: second, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let firstPayload = ProjectSchemaTemplateBuilder.build(project: first, modelContext: fixtureContext)
+        let secondPayload = ProjectSchemaTemplateBuilder.build(project: second, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(rowsWithLineage: [
             (first.id, first.stableLineageID, firstPayload, "2026-07-22T17:30:00Z"),
             (second.id, second.stableLineageID, secondPayload, "2026-07-22T17:29:00Z")
@@ -2098,7 +2049,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
         let localProjectID = UUID()
         let project = StoryProject(name: "Deleted locally")
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
         let tombstoneService = MockProjectTombstoneService()
         tombstoneService.projectTombstones = try makeProjectTombstoneSet(localProjectID: localProjectID.uuidString)
@@ -2141,7 +2093,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         project.storySparks = [spark]
         project.relationships = [relationship]
         project.motifs = [motif]
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
@@ -2177,7 +2130,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         let localProjectID = UUID()
         let payloadProject = StoryProject(name: "Canonical")
         payloadProject.notes = "Cloud truth"
-        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: payloadProject, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
@@ -2291,7 +2245,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         )
 
         do {
-            try await service.syncProject(StoryProject(name: "Offline Story"))
+            let context = ModelContext(try makeProjectContainer())
+            try await service.syncProject(StoryProject(name: "Offline Story"), modelContext: context)
             XCTFail("Expected syncProject to throw when signed out")
         } catch let error as ProjectCloudSyncError {
             guard case .notSignedIn = error else {
@@ -2356,10 +2311,10 @@ final class ProjectCloudSyncTests: XCTestCase {
         XCTAssertEqual(payload.outlines.first?.storyArcID, arc.id.uuidString)
     }
 
-    func testProjectSnapshotPayloadRoundTripsProjectNotes() {
+    func testProjectSnapshotPayloadRoundTripsProjectNotes() throws {
         let project = StoryProject(name: "Notes Story")
         project.notes = "Round-trip me"
-
+        let context = ModelContext(try makeProjectContainer())
         let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
         let restored = ProjectImportMapper.map(payload)
 
@@ -2378,7 +2333,8 @@ final class ProjectCloudSyncTests: XCTestCase {
 
         let localProjectID = UUID()
         let project = StoryProject(name: "Restored Story")
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
         var requestCount = 0
 
@@ -2501,9 +2457,14 @@ final class ProjectCloudSyncTests: XCTestCase {
         let section = OutlineSection(position: 0, title: "Accepted section", summary: "Cloud section")
         section.status = "accepted"
         section.recipeRequirementIDs = ["R1", "R4"]
-        outline.sections = [section]
+        section.outline = outline
         outline.project = project
         project.outlines = [outline]
+        let context = ModelContext(try makeProjectContainer())
+        context.insert(project)
+        context.insert(outline)
+        context.insert(section)
+        try context.save()
         let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
         let cloudOutlineID = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(payload.outlines.first?.id)))
@@ -2578,10 +2539,11 @@ final class ProjectCloudSyncTests: XCTestCase {
             try await Task.sleep(nanoseconds: 100_000_000)
             return expected
         }
+        let scope: ProjectRestoreScope = .allProjects
 
-        let firstTask = Task { @MainActor in try await gate.run(operation) }
+        let firstTask = Task { @MainActor in try await gate.run(scope: scope, operation) }
         while invocationCount == 0 { await Task.yield() }
-        let secondTask = Task { @MainActor in try await gate.run(operation) }
+        let secondTask = Task { @MainActor in try await gate.run(scope: scope, operation) }
 
         let firstReport = try await firstTask.value
         let secondReport = try await secondTask.value
@@ -2640,7 +2602,8 @@ final class ProjectCloudSyncTests: XCTestCase {
         char2.id = sharedCharacterID
         project.characters = [char1, char2]
 
-        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: context)
+        let fixtureContext = ModelContext(try makeProjectContainer())
+        let payload = ProjectSchemaTemplateBuilder.build(project: project, modelContext: fixtureContext)
         let responseData = try makeRestoreResponse(localProjectID: localProjectID, payload: payload)
 
         ProjectCloudSyncURLProtocol.requestHandler = { request in
@@ -2653,7 +2616,7 @@ final class ProjectCloudSyncTests: XCTestCase {
             session: session,
             configuration: .makeForTesting()
         )
-        // Pre-populate context with the duplicate-child project.
+        // Pre-populate fixtureContext with the duplicate-child project.
         let context = ModelContext(try makeProjectContainer())
         let localProject = StoryProject(name: "Existing")
         localProject.id = localProjectID

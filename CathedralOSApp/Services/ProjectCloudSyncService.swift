@@ -383,8 +383,11 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             // semantics for signed-out/misconfigured callers.
             _ = try await validatedClientAndSession()
             let tombstones = try await tombstoneService.fetchProjectTombstones()
-            let lineageID = payload.project.lineageID ?? localProjectID
-            guard !tombstones.isTombstoned(lineageID: lineageID) else {
+            let localID = localProjectID
+            let lineageID = payload.project.lineageID ?? localID
+            let isDeleted = tombstones.isTombstoned(localID: localID)
+                || tombstones.isTombstoned(lineageID: lineageID)
+            guard !isDeleted else {
                 logger.log("Skipped tombstoned project upload \(localProjectID, privacy: .public)")
                 return
             }
@@ -413,8 +416,11 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         try await mutationGate.run {
             let tombstones = try await tombstoneService.fetchProjectTombstones()
             let snapshots = candidates.compactMap { candidate -> ProjectSnapshotSyncInput? in
-                let lineageID = candidate.payload.project.lineageID ?? candidate.localProjectID
-                guard !tombstones.isTombstoned(lineageID: lineageID) else {
+                let localID = candidate.localProjectID
+                let lineageID = candidate.payload.project.lineageID ?? localID
+                let isDeleted = tombstones.isTombstoned(localID: localID)
+                    || tombstones.isTombstoned(lineageID: lineageID)
+                guard !isDeleted else {
                     logger.log("Skipped tombstoned project upload \(candidate.localProjectID, privacy: .public)")
                     return nil
                 }
@@ -871,9 +877,10 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             if let mismatch = rows.first(where: { row in
                 let rowLineage = row.lineageID?.uuidString.lowercased()
                 let identities = self.claimedIdentities(for: row)
-                let lineageMatches = rowLineage == canonicalLineage
-                let localMatches = identities.contains(canonicalLocal)
-                return !(lineageMatches || localMatches)
+                // An explicit lineage is authoritative. A matching local alias
+                // must not allow a different canonical lineage through.
+                if let rowLineage { return rowLineage != canonicalLineage }
+                return !identities.contains(canonicalLocal)
             }) {
                 throw ProjectCloudSyncError.ambiguousSnapshotIdentity(
                     localProjectID: mismatch.localProjectID
@@ -934,7 +941,10 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                     localProjectID: projectID.uuidString
                 )
             }
-            if !includeTombstoned, tombstones.isTombstoned(lineageID: lineageID.uuidString) {
+            if !includeTombstoned, (
+                tombstones.isTombstoned(lineageID: lineageID.uuidString)
+                    || tombstones.isTombstoned(localID: row.localProjectID)
+            ) {
                 skippedTombstonedCount += 1
                 logger.log("Skipped tombstoned project \(projectID.uuidString, privacy: .public)")
                 continue
@@ -955,6 +965,13 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                 newProject.id = projectID
                 newProject.lineageID = lineageID
                 context.insert(newProject)
+                // `ProjectImportMapper` constructs the legacy top-level graph,
+                // while the canonical restore contract also includes grouped
+                // outline sections and authoritative replacement semantics.
+                // Reconcile the full payload for newly inserted projects too;
+                // otherwise child sections disappear on the first restore and
+                // only become visible after a later update restore.
+                reconcileProject(newProject, with: row.snapshotJSON, in: context)
                 project = newProject
                 isUpdate = false
             }

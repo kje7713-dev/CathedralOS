@@ -588,12 +588,14 @@ final class OutlineSuggestionErrorContractTests: XCTestCase {
 
     func testGenericJobFailureRemainsServerError() {
         let error = OutlineSuggestionService.errorForFailedJob(errorCode: "server_error", message: "database failure")
-        XCTAssertEqual(error.localizedDescription, "Server error 500.")
+        XCTAssertTrue(error.localizedDescription.contains("Server error 500."))
+        XCTAssertTrue(error.localizedDescription.contains("database failure"))
     }
 
     func testCompletedJobHasNoFailureMapping() {
         let error = OutlineSuggestionService.errorForFailedJob(errorCode: nil, message: nil)
-        XCTAssertEqual(error.localizedDescription, "Server error 500.")
+        XCTAssertTrue(error.localizedDescription.contains("Server error 500."))
+        XCTAssertTrue(error.localizedDescription.contains("The suggestion job failed."))
     }
 }
 

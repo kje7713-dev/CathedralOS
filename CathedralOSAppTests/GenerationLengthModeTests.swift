@@ -23,17 +23,17 @@ final class GenerationLengthModeTests: XCTestCase {
     // MARK: Display names
 
     func testDisplayNames() {
-        XCTAssertEqual(GenerationLengthMode.short.displayName,   "Short")
-        XCTAssertEqual(GenerationLengthMode.medium.displayName,  "Medium")
-        XCTAssertEqual(GenerationLengthMode.long.displayName,    "Long")
-        XCTAssertEqual(GenerationLengthMode.chapter.displayName, "Chapter")
+        XCTAssertEqual(GenerationLengthMode.short.displayName,   "Short Scene")
+        XCTAssertEqual(GenerationLengthMode.medium.displayName,  "Complete Scene")
+        XCTAssertEqual(GenerationLengthMode.long.displayName,    "Extended Scene")
+        XCTAssertEqual(GenerationLengthMode.chapter.displayName, "Chapter Section")
     }
 
     func testStoryUnitHints() {
-        XCTAssertEqual(GenerationLengthMode.short.storyUnitHint, "Complete short scene")
-        XCTAssertEqual(GenerationLengthMode.medium.storyUnitHint, "Complete scene")
-        XCTAssertEqual(GenerationLengthMode.long.storyUnitHint, "Extended scene")
-        XCTAssertEqual(GenerationLengthMode.chapter.storyUnitHint, "Full chapter section")
+        XCTAssertEqual(GenerationLengthMode.short.storyUnitHint, "a tight complete beat")
+        XCTAssertEqual(GenerationLengthMode.medium.storyUnitHint, "one full dramatic scene")
+        XCTAssertEqual(GenerationLengthMode.long.storyUnitHint, "multiple connected beats")
+        XCTAssertEqual(GenerationLengthMode.chapter.storyUnitHint, "a chapter-shaped section")
     }
 
     // MARK: Output budget mapping
@@ -67,7 +67,7 @@ final class GenerationLengthModeTests: XCTestCase {
         }
     }
 
-    // MARK: Request DTO includes generationLengthMode and approximateMaxOutputTokens
+    // MARK: Request DTO includes generationLengthMode and outputBudget
 
     func testRequestDTOIncludesLengthModeFields() throws {
         let project = StoryProject(name: "Test Project")
@@ -95,7 +95,7 @@ final class GenerationLengthModeTests: XCTestCase {
         let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         XCTAssertEqual(obj["generationLengthMode"] as? String, "long")
-        XCTAssertEqual(obj["approximateMaxOutputTokens"] as? Int, 3_000)
+        XCTAssertEqual(obj["outputBudget"] as? Int, 3_000)
     }
 
     func testRequestDTODefaultLengthModeIsMedium() throws {
@@ -122,8 +122,8 @@ final class GenerationLengthModeTests: XCTestCase {
 
         XCTAssertEqual(obj["generationLengthMode"] as? String, "medium",
                        "Default generationLengthMode must be 'medium'")
-        XCTAssertEqual(obj["approximateMaxOutputTokens"] as? Int, 1_600,
-                       "Default approximateMaxOutputTokens must match medium budget")
+        XCTAssertEqual(obj["outputBudget"] as? Int, 1_600,
+                       "Default outputBudget must match medium budget")
     }
 
     // MARK: GenerationOutput stores generationLengthMode and outputBudget

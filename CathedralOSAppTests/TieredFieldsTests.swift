@@ -418,7 +418,7 @@ final class TieredFieldsTests: XCTestCase {
             promptPack: .init(id: UUID(), name: "Pack", includeProjectSetting: false, notes: "", instructionBias: "")
         )
         let result = PromptPackAssembler.assemble(payload: payload)
-        XCTAssertTrue(result.contains("Reader question left open: did it matter?"))
-        XCTAssertTrue(result.contains("Last image feeling: fading light"))
+        XCTAssertTrue(result.contains("Leave open: did it matter?"))
+        XCTAssertTrue(result.contains("Last image: fading light"))
     }
 }

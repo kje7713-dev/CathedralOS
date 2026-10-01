@@ -117,16 +117,22 @@ struct StoreKitTransactionProcessingResult {
 /// caller owns the backend call and the other callers await its result.
 actor StoreKitTransactionProcessor {
     private var inFlight: [String: Task<StoreKitTransactionProcessingResult, Never>] = [:]
+    private var cachedResults: [String: StoreKitTransactionProcessingResult] = [:]
 
     func process(
         identity: StoreKitTransactionIdentity,
         validate: @escaping () async throws -> StoreKitValidationResponse,
         finish: @escaping () async -> Void
     ) async -> StoreKitTransactionProcessingResult {
+        if let cached = cachedResults[identity.transactionID] {
+            return cached
+        }
         if let existing = inFlight[identity.transactionID] {
             return await existing.value
         }
 
+        // Register the shared task before any suspension so concurrent callers
+        // cannot both pass the empty inFlight check.
         let task = Task {
             do {
                 let response = try await validate()
@@ -159,6 +165,9 @@ actor StoreKitTransactionProcessor {
         inFlight[identity.transactionID] = task
         let result = await task.value
         inFlight.removeValue(forKey: identity.transactionID)
+        if result.disposition == .finished || result.disposition == .terminalFailure {
+            cachedResults[identity.transactionID] = result
+        }
         return result
     }
 }

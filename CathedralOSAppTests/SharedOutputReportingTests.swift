@@ -16,6 +16,7 @@ import XCTest
 
 private final class MockReportAuthService: AuthService {
     var authState: AuthState
+    var currentAccessToken: String? = "test-user-jwt"
     init(authState: AuthState = .signedOut) { self.authState = authState }
     func checkSession() async {}
     func signIn() async throws {}
@@ -134,7 +135,7 @@ final class SharedOutputReportingTests: XCTestCase {
 
     func testReportFailsWhenNotSignedIn() async {
         let auth = MockReportAuthService(authState: .signedOut)
-        let service = BackendPublicSharingService(authService: auth)
+        let service = BackendPublicSharingService(authService: auth, baseURLProvider: { nil })
 
         do {
             try await service.reportSharedOutput(
@@ -152,7 +153,7 @@ final class SharedOutputReportingTests: XCTestCase {
 
     func testReportFailsWhenAuthStateIsUnknown() async {
         let auth = MockReportAuthService(authState: .unknown)
-        let service = BackendPublicSharingService(authService: auth)
+        let service = BackendPublicSharingService(authService: auth, baseURLProvider: { nil })
 
         do {
             try await service.reportSharedOutput(
@@ -171,7 +172,7 @@ final class SharedOutputReportingTests: XCTestCase {
     func testReportFailsWhenEndpointNotConfigured() async {
         // Signed-in but no PublicSharingBaseURL in test bundle — reaches URL check.
         let auth = MockReportAuthService(authState: .signedIn(AuthUser(id: "u1", email: nil)))
-        let service = BackendPublicSharingService(authService: auth)
+        let service = BackendPublicSharingService(authService: auth, baseURLProvider: { nil })
 
         do {
             try await service.reportSharedOutput(

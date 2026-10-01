@@ -52,7 +52,7 @@ final class KindleExportPollerTests: XCTestCase {
         override func startLoading() {
             let capture = self.request
             Self.captured.append(capture)
-            let next = Self.queued.isEmpty ? (500, Data("{}".utf8), 0.0) : Self.queued.removeFirst()
+            let next = Self.queued.isEmpty ? (status: 500, body: Data("{}".utf8), delay: 0.0) : Self.queued.removeFirst()
             DispatchQueue.global().asyncAfter(deadline: .now() + next.delay) { [weak self] in
                 guard let self = self else { return }
                 let http = HTTPURLResponse(
@@ -61,7 +61,7 @@ final class KindleExportPollerTests: XCTestCase {
                     httpVersion: "HTTP/1.1",
                     headerFields: ["Content-Type": "application/json"]
                 )!
-                self.client?.urlProtocol(self, didReceive: http)
+                self.client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
                 self.client?.urlProtocol(self, didLoad: next.body)
                 self.client?.urlProtocolDidFinishLoading(self)
             }
@@ -259,15 +259,17 @@ final class KindleExportPollerTests: XCTestCase {
         // Many pending responses — loop would run forever without cancellation.
         // fastSleep still calls Task.checkCancellation() so the next poll cycle
         // detects the cancelled state and exits the loop.
-        MockURLProtocol.queued = Array(repeating: (200, statusJSON(status: "pending"), 0), count: 100)
-        let poller = makePoller()
+        MockURLProtocol.queued = [(200, statusJSON(status: "pending"), 0)]
+        let sleepEntered = expectation(description: "poller entered sleep")
+        let poller = makePoller(sleepOverride: { _ in
+            sleepEntered.fulfill()
+            try await Task.sleep(nanoseconds: 60_000_000_000)
+        })
 
         let task = Task { @MainActor in
             await poller.run()
         }
-        // Let it run for a brief moment so the loop has started
-        try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
-        // Cancel
+        await fulfillment(of: [sleepEntered], timeout: 1)
         task.cancel()
         // Wait for completion
         _ = await task.value

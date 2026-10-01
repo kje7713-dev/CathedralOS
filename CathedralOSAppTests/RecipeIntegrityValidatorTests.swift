@@ -266,7 +266,7 @@ final class RecipeIntegrityValidatorTests: XCTestCase {
                       "Message must call out the '\''must be edited'\'' instruction: \(message)")
         XCTAssertTrue(message.contains("character"),
                       "Message must name the entity class: \(message)")
-        XCTAssertTrue(message.contains(otherChar.id.uuidString.prefix(8).lowercased()),
+        XCTAssertTrue(message.lowercased().contains(otherChar.id.uuidString.prefix(8).lowercased()),
                       "Message must include the missing UUID (first 8 chars): \(message)")
     }
 

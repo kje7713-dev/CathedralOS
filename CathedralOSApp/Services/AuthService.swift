@@ -205,6 +205,17 @@ private final class AppleSignInHandler: NSObject,
 }
 
 // MARK: - BackendAuthService
+protocol AuthCredentialStore {
+    func loadString(key: String) -> String?
+    func saveString(key: String, value: String) throws
+    func delete(key: String) throws
+}
+
+struct KeychainAuthCredentialStore: AuthCredentialStore {
+    func loadString(key: String) -> String? { KeychainService.loadString(key: key) }
+    func saveString(key: String, value: String) throws { try KeychainService.saveString(key: key, value: value) }
+    func delete(key: String) throws { try KeychainService.delete(key: key) }
+}
 
 /// Production auth service. Persists session credentials via `KeychainService`.
 /// Sign in with Apple exchanges the Apple identity token for a Supabase JWT via the
@@ -221,6 +232,16 @@ final class BackendAuthService: AuthService {
 
     private(set) var authState: AuthState = .unknown
     private(set) var currentAccessToken: String?
+    private let configurationPredicate: () -> Bool
+    private let credentialStore: any AuthCredentialStore
+
+    init(
+        configurationPredicate: @escaping () -> Bool = { SupabaseConfiguration.isConfigured },
+        credentialStore: any AuthCredentialStore = KeychainAuthCredentialStore()
+    ) {
+        self.configurationPredicate = configurationPredicate
+        self.credentialStore = credentialStore
+    }
 
     // MARK: Keychain keys
 
@@ -232,14 +253,14 @@ final class BackendAuthService: AuthService {
     // MARK: - Session check
 
     func checkSession() async {
-        guard SupabaseConfiguration.isConfigured else {
+        guard configurationPredicate() else {
             authState = .signedOut
             currentAccessToken = nil
             return
         }
-        if let storedID = KeychainService.loadString(key: Self.keychainUserID) {
-            let email = KeychainService.loadString(key: Self.keychainEmail)
-            currentAccessToken = KeychainService.loadString(key: Self.keychainAccessToken)
+        if let storedID = credentialStore.loadString(key: Self.keychainUserID) {
+            let email = credentialStore.loadString(key: Self.keychainEmail)
+            currentAccessToken = credentialStore.loadString(key: Self.keychainAccessToken)
             authState = .signedIn(AuthUser(id: storedID, email: email))
         } else {
             authState = .signedOut
@@ -254,7 +275,7 @@ final class BackendAuthService: AuthService {
     /// When the backend is configured, throws `.notImplemented` because the concrete
     /// sign-in path for this service is `signInWithApple()`, not this method.
     func signIn() async throws {
-        guard SupabaseConfiguration.isConfigured else {
+        guard configurationPredicate() else {
             throw AuthServiceError.notConfigured
         }
         // The real entry point is signInWithApple(). This method exists only to
@@ -267,7 +288,7 @@ final class BackendAuthService: AuthService {
     /// Initiates Sign in with Apple, then exchanges the Apple identity token for a
     /// Supabase session via `POST /auth/v1/token?grant_type=id_token`.
     func signInWithApple() async throws {
-        guard SupabaseConfiguration.isConfigured else {
+        guard configurationPredicate() else {
             throw AuthServiceError.notConfigured
         }
 
@@ -306,13 +327,13 @@ final class BackendAuthService: AuthService {
         }
 
         // Persist session to keychain.
-        try? KeychainService.saveString(key: Self.keychainUserID, value: userID)
-        try? KeychainService.saveString(key: Self.keychainAccessToken, value: response.accessToken)
+        try? credentialStore.saveString(key: Self.keychainUserID, value: userID)
+        try? credentialStore.saveString(key: Self.keychainAccessToken, value: response.accessToken)
         if let email {
-            try? KeychainService.saveString(key: Self.keychainEmail, value: email)
+            try? credentialStore.saveString(key: Self.keychainEmail, value: email)
         }
         if let refreshToken = response.refreshToken {
-            try? KeychainService.saveString(key: Self.keychainRefreshToken, value: refreshToken)
+            try? credentialStore.saveString(key: Self.keychainRefreshToken, value: refreshToken)
         }
 
         currentAccessToken = response.accessToken
@@ -330,10 +351,10 @@ final class BackendAuthService: AuthService {
     /// Exchanges the stored refresh token for a new access token.
     /// Throws `.sessionExpired` when no refresh token is available.
     func refreshSession() async throws {
-        guard SupabaseConfiguration.isConfigured else {
+        guard configurationPredicate() else {
             throw AuthServiceError.notConfigured
         }
-        guard let refreshToken = KeychainService.loadString(key: Self.keychainRefreshToken),
+        guard let refreshToken = credentialStore.loadString(key: Self.keychainRefreshToken),
               !refreshToken.isEmpty else {
             authState = .signedOut
             currentAccessToken = nil
@@ -380,9 +401,9 @@ final class BackendAuthService: AuthService {
         let userID = response.user?.id ?? (authState.currentUser?.id ?? "")
         let email = response.user?.email ?? authState.currentUser?.email
 
-        try? KeychainService.saveString(key: Self.keychainAccessToken, value: response.accessToken)
+        try? credentialStore.saveString(key: Self.keychainAccessToken, value: response.accessToken)
         if let refreshToken = response.refreshToken {
-            try? KeychainService.saveString(key: Self.keychainRefreshToken, value: refreshToken)
+            try? credentialStore.saveString(key: Self.keychainRefreshToken, value: refreshToken)
         }
 
         currentAccessToken = response.accessToken
@@ -410,7 +431,7 @@ final class BackendAuthService: AuthService {
         ]
         var failures: [String] = []
         for (key, label) in credentials {
-            do { try KeychainService.delete(key: key) }
+            do { try credentialStore.delete(key: key) }
             catch { failures.append(label) }
         }
         currentAccessToken = nil

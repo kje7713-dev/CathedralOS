@@ -39,9 +39,21 @@ final class KindleExportServiceTests: XCTestCase {
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
         override func startLoading() {
-            let capture = self.request
+            var capture = self.request
+            if capture.httpBody == nil, let stream = capture.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var bytes = Data()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while true {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    bytes.append(buffer, count: count)
+                }
+                capture.httpBody = bytes
+            }
             Self.captured.append(capture)
-            let next = Self.queued.isEmpty ? (500, Data("{}".utf8), 0.0) : Self.queued.removeFirst()
+            let next = Self.queued.isEmpty ? (status: 500, body: Data("{}".utf8), delay: 0.0) : Self.queued.removeFirst()
             DispatchQueue.global().asyncAfter(deadline: .now() + next.delay) { [weak self] in
                 guard let self = self else { return }
                 let http = HTTPURLResponse(
@@ -50,7 +62,7 @@ final class KindleExportServiceTests: XCTestCase {
                     httpVersion: "HTTP/1.1",
                     headerFields: ["Content-Type": "application/json"]
                 )!
-                self.client?.urlProtocol(self, didReceive: http)
+                self.client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
                 self.client?.urlProtocol(self, didLoad: next.body)
                 self.client?.urlProtocolDidFinishLoading(self)
             }
@@ -212,8 +224,8 @@ final class KindleExportServiceTests: XCTestCase {
             _ = try await service.status(jobId: "job-x", userAccessToken: "t")
             XCTFail("Expected KindleExportError.malformed_response, got success")
         } catch let err as KindleExportError {
-            guard case .malformedResponse = err else {
-                XCTFail("Expected .malformed_response, got: \(err)")
+            guard case .pollFailed = err else {
+                XCTFail("Expected .pollFailed, got: \(err)")
                 return
             }
         }
@@ -333,7 +345,7 @@ extension KindleExportServiceTests {
 
     func testDeleteExportPostsToDeleteEndpointWithMetadataId() async throws {
         MockURLProtocol.queued = [(200, Self.sampleDeleteResponse, 0)]
-        let testService = service
+        let testService = try XCTUnwrap(service)
         _ = try await testService.deleteExport(
             exportMetadataId: "metadata-id-xyz",
             userAccessToken: "test-jwt",
@@ -347,7 +359,7 @@ extension KindleExportServiceTests {
 
     func testDeleteExportDecodesPromotedResponse() async throws {
         MockURLProtocol.queued = [(200, Self.sampleDeleteResponse, 0)]
-        let testService = service
+        let testService = try XCTUnwrap(service)
         let response = try await testService.deleteExport(
             exportMetadataId: "metadata-id-xyz",
             userAccessToken: "test-jwt",
@@ -360,7 +372,7 @@ extension KindleExportServiceTests {
 
     func testDeleteExportMaps401ToNotAuthenticated() async throws {
         MockURLProtocol.queued = [(401, Data("unauthorized".utf8), 0)]
-        let testService = service
+        let testService = try XCTUnwrap(service)
         do {
             _ = try await testService.deleteExport(
                 exportMetadataId: "metadata-id-xyz",
@@ -377,7 +389,7 @@ extension KindleExportServiceTests {
 
     func testDeleteExportMapsServerError() async throws {
         MockURLProtocol.queued = [(500, Data("boom".utf8), 0)]
-        let testService = service
+        let testService = try XCTUnwrap(service)
         do {
             _ = try await testService.deleteExport(
                 exportMetadataId: "metadata-id-xyz",
@@ -395,7 +407,7 @@ extension KindleExportServiceTests {
 
     func testDeleteExportMapsForbidden() async throws {
         MockURLProtocol.queued = [(403, Data("forbidden".utf8), 0)]
-        let testService = service
+        let testService = try XCTUnwrap(service)
         do {
             _ = try await testService.deleteExport(
                 exportMetadataId: "metadata-id-xyz",

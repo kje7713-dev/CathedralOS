@@ -1835,7 +1835,9 @@ struct CoverImageProcessor {
 
         let cropped = centerCropToAspectRatio(source, aspectRatio: sharedOutputCoverAspectRatio)
         let targetSize = resizeMax(width: cropped.size.width, height: cropped.size.height)
-        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
         let normalized = renderer.image { _ in
             cropped.draw(in: CGRect(origin: .zero, size: targetSize))
         }
@@ -1896,8 +1898,8 @@ struct CoverImageProcessor {
 
         let scale = min(1, min(Self.maxWidth / width, Self.maxHeight / height))
         return CGSize(
-            width: max(1, floor(width * scale)),
-            height: max(1, floor(height * scale))
+            width: max(1, (width * scale).rounded()),
+            height: max(1, (height * scale).rounded())
         )
     }
 }

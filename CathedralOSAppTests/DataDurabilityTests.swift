@@ -473,6 +473,7 @@ final class DataDurabilityTests: XCTestCase {
         let json = """
         {
             "id": "cloud-abc-123",
+            "user_id": "11111111-1111-1111-1111-111111111111",
             "title": "Should be skipped",
             "output_text": "text",
             "model_name": "gpt-4",

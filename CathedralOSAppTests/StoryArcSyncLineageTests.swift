@@ -38,7 +38,20 @@ private final class CapturingURLProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         Self.capturedURL = request.url
-        Self.capturedBody = request.httpBody
+        var capturedRequest = request
+        if capturedRequest.httpBody == nil, let stream = capturedRequest.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var bytes = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }
+                bytes.append(buffer, count: count)
+            }
+            capturedRequest.httpBody = bytes
+        }
+        Self.capturedBody = capturedRequest.httpBody
         let url = request.url ?? URL(string: "https://test.supabase.co/")!
         let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
                                        headerFields: ["Content-Type": "application/json"])!

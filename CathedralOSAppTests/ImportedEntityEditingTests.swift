@@ -625,7 +625,7 @@ final class ImportedEntityEditingTests: XCTestCase {
         fieldLevel: String = "basic",
         enabledFieldGroups: [String] = []
     ) -> StoryCharacter {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "Test", summary: "", notes: "", tags: []),
@@ -674,7 +674,7 @@ final class ImportedEntityEditingTests: XCTestCase {
         fieldLevel: String = "basic",
         enabledFieldGroups: [String] = []
     ) -> ProjectSetting {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "Test", summary: "", notes: "", tags: []),
@@ -716,7 +716,7 @@ final class ImportedEntityEditingTests: XCTestCase {
         fieldLevel: String = "basic",
         enabledFieldGroups: [String] = []
     ) -> StorySpark {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "Test", summary: "", notes: "", tags: []),
@@ -748,7 +748,7 @@ final class ImportedEntityEditingTests: XCTestCase {
         fieldLevel: String = "basic",
         enabledFieldGroups: [String] = []
     ) -> Aftertaste {
-        let payload = ProjectImportExportPayload(
+        let payload = ProjectImportExportPayload.makeForTesting(
             schema: "cathedralos.project_schema",
             version: 1,
             project: .init(name: "Test", summary: "", notes: "", tags: []),

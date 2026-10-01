@@ -74,6 +74,25 @@ struct ValidatedSupabaseConfiguration {
             .appendingPathComponent(bucket)
             .appendingPathComponent(path)
     }
+
+    static func makeForTesting(
+        projectURL: URL = URL(string: "https://example.supabase.co")!,
+        anonKey: String = "test-anon-key"
+    ) -> Self {
+        Self(
+            projectURL: projectURL, anonKey: anonKey,
+            generationEdgeFunctionPath: SupabaseConfiguration.generationEdgeFunctionPath,
+            outlineFromRecipeEdgeFunctionPath: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath,
+            embedSectionEdgeFunctionPath: SupabaseConfiguration.embedSectionEdgeFunctionPath,
+            syncStoryArcEdgeFunctionPath: SupabaseConfiguration.syncStoryArcEdgeFunctionPath,
+            sharingEdgeFunctionPath: SupabaseConfiguration.sharingEdgeFunctionPath,
+            creditStateEdgeFunctionPath: SupabaseConfiguration.creditStateEdgeFunctionPath,
+            adminGrantCreditsEdgeFunctionPath: SupabaseConfiguration.adminGrantCreditsEdgeFunctionPath,
+            generationModelsEdgeFunctionPath: SupabaseConfiguration.generationModelsEdgeFunctionPath,
+            storeKitSyncEdgeFunctionPath: SupabaseConfiguration.storeKitSyncEdgeFunctionPath,
+            storeKitValidateEdgeFunctionPath: SupabaseConfiguration.storeKitValidateEdgeFunctionPath
+        )
+    }
 }
 
 // MARK: - SupabaseConfiguration

@@ -67,7 +67,7 @@ final class AcceptAllRequestBuilderTests: XCTestCase {
             selectedThemeQuestions: [],
             selectedMotifs: [],
             promptPack: PromptPackExportPayload.PromptPackPayload(
-                id: "pack-1", name: "R", notes: "", instructionBias: ""
+                id: fixtureUUID(11), name: "R", notes: "", instructionBias: ""
             )
         )
     }

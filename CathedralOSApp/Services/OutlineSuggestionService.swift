@@ -281,10 +281,20 @@ struct OutlineSuggestionService {
         }
     }
 
+    private static func extractDecimalAmounts(from text: String) -> [Double] {
+        let pattern = #"(?<![\d.])\d+(?:\.\d+)?(?!\.)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard let swiftRange = Range(match.range, in: text) else { return nil }
+            return Double(text[swiftRange])
+        }
+    }
+
     static func errorForFailedJob(errorCode: String?, message: String?) -> OutlineSuggestionError {
         let text = message ?? "The suggestion job failed."
         if errorCode == "insufficient_credits" || text.lowercased().contains("insufficient") || text.lowercased().contains("requires ~") {
-            let numbers = text.split { !$0.isNumber && $0 != "." }.compactMap { Double($0) }
+            let numbers = extractDecimalAmounts(from: text)
             return .insufficientCredits(needed: numbers.first, available: numbers.dropFirst().first, message: text)
         }
         if errorCode == "provider_billing_unavailable" { return .providerBillingUnavailable }

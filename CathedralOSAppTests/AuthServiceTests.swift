@@ -10,6 +10,7 @@ import SwiftData
 
 final class MockAuthService: AuthService {
     var authState: AuthState = .signedOut
+    var currentAccessToken: String? = "test-user-jwt"
     private(set) var checkSessionCalled = false
     var signInResult: Result<Void, Error> = .failure(
         AuthServiceError.signInFailed("stub")
@@ -28,6 +29,15 @@ final class MockAuthService: AuthService {
         try signOutResult.get()
         authState = .signedOut
     }
+}
+
+
+private final class InMemoryAuthCredentialStore: AuthCredentialStore {
+    var values: [String: String]
+    init(values: [String: String] = [:]) { self.values = values }
+    func loadString(key: String) -> String? { values[key] }
+    func saveString(key: String, value: String) throws { values[key] = value }
+    func delete(key: String) throws { values.removeValue(forKey: key) }
 }
 
 // MARK: - AuthUserTests
@@ -109,7 +119,14 @@ final class AuthServiceTests: XCTestCase {
 
     func testCheckSessionSetsSignedOutWhenNotConfigured() async {
         // In tests, SupabaseConfiguration.isConfigured is false — expect .signedOut.
-        let service = BackendAuthService()
+        let credentials = InMemoryAuthCredentialStore()
+        credentials.values = [
+            "supabase.session.user_id": "test-user-id",
+            "supabase.session.access_token": "test-access-token",
+            "supabase.session.user_email": "test@example.com",
+            "supabase.session.refresh_token": "test-refresh-token"
+        ]
+        let service = BackendAuthService(configurationPredicate: { false }, credentialStore: credentials)
         await service.checkSession()
         XCTAssertEqual(service.authState, .signedOut,
                        "checkSession must set .signedOut when backend is not configured")
@@ -214,17 +231,17 @@ final class AuthServiceTests: XCTestCase {
             "supabase.session.user_email",
             "supabase.session.refresh_token"
         ]
-        for (index, key) in keys.enumerated() {
-            try KeychainService.saveString(key: key, value: "credential-\(index)")
-        }
-        defer { for key in keys { try? KeychainService.delete(key: key) } }
-
-        let service = BackendAuthService()
+        let credentials = InMemoryAuthCredentialStore(values: Dictionary(
+            uniqueKeysWithValues: keys.enumerated().map { index, key in
+                (key, "credential-\(index)")
+            }
+        ))
+        let service = BackendAuthService(configurationPredicate: { true }, credentialStore: credentials)
         try service.destroyLocalSession()
 
         XCTAssertEqual(service.authState, .signedOut)
         XCTAssertNil(service.currentAccessToken)
-        for key in keys { XCTAssertNil(KeychainService.loadString(key: key), key) }
+        for key in keys { XCTAssertNil(credentials.values[key], key) }
     }
 
     func testLocalAccountPurgeRemovesSwiftDataAndLifecycleDefaults() throws {
@@ -294,7 +311,13 @@ final class AuthServiceTests: XCTestCase {
             try? KeychainService.delete(key: refreshTokenKey)
         }
 
-        let service = BackendAuthService()
+        let credentialStore = InMemoryAuthCredentialStore(values: [
+            userIDKey: "test-user-id",
+            accessTokenKey: "test-access-token",
+            emailKey: "test@example.com",
+            refreshTokenKey: "test-refresh-token"
+        ])
+        let service = BackendAuthService(configurationPredicate: { true }, credentialStore: credentialStore)
         await service.checkSession()
         XCTAssertTrue(service.isSignedIn, "Precondition failed: service should be signed in before signOut")
 

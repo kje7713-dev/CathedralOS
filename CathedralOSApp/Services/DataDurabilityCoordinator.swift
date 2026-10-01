@@ -514,6 +514,14 @@ final class DataDurabilityCoordinator: ObservableObject {
         // Checkpoint 1: Accept All tapped.
         logger.log("accept_all: tapped outline=\(outlineID.uuidString, privacy: .public) project=\(projectID.uuidString, privacy: .public)")
 
+        // A live initiation has no server run ID yet, so activeAcceptRun is
+        // intentionally nil. Do not mistake its polling task for stale state
+        // and cancel the in-flight POST on a duplicate tap.
+        if isAcceptRunInitiating {
+            reportAcceptRunError("Accept All is already starting for this outline.")
+            return
+        }
+
         // Cross-outline / cross-project guard. If the coordinator already owns
         // an active run for a DIFFERENT project or outline, refuse explicitly
         // with diagnostics rather than silently returning.

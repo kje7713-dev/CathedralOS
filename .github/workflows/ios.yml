@@ -62,6 +62,23 @@ jobs:
             -scheme CathedralOSApp \
             -sdk iphonesimulator \
             -destination "$DESTINATION" \
+            SUPABASE_PROJECT_URL="$SUPABASE_PROJECT_URL" \
+            SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
+            PUBLIC_SHARING_BASE_URL="$PUBLIC_SHARING_BASE_URL" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Complete CathedralOSApp XCTest suite
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project CathedralOSApp.xcodeproj \
+            -scheme CathedralOSApp \
+            -sdk iphonesimulator \
+            -destination "$DESTINATION" \
+            -parallel-testing-enabled NO \
+            SUPABASE_PROJECT_URL="" \
+            SUPABASE_ANON_KEY="" \
+            PUBLIC_SHARING_BASE_URL="" \
             CODE_SIGNING_ALLOWED=NO
 
       - name: StoreKit regression XCTest suites
@@ -72,4 +89,8 @@ jobs:
             -scheme CathedralOSStoreKitTests \
             -sdk iphonesimulator \
             -destination "$DESTINATION" \
+            -parallel-testing-enabled NO \
+            SUPABASE_PROJECT_URL="" \
+            SUPABASE_ANON_KEY="" \
+            PUBLIC_SHARING_BASE_URL="" \
             CODE_SIGNING_ALLOWED=NO
