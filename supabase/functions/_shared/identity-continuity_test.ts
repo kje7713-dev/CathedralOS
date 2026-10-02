@@ -12,6 +12,10 @@ Deno.test("scene memory treats stable character identity as durable continuity",
   assertStringIncludes(SCENE_MEMORY_GENERATION_INSTRUCTIONS, "pronouns");
   assertStringIncludes(
     SCENE_MEMORY_GENERATION_INSTRUCTIONS,
+    "consistent pronoun set",
+  );
+  assertStringIncludes(
+    SCENE_MEMORY_GENERATION_INSTRUCTIONS,
     "character:<normalized-name>:identity:<attribute>",
   );
   assertStringIncludes(
