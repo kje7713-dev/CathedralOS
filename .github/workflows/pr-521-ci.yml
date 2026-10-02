@@ -95,11 +95,19 @@ jobs:
           supabase/functions/generate-story/index_test.ts
           --filter="PR-360-Z regression A"
 
+      - name: Test identity continuity generation wiring
+        run: >-
+          deno test --no-check -A
+          supabase/functions/generate-story/index_test.ts
+          --filter="stable character identity|standalone memory context"
+
       - name: Test lifecycle, pipeline, and Run All behavioral regressions
         run: >-
           deno test --no-check -A
           supabase/functions/_shared/memory-lifecycle_test.ts
           supabase/functions/_shared/memory-pipeline_test.ts
+          supabase/functions/_shared/identity-continuity_test.ts
+          supabase/functions/_shared/repetition-restraint_test.ts
           supabase/functions/run-outline/index_test.ts
 
       # PR #609 v2: full run-outline/index_test.ts is already run by the
