@@ -99,7 +99,7 @@ jobs:
         run: >-
           deno test --no-check -A
           supabase/functions/generate-story/index_test.ts
-          --filter="stable character identity|standalone memory context"
+          --filter="/(stable character identity|standalone memory context)/"
 
       - name: Test lifecycle, pipeline, and Run All behavioral regressions
         run: >-
