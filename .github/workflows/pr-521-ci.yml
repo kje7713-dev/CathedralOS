@@ -39,6 +39,8 @@ on:
       # PR #657: enforce the MVP private-sharing schema/RLS contract in CI.
       - 'supabase/migrations/20260930120000_disable_public_shared_outputs_for_mvp.sql'
       - 'supabase/tests/database/shared_epub_publication.test.sql'
+      - 'supabase/migrations/20261002150000_harden_internal_security_definer_privileges.sql'
+      - 'supabase/tests/database/security_definer_privileges.test.sql'
       - 'supabase/migrations/20260923160000_epub_story_arc_parts.sql'
       - 'supabase/tests/database/epub_story_arc_parts_rpc.test.sql'
       - '.github/workflows/pr-521-ci.yml'
@@ -272,6 +274,11 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/export_history_persistence_rpc.test.sql
+      # Security hardening for internal SECURITY DEFINER functions.
+      - name: Run SECURITY DEFINER privilege and trigger pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/security_definer_privileges.test.sql
       # Standalone generation-output provenance and wrapper privileges.
       - name: Run standalone EPUB provenance pgTAP test
         run: >-
