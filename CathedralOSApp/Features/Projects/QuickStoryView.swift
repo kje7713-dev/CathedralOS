@@ -20,7 +20,7 @@ struct QuickStoryView: View {
     @AppStorage("cathedralos.generation.selectedModelID") private var selectedModelId = "gpt-5.6-luna"
     @State private var idea = ""
     @State private var tone = ""
-    @State private var selectedLengthMode: GenerationLengthMode = .medium
+    @State private var selectedContainer: Container = .shortStory
     @State private var selectedPOV: POV = .defaultPOV
     @State private var outputToRead: GenerationOutput?
     @State private var isGenerating = false
@@ -63,6 +63,19 @@ struct QuickStoryView: View {
 
     private var trimmedIdea: String {
         idea.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Billing remains on the canonical four-tier length model while the
+    /// selected container controls the prose shape and output cap.
+    private var selectedLengthMode: GenerationLengthMode {
+        switch selectedContainer {
+        case .shortStory:
+            return .short
+        case .chapter, .episode, .novella:
+            return .chapter
+        default:
+            return .long
+        }
     }
 
     private var canGenerate: Bool {
@@ -117,7 +130,7 @@ struct QuickStoryView: View {
             await performEstimate()
         }
         .onChange(of: idea) { _, _ in scheduleEstimate() }
-        .onChange(of: selectedLengthMode) { _, _ in scheduleEstimate() }
+        .onChange(of: selectedContainer) { _, _ in scheduleEstimate() }
         .onChange(of: selectedPOV) { _, _ in scheduleEstimate() }
         .onDisappear { estimateTask?.cancel() }
     }
@@ -162,12 +175,16 @@ struct QuickStoryView: View {
                 .tracking(1.5)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
 
-            Picker("Length", selection: $selectedLengthMode) {
-                ForEach([GenerationLengthMode.short, .medium, .long], id: \.self) { mode in
-                    Text(mode.displayName).tag(mode)
+            Picker("Length", selection: $selectedContainer) {
+                ForEach(Container.allCases, id: \.self) { container in
+                    Text("\(container.displayName) (\(container.expectedRange))")
+                        .tag(container)
                 }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
+            Text(selectedContainer.oneLineDescription)
+                .font(CathedralTheme.Typography.caption(11))
+                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
 
             Picker("Point of view", selection: $selectedPOV) {
                 ForEach(POV.allCases, id: \.self) { pov in
@@ -279,7 +296,7 @@ struct QuickStoryView: View {
                 project: project,
                 pack: pack,
                 lengthMode: selectedLengthMode,
-                selectedContainer: nil,
+                selectedContainer: selectedContainer,
                 selectedPOV: selectedPOV,
                 terminalBeat: nil,
                 selectedModelId: selectedModelId
@@ -327,7 +344,7 @@ struct QuickStoryView: View {
             outputType: GenerationOutputType.story.rawValue,
             generationLengthMode: selectedLengthMode.rawValue,
             outputBudget: selectedLengthMode.outputBudget,
-            renderedContainer: Container.defaultContainer.rawValue
+            renderedContainer: selectedContainer.rawValue
         )
         output.project = project
         modelContext.insert(output)
@@ -349,7 +366,7 @@ struct QuickStoryView: View {
                 pack: pack,
                 requestedOutputType: .story,
                 lengthMode: selectedLengthMode,
-                selectedContainer: nil,
+                selectedContainer: selectedContainer,
                 selectedPOV: selectedPOV,
                 terminalBeat: nil,
                 selectedModelId: selectedModelId,
