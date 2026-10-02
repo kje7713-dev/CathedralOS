@@ -5268,6 +5268,41 @@ Deno.test("buildPrompt: projectStateContext rendered unchanged into user message
   );
 });
 
+Deno.test("buildPrompt: stable character identity facts are hard continuity constraints", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    projectStateContext:
+      "## Project State\n\nContinuity Facts:\n- character:erwernican:identity:pronouns: Erwernican uses he/him pronouns.",
+  });
+  assertStringIncludes(
+    context,
+    "Stable identity facts in Project State",
+  );
+  assertStringIncludes(
+    context,
+    "pronouns",
+  );
+  assertStringIncludes(
+    context,
+    "Do not change them unless the Section Contract explicitly requires that change",
+  );
+});
+
+Deno.test("standalone memory context reuses the canonical Project State fold", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/generate-story/index.ts",
+  );
+  const start = source.indexOf("async function fetchPriorContextForEmbedSection");
+  const end = source.indexOf("// ---- indexGeneratedSection", start);
+  const helper = source.slice(start, end);
+  assertStringIncludes(helper, "formatCanonicalProjectState(");
+  assertStringIncludes(helper, "priorScenes[priorScenes.length - 1]");
+  assertEquals(
+    helper.includes("## Prior section memory (extracted from earlier sections)"),
+    false,
+  );
+});
+
 Deno.test("buildPrompt: Writing Instructions has new Container-rule text", () => {
   const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
   assertEquals(craft.includes("If you cannot cover everything"), false);
