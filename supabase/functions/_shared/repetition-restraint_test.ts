@@ -108,11 +108,11 @@ Deno.test("common trivial phrases stay filtered and guidance caps remain bounded
     currentContract: null,
   });
   assertEquals(guidance.avoidPhrases.includes("the and of"), false);
-  assertEquals(guidance.avoidSentenceOpenings.length <= 3, true);
-  assertEquals(guidance.avoidPhrases.length <= 3, true);
+  assertEquals(guidance.avoidSentenceOpenings.length <= 5, true);
+  assertEquals(guidance.avoidPhrases.length <= 5, true);
 });
 
-Deno.test("repetition restraint uses only the latest five sections and motif cooldown is recent", () => {
+Deno.test("repetition restraint uses only the latest eight sections and motif cooldown is recent", () => {
   const guidance = analyzeRecentRepetition({
     recentRawText: [
       "The radio appeared in an old section.",
@@ -156,9 +156,9 @@ Deno.test("rendered restraint is bounded guidance and never includes raw prose o
   assertEquals(block.includes("raw_text"), false);
 });
 
-Deno.test("repetition restraint lookback is exactly five sections", () => {
-  assertEquals(RECENT_REPETITION_LOOKBACK, 5);
-  // Helper slices the input to the last 5 entries.
+Deno.test("repetition restraint lookback is exactly eight sections", () => {
+  assertEquals(RECENT_REPETITION_LOOKBACK, 8);
+  // Helper slices the input to the last 8 entries.
   const longer = Array.from(
     { length: 9 },
     (_, i) => `Opening ${i}. Sentence ${i}. Tail ${i}.`,
@@ -168,9 +168,9 @@ Deno.test("repetition restraint lookback is exactly five sections", () => {
     selectedMotifs: [],
     currentContract: null,
   });
-  // Sections 4..8 are the last five. If the helper had read more
-  // than five, it could see indices 0..3; since it can only see the
-  // last 5, no opening key should recur across the lookback window
+  // Sections 1..8 are the last eight. If the helper had read more
+  // than eight, it could see index 0; since it can only see the
+  // last 8, no opening key should recur across the lookback window
   // because every sentence varies by its `${i}` index.
   assertEquals(guidance.avoidSentenceOpenings.length, 0);
 });
@@ -285,7 +285,39 @@ Deno.test("character-name substitution recognizes repeated gaze openings", () =>
   );
 });
 
-Deno.test("normalizeOpeningKey only fires for non-stopword name + gaze verb", () => {
+Deno.test("character-name substitution recognizes repeated physical-action openings", () => {
+  const guidance = analyzeRecentRepetition({
+    recentRawText: [
+      "Mara raised the bell above the table.",
+      "Bram raised the bell above the threshold.",
+      "A distinct scene with no matching action.",
+    ],
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(
+    guidance.avoidSentenceOpenings.includes("[character] raised the bell"),
+    true,
+  );
+});
+
+Deno.test("grip and hand-tension reactions saturate across sections", () => {
+  const guidance = analyzeRecentRepetition({
+    recentRawText: [
+      "Mara tightened her grip on the bell.",
+      "Bram clutched the rail until his knuckles whitened.",
+      "A distinct scene with no hand reaction.",
+    ],
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(
+    guidance.saturatedResponseFamilies.includes("grip/hand-tension reactions"),
+    true,
+  );
+});
+
+Deno.test("normalizeOpeningKey only fires for non-stopword name + recognized opening verb", () => {
   // "She looked at" — first token is a stopword; NOT normalized.
   assertEquals(normalizeOpeningKey(["she", "looked", "at", "him"]), null);
   // First non-stopword + gaze verb: normalized.
@@ -298,7 +330,12 @@ Deno.test("normalizeOpeningKey only fires for non-stopword name + gaze verb", ()
     normalizeOpeningKey(["looked", "brody", "in", "the"]),
     null,
   );
-  // Non-gaze verb: not normalized.
+  // Recognized physical-action verbs are normalized with a longer tail.
+  assertEquals(
+    normalizeOpeningKey(["mara", "raised", "the", "bell"]),
+    "[character] raised the bell",
+  );
+  // Unrecognized verbs are not normalized.
   assertEquals(
     normalizeOpeningKey(["brody", "shrugged", "and", "walked"]),
     null,
@@ -477,7 +514,7 @@ Deno.test("conservative throat and breath reaction constructions DO trigger satu
     "She held her breath in the silence.",
     "They let out a breath together.",
   ];
-  // Helper slices to the last 5; throat matches survive there.
+  // Helper slices to the bounded recent window; these matches survive there.
   const guidance = analyzeRecentRepetition({
     recentRawText: sections.slice(-5),
     selectedMotifs: [],
