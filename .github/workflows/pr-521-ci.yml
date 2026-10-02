@@ -209,7 +209,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: supabase/setup-cli@v2
         with:
-          version: latest
+          # Pin the CLI so CI does not depend on GitHub API latest-release lookup.
+          version: 2.119.0
       - name: Start disposable Supabase database and apply migrations
         run: |
           # This historical repair migration uses transaction-scoped LOCK TABLE,
