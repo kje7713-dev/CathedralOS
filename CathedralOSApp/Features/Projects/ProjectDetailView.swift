@@ -835,14 +835,8 @@ struct ProjectDetailView: View {
         ("Custom", "custom")
     ]
 
-    private static let contentRatings: [(label: String, value: String)] = [
-        ("Not set", ""),
-        ("G", "g"),
-        ("PG", "pg"),
-        ("PG-13", "pg_13"),
-        ("R", "r"),
-        ("Custom", "custom")
-    ]
+    private static let contentRatings: [(label: String, value: String)] =
+        StoryContentAgeRating.allCases.map { ($0.displayName, $0.rawValue) }
 
     private var audienceSection: some View {
         Section {
@@ -882,6 +876,9 @@ struct ProjectDetailView: View {
                 bottom: CathedralTheme.Spacing.sm,
                 trailing: CathedralTheme.Spacing.base
             ))
+            .onAppear {
+                project.contentRating = StoryContentAgeRating.storageValue(for: project.contentRating)
+            }
         } header: {
             CathedralSectionHeader("Audience")
                 .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))

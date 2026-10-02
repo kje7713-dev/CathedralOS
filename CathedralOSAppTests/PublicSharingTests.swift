@@ -1448,3 +1448,26 @@ final class PublicSharingTests: XCTestCase {
         XCTAssertEqual(processed.height, 900)
     }
 }
+
+// MARK: - Public age-tier policy
+
+extension PublicSharingTests {
+    func testStoryContentAgeRatingNormalizesLegacyAndUnknownValuesConservatively() {
+        XCTAssertEqual(StoryContentAgeRating.normalize("g"), .allAges)
+        XCTAssertEqual(StoryContentAgeRating.normalize("PG"), .allAges)
+        XCTAssertEqual(StoryContentAgeRating.normalize("pg_13"), .age13Plus)
+        XCTAssertEqual(StoryContentAgeRating.normalize("r"), .age18Plus)
+        XCTAssertEqual(StoryContentAgeRating.normalize(""), .allAges)
+        XCTAssertEqual(StoryContentAgeRating.normalize("unrecognized"), .allAges)
+    }
+
+    func testPublicAgeGateMatchesViewerTierBoundaries() {
+        XCTAssertTrue(canView(contentMinimumAge: 0, viewerTier: .unknown))
+        XCTAssertFalse(canView(contentMinimumAge: 13, viewerTier: .unknown))
+        XCTAssertFalse(canView(contentMinimumAge: 16, viewerTier: .age13To15))
+        XCTAssertTrue(canView(contentMinimumAge: 13, viewerTier: .age13To15))
+        XCTAssertFalse(canView(contentMinimumAge: 18, viewerTier: .age16To17))
+        XCTAssertTrue(canView(contentMinimumAge: 16, viewerTier: .age16To17))
+        XCTAssertTrue(canView(contentMinimumAge: 18, viewerTier: .age18Plus))
+    }
+}

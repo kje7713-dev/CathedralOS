@@ -114,6 +114,102 @@ enum SharedContentType: String, Codable, Equatable {
     case epub
 }
 
+/// Canonical public-content age tiers. StoryProject.contentRating remains the
+/// persisted source of truth; this type is the single normalization boundary.
+enum StoryContentAgeRating: String, Codable, CaseIterable, Equatable {
+    case allAges = "all_ages"
+    case age13Plus = "13_plus"
+    case age16Plus = "16_plus"
+    case age18Plus = "18_plus"
+
+    var minimumAge: Int {
+        switch self {
+        case .allAges: return 0
+        case .age13Plus: return 13
+        case .age16Plus: return 16
+        case .age18Plus: return 18
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .allAges: return "All Ages"
+        case .age13Plus: return "13+"
+        case .age16Plus: return "16+"
+        case .age18Plus: return "18+"
+        }
+    }
+
+    /// Normalizes legacy ratings conservatively. Unknown and blank values are
+    /// baseline-safe rather than silently treated as adult content.
+    static func normalize(_ rawValue: String?) -> StoryContentAgeRating {
+        let value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_") ?? ""
+        switch value {
+        case "13_plus", "pg13", "pg_13", "teen", "young_adult", "ya":
+            return .age13Plus
+        case "16_plus", "16", "mature_teen":
+            return .age16Plus
+        case "18_plus", "18", "r", "nc17", "nc_17", "adult", "mature":
+            return .age18Plus
+        case "all_ages", "all", "g", "pg", "general", "":
+            return .allAges
+        default:
+            return .allAges
+        }
+    }
+
+    static func storageValue(for rawValue: String?) -> String {
+        normalize(rawValue).rawValue
+    }
+}
+
+enum StoryViewerAgeTier: Equatable {
+    case unknown
+    case under13
+    case age13To15
+    case age16To17
+    case age18Plus
+
+    var maximumKnownAge: Int? {
+        switch self {
+        case .unknown: return nil
+        case .under13: return 12
+        case .age13To15: return 15
+        case .age16To17: return 17
+        case .age18Plus: return nil
+        }
+    }
+
+    var minimumKnownAge: Int? {
+        switch self {
+        case .unknown, .under13: return 0
+        case .age13To15: return 13
+        case .age16To17: return 16
+        case .age18Plus: return 18
+        }
+    }
+}
+
+/// Returns whether a viewer may access a public item. Unknown/declined age
+/// sharing is intentionally limited to baseline-safe All Ages content.
+func canView(contentMinimumAge: Int, viewerTier: StoryViewerAgeTier) -> Bool {
+    guard contentMinimumAge <= 0 || contentMinimumAge == 13 || contentMinimumAge == 16 || contentMinimumAge == 18 else {
+        return contentMinimumAge < 13
+    }
+    switch viewerTier {
+    case .unknown, .under13:
+        return contentMinimumAge == 0
+    case .age13To15:
+        return contentMinimumAge <= 13
+    case .age16To17:
+        return contentMinimumAge <= 16
+    case .age18Plus:
+        return true
+    }
+}
+
 struct SharedEPUBDownloadResponse: Codable {
     let signedURL: String
     let expiresAt: String
@@ -121,6 +217,20 @@ struct SharedEPUBDownloadResponse: Codable {
     let bookTitle: String
     let authorName: String
     let epubSHA256: String
+    let ageRating: StoryContentAgeRating
+    let minimumAge: Int
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        signedURL = try c.decode(String.self, forKey: .signedURL)
+        expiresAt = try c.decode(String.self, forKey: .expiresAt)
+        sharedOutputID = try c.decode(String.self, forKey: .sharedOutputID)
+        bookTitle = try c.decodeIfPresent(String.self, forKey: .bookTitle) ?? ""
+        authorName = try c.decodeIfPresent(String.self, forKey: .authorName) ?? ""
+        epubSHA256 = try c.decodeIfPresent(String.self, forKey: .epubSHA256) ?? ""
+        ageRating = StoryContentAgeRating(rawValue: try c.decodeIfPresent(String.self, forKey: .ageRating) ?? "") ?? .allAges
+        minimumAge = try c.decodeIfPresent(Int.self, forKey: .minimumAge) ?? ageRating.minimumAge
+    }
 }
 
 // MARK: - SharedOutputListItem
@@ -134,6 +244,7 @@ struct SharedOutputListItem: Codable, Identifiable {
     let shareExcerpt: String
     let contentType: SharedContentType
     let bookAuthorName: String?
+    let isOwner: Bool
     let authorDisplayName: String?
     let createdAt: Date
     let allowRemix: Bool
@@ -141,6 +252,8 @@ struct SharedOutputListItem: Codable, Identifiable {
     let generationLengthMode: String?
     /// Raw content-rating tag assigned by the publisher (e.g. "general" | "teen" | "mature").
     let contentRating: String?
+    let ageRating: StoryContentAgeRating
+    let minimumAge: Int
     /// Raw reading-level tag assigned by the publisher (e.g. "middle-grade" | "ya" | "adult").
     let readingLevel: String?
     let coverImagePath: String?
@@ -156,11 +269,15 @@ struct SharedOutputListItem: Codable, Identifiable {
         shareExcerpt         = try c.decodeIfPresent(String.self, forKey: .shareExcerpt) ?? ""
         contentType          = (try? c.decodeIfPresent(SharedContentType.self, forKey: .contentType)) ?? .text
         bookAuthorName       = try c.decodeIfPresent(String.self, forKey: .bookAuthorName)
+        isOwner              = try c.decodeIfPresent(Bool.self, forKey: .isOwner) ?? false
         authorDisplayName    = try c.decodeIfPresent(String.self, forKey: .authorDisplayName)
         createdAt            = try c.decodeIfPresent(Date.self,   forKey: .createdAt) ?? Date()
         allowRemix           = try c.decodeIfPresent(Bool.self,   forKey: .allowRemix) ?? false
         generationLengthMode = try c.decodeIfPresent(String.self, forKey: .generationLengthMode)
         contentRating        = try c.decodeIfPresent(String.self, forKey: .contentRating)
+        ageRating            = StoryContentAgeRating(rawValue: try c.decodeIfPresent(String.self, forKey: .ageRating) ?? "")
+            ?? StoryContentAgeRating.normalize(contentRating)
+        minimumAge           = try c.decodeIfPresent(Int.self, forKey: .minimumAge) ?? ageRating.minimumAge
         readingLevel         = try c.decodeIfPresent(String.self, forKey: .readingLevel)
         coverImagePath       = try c.decodeIfPresent(String.self, forKey: .coverImagePath)
         coverImageURL        = try c.decodeIfPresent(String.self, forKey: .coverImageURL)
@@ -196,6 +313,8 @@ struct SharedOutputDetail: Codable {
     let readingLevel: String?
     /// Raw content-rating tag assigned by the publisher (e.g. "general" | "teen" | "mature").
     let contentRating: String?
+    let ageRating: StoryContentAgeRating
+    let minimumAge: Int
     /// Audience notes supplied by the publisher.
     let audienceNotes: String?
     /// Frozen JSON snapshot of the `PromptPackExportPayload` included when `allowRemix` is true.
@@ -226,6 +345,9 @@ struct SharedOutputDetail: Codable {
         shareURL             = try c.decodeIfPresent(String.self, forKey: .shareURL)
         readingLevel         = try c.decodeIfPresent(String.self, forKey: .readingLevel)
         contentRating        = try c.decodeIfPresent(String.self, forKey: .contentRating)
+        ageRating            = StoryContentAgeRating(rawValue: try c.decodeIfPresent(String.self, forKey: .ageRating) ?? "")
+            ?? StoryContentAgeRating.normalize(contentRating)
+        minimumAge           = try c.decodeIfPresent(Int.self, forKey: .minimumAge) ?? ageRating.minimumAge
         audienceNotes        = try c.decodeIfPresent(String.self, forKey: .audienceNotes)
         sourcePayloadJSON    = try c.decodeIfPresent(String.self, forKey: .sourcePayloadJSON)
         coverImagePath       = try c.decodeIfPresent(String.self, forKey: .coverImagePath)
