@@ -1511,19 +1511,14 @@ async function fetchPriorContextForEmbedSection(
       );
     if (priorScenes.length === 0) return "";
 
-    // 4. Build the prior context string (same shape as fetchProjectStateContext
-    //    but ordered by outline position instead of created_at, and explicitly
-    //    labeled for the embed-section LLM extraction prompt).
-    const lines: string[] = [
-      "## Prior section memory (extracted from earlier sections)",
-    ];
-    for (const scene of priorScenes) {
-      const summary = scene.extracted_summary;
-      if (typeof summary === "string" && summary.length > 0) {
-        lines.push("", `**Summary:** ${summary}`);
-      }
-    }
-    return lines.join("\n");
+    // 4. Reuse the same canonical state fold as Run All. Standalone/direct
+    //    generation previously reduced prior memory to summaries here, which
+    //    discarded durable character identity and continuity facts before the
+    //    extractor saw them.
+    return formatCanonicalProjectState(
+      priorScenes,
+      priorScenes[priorScenes.length - 1],
+    );
   } catch (e) {
     console.error(
       `[generate-story] fetchPriorContextForEmbedSection failed: ${
@@ -1967,6 +1962,8 @@ Structural limits:
     contextLines.push(req.projectStateContext);
     contextLines.push("");
     contextLines.push(
+      "Stable identity facts in Project State—especially character names, pronouns, identity terms, kinship, species, and fixed physical traits—are hard continuity constraints. Do not change them unless the Section Contract explicitly requires that change.",
+      "",
       "Project State establishes continuity, not the required subject of the next prose. Transition from prior state into the Section Contract as directly as necessary. Do not continue the previous interaction merely because it was the latest event.",
     );
     contextLines.push("");

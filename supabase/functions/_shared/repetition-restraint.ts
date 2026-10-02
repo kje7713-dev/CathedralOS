@@ -66,11 +66,11 @@ export interface RecentRepetitionGuidance {
 }
 
 /** Cap on the recent canonical sections used for motif + prose analysis. */
-export const RECENT_REPETITION_LOOKBACK = 5 as const;
+export const RECENT_REPETITION_LOOKBACK = 8 as const;
 
 const MAX_AVOID_MOTIFS = 5;
-const MAX_AVOID_OPENINGS = 3;
-const MAX_AVOID_PHRASES = 3;
+const MAX_AVOID_OPENINGS = 5;
+const MAX_AVOID_PHRASES = 5;
 
 /**
  * Single-section threshold above which the paragraph-rhythm guidance is
@@ -194,6 +194,24 @@ const GAZE_VERBS = new Set<string>([
 ]);
 
 /**
+ * Conservative physical-action verbs that often become repeated prose
+ * scaffolding across generated sections. These are normalized only when they
+ * occur immediately after a likely character name at the start of a sentence.
+ */
+const ACTION_VERBS = new Set<string>([
+  "raised",
+  "lifted",
+  "lowered",
+  "gripped",
+  "clutched",
+  "tightened",
+  "reached",
+  "pressed",
+  "touched",
+  "drew",
+]);
+
+/**
  * Limited, conservative response-mode families for the Recent Repetition
  * Restraint. Saturation is measured in SECTIONS (not occurrences) so a
  * single long scene cannot trigger guidance alone. Each family requires
@@ -268,7 +286,16 @@ const RESPONSE_FAMILIES: readonly ResponseFamily[] = [
     patterns: [
       /\b(stomach (dropped|clenched|churned|tightened|turned|flipped))\b/i,
       /\b(gut (dropped|wrenched|twisted))\b/i,
-      /\b(in (his|her) stomach)\b/i,
+      /\b(in (his|her|their) stomach)\b/i,
+    ],
+    minSectionUses: 2,
+  },
+  {
+    name: "grip/hand-tension reactions",
+    patterns: [
+      /\b(gripped|clutched)\b/i,
+      /\btightened (his|her|their) grip\b/i,
+      /\b(fingers tightened|knuckles whitened)\b/i,
     ],
     minSectionUses: 2,
   },
@@ -322,13 +349,19 @@ export function deriveSaturatedResponseFamilies(
 export function normalizeOpeningKey(tokens: string[]): string | null {
   if (tokens.length < 2) return null;
   if (STOPWORDS.has(tokens[0])) return null;
-  if (!GAZE_VERBS.has(tokens[1])) return null;
-  // Keep only the gaze verb + the following token so the canonical
-  // "[CHARACTER] looked at" / "[CHARACTER] stared at" / "[CHARACTER]
-  // glanced toward" shape matches across character names. Longer tails
-  // (e.g. "looked at Mike" vs "looked at Eleven") would re-fragment the
-  // normalized key and defeat the substitution.
-  return "[character] " + tokens.slice(1, 3).join(" ");
+  if (GAZE_VERBS.has(tokens[1])) {
+    // Keep only the gaze verb + the following token so the canonical
+    // "[CHARACTER] looked at" / "[CHARACTER] stared at" shape matches
+    // across character names.
+    return "[character] " + tokens.slice(1, 3).join(" ");
+  }
+  if (ACTION_VERBS.has(tokens[1])) {
+    // Preserve a little more of the object/action tail so ordinary movement
+    // is not over-grouped, while still catching recurring constructions such
+    // as "Mara raised the bell" across a longer manuscript window.
+    return "[character] " + tokens.slice(1, 4).join(" ");
+  }
+  return null;
 }
 
 export interface AnalyzeRecentRepetitionInput {
@@ -652,7 +685,7 @@ export function renderRecentRepetitionBlock(
       "Recent reaction habits are saturated:",
       ...g.saturatedResponseFamilies.map((f) => `- ${f}`),
       "",
-      "Do not merely synonym-swap these reactions. When natural, vary how the response is expressed through dialogue, deliberate action, changed behavior, spatial interaction, internal decision, silence, interruption, or implication. Use the saturated response normally when it is the most physically or dramatically accurate choice.",
+      "Do not merely synonym-swap these reactions or repeat the same setup-action-reaction cadence with different wording. When natural, vary how the response is expressed through dialogue, deliberate action, changed behavior, spatial interaction, internal decision, silence, interruption, or implication. If the repeated physical action is causally necessary, keep the action but vary its dramatic framing rather than reproducing the same prose beat. Use the saturated response normally when it is the most physically or dramatically accurate choice.",
       "Keep this subordinate to the Section Contract. Do not force awkward novelty. Do not distort character voice. Do not prevent necessary physical actions.",
       "",
     );

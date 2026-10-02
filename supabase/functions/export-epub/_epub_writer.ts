@@ -25,7 +25,7 @@
 import JSZip from "https://esm.sh/jszip@3.10.1";
 import type { ExportMetadata } from "./_metadata.ts";
 import type { ProjectOutline, Section } from "./_section_walker.ts";
-import { splitParagraphs } from "./_paragraphs.ts";
+import { renderInlineMarkupXhtml, splitParagraphs } from "./_paragraphs.ts";
 
 export async function writeEpub(
   metadata: ExportMetadata,
@@ -91,7 +91,7 @@ export async function writeEpub(
         );
       }
       for (const paragraph of splitParagraphs(section.body)) {
-        bodyParts.push(`<p>${escapeXml(paragraph)}</p>`);
+        bodyParts.push(`<p>${renderInlineMarkupXhtml(paragraph)}</p>`);
       }
     }
 
@@ -588,7 +588,7 @@ ${sf.body}
   if (metadata.acknowledgements) {
     const ackBody: string[] = [`<h1>Acknowledgements</h1>`];
     for (const paragraph of splitParagraphs(metadata.acknowledgements)) {
-      ackBody.push(`<p>${escapeXml(paragraph)}</p>`);
+      ackBody.push(`<p>${renderInlineMarkupXhtml(paragraph)}</p>`);
     }
     zip.file(
       "OEBPS/text/acknowledgements.xhtml",

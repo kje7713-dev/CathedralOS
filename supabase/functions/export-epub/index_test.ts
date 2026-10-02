@@ -149,6 +149,26 @@ Deno.test("EPUB writer: preserves blank-line paragraph boundaries", () => {
   ]);
 });
 
+Deno.test("EPUB writer: converts generated **strong** markup to safe XHTML", async () => {
+  const outline = makeAcknowledgementsFixture();
+  outline.chapters[0].sections[0].body =
+    "**APPLICATION FOR STABLE PERSONHOOD**\n\nUse <care> & caution.";
+  const epub = await writeEpub(
+    { book_title: "Markup", author_name: "Author", language: "en" },
+    outline,
+    null,
+  );
+  const zip = await JSZip.loadAsync(epub);
+  const section = await readZipText(zip, "OEBPS/text/section-1.xhtml");
+
+  assertStringIncludes(
+    section,
+    "<strong>APPLICATION FOR STABLE PERSONHOOD</strong>",
+  );
+  assertStringIncludes(section, "Use &lt;care&gt; &amp; caution.");
+  assertEquals(section.includes("**APPLICATION FOR STABLE PERSONHOOD**"), false);
+});
+
 Deno.test("EPUB writer: emits Kindle-friendly reflowable typography", () => {
   const src = Deno.readTextFileSync(new URL("./_epub_writer.ts", import.meta.url));
   assertStringIncludes(src, "margin: 0;");
