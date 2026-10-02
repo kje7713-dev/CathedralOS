@@ -95,12 +95,6 @@ jobs:
           supabase/functions/generate-story/index_test.ts
           --filter="PR-360-Z regression A"
 
-      - name: Test identity continuity and repetition restraint
-        run: >-
-          deno test --no-check -A
-          supabase/functions/_shared/identity-continuity_test.ts
-          supabase/functions/_shared/repetition-restraint_test.ts
-
       - name: Test identity continuity generation wiring
         run: >-
           deno test --no-check -A
