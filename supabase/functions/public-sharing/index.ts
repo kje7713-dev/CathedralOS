@@ -110,10 +110,31 @@ function parsePayloadJSON(input: unknown, fallback: unknown = {}): unknown {
   return fallback;
 }
 
+type PublicAgeRating = "all_ages" | "13_plus" | "16_plus" | "18_plus";
+
+export function normalizePublicAgeRating(rawValue: unknown): { ageRating: PublicAgeRating; minimumAge: number } {
+  const value = typeof rawValue === "string"
+    ? rawValue.trim().toLowerCase().replace(/[- ]/g, "_")
+    : "";
+  if (["13_plus", "pg13", "pg_13", "teen", "young_adult", "ya"].includes(value)) {
+    return { ageRating: "13_plus", minimumAge: 13 };
+  }
+  if (["16_plus", "16", "mature_teen"].includes(value)) {
+    return { ageRating: "16_plus", minimumAge: 16 };
+  }
+  if (["18_plus", "18", "r", "nc17", "nc_17", "adult", "mature"].includes(value)) {
+    return { ageRating: "18_plus", minimumAge: 18 };
+  }
+  // Blank and unknown values stay baseline-safe; never infer adult content.
+  return { ageRating: "all_ages", minimumAge: 0 };
+}
+
 function deriveAudienceFields(sourcePayloadJSON: unknown): {
   readingLevel: string | null;
   contentRating: string | null;
   audienceNotes: string | null;
+  ageRating: PublicAgeRating;
+  minimumAge: number;
 } {
   const payload = sourcePayloadJSON as Record<string, unknown> | null;
   const project = payload?.project as Record<string, unknown> | undefined;
@@ -126,7 +147,8 @@ function deriveAudienceFields(sourcePayloadJSON: unknown): {
   const audienceNotes = typeof project?.audienceNotes === "string"
     ? project.audienceNotes
     : null;
-  return { readingLevel, contentRating, audienceNotes };
+  const age = normalizePublicAgeRating(contentRating);
+  return { readingLevel, contentRating, audienceNotes, ...age };
 }
 
 async function getAuthenticatedUserId(
@@ -395,6 +417,7 @@ export async function handler(
         : "";
       return {
         sharedOutputID: String(row.id ?? ""),
+        isOwner: authenticatedUserId === ownerUserID,
         shareTitle: typeof row.share_title === "string" ? row.share_title : "",
         shareExcerpt: typeof row.share_excerpt === "string"
           ? row.share_excerpt
@@ -412,6 +435,8 @@ export async function handler(
           ? row.generation_length_mode
           : null,
         contentRating: audience.contentRating,
+        ageRating: audience.ageRating,
+        minimumAge: audience.minimumAge,
         readingLevel: audience.readingLevel,
         coverImagePath: typeof row.cover_image_path === "string"
           ? row.cover_image_path
@@ -553,6 +578,8 @@ export async function handler(
         shareURL: buildShareURL(publicShareBaseURL, sharedOutputID),
         readingLevel: audience.readingLevel,
         contentRating: audience.contentRating,
+        ageRating: audience.ageRating,
+        minimumAge: audience.minimumAge,
         audienceNotes: audience.audienceNotes,
         sourcePayloadJSON: allowRemix
           ? JSON.stringify(sourcePayload ?? {})
@@ -840,7 +867,7 @@ export async function handler(
       "shared_outputs",
     )
       .select(
-        "id, owner_user_id, content_type, visibility, unpublished_at, export_metadata_id",
+        "id, owner_user_id, content_type, visibility, unpublished_at, export_metadata_id, source_payload_json",
       )
       .eq("id", sharedOutputID).maybeSingle();
     if (
@@ -884,6 +911,7 @@ export async function handler(
         500,
       );
     }
+    const audience = deriveAudienceFields(shared.source_payload_json);
     return jsonResponse({
       signedURL: signed.signedUrl,
       expiresAt: new Date(Date.now() + 300000).toISOString(),
@@ -891,6 +919,8 @@ export async function handler(
       bookTitle: exportRow.book_title,
       authorName: exportRow.author_name,
       epubSHA256: exportRow.epub_sha256 ?? "",
+      ageRating: audience.ageRating,
+      minimumAge: audience.minimumAge,
     });
   }
 

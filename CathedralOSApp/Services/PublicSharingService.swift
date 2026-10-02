@@ -1,4 +1,63 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(DeclaredAgeRange)
+import DeclaredAgeRange
+#endif
+
+// MARK: - Viewer age range
+
+protocol ViewerAgeRangeProviding {
+    func requestViewerAgeTier() async -> StoryViewerAgeTier
+}
+
+/// Uses Apple's Declared Age Range API when available. Older iOS versions,
+/// simulator/unentitled environments, declined sharing, and errors all fall
+/// back to the baseline-safe unknown tier.
+struct AppleViewerAgeRangeProvider: ViewerAgeRangeProviding {
+    func requestViewerAgeTier() async -> StoryViewerAgeTier {
+        #if canImport(DeclaredAgeRange) && canImport(UIKit)
+        guard #available(iOS 26.0, *) else { return .unknown }
+        guard let anchor = await MainActor.run(body: keyWindowViewController) else { return .unknown }
+        do {
+            let response = try await AgeRangeService.shared.requestAgeRange(
+                ageGates: 13, 16, 18, in: anchor
+            )
+            switch response {
+            case .declinedSharing:
+                return .unknown
+            case .sharing(let range):
+                return Self.viewerTier(lowerBound: range.lowerBound, upperBound: range.upperBound)
+            @unknown default:
+                return .unknown
+            }
+        } catch {
+            return .unknown
+        }
+        #else
+        return .unknown
+        #endif
+    }
+
+    #if canImport(UIKit)
+    @MainActor
+    private func keyWindowViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return scenes.flatMap(\.windows).first(where: { $0.isKeyWindow })?.rootViewController
+    }
+    #endif
+
+    private static func viewerTier(lowerBound: Int?, upperBound: Int?) -> StoryViewerAgeTier {
+        if let upperBound, upperBound < 13 { return .under13 }
+        if let lowerBound {
+            if lowerBound >= 18 { return .age18Plus }
+            if lowerBound >= 16 { return .age16To17 }
+            if lowerBound >= 13 { return .age13To15 }
+        }
+        return .unknown
+    }
+}
 
 // MARK: - PublicSharingServiceError
 

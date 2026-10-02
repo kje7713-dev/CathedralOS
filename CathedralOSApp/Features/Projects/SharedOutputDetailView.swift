@@ -13,23 +13,27 @@ struct SharedOutputDetailView: View {
     let remixEventService: RemixEventServiceProtocol
     let authService: AuthService
     let hiddenService: HiddenSharedOutputsService
+    let ageProvider: ViewerAgeRangeProviding
 
     init(sharedOutputID: String,
          sharingService: PublicSharingService = BackendPublicSharingService(),
          remixEventService: RemixEventServiceProtocol = BackendRemixEventService(),
          authService: AuthService = BackendAuthService.shared,
-         hiddenService: HiddenSharedOutputsService = UserDefaultsHiddenSharedOutputsService()) {
+         hiddenService: HiddenSharedOutputsService = UserDefaultsHiddenSharedOutputsService(),
+         ageProvider: ViewerAgeRangeProviding = AppleViewerAgeRangeProvider()) {
         self.sharedOutputID = sharedOutputID
         self.sharingService = sharingService
         self.remixEventService = remixEventService
         self.authService = authService
         self.hiddenService = hiddenService
+        self.ageProvider = ageProvider
     }
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
     @State private var detail: SharedOutputDetail?
+    @State private var viewerAgeTier: StoryViewerAgeTier = .unknown
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var copiedText = false
@@ -255,6 +259,7 @@ struct SharedOutputDetailView: View {
                     let display = GenerationLengthMode(rawValue: lengthMode)?.displayName ?? lengthMode.capitalized
                     metaRow(label: "Length", value: display)
                 }
+                metaRow(label: "Age", value: detail.ageRating.displayName)
                 if let rating = detail.contentRating, !rating.isEmpty {
                     metaRow(label: "Rating", value: rating.capitalized)
                 }
@@ -516,6 +521,15 @@ struct SharedOutputDetailView: View {
         epubReadError = nil
         defer { isLoadingEPUB = false }
         do {
+            guard isOwner(of: detail) || canView(contentMinimumAge: detail.minimumAge, viewerTier: viewerAgeTier) else {
+                epubReadError = "This book is not available for your age range."
+                return
+            }
+            let response = try await sharingService.fetchSharedEpubDownload(sharedOutputID: detail.sharedOutputID)
+            guard isOwner(of: detail) || canView(contentMinimumAge: response.minimumAge, viewerTier: viewerAgeTier) else {
+                epubReadError = "This book is not available for your age range."
+                return
+            }
             let url = try await SharedEPUBDownloader(sharingService: sharingService)
                 .downloadOrCache(sharedOutputID: detail.sharedOutputID)
             readerURL = url
@@ -531,6 +545,10 @@ struct SharedOutputDetailView: View {
         isRemixing = true
         defer { isRemixing = false }
         do {
+            guard isOwner(of: detail) || canView(contentMinimumAge: detail.minimumAge, viewerTier: viewerAgeTier) else {
+                remixError = "This story is not available for your age range."
+                return
+            }
             let project = try SharedOutputRemixMapper.remix(from: detail)
             modelContext.insert(project)
             // Record the remix event to the backend. Failures are non-fatal: the local
@@ -600,7 +618,18 @@ struct SharedOutputDetailView: View {
         loadError = nil
         defer { isLoading = false }
         do {
-            detail = try await sharingService.fetchDetail(sharedOutputID: sharedOutputID)
+            let fetchedDetail = try await sharingService.fetchDetail(sharedOutputID: sharedOutputID)
+            detail = fetchedDetail
+            if isOwner(of: fetchedDetail) {
+                viewerAgeTier = .age18Plus
+            } else {
+                viewerAgeTier = await ageProvider.requestViewerAgeTier()
+                guard canView(contentMinimumAge: fetchedDetail.minimumAge, viewerTier: viewerAgeTier) else {
+                    detail = nil
+                    loadError = "This shared story is not available for your age range."
+                    return
+                }
+            }
         } catch {
             loadError = PublicSharingServiceError.displayMessage(from: error)
         }

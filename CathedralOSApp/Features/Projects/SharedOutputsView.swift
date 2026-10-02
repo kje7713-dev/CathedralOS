@@ -7,20 +7,27 @@ import SwiftUI
 struct SharedOutputsView: View {
     let sharingService: PublicSharingService
     let hiddenService: HiddenSharedOutputsService
+    let ageProvider: ViewerAgeRangeProviding
 
     init(sharingService: PublicSharingService = BackendPublicSharingService(),
-         hiddenService: HiddenSharedOutputsService = UserDefaultsHiddenSharedOutputsService()) {
+         hiddenService: HiddenSharedOutputsService = UserDefaultsHiddenSharedOutputsService(),
+         ageProvider: ViewerAgeRangeProviding = AppleViewerAgeRangeProvider()) {
         self.sharingService = sharingService
         self.hiddenService = hiddenService
+        self.ageProvider = ageProvider
     }
 
     @State private var items: [SharedOutputListItem] = []
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var hiddenIDs: Set<String> = []
+    @State private var viewerAgeTier: StoryViewerAgeTier = .unknown
 
     private var visibleItems: [SharedOutputListItem] {
-        items.filter { !hiddenIDs.contains($0.sharedOutputID) }
+        return items.filter {
+            !hiddenIDs.contains($0.sharedOutputID) &&
+            ($0.isOwner || canView(contentMinimumAge: $0.minimumAge, viewerTier: viewerAgeTier))
+        }
     }
 
     private static let dateFormatter: DateFormatter = {
@@ -61,7 +68,8 @@ struct SharedOutputsView: View {
                 SharedOutputDetailView(
                     sharedOutputID: item.sharedOutputID,
                     sharingService: sharingService,
-                    hiddenService: hiddenService
+                    hiddenService: hiddenService,
+                    ageProvider: ageProvider
                 )
             }
             .task { await load() }
@@ -146,6 +154,7 @@ struct SharedOutputsView: View {
         loadError = nil
         defer { isLoading = false }
         do {
+            viewerAgeTier = await ageProvider.requestViewerAgeTier()
             items = try await sharingService.fetchPublicList()
             hiddenIDs = hiddenService.hiddenIDs
         } catch {

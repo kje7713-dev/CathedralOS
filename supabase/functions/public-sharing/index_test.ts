@@ -2,7 +2,7 @@ import {
   assert,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { epubPublicationOwnerMatches, handler } from "./index.ts";
+import { epubPublicationOwnerMatches, handler, normalizePublicAgeRating } from "./index.ts";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-2222-2222-222222222222";
@@ -363,4 +363,14 @@ Deno.test("remix-events inserts an event for an unblocked creator", async () => 
   );
   assertEquals(response.status, 204);
   assertEquals(client.state.writes.filter((row: Record<string, unknown>) => row.shared_output_id === SHARED_ID).length, 1);
+});
+
+
+Deno.test("normalizePublicAgeRating maps legacy ratings and keeps unknown values baseline-safe", () => {
+  assertEquals(normalizePublicAgeRating("g"), { ageRating: "all_ages", minimumAge: 0 });
+  assertEquals(normalizePublicAgeRating("PG"), { ageRating: "all_ages", minimumAge: 0 });
+  assertEquals(normalizePublicAgeRating("pg_13"), { ageRating: "13_plus", minimumAge: 13 });
+  assertEquals(normalizePublicAgeRating("r"), { ageRating: "18_plus", minimumAge: 18 });
+  assertEquals(normalizePublicAgeRating("unknown"), { ageRating: "all_ages", minimumAge: 0 });
+  assertEquals(normalizePublicAgeRating(""), { ageRating: "all_ages", minimumAge: 0 });
 });
