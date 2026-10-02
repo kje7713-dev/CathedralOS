@@ -55,6 +55,7 @@ CONTEXT YOU WILL RECEIVE:
 
 FIND INCONSISTENCIES. Categories include but are not limited to:
 - Contradictions with prior canon (character states, locations, plot events, continuity facts)
+- Stable character identity drift (names, pronouns, identity terms, kinship, species, fixed physical traits) that conflicts with prior canon unless the current section explicitly establishes an intentional change
 - Output contradicts the current section\'s intended premise/summary/POV/container
 - Internal inconsistencies within the output itself (POV shifts, character/name confusion, impossible sequencing, factual self-contradictions)
 - Unresolved plot threads being silently dropped, or open threads being prematurely closed
@@ -63,7 +64,7 @@ FIND INCONSISTENCIES. Categories include but are not limited to:
 FOR EACH FINDING, write \`reason\` as a one-sentence plain-English explanation. Cite the contradicting canon element when the inconsistency is canon-related. When the inconsistency is entirely inside the output (no canon element to cite), state that explicitly.
 
 SEVERITY:
-- "high" — clear factual contradiction, premise mismatch, or POV drift
+- "high" — clear factual contradiction, stable identity/pronoun contradiction, premise mismatch, or POV drift
 - "warn" — softer concern (anachronism, lesser inconsistency)
 
 If there are no real inconsistencies, return {"warnings": []}.`;
