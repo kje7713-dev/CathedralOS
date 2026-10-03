@@ -108,7 +108,7 @@ values (
       'status', 'draft'
     ))
   ))),
-  'security-test'
+  'sync'
 );
 select ok(exists (
   select 1 from public.outline_sections where id = '00000000-0000-4000-8000-000000009905'
