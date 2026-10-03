@@ -37,8 +37,13 @@ with fact_rows as (
       'i'
     ) as parts
   from public.section_embeddings se
-  cross join lateral jsonb_array_elements(se.continuity_facts)
-    with ordinality as fact(value, ordinality)
+  cross join lateral jsonb_array_elements(
+    case
+      when jsonb_typeof(se.continuity_facts) = 'array'
+        then se.continuity_facts
+      else '[]'::jsonb
+    end
+  ) with ordinality as fact(value, ordinality)
 ),
 normalized as (
   select
