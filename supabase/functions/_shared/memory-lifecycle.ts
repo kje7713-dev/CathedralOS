@@ -21,6 +21,50 @@ function semanticReference(prefix: string, value: string): string {
   return `${prefix}:${normalized}`;
 }
 
+function identityFactReference(fact: string): string {
+  const match = /^character:([^:]+):identity:([^:]+):/i.exec(fact);
+  if (!match) return "";
+  const character = key(match[1]).replace(/\s+/g, "-");
+  const attribute = key(match[2]).replace(/\s+/g, "-");
+  return character && attribute
+    ? `character:${character}:identity:${attribute}`
+    : "";
+}
+
+function factReference(item: AnyRecord): string {
+  const fact = text(item.fact) || text(item.description);
+  return identityFactReference(fact) ||
+    text(item.reference) ||
+    semanticReference("fact", fact);
+}
+
+function priorFactReference(
+  existing: AnyRecord[],
+  supplied: string,
+  currentFact: string,
+): string {
+  if (!supplied) return "";
+  if (existing.some((candidate) => factReference(candidate) === supplied)) {
+    return supplied;
+  }
+
+  const currentIdentity = identityFactReference(currentFact);
+  if (!currentIdentity) return supplied;
+  const currentAttribute = currentIdentity.slice(
+    currentIdentity.lastIndexOf(":") + 1,
+  );
+
+  const legacyMatches = existing.filter((candidate) => {
+    if (text(candidate.reference) !== supplied) return false;
+    const candidateIdentity = identityFactReference(
+      text(candidate.fact) || text(candidate.description),
+    );
+    return candidateIdentity.endsWith(`:identity:${currentAttribute}`);
+  });
+  const canonical = new Set(legacyMatches.map(factReference));
+  return canonical.size === 1 ? [...canonical][0] : supplied;
+}
+
 function priorItems(rows: MemoryRow[], field: keyof MemoryRow): AnyRecord[] {
   const items: AnyRecord[] = [];
   for (const row of rows) {
@@ -160,10 +204,9 @@ function reconcileFacts(
       : (raw && typeof raw === "object" ? raw as AnyRecord : {});
     const fact = text(item.fact) || text(item.description);
     if (!fact) continue;
-    const reference = text(item.reference) || semanticReference("fact", fact);
+    const reference = factReference(item);
     const matches = existing.filter((candidate) =>
-      (text(candidate.reference) ||
-        semanticReference("fact", text(candidate.fact))) === reference
+      factReference(candidate) === reference
     );
     const distinctIds = new Set(
       matches.map((candidate) =>
@@ -174,13 +217,16 @@ function reconcileFacts(
       throw new Error(`ambiguous fact reference: ${reference}`);
     }
     const match = matches[matches.length - 1];
-    const replacement = text(item.prior_fact_reference);
+    const replacement = priorFactReference(
+      existing,
+      text(item.prior_fact_reference),
+      fact,
+    );
     let supersedesPrior = false;
     if (text(item.operation) === "supersede") {
       const priorMatches = replacement
         ? existing.filter((candidate) =>
-          (text(candidate.reference) ||
-              semanticReference("fact", text(candidate.fact))) === replacement &&
+          factReference(candidate) === replacement &&
           candidate.active !== false
         )
         : [];

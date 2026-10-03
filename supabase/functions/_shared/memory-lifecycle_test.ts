@@ -340,6 +340,83 @@ Deno.test("first lifecycle hints establish safe canonical identities", () => {
   assertEquals(typeof result.open_loops[0].id, "string");
 });
 
+Deno.test("character identity facts canonicalize model-supplied entity references", () => {
+  const prior = {
+    continuity_facts: [{
+      id: "name-fact",
+      reference: "Dr. Sela Aro",
+      fact: "character:Dr. Sela Aro:identity:name:Dr. Sela Aro",
+      active: true,
+    }, {
+      id: "pronoun-fact",
+      reference: "Dr. Sela Aro",
+      fact: "character:Dr. Sela Aro:identity:pronouns:she/her",
+      active: true,
+    }, {
+      id: "role-fact",
+      reference: "Dr. Sela Aro",
+      fact: "character:Dr. Sela Aro:identity:role:doctor",
+      active: true,
+    }],
+  };
+
+  const result = reconcileSceneMemory([prior], {
+    continuity_facts: [{
+      operation: "preserve",
+      reference: "Dr. Sela Aro",
+      fact: "character:Dr. Sela Aro:identity:pronouns:she/her",
+      prior_fact_reference: null,
+    }],
+  }, "s24");
+
+  assertEquals(result.continuity_facts.length, 1);
+  assertEquals(result.continuity_facts[0].id, "pronoun-fact");
+  assertEquals(
+    result.continuity_facts[0].reference,
+    "character:dr-sela-aro:identity:pronouns",
+  );
+  assertEquals(result.continuity_facts[0].operation, "preserve");
+});
+
+Deno.test("legacy character-name supersede reference resolves by identity attribute", () => {
+  const prior = {
+    continuity_facts: [{
+      id: "pronoun-fact",
+      reference: "Dr. Sela Aro",
+      fact: "character:Dr. Sela Aro:identity:pronouns:she/her",
+      active: true,
+    }, {
+      id: "role-fact",
+      reference: "Dr. Sela Aro",
+      fact: "character:Dr. Sela Aro:identity:role:doctor",
+      active: true,
+    }],
+  };
+
+  const result = reconcileSceneMemory([prior], {
+    continuity_facts: [{
+      operation: "supersede",
+      reference: "Dr. Sela Aro",
+      fact: "character:Dr. Sela Aro:identity:pronouns:they/them",
+      prior_fact_reference: "Dr. Sela Aro",
+    }],
+  }, "s25");
+
+  assertEquals(result.continuity_facts.length, 2);
+  assertEquals(result.continuity_facts[0].id, "pronoun-fact");
+  assertEquals(result.continuity_facts[0].active, false);
+  assertEquals(
+    result.continuity_facts[0].superseded_by,
+    "character:dr-sela-aro:identity:pronouns",
+  );
+  assertEquals(result.continuity_facts[1].id, "pronoun-fact");
+  assertEquals(result.continuity_facts[1].active, true);
+  assertEquals(
+    result.continuity_facts[1].reference,
+    "character:dr-sela-aro:identity:pronouns",
+  );
+});
+
 Deno.test("legacy random IDs do not override semantic matching", () => {
   const result = reconcileSceneMemory([{
     plot_thread_deltas: [{
