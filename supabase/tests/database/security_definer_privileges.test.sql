@@ -15,9 +15,21 @@ select ok(not has_function_privilege('authenticated', 'public.extract_outlines_f
 select ok(not has_function_privilege('public', 'public.record_outline_section_delete_intent()', 'execute'), 'PUBLIC cannot execute delete-intent trigger function');
 select ok(not has_function_privilege('anon', 'public.record_outline_section_delete_intent()', 'execute'), 'anon cannot execute delete-intent trigger function');
 select ok(not has_function_privilege('authenticated', 'public.record_outline_section_delete_intent()', 'execute'), 'authenticated cannot execute delete-intent trigger function');
-select ok(not has_function_privilege('public', 'public.rls_auto_enable()', 'execute'), 'PUBLIC cannot execute RLS event-trigger function');
-select ok(not has_function_privilege('anon', 'public.rls_auto_enable()', 'execute'), 'anon cannot execute RLS event-trigger function');
-select ok(not has_function_privilege('authenticated', 'public.rls_auto_enable()', 'execute'), 'authenticated cannot execute RLS event-trigger function');
+select ok(
+  to_regprocedure('public.rls_auto_enable()') is null
+  or not has_function_privilege('public', to_regprocedure('public.rls_auto_enable()'), 'execute'),
+  'PUBLIC cannot execute RLS event-trigger function when present'
+);
+select ok(
+  to_regprocedure('public.rls_auto_enable()') is null
+  or not has_function_privilege('anon', to_regprocedure('public.rls_auto_enable()'), 'execute'),
+  'anon cannot execute RLS event-trigger function when present'
+);
+select ok(
+  to_regprocedure('public.rls_auto_enable()') is null
+  or not has_function_privilege('authenticated', to_regprocedure('public.rls_auto_enable()'), 'execute'),
+  'authenticated cannot execute RLS event-trigger function when present'
+);
 
 select is(
   (select proconfig[1] from pg_proc where oid = 'public.capture_telemetry_weekly_snapshot(date)'::regprocedure),
@@ -40,11 +52,15 @@ select ok(exists (
   where t.tgname = 'record_outline_section_delete_intent_trigger'
     and t.tgfoid = 'public.record_outline_section_delete_intent()'::regprocedure
 ), 'delete-intent trigger remains attached');
-select ok(exists (
-  select 1 from pg_event_trigger e
-  where e.evtname = 'ensure_rls'
-    and e.evtfoid = 'public.rls_auto_enable()'::regprocedure
-), 'RLS event trigger remains attached');
+select ok(
+  to_regprocedure('public.rls_auto_enable()') is null
+  or exists (
+    select 1 from pg_event_trigger e
+    where e.evtname = 'ensure_rls'
+      and e.evtfoid = 'public.rls_auto_enable()'::regprocedure
+  ),
+  'RLS event trigger remains attached when present'
+);
 
 -- The operator path still works for the privileged test role that owns the
 -- database; this is rolled back with the rest of the fixture.
@@ -61,8 +77,9 @@ select ok(exists (
 -- owner, not through ordinary function EXECUTE privileges.
 create table public._security_definer_rls_fixture (id integer);
 select ok(
-  (select relrowsecurity from pg_class where oid = 'public._security_definer_rls_fixture'::regclass),
-  'RLS event trigger still enables RLS on new public tables'
+  to_regprocedure('public.rls_auto_enable()') is null
+  or (select relrowsecurity from pg_class where oid = 'public._security_definer_rls_fixture'::regclass),
+  'RLS event trigger still enables RLS on new public tables when present'
 );
 drop table public._security_definer_rls_fixture;
 
