@@ -85,10 +85,10 @@ drop table public._security_definer_rls_fixture;
 
 -- Row triggers likewise invoke their SECURITY DEFINER functions without
 -- requiring the DML role to have direct EXECUTE on those functions.
-set local role service_role;
 insert into auth.users (id, aud, role, email)
 values ('00000000-0000-4000-8000-000000009901', 'authenticated', 'authenticated', 'security-definer-test@example.invalid')
 on conflict (id) do nothing;
+set local role service_role;
 insert into public.project_snapshots (id, user_id, local_project_id, lineage_id, snapshot_json, source)
 values (
   '00000000-0000-4000-8000-000000009902',
