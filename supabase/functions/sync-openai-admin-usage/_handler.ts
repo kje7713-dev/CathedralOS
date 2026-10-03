@@ -329,10 +329,19 @@ export async function handler(
         fetchImpl,
       ),
     ]);
-    const [costRows, usageRows] = await Promise.all([
-      parseCostRows(costBuckets, deps.projectId, syncedAt),
-      parseUsageRows(usageBuckets, deps.projectId, syncedAt),
-    ]);
+    // Validate costs before starting usage hashing. If the provider sends an
+    // invalid cost row, return immediately without leaving a concurrent
+    // crypto.subtle.digest operation behind in the caller/test runtime.
+    const costRows = await parseCostRows(
+      costBuckets,
+      deps.projectId,
+      syncedAt,
+    );
+    const usageRows = await parseUsageRows(
+      usageBuckets,
+      deps.projectId,
+      syncedAt,
+    );
     const { data, error } = await deps.db.rpc(
       "reconcile_openai_admin_usage",
       {
