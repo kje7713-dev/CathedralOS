@@ -57,7 +57,7 @@ select ok(
   or exists (
     select 1 from pg_event_trigger e
     where e.evtname = 'ensure_rls'
-      and e.evtfoid = 'public.rls_auto_enable()'::regprocedure
+      and e.evtfoid = to_regprocedure('public.rls_auto_enable()')
   ),
   'RLS event trigger remains attached when present'
 );
