@@ -39,23 +39,26 @@ struct SharedOutputsView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                storyDonkeyHeader
-                Group {
-                    if isLoading {
-                        loadingState
-                    } else if let loadError {
-                        errorState(loadError)
-                    } else if visibleItems.isEmpty {
-                        emptyState
-                    } else {
-                        itemList
-                    }
+            Group {
+                if isLoading {
+                    loadingState
+                } else if let loadError {
+                    errorState(loadError)
+                } else if visibleItems.isEmpty {
+                    emptyState
+                } else {
+                    itemList
                 }
             }
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Image("StoryDonkeyWordmark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 170, height: 32)
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         Task { await load() }
@@ -80,16 +83,6 @@ struct SharedOutputsView: View {
     }
 
     // MARK: Subviews
-
-    private var storyDonkeyHeader: some View {
-        Image("StoryDonkeyWordmark")
-            .resizable()
-            .scaledToFit()
-            .frame(maxWidth: 260)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, CathedralTheme.Spacing.base)
-            .padding(.vertical, CathedralTheme.Spacing.sm)
-    }
 
     private var loadingState: some View {
         VStack(spacing: CathedralTheme.Spacing.md) {
