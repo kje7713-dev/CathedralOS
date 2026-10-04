@@ -39,15 +39,18 @@ struct SharedOutputsView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if isLoading {
-                    loadingState
-                } else if let loadError {
-                    errorState(loadError)
-                } else if visibleItems.isEmpty {
-                    emptyState
-                } else {
-                    itemList
+            VStack(spacing: 0) {
+                storyDonkeyHeader
+                Group {
+                    if isLoading {
+                        loadingState
+                    } else if let loadError {
+                        errorState(loadError)
+                    } else if visibleItems.isEmpty {
+                        emptyState
+                    } else {
+                        itemList
+                    }
                 }
             }
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
@@ -78,6 +81,16 @@ struct SharedOutputsView: View {
     }
 
     // MARK: Subviews
+
+    private var storyDonkeyHeader: some View {
+        Image("StoryDonkeyWordmark")
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: 260)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, CathedralTheme.Spacing.base)
+            .padding(.vertical, CathedralTheme.Spacing.sm)
+    }
 
     private var loadingState: some View {
         VStack(spacing: CathedralTheme.Spacing.md) {
