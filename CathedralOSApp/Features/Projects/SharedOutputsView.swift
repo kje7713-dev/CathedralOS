@@ -54,7 +54,7 @@ struct SharedOutputsView: View {
                 }
             }
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
