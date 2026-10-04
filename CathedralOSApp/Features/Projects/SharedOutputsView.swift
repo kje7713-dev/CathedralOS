@@ -57,7 +57,7 @@ struct SharedOutputsView: View {
                     Image("StoryDonkeyWordmark")
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 170, height: 32)
+                        .frame(width: 220, height: 40)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
