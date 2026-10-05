@@ -58,6 +58,7 @@ struct SharedOutputsView: View {
                         .resizable()
                         .scaledToFit()
                         .frame(width: 260)
+                        .offset(x: 48)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
