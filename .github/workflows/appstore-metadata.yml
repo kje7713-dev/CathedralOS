@@ -1,0 +1,44 @@
+name: App Store Metadata
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Write checked-in metadata to App Store Connect (default is dry-run)'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: Synchronize App Store metadata
+    runs-on: macos-26
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+      APP_IDENTIFIER: ${{ secrets.APP_IDENTIFIER }}
+      APPLY: ${{ inputs.apply }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      - name: Validate API secret presence
+        run: |
+          test -n "$ASC_KEY_ID" || { echo 'ASC_KEY_ID is missing'; exit 1; }
+          test -n "$ASC_ISSUER_ID" || { echo 'ASC_ISSUER_ID is missing'; exit 1; }
+          test -n "$ASC_API_KEY" || { echo 'ASC_API_KEY is missing'; exit 1; }
+          test -n "$APP_IDENTIFIER" || { echo 'APP_IDENTIFIER is missing'; exit 1; }
+          echo "App Store metadata mode: $([[ "$APPLY" == 'true' ]] && echo apply || echo dry-run)"
+
+      - name: Synchronize metadata
+        run: bundle exec fastlane ios appstore_metadata

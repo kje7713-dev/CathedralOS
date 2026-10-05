@@ -338,6 +338,36 @@ platform :ios do
   end
 
   # ---------------------------------------------------------------------------
+  # appstore_metadata — synchronize checked-in App Store metadata through the
+  # App Store Connect API. Defaults to dry-run; set APPLY=true to write.
+  # ---------------------------------------------------------------------------
+  lane :appstore_metadata do
+    preflight_checks(%w[ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY APP_IDENTIFIER])
+
+    app_store_connect_api_key(
+      key_id:                ENV["ASC_KEY_ID"],
+      issuer_id:             ENV["ASC_ISSUER_ID"],
+      key_content:           ENV["ASC_API_KEY"],
+      is_key_content_base64: true,
+      in_house:              false
+    )
+
+    apply_changes = ENV["APPLY"].to_s.downcase == "true"
+    UI.message(apply_changes ? "Applying App Store metadata …" : "Dry run: no App Store metadata will be changed.")
+
+    deliver(
+      app_identifier:          ENV["APP_IDENTIFIER"],
+      metadata_path:           "./fastlane/metadata",
+      skip_binary_upload:      true,
+      skip_screenshots:        true,
+      submit_for_review:       false,
+      run_precheck_before_submit: false,
+      force:                   apply_changes,
+      dry_run:                 !apply_changes
+    )
+  end
+
+  # ---------------------------------------------------------------------------
   # verify_profile_entitlements — verify the installed App Store provisioning
   # profile includes the Sign in with Apple entitlement.
   #
