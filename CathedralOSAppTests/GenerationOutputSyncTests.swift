@@ -1096,7 +1096,9 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
     private var tempDirectory: URL!
 
     override func setUpWithError() throws {
-        let schema = Schema([GenerationOutput.self, StoryProject.self])
+        let schema = Schema([
+            GenerationOutput.self, StoryProject.self, Outline.self, OutlineSection.self, PromptPack.self
+        ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         container = try ModelContainer(for: schema, configurations: config)
         tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1397,6 +1399,12 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         let context = ModelContext(container)
         let selectedProject = StoryProject(name: "Selected")
         let otherProject = StoryProject(name: "Other")
+        let outline = Outline(name: "Selected Outline")
+        outline.project = selectedProject
+        let section = OutlineSection(position: 0, title: "Selected Section")
+        section.outline = outline
+        let recipe = PromptPack(name: "Selected Recipe")
+        recipe.project = selectedProject
         let cloudOutput = GenerationOutput(title: "Cloud")
         cloudOutput.project = selectedProject
         cloudOutput.cloudGenerationOutputID = cloudID
@@ -1407,6 +1415,9 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         unrelatedOutput.project = otherProject
         context.insert(selectedProject)
         context.insert(otherProject)
+        context.insert(outline)
+        context.insert(section)
+        context.insert(recipe)
         context.insert(cloudOutput)
         context.insert(localOutput)
         context.insert(unrelatedOutput)
@@ -1429,12 +1440,16 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         XCTAssertEqual(deletedCloudIDs, [cloudID])
         XCTAssertEqual(try context.fetch(FetchDescriptor<GenerationOutput>()).map(\.title), ["Unrelated"])
         XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.name).sorted(), ["Other", "Selected"])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Outline>()).map(\.name), ["Selected Outline"])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<OutlineSection>()).map(\.title), ["Selected Section"])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<PromptPack>()).map(\.name), ["Selected Recipe"])
         XCTAssertEqual(tombstones.recorded.map(\.deletionScope), [.everywhere, .localOnly])
     }
 
     func testDeleteAllKeepsCloudFailureLocalRowAndDeletesSuccessfulRows() async throws {
-        let successfulCloudID = "56565656-5656-5656-5656-565656565656"
-        let failedCloudID = "78787878-7878-7878-7878-787878787878"
+        let successfulCloudIDA = "56565656-5656-5656-5656-565656565656"
+        let failedCloudIDB = "78787878-7878-7878-7878-787878787878"
+        let successfulCloudIDC = "12121212-3434-5656-7878-909090909090"
         let userID = "90909090-9090-9090-9090-909090909090"
         let auth = MockSyncAuthService(
             authState: .signedIn(AuthUser(id: userID, email: nil)),
@@ -1444,27 +1459,34 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         let config = ValidatedSupabaseConfiguration.makeForTesting(
             projectURL: URL(string: "https://example.supabase.co")!
         )
+        var requestedCloudIDs: [String] = []
         GenerationOutputSyncURLProtocol.requestHandler = { request in
             let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
-            let cloudID = query?.first(where: { $0.name == "id" })?.value?.replacingOccurrences(of: "eq.", with: "")
-            let status = cloudID == failedCloudID ? 503 : 200
+            let cloudID = try XCTUnwrap(query?.first(where: { $0.name == "id" })?.value?.replacingOccurrences(of: "eq.", with: ""))
+            requestedCloudIDs.append(cloudID)
+            let status = cloudID == failedCloudIDB ? 503 : 200
             let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: status, httpVersion: nil, headerFields: nil)!
             return (response, Data("[]".utf8))
         }
 
         let context = ModelContext(container)
         let project = StoryProject(name: "Partial")
-        let success = GenerationOutput(title: "Success")
-        success.project = project
-        success.cloudGenerationOutputID = successfulCloudID
-        success.cloudOwnerUserID = userID
-        let failure = GenerationOutput(title: "Failure")
-        failure.project = project
-        failure.cloudGenerationOutputID = failedCloudID
-        failure.cloudOwnerUserID = userID
+        let successA = GenerationOutput(title: "Success A")
+        successA.project = project
+        successA.cloudGenerationOutputID = successfulCloudIDA
+        successA.cloudOwnerUserID = userID
+        let failureB = GenerationOutput(title: "Failure B")
+        failureB.project = project
+        failureB.cloudGenerationOutputID = failedCloudIDB
+        failureB.cloudOwnerUserID = userID
+        let successC = GenerationOutput(title: "Success C")
+        successC.project = project
+        successC.cloudGenerationOutputID = successfulCloudIDC
+        successC.cloudOwnerUserID = userID
         context.insert(project)
-        context.insert(success)
-        context.insert(failure)
+        context.insert(successA)
+        context.insert(failureB)
+        context.insert(successC)
         try context.save()
 
         let service = GenerationOutputDeletionService(
@@ -1478,7 +1500,11 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
 
         do {
             try await service.deleteAll(
-                inputs: [GenerationOutputDeletionInput(output: success), GenerationOutputDeletionInput(output: failure)],
+                inputs: [
+                    GenerationOutputDeletionInput(output: successA),
+                    GenerationOutputDeletionInput(output: failureB),
+                    GenerationOutputDeletionInput(output: successC)
+                ],
                 context: context
             )
             XCTFail("Expected deterministic partial-success error")
@@ -1486,14 +1512,18 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
             guard case .batchDeletionFailed(let failures) = error else {
                 return XCTFail("Unexpected error: \(error)")
             }
-            XCTAssertEqual(failures.map(\.localOutputID), [failure.id])
+            XCTAssertEqual(requestedCloudIDs, [successfulCloudIDA, failedCloudIDB, successfulCloudIDC])
+            XCTAssertEqual(failures.map(\.localOutputID), [failureB.id])
+            XCTAssertEqual(error.errorDescription, "1 generated output could not be deleted from the cloud. It was kept on this device so you can retry.")
+            XCTAssertFalse(error.errorDescription?.contains(failureB.id.uuidString) == true)
         }
 
         let remaining = try context.fetch(FetchDescriptor<GenerationOutput>())
-        XCTAssertEqual(remaining.map(\.id), [failure.id])
+        XCTAssertEqual(remaining.map(\.id), [failureB.id])
         XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.name), ["Partial"])
-        XCTAssertEqual(tombstones.recorded.count, 2, "All deletion intent must be tombstoned before network work")
-        XCTAssertEqual(tombstones.recorded.map(\.deletionScope), [.everywhere, .everywhere])
+        XCTAssertEqual(tombstones.recorded.count, 3, "All deletion intent must be tombstoned before network work")
+        XCTAssertEqual(tombstones.recorded.map(\.localEntityID), [successA.id.uuidString, failureB.id.uuidString, successC.id.uuidString])
+        XCTAssertEqual(tombstones.recorded.map(\.deletionScope), [.everywhere, .everywhere, .everywhere])
     }
 
     private func makeSession() -> URLSession {

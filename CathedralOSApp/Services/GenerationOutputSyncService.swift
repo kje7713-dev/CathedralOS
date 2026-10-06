@@ -869,8 +869,10 @@ enum GenerationOutputDeletionError: Error, LocalizedError {
         case .persistenceError(let stage, let error):
             return "Could not save output deletion (\(stage)): \(error.localizedDescription)"
         case .batchDeletionFailed(let failures):
-            let details = failures.map { "\($0.localOutputID.uuidString): \($0.message)" }.joined(separator: "\n")
-            return "Some generated outputs could not be deleted. The successful deletions were completed; retry the remaining outputs.\n\(details)"
+            let count = failures.count
+            let noun = count == 1 ? "output" : "outputs"
+            let pronoun = count == 1 ? "It was" : "They were"
+            return "\(count) generated \(noun) could not be deleted from the cloud. \(pronoun) kept on this device so you can retry."
         }
     }
 }
