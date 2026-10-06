@@ -426,6 +426,80 @@ platform :ios do
     screenshot_sets = localization.get_app_screenshot_sets
     screenshot_count = screenshot_sets.sum { |set| set.app_screenshots.to_a.length }
     UI.message("INFO: en-US screenshot count: #{screenshot_count}")
+    preview_sets = localization.get_app_preview_sets
+    preview_count = preview_sets.sum { |set| set.app_previews.to_a.length }
+    UI.message("INFO: en-US preview video count: #{preview_count}")
+
+    presence = lambda do |label, value|
+      value = value.to_s.strip
+      UI.message("#{value.empty? ? 'MISSING' : 'PRESENT'}: #{label}")
+    end
+
+    info = app.fetch_latest_app_info
+    if info
+      UI.message("INFO: app info state: #{info.state || info.app_store_state}")
+      presence.call("age rating", info.app_store_age_rating)
+      presence.call("Brazil age rating", info.brazil_age_rating)
+      presence.call("primary category", info.primary_category)
+      presence.call("secondary category", info.secondary_category)
+      begin
+        age_declaration = info.fetch_age_rating_declaration
+        presence.call("age rating declaration", age_declaration&.id)
+      rescue => error
+        UI.message("UNAVAILABLE: age rating declaration (#{error.class})")
+      end
+
+      info_localizations = info.get_app_info_localizations
+      info_localizations.each do |item|
+        next unless item.locale.to_s.start_with?("en")
+        UI.message("INFO: app-info locale #{item.locale}")
+        presence.call("#{item.locale} app name", item.name)
+        presence.call("#{item.locale} subtitle", item.subtitle)
+        presence.call("#{item.locale} privacy policy URL", item.privacy_policy_url)
+        presence.call("#{item.locale} privacy choices URL", item.privacy_choices_url)
+      end
+    else
+      UI.message("MISSING: editable app info record")
+    end
+
+    presence.call("content rights declaration", app.content_rights_declaration)
+    begin
+      territories = app.fetch_available_territories
+      UI.message("INFO: available territories: #{territories.length}")
+    rescue => error
+      UI.message("UNAVAILABLE: territory availability (#{error.class})")
+    end
+    begin
+      prices = app.fetch_app_prices
+      UI.message("INFO: configured app price records: #{prices.length}")
+    rescue => error
+      UI.message("UNAVAILABLE: app pricing (#{error.class})")
+    end
+
+    begin
+      review = version.fetch_app_store_review_detail
+      presence.call("review contact first name", review&.contact_first_name)
+      presence.call("review contact last name", review&.contact_last_name)
+      presence.call("review contact phone", review&.contact_phone)
+      presence.call("review contact email", review&.contact_email)
+      presence.call("review notes", review&.notes)
+      if review&.demo_account_required
+        presence.call("review demo account name", review.demo_account_name)
+        presence.call("review demo account password", review.demo_account_password)
+      else
+        UI.message("INFO: review demo account not marked required")
+      end
+    rescue => error
+      UI.message("UNAVAILABLE: review contact/details (#{error.class})")
+    end
+
+    begin
+      iaps = Spaceship::ConnectAPI.get_in_app_purchases(app_id: app.id).all_pages.flat_map(&:to_models)
+      UI.message("INFO: in-app purchase records: #{iaps.length}")
+    rescue => error
+      UI.message("UNAVAILABLE: in-app purchase inventory (#{error.class})")
+    end
+
     UI.message("READ-ONLY AUDIT COMPLETE: no App Store metadata was changed.")
   end
 
