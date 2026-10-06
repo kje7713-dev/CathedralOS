@@ -827,6 +827,11 @@ private struct GenerationOutputCountRecord: Decodable {
 
 // MARK: - GenerationOutputDeletionService
 
+struct GenerationOutputDeletionFailure: Error {
+    let localOutputID: UUID
+    let message: String
+}
+
 enum GenerationOutputDeletionError: Error, LocalizedError {
     case notConfigured
     case notSignedIn
@@ -837,6 +842,7 @@ enum GenerationOutputDeletionError: Error, LocalizedError {
     case cloudDeleteNotVerified
     case cloudOwnershipNotVerified
     case persistenceError(stage: String, error: Error)
+    case batchDeletionFailed([GenerationOutputDeletionFailure])
 
     var errorDescription: String? {
         switch self {
@@ -862,6 +868,9 @@ enum GenerationOutputDeletionError: Error, LocalizedError {
             return "This output's cloud ownership could not be verified. Confirm you're signed in to the account that created it, then retry. Your local copy was kept."
         case .persistenceError(let stage, let error):
             return "Could not save output deletion (\(stage)): \(error.localizedDescription)"
+        case .batchDeletionFailed(let failures):
+            let details = failures.map { "\($0.localOutputID.uuidString): \($0.message)" }.joined(separator: "\n")
+            return "Some generated outputs could not be deleted. The successful deletions were completed; retry the remaining outputs.\n\(details)"
         }
     }
 }
@@ -1262,6 +1271,9 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     func deleteAll(inputs: [GenerationOutputDeletionInput], context: ModelContext) async throws {
         guard !inputs.isEmpty else { return }
 
+        // Freeze deletion intent before any network work. Tombstones are written
+        // for every snapshot up front so a later partial failure cannot make a
+        // still-present local row reappear during sync.
         for input in inputs {
             let scope: SyncTombstone.DeletionScope = input.cloudGenerationOutputID.isEmpty
                 ? .localOnly
@@ -1269,11 +1281,35 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
             await writeTombstone(input: input, scope: scope)
         }
 
-        for input in inputs where !input.cloudGenerationOutputID.isEmpty {
-            try await deleteCloud(input: input)
+        // Each cloud deletion is independent. Keep the input order so the
+        // partial-success result and retry behavior are deterministic.
+        var locallyDeletable: [GenerationOutputDeletionInput] = []
+        var failures: [GenerationOutputDeletionFailure] = []
+        for input in inputs {
+            guard !input.cloudGenerationOutputID.isEmpty else {
+                locallyDeletable.append(input)
+                continue
+            }
+            do {
+                try await deleteCloud(input: input)
+                locallyDeletable.append(input)
+            } catch {
+                failures.append(GenerationOutputDeletionFailure(
+                    localOutputID: input.localOutputID,
+                    message: GenerationOutputDeletionError.displayMessage(from: error)
+                ))
+            }
         }
 
-        try deleteLocalBatch(inputs: inputs, context: context)
+        // One synchronous MainActor SwiftData save covers all outputs whose
+        // cloud stage succeeded (plus local-only outputs). This is best-effort
+        // batch deletion, not an atomic transaction across independent stores.
+        if !locallyDeletable.isEmpty {
+            try deleteLocalBatch(inputs: locallyDeletable, context: context)
+        }
+        if !failures.isEmpty {
+            throw GenerationOutputDeletionError.batchDeletionFailed(failures)
+        }
     }
 
     private func resolveLegacyOwnership(input: GenerationOutputDeletionInput, cloudID: String) async throws {

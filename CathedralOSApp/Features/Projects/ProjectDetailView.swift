@@ -128,6 +128,7 @@ struct ProjectDetailView: View {
     @State private var readLatestOutputID: UUID?
     @State private var outputDeletionError: String?
     @State private var showDeleteAllOutputsConfirm = false
+    @State private var pendingDeleteAllInputs: [GenerationOutputDeletionInput] = []
     @State private var isDeletingAllOutputs = false
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
@@ -437,7 +438,7 @@ struct ProjectDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Delete all \(project.generations.count) generated outputs from this project on this device and from the cloud? This cannot be undone.")
+            Text("Delete all \(pendingDeleteAllInputs.count) generated outputs from this project on this device and, when present, from the cloud? This cannot be undone.")
         }
         .alert("Output Deletion Failed", isPresented: Binding(
             get: { outputDeletionError != nil },
@@ -1277,6 +1278,9 @@ struct ProjectDetailView: View {
                 Spacer()
                 if !project.generations.isEmpty {
                     Button {
+                        // Capture scalar values before presenting confirmation so
+                        // the deletion set cannot drift while the alert is open.
+                        pendingDeleteAllInputs = project.generations.map(GenerationOutputDeletionInput.init(output:))
                         showDeleteAllOutputsConfirm = true
                     } label: {
                         Label("Delete All", systemImage: "trash")
@@ -1295,7 +1299,8 @@ struct ProjectDetailView: View {
 
     @MainActor
     private func deleteAllOutputs() async {
-        let inputs = project.generations.map(GenerationOutputDeletionInput.init(output:))
+        let inputs = pendingDeleteAllInputs
+        pendingDeleteAllInputs = []
         guard !inputs.isEmpty else { return }
         isDeletingAllOutputs = true
         defer { isDeletingAllOutputs = false }

@@ -1374,6 +1374,128 @@ final class GenerationOutputDeletionServiceTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<GenerationOutput>()), 0)
     }
 
+    func testDeleteAllDeletesCloudAndLocalOnlyOutputsWhileRetainingProjectAndOtherProjectData() async throws {
+        let cloudID = "12121212-1212-1212-1212-121212121212"
+        let userID = "34343434-3434-3434-3434-343434343434"
+        let auth = MockSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: nil)),
+            accessToken: fixtureSessionValue
+        )
+        let tombstones = MockOutputTombstoneService()
+        let config = ValidatedSupabaseConfiguration.makeForTesting(
+            projectURL: URL(string: "https://example.supabase.co")!
+        )
+        var deletedCloudIDs: [String] = []
+        GenerationOutputSyncURLProtocol.requestHandler = { request in
+            let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
+            let cloudID = query?.first(where: { $0.name == "id" })?.value?.replacingOccurrences(of: "eq.", with: "")
+            if let cloudID { deletedCloudIDs.append(cloudID) }
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data("[]".utf8))
+        }
+
+        let context = ModelContext(container)
+        let selectedProject = StoryProject(name: "Selected")
+        let otherProject = StoryProject(name: "Other")
+        let cloudOutput = GenerationOutput(title: "Cloud")
+        cloudOutput.project = selectedProject
+        cloudOutput.cloudGenerationOutputID = cloudID
+        cloudOutput.cloudOwnerUserID = userID
+        let localOutput = GenerationOutput(title: "Local")
+        localOutput.project = selectedProject
+        let unrelatedOutput = GenerationOutput(title: "Unrelated")
+        unrelatedOutput.project = otherProject
+        context.insert(selectedProject)
+        context.insert(otherProject)
+        context.insert(cloudOutput)
+        context.insert(localOutput)
+        context.insert(unrelatedOutput)
+        try context.save()
+
+        let service = GenerationOutputDeletionService(
+            authService: auth,
+            sharingService: MockDeletionSharingService(),
+            backupService: LocalGenerationOutputBackupService(baseDirectory: tempDirectory),
+            tombstoneService: tombstones,
+            session: makeSession(),
+            clientFactory: { SupabaseBackendClient(configuration: config) }
+        )
+
+        try await service.deleteAll(
+            inputs: [GenerationOutputDeletionInput(output: cloudOutput), GenerationOutputDeletionInput(output: localOutput)],
+            context: context
+        )
+
+        XCTAssertEqual(deletedCloudIDs, [cloudID])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<GenerationOutput>()).map(\.title), ["Unrelated"])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.name).sorted(), ["Other", "Selected"])
+        XCTAssertEqual(tombstones.recorded.map(\.deletionScope), [.everywhere, .localOnly])
+    }
+
+    func testDeleteAllKeepsCloudFailureLocalRowAndDeletesSuccessfulRows() async throws {
+        let successfulCloudID = "56565656-5656-5656-5656-565656565656"
+        let failedCloudID = "78787878-7878-7878-7878-787878787878"
+        let userID = "90909090-9090-9090-9090-909090909090"
+        let auth = MockSyncAuthService(
+            authState: .signedIn(AuthUser(id: userID, email: nil)),
+            accessToken: fixtureSessionValue
+        )
+        let tombstones = MockOutputTombstoneService()
+        let config = ValidatedSupabaseConfiguration.makeForTesting(
+            projectURL: URL(string: "https://example.supabase.co")!
+        )
+        GenerationOutputSyncURLProtocol.requestHandler = { request in
+            let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
+            let cloudID = query?.first(where: { $0.name == "id" })?.value?.replacingOccurrences(of: "eq.", with: "")
+            let status = cloudID == failedCloudID ? 503 : 200
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: status, httpVersion: nil, headerFields: nil)!
+            return (response, Data("[]".utf8))
+        }
+
+        let context = ModelContext(container)
+        let project = StoryProject(name: "Partial")
+        let success = GenerationOutput(title: "Success")
+        success.project = project
+        success.cloudGenerationOutputID = successfulCloudID
+        success.cloudOwnerUserID = userID
+        let failure = GenerationOutput(title: "Failure")
+        failure.project = project
+        failure.cloudGenerationOutputID = failedCloudID
+        failure.cloudOwnerUserID = userID
+        context.insert(project)
+        context.insert(success)
+        context.insert(failure)
+        try context.save()
+
+        let service = GenerationOutputDeletionService(
+            authService: auth,
+            sharingService: MockDeletionSharingService(),
+            backupService: LocalGenerationOutputBackupService(baseDirectory: tempDirectory),
+            tombstoneService: tombstones,
+            session: makeSession(),
+            clientFactory: { SupabaseBackendClient(configuration: config) }
+        )
+
+        do {
+            try await service.deleteAll(
+                inputs: [GenerationOutputDeletionInput(output: success), GenerationOutputDeletionInput(output: failure)],
+                context: context
+            )
+            XCTFail("Expected deterministic partial-success error")
+        } catch let error as GenerationOutputDeletionError {
+            guard case .batchDeletionFailed(let failures) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(failures.map(\.localOutputID), [failure.id])
+        }
+
+        let remaining = try context.fetch(FetchDescriptor<GenerationOutput>())
+        XCTAssertEqual(remaining.map(\.id), [failure.id])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<StoryProject>()).map(\.name), ["Partial"])
+        XCTAssertEqual(tombstones.recorded.count, 2, "All deletion intent must be tombstoned before network work")
+        XCTAssertEqual(tombstones.recorded.map(\.deletionScope), [.everywhere, .everywhere])
+    }
+
     private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GenerationOutputSyncURLProtocol.self]
