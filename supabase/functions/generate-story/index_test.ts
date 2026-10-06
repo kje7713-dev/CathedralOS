@@ -2337,7 +2337,7 @@ Deno.test({
     // the header (UNTRUSTED counterproductive beside authoritative language;
     // CACHEABLE is implementation metadata, not LLM-visible prose).
     assertStringIncludes(sysMsg, "## Section Contract Authority");
-    assertStringIncludes(sysMsg, "outranks ALL other creative guidance");
+    assertStringIncludes(sysMsg, "Established Project State is authoritative for concrete facts that are already true at the beginning of this scene");
     assertEquals(
       sysMsg.includes("UNTRUSTED"),
       false,
@@ -3166,11 +3166,10 @@ Deno.test({
   },
 });
 
-// Regression 2: SYSTEM has the Section Contract Authority block that
-//   says Section Contract outranks ALL other creative guidance.
+// Regression 2: SYSTEM has the explicit canon → contract → future authority order.
 Deno.test({
   name:
-    "Authority fix: SYSTEM has Section Contract Authority block (outranks ALL other creative guidance)",
+    "Authority fix: SYSTEM has the canon → contract → future authority block",
   fn: async () => {
     const c = await runPR360ZCapture({
       sourcePayloadJSON: POPULATED_PAYLOAD_PR360Z,
@@ -3189,13 +3188,13 @@ Deno.test({
     );
     assertStringIncludes(
       sysMsg,
-      "outranks ALL other creative guidance",
-      "SYSTEM authority must explicitly say Section Contract outranks ALL other creative guidance",
+      "Established Project State is authoritative for concrete facts that are already true at the beginning of this scene",
+      "SYSTEM authority must establish canon as the scene-entry authority",
     );
     assertStringIncludes(
       sysMsg,
-      "Dramatic Seed, Themes, Motifs, Relationships, Ending Instruction",
-      "SYSTEM authority must enumerate what Section Contract outranks",
+      "Authority order: 1. Established Project State defines scene-entry reality.",
+      "SYSTEM authority must state the explicit authority order",
     );
     // Death rule kept separately as Kevin required.
     assertStringIncludes(
@@ -3247,8 +3246,8 @@ Deno.test({
     );
     assertStringIncludes(
       userMsg,
-      "The Section Contract always takes precedence",
-      "Dramatic Seed must include 'The Section Contract always takes precedence'",
+      "Do not let the spark override established Project State or redirect the current Section Contract",
+      "Dramatic Seed must defer to canon and the current Section Contract",
     );
   },
 });
@@ -3303,8 +3302,8 @@ Deno.test({
     const endingBlock = userMsg.slice(endingIdx, endingIdx + 350);
     assertStringIncludes(
       endingBlock,
-      "The current Section Contract always takes precedence",
-      "Ending Instruction must say 'The current Section Contract always takes precedence'",
+      "The Ending Instruction is subordinate to established Project State and the current Section Contract",
+      "Ending Instruction must defer without redirecting the scene",
     );
   },
 });
@@ -3329,7 +3328,7 @@ Deno.test({
     const userMsg = c!.messages[1].content;
     assertStringIncludes(
       userMsg,
-      "Project State establishes continuity, not the required subject of the next prose",
+      "Project State establishes the factual starting conditions for this scene, not the required subject of the prose",
       "USER prompt must contain the Project State transition rule",
     );
     assertStringIncludes(
@@ -4052,7 +4051,7 @@ Deno.test({
     // Section Contract still outranks Ending Instruction.
     assertStringIncludes(
       text,
-      "The current Section Contract always takes precedence over the Ending Instruction",
+      "The Ending Instruction is subordinate to established Project State and the current Section Contract",
       "Section Contract must remain authoritative over Ending Instruction (Kevin 14:44 EDT spec)",
     );
   },
@@ -4077,42 +4076,42 @@ Deno.test({
     // Relationships: supporting context only — do not let it redirect.
     assertStringIncludes(
       text,
-      "(Supporting context only — the current Section Contract always takes precedence. Do not let relationships redirect the section.)",
+      "(Supporting context only. Do not let relationships override established Project State or redirect the current Section Contract.)",
       "Relationships must carry the 'supporting context only' qualifier",
     );
 
     // Themes: same.
     assertStringIncludes(
       text,
-      "(Supporting context only — the current Section Contract always takes precedence. Do not let these questions redirect the section.)",
+      "(Supporting context only. Do not let these questions override established Project State or redirect the current Section Contract.)",
       "Themes must carry the 'supporting context only' qualifier",
     );
 
     // Motifs: same.
     assertStringIncludes(
       text,
-      "(Supporting context only — the current Section Contract always takes precedence. Do not let motifs redirect the section.)",
+      "(Supporting context only. These motifs must not override established Project State or redirect the current Section Contract.)",
       "Motifs must carry the 'supporting context only' qualifier",
     );
 
     // Dramatic Seed: explicitly states the Section Contract always wins.
     assertStringIncludes(
       text,
-      "The Section Contract always takes precedence. Do not let the spark redirect, replace, or override the section premise",
+      "Do not let the spark override established Project State or redirect the current Section Contract",
       "Dramatic Seed must explicitly defer to Section Contract (Kevin 09:37 EDT rule)",
     );
 
     // Ending Instruction: now explicitly states Section Contract outranks it.
     assertStringIncludes(
       text,
-      "The current Section Contract always takes precedence over the Ending Instruction",
+      "The Ending Instruction is subordinate to established Project State and the current Section Contract",
       "Ending Instruction must explicitly state Section Contract outranks it (Kevin 14:44 EDT fix #2)",
     );
 
-    // SYSTEM authority block unchanged: Section Contract outranks ALL.
+    // SYSTEM authority block: canon defines entry reality and the contract defines the current transition.
     assertStringIncludes(
       text,
-      "It outranks ALL other creative guidance in this prompt — Dramatic Seed, Themes, Motifs, Relationships, Ending Instruction, Intimacy guidance, and Project State (prior scenes).",
+      "Authority order: 1. Established Project State defines scene-entry reality. 2. The current Section Contract defines the required transition and outcome for this scene. 3. Future Outline Obligations constrain what must remain possible later. 4. Other creative guidance is subordinate to the above.",
       "SYSTEM Section Contract Authority block must outrank ALL other creative guidance (invariant)",
     );
   },
@@ -5264,7 +5263,7 @@ Deno.test("buildPrompt: projectStateContext rendered unchanged into user message
   // The transition rule (continuity, not subject) should still appear.
   assertStringIncludes(
     context,
-    "Project State establishes continuity, not the required subject",
+    "Project State establishes the factual starting conditions for this scene, not the required subject of the prose",
   );
 });
 
@@ -5450,17 +5449,95 @@ Deno.test("buildPrompt: Project State block itself remains unchanged (full conte
   assertStringIncludes(context, projectState);
   assertStringIncludes(
     context,
-    "Project State establishes continuity, not the required subject",
+    "Project State establishes the factual starting conditions for this scene, not the required subject of the prose",
   );
 });
 
 // =============================================================================
-// Kevin 2026-08-22 10:35 EDT narrow correction acceptance tests for Terminal
-// Function rendering. Verifies raw enum IDs never reach the assembled prompt
-// (even when the caller passes them as terminalBeat), no implementation
-// examples or multi-beat guidance leak into production, and the literal spec
-// block format is emitted with the resolved canonical purpose.
+// Continuity architecture refactor regressions.
+// The prompt itself reconciles canon, current contract, and future trajectory;
+// there is no pre-generation classifier or repair call.
 // =============================================================================
+
+Deno.test("continuity authority: canon owns scene-entry reality and contract owns the current transition", () => {
+  const { context, craft } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "Convoy Count",
+    sectionSummary: "Miran learns that Ilya is missing from the final convoy count.",
+    sectionDramaticEvent: "Miran carries forward with a loss that cannot be repaired.",
+    projectStateContext:
+      "Ilya crossed the marsh. Ilya is alive at Willow Refuge. His shoulder wound is being treated.",
+  });
+  const prompt = `${craft}\n${context}`;
+  assertStringIncludes(
+    prompt,
+    "Established Project State is authoritative for concrete facts that are already true at the beginning of this scene.",
+  );
+  assertStringIncludes(prompt, "Do not retcon established events");
+  assertStringIncludes(
+    prompt,
+    "The current Section Contract is authoritative for what this scene must accomplish FROM that established starting state.",
+  );
+  assertStringIncludes(prompt, "making the required change occur causally within the current scene whenever possible");
+  assertEquals(prompt.includes("If they conflict with the Section Contract, follow the Section Contract."), false);
+});
+
+Deno.test("continuity authority: future outline is trajectory-only and precedes the current contract", () => {
+  const { context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "Convoy Count",
+    sectionSummary: "Miran learns that Ilya is missing from the final convoy count.",
+    futureOutlineContext: [
+      "## Future Outline Obligations",
+      "",
+      "These are future planned outcomes, not current-scene instructions.",
+      "Do not treat them as facts that have already happened.",
+      "If a future obligation requires a later character state or event, preserve a plausible causal path toward it; do not pretend that future state is already true.",
+    ].join("\n"),
+  });
+  const futureIndex = context.indexOf("## Future Outline Obligations");
+  const contractIndex = context.indexOf("## Section Contract");
+  assertNotEquals(futureIndex, -1);
+  assertNotEquals(contractIndex, -1);
+  assertEquals(futureIndex < contractIndex, true);
+  assertStringIncludes(context, "These are future planned outcomes, not current-scene instructions.");
+  assertStringIncludes(context, "Do not treat them as facts that have already happened.");
+  assertStringIncludes(context, "preserve a plausible causal path toward it");
+});
+
+Deno.test("missing stores regression: ordinary prose prompt construction has no continuity repair gate", () => {
+  const { context, craft } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "Grain Doors Under Guard",
+    sectionSummary: "Food distribution becomes guarded as shortages worsen.",
+    sectionDramaticEvent:
+      "Sava orders the Imperial Granary Terrace guarded after missing stores and growing panic force the first ration cuts.",
+    projectStateContext: "Sava and Miran are established canonical characters.",
+  });
+  const prompt = `${craft}\n${context}`;
+  assertStringIncludes(prompt, "Grain Doors Under Guard");
+  assertStringIncludes(prompt, "missing stores");
+  assertEquals(prompt.includes("repair JSON"), false);
+  assertEquals(prompt.includes("pre-generation classifier"), false);
+});
+
+Deno.test("Tartaria regression: stale contract cannot authorize retconning a successful crossing", () => {
+  const { context, craft } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "The Final Convoy",
+    sectionSummary: "Miran learns that Ilya is missing from the final convoy count.",
+    sectionDramaticEvent: "Miran carries forward with a loss that cannot be repaired.",
+    futureOutlineContext: "## Future Outline Obligations\nIlya remains absent in the closing section.",
+    projectStateContext:
+      "Ilya crossed the marsh. Ilya is alive at Willow Refuge. His shoulder wound is being treated.",
+  });
+  const prompt = `${craft}\n${context}`;
+  assertStringIncludes(prompt, "Ilya crossed the marsh");
+  assertStringIncludes(prompt, "Do not rewrite prior canon");
+  assertStringIncludes(prompt, "preserve the contract's dramatic purpose and intended consequence");
+  assertStringIncludes(prompt, "Established Project State is authoritative for concrete facts that are already true at the beginning of this scene.");
+  assertEquals(prompt.includes("claim they never arrived"), false);
+});
 
 Deno.test("buildPrompt: Terminal Function -- call_to_adventure fixture contains resolved purpose but not the raw enum", () => {
   const { context } = buildPrompt({

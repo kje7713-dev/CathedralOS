@@ -39,7 +39,8 @@ export function buildFutureOutlineContext(
     "Do not dramatize them early or force awkward foreshadowing.",
     "Do not override established canon.",
     "Use them only to avoid discretionary choices that would make an already-planned future outcome impossible or implausible.",
-    "The current Section Contract still controls the current scene after any required canon reconciliation.",
+    "If a future obligation requires a later character state or event, preserve a plausible causal path toward it; do not pretend that future state is already true.",
+    "The current Section Contract controls what must happen in this scene, subject to established scene-entry canon.",
     "",
   ];
   for (const section of future) {
