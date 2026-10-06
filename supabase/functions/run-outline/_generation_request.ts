@@ -10,6 +10,49 @@ import type { LengthMode } from "../generate-story/_credits.ts";
 
 type JSONObject = Record<string, unknown>;
 
+export type FutureOutlineSection = {
+  id?: string;
+  position?: number;
+  title?: string | null;
+  dramatic_event?: string | null;
+  resulting_change?: string | null;
+  terminal_state?: string | null;
+};
+
+/** Build the bounded, trajectory-only context for sections after the current one. */
+export function buildFutureOutlineContext(
+  current: FutureOutlineSection,
+  orderedSections: FutureOutlineSection[],
+  maxSections = 8,
+): string {
+  const currentPosition = Number(current.position ?? 0);
+  const future = orderedSections
+    .filter((section) => Number(section.position ?? 0) > currentPosition)
+    .sort((a, b) => Number(a.position ?? 0) - Number(b.position ?? 0))
+    .slice(0, Math.max(0, Math.min(8, maxSections)));
+  if (future.length === 0) return "";
+
+  const lines = [
+    "## Future Outline Obligations",
+    "",
+    "These are future planned outcomes, not current-scene instructions.",
+    "Do not dramatize them early or force awkward foreshadowing.",
+    "Do not override established canon.",
+    "Use them only to avoid discretionary choices that would make an already-planned future outcome impossible or implausible.",
+    "The current Section Contract still controls the current scene after any required canon reconciliation.",
+    "",
+  ];
+  for (const section of future) {
+    lines.push(
+      `- ${String(section.title ?? "Untitled section")}`,
+      `  Dramatic event: ${String(section.dramatic_event ?? "(none)")}`,
+      `  Resulting change: ${String(section.resulting_change ?? "(none)")}`,
+      `  Terminal state: ${String(section.terminal_state ?? "(none)")}`,
+    );
+  }
+  return lines.join("\n");
+}
+
 /** Match both local and canonical identities for restored/imported projects. */
 export function projectSnapshotLookupFilter(
   projectId: string,
@@ -96,6 +139,7 @@ export function buildGenerateStoryRequest(args: {
   frozenRecipeHash?: string | null;
   recipeObligations?: unknown;
   assignedRecipeRequirementIDs?: unknown;
+  futureOutlineContext?: string;
   // `id` is the outline_sections.id (mirrors the chapter_run.start_parent_section_id
   // the run loop passes in). Added in the PR-#327 backend fix-forward so generate-story
   // can persist `outline_section_id` on the generation_outputs row it inserts, which is
@@ -116,8 +160,6 @@ export function buildGenerateStoryRequest(args: {
     target_words_max?: number | null;
   };
   projectId: string;
-  /** Canonical StoryProject lineage, separate from local_project_id. */
-  projectLineageID?: string;
   runId?: string;
   selectedModelId?: string;
   lengthMode: LengthMode;
@@ -141,6 +183,7 @@ export function buildGenerateStoryRequest(args: {
     frozenRecipeHash: args.frozenRecipeHash ?? undefined,
     recipeObligations: args.recipeObligations,
     assignedRecipeRequirementIDs: args.assignedRecipeRequirementIDs,
+    futureOutlineContext: args.futureOutlineContext || undefined,
     // PR-360-Z: outputBudget removed. The container (section.container) now
     // owns the output cap via CONTAINER_HARD_CAPS in generate-story. The
     // length-mode budget is no longer sent.
@@ -153,7 +196,6 @@ export function buildGenerateStoryRequest(args: {
     sectionResultingChange: args.section.resulting_change ?? undefined,
     sectionTerminalState: args.section.terminal_state ?? undefined,
     projectID: args.projectId,
-    projectLineageID: args.projectLineageID,
     // PR-360-Z Bug A: send BOTH `projectID` (camelCase, what iOS reads)
     // AND `project_id` (snake_case, what run-outline used to send and what
     // generate-story reads via the normalized projectID variable in Commit 1).

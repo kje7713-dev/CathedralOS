@@ -112,6 +112,15 @@ import type { EmbedSectionRequest } from "../_shared/section-embedding.ts";
 import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
 import { formatCanonicalProjectState } from "../_shared/memory-state.ts";
 import {
+  buildContractRepairPrompt,
+  contractsEqual,
+  CONTRACT_REPAIR_RESPONSE_FORMAT,
+  detectPotentialContractCanonConflict,
+  parseContractRepairResult,
+  type ContractRepairResult,
+  type SectionContractFields,
+} from "./_contract_continuity.ts";
+import {
   analyzeRecentRepetition,
   type CurrentSectionContractLike,
   RECENT_REPETITION_LOOKBACK,
@@ -379,6 +388,7 @@ interface BulkEstimateSection {
   container?: string;
   pov?: string;
   terminalBeat?: string;
+  futureOutlineContext?: string;
 }
 
 interface GenerateStoryRequest {
@@ -449,6 +459,8 @@ interface GenerateStoryRequest {
   sectionDramaticEvent?: string;
   sectionResultingChange?: string;
   sectionTerminalState?: string;
+  // Bounded future trajectory context used only by durable Run All.
+  futureOutlineContext?: string;
   // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): the 5 Story Arc
   // Context fields were REMOVED from the request body. iOS and run-outline
   // no longer pass them — generate-story now resolves story arc context
@@ -568,6 +580,8 @@ interface HandlerDependencies {
   generationModelStore?: GenerationModelStore;
   authenticatedUserId?: string;
   persistenceStore?: GenerationPersistenceStore;
+  // Test-only service-role client seam; production leaves this unset.
+  adminClient?: any;
 }
 
 // ---------------------------------------------------------------------------
@@ -1590,6 +1604,7 @@ export function buildPrompt(req: {
   sectionDramaticEvent?: string;
   sectionResultingChange?: string;
   sectionTerminalState?: string;
+  futureOutlineContext?: string;
   // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
   // Optional — when any field is set, the buildPrompt renders a
   // "## Story Arc Context" block between Project State and Section Contract.
@@ -2074,6 +2089,10 @@ Structural limits:
   // shape is Project State → Section Contract → Writing Task — this is
   // the cache-friendly structure for PR-372 (volatile values don't change
   // the cache-key for the upstream stable blocks).
+  if (req.futureOutlineContext) {
+    contextLines.push(req.futureOutlineContext, "");
+  }
+
   if (hasSectionContext) {
     contextLines.push(
       "## Section Contract",
@@ -2420,6 +2439,7 @@ async function handler(
     generationModelStore,
     authenticatedUserId,
     persistenceStore: injectedPersistenceStore,
+    adminClient: injectedAdminClient,
   } = deps;
 
   // Preflight
@@ -2556,13 +2576,15 @@ async function handler(
 
   let store: CreditStore;
   let limiter: RateLimitStore;
-  const requiresAdminClient = creditStore === undefined ||
+  const requiresAdminClient = injectedAdminClient === undefined && (
+    creditStore === undefined ||
     rateLimitStore === undefined ||
     injectedPersistenceStore === undefined ||
-    generationModelStore === undefined;
+    generationModelStore === undefined
+  );
   let adminClient:
     // deno-lint-ignore no-explicit-any
-    any | null = null;
+    any | null = injectedAdminClient ?? null;
 
   if (requiresAdminClient) {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -2959,6 +2981,7 @@ async function handler(
         promptPackName,
         sectionTitle: section.title,
         sectionSummary: section.summary,
+        futureOutlineContext: section.futureOutlineContext,
       });
       const estimatedInputTokens = estimateTokensFromText(
         stableBlocks.join("\n"),
@@ -3031,6 +3054,7 @@ async function handler(
       sectionDramaticEvent: body.sectionDramaticEvent,
       sectionResultingChange: body.sectionResultingChange,
       sectionTerminalState: body.sectionTerminalState,
+      futureOutlineContext: body.futureOutlineContext,
     });
     // PR-372: concat blocks for token estimation. Hash not computed in the
     // estimate path (no billable call → no telemetry row).
@@ -3140,6 +3164,41 @@ async function handler(
   // entitlement check immediately before the provider call.
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // Resolve provider (injected or from env)
+  // -------------------------------------------------------------------------
+
+  let llm: LLMProvider;
+  try {
+    llm = provider ?? buildProviderFromEnv();
+  } catch (err) {
+    const msg = err instanceof Error
+      ? err.message
+      : "Provider configuration error";
+    await limiter.recordRequest(userId, {
+      requestId,
+      action: generationAction,
+      generationLengthMode,
+      outputBudget: maxCompletionTokens,
+      selectedModelId,
+      providerModel: selectedModel.provider_model,
+      maxCompletionTokens,
+      status: "failed",
+      errorCode: "backend_config_missing",
+      errorMessage: msg,
+      durationMs: Date.now() - requestStartMs,
+    });
+    return corsResponse(
+      JSON.stringify({
+        status: "failed",
+        errorCode: "backend_config_missing",
+        errorMessage: msg,
+      }),
+      { status: 500 },
+    );
+  }
+
+
   // RAG retrieval — fetch project state context aggregated across ALL
   // accepted scenes. Tests can override via body.projectStateContext
   // (so unit tests don't need to mock adminClient). Production always
@@ -3168,6 +3227,150 @@ async function handler(
       body.outline_section_id ?? undefined,
     )
     : [];
+
+  // Run All only: inspect a suspicious concrete-state assertion before prompt
+  // assembly. The billable reconciliation call is the semantic decision-maker.
+  const currentContract: SectionContractFields = {
+    title: body.sectionTitle ?? "",
+    summary: body.sectionSummary ?? "",
+    entryState: body.sectionEntryState ?? "",
+    dramaticEvent: body.sectionDramaticEvent ?? "",
+    resultingChange: body.sectionResultingChange ?? "",
+    terminalState: body.sectionTerminalState ?? "",
+  };
+  const continuityCandidate = durableRunId && projectStateContext
+    ? detectPotentialContractCanonConflict(projectStateContext, currentContract)
+    : null;
+  if (durableRunId && continuityCandidate) {
+    try {
+      const repairResult = await runBillableLLM<ContractRepairResult>(
+        {
+          userID: userId,
+          purpose: "coherence-check",
+          action: "section-contract-repair",
+          model: selectedModel,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You reconcile a stale current story Section Contract against established canon. Canon wins. Return only JSON.",
+            },
+            {
+              role: "user",
+              content: buildContractRepairPrompt(
+                projectStateContext,
+                currentContract,
+                {
+                  container,
+                  terminalBeat: body.terminalBeat ?? null,
+                  storyArcName: outlineSectionCtx.storyArc.name ?? null,
+                  storyArcBeatLabel: outlineSectionCtx.storyArc.beatLabel ?? null,
+                  storyArcBeatPurpose: outlineSectionCtx.storyArc.beatPurpose ?? null,
+                  storyArcPosition: outlineSectionCtx.storyArc.position ?? null,
+                  storyArcTotalBeats: outlineSectionCtx.storyArc.totalBeats ?? null,
+                  storyArcWithinBeatPosition:
+                    outlineSectionCtx.storyArc.withinBeatPosition ?? null,
+                  storyArcWithinBeatTotal:
+                    outlineSectionCtx.storyArc.withinBeatTotal ?? null,
+                },
+                body.futureOutlineContext ?? "",
+                continuityCandidate,
+              ),
+            },
+          ],
+          maxOutputTokens: 1200,
+          providerOptions: {
+            responseFormat: CONTRACT_REPAIR_RESPONSE_FORMAT,
+            responseFormatTarget: "chat",
+          },
+          usageContext: {
+            projectID,
+            generationOutputID: null,
+            generationLengthMode: "short",
+            outputBudget: 1200,
+            idempotencyKey:
+              `${durableRunId}:${body.outline_section_id}:section-contract-repair`,
+          },
+          onProviderSuccess: async (result: BillableProviderResult) =>
+            parseContractRepairResult(result.content),
+        },
+        {
+          adminClient,
+          provider: llm,
+          creditStore: store,
+        },
+      );
+      const repairedResult = repairResult.featureResult;
+      if (!repairedResult.conflict) {
+        if (!contractsEqual(currentContract, repairedResult.contract)) {
+          throw new Error(
+            "A no-conflict continuity response changed the Section Contract",
+          );
+        }
+      } else {
+        const repaired = repairedResult.contract;
+        if (
+          Object.values(repaired).some((value) =>
+            typeof value !== "string" || value.trim().length === 0
+          )
+        ) {
+          throw new Error("A conflict repair returned an incomplete contract");
+        }
+        if (
+          detectPotentialContractCanonConflict(projectStateContext, repaired)
+        ) {
+          return corsResponse(
+            JSON.stringify({
+              status: "failed",
+              errorCode: "section_contract_continuity_conflict",
+              errorMessage:
+                "Repaired Section Contract still presents the established canon conflict.",
+            }),
+            { status: 422 },
+          );
+        }
+        body.sectionTitle = repaired.title;
+        body.sectionSummary = repaired.summary;
+        body.sectionEntryState = repaired.entryState ?? undefined;
+        body.sectionDramaticEvent = repaired.dramaticEvent ?? undefined;
+        body.sectionResultingChange = repaired.resultingChange ?? undefined;
+        body.sectionTerminalState = repaired.terminalState ?? undefined;
+      }
+    } catch (error) {
+      console.error(
+        `[generate-story] section contract repair failed: ${String(error)}`,
+      );
+      if (error instanceof BillableLLMError) {
+        return corsResponse(
+          JSON.stringify({
+            status: "failed",
+            errorCode: error.code,
+            errorMessage: error.message,
+          }),
+          { status: error.code === "insufficient_credits" ? 402 : 500 },
+        );
+      }
+      if (error instanceof ProviderError) {
+        const failure = providerErrorResponse(
+          error.errorCode,
+          error.message,
+        );
+        return corsResponse(JSON.stringify(failure.body), {
+          status: failure.httpStatus,
+          ...(failure.headers ? { headers: failure.headers } : {}),
+        });
+      }
+      return corsResponse(
+        JSON.stringify({
+          status: "failed",
+          errorCode: "section_contract_continuity_conflict",
+          errorMessage:
+            "Could not reconcile the current Section Contract with established canon.",
+        }),
+        { status: 422 },
+      );
+    }
+  }
 
   // PR-372: destructure stable/volatile blocks. Canon is now in stable
   // (per the buildPrompt refactor); Section Contract values + project state
@@ -3203,6 +3406,7 @@ async function handler(
     sectionDramaticEvent: body.sectionDramaticEvent,
     sectionResultingChange: body.sectionResultingChange,
     sectionTerminalState: body.sectionTerminalState,
+    futureOutlineContext: body.futureOutlineContext,
     // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): Story Arc Context
     // resolved SERVER-SIDE from outlineSectionCtx (fetched via
     // fetchOutlineSectionContext at the top of the handler). Caller no longer
@@ -3234,40 +3438,6 @@ async function handler(
     outputTokens: CONTAINER_HARD_CAPS[container],
     toolCostUsd: 0,
   };
-
-  // -------------------------------------------------------------------------
-  // Resolve provider (injected or from env)
-  // -------------------------------------------------------------------------
-
-  let llm: LLMProvider;
-  try {
-    llm = provider ?? buildProviderFromEnv();
-  } catch (err) {
-    const msg = err instanceof Error
-      ? err.message
-      : "Provider configuration error";
-    await limiter.recordRequest(userId, {
-      requestId,
-      action: generationAction,
-      generationLengthMode,
-      outputBudget: maxCompletionTokens,
-      selectedModelId,
-      providerModel: selectedModel.provider_model,
-      maxCompletionTokens,
-      status: "failed",
-      errorCode: "backend_config_missing",
-      errorMessage: msg,
-      durationMs: Date.now() - requestStartMs,
-    });
-    return corsResponse(
-      JSON.stringify({
-        status: "failed",
-        errorCode: "backend_config_missing",
-        errorMessage: msg,
-      }),
-      { status: 500 },
-    );
-  }
 
   // -------------------------------------------------------------------------
   // Shared billable runner: provider call → output persistence → usage event
