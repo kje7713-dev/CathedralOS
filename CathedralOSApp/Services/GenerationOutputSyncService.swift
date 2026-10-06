@@ -827,6 +827,11 @@ private struct GenerationOutputCountRecord: Decodable {
 
 // MARK: - GenerationOutputDeletionService
 
+struct GenerationOutputDeletionFailure: Error {
+    let localOutputID: UUID
+    let message: String
+}
+
 enum GenerationOutputDeletionError: Error, LocalizedError {
     case notConfigured
     case notSignedIn
@@ -837,6 +842,7 @@ enum GenerationOutputDeletionError: Error, LocalizedError {
     case cloudDeleteNotVerified
     case cloudOwnershipNotVerified
     case persistenceError(stage: String, error: Error)
+    case batchDeletionFailed([GenerationOutputDeletionFailure])
 
     var errorDescription: String? {
         switch self {
@@ -862,6 +868,11 @@ enum GenerationOutputDeletionError: Error, LocalizedError {
             return "This output's cloud ownership could not be verified. Confirm you're signed in to the account that created it, then retry. Your local copy was kept."
         case .persistenceError(let stage, let error):
             return "Could not save output deletion (\(stage)): \(error.localizedDescription)"
+        case .batchDeletionFailed(let failures):
+            let count = failures.count
+            let noun = count == 1 ? "output" : "outputs"
+            let pronoun = count == 1 ? "It was" : "They were"
+            return "\(count) generated \(noun) could not be deleted from the cloud. \(pronoun) kept on this device so you can retry."
         }
     }
 }
@@ -923,6 +934,12 @@ protocol GenerationOutputDeletionServiceProtocol {
     /// stages plus a synchronous MainActor fetch-by-ID → delete → save.
     @MainActor
     func deleteEverywhere(input: GenerationOutputDeletionInput, context: ModelContext) async throws
+
+    /// Deletes every generated output in one project-scoped batch. Tombstones
+    /// are written before cloud deletion so a partial network failure cannot
+    /// resurrect outputs during the next sync.
+    @MainActor
+    func deleteAll(inputs: [GenerationOutputDeletionInput], context: ModelContext) async throws
 
     /// 19:16 EDT Kevin: MainActor so authService.authState (which is
     /// MainActor-isolated) is accessible. Awaits tombstoneService.record
@@ -1250,6 +1267,51 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     @MainActor
     func deleteEverywhere(input: GenerationOutputDeletionInput, context: ModelContext) async throws {
         try await delete(input: input, scope: .everywhere, context: context)
+    }
+
+    @MainActor
+    func deleteAll(inputs: [GenerationOutputDeletionInput], context: ModelContext) async throws {
+        guard !inputs.isEmpty else { return }
+
+        // Freeze deletion intent before any network work. Tombstones are written
+        // for every snapshot up front so a later partial failure cannot make a
+        // still-present local row reappear during sync.
+        for input in inputs {
+            let scope: SyncTombstone.DeletionScope = input.cloudGenerationOutputID.isEmpty
+                ? .localOnly
+                : .everywhere
+            await writeTombstone(input: input, scope: scope)
+        }
+
+        // Each cloud deletion is independent. Keep the input order so the
+        // partial-success result and retry behavior are deterministic.
+        var locallyDeletable: [GenerationOutputDeletionInput] = []
+        var failures: [GenerationOutputDeletionFailure] = []
+        for input in inputs {
+            guard !input.cloudGenerationOutputID.isEmpty else {
+                locallyDeletable.append(input)
+                continue
+            }
+            do {
+                try await deleteCloud(input: input)
+                locallyDeletable.append(input)
+            } catch {
+                failures.append(GenerationOutputDeletionFailure(
+                    localOutputID: input.localOutputID,
+                    message: GenerationOutputDeletionError.displayMessage(from: error)
+                ))
+            }
+        }
+
+        // One synchronous MainActor SwiftData save covers all outputs whose
+        // cloud stage succeeded (plus local-only outputs). This is best-effort
+        // batch deletion, not an atomic transaction across independent stores.
+        if !locallyDeletable.isEmpty {
+            try deleteLocalBatch(inputs: locallyDeletable, context: context)
+        }
+        if !failures.isEmpty {
+            throw GenerationOutputDeletionError.batchDeletionFailed(failures)
+        }
     }
 
     private func resolveLegacyOwnership(input: GenerationOutputDeletionInput, cloudID: String) async throws {
