@@ -40,6 +40,7 @@ import {
 } from "../generate-story/_credits.ts";
 import {
   buildGenerateStoryRequest,
+  buildFutureOutlineContext,
   generationOutputId,
   projectSnapshotLookupFilter,
 } from "./_generation_request.ts";
@@ -1114,6 +1115,7 @@ async function runOutline(
         frozenRecipeHash,
         recipeObligations,
         assignedRecipeRequirementIDs: section.recipe_requirement_ids,
+        futureOutlineContext: buildFutureOutlineContext(section, sections),
         section,
         projectId,
         projectLineageID: String(outlineRow.lineage_id ?? "").trim() ||
