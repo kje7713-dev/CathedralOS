@@ -355,15 +355,21 @@ platform :ios do
     apply_changes = ENV["APPLY"].to_s.downcase == "true"
     UI.message(apply_changes ? "Applying App Store metadata …" : "Dry run: no App Store metadata will be changed.")
 
+    unless apply_changes
+      metadata_files = Dir[File.join("./fastlane/metadata", "**", "*")].select { |path| File.file?(path) }.sort
+      UI.message("Dry run: checked-in metadata files (no App Store API write will occur):")
+      metadata_files.each { |path| UI.message("  - #{path}") }
+      next
+    end
+
     deliver(
-      app_identifier:          ENV["APP_IDENTIFIER"],
-      metadata_path:           "./fastlane/metadata",
-      skip_binary_upload:      true,
-      skip_screenshots:        true,
-      submit_for_review:       false,
+      app_identifier:             ENV["APP_IDENTIFIER"],
+      metadata_path:              "./fastlane/metadata",
+      skip_binary_upload:         true,
+      skip_screenshots:           true,
+      submit_for_review:          false,
       run_precheck_before_submit: false,
-      force:                   apply_changes,
-      dry_run:                 !apply_changes
+      force:                      true
     )
   end
 
