@@ -40,8 +40,10 @@ Deno.test("generation request: Run All future context is forwarded to generate-s
       terminal_beat: null,
     },
     projectId: "project-1",
+    projectLineageID: "lineage-123",
     lengthMode: "short",
   });
+  assertEquals(request.projectLineageID, "lineage-123");
   assertEquals(
     request.futureOutlineContext,
     "## Future Outline Obligations\n- Later",

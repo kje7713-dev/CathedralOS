@@ -3316,19 +3316,6 @@ async function handler(
         ) {
           throw new Error("A conflict repair returned an incomplete contract");
         }
-        if (
-          detectPotentialContractCanonConflict(projectStateContext, repaired)
-        ) {
-          return corsResponse(
-            JSON.stringify({
-              status: "failed",
-              errorCode: "section_contract_continuity_conflict",
-              errorMessage:
-                "Repaired Section Contract still presents the established canon conflict.",
-            }),
-            { status: 422 },
-          );
-        }
         body.sectionTitle = repaired.title;
         body.sectionSummary = repaired.summary;
         body.sectionEntryState = repaired.entryState ?? undefined;

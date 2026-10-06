@@ -317,14 +317,57 @@ Deno.test("handler continuity: conflict=false cannot rewrite the contract", asyn
   assertEquals(result.calls.length, 1);
 });
 
-Deno.test("handler continuity: a still-suspicious repair fails without retry or prose", async () => {
+Deno.test("handler continuity: valid current-scene disappearance after repair succeeds", async () => {
+  const repaired = {
+    title: "The Empty Place at the Table",
+    summary: "Raiders strike Willow Refuge and Ilya disappears during the evacuation.",
+    entryState: "Ilya is alive at Willow Refuge when the attack begins.",
+    dramaticEvent: "The attack splits Miran and Ilya during the evacuation.",
+    resultingChange: "Miran reaches safety but cannot account for Ilya.",
+    terminalState: "Ilya is missing after the current attack.",
+  };
   const result = await runScenario(baseContract, {
     complete: async (_messages, _max, _model, options) => ({
       content: options?.responseFormatTarget === "chat"
         ? JSON.stringify({
           conflict: true,
-          reason: "Still contradictory",
-          contract: baseContract,
+          reason: "The old contract contradicts canon; move the separation into the current scene.",
+          contract: repaired,
+        })
+        : "The attack split Miran and Ilya during the evacuation.",
+      modelName: "mock-model",
+      inputTokens: 10,
+      outputTokens: 25,
+    }),
+  });
+  assertEquals(result.response.status, 200);
+  assertEquals(result.calls.length, 2);
+  assertEquals(result.settleCalls.length, 2);
+  assertEquals(result.settleCalls[0].p_action, "section-contract-repair");
+  assertEquals(result.settleCalls[1].p_action, "generate");
+  const prosePrompt = JSON.stringify(result.calls[1].messages);
+  assertStringIncludes(
+    prosePrompt,
+    "Ilya is alive at Willow Refuge when the attack begins",
+  );
+  assertStringIncludes(prosePrompt, "Ilya is missing after the current attack");
+});
+
+Deno.test("handler continuity: malformed repair fails after one call without prose", async () => {
+  const result = await runScenario(baseContract, {
+    complete: async (_messages, _max, _model, options) => ({
+      content: options?.responseFormatTarget === "chat"
+        ? JSON.stringify({
+          conflict: true,
+          reason: "repair",
+          contract: {
+            title: "",
+            summary: "",
+            entryState: "",
+            dramaticEvent: "",
+            resultingChange: "",
+            terminalState: "",
+          },
         })
         : "should not generate",
       modelName: "mock-model",
