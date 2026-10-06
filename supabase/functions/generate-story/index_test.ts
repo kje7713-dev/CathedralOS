@@ -5267,23 +5267,24 @@ Deno.test("buildPrompt: projectStateContext rendered unchanged into user message
   );
 });
 
-Deno.test("buildPrompt: stable character identity facts are hard continuity constraints", () => {
+Deno.test("buildPrompt: stable identity facts cannot be retconned by a stale Section Contract", () => {
   const { context } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,
     projectStateContext:
-      "## Project State\n\nContinuity Facts:\n- character:erwernican:identity:pronouns: Erwernican uses he/him pronouns.",
+      "## Project State\n\nSava is an established male character and uses he/him pronouns.",
+    sectionTitle: "Stale Identity Wording",
+    sectionSummary: "Sava enters the scene using stale she/her wording.",
+    sectionDramaticEvent: "Sava responds to the immediate crisis.",
   });
+  assertStringIncludes(context, "Stable identity facts in Project State");
+  assertStringIncludes(context, "Do not retcon them to satisfy the Section Contract.");
   assertStringIncludes(
     context,
-    "Stable identity facts in Project State",
+    "If the current scene legitimately changes a mutable character state, depict that change causally from the established starting state.",
   );
-  assertStringIncludes(
-    context,
-    "pronouns",
-  );
-  assertStringIncludes(
-    context,
-    "Do not change them unless the Section Contract explicitly requires that change",
+  assertEquals(
+    context.includes("unless the Section Contract explicitly requires that change"),
+    false,
   );
 });
 

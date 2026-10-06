@@ -884,10 +884,10 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   }
 
   // 6. Dramatic Seed — Kevin 2026-08-21 09:37 EDT fix: drop "primary
-  //    dramatic engine" language that outranked the Section Contract.
-  //    Spark is SUPPORTING CONTEXT only — it informs the Section Contract
-  //    but must NEVER redirect it. Same rule applies to relationships,
-  //    themes, motifs, ending instruction, intimacy, and prior open loops.
+  //    dramatic engine" language that made the spark appear to govern the
+  //    section outcome. Spark is SUPPORTING CONTEXT only. Project State owns
+  //    established scene-entry reality; the Section Contract owns the current
+  //    transition/outcome; supporting creative guidance remains subordinate.
   const spark = p.selectedStorySpark;
   if (spark) {
     const sparkLines: string[] = [];
@@ -986,8 +986,9 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   }
 
   // 8. Ending Instruction — Kevin 2026-08-21 09:37 EDT fix: supporting
-  //    context only, must NEVER redirect the Section Contract. Aftertaste
-  //    shapes HOW the Section Contract closes, not WHAT closes.
+  //    creative guidance only. Project State governs established scene-entry
+  //    facts; the Section Contract governs the current transition/outcome;
+  //    aftertaste shapes HOW that outcome closes, not WHAT closes.
   const at = p.selectedAftertaste;
   if (at) {
     const atLines: string[] = [];
@@ -999,8 +1000,9 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
     // underlying residue (e.g., "Vomit" → nausea, disgust, stomach turning,
     // sour/bitter sensory residue, physical revulsion if organically
     // appropriate) and never quote/name it directly unless the current scene
-    // independently requires that literal thing. Section Contract still
-    // outranks Ending Instruction.
+    // independently requires that literal thing. Established Project State
+    // governs scene-entry facts; the current Section Contract governs the
+    // transition/outcome; Ending Instruction remains subordinate guidance.
     atLines.push(
       `Target ending residue: ${at.label ?? ""}.`,
       "The Ending Instruction describes the emotional, sensory, or thematic residue the ending should leave with the reader. Do not quote, name, or directly restate it unless the current scene independently requires that literal thing. Interpret the label as the underlying residue and shape the final image, tone, and consequence to produce it.",
@@ -1683,8 +1685,9 @@ export function buildPrompt(req: {
       expectedRange: "75–250",
       // PR-360-Z re-tighten (Kevin 2026-08-21 09:37 EDT): Beat's max_tokens
       // must match the 75–250 target range. PR #396 bumped this to 1200
-      // for runway; the prompt authority fix (Section Contract outranks
-      // Project State) makes that workaround unnecessary. Setting to 250.
+      // for runway; the current authority model keeps established Project
+      // State as scene-entry reality and the Section Contract as the current
+      // transition/outcome. Setting to 250.
       hardCap: 250,
     },
     moment: {
@@ -1953,9 +1956,9 @@ Structural limits:
   // is the cache-invariant tail of the user message).
 
   // Project state context — RAG retrieval, aggregated cumulative state.
-  // Kevin 2026-08-21 09:37 EDT: add transition rule. Project State is
-  // CONTINUITY, not the required subject of the next prose. The Section
-  // Contract outranks it.
+  // Kevin 2026-08-21 09:37 EDT: add transition rule. Project State owns
+  // established scene-entry reality, not the required subject of the next
+  // prose. The Section Contract owns the current transition/outcome.
   if (req.projectStateContext) {
     // Kevin 2026-08-22 10:12 EDT narrow correction: Project State is factual
     // continuity data, not a prose sample. Prevents the model from imitating
@@ -1968,7 +1971,7 @@ Structural limits:
     contextLines.push(req.projectStateContext);
     contextLines.push("");
     contextLines.push(
-      "Stable identity facts in Project State—especially character names, pronouns, identity terms, kinship, species, and fixed physical traits—are hard continuity constraints. Do not change them unless the Section Contract explicitly requires that change.",
+      "Stable identity facts in Project State—especially character names, pronouns, identity terms, kinship, species, and fixed physical traits—are hard continuity constraints. Do not retcon them to satisfy the Section Contract. If the current scene legitimately changes a mutable character state, depict that change causally from the established starting state.",
       "",
       "Project State establishes the factual starting conditions for this scene, not the required subject of the prose. Continue from those facts into the Section Contract as directly as necessary.",
       "Do not replay or dwell on prior events merely because they appear in Project State.",
@@ -2004,12 +2007,13 @@ Structural limits:
   }
 
   // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
-  // Supporting structural context only. The Section Contract remains
-  // authoritative (same deferral rule as Dramatic Seed / Relationships /
-  // Themes / Motifs / Ending Instruction). Rendered between Project State
-  // and Section Contract so the model sees arc position immediately before
-  // the per-section contract — gives the model structural awareness
-  // ("this is beat 3 of 7") without overriding the Section Contract.
+  // Supporting structural context only. Project State owns established
+  // scene-entry reality; the Section Contract owns the current
+  // transition/outcome; Story Arc Context remains subordinate creative
+  // guidance. Rendered between Project State and Section Contract so the
+  // model sees arc position immediately before the per-section contract —
+  // gives the model structural awareness ("this is beat 3 of 7") without
+  // redirecting the current transition.
   //
   // Block is omitted entirely when none of the five fields are set
   // (back-compat — iOS direct generation doesn't populate them today;
