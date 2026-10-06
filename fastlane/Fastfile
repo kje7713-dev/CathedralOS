@@ -374,6 +374,62 @@ platform :ios do
   end
 
   # ---------------------------------------------------------------------------
+  # appstore_audit — read current App Store metadata and compare it with the
+  # checked-in English metadata. This lane never writes to Apple.
+  # ---------------------------------------------------------------------------
+  lane :appstore_audit do
+    preflight_checks(%w[ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY APP_IDENTIFIER])
+
+    app_store_connect_api_key(
+      key_id:                ENV["ASC_KEY_ID"],
+      issuer_id:             ENV["ASC_ISSUER_ID"],
+      key_content:           ENV["ASC_API_KEY"],
+      is_key_content_base64: true,
+      in_house:              false
+    )
+
+    app = Spaceship::ConnectAPI::App.find(ENV["APP_IDENTIFIER"])
+    UI.user_error!("App Store Connect app not found for #{ENV['APP_IDENTIFIER']}") unless app
+
+    version = app.get_edit_app_store_version || app.get_latest_app_store_version
+    UI.user_error!("No App Store version exists yet for #{app.name}") unless version
+
+    UI.message("App Store app: #{app.name} (#{app.bundle_id})")
+    UI.message("Version: #{version.version_string} (#{version.app_version_state || version.app_store_state})")
+
+    localizations = version.get_app_store_version_localizations
+    localization = localizations.find { |item| item.locale == "en-US" } ||
+      localizations.find { |item| item.locale.to_s.start_with?("en") }
+    UI.user_error!("No English App Store localization found") unless localization
+
+    metadata_dir = File.join("fastlane", "metadata", "en-US")
+    checks = {
+      "description" => [localization.description, File.join(metadata_dir, "description.txt")],
+      "keywords" => [localization.keywords, File.join(metadata_dir, "keywords.txt")]
+    }
+
+    checks.each do |field, (current, path)|
+      expected = File.exist?(path) ? File.read(path).strip : ""
+      current = current.to_s.strip
+      status = if current.empty?
+        "MISSING"
+      elsif expected.empty?
+        "NO_LOCAL_COPY"
+      elsif current == expected
+        "MATCH"
+      else
+        "DIFF"
+      end
+      UI.message("#{status}: en-US #{field}")
+    end
+
+    screenshot_sets = localization.get_app_screenshot_sets
+    screenshot_count = screenshot_sets.sum { |set| set.app_screenshots.to_a.length }
+    UI.message("INFO: en-US screenshot count: #{screenshot_count}")
+    UI.message("READ-ONLY AUDIT COMPLETE: no App Store metadata was changed.")
+  end
+
+  # ---------------------------------------------------------------------------
   # verify_profile_entitlements — verify the installed App Store provisioning
   # profile includes the Sign in with Apple entitlement.
   #

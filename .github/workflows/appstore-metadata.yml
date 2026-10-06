@@ -3,11 +3,15 @@ name: App Store Metadata
 on:
   workflow_dispatch:
     inputs:
-      apply:
-        description: 'Write checked-in metadata to App Store Connect (default is dry-run)'
+      mode:
+        description: 'Run a read-only audit, local preview, or apply metadata'
         required: true
-        default: false
-        type: boolean
+        default: audit
+        type: choice
+        options:
+          - audit
+          - preview
+          - apply
 
 permissions:
   contents: read
@@ -21,7 +25,7 @@ jobs:
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
       APP_IDENTIFIER: ${{ secrets.APP_IDENTIFIER }}
-      APPLY: ${{ inputs.apply }}
+      MODE: ${{ inputs.mode }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,5 +44,11 @@ jobs:
           test -n "$APP_IDENTIFIER" || { echo 'APP_IDENTIFIER is missing'; exit 1; }
           echo "App Store metadata mode: $([[ "$APPLY" == 'true' ]] && echo apply || echo dry-run)"
 
-      - name: Synchronize metadata
-        run: bundle exec fastlane ios appstore_metadata
+      - name: Audit or synchronize metadata
+        run: |
+          case "$MODE" in
+            audit) bundle exec fastlane ios appstore_audit ;;
+            preview) APPLY=false bundle exec fastlane ios appstore_metadata ;;
+            apply) APPLY=true bundle exec fastlane ios appstore_metadata ;;
+            *) echo "Unknown mode: $MODE"; exit 1 ;;
+          esac
