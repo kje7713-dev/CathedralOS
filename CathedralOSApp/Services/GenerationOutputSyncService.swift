@@ -924,6 +924,12 @@ protocol GenerationOutputDeletionServiceProtocol {
     @MainActor
     func deleteEverywhere(input: GenerationOutputDeletionInput, context: ModelContext) async throws
 
+    /// Deletes every generated output in one project-scoped batch. Tombstones
+    /// are written before cloud deletion so a partial network failure cannot
+    /// resurrect outputs during the next sync.
+    @MainActor
+    func deleteAll(inputs: [GenerationOutputDeletionInput], context: ModelContext) async throws
+
     /// 19:16 EDT Kevin: MainActor so authService.authState (which is
     /// MainActor-isolated) is accessible. Awaits tombstoneService.record
     /// on background queue; the function returns the assignment to
@@ -1250,6 +1256,24 @@ final class GenerationOutputDeletionService: GenerationOutputDeletionServiceProt
     @MainActor
     func deleteEverywhere(input: GenerationOutputDeletionInput, context: ModelContext) async throws {
         try await delete(input: input, scope: .everywhere, context: context)
+    }
+
+    @MainActor
+    func deleteAll(inputs: [GenerationOutputDeletionInput], context: ModelContext) async throws {
+        guard !inputs.isEmpty else { return }
+
+        for input in inputs {
+            let scope: SyncTombstone.DeletionScope = input.cloudGenerationOutputID.isEmpty
+                ? .localOnly
+                : .everywhere
+            await writeTombstone(input: input, scope: scope)
+        }
+
+        for input in inputs where !input.cloudGenerationOutputID.isEmpty {
+            try await deleteCloud(input: input)
+        }
+
+        try deleteLocalBatch(inputs: inputs, context: context)
     }
 
     private func resolveLegacyOwnership(input: GenerationOutputDeletionInput, cloudID: String) async throws {

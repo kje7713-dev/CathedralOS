@@ -127,6 +127,8 @@ struct ProjectDetailView: View {
     @State private var outputFilter: OutputListFilter = .all
     @State private var readLatestOutputID: UUID?
     @State private var outputDeletionError: String?
+    @State private var showDeleteAllOutputsConfirm = false
+    @State private var isDeletingAllOutputs = false
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
@@ -428,6 +430,14 @@ struct ProjectDetailView: View {
             }
         } message: {
             Text("Chapters are long. Make sure your credit balance can cover the generation.")
+        }
+        .alert("Delete All Generated Outputs?", isPresented: $showDeleteAllOutputsConfirm) {
+            Button("Delete All", role: .destructive) {
+                Task { await deleteAllOutputs() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Delete all \(project.generations.count) generated outputs from this project on this device and from the cloud? This cannot be undone.")
         }
         .alert("Output Deletion Failed", isPresented: Binding(
             get: { outputDeletionError != nil },
@@ -1259,8 +1269,40 @@ struct ProjectDetailView: View {
                 }
             }
         } header: {
-            CathedralSectionHeader("Generated Outputs")
-                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
+            HStack {
+                Text("GENERATED OUTPUTS")
+                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                    .tracking(1.5)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Spacer()
+                if !project.generations.isEmpty {
+                    Button {
+                        showDeleteAllOutputsConfirm = true
+                    } label: {
+                        Label("Delete All", systemImage: "trash")
+                            .font(CathedralTheme.Typography.caption(weight: .semibold))
+                    }
+                    .foregroundStyle(.red)
+                    .buttonStyle(.borderless)
+                    .disabled(isDeletingAllOutputs)
+                    .accessibilityLabel("Delete all generated outputs")
+                }
+            }
+            .padding(.top, CathedralTheme.Spacing.xs)
+            .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
+        }
+    }
+
+    @MainActor
+    private func deleteAllOutputs() async {
+        let inputs = project.generations.map(GenerationOutputDeletionInput.init(output:))
+        guard !inputs.isEmpty else { return }
+        isDeletingAllOutputs = true
+        defer { isDeletingAllOutputs = false }
+        do {
+            try await outputDeletionService.deleteAll(inputs: inputs, context: modelContext)
+        } catch {
+            outputDeletionError = GenerationOutputDeletionError.displayMessage(from: error)
         }
     }
 
