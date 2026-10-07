@@ -112,15 +112,6 @@ import type { EmbedSectionRequest } from "../_shared/section-embedding.ts";
 import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
 import { formatCanonicalProjectState } from "../_shared/memory-state.ts";
 import {
-  buildContractRepairPrompt,
-  contractsEqual,
-  CONTRACT_REPAIR_RESPONSE_FORMAT,
-  detectPotentialContractCanonConflict,
-  parseContractRepairResult,
-  type ContractRepairResult,
-  type SectionContractFields,
-} from "./_contract_continuity.ts";
-import {
   analyzeRecentRepetition,
   type CurrentSectionContractLike,
   RECENT_REPETITION_LOOKBACK,
@@ -580,8 +571,6 @@ interface HandlerDependencies {
   generationModelStore?: GenerationModelStore;
   authenticatedUserId?: string;
   persistenceStore?: GenerationPersistenceStore;
-  // Test-only service-role client seam; production leaves this unset.
-  adminClient?: any;
 }
 
 // ---------------------------------------------------------------------------
@@ -810,7 +799,7 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   if (rels?.length) {
     out.push("## Relationships");
     out.push(
-      "(Supporting context only — the current Section Contract always takes precedence. Do not let relationships redirect the section.)",
+      "(Supporting context only. Do not let relationships override established Project State or redirect the current Section Contract.)",
     );
     for (const r of rels) {
       if (nonEmpty(r.name)) out.push(`### ${r.name}`);
@@ -852,7 +841,7 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   if (themes?.length) {
     out.push("## Themes");
     out.push(
-      "(Supporting context only — the current Section Contract always takes precedence. Do not let these questions redirect the section.)",
+      "(Supporting context only. Do not let these questions override established Project State or redirect the current Section Contract.)",
     );
     for (const t of themes) {
       if (nonEmpty(t.question)) out.push(`- ${t.question}`);
@@ -880,7 +869,7 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   if (motifs?.length) {
     out.push("## Motifs");
     out.push(
-      "(Supporting context only — the current Section Contract always takes precedence. These motifs are available story material, not mandatory scene ingredients. Do not include one merely to demonstrate memory or reinforce atmosphere. Recurrence is appropriate when the Section Contract, causality, or physical continuity requires it, or when the motif materially transforms its meaning, function, or consequence. Prefer scene-specific imagery when a familiar motif is unnecessary.)",
+      "(Supporting context only. These motifs are available story material, not mandatory scene ingredients. Do not let them override established Project State or redirect the current Section Contract. Do not include one merely to demonstrate memory or reinforce atmosphere. Recurrence is appropriate when the Section Contract, causality, or physical continuity requires it, or when the motif materially transforms its meaning, function, or consequence. Prefer scene-specific imagery when a familiar motif is unnecessary.)",
     );
     for (const m of motifs) {
       out.push(
@@ -895,10 +884,10 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   }
 
   // 6. Dramatic Seed — Kevin 2026-08-21 09:37 EDT fix: drop "primary
-  //    dramatic engine" language that outranked the Section Contract.
-  //    Spark is SUPPORTING CONTEXT only — it informs the Section Contract
-  //    but must NEVER redirect it. Same rule applies to relationships,
-  //    themes, motifs, ending instruction, intimacy, and prior open loops.
+  //    dramatic engine" language that made the spark appear to govern the
+  //    section outcome. Spark is SUPPORTING CONTEXT only. Project State owns
+  //    established scene-entry reality; the Section Contract owns the current
+  //    transition/outcome; supporting creative guidance remains subordinate.
   const spark = p.selectedStorySpark;
   if (spark) {
     const sparkLines: string[] = [];
@@ -908,7 +897,7 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
       }"`,
     );
     sparkLines.push(
-      "The Section Contract always takes precedence. Do not let the spark redirect, replace, or override the section premise — if the section calls for something other than this spark, follow the Section Contract.",
+      "Do not let the spark override established Project State or redirect the current Section Contract. If the section calls for something other than this spark, follow the current scene contract from the established starting state.",
     );
     if (nonEmpty(spark.situation)) {
       sparkLines.push(`Situation: ${spark.situation}`);
@@ -997,8 +986,9 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
   }
 
   // 8. Ending Instruction — Kevin 2026-08-21 09:37 EDT fix: supporting
-  //    context only, must NEVER redirect the Section Contract. Aftertaste
-  //    shapes HOW the Section Contract closes, not WHAT closes.
+  //    creative guidance only. Project State governs established scene-entry
+  //    facts; the Section Contract governs the current transition/outcome;
+  //    aftertaste shapes HOW that outcome closes, not WHAT closes.
   const at = p.selectedAftertaste;
   if (at) {
     const atLines: string[] = [];
@@ -1010,12 +1000,13 @@ function buildStructuredPromptBody(p: PromptPackPayloadShape): string[] {
     // underlying residue (e.g., "Vomit" → nausea, disgust, stomach turning,
     // sour/bitter sensory residue, physical revulsion if organically
     // appropriate) and never quote/name it directly unless the current scene
-    // independently requires that literal thing. Section Contract still
-    // outranks Ending Instruction.
+    // independently requires that literal thing. Established Project State
+    // governs scene-entry facts; the current Section Contract governs the
+    // transition/outcome; Ending Instruction remains subordinate guidance.
     atLines.push(
       `Target ending residue: ${at.label ?? ""}.`,
       "The Ending Instruction describes the emotional, sensory, or thematic residue the ending should leave with the reader. Do not quote, name, or directly restate it unless the current scene independently requires that literal thing. Interpret the label as the underlying residue and shape the final image, tone, and consequence to produce it.",
-      "The current Section Contract always takes precedence over the Ending Instruction.",
+      "The Ending Instruction is subordinate to established Project State and the current Section Contract; shape the residue without redirecting the scene.",
     );
     if (nonEmpty(at.note)) atLines.push(at.note!);
     if (nonEmpty(at.emotionalResidue)) {
@@ -1694,8 +1685,9 @@ export function buildPrompt(req: {
       expectedRange: "75–250",
       // PR-360-Z re-tighten (Kevin 2026-08-21 09:37 EDT): Beat's max_tokens
       // must match the 75–250 target range. PR #396 bumped this to 1200
-      // for runway; the prompt authority fix (Section Contract outranks
-      // Project State) makes that workaround unnecessary. Setting to 250.
+      // for runway; the current authority model keeps established Project
+      // State as scene-entry reality and the Section Contract as the current
+      // transition/outcome. Setting to 250.
       hardCap: 250,
     },
     moment: {
@@ -1914,14 +1906,16 @@ Structural limits:
     craftLines.push(
       "## Section Contract Authority",
       "",
-      "The current Section Contract is the authoritative writing directive for this scene. It outranks ALL other creative guidance in this prompt — Dramatic Seed, Themes, Motifs, Relationships, Ending Instruction, Intimacy guidance, and Project State (prior scenes).",
+      "Established Project State is authoritative for concrete facts that are already true at the beginning of this scene. Do not retcon established events, character states, locations, relationships, possessions, injuries, deaths, arrivals, departures, or other concrete prior facts in order to satisfy the Section Contract.",
+      "The current Section Contract is authoritative for what this scene must accomplish FROM that established starting state. Treat its required dramatic outcome as a transition to create now, not permission to rewrite what already happened.",
+      "If the Section Contract assumes a prior fact that conflicts with established Project State, preserve the contract's dramatic purpose and intended consequence by making the required change occur causally within the current scene whenever possible. Do not rewrite prior canon.",
+      "Future Outline Obligations are trajectory constraints only. Do not enact them early, do not treat them as facts that have already happened, and do not force awkward foreshadowing. Use them only to avoid discretionary current-scene choices that would make the planned future trajectory impossible or implausible.",
+      "Authority order: 1. Established Project State defines scene-entry reality. 2. The current Section Contract defines the required transition and outcome for this scene. 3. Future Outline Obligations constrain what must remain possible later. 4. Other creative guidance is subordinate to the above.",
       "",
-      "Container scope and the Section Contract are jointly authoritative. The Container controls the scale and shape of the output; the Section Contract controls its subject and required outcome. If the Section Contract is broader than the Container, select one container-sized portion using the Container’s “What it contains” definition. Fully develop and complete that unit rather than summarizing or cramming the larger section.",
+      "Container scope and the Section Contract are jointly authoritative within that order. The Container controls the scale and shape of the output; the Section Contract controls its subject and required outcome. If the Section Contract is broader than the Container, select one container-sized portion using the Container’s “What it contains” definition. Fully develop and complete that unit rather than summarizing or cramming the larger section.",
       "The expected range is a genuine target. Do not finish below its minimum by reducing a major event to a gesture, threat, near miss, or summary. Develop the selected event through concrete actions, obstacles, reactions, reversals, and consequences appropriate to the Container, without unrelated padding.",
       "",
-      "These are supporting context only and must NEVER redirect the current section. If they conflict with the Section Contract, follow the Section Contract.",
-      "",
-      "Death rule (kept separately as required): if the Section Contract summary establishes a character as already dead, do not depict that character alive unless the summary explicitly requires a flashback, memory, or similar device.",
+      "Death rule: established canon controls whether a character is already dead at scene entry. If established Project State says the character is dead, do not depict them alive except in an explicitly required flashback, memory, dream, recording, or similar device. If established Project State says the character is alive but the Section Contract requires their death, the death may occur during the current scene. Do not rewrite prior canon to claim they were already dead.",
       "",
       "Container invariants:",
       `- Container: ${cfg.name}`,
@@ -1962,9 +1956,9 @@ Structural limits:
   // is the cache-invariant tail of the user message).
 
   // Project state context — RAG retrieval, aggregated cumulative state.
-  // Kevin 2026-08-21 09:37 EDT: add transition rule. Project State is
-  // CONTINUITY, not the required subject of the next prose. The Section
-  // Contract outranks it.
+  // Kevin 2026-08-21 09:37 EDT: add transition rule. Project State owns
+  // established scene-entry reality, not the required subject of the next
+  // prose. The Section Contract owns the current transition/outcome.
   if (req.projectStateContext) {
     // Kevin 2026-08-22 10:12 EDT narrow correction: Project State is factual
     // continuity data, not a prose sample. Prevents the model from imitating
@@ -1977,9 +1971,11 @@ Structural limits:
     contextLines.push(req.projectStateContext);
     contextLines.push("");
     contextLines.push(
-      "Stable identity facts in Project State—especially character names, pronouns, identity terms, kinship, species, and fixed physical traits—are hard continuity constraints. Do not change them unless the Section Contract explicitly requires that change.",
+      "Stable identity facts in Project State—especially character names, pronouns, identity terms, kinship, species, and fixed physical traits—are hard continuity constraints. Do not retcon them to satisfy the Section Contract. If the current scene legitimately changes a mutable character state, depict that change causally from the established starting state.",
       "",
-      "Project State establishes continuity, not the required subject of the next prose. Transition from prior state into the Section Contract as directly as necessary. Do not continue the previous interaction merely because it was the latest event.",
+      "Project State establishes the factual starting conditions for this scene, not the required subject of the prose. Continue from those facts into the Section Contract as directly as necessary.",
+      "Do not replay or dwell on prior events merely because they appear in Project State.",
+      "Do not alter established Project State to make the Section Contract easier to satisfy. If the contract’s assumed setup is stale, preserve its intended dramatic function by creating the needed transition now.",
     );
     contextLines.push("");
   }
@@ -2011,12 +2007,13 @@ Structural limits:
   }
 
   // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
-  // Supporting structural context only. The Section Contract remains
-  // authoritative (same deferral rule as Dramatic Seed / Relationships /
-  // Themes / Motifs / Ending Instruction). Rendered between Project State
-  // and Section Contract so the model sees arc position immediately before
-  // the per-section contract — gives the model structural awareness
-  // ("this is beat 3 of 7") without overriding the Section Contract.
+  // Supporting structural context only. Project State owns established
+  // scene-entry reality; the Section Contract owns the current
+  // transition/outcome; Story Arc Context remains subordinate creative
+  // guidance. Rendered between Project State and Section Contract so the
+  // model sees arc position immediately before the per-section contract —
+  // gives the model structural awareness ("this is beat 3 of 7") without
+  // redirecting the current transition.
   //
   // Block is omitted entirely when none of the five fields are set
   // (back-compat — iOS direct generation doesn't populate them today;
@@ -2439,7 +2436,6 @@ async function handler(
     generationModelStore,
     authenticatedUserId,
     persistenceStore: injectedPersistenceStore,
-    adminClient: injectedAdminClient,
   } = deps;
 
   // Preflight
@@ -2576,15 +2572,13 @@ async function handler(
 
   let store: CreditStore;
   let limiter: RateLimitStore;
-  const requiresAdminClient = injectedAdminClient === undefined && (
-    creditStore === undefined ||
+  const requiresAdminClient = creditStore === undefined ||
     rateLimitStore === undefined ||
     injectedPersistenceStore === undefined ||
-    generationModelStore === undefined
-  );
+    generationModelStore === undefined;
   let adminClient:
     // deno-lint-ignore no-explicit-any
-    any | null = injectedAdminClient ?? null;
+    any | null = null;
 
   if (requiresAdminClient) {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -3227,137 +3221,6 @@ async function handler(
       body.outline_section_id ?? undefined,
     )
     : [];
-
-  // Run All only: inspect a suspicious concrete-state assertion before prompt
-  // assembly. The billable reconciliation call is the semantic decision-maker.
-  const currentContract: SectionContractFields = {
-    title: body.sectionTitle ?? "",
-    summary: body.sectionSummary ?? "",
-    entryState: body.sectionEntryState ?? "",
-    dramaticEvent: body.sectionDramaticEvent ?? "",
-    resultingChange: body.sectionResultingChange ?? "",
-    terminalState: body.sectionTerminalState ?? "",
-  };
-  const continuityCandidate = durableRunId && projectStateContext
-    ? detectPotentialContractCanonConflict(projectStateContext, currentContract)
-    : null;
-  if (durableRunId && continuityCandidate) {
-    try {
-      const repairResult = await runBillableLLM<ContractRepairResult>(
-        {
-          userID: userId,
-          purpose: "coherence-check",
-          action: "section-contract-repair",
-          model: selectedModel,
-          messages: [
-            {
-              role: "system",
-              content:
-                "You reconcile a stale current story Section Contract against established canon. Canon wins. Return only JSON.",
-            },
-            {
-              role: "user",
-              content: buildContractRepairPrompt(
-                projectStateContext,
-                currentContract,
-                {
-                  container,
-                  terminalBeat: body.terminalBeat ?? null,
-                  storyArcName: outlineSectionCtx.storyArc.name ?? null,
-                  storyArcBeatLabel: outlineSectionCtx.storyArc.beatLabel ?? null,
-                  storyArcBeatPurpose: outlineSectionCtx.storyArc.beatPurpose ?? null,
-                  storyArcPosition: outlineSectionCtx.storyArc.position ?? null,
-                  storyArcTotalBeats: outlineSectionCtx.storyArc.totalBeats ?? null,
-                  storyArcWithinBeatPosition:
-                    outlineSectionCtx.storyArc.withinBeatPosition ?? null,
-                  storyArcWithinBeatTotal:
-                    outlineSectionCtx.storyArc.withinBeatTotal ?? null,
-                },
-                body.futureOutlineContext ?? "",
-                continuityCandidate,
-              ),
-            },
-          ],
-          maxOutputTokens: 1200,
-          providerOptions: {
-            responseFormat: CONTRACT_REPAIR_RESPONSE_FORMAT,
-            responseFormatTarget: "chat",
-          },
-          usageContext: {
-            projectID,
-            generationOutputID: null,
-            generationLengthMode: "short",
-            outputBudget: 1200,
-            idempotencyKey:
-              `${durableRunId}:${body.outline_section_id}:section-contract-repair`,
-          },
-          onProviderSuccess: async (result: BillableProviderResult) =>
-            parseContractRepairResult(result.content),
-        },
-        {
-          adminClient,
-          provider: llm,
-          creditStore: store,
-        },
-      );
-      const repairedResult = repairResult.featureResult;
-      if (!repairedResult.conflict) {
-        if (!contractsEqual(currentContract, repairedResult.contract)) {
-          throw new Error(
-            "A no-conflict continuity response changed the Section Contract",
-          );
-        }
-      } else {
-        const repaired = repairedResult.contract;
-        if (
-          Object.values(repaired).some((value) =>
-            typeof value !== "string" || value.trim().length === 0
-          )
-        ) {
-          throw new Error("A conflict repair returned an incomplete contract");
-        }
-        body.sectionTitle = repaired.title;
-        body.sectionSummary = repaired.summary;
-        body.sectionEntryState = repaired.entryState ?? undefined;
-        body.sectionDramaticEvent = repaired.dramaticEvent ?? undefined;
-        body.sectionResultingChange = repaired.resultingChange ?? undefined;
-        body.sectionTerminalState = repaired.terminalState ?? undefined;
-      }
-    } catch (error) {
-      console.error(
-        `[generate-story] section contract repair failed: ${String(error)}`,
-      );
-      if (error instanceof BillableLLMError) {
-        return corsResponse(
-          JSON.stringify({
-            status: "failed",
-            errorCode: error.code,
-            errorMessage: error.message,
-          }),
-          { status: error.code === "insufficient_credits" ? 402 : 500 },
-        );
-      }
-      if (error instanceof ProviderError) {
-        const failure = providerErrorResponse(
-          error.errorCode,
-          error.message,
-        );
-        return corsResponse(JSON.stringify(failure.body), {
-          status: failure.httpStatus,
-          ...(failure.headers ? { headers: failure.headers } : {}),
-        });
-      }
-      return corsResponse(
-        JSON.stringify({
-          status: "failed",
-          errorCode: "section_contract_continuity_conflict",
-          errorMessage:
-            "Could not reconcile the current Section Contract with established canon.",
-        }),
-        { status: 422 },
-      );
-    }
-  }
 
   // PR-372: destructure stable/volatile blocks. Canon is now in stable
   // (per the buildPrompt refactor); Section Contract values + project state
