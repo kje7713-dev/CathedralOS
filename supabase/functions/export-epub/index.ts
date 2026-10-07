@@ -180,7 +180,9 @@ async function handleExport(req: Request, userId: string): Promise<Response> {
       localProjectId,
       snapshotProjectId,
     );
-    const estimatedBilling = estimateAiCoverBilling(buildCoverPrompt(outline));
+    const estimatedBilling = estimateAiCoverBilling(
+      buildCoverPrompt(outline, body.book_title),
+    );
     return json({
       estimated_credit_charge: Math.ceil(estimatedBilling.actualCharge),
     });
@@ -230,7 +232,7 @@ async function processJob(
         if (req.cover_image_ai_generate && !aiCoverReserved) {
           try {
             const estimatedBilling = estimateAiCoverBilling(
-              buildCoverPrompt(outline),
+              buildCoverPrompt(outline, req.book_title),
             );
             await reserveAiCoverCredits(
               supabaseAdmin,

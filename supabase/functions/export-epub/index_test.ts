@@ -118,7 +118,7 @@ function makeWarningOnlyResult(): ValidationResult {
 Deno.test("AI cover prompt uses story-wide recipe signals", () => {
   const outline: ProjectOutline = {
     id: "outline-1",
-    title: "The Long Return",
+    title: "Outline",
     chapters: [],
     parts: [],
     storyBrief: {
@@ -131,12 +131,18 @@ Deno.test("AI cover prompt uses story-wide recipe signals", () => {
       endingTexture: "haunted but tender",
     },
   };
-  const prompt = buildCoverPrompt(outline);
+  const prompt = buildCoverPrompt(outline, "Tartaria Magna");
+  assertStringIncludes(prompt, 'book "Tartaria Magna"');
+  assertEquals(prompt.includes('book "Outline"'), false);
   assertStringIncludes(prompt, "drowned city");
   assertStringIncludes(prompt, "saltwater gothic");
   assertStringIncludes(prompt, "Mara");
   assertStringIncludes(prompt, "memory versus truth");
   assertStringIncludes(prompt, "whole story");
+  assertStringIncludes(
+    prompt,
+    "do not render readable text, letters, logos, or words",
+  );
 });
 
 Deno.test("EPUB writer: preserves blank-line paragraph boundaries", () => {

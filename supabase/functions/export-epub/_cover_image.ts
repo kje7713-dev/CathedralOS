@@ -50,7 +50,7 @@ export async function generateOrFetchCover(
 
   // Path B: OpenAI image generation
   if (req.cover_image_ai_generate) {
-    return await generateCoverWithDallE(outline);
+    return await generateCoverWithDallE(outline, req.book_title);
   }
 
   // Path C: no cover
@@ -59,11 +59,12 @@ export async function generateOrFetchCover(
 
 async function generateCoverWithDallE(
   outline: ProjectOutline,
+  bookTitle: string,
 ): Promise<CoverResult> {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
-  const prompt = buildCoverPrompt(outline);
+  const prompt = buildCoverPrompt(outline, bookTitle);
 
   const model = Deno.env.get("OPENAI_IMAGE_MODEL") ?? "gpt-image-1";
 
@@ -135,10 +136,13 @@ async function generateCoverWithDallE(
   };
 }
 
-export function buildCoverPrompt(outline: ProjectOutline): string {
+export function buildCoverPrompt(
+  outline: ProjectOutline,
+  bookTitle: string,
+): string {
   const brief = outline.storyBrief ?? {};
   return [
-    `Create a cohesive literary book cover for "${outline.title}" representing the whole story, not one isolated scene.`,
+    `Create cohesive literary cover art for the book "${bookTitle}", representing the whole story, not one isolated scene. The title is context only; do not render readable text, letters, logos, or words.`,
     brief.projectSummary ? `Premise: ${brief.projectSummary}` : "",
     brief.recipe ? `Recipe and story arc: ${brief.recipe}` : "",
     brief.setting ? `Setting and atmosphere: ${brief.setting}` : "",
@@ -146,6 +150,6 @@ export function buildCoverPrompt(outline: ProjectOutline): string {
     brief.conflict ? `Central conflict and stakes: ${brief.conflict}` : "",
     brief.themes ? `Themes and motifs: ${brief.themes}` : "",
     brief.endingTexture ? `Emotional aftertaste: ${brief.endingTexture}` : "",
-    "Use the recurring visual idea that best unifies these signals. No readable text, letters, logos, or words; no spoilers.",
+    "Use the recurring visual idea that best unifies these signals; no spoilers.",
   ].filter(Boolean).join(" ");
 }

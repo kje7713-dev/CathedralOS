@@ -4,7 +4,7 @@
 export function formatCanonicalProjectState(
   scenes: Array<Record<string, unknown>>,
   previousScene?: Record<string, unknown>,
-  maxChars = 24_000,
+  maxChars = 50_000,
 ): string {
   const characters = new Map<string, Record<string, unknown>>();
   const threads = new Map<string, Record<string, unknown>>();
@@ -89,6 +89,28 @@ export function formatCanonicalProjectState(
       } else loops.set(id, record);
     }
   }
+  const isStableIdentityFact = (item: Record<string, unknown>) =>
+    key(item.reference).split(" ").includes("identity");
+  const stableIdentityFacts = Array.from(facts.values()).filter(
+    isStableIdentityFact,
+  );
+  const remainingFacts = Array.from(facts.values()).filter(
+    (item) => !isStableIdentityFact(item),
+  );
+
+  if (stableIdentityFacts.length) {
+    lines.push(
+      "## Stable Identity Facts",
+      "",
+      ...stableIdentityFacts.map((item) =>
+        `- ${String(item.reference ?? "no-reference")}: ${
+          String(item.fact ?? "")
+        }`
+      ),
+      "",
+    );
+  }
+
   lines.push("## Cumulative Story State", "");
   if (characters.size) {
     lines.push(
@@ -113,10 +135,10 @@ export function formatCanonicalProjectState(
       "",
     );
   }
-  if (facts.size) {
+  if (remainingFacts.length) {
     lines.push(
       "Continuity Facts:",
-      ...Array.from(facts.values()).map((item) =>
+      ...remainingFacts.map((item) =>
         `- ${String(item.reference ?? "no-reference")}: ${
           String(item.fact ?? "")
         }`

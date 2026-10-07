@@ -340,6 +340,83 @@ Deno.test("first lifecycle hints establish safe canonical identities", () => {
   assertEquals(typeof result.open_loops[0].id, "string");
 });
 
+Deno.test("canonical project state defaults to 50k and prioritizes stable identity facts", () => {
+  const state = formatCanonicalProjectState([{
+    continuity_facts: [{
+      reference: "character:Sava:identity:pronouns",
+      fact: "Sava uses he/him pronouns.",
+      active: true,
+    }, {
+      reference: "ordinary-fact",
+      fact: "The lantern remains lit.",
+      active: true,
+    }],
+    character_deltas: [{
+      character_name: "Mara",
+      state: "x".repeat(60_000),
+    }],
+  }]);
+
+  assertEquals(state.length, 50_000);
+  assertEquals(
+    state.indexOf("## Stable Identity Facts") <
+      state.indexOf("## Cumulative Story State"),
+    true,
+  );
+  assertEquals(
+    state.indexOf(
+      "character:Sava:identity:pronouns: Sava uses he/him pronouns.",
+    ) <
+      state.indexOf("Characters:"),
+    true,
+  );
+});
+
+Deno.test("stable identity facts survive a smaller project-state cap", () => {
+  const state = formatCanonicalProjectState(
+    [{
+      continuity_facts: [{
+        reference: "character:Sava:identity:pronouns",
+        fact: "Sava uses he/him pronouns.",
+        active: true,
+      }],
+      character_deltas: [{
+        character_name: "Mara",
+        state: "x".repeat(10_000),
+      }],
+    }],
+    undefined,
+    1_000,
+  );
+
+  assertStringIncludes(
+    state,
+    "character:Sava:identity:pronouns: Sava uses he/him pronouns.",
+  );
+});
+
+Deno.test("canonical project state keeps active ordinary facts and omits inactive facts", () => {
+  const state = formatCanonicalProjectState([{
+    continuity_facts: [{
+      reference: "ordinary-active",
+      fact: "The lantern remains lit.",
+      active: true,
+    }, {
+      reference: "ordinary-inactive",
+      fact: "The door is locked.",
+      active: false,
+    }, {
+      reference: "ordinary-superseded",
+      fact: "The road is open.",
+      superseded_by: "ordinary-active",
+    }],
+  }]);
+
+  assertStringIncludes(state, "ordinary-active: The lantern remains lit.");
+  assertEquals(state.includes("ordinary-inactive"), false);
+  assertEquals(state.includes("ordinary-superseded"), false);
+});
+
 Deno.test("character identity facts canonicalize model-supplied entity references", () => {
   const prior = {
     continuity_facts: [{
