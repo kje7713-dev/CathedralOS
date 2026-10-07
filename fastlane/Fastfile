@@ -365,7 +365,7 @@ platform :ios do
     app = Spaceship::ConnectAPI::App.find(ENV["APP_IDENTIFIER"])
     UI.user_error!("App Store Connect app not found for #{ENV['APP_IDENTIFIER']}") unless app
 
-    metadata_dir = File.join("fastlane", "metadata", "en-US")
+    metadata_dir = File.expand_path("metadata/en-US", __dir__)
     read_metadata = lambda do |name|
       path = File.join(metadata_dir, name)
       UI.user_error!("Missing checked-in metadata file: #{path}") unless File.file?(path)
