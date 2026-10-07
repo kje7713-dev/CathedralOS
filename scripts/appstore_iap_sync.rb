@@ -52,7 +52,7 @@ def included_price_point(client, iap_id, target_price)
 end
 
 def create_price_schedule(client, iap_id, point_id)
-  inline_price_id = "price-#{iap_id}-usa"
+  inline_price_id = "${price}"
   client.request("post", "/v1/inAppPurchasePriceSchedules", {
     data: {
       type: "inAppPurchasePriceSchedules",
