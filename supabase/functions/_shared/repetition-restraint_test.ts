@@ -4,11 +4,13 @@ import {
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   analyzeRecentRepetition,
+  classifySectionEntryFamily,
   deriveAvoidMotifs,
   deriveRepeatedOpenings,
   deriveRepeatedPhrases,
   deriveRhythmGuidance,
   deriveSaturatedResponseFamilies,
+  deriveSaturatedSectionEntryFamilies,
   normalizeOpeningKey,
   RECENT_REPETITION_LOOKBACK,
   renderRecentRepetitionBlock,
@@ -129,6 +131,230 @@ Deno.test("repetition restraint uses only the latest eight sections and motif co
   assertEquals(guidance.avoidMotifs, ["radio"]);
 });
 
+Deno.test("section-entry classifier collapses subject plus auxiliary variants", () => {
+  for (
+    const sentence of [
+      "Miran had reached the eastern quay before sunrise.",
+      "Miran had taken the ledger from the shelf.",
+      "Miran was already waiting beside the ferry.",
+      "Miran could hear the bells across the river.",
+      "Anika had crossed before him.",
+    ]
+  ) {
+    assertEquals(
+      classifySectionEntryFamily(sentence),
+      "subject + auxiliary openings",
+    );
+  }
+});
+
+Deno.test("section-entry classifier gives definite article precedence", () => {
+  assertEquals(
+    classifySectionEntryFamily("The ferry was empty when Miran arrived."),
+    "definite-article subject openings",
+  );
+});
+
+Deno.test("section-entry classifier gives temporal openings precedence", () => {
+  assertEquals(
+    classifySectionEntryFamily("By dawn, Miran had crossed the lower ward."),
+    "temporal/transition openings",
+  );
+  assertEquals(
+    classifySectionEntryFamily(
+      "When Miran reached the quay, the boats were gone.",
+    ),
+    "temporal/transition openings",
+  );
+  assertEquals(
+    classifySectionEntryFamily("At first light, the carts began moving."),
+    "temporal/transition openings",
+  );
+});
+
+Deno.test("section-entry classifier recognizes dialogue openings", () => {
+  assertEquals(
+    classifySectionEntryFamily('"Move the ledger," Anika said.'),
+    "dialogue openings",
+  );
+});
+
+Deno.test("structural section-entry variants saturate across sections", () => {
+  const guidance = analyzeRecentRepetition({
+    recentRawText: [
+      "Miran had reached the eastern quay.",
+      "Miran was standing beside the ferry.",
+      "Miran could hear the bells across the river.",
+      "A different opening begins here.",
+      "Another distinct entry begins here.",
+      "The final scene uses another entry.",
+      "A last distinct entry begins here.",
+      "One more different entry begins here.",
+    ],
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(
+    guidance.saturatedSectionEntryFamilies,
+    ["subject + auxiliary openings"],
+  );
+});
+
+Deno.test("section-entry families do not saturate below their thresholds", () => {
+  const guidance = analyzeRecentRepetition({
+    recentRawText: [
+      "Miran had reached the quay.",
+      "Miran could hear the bells.",
+      "The ferry was empty.",
+      "The council chamber was quiet.",
+      "By dawn, the boats were gone.",
+      "When Miran arrived, nobody moved.",
+      '"Move the ledger," Anika said.',
+      "Miran crossed the courtyard.",
+    ],
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(guidance.saturatedSectionEntryFamilies, []);
+});
+
+Deno.test("definite-article section entries saturate at four sections", () => {
+  assertEquals(
+    deriveSaturatedSectionEntryFamilies([
+      "The ferry was empty.",
+      "The clerk waited.",
+      "The road narrowed.",
+      "The council gathered.",
+      "Miran crossed the courtyard.",
+    ]),
+    ["definite-article subject openings"],
+  );
+});
+
+Deno.test("section-entry saturation uses only the latest eight sections", () => {
+  const oldSaturated = [
+    "Miran had reached the quay.",
+    "Miran was standing beside the ferry.",
+    "Miran could hear the bells.",
+  ];
+  const latestEight = Array.from(
+    { length: 8 },
+    (_, i) => `A distinct action begins in section ${i}.`,
+  );
+  const guidance = analyzeRecentRepetition({
+    recentRawText: [...oldSaturated, ...latestEight],
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(guidance.saturatedSectionEntryFamilies, []);
+});
+
+function sentenceWithTokens(count: number): string {
+  return `${Array.from({ length: count }, (_, i) => `word${i}`).join(" ")}.`;
+}
+
+Deno.test("sentence-length guidance detects short, medium, and long saturation", () => {
+  assertStringIncludes(
+    deriveRhythmGuidance(
+      Array.from({ length: 20 }, () => sentenceWithTokens(4)),
+    ) ?? "",
+    "heavily favor short sentences",
+  );
+  assertStringIncludes(
+    deriveRhythmGuidance(
+      Array.from({ length: 20 }, () => sentenceWithTokens(12)),
+    ) ?? "",
+    "heavily favor medium-length sentences",
+  );
+  assertStringIncludes(
+    deriveRhythmGuidance(
+      Array.from({ length: 20 }, () => sentenceWithTokens(22)),
+    ) ?? "",
+    "heavily favor long sentences",
+  );
+});
+
+Deno.test("sentence-length guidance stays quiet for balanced or tiny samples", () => {
+  const balanced = [
+    ...Array.from({ length: 8 }, () => sentenceWithTokens(4)),
+    ...Array.from({ length: 6 }, () => sentenceWithTokens(12)),
+    ...Array.from({ length: 6 }, () => sentenceWithTokens(22)),
+  ].join(" ");
+  assertEquals(deriveRhythmGuidance([balanced]), undefined);
+  const tinyGuidance = deriveRhythmGuidance(
+    Array.from({ length: 19 }, () => sentenceWithTokens(12)),
+  );
+  assertEquals(
+    tinyGuidance?.includes("heavily favor medium-length sentences") ?? false,
+    false,
+  );
+});
+
+Deno.test("paragraph and sentence-length rhythm guidance combine", () => {
+  const sections = Array.from(
+    { length: 20 },
+    () => sentenceWithTokens(12),
+  ).join("\n\n");
+  const guidance = deriveRhythmGuidance([sections]);
+  assertStringIncludes(guidance ?? "", "isolated one-sentence paragraphs");
+  assertStringIncludes(guidance ?? "", "medium-length sentences");
+});
+
+Deno.test("rhythm guidance uses only the latest eight sections", () => {
+  const oldUniform = Array.from(
+    { length: 20 },
+    () => sentenceWithTokens(4),
+  ).join(" ");
+  const balancedLatest = Array.from(
+    { length: 8 },
+    () =>
+      [sentenceWithTokens(4), sentenceWithTokens(12), sentenceWithTokens(22)]
+        .join(" "),
+  );
+  const guidance = analyzeRecentRepetition({
+    recentRawText: [...Array(20).fill(oldUniform), ...balancedLatest],
+    selectedMotifs: [],
+    currentContract: null,
+  });
+  assertEquals(guidance.rhythmGuidance, undefined);
+});
+
+Deno.test("rendered section-entry guidance preserves authority and soft restraint", () => {
+  const block = renderRecentRepetitionBlock({
+    requiredMotifs: [],
+    avoidMotifs: [],
+    avoidSentenceOpenings: [],
+    avoidPhrases: [],
+    saturatedResponseFamilies: [],
+    saturatedSectionEntryFamilies: [
+      "subject + auxiliary openings",
+      "definite-article subject openings",
+    ],
+    rhythmGuidance: undefined,
+  });
+  assertStringIncludes(block, "Recent section-entry habits are saturated");
+  assertStringIncludes(block, "subject + auxiliary openings");
+  assertStringIncludes(block, "definite-article subject openings");
+  assertStringIncludes(block, "Do not mechanically invert sentences");
+  assertStringIncludes(block, "Section Contract remains authoritative");
+});
+
+Deno.test("empty section-entry guidance remains absent from the prompt block", () => {
+  const block = renderRecentRepetitionBlock({
+    requiredMotifs: [],
+    avoidMotifs: [],
+    avoidSentenceOpenings: [],
+    avoidPhrases: [],
+    saturatedResponseFamilies: [],
+    saturatedSectionEntryFamilies: [],
+    rhythmGuidance: undefined,
+  });
+  assertEquals(
+    block.includes("Recent section-entry habits are saturated"),
+    false,
+  );
+});
+
 Deno.test("repetition restraint emits rhythm only above the explicit threshold", () => {
   assertEquals(
     deriveRhythmGuidance([
@@ -149,6 +375,7 @@ Deno.test("rendered restraint is bounded guidance and never includes raw prose o
     avoidSentenceOpenings: ["she turned toward the"],
     avoidPhrases: ["held the radio"],
     saturatedResponseFamilies: [],
+    saturatedSectionEntryFamilies: [],
     rhythmGuidance: "Use fuller paragraph development where natural.",
   });
   assertStringIncludes(block, "## Recent Repetition Restraint");
@@ -354,6 +581,7 @@ Deno.test("rendered saturated-family guidance discourages synonym swapping", () 
       "gaze/orientation reactions",
       "swallowing/throat reactions",
     ],
+    saturatedSectionEntryFamilies: [],
     rhythmGuidance: undefined,
   });
   assertStringIncludes(block, "## Recent Repetition Restraint");
@@ -403,6 +631,7 @@ Deno.test("rendered restraint block is bounded guidance and never includes raw p
     avoidSentenceOpenings: ["she turned toward the"],
     avoidPhrases: ["held the radio"],
     saturatedResponseFamilies: [],
+    saturatedSectionEntryFamilies: [],
     rhythmGuidance: "Use fuller paragraph development where natural.",
   });
   assertStringIncludes(block, "## Recent Repetition Restraint");
@@ -412,7 +641,6 @@ Deno.test("rendered restraint block is bounded guidance and never includes raw p
   assertEquals(block.includes("recentRawText"), false);
   assertEquals(block.includes("saturatedResponseFamilies"), false);
 });
-
 
 Deno.test("saturated families are ranked by section-count frequency, not declaration order", () => {
   // 5 sections. Frequencies:
