@@ -79,6 +79,7 @@ jobs:
             SUPABASE_PROJECT_URL="" \
             SUPABASE_ANON_KEY="" \
             PUBLIC_SHARING_BASE_URL="" \
+            SKIP_RUNTIME_CONFIG_INJECTION=YES \
             CODE_SIGNING_ALLOWED=NO
 
       - name: StoreKit regression XCTest suites
@@ -93,4 +94,5 @@ jobs:
             SUPABASE_PROJECT_URL="" \
             SUPABASE_ANON_KEY="" \
             PUBLIC_SHARING_BASE_URL="" \
+            SKIP_RUNTIME_CONFIG_INJECTION=YES \
             CODE_SIGNING_ALLOWED=NO
