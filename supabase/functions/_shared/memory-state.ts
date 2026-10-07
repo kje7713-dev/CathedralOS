@@ -89,8 +89,23 @@ export function formatCanonicalProjectState(
       } else loops.set(id, record);
     }
   }
-  const isStableIdentityFact = (item: Record<string, unknown>) =>
-    key(item.reference).split(" ").includes("identity");
+  const stableIdentityCategories = new Set([
+    "pronoun",
+    "pronouns",
+    "gender",
+    "identity",
+    "kinship",
+    "species",
+    "name",
+    "physical",
+  ]);
+  const isStableIdentityFact = (item: Record<string, unknown>) => {
+    const parts = key(item.reference).split(" ").filter(Boolean);
+    const identityIndex = parts.indexOf("identity");
+    if (parts[0] !== "character" || identityIndex < 1) return false;
+    const category = parts[identityIndex + 1];
+    return stableIdentityCategories.has(category);
+  };
   const stableIdentityFacts = Array.from(facts.values()).filter(
     isStableIdentityFact,
   );

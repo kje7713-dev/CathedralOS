@@ -372,6 +372,91 @@ Deno.test("canonical project state defaults to 50k and prioritizes stable identi
   );
 });
 
+Deno.test("only stable character identity categories are prioritized", () => {
+  const state = formatCanonicalProjectState([{
+    continuity_facts: [
+      {
+        reference: "character:Sava:identity:pronouns",
+        fact: "Sava uses he/him pronouns.",
+        active: true,
+      },
+      {
+        reference: "character:Sava:identity:pronouns-he/him",
+        fact: "Sava uses he/him pronouns.",
+        active: true,
+      },
+      {
+        reference: "character:Anika Reedrunner:identity:physical:hair",
+        fact: "Anika has dark hair bound with blue cloth.",
+        active: true,
+      },
+      {
+        reference: "character:Sava:identity:physical:sign-mark",
+        fact: "Sava's sign-mark is a thumbprint-like hollow.",
+        active: true,
+      },
+      {
+        reference: "character:senior-clerk:identity:physical:beard",
+        fact: "The senior clerk has a gray beard tied under his chin.",
+        active: true,
+      },
+      {
+        reference: "character:Miran:identity:location",
+        fact: "Miran is at the river.",
+        active: true,
+      },
+      {
+        reference: "character:Miran:identity:no-charcoal-left",
+        fact: "Miran has no charcoal left.",
+        active: true,
+      },
+      {
+        reference: "character:Sava:identity:uses-a-walking-stick",
+        fact: "Sava uses a walking stick.",
+        active: true,
+      },
+      {
+        reference: "character:Miran:identity:occupation-clerk",
+        fact: "Miran is currently assigned as a clerk.",
+        active: true,
+      },
+    ],
+  }]);
+
+  const stableEnd = state.indexOf("## Cumulative Story State");
+  const continuityStart = state.indexOf("Continuity Facts:");
+  assertEquals(stableEnd > -1, true);
+  assertEquals(continuityStart > stableEnd, true);
+  assertStringIncludes(
+    state.slice(0, stableEnd),
+    "character:Sava:identity:pronouns: Sava uses he/him pronouns.",
+  );
+  assertStringIncludes(
+    state.slice(0, stableEnd),
+    "character:Sava:identity:pronouns-he/him: Sava uses he/him pronouns.",
+  );
+  for (
+    const physicalFact of [
+      "character:Anika Reedrunner:identity:physical:hair: Anika has dark hair bound with blue cloth.",
+      "character:Sava:identity:physical:sign-mark: Sava's sign-mark is a thumbprint-like hollow.",
+      "character:senior-clerk:identity:physical:beard: The senior clerk has a gray beard tied under his chin.",
+    ]
+  ) {
+    assertStringIncludes(state.slice(0, stableEnd), physicalFact);
+  }
+  for (
+    const reference of [
+      "character:Miran:identity:location",
+      "character:Miran:identity:no-charcoal-left",
+      "character:Sava:identity:uses-a-walking-stick",
+      "character:Miran:identity:occupation-clerk",
+    ]
+  ) {
+    assertEquals(state.slice(0, stableEnd).includes(reference), false);
+    assertStringIncludes(state.slice(continuityStart), reference);
+  }
+});
+
 Deno.test("stable identity facts survive a smaller project-state cap", () => {
   const state = formatCanonicalProjectState(
     [{
