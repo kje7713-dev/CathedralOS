@@ -13,12 +13,13 @@ APP_IDENTIFIER = ENV.fetch("APP_IDENTIFIER")
 APPLY = ENV.fetch("APPLY", "false").casecmp?("true")
 
 PRODUCTS = [
-  { id: "cathedralos.pro.monthly", name: "StoryDonkey Pro Monthly", type: "AUTORENEWABLE", price: "4.99", credits: 100 },
   { id: "cathedralos.credits.small", name: "StoryDonkey 20 Credits", type: "CONSUMABLE", price: "0.99", credits: 20 },
   { id: "cathedralos.credits.medium", name: "StoryDonkey 60 Credits", type: "CONSUMABLE", price: "2.99", credits: 60 },
   { id: "cathedralos.credits.large", name: "StoryDonkey 150 Credits", type: "CONSUMABLE", price: "6.99", credits: 150 },
   { id: "cathedralos.credits.xlarge", name: "StoryDonkey 400 Credits", type: "CONSUMABLE", price: "14.99", credits: 400 }
 ].freeze
+
+PRO_MONTHLY = { id: "cathedralos.pro.monthly", price: "4.99" }.freeze
 
 class ASCClient
   def initialize
@@ -76,11 +77,12 @@ client = ASCClient.new
 app_response = client.request("get", "/v1/apps?filter[bundleId]=#{URI.encode_www_form_component(APP_IDENTIFIER)}")
 app = app_response.fetch("data").first or raise "No App Store Connect app found for #{APP_IDENTIFIER}"
 app_id = app.fetch("id")
-products = client.request("get", "/v1/apps/#{app_id}/inAppPurchasesV2?limit=200").fetch("data")
+products = client.request("get", "/v1/apps/#{app_id}/inAppPurchasesV2?include=iapPriceSchedule&limit=200").fetch("data")
 by_product_id = products.to_h { |item| [item.dig("attributes", "productId"), item] }
 
 puts "App Store Connect app #{app_id} (#{APP_IDENTIFIER})"
 puts "Mode: #{APPLY ? "apply" : "audit"}"
+puts "UNCHANGED #{PRO_MONTHLY[:id]} target=$#{PRO_MONTHLY[:price]} (auto-renewable subscription; Apple exposes it through the subscription API, not inAppPurchasesV2)"
 
 PRODUCTS.each do |definition|
   item = by_product_id[definition[:id]]
@@ -123,11 +125,11 @@ PRODUCTS.each do |definition|
   puts "READY #{definition[:id]} id=#{item.fetch("id")} target=$#{definition[:price]} price_point=#{point.fetch("id")}"
   next unless APPLY
 
-  begin
-    client.request("get", "/v1/inAppPurchases/#{item.fetch("id")}/priceSchedule")
+  schedule = item.dig("relationships", "iapPriceSchedule", "data")
+  if schedule
     puts "PRICE_SCHEDULE_EXISTS #{definition[:id]} (left unchanged)"
-  rescue StandardError => e
-    raise unless e.message.include?("ASC API 404")
+  else
+    raise "No existing price schedule for #{definition[:id]} in audit mode" unless APPLY
 
     create_price_schedule(client, item.fetch("id"), point.fetch("id"))
     puts "PRICE_SCHEDULE_CREATED #{definition[:id]} $#{definition[:price]}"
