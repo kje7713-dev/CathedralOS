@@ -76,7 +76,7 @@ client = ASCClient.new
 app_response = client.request("get", "/v1/apps?filter[bundleId]=#{URI.encode_www_form_component(APP_IDENTIFIER)}")
 app = app_response.fetch("data").first or raise "No App Store Connect app found for #{APP_IDENTIFIER}"
 app_id = app.fetch("id")
-products = client.request("get", "/v2/inAppPurchases?filter[app]=#{app_id}&limit=200").fetch("data")
+products = client.request("get", "/v1/apps/#{app_id}/inAppPurchasesV2?limit=200").fetch("data")
 by_product_id = products.to_h { |item| [item.dig("attributes", "productId"), item] }
 
 puts "App Store Connect app #{app_id} (#{APP_IDENTIFIER})"
