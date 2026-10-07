@@ -31,6 +31,7 @@ Product IDs are defined centrally in `StoreKitProductIDs.swift` (iOS) and `_prod
 | `cathedralos.credits.small` | Consumable | Small credit pack | 20 purchased credits |
 | `cathedralos.credits.medium` | Consumable | Medium credit pack | 60 purchased credits |
 | `cathedralos.credits.large` | Consumable | Large credit pack | 150 purchased credits |
+| `cathedralos.credits.xlarge` | Consumable | Extra-large credit pack | 400 purchased credits |
 
 > Replace these placeholder IDs with your real App Store Connect product IDs before submission.
 

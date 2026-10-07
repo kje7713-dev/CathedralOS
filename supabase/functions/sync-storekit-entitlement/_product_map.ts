@@ -67,6 +67,10 @@ export const PRODUCT_MAP: Record<string, ProductGrant> = {
     type: "consumable",
     creditAmount: 150,
   },
+  "cathedralos.credits.xlarge": {
+    type: "consumable",
+    creditAmount: 400,
+  },
 };
 
 // ---------------------------------------------------------------------------

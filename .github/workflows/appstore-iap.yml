@@ -1,0 +1,39 @@
+name: App Store IAP Pricing
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Audit existing products or apply approved IAP configuration'
+        required: true
+        default: audit
+        type: choice
+        options: [audit, apply]
+
+permissions:
+  contents: read
+
+jobs:
+  iap:
+    name: Audit or synchronize IAP products
+    runs-on: macos-26
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+      APP_IDENTIFIER: ${{ secrets.APP_IDENTIFIER }}
+      APPLY: ${{ inputs.mode == 'apply' && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+      - name: Validate API secret presence
+        run: |
+          test -n "$ASC_KEY_ID"
+          test -n "$ASC_ISSUER_ID"
+          test -n "$ASC_API_KEY"
+          test -n "$APP_IDENTIFIER"
+      - name: Run IAP audit or apply
+        run: bundle exec ruby scripts/appstore_iap_sync.rb

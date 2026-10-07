@@ -12,6 +12,7 @@ import Foundation
 //   cathedralos.credits.small  — small one-time credit pack
 //   cathedralos.credits.medium — medium one-time credit pack
 //   cathedralos.credits.large  — large one-time credit pack
+//   cathedralos.credits.xlarge — 400-credit one-time credit pack
 //
 // For local/TestFlight testing, configure a StoreKit configuration file
 // (see Configuration/StoreKitConfig.storekit) and enable it in the scheme's
@@ -39,13 +40,16 @@ enum StoreKitProductIDs {
     /// Large credit pack (150 credits).
     static let creditsLarge  = "cathedralos.credits.large"
 
+    /// Extra-large credit pack (400 credits).
+    static let creditsXLarge = "cathedralos.credits.xlarge"
+
     // MARK: - Grouped sets
 
     /// All subscription product IDs.
     static let subscriptionIDs: Set<String> = [proMonthly]
 
     /// All one-time credit pack product IDs.
-    static let creditPackIDs: Set<String> = [creditsSmall, creditsMedium, creditsLarge]
+    static let creditPackIDs: Set<String> = [creditsSmall, creditsMedium, creditsLarge, creditsXLarge]
 
     /// Every product ID this app offers (subscriptions + credit packs).
     static let allIDs: Set<String> = subscriptionIDs.union(creditPackIDs)
@@ -59,6 +63,7 @@ enum StoreKitProductIDs {
         case creditsSmall:  return 20
         case creditsMedium: return 60
         case creditsLarge:  return 150
+        case creditsXLarge: return 400
         default:            return 0
         }
     }

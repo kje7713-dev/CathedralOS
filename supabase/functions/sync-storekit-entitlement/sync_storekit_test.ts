@@ -72,6 +72,13 @@ Deno.test("PRODUCT_MAP: credits.large is a consumable with 150 credits", () => {
   assertEquals(grant.creditAmount, 150);
 });
 
+Deno.test("PRODUCT_MAP: credits.xlarge is a consumable with 400 credits", () => {
+  const grant = getProductGrant("cathedralos.credits.xlarge") as ConsumableGrant;
+  assertExists(grant);
+  assertEquals(grant.type, "consumable");
+  assertEquals(grant.creditAmount, 400);
+});
+
 Deno.test("PRODUCT_MAP: unknown product returns null", () => {
   const grant = getProductGrant("com.unknown.product");
   assertEquals(grant, null);
@@ -93,12 +100,13 @@ Deno.test("PRODUCT_MAP: isConsumableProduct returns false for subscription", () 
   assertEquals(isConsumableProduct("cathedralos.pro.monthly"), false);
 });
 
-Deno.test("PRODUCT_MAP: ALL_PRODUCT_IDS contains all four products", () => {
-  assertEquals(ALL_PRODUCT_IDS.length, 4);
+Deno.test("PRODUCT_MAP: ALL_PRODUCT_IDS contains all five products", () => {
+  assertEquals(ALL_PRODUCT_IDS.length, 5);
   assertEquals(ALL_PRODUCT_IDS.includes("cathedralos.pro.monthly"), true);
   assertEquals(ALL_PRODUCT_IDS.includes("cathedralos.credits.small"), true);
   assertEquals(ALL_PRODUCT_IDS.includes("cathedralos.credits.medium"), true);
   assertEquals(ALL_PRODUCT_IDS.includes("cathedralos.credits.large"), true);
+  assertEquals(ALL_PRODUCT_IDS.includes("cathedralos.credits.xlarge"), true);
 });
 
 Deno.test("PRODUCT_MAP: SUBSCRIPTION_PRODUCT_IDS contains only pro.monthly", () => {
@@ -106,8 +114,8 @@ Deno.test("PRODUCT_MAP: SUBSCRIPTION_PRODUCT_IDS contains only pro.monthly", () 
   assertEquals(SUBSCRIPTION_PRODUCT_IDS[0], "cathedralos.pro.monthly");
 });
 
-Deno.test("PRODUCT_MAP: CONSUMABLE_PRODUCT_IDS contains three credit packs", () => {
-  assertEquals(CONSUMABLE_PRODUCT_IDS.length, 3);
+Deno.test("PRODUCT_MAP: CONSUMABLE_PRODUCT_IDS contains four credit packs", () => {
+  assertEquals(CONSUMABLE_PRODUCT_IDS.length, 4);
   assertEquals(
     CONSUMABLE_PRODUCT_IDS.includes("cathedralos.credits.small"),
     true,
@@ -118,6 +126,10 @@ Deno.test("PRODUCT_MAP: CONSUMABLE_PRODUCT_IDS contains three credit packs", () 
   );
   assertEquals(
     CONSUMABLE_PRODUCT_IDS.includes("cathedralos.credits.large"),
+    true,
+  );
+  assertEquals(
+    CONSUMABLE_PRODUCT_IDS.includes("cathedralos.credits.xlarge"),
     true,
   );
 });
