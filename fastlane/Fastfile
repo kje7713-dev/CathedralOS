@@ -362,15 +362,43 @@ platform :ios do
       next
     end
 
-    deliver(
-      app_identifier:             ENV["APP_IDENTIFIER"],
-      metadata_path:              "./fastlane/metadata",
-      skip_binary_upload:         true,
-      skip_screenshots:           true,
-      submit_for_review:          false,
-      run_precheck_before_submit: false,
-      force:                      true
+    app = Spaceship::ConnectAPI::App.find(ENV["APP_IDENTIFIER"])
+    UI.user_error!("App Store Connect app not found for #{ENV['APP_IDENTIFIER']}") unless app
+
+    metadata_dir = File.join("fastlane", "metadata", "en-US")
+    read_metadata = lambda do |name|
+      path = File.join(metadata_dir, name)
+      UI.user_error!("Missing checked-in metadata file: #{path}") unless File.file?(path)
+      File.read(path).strip
+    end
+
+    version = app.get_edit_app_store_version || app.get_latest_app_store_version
+    UI.user_error!("No editable App Store version exists for #{app.name}") unless version
+    version_localization = version.get_app_store_version_localizations.find { |item| item.locale == "en-US" } ||
+      version.get_app_store_version_localizations.find { |item| item.locale.to_s.start_with?("en") }
+    UI.user_error!("No English App Store version localization exists") unless version_localization
+
+    version_localization.update(
+      attributes: {
+        description: read_metadata.call("description.txt"),
+        keywords: read_metadata.call("keywords.txt"),
+        promotionalText: read_metadata.call("promotional_text.txt")
+      }
     )
+
+    app_info = app.fetch_edit_app_info
+    UI.user_error!("No editable App Store information exists for #{app.name}") unless app_info
+    info_localization = app_info.get_app_info_localizations.find { |item| item.locale == "en-US" } ||
+      app_info.get_app_info_localizations.find { |item| item.locale.to_s.start_with?("en") }
+    UI.user_error!("No English App Store information localization exists") unless info_localization
+
+    info_localization.update(
+      attributes: {
+        name: read_metadata.call("name.txt"),
+        subtitle: read_metadata.call("subtitle.txt")
+      }
+    )
+    UI.success("App Store text metadata applied without changing screenshots, binary, or submission state.")
   end
 
   # ---------------------------------------------------------------------------
