@@ -61,7 +61,9 @@ export interface RecentRepetitionGuidance {
    * multi-section threshold.
    */
   saturatedResponseFamilies: string[];
-  /** Optional paragraph rhythm guidance (only when dominant). */
+  /** Section-entry structures saturated across the recent lookback. */
+  saturatedSectionEntryFamilies: string[];
+  /** Optional paragraph and sentence rhythm guidance (only when dominant). */
   rhythmGuidance?: string;
 }
 
@@ -79,6 +81,33 @@ const MAX_AVOID_PHRASES = 5;
  * guidance for an otherwise well-paced window.
  */
 const SINGLE_SENTENCE_PARAGRAPH_RATIO = 0.6;
+const SENTENCE_LENGTH_SATURATION_RATIO = 0.7;
+const MIN_SENTENCES_FOR_LENGTH_GUIDANCE = 20;
+const MAX_SATURATED_SECTION_ENTRY_FAMILIES = 3;
+
+const ENTRY_AUXILIARIES = new Set<string>([
+  "had",
+  "has",
+  "have",
+  "was",
+  "were",
+  "is",
+  "are",
+  "could",
+  "would",
+  "should",
+  "can",
+  "will",
+  "may",
+  "might",
+]);
+
+const SECTION_ENTRY_FAMILY_THRESHOLDS: Readonly<Record<string, number>> = {
+  "subject + auxiliary openings": 3,
+  "definite-article subject openings": 4,
+  "temporal/transition openings": 3,
+  "dialogue openings": 4,
+};
 
 const STOPWORDS = new Set<string>([
   "a",
@@ -597,6 +626,59 @@ export function deriveRepeatedPhrases(
   return candidates.slice(0, MAX_AVOID_PHRASES).map((c) => c.phrase);
 }
 
+const TEMPORAL_ENTRY_WORDS = new Set([
+  "by",
+  "when",
+  "after",
+  "before",
+  "during",
+  "once",
+]);
+
+/** Classifies only the first sentence's deliberately small entry structure. */
+export function classifySectionEntryFamily(section: string): string | null {
+  const firstSentence = splitSentences(section)[0];
+  if (!firstSentence) return null;
+  const normalized = normalizeWhitespace(firstSentence);
+  if (normalized.startsWith('"')) return "dialogue openings";
+
+  const tokens = tokenize(firstSentence);
+  if (tokens.length === 0) return null;
+  if (tokens[0] === "the") return "definite-article subject openings";
+  if (
+    TEMPORAL_ENTRY_WORDS.has(tokens[0]) ||
+    (tokens[0] === "at" && tokens[1] === "dawn") ||
+    (tokens[0] === "at" && tokens[1] === "first" && tokens[2] === "light") ||
+    (tokens[0] === "by" && tokens[1] === "the" && tokens[2] === "time")
+  ) return "temporal/transition openings";
+  if (tokens.length >= 2 && ENTRY_AUXILIARIES.has(tokens[1])) {
+    return "subject + auxiliary openings";
+  }
+  return null;
+}
+
+export function deriveSaturatedSectionEntryFamilies(
+  recentSections: string[],
+): string[] {
+  const counts = new Map<string, number>();
+  for (const section of recentSections) {
+    const family = classifySectionEntryFamily(section);
+    if (family) counts.set(family, (counts.get(family) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([family, count]) =>
+      count >= (SECTION_ENTRY_FAMILY_THRESHOLDS[family] ?? Infinity)
+    )
+    .sort(([familyA, countA], [familyB, countB]) => {
+      if (countB !== countA) return countB - countA;
+      if (familyA < familyB) return -1;
+      if (familyA > familyB) return 1;
+      return 0;
+    })
+    .slice(0, MAX_SATURATED_SECTION_ENTRY_FAMILIES)
+    .map(([family]) => family);
+}
+
 export function deriveRhythmGuidance(
   lowerSections: string[],
 ): string | undefined {
@@ -609,10 +691,59 @@ export function deriveRhythmGuidance(
       if (sentenceCount <= 1) singleSentenceParagraphs += 1;
     }
   }
-  if (totalParagraphs === 0) return undefined;
-  const ratio = singleSentenceParagraphs / totalParagraphs;
-  if (ratio < SINGLE_SENTENCE_PARAGRAPH_RATIO) return undefined;
-  return "Recent sections heavily favor isolated one-sentence paragraphs. Use fuller paragraph development where natural; reserve isolated short paragraphs for actual emphasis.";
+
+  const guidance: string[] = [];
+  if (totalParagraphs > 0) {
+    const ratio = singleSentenceParagraphs / totalParagraphs;
+    if (ratio >= SINGLE_SENTENCE_PARAGRAPH_RATIO) {
+      guidance.push(
+        "Recent sections heavily favor isolated one-sentence paragraphs. Use fuller paragraph development where natural; reserve isolated short paragraphs for actual emphasis.",
+      );
+    }
+  }
+
+  const sentenceCounts = { short: 0, medium: 0, long: 0 };
+  let sentenceTotal = 0;
+  for (const section of lowerSections) {
+    for (const sentence of splitSentences(section)) {
+      const tokenCount = tokenize(sentence).length;
+      if (tokenCount === 0) continue;
+      sentenceTotal += 1;
+      if (tokenCount <= 8) sentenceCounts.short += 1;
+      else if (tokenCount <= 20) sentenceCounts.medium += 1;
+      else sentenceCounts.long += 1;
+    }
+  }
+  if (sentenceTotal >= MIN_SENTENCES_FOR_LENGTH_GUIDANCE) {
+    const dominantRatio = Math.max(
+      sentenceCounts.short,
+      sentenceCounts.medium,
+      sentenceCounts.long,
+    ) / sentenceTotal;
+    if (dominantRatio >= SENTENCE_LENGTH_SATURATION_RATIO) {
+      if (
+        sentenceCounts.short / sentenceTotal >= SENTENCE_LENGTH_SATURATION_RATIO
+      ) {
+        guidance.push(
+          "Recent sections heavily favor short sentences. Where natural, allow more developed sentences and connected thought so the prose does not become uniformly clipped. Preserve short sentences when they carry genuine force.",
+        );
+      } else if (
+        sentenceCounts.medium / sentenceTotal >=
+          SENTENCE_LENGTH_SATURATION_RATIO
+      ) {
+        guidance.push(
+          "Recent sections heavily favor medium-length sentences. Allow more natural variation in sentence span where useful: shorter sentences for compression or emphasis, and longer sentences when thought, action, or description benefits from sustained development. Do not vary length mechanically.",
+        );
+      } else if (
+        sentenceCounts.long / sentenceTotal >= SENTENCE_LENGTH_SATURATION_RATIO
+      ) {
+        guidance.push(
+          "Recent sections heavily favor long sentences. Where natural, introduce cleaner short and medium-length sentences so the prose does not become uniformly extended. Do not fragment sentences merely for variety.",
+        );
+      }
+    }
+  }
+  return guidance.length > 0 ? guidance.join(" ") : undefined;
 }
 
 export function analyzeRecentRepetition(
@@ -639,6 +770,9 @@ export function analyzeRecentRepetition(
     avoidSentenceOpenings: deriveRepeatedOpenings(lowerSections),
     avoidPhrases: deriveRepeatedPhrases(lowerSections),
     saturatedResponseFamilies: deriveSaturatedResponseFamilies(lowerSections),
+    saturatedSectionEntryFamilies: deriveSaturatedSectionEntryFamilies(
+      lowerSections,
+    ),
     rhythmGuidance: deriveRhythmGuidance(lowerSections),
   };
 }
@@ -690,6 +824,16 @@ export function renderRecentRepetitionBlock(
       "",
     );
   }
+  if (g.saturatedSectionEntryFamilies.length > 0) {
+    sections.push(
+      "Recent section-entry habits are saturated:",
+      ...g.saturatedSectionEntryFamilies.map((f) => `- ${f}`),
+      "",
+      "Prefer a different natural point of entry when the current Section Contract allows it. Possible alternatives include dialogue already underway, action in progress, interruption, consequence, decision, spatial image, or sensory change. Do not mechanically invert sentences, synonym-swap, randomly rotate opening types, or force novelty. Reuse a saturated entry form when it is clearly the strongest opening for the scene.",
+      "Keep this guidance subordinate to the Section Contract. Do not force awkward novelty or mechanically alternate opening families.",
+      "",
+    );
+  }
   if (g.rhythmGuidance) {
     sections.push("Rhythm:", g.rhythmGuidance, "");
   }
@@ -706,6 +850,11 @@ export const _internal = {
   MAX_AVOID_PHRASES,
   SINGLE_SENTENCE_PARAGRAPH_RATIO,
   MAX_SATURATED_RESPONSE_FAMILIES,
+  MAX_SATURATED_SECTION_ENTRY_FAMILIES,
+  ENTRY_AUXILIARIES,
+  SECTION_ENTRY_FAMILY_THRESHOLDS,
+  SENTENCE_LENGTH_SATURATION_RATIO,
+  MIN_SENTENCES_FOR_LENGTH_GUIDANCE,
   RESPONSE_FAMILIES,
   GAZE_VERBS,
   STOPWORDS,
