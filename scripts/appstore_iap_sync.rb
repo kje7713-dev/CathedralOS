@@ -115,7 +115,7 @@ PRODUCTS.each do |definition|
           name: definition[:name],
           description: "One-time purchase of #{definition[:credits]} StoryDonkey generation credits."
         },
-        relationships: { inAppPurchase: { data: { type: "inAppPurchases", id: item.fetch("id") } } }
+        relationships: { inAppPurchaseV2: { data: { type: "inAppPurchases", id: item.fetch("id") } } }
       }
     })
     puts "LOCALIZED #{definition[:id]} en-US"
