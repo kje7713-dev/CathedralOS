@@ -46,10 +46,11 @@ final class ProductIDTests: XCTestCase {
         XCTAssertTrue(StoreKitProductIDs.subscriptionIDs.contains(StoreKitProductIDs.proMonthly))
     }
 
-    func testCreditPackIDsContainAllThreePacks() {
+    func testCreditPackIDsContainAllFourPacks() {
         XCTAssertTrue(StoreKitProductIDs.creditPackIDs.contains(StoreKitProductIDs.creditsSmall))
         XCTAssertTrue(StoreKitProductIDs.creditPackIDs.contains(StoreKitProductIDs.creditsMedium))
         XCTAssertTrue(StoreKitProductIDs.creditPackIDs.contains(StoreKitProductIDs.creditsLarge))
+        XCTAssertTrue(StoreKitProductIDs.creditPackIDs.contains(StoreKitProductIDs.creditsXLarge))
     }
 
     func testAllIDsContainsBothSubscriptionsAndPacks() {
@@ -58,6 +59,7 @@ final class ProductIDTests: XCTestCase {
         XCTAssertTrue(all.contains(StoreKitProductIDs.creditsSmall))
         XCTAssertTrue(all.contains(StoreKitProductIDs.creditsMedium))
         XCTAssertTrue(all.contains(StoreKitProductIDs.creditsLarge))
+        XCTAssertTrue(all.contains(StoreKitProductIDs.creditsXLarge))
     }
 
     func testSubscriptionNotInCreditPacks() {
@@ -74,6 +76,10 @@ final class ProductIDTests: XCTestCase {
 
     func testCreditAmountLarge() {
         XCTAssertEqual(StoreKitProductIDs.creditAmount(for: StoreKitProductIDs.creditsLarge), 150)
+    }
+
+    func testCreditAmountXLarge() {
+        XCTAssertEqual(StoreKitProductIDs.creditAmount(for: StoreKitProductIDs.creditsXLarge), 400)
     }
 
     func testCreditAmountUnknownProductIsZero() {
