@@ -1230,35 +1230,44 @@ export async function fetchRecentRawText(
     const currentPosition = Number(current.position ?? 0);
 
     const { data: rows, error: rowsError } = await adminClient
-      .from("section_embeddings")
+      .from("outline_sections")
       .select(
-        "outline_section_id, raw_text, outline_sections!inner(id, outline_id, position, status), generation_outputs!inner(id)",
+        "id, position, section_embeddings!inner(raw_text, project_id, generation_outputs!inner(id))",
       )
-      .eq("project_id", projectId)
-      .neq("outline_section_id", currentOutlineSectionId)
-      .eq("outline_sections.outline_id", currentOutlineId)
-      .eq("outline_sections.status", "accepted")
-      .lt("outline_sections.position", currentPosition)
-      .neq("raw_text", "")
-      // PostgREST orders the embedded outline_sections relation, then limits
-      // the parent rows. The query is intentionally newest-first so the
-      // limit selects only the latest canonical prior sections.
-      .order("position", {
-        foreignTable: "outline_sections",
-        ascending: false,
-      })
+      .eq("outline_id", currentOutlineId)
+      .eq("status", "accepted")
+      .lt("position", currentPosition)
+      .eq("section_embeddings.project_id", projectId)
+      .neq("section_embeddings.raw_text", "")
+      // The root outline_sections relation owns the canonical position, so
+      // ORDER BY + LIMIT selects the latest prior sections before embedding
+      // rows are mapped back into chronological prose.
+      .order("position", { ascending: false })
       .limit(RECENT_REPETITION_LOOKBACK);
     if (rowsError || !Array.isArray(rows)) return [];
 
     const recent = rows
-      .filter((r: any) =>
-        typeof r?.raw_text === "string" &&
-        r.raw_text.length > 0 &&
-        Number.isFinite(Number(r.outline_sections?.position))
-      )
       .map((r: any) => ({
-        position: Number(r.outline_sections.position),
-        raw_text: String(r.raw_text),
+        position: Number(r?.position),
+        embedding: Array.isArray(r?.section_embeddings)
+          ? r.section_embeddings[0]
+          : r?.section_embeddings,
+      }))
+      .filter((r: any) => {
+        const output = r.embedding?.generation_outputs;
+        const hasLiveOutput = Array.isArray(output)
+          ? output.some((item: any) => item?.id)
+          : Boolean(output?.id);
+        return Number.isFinite(r.position) &&
+          typeof r.embedding?.raw_text === "string" &&
+          r.embedding.raw_text.length > 0 &&
+          canonicalUUID(String(r.embedding.project_id ?? "")) ===
+            canonicalUUID(projectId) &&
+          hasLiveOutput;
+      })
+      .map((r: any) => ({
+        position: r.position,
+        raw_text: String(r.embedding.raw_text),
       }))
       // The DB query returns newest-first; restore chronological order for
       // analyzeRecentRepetition(), whose final element is the prior section.
