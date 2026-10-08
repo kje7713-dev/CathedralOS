@@ -1261,7 +1261,8 @@ export async function fetchRecentRawText(
         return Number.isFinite(r.position) &&
           typeof r.embedding?.raw_text === "string" &&
           r.embedding.raw_text.length > 0 &&
-          String(r.embedding.project_id ?? "") === projectId &&
+          canonicalUUID(String(r.embedding.project_id ?? "")) ===
+            canonicalUUID(projectId) &&
           hasLiveOutput;
       })
       .map((r: any) => ({

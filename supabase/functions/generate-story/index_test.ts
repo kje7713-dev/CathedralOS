@@ -189,15 +189,25 @@ Deno.test("fetchRecentRawText roots the bounded window on outline_sections", asy
     | { column: string; ascending?: boolean; foreignTable?: string }
     | null = null;
   let limitValue: number | null = null;
+  const requestedProjectId = "F691C57F-2097-46D6-B184-B288435D7B52";
   const rowsReturnedByDatabase = [7, 6, 5, 4, 3].map((position) => ({
     id: `section-${position}`,
     position,
     section_embeddings: {
       raw_text: `valid-${position}`,
-      project_id: "project-1",
+      project_id: "f691c57f-2097-46d6-b184-b288435d7b52",
       generation_outputs: { id: `output-${position}` },
     },
   }));
+  rowsReturnedByDatabase.push({
+    id: "section-2",
+    position: 2,
+    section_embeddings: {
+      raw_text: "wrong-project",
+      project_id: "00000000-0000-0000-0000-000000000000",
+      generation_outputs: { id: "output-2" },
+    },
+  });
   let fromCount = 0;
   const client = {
     from: (table: string) => {
@@ -245,7 +255,11 @@ Deno.test("fetchRecentRawText roots the bounded window on outline_sections", asy
     },
   };
 
-  const result = await fetchRecentRawText(client, "project-1", "current");
+  const result = await fetchRecentRawText(
+    client,
+    requestedProjectId,
+    "current",
+  );
 
   assertEquals(tables, ["outline_sections", "outline_sections"]);
   assertEquals(
@@ -277,7 +291,7 @@ Deno.test("fetchRecentRawText roots the bounded window on outline_sections", asy
   assertEquals(
     predicates.some(([kind, column, value]) =>
       kind === "eq" && column === "section_embeddings.project_id" &&
-      value === "project-1"
+      value === requestedProjectId
     ),
     true,
   );
