@@ -181,27 +181,27 @@ function makeAuthRequest(body: Record<string, unknown>): Request {
   });
 }
 
-Deno.test("fetchRecentRawText bounds canonical rows in the DB and restores chronology", async () => {
+Deno.test("fetchRecentRawText roots the bounded window on outline_sections", async () => {
   const selected: string[] = [];
   const predicates: Array<[string, string, unknown]> = [];
+  const tables: string[] = [];
   let orderArgs:
-    | { column: string; foreignTable?: string; ascending?: boolean }
+    | { column: string; ascending?: boolean; foreignTable?: string }
     | null = null;
   let limitValue: number | null = null;
   const rowsReturnedByDatabase = [7, 6, 5, 4, 3].map((position) => ({
-    outline_section_id: `section-${position}`,
-    raw_text: `valid-${position}`,
-    outline_sections: {
-      id: `section-${position}`,
-      outline_id: "outline-1",
-      position,
-      status: "accepted",
+    id: `section-${position}`,
+    position,
+    section_embeddings: {
+      raw_text: `valid-${position}`,
+      project_id: "project-1",
+      generation_outputs: { id: `output-${position}` },
     },
-    generation_outputs: { id: `output-${position}` },
   }));
   let fromCount = 0;
   const client = {
     from: (table: string) => {
+      tables.push(table);
       fromCount += 1;
       const isCurrent = fromCount === 1;
       const chain: any = {
@@ -233,14 +233,13 @@ Deno.test("fetchRecentRawText bounds canonical rows in the DB and restores chron
           data: { id: "current", outline_id: "outline-1", position: 8 },
           error: null,
         }),
-        then: (resolve: (value: unknown) => unknown) => {
-          if (isCurrent) {
-            return Promise.resolve(resolve({ data: null, error: null }));
-          }
-          return Promise.resolve(
-            resolve({ data: rowsReturnedByDatabase, error: null }),
-          );
-        },
+        then: (resolve: (value: unknown) => unknown) =>
+          Promise.resolve(
+            resolve({
+              data: isCurrent ? null : rowsReturnedByDatabase,
+              error: null,
+            }),
+          ),
       };
       return chain;
     },
@@ -248,56 +247,92 @@ Deno.test("fetchRecentRawText bounds canonical rows in the DB and restores chron
 
   const result = await fetchRecentRawText(client, "project-1", "current");
 
+  assertEquals(tables, ["outline_sections", "outline_sections"]);
   assertEquals(
     selected.some((value) =>
       value.includes(
-        "outline_sections!inner(id, outline_id, position, status)",
-      ) &&
-      value.includes("generation_outputs!inner(id)")
+        "section_embeddings!inner(raw_text, project_id, generation_outputs!inner(id))",
+      )
     ),
     true,
   );
   assertEquals(
     predicates.some(([kind, column, value]) =>
-      kind === "eq" && column === "project_id" && value === "project-1"
+      kind === "eq" && column === "outline_id" && value === "outline-1"
     ),
     true,
   );
   assertEquals(
     predicates.some(([kind, column, value]) =>
-      kind === "eq" && column === "outline_sections.outline_id" &&
-      value === "outline-1"
+      kind === "eq" && column === "status" && value === "accepted"
     ),
     true,
   );
   assertEquals(
     predicates.some(([kind, column, value]) =>
-      kind === "lt" && column === "outline_sections.position" && value === 8
+      kind === "lt" && column === "position" && value === 8
     ),
     true,
   );
   assertEquals(
     predicates.some(([kind, column, value]) =>
-      kind === "eq" && column === "outline_sections.status" &&
-      value === "accepted"
+      kind === "eq" && column === "section_embeddings.project_id" &&
+      value === "project-1"
     ),
     true,
   );
   assertEquals(
     predicates.some(([kind, column, value]) =>
-      kind === "neq" && column === "raw_text" && value === ""
+      kind === "neq" && column === "section_embeddings.raw_text" &&
+      value === ""
     ),
     true,
   );
-  assertEquals(orderArgs, {
-    column: "position",
-    foreignTable: "outline_sections",
-    ascending: false,
-  });
+  assertEquals(orderArgs, { column: "position", ascending: false });
   assertEquals(limitValue, RECENT_REPETITION_LOOKBACK);
-  assertEquals(rowsReturnedByDatabase.length, RECENT_REPETITION_LOOKBACK);
   assertEquals(result, ["valid-3", "valid-4", "valid-5", "valid-6", "valid-7"]);
   assertEquals(result.at(-1), "valid-7");
+});
+
+Deno.test("fetchRecentRawText applies root ordering before the bounded limit", async () => {
+  const tables: string[] = [];
+  const orders: Array<Record<string, unknown>> = [];
+  const limits: number[] = [];
+  let call = 0;
+  const client = {
+    from: (table: string) => {
+      tables.push(table);
+      call += 1;
+      const current = call === 1;
+      const chain: any = {
+        select: () => chain,
+        eq: () => chain,
+        neq: () => chain,
+        lt: () => chain,
+        order: (column: string, options: Record<string, unknown>) => {
+          orders.push({ column, ...options });
+          return chain;
+        },
+        limit: (value: number) => {
+          limits.push(value);
+          return chain;
+        },
+        maybeSingle: async () => ({
+          data: { outline_id: "outline-1", position: 8 },
+          error: null,
+        }),
+        then: (resolve: (value: unknown) => unknown) =>
+          Promise.resolve(resolve({ data: current ? null : [], error: null })),
+      };
+      return chain;
+    },
+  };
+
+  await fetchRecentRawText(client, "project-1", "current");
+
+  assertEquals(tables[1], "outline_sections");
+  assertEquals(orders, [{ column: "position", ascending: false }]);
+  assertEquals(limits, [RECENT_REPETITION_LOOKBACK]);
 });
 
 // Mock LLM provider -- returns a fixed successful response.
