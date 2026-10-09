@@ -5,6 +5,7 @@ import {
   assertThrows,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  backfillPronounFacts,
   normalizeSceneMemory,
   SCENE_MEMORY_RESPONSE_FORMAT,
 } from "./scene-memory.ts";
@@ -604,10 +605,31 @@ function normalizedPronounFacts(
   delta: Record<string, string>,
   continuityFacts: Array<Record<string, unknown>> = [],
 ) {
-  return normalizeSceneMemory({
+  const normalized = normalizeSceneMemory({
     character_deltas: [{ character_name: characterName, ...delta }],
     continuity_facts: continuityFacts,
-  }).continuity_facts;
+  });
+  return backfillPronounFacts(
+    normalized.character_deltas,
+    normalized.continuity_facts,
+  );
+}
+
+function reconciledPronounFacts(
+  priorRows: Array<{ continuity_facts?: unknown }>,
+  characterName: string,
+  delta: Record<string, string>,
+  continuityFacts: Array<Record<string, unknown>> = [],
+) {
+  return reconcileSceneMemory(
+    priorRows,
+    normalizeSceneMemory({
+      character_deltas: [{ character_name: characterName, ...delta }],
+      continuity_facts: continuityFacts,
+    }),
+    "current-section",
+    "2026-10-09T00:00:00.000Z",
+  ).continuity_facts;
 }
 
 // V6 regression: structured scene memory used they/them for Ilya in
@@ -694,5 +716,90 @@ Deno.test("unnamed characters do not backfill pronouns", () => {
     location: "They wait at the gate.",
     goals: "Their lantern is ready.",
   });
+  assertEquals(facts, []);
+});
+
+Deno.test("prior canonical pronoun blocks inferred he/him drift", () => {
+  const priorRows = [{
+    continuity_facts: [{
+      id: "ilya-prior",
+      reference: "character:ilya:identity:pronouns",
+      fact: "Ilya uses they/them pronouns.",
+      active: true,
+    }],
+  }];
+  const facts = reconciledPronounFacts(priorRows, "Ilya", {
+    location: "He continues working.",
+    injuries: "His arm is injured.",
+  });
+
+  assertEquals(facts, []);
+  assertEquals(priorRows[0].continuity_facts, [{
+    id: "ilya-prior",
+    reference: "character:ilya:identity:pronouns",
+    fact: "Ilya uses they/them pronouns.",
+    active: true,
+  }]);
+});
+
+Deno.test("prior he/him blocks inferred they/them drift", () => {
+  const priorRows = [{
+    continuity_facts: [{
+      id: "miran-prior",
+      reference: "character:miran:identity:pronouns",
+      fact: "Miran uses he/him pronouns.",
+      active: true,
+    }],
+  }];
+  const facts = reconciledPronounFacts(priorRows, "Miran", {
+    location: "They move toward the gate.",
+    possessions: "Their pack is missing.",
+  });
+
+  assertEquals(facts, []);
+});
+
+Deno.test("no prior pronoun fact still backfills through reconciliation", () => {
+  const facts = reconciledPronounFacts([], "Ilya", {
+    location: "They continue making bridge pins.",
+    relationship_delta: "Their trust in Miran is reinforced.",
+  });
+
+  assertEquals(facts.length, 1);
+  assertEquals(facts[0].reference, "character:ilya:identity:pronouns");
+  assertEquals(facts[0].fact, "Ilya uses they/them pronouns.");
+  assertEquals(facts[0].operation, "establish");
+});
+
+Deno.test("explicit current pronoun fact blocks inferred backfill", () => {
+  const facts = reconciledPronounFacts([], "Ilya", {
+    location: "He turns toward the gate.",
+    injuries: "His arm is injured.",
+  }, [{
+    operation: "establish",
+    fact: "Ilya uses they/them pronouns.",
+    reference: "character:ilya:identity:pronouns",
+    prior_fact_reference: null,
+  }]);
+
+  assertEquals(facts.length, 1);
+  assertEquals(facts[0].fact, "Ilya uses they/them pronouns.");
+  assertEquals(facts[0].reference, "character:ilya:identity:pronouns");
+});
+
+Deno.test("legacy prior pronoun identity also blocks inferred drift", () => {
+  const priorRows = [{
+    continuity_facts: [{
+      id: "legacy-ilya-prior",
+      reference: "Ilya",
+      fact: "character:Ilya:identity:pronouns:they/them",
+      active: true,
+    }],
+  }];
+  const facts = reconciledPronounFacts(priorRows, "Ilya", {
+    location: "He continues working.",
+    injuries: "His arm is injured.",
+  });
+
   assertEquals(facts, []);
 });

@@ -223,14 +223,19 @@ function detectPronounFamily(
     : null;
 }
 
-function backfillPronounFacts(
+export function backfillPronounFacts(
   characterDeltas: SceneMemory["character_deltas"],
   continuityFacts: SceneMemory["continuity_facts"],
+  protectedReferences: ReadonlySet<string> = new Set(),
 ): SceneMemory["continuity_facts"] {
   const facts = [...continuityFacts];
   const existingReferences = new Set(
-    facts
-      .map((fact) => typeof fact.reference === "string" ? fact.reference : "")
+    [
+      ...protectedReferences,
+      ...facts.map((fact) =>
+        typeof fact.reference === "string" ? fact.reference : ""
+      ),
+    ]
       .filter(Boolean)
       .map((reference) => reference.trim().toLowerCase()),
   );
@@ -294,7 +299,7 @@ export function normalizeSceneMemory(input: unknown): SceneMemory {
     plot_thread_deltas: Array.isArray(parsed.plot_thread_deltas)
       ? parsed.plot_thread_deltas
       : [],
-    continuity_facts: backfillPronounFacts(characterDeltas, continuityFacts),
+    continuity_facts: continuityFacts,
     open_loops: Array.isArray(parsed.open_loops) ? parsed.open_loops : [],
     scene_ending_state: parsed.scene_ending_state &&
         typeof parsed.scene_ending_state === "object"
