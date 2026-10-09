@@ -446,15 +446,13 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             }
         }
         .sheet(isPresented: $showingOutlineModelSheet) {
-            if let outlinePlanningRequest {
-                OutlinePlanningModelSheet(initialModelID: preferredOutlineModelID, request: outlinePlanningRequest) { modelID in
-                preferredOutlineModelID = modelID
-                showingOutlineModelSheet = false
-                Task { await loadSuggestions(modelID: modelID) }
-                } onCancel: {
-                    showingOutlineModelSheet = false
-                    outlinePlanningRequest = nil
-                }
+            if let request = outlinePlanningRequest {
+                OutlinePlanningModelSheet(
+                    initialModelID: preferredOutlineModelID,
+                    request: request,
+                    onConfirm: confirmOutlinePlanningModel,
+                    onCancel: cancelOutlinePlanningModel
+                )
             }
         }
         .alert("Suggestions Ready", isPresented: suggestionsFeedbackPresented) {
@@ -837,6 +835,27 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         showingSuggestionSheet = true
     }
 
+    private func prepareOutlinePlanning() {
+        do {
+            outlinePlanningRequest = try makePlanningRequest(modelID: preferredOutlineModelID)
+            showingOutlineModelSheet = true
+        } catch {
+            suggestionsError = error.localizedDescription
+        }
+    }
+
+    private func confirmOutlinePlanningModel(_ modelID: String) {
+        preferredOutlineModelID = modelID
+        showingOutlineModelSheet = false
+        outlinePlanningRequest = nil
+        Task { await loadSuggestions(modelID: modelID) }
+    }
+
+    private func cancelOutlinePlanningModel() {
+        showingOutlineModelSheet = false
+        outlinePlanningRequest = nil
+    }
+
     @MainActor
     private func makePlanningRequest(modelID: String) throws -> OutlineSuggestionRequest {
         guard let recipe = recipeSelection?.selectedRecipe,
@@ -976,16 +995,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     }
                     .disabled(projectRunStatus != nil || isGenerationStarting)
                 }
-                Button {
-                    do {
-                        outlinePlanningRequest = try makePlanningRequest(modelID: preferredOutlineModelID)
-                        showingOutlineModelSheet = true
-                    } catch let error as OutlineSuggestionError {
-                        suggestionsError = error.localizedDescription
-                    } catch {
-                        suggestionsError = error.localizedDescription
-                    }
-                } label: {
+                Button(action: prepareOutlinePlanning) label: {
                     if suggestionRunActive {
                         ProgressView()
                     } else {
@@ -1372,21 +1382,7 @@ struct OutlinePlanningModelSheet: View {
                         .buttonStyle(.plain)
                     }
                 }
-                Section("Outline estimate") {
-                    if isEstimating {
-                        HStack { ProgressView(); Text("Estimating outline generation…") }
-                    } else if let estimate {
-                        Text("Estimated outline generation: \(formatRunCredits(estimate.estimatedCredits)) credits")
-                        Text("Your available credits: \(formatRunCredits(estimate.availableCredits)) credits")
-                        Text("Estimated balance afterward: \(formatRunCredits(estimate.projectedBalance)) credits")
-                        Text("This is a projection across variable-length planning stages; actual charges can vary.")
-                            .font(CathedralTheme.Typography.caption(11))
-                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        if !estimate.allowed { Text("Insufficient credits for this estimate.").foregroundStyle(CathedralTheme.Colors.destructive) }
-                    } else if let estimateError {
-                        Text(estimateError).foregroundStyle(CathedralTheme.Colors.destructive)
-                    }
-                }
+                estimateSection
                 if isLoading {
                     HStack(spacing: CathedralTheme.Spacing.sm) {
                         ProgressView()
@@ -1416,22 +1412,63 @@ struct OutlinePlanningModelSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-        .task { await loadModels(); await refreshEstimate() }
+        .task { await loadSheetData() }
         .onChange(of: selectedModelID) { _, _ in
-            Task { await refreshEstimate() }
+            selectionChanged()
         }
+    }
+
+    @ViewBuilder
+    private var estimateSection: some View {
+        Section("Outline estimate") {
+            if isEstimating {
+                HStack {
+                    ProgressView()
+                    Text("Estimating outline generation…")
+                }
+            } else if let estimate {
+                Text("Estimated outline generation: \(formatRunCredits(estimate.estimatedCredits)) credits")
+                Text("Your available credits: \(formatRunCredits(estimate.availableCredits)) credits")
+                Text("Estimated balance afterward: \(formatRunCredits(estimate.projectedBalance)) credits")
+                Text("This is a projection across variable-length planning stages; actual charges can vary.")
+                    .font(CathedralTheme.Typography.caption(11))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                if !estimate.allowed {
+                    Text("Insufficient credits for this estimate.")
+                        .foregroundStyle(CathedralTheme.Colors.destructive)
+                }
+            } else if let estimateError {
+                Text(estimateError)
+                    .foregroundStyle(CathedralTheme.Colors.destructive)
+            }
+        }
+    }
+
+    private func loadSheetData() async {
+        await loadModels()
+        await refreshEstimate()
+    }
+
+    private func selectionChanged() {
+        Task { await refreshEstimate() }
     }
 
     @MainActor
     private func refreshEstimate() async {
-        guard options.first(where: { $0.id == selectedModelID })?.isAvailable == true else {
+        guard selectedOption?.isAvailable == true else {
             estimate = nil
             estimateError = "Pricing could not be estimated until this model is available."
             return
         }
-        isEstimating = true; estimateError = nil; defer { isEstimating = false }
-        do { estimate = try await OutlineSuggestionService().estimate(request: request, modelID: selectedModelID) }
-        catch { estimate = nil; estimateError = "Pricing could not be estimated. No credits were consumed." }
+        isEstimating = true
+        estimateError = nil
+        defer { isEstimating = false }
+        do {
+            estimate = try await OutlineSuggestionService().estimate(request: request, modelID: selectedModelID)
+        } catch {
+            estimate = nil
+            estimateError = "Pricing could not be estimated. No credits were consumed."
+        }
     }
 
     @MainActor
