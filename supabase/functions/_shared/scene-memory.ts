@@ -184,31 +184,122 @@ export interface SceneMemory {
   };
 }
 
+const PRONOUN_DELTA_FIELDS = [
+  "location",
+  "knowledge_delta",
+  "relationship_delta",
+  "injuries",
+  "goals",
+  "possessions",
+  "emotional_stance",
+] as const;
+
+type PronounFamily = "he" | "she" | "they";
+
+function normalizeCharacterName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
+    /^-+|-+$/g,
+    "",
+  );
+}
+
+function detectPronounFamily(
+  delta: SceneMemory["character_deltas"][number],
+): PronounFamily | null {
+  const text = PRONOUN_DELTA_FIELDS.map((field) => delta[field]).filter(
+    (value): value is string => typeof value === "string",
+  ).join(" ");
+  const counts: Record<PronounFamily, number> = {
+    he: (text.match(/\b(?:he|him|his|himself)\b/gi) ?? []).length,
+    she: (text.match(/\b(?:she|her|hers|herself)\b/gi) ?? []).length,
+    they: (text.match(/\b(?:they|them|their|theirs|themselves)\b/gi) ?? [])
+      .length,
+  };
+  const qualifyingFamilies = (Object.keys(counts) as PronounFamily[]).filter(
+    (family) => counts[family] > 0,
+  );
+  return qualifyingFamilies.length === 1 && counts[qualifyingFamilies[0]] >= 2
+    ? qualifyingFamilies[0]
+    : null;
+}
+
+export function backfillPronounFacts(
+  characterDeltas: SceneMemory["character_deltas"],
+  continuityFacts: SceneMemory["continuity_facts"],
+  protectedReferences: ReadonlySet<string> = new Set(),
+): SceneMemory["continuity_facts"] {
+  const facts = [...continuityFacts];
+  const existingReferences = new Set(
+    [
+      ...protectedReferences,
+      ...facts.map((fact) =>
+        typeof fact.reference === "string" ? fact.reference : ""
+      ),
+    ]
+      .filter(Boolean)
+      .map((reference) => reference.trim().toLowerCase()),
+  );
+
+  for (const delta of characterDeltas) {
+    if (!delta || typeof delta !== "object") continue;
+    const characterName = typeof delta.character_name === "string"
+      ? delta.character_name.trim()
+      : "";
+    const normalizedName = characterName
+      ? normalizeCharacterName(characterName)
+      : "";
+    if (!normalizedName) continue;
+
+    const reference = `character:${normalizedName}:identity:pronouns`;
+    if (existingReferences.has(reference)) continue;
+
+    const family = detectPronounFamily(delta);
+    if (!family) continue;
+
+    const pronouns = family === "he"
+      ? "he/him"
+      : family === "she"
+      ? "she/her"
+      : "they/them";
+    facts.push({
+      operation: "establish",
+      fact: `${characterName} uses ${pronouns} pronouns.`,
+      reference,
+      prior_fact_reference: null,
+    });
+    existingReferences.add(reference);
+  }
+
+  return facts;
+}
+
 export function normalizeSceneMemory(input: unknown): SceneMemory {
   const parsed = input && typeof input === "object"
     ? input as Partial<SceneMemory>
     : {};
+  const characterDeltas = Array.isArray(parsed.character_deltas)
+    ? parsed.character_deltas
+    : [];
+  const continuityFacts = Array.isArray(parsed.continuity_facts)
+    ? parsed.continuity_facts.map((fact) =>
+      typeof fact === "string"
+        ? {
+          operation: "establish" as const,
+          fact,
+          prior_fact_reference: null,
+        }
+        : fact
+    ).filter((fact) => fact && typeof fact === "object")
+    : [];
   return {
     extracted_summary: typeof parsed.extracted_summary === "string"
       ? parsed.extracted_summary
       : "",
-    character_deltas: Array.isArray(parsed.character_deltas)
-      ? parsed.character_deltas
-      : [],
+    character_deltas: characterDeltas,
     plot_thread_deltas: Array.isArray(parsed.plot_thread_deltas)
       ? parsed.plot_thread_deltas
       : [],
-    continuity_facts: Array.isArray(parsed.continuity_facts)
-      ? parsed.continuity_facts.map((fact) =>
-        typeof fact === "string"
-          ? {
-            operation: "establish" as const,
-            fact,
-            prior_fact_reference: null,
-          }
-          : fact
-      ).filter((fact) => fact && typeof fact === "object")
-      : [],
+    continuity_facts: continuityFacts,
     open_loops: Array.isArray(parsed.open_loops) ? parsed.open_loops : [],
     scene_ending_state: parsed.scene_ending_state &&
         typeof parsed.scene_ending_state === "object"

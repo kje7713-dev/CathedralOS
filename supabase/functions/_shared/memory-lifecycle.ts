@@ -1,6 +1,8 @@
 // Server-owned lifecycle reconciliation for structured scene memory.
 // LLM output is semantic input only; IDs and lifecycle state are canonicalized here.
 
+import { backfillPronounFacts, type SceneMemory } from "./scene-memory.ts";
+
 export type MemoryRow = {
   character_deltas?: unknown;
   plot_thread_deltas?: unknown;
@@ -217,6 +219,28 @@ function reconcileFacts(
       throw new Error(`ambiguous fact reference: ${reference}`);
     }
     const match = matches[matches.length - 1];
+    const activePronounMatch = /:identity:pronouns$/i.test(reference)
+      ? matches.filter((candidate) => candidate.active !== false).at(-1)
+      : undefined;
+    const priorPronounFact = activePronounMatch
+      ? text(activePronounMatch.fact) || text(activePronounMatch.description)
+      : "";
+    if (
+      activePronounMatch && priorPronounFact &&
+      text(item.operation) !== "supersede"
+    ) {
+      out.push({
+        ...activePronounMatch,
+        reference,
+        source_section_id: source,
+        operation: "preserve",
+        fact: priorPronounFact,
+        active: true,
+        superseded_by: null,
+        created_at: text(activePronounMatch.created_at) || now,
+      });
+      continue;
+    }
     const replacement = priorFactReference(
       existing,
       text(item.prior_fact_reference),
@@ -278,8 +302,33 @@ export function reconcileSceneMemory(
   continuity_facts: AnyRecord[];
   open_loops: AnyRecord[];
 } {
+  const currentCharacterDeltas = Array.isArray(memory.character_deltas)
+    ? memory.character_deltas
+    : [];
+  const currentContinuityFacts = Array.isArray(memory.continuity_facts)
+    ? memory.continuity_facts
+    : [];
+  const protectedPronounReferences = new Set(
+    [
+      ...priorItems(rows, "continuity_facts").filter((item) =>
+        item.active !== false
+      ),
+      ...currentContinuityFacts.filter((item) =>
+        item && typeof item === "object"
+      ).map((item) => item as AnyRecord),
+    ]
+      .map(factReference)
+      .filter((reference) => /:identity:pronouns$/i.test(reference))
+      .map((reference) => reference.trim().toLowerCase()),
+  );
+  const normalizedContinuityFacts = backfillPronounFacts(
+    currentCharacterDeltas as SceneMemory["character_deltas"],
+    currentContinuityFacts as SceneMemory["continuity_facts"],
+    protectedPronounReferences,
+  );
+
   return {
-    character_deltas: mergeCharacterDeltas(rows, memory.character_deltas),
+    character_deltas: mergeCharacterDeltas(rows, currentCharacterDeltas),
     plot_thread_deltas: reconcileThreads(
       rows,
       Array.isArray(memory.plot_thread_deltas) ? memory.plot_thread_deltas : [],
@@ -288,7 +337,7 @@ export function reconcileSceneMemory(
     ),
     continuity_facts: reconcileFacts(
       rows,
-      Array.isArray(memory.continuity_facts) ? memory.continuity_facts : [],
+      normalizedContinuityFacts,
       sourceSectionId,
       now,
     ),
