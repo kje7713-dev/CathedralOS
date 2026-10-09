@@ -84,6 +84,9 @@ import {
   returnSuggestionRunToPending,
   recoverPendingSuggestionRun,
   runSuggestionJob,
+  LEGACY_PLANNING_MODEL_ID,
+  recoverablePlanningModelID,
+  isLegacyPlanningRequest,
 } from "./index.ts";
 import { ProviderBillingUnavailableError } from "../generate-story/_provider.ts";
 
@@ -229,6 +232,23 @@ Deno.test("PR4 validateRequest rejects malformed project_lineage_id", () => {
     validateRequest({ ...sparseRequest, project_lineage_id: null }),
     "project_lineage_id must be a UUID string when present",
   );
+});
+
+Deno.test("legacy planning requests preserve historical model identity without Sol upgrade", () => {
+  assertEquals(LEGACY_PLANNING_MODEL_ID, "gpt-5.6-luna");
+  assertEquals(recoverablePlanningModelID({}), "gpt-5.6-luna");
+  assertEquals(recoverablePlanningModelID({}, "gpt-5.6-sol"), "gpt-5.6-sol");
+  assertEquals(recoverablePlanningModelID({ modelID: "gpt-6.1-sol" }, "gpt-5.6-luna"), "gpt-6.1-sol");
+  assertEquals(isLegacyPlanningRequest({}), true);
+  assertEquals(isLegacyPlanningRequest({ modelID: "gpt-6.1-sol" }), false);
+});
+
+Deno.test("planning handler resolves persisted request bodies for recovery before dispatch", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes("recoverPersistedPlanningBody(db, existing)"), true);
+  assertEquals(source.includes("generation_provider_attempts"), true);
+  assertEquals(source.includes("body.modelID ?? LEGACY_PLANNING_MODEL_ID"), true);
+  assertEquals(source.includes("const selectedModelID = recoverablePlanningModelID(body)"), true);
 });
 
 Deno.test("Outline MVP accepts only the three approved model IDs", () => {

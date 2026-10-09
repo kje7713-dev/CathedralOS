@@ -669,7 +669,7 @@ struct ProjectDetailView: View {
         case .define: return "Define your premise"
         case .recipe: return "Create or refine your recipe"
         case .shape: return "Shape the story arc"
-        case .outline: return "Add an outline section"
+        case .outline: return "Generate or review outline sections"
         case .write: return "Write your first section"
         case .review: return "Review your latest output"
         case .read: return "Read your latest output"

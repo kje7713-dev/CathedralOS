@@ -1150,8 +1150,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     /// 2. Scene-memory extraction (`embed-section` → LLM extract + embed +
     ///    section_embeddings UPSERT) is fired fire-and-forget only when
     ///    real prose exists — i.e. the section has at least one
-    ///    GenerationOutput. A manual / blank New Section (no outputs)
-    ///    accepts with NO LLM call and NO section_embeddings row.
+    ///    GenerationOutput. A planned section without prose is accepted
+    ///    with NO extraction call and NO section_embeddings row.
     ///
     /// 3. If the embed call fails for a generated section, the failure is
     ///    surfaced as `embedError` (non-blocking warning) but the planning
@@ -1166,7 +1166,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         defer { acceptingSectionID = nil }
 
         // (1) Planning acceptance: synchronous, unconditional on the embed
-        // call. A manual / blank New Section accepts here with no LLM call.
+        // call. A planned section without prose needs no extraction call.
         guard let outlineID = section.outline?.id ?? currentOutline?.id else {
             embedError = "Section has no outline. Refresh the project and try again."
             return
@@ -1276,6 +1276,9 @@ struct OutlinePlanningModelSheet: View {
                 Section {
                     Text("Choose the model for this outline plan. The selection is saved for the next run, but this sheet will appear every time.")
                         .font(CathedralTheme.Typography.body(14))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    Text("Displayed credits are the catalog minimum, not an estimate of the full planning run. The server remains authoritative for actual pricing.")
+                        .font(CathedralTheme.Typography.caption(11))
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
                 Section("Outline planning model") {

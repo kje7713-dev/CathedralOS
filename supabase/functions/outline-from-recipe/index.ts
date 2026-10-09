@@ -74,6 +74,10 @@ import {
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const OPENAI_MODEL = "gpt-6.1-sol";
+// Requests created before PR #699 commonly omitted modelID. Their historical
+// default was GPT-5.6 Luna; never reinterpret such a persisted request as the
+// new Sol default. New iOS requests always send an explicit approved ID.
+export const LEGACY_PLANNING_MODEL_ID = "gpt-5.6-luna";
 const APPROVED_OUTLINE_MODEL_IDS = new Set([
   "gpt-6-luna",
   "gpt-6.1-sol",
@@ -1464,6 +1468,72 @@ export async function resumeOrRepairStoryMaterial(options: {
   }
 
   return { material, audit };
+}
+
+export function recoverablePlanningModelID(
+  requestJSON: unknown,
+  recoveredProviderModel?: unknown,
+): string {
+  const requestModel = requestJSON && typeof requestJSON === "object"
+    ? (requestJSON as Record<string, unknown>).modelID
+    : undefined;
+  if (typeof requestModel === "string" && requestModel.trim()) {
+    return requestModel.trim();
+  }
+  if (typeof recoveredProviderModel === "string" && recoveredProviderModel.trim()) {
+    return recoveredProviderModel.trim();
+  }
+  return LEGACY_PLANNING_MODEL_ID;
+}
+
+export function isLegacyPlanningRequest(requestJSON: unknown): boolean {
+  return !(requestJSON && typeof requestJSON === "object" &&
+    typeof (requestJSON as Record<string, unknown>).modelID === "string" &&
+    ((requestJSON as Record<string, unknown>).modelID as string).trim());
+}
+
+/**
+ * Rebuild the worker body from the durable run, never from a reconnect's
+ * current preferences. Provider attempts are the only older durable record
+ * of the model when request_json predates modelID.
+ */
+export async function recoverPersistedPlanningBody(
+  db: any,
+  run: { id: string; request_json?: unknown },
+): Promise<OutlineFromRecipeRequest> {
+  const stored = run.request_json && typeof run.request_json === "object"
+    ? { ...(run.request_json as Record<string, unknown>) }
+    : {};
+  let recoveredProviderModel: string | undefined;
+  if (isLegacyPlanningRequest(stored)) {
+    const attempt = await db.from("generation_provider_attempts")
+      .select("model_name")
+      .eq("feature_run_id", run.id)
+      .order("started_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    recoveredProviderModel = typeof attempt?.data?.model_name === "string"
+      ? attempt.data.model_name
+      : undefined;
+  }
+  const recoveredModel = recoverablePlanningModelID(
+    stored,
+    recoveredProviderModel,
+  );
+  if (recoveredProviderModel && recoveredModel === recoveredProviderModel) {
+    const catalog = await db.from("generation_models").select("id")
+      .eq("provider", "openai")
+      .eq("provider_model", recoveredProviderModel)
+      .maybeSingle();
+    if (typeof catalog?.data?.id === "string") {
+      stored.modelID = catalog.data.id;
+    } else {
+      stored.modelID = recoveredModel;
+    }
+  } else {
+    stored.modelID = recoveredModel;
+  }
+  return stored as unknown as OutlineFromRecipeRequest;
 }
 
 export function validateRequest(req: unknown): string | null {
@@ -3512,7 +3582,7 @@ export async function runSuggestionJob(
     : [];
   try {
     const modelStore = dependencies.model ? null : new SupabaseGenerationModelStore(db);
-    const selectedModelID = body.modelID ?? OPENAI_MODEL;
+    const selectedModelID = recoverablePlanningModelID(body);
     const model = dependencies.model ?? await modelStore!.getEnabledModelById(selectedModelID);
     if (!model) {
       throw new Error(`Selected outline model is unavailable: ${selectedModelID}`);
@@ -4329,9 +4399,9 @@ Deno.serve(async (req: Request) => {
   } catch {
     return errorResponse("invalid_request", "Body must be JSON", 400);
   }
-  // Outline Sections always has an explicit approved planning model. Sol is
-  // the product default; never substitute a different model silently.
-  body = { ...body, modelID: body.modelID ?? OPENAI_MODEL };
+  // Do not apply the new Sol default until after legacy idempotent recovery
+  // has had a chance to match the original request fingerprint. Legacy
+  // callers without modelID retain their historical GPT-5.6 Luna default.
   if (body.storyMaterialEnrichment) {
     body = {
       ...body,
@@ -4345,10 +4415,6 @@ Deno.serve(async (req: Request) => {
     return errorResponse("invalid_request", validationError, 400);
   }
   const db = admin();
-  const selectedModel = await new SupabaseGenerationModelStore(db).getEnabledModelById(body.modelID!);
-  if (!selectedModel) {
-    return errorResponse("model_unavailable", `Selected outline model is unavailable: ${body.modelID}`, 422);
-  }
   // Current clients must identify the concrete Outline and canonical project
   // lineage. Validate against the real schema (local_project_id + lineage_id)
   // before rate limiting, run creation, or any billable work.
@@ -4377,7 +4443,7 @@ Deno.serve(async (req: Request) => {
   }
   // PR 7: calculate logical identity BEFORE checkRateLimit so reconnects
   // can short-circuit without consuming a rate-limit slot or logging.
-  const identity = await logicalSuggestionIdentity(body);
+  let identity = await logicalSuggestionIdentity(body);
   // PR 7: resolve an existing matching idempotent run first. If the
   // current request's idempotency key is already bound to a run with the
   // same fingerprint, reconnect to it (no rate limit, no log entry). If
@@ -4394,6 +4460,15 @@ Deno.serve(async (req: Request) => {
   if (existingError) {
     console.error("[outline-from-recipe] existing-run resolve failed", existingError);
     return errorResponse("db_error", existingError.message ?? "Could not resolve existing run", 500);
+  }
+  if (existing && body.modelID === undefined && !isLegacyPlanningRequest(existing.request_json)) {
+    // PR #699 briefly defaulted missing modelID to Sol before persisting the
+    // fingerprint. Reconnect that historical run using its persisted model,
+    // rather than treating the current legacy-shaped request as a conflict.
+    identity = await logicalSuggestionIdentity({
+      ...body,
+      modelID: recoverablePlanningModelID(existing.request_json),
+    });
   }
   if (existing) {
     if (
@@ -4420,8 +4495,9 @@ Deno.serve(async (req: Request) => {
         attempt_count: (existing.attempt_count ?? 0) + 1,
       }).eq("id", existing.id).eq("status", "failed").eq("credit_cost_charged", 0);
       if (retryError) return errorResponse("db_error", retryError.message ?? "Could not retry failed suggestion run", 500);
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
       // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, body, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
       return corsResponse(
         JSON.stringify({
           run_id: existing.id,
@@ -4449,8 +4525,9 @@ Deno.serve(async (req: Request) => {
     if (existing.status === "pending") {
       // Reconnects and continuation POSTs do not consume another rate-limit
       // slot or request-log entry. The pending claim makes this race-safe.
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
       // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, body, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
     }
     // Reconnect: return existing run status. Skip checkRateLimit + logRequest
     // so a stray reconnect does NOT consume a rate-limit slot or produce
@@ -4478,6 +4555,13 @@ Deno.serve(async (req: Request) => {
   // PR 7: only NEW logical requests reach checkRateLimit. Reconnects were
   // handled by the resolve-existing path above; this is a fresh
   // outline-from-recipe request with a brand-new idempotency key.
+  // The native iOS MVP sends an explicit model; missing modelID is retained
+  // only for legacy clients and keeps the historical GPT-5.6 Luna identity.
+  body = { ...body, modelID: body.modelID ?? LEGACY_PLANNING_MODEL_ID };
+  const selectedModel = await new SupabaseGenerationModelStore(db).getEnabledModelById(body.modelID!);
+  if (!selectedModel) {
+    return errorResponse("model_unavailable", `Selected outline model is unavailable: ${body.modelID}`, 422);
+  }
   const rateResult = await checkRateLimit(userClient, user.id);
   if (!rateResult.allowed) {
     return corsResponse(
@@ -4562,7 +4646,9 @@ Deno.serve(async (req: Request) => {
   // suspension. The pending claim inside runSuggestionJob makes this race-safe.
   if (run.status === "pending") {
     // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-    EdgeRuntime.waitUntil(runSuggestionJob(run.id, body, user.id, openaiKey, run.attempt_count ?? 0, authHeader));
+    const recoveredBody = await recoverPersistedPlanningBody(db, run);
+    // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+    EdgeRuntime.waitUntil(runSuggestionJob(run.id, recoveredBody, user.id, openaiKey, run.attempt_count ?? 0, authHeader));
   }
   return corsResponse(
     JSON.stringify({

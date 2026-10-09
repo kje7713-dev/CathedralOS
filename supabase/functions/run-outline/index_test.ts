@@ -22,6 +22,7 @@ import {
   runOutlineSectionLifecycle,
   validateOutlineSectionsModelID,
   OUTLINE_SECTIONS_DEFAULT_MODEL_ID,
+  runOutlineIdempotencyKey,
 } from "./index.ts";
 import {
   buildGenerateStoryRequest,
@@ -76,6 +77,14 @@ Deno.test("Outline Sections accepts only approved models and defaults to Sol", (
   }
   assertEquals(validateOutlineSectionsModelID("gpt-5.6-luna"), "model must be one of the approved Outline Sections models");
   assertEquals(validateOutlineSectionsModelID(""), "model must be one of the approved Outline Sections models");
+});
+
+Deno.test("Run All target identity blocks conflicting model launches but permits terminal reruns", () => {
+  const luna = runOutlineIdempotencyKey("u", "o", "s");
+  const astra = runOutlineIdempotencyKey("u", "o", "s");
+  const otherTarget = runOutlineIdempotencyKey("u", "o", "other");
+  assertEquals(luna, astra);
+  assertEquals(luna === otherTarget, false);
 });
 
 Deno.test("outline loader accepts a valid authoritative outline", async () => {
@@ -386,8 +395,9 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   );
   assertEquals(source.includes("idempotency_key: null"), true);
   assertEquals(source.includes("latest replacement"), false); // replacement lookup is client/server contract
-  assertEquals(source.includes("outline_id + start_parent_section_id"), true);
-  assertEquals(source.includes('`${userId}:${body.outline_id}:${body.start_parent_section_id}:${body.scope || "single"}:${selectedModelID}`'), true);
+  assertEquals(source.includes("runOutlineIdempotencyKey("), true);
+  assertEquals(source.includes('return `${userID}:${outlineID}:${startParentSectionID}`;'), true);
+  assertEquals(source.includes('`${userId}:${body.outline_id}:${body.start_parent_section_id}:${body.scope || "single"}:${selectedModelID}`'), false);
   assertEquals(source.includes("body = { ...body, model: selectedModelID }"), true);
   assertEquals(
     source.includes('.from("chapter_runs")\n      .delete()'),

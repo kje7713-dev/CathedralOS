@@ -92,6 +92,14 @@ export function validateOutlineSectionsModelID(modelID: unknown): string | null 
   return null;
 }
 
+export function runOutlineIdempotencyKey(
+  userID: string,
+  outlineID: string,
+  startParentSectionID: string,
+): string {
+  return `${userID}:${outlineID}:${startParentSectionID}`;
+}
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -392,16 +400,6 @@ async function handleKickoff(req: Request): Promise<Response> {
     return errorResponse("invalid_model", modelValidationError, 400);
   }
   body = { ...body, model: selectedModelID };
-  const selectedCatalogModel = await new SupabaseGenerationModelStore(adminClient)
-    .getEnabledModelById(selectedModelID);
-  if (!selectedCatalogModel) {
-    return errorResponse(
-      "model_unavailable",
-      `Selected Outline Sections model is unavailable: ${selectedModelID}`,
-      422,
-    );
-  }
-
   // 3. Idempotency: try insert; on 23505 return existing run
   let readinessOutline: ReadinessOutline;
   try {
@@ -461,8 +459,15 @@ async function handleKickoff(req: Request): Promise<Response> {
     );
   }
 
-  const idempotencyKey =
-    `${userId}:${body.outline_id}:${body.start_parent_section_id}:${body.scope || "single"}:${selectedModelID}`;
+  // Model and scope are persisted on the durable run, but are deliberately
+  // not part of the active-run identity. A second launch for the same target
+  // must reconnect to the existing run rather than create a competing job.
+  // Terminal runs release this target key before a legitimate rerun.
+  const idempotencyKey = runOutlineIdempotencyKey(
+    userId,
+    body.outline_id,
+    body.start_parent_section_id,
+  );
 
   // Idempotency: check for existing run first.
   // - running → return 409 already_running
@@ -511,6 +516,16 @@ async function handleKickoff(req: Request): Promise<Response> {
         500,
       );
     }
+  }
+
+  const selectedCatalogModel = await new SupabaseGenerationModelStore(adminClient)
+    .getEnabledModelById(selectedModelID);
+  if (!selectedCatalogModel) {
+    return errorResponse(
+      "model_unavailable",
+      `Selected Outline Sections model is unavailable: ${selectedModelID}`,
+      422,
+    );
   }
 
   const { data: run, error: insertErr } = await adminClient

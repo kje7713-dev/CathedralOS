@@ -133,6 +133,32 @@ final class OutlineSuggestionIdentityContractTests: XCTestCase {
 
     // MARK: - Round-trip (server decode parity)
 
+    func testRoundTripPreservesSelectedModel() throws {
+        let request = OutlineSuggestionRequest(
+            recipe: makeSampleRequest().recipe,
+            arcTemplate: makeSampleRequest().arcTemplate,
+            hint: nil,
+            existingSections: nil,
+            idempotencyKey: "key",
+            outline_id: nil,
+            project_lineage_id: nil,
+            requestedFormat: "novel",
+            modelID: "gpt-6.1-sol"
+        )
+        let decoded = try JSONDecoder().decode(
+            OutlineSuggestionRequest.self,
+            from: JSONEncoder().encode(request)
+        )
+        XCTAssertEqual(decoded.modelID, "gpt-6.1-sol")
+    }
+
+    func testLegacyRequestWithoutModelIDDecodesAsLegacy() throws {
+        let request = makeSampleRequest()
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(OutlineSuggestionRequest.self, from: data)
+        XCTAssertNil(decoded.modelID)
+    }
+
     func testRoundTripPreservesIdentityFields() throws {
         let outlineID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         let lineageID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
