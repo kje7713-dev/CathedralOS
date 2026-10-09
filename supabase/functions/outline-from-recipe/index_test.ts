@@ -86,6 +86,9 @@ import {
   runSuggestionJob,
   LEGACY_PLANNING_MODEL_ID,
   recoverablePlanningModelID,
+  canonicalizeNewPlanningRequest,
+  resolvePlanningRequestIdentity,
+  recoverPersistedPlanningBody,
   isLegacyPlanningRequest,
 } from "./index.ts";
 import { ProviderBillingUnavailableError } from "../generate-story/_provider.ts";
@@ -234,11 +237,12 @@ Deno.test("PR4 validateRequest rejects malformed project_lineage_id", () => {
   );
 });
 
-Deno.test("legacy planning requests preserve historical model identity without Sol upgrade", () => {
+Deno.test("legacy planning recovery fails closed without evidence and preserves recorded models", () => {
   assertEquals(LEGACY_PLANNING_MODEL_ID, "gpt-5.6-luna");
-  assertEquals(recoverablePlanningModelID({}), "gpt-5.6-luna");
-  assertEquals(recoverablePlanningModelID({}, "gpt-5.6-sol"), "gpt-5.6-sol");
+  assertEquals(recoverablePlanningModelID({}), undefined);
+  assertEquals(recoverablePlanningModelID({}, "gpt-5.4-mini"), "gpt-5.4-mini");
   assertEquals(recoverablePlanningModelID({ modelID: "gpt-6.1-sol" }, "gpt-5.6-luna"), "gpt-6.1-sol");
+  assertEquals(canonicalizeNewPlanningRequest({ ...sparseRequest } as any).modelID, "gpt-5.6-luna");
   assertEquals(isLegacyPlanningRequest({}), true);
   assertEquals(isLegacyPlanningRequest({ modelID: "gpt-6.1-sol" }), false);
 });
@@ -247,18 +251,71 @@ Deno.test("planning handler resolves persisted request bodies for recovery befor
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   assertEquals(source.includes("recoverPersistedPlanningBody(db, existing)"), true);
   assertEquals(source.includes("generation_provider_attempts"), true);
-  assertEquals(source.includes("body.modelID ?? LEGACY_PLANNING_MODEL_ID"), true);
+  assertEquals(source.includes("recoverPendingSuggestionRun"), true);
+  assertEquals(source.includes("recoverPersistedPlanningBody(db, existing)"), true);
   assertEquals(source.includes("const selectedModelID = recoverablePlanningModelID(body)"), true);
+  assertEquals(source.includes("planning_model_unrecoverable"), true);
 });
 
-Deno.test("Outline MVP accepts only the three approved model IDs", () => {
-  for (const modelID of ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]) {
+Deno.test("new picker models and enabled legacy planning models pass request shape validation", () => {
+  for (const modelID of ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-luna", "gpt-5.4-mini"]) {
     assertEquals(validateRequest({ ...sparseRequest, modelID }), null);
   }
-  assertEquals(
-    validateRequest({ ...sparseRequest, modelID: "gpt-5.6-luna" }),
-    "modelID must be one of the approved Outline Sections models",
+  assertEquals(validateRequest({ ...sparseRequest, modelID: "" }), "modelID must be a non-empty catalog model ID");
+});
+
+Deno.test("planning identity lifecycle preserves legacy and modern persisted fingerprints", async () => {
+  const legacyRequest = { ...sparseRequest, idempotencyKey: "legacy-key" } as any;
+  const firstLegacy = await resolvePlanningRequestIdentity(legacyRequest);
+  const persistedLegacy = {
+    request_json: firstLegacy.canonicalBody,
+    request_fingerprint: firstLegacy.identity.fingerprint,
+  };
+  const legacyReconnect = await resolvePlanningRequestIdentity(legacyRequest, persistedLegacy);
+  assertEquals(legacyReconnect.identity.fingerprint, firstLegacy.identity.fingerprint);
+  assertEquals(legacyReconnect.acceptedFingerprints.has(persistedLegacy.request_fingerprint), true);
+
+  const historicalRawIdentity = await logicalSuggestionIdentity(legacyRequest);
+  const historicalReconnect = await resolvePlanningRequestIdentity(legacyRequest, { request_json: legacyRequest });
+  assertEquals(historicalReconnect.acceptedFingerprints.has(historicalRawIdentity.fingerprint), true);
+
+  const solRequest = { ...sparseRequest, idempotencyKey: "modern-key", modelID: "gpt-6.1-sol" } as any;
+  const firstSol = await resolvePlanningRequestIdentity(solRequest);
+  const solReconnect = await resolvePlanningRequestIdentity(solRequest, {
+    request_json: firstSol.canonicalBody,
+  });
+  assertEquals(solReconnect.identity.fingerprint, firstSol.identity.fingerprint);
+
+  const changedModel = await resolvePlanningRequestIdentity({ ...solRequest, modelID: "gpt-6-luna" }, {
+    request_json: firstSol.canonicalBody,
+  });
+  assertEquals(changedModel.acceptedFingerprints.has(firstSol.identity.fingerprint), false);
+});
+
+Deno.test("legacy planning recovery maps provider attempts and does not rewrite missing history", async () => {
+  const dbFor = (attemptModel: string | null, catalogID: string | null) => ({
+    from(table: string) {
+      const result = table === "generation_provider_attempts"
+        ? { data: attemptModel ? { model_name: attemptModel } : null, error: null }
+        : { data: catalogID ? { id: catalogID } : null, error: null };
+      const chain: any = {
+        select: () => chain, eq: () => chain, order: () => chain, limit: () => chain,
+        maybeSingle: async () => result,
+      };
+      return chain;
+    },
+  });
+  const recorded = await recoverPersistedPlanningBody(
+    dbFor("gpt-5.4-mini-2025-01", "gpt-5.4-mini"),
+    { id: "legacy-recorded", request_json: { ...sparseRequest } },
   );
+  assertEquals(recorded.modelID, "gpt-5.4-mini");
+
+  const noEvidence = await recoverPersistedPlanningBody(
+    dbFor(null, null),
+    { id: "legacy-unknown", request_json: { ...sparseRequest } },
+  );
+  assertEquals(noEvidence.modelID, undefined);
 });
 
 Deno.test("Outline model selection participates in durable request identity", async () => {
@@ -4497,17 +4554,77 @@ Deno.test("GET recovery starts the next pending slice after self-scheduling fail
   const body = { idempotencyKey: "same-key", recipe: { project: { id: "p" } } } as any;
   const started: any[] = [];
   const startedRecovery = await recoverPendingSuggestionRun(
-    { id: "run-recovery", status: "pending", request_json: body, attempt_count: 2 },
+    { id: "run-recovery", status: "pending", request_json: { ...body, modelID: "gpt-6.1-sol" }, attempt_count: 2 },
     "user-recovery",
     "openai-key",
     "Bearer recovery",
     async (...args) => { started.push(args); },
+    { from: () => { throw new Error("explicit model must not query attempts"); } },
   );
   assertEquals(startedRecovery, true);
   assertEquals(started.length, 1);
   assertEquals(started[0][0], "run-recovery");
-  assertEquals(started[0][1], body);
+  assertEquals(started[0][1].modelID, "gpt-6.1-sol");
   assertEquals(started[0][5], "Bearer recovery");
+});
+
+Deno.test("GET recovery restores a legacy provider-attempt model before worker dispatch", async () => {
+  const started: any[] = [];
+  const db: any = {
+    from(table: string) {
+      const result = table === "generation_provider_attempts"
+        ? { data: { model_name: "gpt-5.4-mini-2025-01" }, error: null }
+        : { data: { id: "gpt-5.4-mini" }, error: null };
+      const chain: any = {
+        select: () => chain, eq: () => chain, order: () => chain, limit: () => chain,
+        maybeSingle: async () => result,
+      };
+      return chain;
+    },
+  };
+  const startedRecovery = await recoverPendingSuggestionRun(
+    { id: "run-legacy-get", status: "pending", request_json: { ...sparseRequest }, attempt_count: 1 },
+    "user-recovery",
+    "openai-key",
+    "Bearer recovery",
+    async (...args) => { started.push(args); },
+    db,
+  );
+  assertEquals(startedRecovery, true);
+  assertEquals(started[0][1].modelID, "gpt-5.4-mini");
+});
+
+Deno.test("persisted selected model reaches the billable planning call", async () => {
+  const body = await executableWorkerBody();
+  body.modelID = "gpt-6.1-sol";
+  const row: any = {
+    ...checkpointedWorkerRow(body),
+    planning_state: {
+      version: 2,
+      phase: "allocation_complete",
+      allocationEntries: [
+        ["beat-1", { minSections: 1, rationale: "model propagation" }],
+        ["beat-2", { minSections: 1, rationale: "model propagation" }],
+      ],
+    },
+  };
+  const db = new ExecutableRunDb(row);
+  let selectedProviderModel: string | undefined;
+  const actions: string[] = [];
+  const delegate = fakeWorkerBilling(actions);
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "gpt-6.1-sol" },
+    provider: {},
+    creditStore: {},
+    billableLLM: (async (request: any) => {
+      selectedProviderModel = request.model.provider_model;
+      return delegate(request);
+    }) as any,
+    scheduleContinuation: async () => {},
+  });
+  assertEquals(selectedProviderModel, "gpt-6.1-sol");
+  assertEquals(actions.includes("outline-suggestions"), true);
 });
 
 Deno.test("self-scheduling failure leaves pending checkpoint recoverable", async () => {

@@ -79,6 +79,10 @@ const MAX_TRANSIENT_OUTLINE_LOOKUP_ATTEMPTS = 3;
 const TRANSIENT_OUTLINE_LOOKUP_RETRY_SECONDS = 30;
 
 export const OUTLINE_SECTIONS_DEFAULT_MODEL_ID = "gpt-6.1-sol";
+// New iOS Outline Sections requests send the picker default explicitly. Older
+// callers omitted `model`, which historically flowed to the generation
+// infrastructure's gpt-4o-mini default; preserve that behavior.
+export const LEGACY_RUN_OUTLINE_DEFAULT_MODEL_ID = "gpt-4o-mini";
 export const APPROVED_OUTLINE_SECTIONS_MODEL_IDS = new Set([
   "gpt-6-luna",
   "gpt-6.1-sol",
@@ -394,10 +398,13 @@ async function handleKickoff(req: Request): Promise<Response> {
       400,
     );
   }
-  const selectedModelID = body.model ?? OUTLINE_SECTIONS_DEFAULT_MODEL_ID;
-  const modelValidationError = validateOutlineSectionsModelID(selectedModelID);
-  if (modelValidationError) {
-    return errorResponse("invalid_model", modelValidationError, 400);
+  const selectedModelID = body.model ?? LEGACY_RUN_OUTLINE_DEFAULT_MODEL_ID;
+  // The iOS Outline Sections picker is intentionally limited to the three
+  // MVP IDs above. The endpoint must remain compatible with older legitimate
+  // callers, however; the catalog lookup below is the authority for whether
+  // any explicitly requested model is enabled, priced, and provider-available.
+  if (typeof selectedModelID !== "string" || selectedModelID.trim() === "") {
+    return errorResponse("invalid_model", "model must be a non-empty catalog model ID", 400);
   }
   body = { ...body, model: selectedModelID };
   // 3. Idempotency: try insert; on 23505 return existing run

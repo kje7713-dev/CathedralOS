@@ -22,6 +22,7 @@ import {
   runOutlineSectionLifecycle,
   validateOutlineSectionsModelID,
   OUTLINE_SECTIONS_DEFAULT_MODEL_ID,
+  LEGACY_RUN_OUTLINE_DEFAULT_MODEL_ID,
   runOutlineIdempotencyKey,
 } from "./index.ts";
 import {
@@ -72,6 +73,7 @@ function mockOutlineClient(result: { data: unknown; error: unknown }) {
 
 Deno.test("Outline Sections accepts only approved models and defaults to Sol", () => {
   assertEquals(OUTLINE_SECTIONS_DEFAULT_MODEL_ID, "gpt-6.1-sol");
+  assertEquals(LEGACY_RUN_OUTLINE_DEFAULT_MODEL_ID, "gpt-4o-mini");
   for (const modelID of ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]) {
     assertEquals(validateOutlineSectionsModelID(modelID), null);
   }
@@ -376,11 +378,13 @@ Deno.test("Run All validates the approved model and availability before durable 
   const source = await Deno.readTextFile(
     "./supabase/functions/run-outline/index.ts",
   );
-  assertStringIncludes(source, "validateOutlineSectionsModelID(selectedModelID)");
+  assertEquals(source.includes("validateOutlineSectionsModelID(selectedModelID)"), false);
+  assertStringIncludes(source, "The iOS Outline Sections picker is intentionally limited");
+  assertStringIncludes(source, "body.model ?? LEGACY_RUN_OUTLINE_DEFAULT_MODEL_ID");
   assertStringIncludes(source, "new SupabaseGenerationModelStore(adminClient)");
   assertStringIncludes(source, 'return errorResponse(\n      "model_unavailable"');
   assertStringIncludes(source, 'body = { ...body, model: selectedModelID }');
-  assertStringIncludes(source, 'body.model ?? OUTLINE_SECTIONS_DEFAULT_MODEL_ID');
+  assertEquals(source.includes('body.model ?? OUTLINE_SECTIONS_DEFAULT_MODEL_ID'), false);
 });
 
 Deno.test("run-outline uses leased bounded continuations", async () => {
