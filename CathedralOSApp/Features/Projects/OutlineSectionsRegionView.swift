@@ -276,6 +276,13 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             ?? durabilityCoordinator.runStatus(for: project.stableLineageID)
     }
 
+    private var projectActiveRunPollingError: String? {
+        guard durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID else {
+            return nil
+        }
+        return durabilityCoordinator.activeRunPollingError
+    }
+
     /// Beat picker source — current arc's beats (empty if no arc picked yet).
     private var availableBeats: [StoryArcBeat] {
         guard let arc = project.storyArcs.first else { return [] }
@@ -288,12 +295,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 GenerationStartingBanner()
             }
             if let status = projectRunStatus {
-                let pollingError: String? = durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
-                    ? durabilityCoordinator.activeRunPollingError
-                    : nil
                 ActiveRunBanner(
                     status: status,
-                    pollingError: pollingError,
+                    pollingError: projectActiveRunPollingError,
                     onResume: { await self.resumeRun(status) }
                 )
             }
