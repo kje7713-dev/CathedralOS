@@ -5528,8 +5528,170 @@ Deno.test("continuity authority: canon owns scene-entry reality and contract own
     prompt,
     "The current Section Contract is authoritative for what this scene must accomplish FROM that established starting state.",
   );
-  assertStringIncludes(prompt, "making the required change occur causally within the current scene whenever possible");
+  assertStringIncludes(
+    prompt,
+    "you MUST preserve established history and create the contract's required dramatic transition from that actual starting state",
+  );
+  assertEquals(
+    prompt.includes(
+      "making the required change occur causally within the current scene whenever possible",
+    ),
+    false,
+  );
   assertEquals(prompt.includes("If they conflict with the Section Contract, follow the Section Contract."), false);
+});
+
+// V5 continuity regression: prior canon says a character boarded and traveled
+// with the convoy; a later contract says the character must be discovered
+// missing. The prompt must preserve the boarding/travel history and require a
+// causal separation now, rather than allowing the model to claim the character
+// never boarded.
+Deno.test("continuity interpretation: Section Contract is transition, not history", () => {
+  const { craft, context } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "The Empty Place at the Table",
+    sectionSummary: "The protagonist learns that the character is missing from the evacuation.",
+    projectStateContext: "A character boarded the evacuation boat and is currently traveling with the convoy.",
+  });
+  assertStringIncludes(craft, "## Section Contract Interpretation");
+  assertStringIncludes(
+    craft,
+    "The Section Contract specifies the transition and outcome that must be created in the CURRENT scene.",
+  );
+  assertStringIncludes(
+    craft,
+    "It is not a source of new historical facts about events that occurred before scene entry.",
+  );
+  assertStringIncludes(
+    craft,
+    "Backward-looking wording inside a Section Contract does not override Established Project State.",
+  );
+  assertStringIncludes(
+    craft,
+    "discard the conflicting historical implication",
+  );
+  assertStringIncludes(context, "The protagonist learns that the character is missing");
+});
+
+Deno.test("continuity interpretation: conflicting history requires mandatory causal reconciliation", () => {
+  const { craft } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "A Missing Passenger",
+    sectionSummary: "The character is missing from the final arrival.",
+    projectStateContext: "The character boarded and traveled with the group.",
+  });
+  assertStringIncludes(
+    craft,
+    "you MUST preserve established history and create the contract's required dramatic transition from that actual starting state",
+  );
+  assertStringIncludes(
+    craft,
+    "Never satisfy the contract by rewriting, negating, or replacing an established prior event.",
+  );
+  assertEquals(
+    craft.includes(
+      "making the required change occur causally within the current scene whenever possible",
+    ),
+    false,
+  );
+});
+
+Deno.test("continuity interpretation: required silent preflight reconciles canon before writing", () => {
+  const { craft } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "A Missing Passenger",
+    sectionSummary: "The character is discovered missing.",
+    projectStateContext: "The character boarded and traveled with the group.",
+  });
+  assertStringIncludes(craft, "## Continuity Preflight — REQUIRED BEFORE WRITING");
+  for (const phrase of [
+    "Identify concrete facts already established before scene entry",
+    "treat them as fixed history",
+    "Identify the state change or dramatic outcome that the current Section Contract requires NOW",
+    "reject the conflicting historical assumption",
+    "Construct a causal transition from the actual established state",
+    "Only then write the scene",
+  ]) {
+    assertStringIncludes(craft, phrase);
+  }
+  assertStringIncludes(
+    craft,
+    "Never solve a Section Contract conflict by retroactively claiming that an established prior event did not occur.",
+  );
+});
+
+Deno.test("continuity interpretation: generic boarding example forbids historical retcon", () => {
+  const { craft } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "A Missing Passenger",
+    sectionSummary: "The character is discovered missing.",
+    projectStateContext: "A character boarded an evacuation boat.",
+  });
+  assertStringIncludes(
+    craft,
+    "Established Project State: A character boarded an evacuation boat and was later seen traveling with the group.",
+  );
+  assertStringIncludes(
+    craft,
+    "Current Section Contract: The protagonist learns that the character is missing from the evacuation.",
+  );
+  assertStringIncludes(
+    craft,
+    "Invalid interpretation: claiming the character never boarded the evacuation boat.",
+  );
+  assertStringIncludes(
+    craft,
+    "The contract controls the required present transition. Project State controls what already happened.",
+  );
+});
+
+Deno.test("continuity interpretation: no section context keeps the authority block omitted", () => {
+  const { craft, context } = buildPrompt(MINIMAL_PROMPT_ARGS);
+  assertEquals(craft.includes("## Section Contract Authority"), false);
+  assertEquals(craft.includes("Continuity Preflight — REQUIRED BEFORE WRITING"), false);
+  assertEquals(context.includes("## Section Contract"), false);
+});
+
+Deno.test("continuity interpretation: static preflight stays in stable prompt boundary", () => {
+  const { craft, context, stableBlocks, volatileBlocks } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "The Empty Place at the Table",
+    sectionSummary: "Ilya is missing from the final convoy count.",
+    projectStateContext: "Ilya boarded the evacuation boat and is currently traveling with the convoy.",
+  });
+  const stable = stableBlocks.join("\n");
+  const volatile = volatileBlocks.join("\n");
+  assertStringIncludes(stable, "Continuity Preflight — REQUIRED BEFORE WRITING");
+  assertEquals(craft.includes("Ilya"), false);
+  assertStringIncludes(context, "Ilya is missing from the final convoy count.");
+  assertStringIncludes(volatile, "Ilya boarded the evacuation boat");
+  assertEquals(stable.includes("Ilya"), false);
+});
+
+Deno.test("continuity interpretation: authority order remains canon then contract then future", () => {
+  const { craft } = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    sectionTitle: "A Missing Passenger",
+    sectionSummary: "The character is discovered missing.",
+  });
+  const authority = "Authority order: 1. Established Project State defines scene-entry reality. 2. The current Section Contract defines the required transition and outcome for this scene. 3. Future Outline Obligations constrain what must remain possible later. 4. Other creative guidance is subordinate to the above.";
+  assertStringIncludes(craft, authority);
+  const authorityText = craft.slice(craft.indexOf("Authority order:"));
+  assertEquals(
+    authorityText.indexOf("Established Project State") <
+      authorityText.indexOf("The current Section Contract"),
+    true,
+  );
+  assertEquals(
+    authorityText.indexOf("The current Section Contract") <
+      authorityText.indexOf("Future Outline Obligations"),
+    true,
+  );
+  assertEquals(
+    authorityText.indexOf("Future Outline Obligations") <
+      authorityText.indexOf("Other creative guidance"),
+    true,
+  );
 });
 
 Deno.test("continuity authority: future outline is trajectory-only and precedes the current contract", () => {
@@ -5584,7 +5746,10 @@ Deno.test("Tartaria regression: stale contract cannot authorize retconning a suc
   const prompt = `${craft}\n${context}`;
   assertStringIncludes(prompt, "Ilya crossed the marsh");
   assertStringIncludes(prompt, "Do not rewrite prior canon");
-  assertStringIncludes(prompt, "preserve the contract's dramatic purpose and intended consequence");
+  assertStringIncludes(
+    prompt,
+    "preserving the contract's dramatic purpose, resulting change, and required terminal state",
+  );
   assertStringIncludes(prompt, "Established Project State is authoritative for concrete facts that are already true at the beginning of this scene.");
   assertEquals(prompt.includes("claim they never arrived"), false);
 });
