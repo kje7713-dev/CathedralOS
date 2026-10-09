@@ -395,9 +395,13 @@ platform :ios do
     info_localization.update(
       attributes: {
         name: read_metadata.call("name.txt"),
-        subtitle: read_metadata.call("subtitle.txt")
+        subtitle: read_metadata.call("subtitle.txt"),
+        privacyPolicyUrl: read_metadata.call("privacy_policy_url.txt"),
+        supportUrl: read_metadata.call("support_url.txt"),
+        marketingUrl: read_metadata.call("marketing_url.txt")
       }
     )
+    UI.message("Terms of Use URL recorded at #{read_metadata.call("terms_of_use_url.txt")}; App Store Connect exposes no writable Terms URL field in AppInfoLocalization, so the release binary configuration remains authoritative for it.")
     UI.success("App Store text metadata applied without changing screenshots, binary, or submission state.")
   end
 
@@ -433,7 +437,10 @@ platform :ios do
     metadata_dir = File.join("fastlane", "metadata", "en-US")
     checks = {
       "description" => [localization.description, File.join(metadata_dir, "description.txt")],
-      "keywords" => [localization.keywords, File.join(metadata_dir, "keywords.txt")]
+      "keywords" => [localization.keywords, File.join(metadata_dir, "keywords.txt")],
+      "privacyPolicyUrl" => [localization.privacy_policy_url, File.join(metadata_dir, "privacy_policy_url.txt")],
+      "supportUrl" => [localization.support_url, File.join(metadata_dir, "support_url.txt")],
+      "marketingUrl" => [localization.marketing_url, File.join(metadata_dir, "marketing_url.txt")]
     }
 
     checks.each do |field, (current, path)|

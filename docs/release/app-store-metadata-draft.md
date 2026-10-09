@@ -13,11 +13,12 @@ contains no fabricated legal URLs or credentials.
 | Description | See `fastlane/metadata/en-US/description.txt`. | Existing draft; review before apply |
 | Keywords | See `fastlane/metadata/en-US/keywords.txt`. | Existing draft; review before apply |
 
-## URLs — operator input required
+## URLs — approved values
 
-- Privacy Policy URL: **NEEDS OPERATOR**
-- Terms of Use / EULA: **NEEDS OPERATOR**
-- Support URL: **NEEDS OPERATOR**
+- Privacy Policy URL: `https://savagesbydesign.com/storydonkey-privacy/`
+- Terms of Use / EULA: `https://savagesbydesign.com/storydonkey-terms/` (recorded for release binary configuration; not a writable AppInfoLocalization field)
+- Support URL: `https://savagesbydesign.com/storydonkey-support/`
+- Marketing / Beta Signup URL: `https://savagesbydesign.com/storydonkey/#beta`
 
 Do not replace these with placeholders. The release workflow requires production
 privacy and terms URLs to be real HTTPS URLs.
