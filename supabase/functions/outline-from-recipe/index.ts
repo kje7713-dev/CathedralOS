@@ -1,16 +1,21 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { BillableLLMError, runBillableLLM } from "../_shared/billable-llm.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
+import { availableCredits, type UserEntitlement } from "../generate-story/_credits.ts";
 import {
   inputTokenLimitDetails,
   estimateTokensFromMessages,
+  computeMaxChargeCredits,
+  snapshotPricing,
   SupabaseGenerationModelStore,
+  type GenerationModel,
 } from "../generate-story/_generation_models.ts";
 import {
   type LLMMessage,
   getProviderBillingUnavailableUpstream,
   isProviderBillingUnavailable,
   OpenAIProvider,
+  supportsCustomTemperature,
 } from "../generate-story/_provider.ts";
 import {
   buildCompactPlanningView,
@@ -643,6 +648,66 @@ interface OutlineFromRecipeRequest {
   // into a paid LLM call.
   project_lineage_id?: string;
   idempotencyKey?: string;
+  /** Non-billable planning estimate request; never creates a durable run. */
+  estimate_only?: boolean;
+}
+
+export interface OutlinePlanningEstimate {
+  estimatedCredits: number;
+  lowerBoundCredits: number;
+  upperBoundCredits: number;
+  availableCredits: number;
+  projectedBalance: number;
+  allowed: boolean;
+  model: string;
+  expectedStages: number;
+}
+
+/**
+ * Project the complete outline pipeline without calling an LLM or reserving
+ * credits. The range is deliberately labelled as an estimate: enrichment,
+ * allocation, first-pass suggestions, and variable expansion calls are all
+ * priced with the canonical GenerationModel snapshot and the same token
+ * accounting used by the billable runner.
+ */
+export function estimateOutlinePlanningCost(
+  request: OutlineFromRecipeRequest,
+  model: GenerationModel,
+  entitlement: UserEntitlement,
+): OutlinePlanningEstimate {
+  const inputTokens = Math.max(1_500, estimateTokensFromMessages([
+    { content: JSON.stringify(request.recipe) },
+    { content: JSON.stringify(request.arcTemplate) },
+    { content: JSON.stringify(request.existingSections ?? []) },
+  ]));
+  const pricing = snapshotPricing(model);
+  const stage = (input: number, output: number) => computeMaxChargeCredits({
+    uncachedInputTokens: input,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: output,
+    toolCostUsd: 0,
+  }, pricing);
+  const beatCount = Math.max(1, request.arcTemplate.beats.length);
+  const expansionCalls = Math.max(1, Math.ceil(beatCount / 4));
+  const baseStages = [
+    stage(inputTokens, 12_000), // story-material enrichment
+    stage(inputTokens, 2_048), // allocation
+    stage(inputTokens, 16_000), // first-pass suggestions
+  ];
+  const lowerBoundCredits = baseStages.reduce((sum, value) => sum + value, 0);
+  const upperBoundCredits = lowerBoundCredits + expansionCalls * stage(inputTokens, 16_000);
+  const available = availableCredits(entitlement);
+  return {
+    estimatedCredits: upperBoundCredits,
+    lowerBoundCredits,
+    upperBoundCredits,
+    availableCredits: available,
+    projectedBalance: available - upperBoundCredits,
+    allowed: available >= upperBoundCredits,
+    model: model.id,
+    expectedStages: 3 + expansionCalls,
+  };
 }
 
 interface ExistingSectionBlob {
@@ -2782,7 +2847,7 @@ async function callOpenAI(
               schema: options?.jsonSchema ?? { type: "object" },
             },
           },
-        temperature: 0.7,
+        ...(supportsCustomTemperature(OPENAI_MODEL) ? { temperature: 0.7 } : {}),
       }),
       signal: ac.signal,
     });
@@ -3703,7 +3768,7 @@ export async function runSuggestionJob(
         maxOutputTokens,
         providerOptions: {
           responseFormat,
-          temperature: 0.7,
+          ...(supportsCustomTemperature(model) ? { temperature: 0.7 } : {}),
           cacheMode: model.cacheMode,
           promptCacheKey: model.cacheMode === "none" ? undefined : promptCacheKey,
         },
@@ -4263,8 +4328,24 @@ export async function runSuggestionJob(
       return;
     }
     const providerBillingUnavailable = isProviderBillingUnavailable(err);
+    const providerErrorCode = err && typeof err === "object" && "errorCode" in err
+      ? String((err as { errorCode?: unknown }).errorCode)
+      : null;
+    const configurationFailure = providerErrorCode === "invalid_request" ||
+      providerErrorCode === "provider_rejected";
+    const providerRateLimited = providerErrorCode === "provider_rate_limited";
+    const providerOutage = providerErrorCode === "provider_overloaded" ||
+      providerErrorCode === "provider_timeout";
     const errorCode = providerBillingUnavailable
       ? "provider_billing_unavailable"
+      : configurationFailure
+      ? "unsupported_model_configuration"
+      : providerRateLimited
+      ? "provider_rate_limited"
+      : providerOutage
+      ? "provider_outage"
+      : providerErrorCode
+      ? "provider_error"
       : err instanceof RecipeObligationValidationError
       ? err.code
       : err instanceof StoryMaterialSufficiencyError
@@ -4280,12 +4361,24 @@ export async function runSuggestionJob(
     const message = err instanceof Error ? err.message : String(err);
     const publicError = providerBillingUnavailable
       ? "Temporarily unavailable — try again later."
+      : configurationFailure
+      ? "This selected model does not support the outline planner configuration. Choose another model; no credits were charged."
+      : providerRateLimited
+      ? "The AI provider is rate-limiting outline planning. Wait a moment before trying again."
+      : providerOutage
+      ? "The AI provider is temporarily unavailable. No credits were charged; try again later."
+      : providerErrorCode
+      ? "The AI outline planner could not complete this request. No credits were charged; review the run status before retrying."
       : message.slice(0, 2000);
     const failedDiagnostics = {
       ...diagnostics,
       stage: "failed",
+      runID: runId,
+      selectedModel: providerModelForAlert,
+      errorCode,
+      ...(providerErrorCode ? { providerErrorCode } : {}),
       plannedMinimumSections,
-      ...(providerBillingUnavailable ? {} : { error: message.slice(0, 500) }),
+      ...(providerBillingUnavailable || configurationFailure ? {} : { error: message.slice(0, 500) }),
       ...(requestedStoryMaterialFormat(body) === "novel"
         ? { novelScale: evaluateNovelScale(latestValidSuggestions, body.existingSections ?? []) }
         : {}),
@@ -4446,10 +4539,6 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  const openaiKey = Deno.env.get("OPENAI_API_KEY");
-  if (!openaiKey) {
-    return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
-  }
   let body: OutlineFromRecipeRequest;
   try {
     body = await req.json();
@@ -4497,6 +4586,39 @@ Deno.serve(async (req: Request) => {
     const { count } = await db.from("outline_sections").select("id", { count: "exact", head: true })
       .eq("outline_id", body.outline_id).neq("status", "deleted");
     if ((count ?? 0) > 0) return errorResponse("recipe_provenance_conflict", "Recipe changed after sections were planned; start a fresh outline or edit the existing recipe.", 409);
+  }
+  // Estimates are read-only: they use the authenticated entitlement and
+  // canonical model pricing, but never create a run, provider attempt, usage
+  // event, ledger entry, or rate-limit log.
+  if (body.estimate_only === true) {
+    const selectedModel = await new SupabaseGenerationModelStore(db).getEnabledModelById(
+      body.modelID?.trim() || LEGACY_PLANNING_MODEL_ID,
+    );
+    if (!selectedModel) {
+      return errorResponse("model_unavailable", `Selected outline model is unavailable: ${body.modelID ?? LEGACY_PLANNING_MODEL_ID}`, 422);
+    }
+    try {
+      const entitlement = await new SupabaseCreditStore(db).loadOrDefault(user.id);
+      const estimate = estimateOutlinePlanningCost(body, selectedModel, entitlement);
+      return corsResponse(JSON.stringify({
+        estimated_credits: estimate.estimatedCredits,
+        lower_bound_credits: estimate.lowerBoundCredits,
+        upper_bound_credits: estimate.upperBoundCredits,
+        available_credits: estimate.availableCredits,
+        projected_balance: estimate.projectedBalance,
+        allowed: estimate.allowed,
+        model: estimate.model,
+        expected_stages: estimate.expectedStages,
+      }), { status: 200 });
+    } catch (error) {
+      console.error("[outline-from-recipe] estimate failed", error);
+      return errorResponse("estimate_unavailable", "Outline pricing could not be estimated", 503);
+    }
+  }
+
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!openaiKey) {
+    return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
   }
   // PR 7: calculate both identities BEFORE checkRateLimit so reconnects
   // can short-circuit without consuming a rate-limit slot or logging.

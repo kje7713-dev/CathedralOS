@@ -90,6 +90,7 @@ import {
   resolvePlanningRequestIdentity,
   recoverPersistedPlanningBody,
   isLegacyPlanningRequest,
+  estimateOutlinePlanningCost,
 } from "./index.ts";
 import { ProviderBillingUnavailableError } from "../generate-story/_provider.ts";
 
@@ -141,6 +142,36 @@ const sparseRequest = {
     ],
   },
 };
+
+Deno.test("outline estimate uses canonical model pricing and changes with selected model", () => {
+  const makeModel = (id: string, multiplier: number) => ({
+    id, provider: "openai", provider_model: id, display_name: id, description: null,
+    input_credit_rate: 0, output_credit_rate: 0, minimum_charge_credits: 0.25,
+    max_output_tokens: 16000, enabled: true, sort_order: 1, billing_multiplier: multiplier,
+    provider_input_usd_per_1m: 1, provider_cached_input_usd_per_1m: 0.5,
+    provider_cache_write_usd_per_1m: 1, provider_output_usd_per_1m: 2,
+    pricing_effective_at: new Date().toISOString(), pricing_state: "verified",
+    pricing_verified_at: new Date().toISOString(), cache_write_pricing_required: false,
+    cacheMode: "implicit" as const,
+  });
+  const entitlement = { monthly_credit_allowance: 100, purchased_credit_balance: 0 } as any;
+  const luna = estimateOutlinePlanningCost(sparseRequest as any, makeModel("gpt-6-luna", 1) as any, entitlement);
+  const astra = estimateOutlinePlanningCost(sparseRequest as any, makeModel("gpt-6-astra", 4) as any, entitlement);
+  assertEquals(luna.availableCredits, 100);
+  assertEquals(luna.projectedBalance, luna.availableCredits - luna.estimatedCredits);
+  assertEquals(luna.allowed, luna.estimatedCredits <= 100);
+  assertEquals(astra.estimatedCredits > luna.estimatedCredits, true);
+  assertEquals(astra.expectedStages, 4);
+});
+
+Deno.test("outline estimate is read-only and never includes a billable minimum fallback", () => {
+  const source = Deno.readTextFileSync("./supabase/functions/outline-from-recipe/index.ts");
+  const estimate = source.indexOf('if (body.estimate_only === true)');
+  const insert = source.indexOf('const insert = await db');
+  assertEquals(estimate >= 0 && insert > estimate, true);
+  assertEquals(source.slice(estimate, insert).includes("runBillableLLM"), false);
+  assertEquals(source.slice(estimate, insert).includes("generation_usage_events"), false);
+});
 
 Deno.test("malformed selected recipe entities fail before any billable call", () => {
   assertEquals(
