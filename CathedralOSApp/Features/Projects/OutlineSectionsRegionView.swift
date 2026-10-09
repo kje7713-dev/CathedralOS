@@ -364,12 +364,13 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // selection state mutates. The chooser Menu and Suggest Sections
         // button both consume `recipeSelection` so this keeps them in sync.
         .onChange(of: recipeSelectionKey) { _, _ in
-            let prior = recipeSelection?.selectedRecipe?.id
+            let previousSelection = recipeSelection
+            let prior = previousSelection?.selectedRecipe?.id
             // A `.autoSelected -> .pending` transition happens when a 2nd
             // recipe is added; preserve recoverable suggestions so re-picking
             // the original recipe re-surfaces them. Only an EXPLICIT prior
             // selection that has now changed should clear recoverable.
-            let priorWasExplicit = recipeSelection?.kind == .selected
+            let priorWasExplicit = previousSelection?.kind == .selected
             recipeSelection = recipeSelectionService.resolve(for: project)
             if priorWasExplicit,
                let priorID = prior,
