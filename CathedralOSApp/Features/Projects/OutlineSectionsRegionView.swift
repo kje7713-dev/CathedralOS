@@ -289,6 +289,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         return arc.beats.sorted(by: { $0.position < $1.position })
     }
 
+    private func saveEditedSection() {
+        try? modelContext.save()
+        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
             if isGenerationStarting && projectRunStatus == nil {
@@ -410,10 +415,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             OutlineSectionEditView(
                 section: section,
                 availableBeats: availableBeats,
-                onSave: {
-                    try? modelContext.save()
-                    Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
-                }
+                onSave: saveEditedSection
             )
         }
         .sheet(item: $generationToView) { output in
