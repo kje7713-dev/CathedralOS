@@ -73,7 +73,11 @@ import {
 // =============================================================================
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-5.6-luna";
+// Requests created before PR #699 commonly omitted modelID. Their historical
+// default was GPT-5.6 Luna; never reinterpret such a persisted request as the
+// new Sol default. New iOS requests always send an explicit approved ID.
+export const LEGACY_PLANNING_MODEL_ID = "gpt-5.6-luna";
+const OPENAI_MODEL = LEGACY_PLANNING_MODEL_ID;
 
 /** Maps every physical outline action to one logical billing/cache stage. */
 export function outlineLogicalStageFamily(action: string): string {
@@ -631,6 +635,8 @@ interface OutlineFromRecipeRequest {
   existingSections?: ExistingSectionBlob[]; // iOS-side outline state at request time
   storyMaterialEnrichment?: StoryMaterialEnrichment; // candidate reuse from a prior planning pass
   requestedFormat?: StoryMaterialFormat;
+  /** Explicit MVP model selection; persisted in request_json for resume. */
+  modelID?: string;
   outline_id?: string;
   // PR 4: canonical planning identity. Server-validated pre-billable so a
   // stale Outline reference (delete + restore, sync race) cannot survive
@@ -1459,6 +1465,123 @@ export async function resumeOrRepairStoryMaterial(options: {
   return { material, audit };
 }
 
+export function recoverablePlanningModelID(
+  requestJSON: unknown,
+  recoveredProviderModel?: unknown,
+): string | undefined {
+  const requestModel = requestJSON && typeof requestJSON === "object"
+    ? (requestJSON as Record<string, unknown>).modelID
+    : undefined;
+  if (typeof requestModel === "string" && requestModel.trim()) {
+    return requestModel.trim();
+  }
+  if (typeof recoveredProviderModel === "string" && recoveredProviderModel.trim()) {
+    return recoveredProviderModel.trim();
+  }
+  // There is no safe universal fallback for historical jobs. A legacy row
+  // without a model and without a provider attempt must fail closed rather
+  // than silently becoming a newer model.
+  return undefined;
+}
+
+export function canonicalizeNewPlanningRequest(
+  body: OutlineFromRecipeRequest,
+): OutlineFromRecipeRequest {
+  return body.modelID && body.modelID.trim()
+    ? body
+    : { ...body, modelID: LEGACY_PLANNING_MODEL_ID };
+}
+
+export function isLegacyPlanningRequest(requestJSON: unknown): boolean {
+  return !(requestJSON && typeof requestJSON === "object" &&
+    typeof (requestJSON as Record<string, unknown>).modelID === "string" &&
+    ((requestJSON as Record<string, unknown>).modelID as string).trim());
+}
+
+export interface PlanningIdentityResolution {
+  canonicalBody: OutlineFromRecipeRequest;
+  rawIdentity: { key: string; fingerprint: string };
+  canonicalIdentity: { key: string; fingerprint: string };
+  identity: { key: string; fingerprint: string };
+  lookupKeys: string[];
+  acceptedFingerprints: Set<string>;
+}
+
+export async function resolvePlanningRequestIdentity(
+  body: OutlineFromRecipeRequest,
+  existing?: { request_json?: unknown } | null,
+): Promise<PlanningIdentityResolution> {
+  const canonicalBody = canonicalizeNewPlanningRequest(body);
+  const rawIdentity = await logicalSuggestionIdentity(body);
+  const canonicalIdentity = await logicalSuggestionIdentity(canonicalBody);
+  const persistedModelID = existing
+    ? recoverablePlanningModelID(existing.request_json)
+    : undefined;
+  const reconnectIdentity = body.modelID === undefined && persistedModelID
+    ? await logicalSuggestionIdentity({ ...body, modelID: persistedModelID })
+    : null;
+  const identity = reconnectIdentity ?? canonicalIdentity;
+  const acceptedFingerprints = new Set([
+    body.modelID === undefined ? rawIdentity.fingerprint : canonicalIdentity.fingerprint,
+    ...(reconnectIdentity ? [reconnectIdentity.fingerprint] : []),
+  ]);
+  return {
+    canonicalBody,
+    rawIdentity,
+    canonicalIdentity,
+    identity,
+    lookupKeys: Array.from(new Set([rawIdentity.key, canonicalIdentity.key])),
+    acceptedFingerprints,
+  };
+}
+
+/**
+ * Rebuild the worker body from the durable run, never from a reconnect's
+ * current preferences. Provider attempts are the only older durable record
+ * of the model when request_json predates modelID.
+ */
+export async function recoverPersistedPlanningBody(
+  db: any,
+  run: { id: string; request_json?: unknown },
+): Promise<OutlineFromRecipeRequest> {
+  const stored = run.request_json && typeof run.request_json === "object"
+    ? { ...(run.request_json as Record<string, unknown>) }
+    : {};
+  let recoveredProviderModel: string | undefined;
+  if (isLegacyPlanningRequest(stored)) {
+    const attempt = await db.from("generation_provider_attempts")
+      .select("model_name")
+      .eq("feature_run_id", run.id)
+      .order("started_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    recoveredProviderModel = typeof attempt?.data?.model_name === "string"
+      ? attempt.data.model_name
+      : undefined;
+  }
+  const recoveredModel = recoverablePlanningModelID(
+    stored,
+    recoveredProviderModel,
+  );
+  if (recoveredModel) {
+    if (recoveredProviderModel && recoveredModel === recoveredProviderModel) {
+      // Map the recorded provider name to the canonical catalog ID without
+      // requiring the historical row to remain enabled. The worker will then
+      // reject an ineligible row instead of substituting another model.
+      const catalog = await db.from("generation_models").select("id")
+        .eq("provider", "openai")
+        .eq("provider_model", recoveredProviderModel)
+        .maybeSingle();
+      stored.modelID = typeof catalog?.data?.id === "string"
+        ? catalog.data.id
+        : recoveredModel;
+    } else {
+      stored.modelID = recoveredModel;
+    }
+  }
+  return stored as unknown as OutlineFromRecipeRequest;
+}
+
 export function validateRequest(req: unknown): string | null {
   if (!req || typeof req !== "object") return "request must be an object";
   const r = req as Partial<OutlineFromRecipeRequest>;
@@ -1503,6 +1626,7 @@ export function validateRequest(req: unknown): string | null {
     }
   }
   if (r.requestedFormat !== undefined && !["novel", "shortStory", "other"].includes(r.requestedFormat)) return "requestedFormat must be novel, shortStory, or other";
+  if (r.modelID !== undefined && (typeof r.modelID !== "string" || r.modelID.trim() === "")) return "modelID must be a non-empty catalog model ID";
   if (r.idempotencyKey !== undefined && (typeof r.idempotencyKey !== "string" || r.idempotencyKey.trim() === "" || r.idempotencyKey.length > 512)) return "idempotencyKey must be a non-empty string of at most 512 characters";
   if (r.storyMaterialEnrichment) {
     try {
@@ -2583,6 +2707,7 @@ export async function logRequest(
   userId: string,
   status: string,
   errorCode?: string,
+  modelName: string = OPENAI_MODEL,
 ): Promise<void> {
   const { error } = await supabase.from("generation_request_logs").insert({
     request_id: crypto.randomUUID(),
@@ -2592,7 +2717,7 @@ export async function logRequest(
     output_budget: 0,
     status,
     error_code: errorCode ?? null,
-    model_name: OPENAI_MODEL,
+    model_name: modelName,
     created_at: new Date().toISOString(),
   });
   if (error) {
@@ -3400,11 +3525,15 @@ export async function recoverPendingSuggestionRun(
   openaiKey: string | undefined,
   authHeader: string,
   startWorker: SuggestionWorkerStarter,
+  db?: any,
 ): Promise<boolean> {
   if (run?.status !== "pending" || !run.request_json || !openaiKey) return false;
+  const body = db
+    ? await recoverPersistedPlanningBody(db, run)
+    : run.request_json as OutlineFromRecipeRequest;
   await startWorker(
     run.id,
-    run.request_json as OutlineFromRecipeRequest,
+    body,
     userId,
     openaiKey,
     run.attempt_count ?? 0,
@@ -3503,13 +3632,20 @@ export async function runSuggestionJob(
     : [];
   try {
     const modelStore = dependencies.model ? null : new SupabaseGenerationModelStore(db);
-    const model = dependencies.model ?? await modelStore!.getEnabledModelById(OPENAI_MODEL);
+    const selectedModelID = recoverablePlanningModelID(body);
+    const model = dependencies.model ?? (selectedModelID
+      ? await modelStore!.getEnabledModelById(selectedModelID)
+      : null);
     if (!model) {
-      throw new Error(`Enabled billing model not found: ${OPENAI_MODEL}`);
+      throw new Error(
+        selectedModelID
+          ? `Selected outline model is unavailable: ${selectedModelID}`
+          : "planning_model_unrecoverable: historical request has no model identity or provider attempt",
+      );
     }
-    providerModelForAlert = model.provider_model ?? OPENAI_MODEL;
+    providerModelForAlert = model.provider_model ?? selectedModelID;
     const creditStore = dependencies.creditStore ?? new SupabaseCreditStore(db);
-    const provider = dependencies.provider ?? new OpenAIProvider(openaiKey, OPENAI_MODEL);
+    const provider = dependencies.provider ?? new OpenAIProvider(openaiKey, model.provider_model);
     const billableLLM = dependencies.billableLLM ?? runBillableLLM;
     // Reclaimed workers resume from persisted billing/material state. The
     // usage-event idempotency key is the final no-double-charge guard, while
@@ -3840,7 +3976,7 @@ export async function runSuggestionJob(
       return;
     }
     let storyMaterial: StoryMaterialEnrichment | null = null;
-    let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: OPENAI_MODEL, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
+    let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: model.id, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
     if (body.storyMaterialEnrichment) {
       try {
         const candidate = validateStoryMaterialEnrichment(body.storyMaterialEnrichment, { recipe: body.recipe });
@@ -4285,6 +4421,7 @@ Deno.serve(async (req: Request) => {
         authHeader,
         (recoveryRunID, recoveryBody, recoveryUserID, recoveryKeyValue, recoveryAttemptCount, recoveryAuthHeader) =>
           runSuggestionJob(recoveryRunID, recoveryBody, recoveryUserID, recoveryKeyValue, recoveryAttemptCount, recoveryAuthHeader),
+        admin(),
       ));
       run = recoveredRun;
     }
@@ -4319,6 +4456,9 @@ Deno.serve(async (req: Request) => {
   } catch {
     return errorResponse("invalid_request", "Body must be JSON", 400);
   }
+  // Do not apply the new Sol default until after legacy idempotent recovery
+  // has had a chance to match the original request fingerprint. Legacy
+  // callers without modelID retain their historical GPT-5.6 Luna default.
   if (body.storyMaterialEnrichment) {
     body = {
       ...body,
@@ -4358,9 +4498,13 @@ Deno.serve(async (req: Request) => {
       .eq("outline_id", body.outline_id).neq("status", "deleted");
     if ((count ?? 0) > 0) return errorResponse("recipe_provenance_conflict", "Recipe changed after sections were planned; start a fresh outline or edit the existing recipe.", 409);
   }
-  // PR 7: calculate logical identity BEFORE checkRateLimit so reconnects
+  // PR 7: calculate both identities BEFORE checkRateLimit so reconnects
   // can short-circuit without consuming a rate-limit slot or logging.
-  const identity = await logicalSuggestionIdentity(body);
+  // Existing historical rows may use the pre-model fingerprint; new rows
+  // persist the canonical body with an explicit model.
+  const incomingBody = body;
+  let identityResolution = await resolvePlanningRequestIdentity(incomingBody);
+  let { canonicalBody, identity, lookupKeys } = identityResolution;
   // PR 7: resolve an existing matching idempotent run first. If the
   // current request's idempotency key is already bound to a run with the
   // same fingerprint, reconnect to it (no rate limit, no log entry). If
@@ -4372,17 +4516,16 @@ Deno.serve(async (req: Request) => {
     .from("outline_suggestion_runs")
     .select("id, status, request_fingerprint, lease_expires_at, error_code, suggestions, warnings, error, diagnostics, story_material, credit_cost_charged, remaining_credits, request_json, created_at, updated_at, completed_at, attempt_count")
     .eq("user_id", user.id)
-    .eq("idempotency_key", identity.key)
+    .in("idempotency_key", lookupKeys)
     .maybeSingle();
   if (existingError) {
     console.error("[outline-from-recipe] existing-run resolve failed", existingError);
     return errorResponse("db_error", existingError.message ?? "Could not resolve existing run", 500);
   }
   if (existing) {
-    if (
-      existing.request_fingerprint &&
-      existing.request_fingerprint !== identity.fingerprint
-    ) {
+    identityResolution = await resolvePlanningRequestIdentity(incomingBody, existing);
+    ({ canonicalBody, identity, lookupKeys } = identityResolution);
+    if (existing.request_fingerprint && !identityResolution.acceptedFingerprints.has(existing.request_fingerprint)) {
       return errorResponse(
         "idempotency_conflict",
         "The idempotency key is already bound to a different suggestion request",
@@ -4403,8 +4546,9 @@ Deno.serve(async (req: Request) => {
         attempt_count: (existing.attempt_count ?? 0) + 1,
       }).eq("id", existing.id).eq("status", "failed").eq("credit_cost_charged", 0);
       if (retryError) return errorResponse("db_error", retryError.message ?? "Could not retry failed suggestion run", 500);
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
       // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, body, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
       return corsResponse(
         JSON.stringify({
           run_id: existing.id,
@@ -4432,8 +4576,9 @@ Deno.serve(async (req: Request) => {
     if (existing.status === "pending") {
       // Reconnects and continuation POSTs do not consume another rate-limit
       // slot or request-log entry. The pending claim makes this race-safe.
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
       // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, body, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
     }
     // Reconnect: return existing run status. Skip checkRateLimit + logRequest
     // so a stray reconnect does NOT consume a rate-limit slot or produce
@@ -4461,6 +4606,12 @@ Deno.serve(async (req: Request) => {
   // PR 7: only NEW logical requests reach checkRateLimit. Reconnects were
   // handled by the resolve-existing path above; this is a fresh
   // outline-from-recipe request with a brand-new idempotency key.
+  body = canonicalBody;
+  identity = identityResolution.canonicalIdentity;
+  const selectedModel = await new SupabaseGenerationModelStore(db).getEnabledModelById(body.modelID!);
+  if (!selectedModel) {
+    return errorResponse("model_unavailable", `Selected outline model is unavailable: ${body.modelID}`, 422);
+  }
   const rateResult = await checkRateLimit(userClient, user.id);
   if (!rateResult.allowed) {
     return corsResponse(
@@ -4504,7 +4655,8 @@ Deno.serve(async (req: Request) => {
       .eq("user_id", user.id).eq("idempotency_key", identity.key).single();
     if (existing.error || !existing.data) return errorResponse("db_error", existing.error?.message ?? "Could not resolve suggestion run", 500);
     run = existing.data;
-    if (run.request_fingerprint && run.request_fingerprint !== identity.fingerprint) {
+    const raceIdentity = await resolvePlanningRequestIdentity(incomingBody, run);
+    if (run.request_fingerprint && !raceIdentity.acceptedFingerprints.has(run.request_fingerprint)) {
       return errorResponse("idempotency_conflict", "The idempotency key is already bound to a different suggestion request", 409);
     }
     const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
@@ -4536,7 +4688,7 @@ Deno.serve(async (req: Request) => {
   // failure could allow one extra request through the limit window.
   if (isFreshInsert) {
     try {
-      await logRequest(db, user.id, "queued");
+      await logRequest(db, user.id, "queued", undefined, body.modelID ?? OPENAI_MODEL);
     } catch (logError) {
       console.error("[outline-from-recipe] logRequest failed", logError);
     }
@@ -4545,7 +4697,9 @@ Deno.serve(async (req: Request) => {
   // suspension. The pending claim inside runSuggestionJob makes this race-safe.
   if (run.status === "pending") {
     // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-    EdgeRuntime.waitUntil(runSuggestionJob(run.id, body, user.id, openaiKey, run.attempt_count ?? 0, authHeader));
+    const recoveredBody = await recoverPersistedPlanningBody(db, run);
+    // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+    EdgeRuntime.waitUntil(runSuggestionJob(run.id, recoveredBody, user.id, openaiKey, run.attempt_count ?? 0, authHeader));
   }
   return corsResponse(
     JSON.stringify({
