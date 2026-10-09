@@ -288,11 +288,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 GenerationStartingBanner()
             }
             if let status = projectRunStatus {
+                let pollingError: String? = durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
+                    ? durabilityCoordinator.activeRunPollingError
+                    : nil
                 ActiveRunBanner(
                     status: status,
-                    pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
-                        ? durabilityCoordinator.activeRunPollingError
-                        : nil,
+                    pollingError: pollingError,
                     onResume: { await self.resumeRun(status) }
                 )
             }
