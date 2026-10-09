@@ -219,6 +219,28 @@ function reconcileFacts(
       throw new Error(`ambiguous fact reference: ${reference}`);
     }
     const match = matches[matches.length - 1];
+    const activePronounMatch = /:identity:pronouns$/i.test(reference)
+      ? matches.filter((candidate) => candidate.active !== false).at(-1)
+      : undefined;
+    const priorPronounFact = activePronounMatch
+      ? text(activePronounMatch.fact) || text(activePronounMatch.description)
+      : "";
+    if (
+      activePronounMatch && priorPronounFact &&
+      text(item.operation) !== "supersede"
+    ) {
+      out.push({
+        ...activePronounMatch,
+        reference,
+        source_section_id: source,
+        operation: "preserve",
+        fact: priorPronounFact,
+        active: true,
+        superseded_by: null,
+        created_at: text(activePronounMatch.created_at) || now,
+      });
+      continue;
+    }
     const replacement = priorFactReference(
       existing,
       text(item.prior_fact_reference),

@@ -803,3 +803,125 @@ Deno.test("legacy prior pronoun identity also blocks inferred drift", () => {
 
   assertEquals(facts, []);
 });
+
+Deno.test("prior pronoun fact text beats current establish wording", () => {
+  const facts = reconciledPronounFacts(
+    [{
+      continuity_facts: [{
+        id: "ilya-prior",
+        reference: "character:ilya:identity:pronouns",
+        fact: "Ilya uses they/them pronouns.",
+        active: true,
+      }],
+    }],
+    "Ilya",
+    {},
+    [{
+      operation: "establish",
+      reference: "character:ilya:identity:pronouns",
+      fact: "Ilya uses he/him pronouns.",
+      prior_fact_reference: null,
+    }],
+  );
+
+  assertEquals(facts.length, 1);
+  assertEquals(facts[0].fact, "Ilya uses they/them pronouns.");
+  assertEquals(facts[0].operation, "preserve");
+  assertEquals(facts[0].active, true);
+});
+
+Deno.test("prior pronoun fact text beats current preserve wording", () => {
+  const facts = reconciledPronounFacts(
+    [{
+      continuity_facts: [{
+        id: "ilya-prior",
+        reference: "character:ilya:identity:pronouns",
+        fact: "Ilya uses they/them pronouns.",
+        active: true,
+      }],
+    }],
+    "Ilya",
+    {},
+    [{
+      operation: "preserve",
+      reference: "character:ilya:identity:pronouns",
+      fact: "Ilya uses he/him pronouns.",
+      prior_fact_reference: null,
+    }],
+  );
+
+  assertEquals(facts.length, 1);
+  assertEquals(facts[0].fact, "Ilya uses they/them pronouns.");
+  assertEquals(facts[0].operation, "preserve");
+});
+
+Deno.test("prior he/him fact text beats current establish they/them", () => {
+  const facts = reconciledPronounFacts(
+    [{
+      continuity_facts: [{
+        id: "miran-prior",
+        reference: "character:miran:identity:pronouns",
+        fact: "Miran uses he/him pronouns.",
+        active: true,
+      }],
+    }],
+    "Miran",
+    {},
+    [{
+      operation: "establish",
+      reference: "character:miran:identity:pronouns",
+      fact: "Miran uses they/them pronouns.",
+      prior_fact_reference: null,
+    }],
+  );
+
+  assertEquals(facts.length, 1);
+  assertEquals(facts[0].fact, "Miran uses he/him pronouns.");
+  assertEquals(facts[0].operation, "preserve");
+});
+
+Deno.test("explicit pronoun fact establishes without prior canon", () => {
+  const facts = reconciledPronounFacts([], "Ilya", {}, [{
+    operation: "establish",
+    reference: "character:ilya:identity:pronouns",
+    fact: "Ilya uses they/them pronouns.",
+    prior_fact_reference: null,
+  }]);
+
+  assertEquals(facts.length, 1);
+  assertEquals(facts[0].fact, "Ilya uses they/them pronouns.");
+  assertEquals(facts[0].operation, "establish");
+  assertEquals(facts[0].active, true);
+});
+
+Deno.test("explicit pronoun supersede still replaces prior canon", () => {
+  const facts = reconciledPronounFacts(
+    [{
+      continuity_facts: [{
+        id: "ilya-prior",
+        reference: "character:ilya:identity:pronouns",
+        fact: "Ilya uses they/them pronouns.",
+        active: true,
+      }],
+    }],
+    "Ilya",
+    {},
+    [{
+      operation: "supersede",
+      reference: "character:ilya:identity:pronouns",
+      fact: "Ilya uses he/him pronouns.",
+      prior_fact_reference: "character:ilya:identity:pronouns",
+    }],
+  );
+
+  assertEquals(facts.length, 2);
+  assertEquals(facts[0].fact, "Ilya uses they/them pronouns.");
+  assertEquals(facts[0].active, false);
+  assertEquals(
+    facts[0].superseded_by,
+    "character:ilya:identity:pronouns",
+  );
+  assertEquals(facts[1].fact, "Ilya uses he/him pronouns.");
+  assertEquals(facts[1].operation, "supersede");
+  assertEquals(facts[1].active, true);
+});
