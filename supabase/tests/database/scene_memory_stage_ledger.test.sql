@@ -4,7 +4,7 @@
 
 create extension if not exists pgtap;
 begin;
-select plan(8);
+select plan(11);
 
 insert into auth.users (id, aud, role, email)
 values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'authenticated', 'authenticated',
@@ -114,6 +114,47 @@ select is(
       and related_generation_output_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
   1::bigint,
   'settlement writes exactly one credit ledger debit'
+);
+
+select results_eq(
+  $$select settlement_status, remaining_credits
+      from public.settle_scene_memory_stage(
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid,
+        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:scene-memory-embedding:v2',
+        'v2', 'scene-memory-embedding',
+        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid,
+        'text-embedding-3-small', 73555, 0, 0.117688
+      )$$,
+  $$values ('settled'::text, 7.882312::numeric)$$,
+  'embedding settlement preserves fractional usage-based charge'
+);
+
+select results_eq(
+  $$select settlement_status, remaining_credits
+      from public.settle_scene_memory_stage(
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid,
+        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:scene-memory-embedding:v2',
+        'v2', 'scene-memory-embedding',
+        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid,
+        'text-embedding-3-small', 73555, 0, 0.117688
+      )$$,
+  $$values ('duplicate'::text, 7.882312::numeric)$$,
+  'retrying embedding settlement does not debit twice'
+);
+
+select is(
+  (select count(*) from public.generation_usage_events
+    where stage_identity = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:scene-memory-embedding:v2'),
+  1::bigint,
+  'embedding settlement writes exactly one usage event'
+);
+
+select is(
+  (select count(*) from public.user_credit_ledger
+    where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+      and related_generation_output_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
+  2::bigint,
+  'embedding settlement adds exactly one ledger debit'
 );
 
 select * from finish();
