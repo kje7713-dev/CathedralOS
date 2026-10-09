@@ -995,7 +995,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     }
                     .disabled(projectRunStatus != nil || isGenerationStarting)
                 }
-                Button(action: prepareOutlinePlanning) label: {
+                Button(action: prepareOutlinePlanning) {
                     if suggestionRunActive {
                         ProgressView()
                     } else {
