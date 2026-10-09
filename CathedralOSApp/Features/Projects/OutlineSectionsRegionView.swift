@@ -338,7 +338,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             // reattached or surfaced. The coordinator's exact-match guard
             // will discard any persisted/active entry whose idempotency key
             // differs from the freshly built current key.
-            let currentKey = currentSuggestionIdempotencyKey(modelID: preferredOutlineModelID)
+            let recoveryMetadata = suggestionRunMetadataForRecovery()
+            let currentKey = currentSuggestionIdempotencyKey(
+                modelID: recoveryMetadata?.request.modelID,
+                usePreferredModel: recoveryMetadata == nil
+            )
             // PR 6: pass canonical stableLineageID so resume-state survives
             // local project UUID drift (delete + recreate, restore from backup).
             durabilityCoordinator.resumeSuggestionRunIfNeeded(
@@ -706,7 +710,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         durabilityCoordinator.suggestionGenerationID(for: project.stableLineageID)
     }
 
-    private func currentSuggestionIdempotencyKey(modelID: String? = nil) -> String? {
+    private func currentSuggestionIdempotencyKey(
+        modelID: String? = nil,
+        usePreferredModel: Bool = true
+    ) -> String? {
         guard let recipe = recipeSelection?.selectedRecipe,
               let project = recipe.project,
               let arc = project.storyArcs.first,
@@ -730,8 +737,20 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             existingSections: currentOutline?.sections ?? [],
             material: material,
             requestGenerationID: currentSuggestionGenerationID(),
-            modelID: modelID ?? preferredOutlineModelID
+            modelID: usePreferredModel ? (modelID ?? preferredOutlineModelID) : modelID
         ).idempotencyKey
+    }
+
+    /// Existing runs own their model identity. The preference is only used
+    /// when there is no persisted/active run and a new request is being built.
+    private func suggestionRunMetadataForRecovery() -> SuggestionRunMetadata? {
+        if let active = durabilityCoordinator.activeSuggestionRun(for: project.id) {
+            return active
+        }
+        return durabilityCoordinator.loadSuggestionRunMetadata(
+            lineageID: project.stableLineageID,
+            projectID: project.id
+        )
     }
 
     private func loadRecoverableSuggestions() async {
@@ -774,7 +793,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 existingSections: currentOutline?.sections ?? [],
                 material: material,
                 requestGenerationID: currentSuggestionGenerationID(),
-                modelID: preferredOutlineModelID
+                modelID: suggestionRunMetadataForRecovery()?.request.modelID
             )
             // 3 + 4. recover only a completed run whose idempotency key
             //    matches that exact request. `findRun` is best-effort and
