@@ -73,11 +73,11 @@ import {
 // =============================================================================
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-6.1-sol";
 // Requests created before PR #699 commonly omitted modelID. Their historical
 // default was GPT-5.6 Luna; never reinterpret such a persisted request as the
 // new Sol default. New iOS requests always send an explicit approved ID.
 export const LEGACY_PLANNING_MODEL_ID = "gpt-5.6-luna";
+const OPENAI_MODEL = LEGACY_PLANNING_MODEL_ID;
 const APPROVED_OUTLINE_MODEL_IDS = new Set([
   "gpt-6-luna",
   "gpt-6.1-sol",
