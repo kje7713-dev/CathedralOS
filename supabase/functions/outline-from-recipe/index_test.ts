@@ -231,6 +231,22 @@ Deno.test("PR4 validateRequest rejects malformed project_lineage_id", () => {
   );
 });
 
+Deno.test("Outline MVP accepts only the three approved model IDs", () => {
+  for (const modelID of ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]) {
+    assertEquals(validateRequest({ ...sparseRequest, modelID }), null);
+  }
+  assertEquals(
+    validateRequest({ ...sparseRequest, modelID: "gpt-5.6-luna" }),
+    "modelID must be one of the approved Outline Sections models",
+  );
+});
+
+Deno.test("Outline model selection participates in durable request identity", async () => {
+  const luna = await logicalSuggestionIdentity({ ...sparseRequest, modelID: "gpt-6-luna" } as any);
+  const astra = await logicalSuggestionIdentity({ ...sparseRequest, modelID: "gpt-6-astra" } as any);
+  assertEquals(luna.fingerprint === astra.fingerprint, false);
+});
+
 Deno.test("PR4 validateRequest accepts missing outline_id for legacy callers", () => {
   // Legacy callers that have not yet been migrated to the new contract
   // omit outline_id entirely. The server treats this as 'skip enrichment
@@ -2924,7 +2940,7 @@ Deno.test("PR7 POST handler reorders: resolve-existing BEFORE checkRateLimit", a
 Deno.test("PR7 POST handler gates logRequest on isFreshInsert (reconnects skip logRequest)", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const isFreshInsertDecl = source.indexOf("const isFreshInsert = !insert.error && !!insert.data;");
-  const logRequestCall = source.indexOf("await logRequest(db, user.id, \"queued\");");
+  const logRequestCall = source.indexOf("await logRequest(db, user.id, \"queued\", undefined, body.modelID");
   const logRequestGuard = source.indexOf("if (isFreshInsert) {");
   assertEquals(isFreshInsertDecl > 0, true, "POST handler must declare isFreshInsert");
   assertEquals(logRequestCall > 0, true, "POST handler must call logRequest");

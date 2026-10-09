@@ -20,6 +20,8 @@ import {
   requireRunOutlineRecipe,
   RunOutlineOutlineError,
   runOutlineSectionLifecycle,
+  validateOutlineSectionsModelID,
+  OUTLINE_SECTIONS_DEFAULT_MODEL_ID,
 } from "./index.ts";
 import {
   buildGenerateStoryRequest,
@@ -66,6 +68,15 @@ function mockOutlineClient(result: { data: unknown; error: unknown }) {
     }),
   } as never;
 }
+
+Deno.test("Outline Sections accepts only approved models and defaults to Sol", () => {
+  assertEquals(OUTLINE_SECTIONS_DEFAULT_MODEL_ID, "gpt-6.1-sol");
+  for (const modelID of ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]) {
+    assertEquals(validateOutlineSectionsModelID(modelID), null);
+  }
+  assertEquals(validateOutlineSectionsModelID("gpt-5.6-luna"), "model must be one of the approved Outline Sections models");
+  assertEquals(validateOutlineSectionsModelID(""), "model must be one of the approved Outline Sections models");
+});
 
 Deno.test("outline loader accepts a valid authoritative outline", async () => {
   const outline = await loadRunOutline(
@@ -352,6 +363,17 @@ Deno.test("finds a project snapshot through either local ID or lineage", () => {
   );
 });
 
+Deno.test("Run All validates the approved model and availability before durable billing", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/run-outline/index.ts",
+  );
+  assertStringIncludes(source, "validateOutlineSectionsModelID(selectedModelID)");
+  assertStringIncludes(source, "new SupabaseGenerationModelStore(adminClient)");
+  assertStringIncludes(source, 'return errorResponse(\n      "model_unavailable"');
+  assertStringIncludes(source, 'body = { ...body, model: selectedModelID }');
+  assertStringIncludes(source, 'body.model ?? OUTLINE_SECTIONS_DEFAULT_MODEL_ID');
+});
+
 Deno.test("run-outline uses leased bounded continuations", async () => {
   const source = await Deno.readTextFile(
     "./supabase/functions/run-outline/index.ts",
@@ -365,6 +387,8 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   assertEquals(source.includes("idempotency_key: null"), true);
   assertEquals(source.includes("latest replacement"), false); // replacement lookup is client/server contract
   assertEquals(source.includes("outline_id + start_parent_section_id"), true);
+  assertEquals(source.includes('`${userId}:${body.outline_id}:${body.start_parent_section_id}:${body.scope || "single"}:${selectedModelID}`'), true);
+  assertEquals(source.includes("body = { ...body, model: selectedModelID }"), true);
   assertEquals(
     source.includes('.from("chapter_runs")\n      .delete()'),
     false,

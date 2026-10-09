@@ -1517,7 +1517,7 @@ struct ProjectDetailView: View {
     private var sectionsToRunSection: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
             if outlineSections.isEmpty {
-                Text("Add sections in Outline before writing the novel.")
+                Text("Generate or review sections in Outline before writing the novel.")
                     .font(CathedralTheme.Typography.caption())
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 CathedralPrimaryButton("Open Outline", systemImage: "list.number") {

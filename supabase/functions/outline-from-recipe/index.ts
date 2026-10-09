@@ -73,7 +73,12 @@ import {
 // =============================================================================
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-5.6-luna";
+const OPENAI_MODEL = "gpt-6.1-sol";
+const APPROVED_OUTLINE_MODEL_IDS = new Set([
+  "gpt-6-luna",
+  "gpt-6.1-sol",
+  "gpt-6-astra",
+]);
 
 /** Maps every physical outline action to one logical billing/cache stage. */
 export function outlineLogicalStageFamily(action: string): string {
@@ -631,6 +636,8 @@ interface OutlineFromRecipeRequest {
   existingSections?: ExistingSectionBlob[]; // iOS-side outline state at request time
   storyMaterialEnrichment?: StoryMaterialEnrichment; // candidate reuse from a prior planning pass
   requestedFormat?: StoryMaterialFormat;
+  /** Explicit MVP model selection; persisted in request_json for resume. */
+  modelID?: string;
   outline_id?: string;
   // PR 4: canonical planning identity. Server-validated pre-billable so a
   // stale Outline reference (delete + restore, sync race) cannot survive
@@ -1503,6 +1510,7 @@ export function validateRequest(req: unknown): string | null {
     }
   }
   if (r.requestedFormat !== undefined && !["novel", "shortStory", "other"].includes(r.requestedFormat)) return "requestedFormat must be novel, shortStory, or other";
+  if (r.modelID !== undefined && (!APPROVED_OUTLINE_MODEL_IDS.has(r.modelID) || r.modelID.trim() === "")) return "modelID must be one of the approved Outline Sections models";
   if (r.idempotencyKey !== undefined && (typeof r.idempotencyKey !== "string" || r.idempotencyKey.trim() === "" || r.idempotencyKey.length > 512)) return "idempotencyKey must be a non-empty string of at most 512 characters";
   if (r.storyMaterialEnrichment) {
     try {
@@ -2583,6 +2591,7 @@ export async function logRequest(
   userId: string,
   status: string,
   errorCode?: string,
+  modelName: string = OPENAI_MODEL,
 ): Promise<void> {
   const { error } = await supabase.from("generation_request_logs").insert({
     request_id: crypto.randomUUID(),
@@ -2592,7 +2601,7 @@ export async function logRequest(
     output_budget: 0,
     status,
     error_code: errorCode ?? null,
-    model_name: OPENAI_MODEL,
+    model_name: modelName,
     created_at: new Date().toISOString(),
   });
   if (error) {
@@ -3503,13 +3512,14 @@ export async function runSuggestionJob(
     : [];
   try {
     const modelStore = dependencies.model ? null : new SupabaseGenerationModelStore(db);
-    const model = dependencies.model ?? await modelStore!.getEnabledModelById(OPENAI_MODEL);
+    const selectedModelID = body.modelID ?? OPENAI_MODEL;
+    const model = dependencies.model ?? await modelStore!.getEnabledModelById(selectedModelID);
     if (!model) {
-      throw new Error(`Enabled billing model not found: ${OPENAI_MODEL}`);
+      throw new Error(`Selected outline model is unavailable: ${selectedModelID}`);
     }
-    providerModelForAlert = model.provider_model ?? OPENAI_MODEL;
+    providerModelForAlert = model.provider_model ?? selectedModelID;
     const creditStore = dependencies.creditStore ?? new SupabaseCreditStore(db);
-    const provider = dependencies.provider ?? new OpenAIProvider(openaiKey, OPENAI_MODEL);
+    const provider = dependencies.provider ?? new OpenAIProvider(openaiKey, model.provider_model);
     const billableLLM = dependencies.billableLLM ?? runBillableLLM;
     // Reclaimed workers resume from persisted billing/material state. The
     // usage-event idempotency key is the final no-double-charge guard, while
@@ -3840,7 +3850,7 @@ export async function runSuggestionJob(
       return;
     }
     let storyMaterial: StoryMaterialEnrichment | null = null;
-    let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: OPENAI_MODEL, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
+    let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: model.id, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
     if (body.storyMaterialEnrichment) {
       try {
         const candidate = validateStoryMaterialEnrichment(body.storyMaterialEnrichment, { recipe: body.recipe });
@@ -4319,6 +4329,9 @@ Deno.serve(async (req: Request) => {
   } catch {
     return errorResponse("invalid_request", "Body must be JSON", 400);
   }
+  // Outline Sections always has an explicit approved planning model. Sol is
+  // the product default; never substitute a different model silently.
+  body = { ...body, modelID: body.modelID ?? OPENAI_MODEL };
   if (body.storyMaterialEnrichment) {
     body = {
       ...body,
@@ -4332,6 +4345,10 @@ Deno.serve(async (req: Request) => {
     return errorResponse("invalid_request", validationError, 400);
   }
   const db = admin();
+  const selectedModel = await new SupabaseGenerationModelStore(db).getEnabledModelById(body.modelID!);
+  if (!selectedModel) {
+    return errorResponse("model_unavailable", `Selected outline model is unavailable: ${body.modelID}`, 422);
+  }
   // Current clients must identify the concrete Outline and canonical project
   // lineage. Validate against the real schema (local_project_id + lineage_id)
   // before rate limiting, run creation, or any billable work.
@@ -4536,7 +4553,7 @@ Deno.serve(async (req: Request) => {
   // failure could allow one extra request through the limit window.
   if (isFreshInsert) {
     try {
-      await logRequest(db, user.id, "queued");
+      await logRequest(db, user.id, "queued", undefined, body.modelID ?? OPENAI_MODEL);
     } catch (logError) {
       console.error("[outline-from-recipe] logRequest failed", logError);
     }

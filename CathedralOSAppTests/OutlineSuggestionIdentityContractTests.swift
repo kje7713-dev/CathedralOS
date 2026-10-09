@@ -85,6 +85,32 @@ final class OutlineSuggestionIdentityContractTests: XCTestCase {
             "Wire JSON must include project_lineage_id so outline-from-recipe can validate canonical lineage pre-billable")
     }
 
+    func testJSONWirePayloadContainsSelectedOutlineModel() throws {
+        var request = makeSampleRequest()
+        request = OutlineSuggestionRequest(
+            recipe: request.recipe,
+            arcTemplate: request.arcTemplate,
+            hint: request.hint,
+            existingSections: request.existingSections,
+            idempotencyKey: request.idempotencyKey,
+            outline_id: request.outline_id,
+            project_lineage_id: request.project_lineage_id,
+            requestedFormat: request.requestedFormat,
+            modelID: "gpt-6.1-sol"
+        )
+        let data = try JSONEncoder().encode(request)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["modelID"] as? String, "gpt-6.1-sol")
+    }
+
+    func testOutlineModelSurfaceIsExactlyTheApprovedThreeAndDefaultsToSol() {
+        XCTAssertEqual(
+            OutlineSectionsModelCatalog.definitions.map { $0.id },
+            ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]
+        )
+        XCTAssertEqual(OutlineSectionsModelCatalog.defaultID, "gpt-6.1-sol")
+    }
+
     func testJSONWirePayloadContainsRequestedFormat() throws {
         let request = makeSampleRequest()
         let data = try JSONEncoder().encode(request)

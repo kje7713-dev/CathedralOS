@@ -55,6 +55,10 @@ struct OutlineSuggestionRequest: Codable {
     let outline_id: UUID?
     let project_lineage_id: UUID?
     let requestedFormat: String?
+    /// Explicit model selected for this planning run. Persisted in the
+    /// durable request JSON so reconnects and worker continuations reuse the
+    /// original selection rather than falling back to a server default.
+    let modelID: String? = nil
 }
 
 struct ArcTemplateBlob: Codable {

@@ -68,6 +68,7 @@ import {
   getEnabledModelByProviderModel,
   getEnabledPricedModelByProviderModel,
   snapshotPricing,
+  SupabaseGenerationModelStore,
 } from "../generate-story/_generation_models.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -76,6 +77,20 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const MAX_TRANSIENT_OUTLINE_LOOKUP_ATTEMPTS = 3;
 const TRANSIENT_OUTLINE_LOOKUP_RETRY_SECONDS = 30;
+
+export const OUTLINE_SECTIONS_DEFAULT_MODEL_ID = "gpt-6.1-sol";
+export const APPROVED_OUTLINE_SECTIONS_MODEL_IDS = new Set([
+  "gpt-6-luna",
+  "gpt-6.1-sol",
+  "gpt-6-astra",
+]);
+
+export function validateOutlineSectionsModelID(modelID: unknown): string | null {
+  if (typeof modelID !== "string" || !APPROVED_OUTLINE_SECTIONS_MODEL_IDS.has(modelID)) {
+    return "model must be one of the approved Outline Sections models";
+  }
+  return null;
+}
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -371,6 +386,21 @@ async function handleKickoff(req: Request): Promise<Response> {
       400,
     );
   }
+  const selectedModelID = body.model ?? OUTLINE_SECTIONS_DEFAULT_MODEL_ID;
+  const modelValidationError = validateOutlineSectionsModelID(selectedModelID);
+  if (modelValidationError) {
+    return errorResponse("invalid_model", modelValidationError, 400);
+  }
+  body = { ...body, model: selectedModelID };
+  const selectedCatalogModel = await new SupabaseGenerationModelStore(adminClient)
+    .getEnabledModelById(selectedModelID);
+  if (!selectedCatalogModel) {
+    return errorResponse(
+      "model_unavailable",
+      `Selected Outline Sections model is unavailable: ${selectedModelID}`,
+      422,
+    );
+  }
 
   // 3. Idempotency: try insert; on 23505 return existing run
   let readinessOutline: ReadinessOutline;
@@ -432,7 +462,7 @@ async function handleKickoff(req: Request): Promise<Response> {
   }
 
   const idempotencyKey =
-    `${userId}:${body.outline_id}:${body.start_parent_section_id}`;
+    `${userId}:${body.outline_id}:${body.start_parent_section_id}:${body.scope || "single"}:${selectedModelID}`;
 
   // Idempotency: check for existing run first.
   // - running → return 409 already_running
