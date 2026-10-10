@@ -508,6 +508,7 @@ export async function processSectionMemory(
       estimateTokensFromText(compressedMemory),
       0,
       "embedding",
+      "scene-memory-embedding",
     );
   }
   if (!existingEmbedding) {
