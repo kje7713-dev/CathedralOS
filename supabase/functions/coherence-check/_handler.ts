@@ -32,6 +32,7 @@ import { validateAndFilterWarnings } from "./_validation.ts";
 import { computeIdempotencyKey } from "./_idempotency.ts";
 import type { CoherenceCheckRequest, CoherenceWarning } from "./_validation.ts";
 import { GenerationModel } from "../generate-story/_generation_models.ts";
+import { supportsCustomTemperature } from "../generate-story/_provider.ts";
 import type { LLMMessage, LLMProvider } from "../generate-story/_provider.ts";
 import { checkCredits, type CreditStore } from "../generate-story/_credits.ts";
 import {
@@ -90,11 +91,7 @@ export interface CoherenceConfig {
   temperature: number;
 }
 
-/** GPT-5-family OpenAI models only support their default temperature (1). */
-export function supportsCustomTemperature(model: GenerationModel): boolean {
-  return !(model.provider === "openai" &&
-    /^gpt-5(?:[.-]|$)/i.test(model.provider_model));
-}
+export { supportsCustomTemperature };
 
 // ---------------------------------------------------------------------------
 // Internal helpers

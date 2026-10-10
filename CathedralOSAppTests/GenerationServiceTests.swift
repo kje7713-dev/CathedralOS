@@ -583,7 +583,7 @@ final class OutlineSuggestionErrorContractTests: XCTestCase {
 
     func testProviderFailureRemainsProviderError() {
         let error = OutlineSuggestionService.errorForFailedJob(errorCode: "provider_error", message: "OpenAI timeout")
-        XCTAssertEqual(error.localizedDescription, "The AI suggestion failed. Try again.")
+        XCTAssertEqual(error.localizedDescription, "The AI outline planner returned an unexpected error. Review the run status before retrying.")
     }
 
     func testGenericJobFailureRemainsServerError() {

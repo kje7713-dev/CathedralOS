@@ -155,6 +155,26 @@ Deno.test("OpenAIProvider: responseFormat present routes to chat/completions + S
   }
 });
 
+Deno.test("OpenAIProvider: GPT-6 reasoning models omit unsupported temperature", async () => {
+  for (const model of ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]) {
+    installFetchStub(chatCompletionsResponse("ok"));
+    try {
+      const provider = new OpenAIProvider("test-key", model, PROVIDER_TIMEOUT_MS);
+      await provider.complete(
+        [{ role: "user", content: "outline" }],
+        500,
+        model,
+        { responseFormat: { type: "json_object" }, temperature: 0.7 },
+      );
+      assertExists(lastRequest);
+      assertEquals(lastRequest.body.model, model);
+      assertEquals(Object.prototype.hasOwnProperty.call(lastRequest.body, "temperature"), false);
+    } finally {
+      uninstallFetchStub();
+    }
+  }
+});
+
 Deno.test("OpenAIProvider: Responses structured output preserves cache boundary", async () => {
   installFetchStub(responsesApiResponse('{"scene":"ok"}'));
   try {

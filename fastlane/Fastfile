@@ -382,7 +382,9 @@ platform :ios do
       attributes: {
         description: read_metadata.call("description.txt"),
         keywords: read_metadata.call("keywords.txt"),
-        promotionalText: read_metadata.call("promotional_text.txt")
+        promotionalText: read_metadata.call("promotional_text.txt"),
+        supportUrl: read_metadata.call("support_url.txt"),
+        marketingUrl: read_metadata.call("marketing_url.txt")
       }
     )
 
@@ -395,9 +397,11 @@ platform :ios do
     info_localization.update(
       attributes: {
         name: read_metadata.call("name.txt"),
-        subtitle: read_metadata.call("subtitle.txt")
+        subtitle: read_metadata.call("subtitle.txt"),
+        privacyPolicyUrl: read_metadata.call("privacy_policy_url.txt")
       }
     )
+    UI.message("Terms of Use URL recorded at #{read_metadata.call("terms_of_use_url.txt")}; App Store Connect exposes no writable Terms URL field in AppInfoLocalization, so the release binary configuration remains authoritative for it.")
     UI.success("App Store text metadata applied without changing screenshots, binary, or submission state.")
   end
 
@@ -433,7 +437,9 @@ platform :ios do
     metadata_dir = File.join("fastlane", "metadata", "en-US")
     checks = {
       "description" => [localization.description, File.join(metadata_dir, "description.txt")],
-      "keywords" => [localization.keywords, File.join(metadata_dir, "keywords.txt")]
+      "keywords" => [localization.keywords, File.join(metadata_dir, "keywords.txt")],
+      "supportUrl" => [localization.support_url, File.join(metadata_dir, "support_url.txt")],
+      "marketingUrl" => [localization.marketing_url, File.join(metadata_dir, "marketing_url.txt")]
     }
 
     checks.each do |field, (current, path)|
@@ -450,6 +456,32 @@ platform :ios do
       end
       UI.message("#{status}: en-US #{field}")
     end
+
+    app_info = app.fetch_edit_app_info
+    UI.user_error!("No editable App Store information exists for #{app.name}") unless app_info
+    info_localizations = app_info.get_app_info_localizations
+    info_localization = info_localizations.find { |item| item.locale == "en-US" } ||
+      info_localizations.find { |item| item.locale.to_s.start_with?("en") }
+    UI.user_error!("No English App Store information localization found") unless info_localization
+
+    url_checks = {
+      "privacyPolicyUrl" => [info_localization.privacy_policy_url, File.join(metadata_dir, "privacy_policy_url.txt")]
+    }
+    url_checks.each do |field, (current, path)|
+      expected = File.exist?(path) ? File.read(path).strip : ""
+      current = current.to_s.strip
+      status = if current.empty?
+        "MISSING"
+      elsif expected.empty?
+        "NO_LOCAL_COPY"
+      elsif current == expected
+        "MATCH"
+      else
+        "DIFF"
+      end
+      UI.message("#{status}: en-US #{field}")
+    end
+    UI.message("INFO: termsOfUseUrl is recorded for release binary configuration; AppInfoLocalization has no writable Terms URL field.")
 
     screenshot_sets = localization.get_app_screenshot_sets
     screenshot_count = screenshot_sets.sum { |set| set.app_screenshots.to_a.length }
