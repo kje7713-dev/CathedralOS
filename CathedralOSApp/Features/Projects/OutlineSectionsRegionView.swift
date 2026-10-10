@@ -995,7 +995,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         Label("Run Sections", systemImage: "play.fill")
                             .font(CathedralTheme.Typography.body(13, weight: .semibold))
                     }
-                    .disabled(projectRunStatus != nil || isGenerationStarting)
+                    // A completed or failed banner is historical, not an active run.
+                    .disabled((projectRunStatus?.blocksNewGeneration ?? false) || isGenerationStarting)
                 }
                 Button {
                     if suggestionRunActive {
