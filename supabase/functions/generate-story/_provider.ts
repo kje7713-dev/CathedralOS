@@ -388,20 +388,6 @@ export interface LLMProviderOptions {
   promptCacheKey?: string;
 }
 
-/**
- * OpenAI reasoning-model families only accept their default temperature.
- * Keep this compatibility rule next to the provider contract so every
- * billable workflow builds the same safe request payload.
- */
-export function supportsCustomTemperature(model: {
-  provider?: string;
-  provider_model?: string;
-} | string): boolean {
-  const provider = typeof model === "string" ? "openai" : model.provider;
-  const providerModel = typeof model === "string" ? model : (model.provider_model ?? "");
-  return !(provider === "openai" && /^gpt-(?:5|6)(?:[.-]|$)/i.test(providerModel));
-}
-
 export interface LLMProvider {
   complete(
     messages: LLMMessage[],
@@ -650,7 +636,7 @@ export class OpenAIProvider implements LLMProvider {
     if (options.responseFormat) {
       body.response_format = options.responseFormat;
     }
-    if (typeof options.temperature === "number" && supportsCustomTemperature(resolvedModel)) {
+    if (typeof options.temperature === "number") {
       body.temperature = options.temperature;
     }
     // PR-372: chat/completions supports prompt_cache_key but NOT

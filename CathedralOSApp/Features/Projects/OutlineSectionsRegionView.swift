@@ -22,7 +22,10 @@ enum OutlineSectionsModelCatalog {
 
         var isAvailable: Bool { catalogModel != nil }
 
-        var costDescription: String { catalogModel == nil ? "Currently unavailable" : "Available for outline planning" }
+        var costDescription: String {
+            guard let catalogModel else { return "Currently unavailable" }
+            return "Minimum \(formatRunCredits(catalogModel.minimumChargeCredits)) credits · \(catalogModel.relativeCostLabel) rate"
+        }
     }
 
     static let definitions: [(id: String, tier: String, name: String, description: String)] = [
@@ -247,7 +250,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestionsNotice: String?
     @State private var suggestionsFeedback: String?
     @State private var showingOutlineModelSheet = false
-    @State private var outlinePlanningRequest: OutlineSuggestionRequest?
     @AppStorage(OutlineSectionsModelCatalog.preferenceKey) private var preferredOutlineModelID = OutlineSectionsModelCatalog.defaultID
     @State private var acceptingSectionID: UUID?
     @State private var publicSharingStatuses: [UUID: PublicSharingEligibilityStatus] = [:]
@@ -276,22 +278,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             ?? durabilityCoordinator.runStatus(for: project.stableLineageID)
     }
 
-    private var projectActiveRunPollingError: String? {
-        guard durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID else {
-            return nil
-        }
-        return durabilityCoordinator.activeRunPollingError
-    }
-
     /// Beat picker source — current arc's beats (empty if no arc picked yet).
     private var availableBeats: [StoryArcBeat] {
         guard let arc = project.storyArcs.first else { return [] }
         return arc.beats.sorted(by: { $0.position < $1.position })
-    }
-
-    private func saveEditedSection() {
-        try? modelContext.save()
-        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
     }
 
     var body: some View {
@@ -302,7 +292,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             if let status = projectRunStatus {
                 ActiveRunBanner(
                     status: status,
-                    pollingError: projectActiveRunPollingError,
+                    pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
+                        ? durabilityCoordinator.activeRunPollingError
+                        : nil,
                     onResume: { await self.resumeRun(status) }
                 )
             }
@@ -373,13 +365,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // selection state mutates. The chooser Menu and Suggest Sections
         // button both consume `recipeSelection` so this keeps them in sync.
         .onChange(of: recipeSelectionKey) { _, _ in
-            let previousSelection = recipeSelection
-            let prior = previousSelection?.selectedRecipe?.id
+            let prior = recipeSelection?.selectedRecipe?.id
             // A `.autoSelected -> .pending` transition happens when a 2nd
             // recipe is added; preserve recoverable suggestions so re-picking
             // the original recipe re-surfaces them. Only an EXPLICIT prior
             // selection that has now changed should clear recoverable.
-            let priorWasExplicit = previousSelection?.kind == .selected
+            let priorWasExplicit = recipeSelection?.kind == .selected
             recipeSelection = recipeSelectionService.resolve(for: project)
             if priorWasExplicit,
                let priorID = prior,
@@ -415,7 +406,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             OutlineSectionEditView(
                 section: section,
                 availableBeats: availableBeats,
-                onSave: saveEditedSection
+                onSave: {
+                    try? modelContext.save()
+                    Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+                }
             )
         }
         .sheet(item: $generationToView) { output in
@@ -446,13 +440,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             }
         }
         .sheet(isPresented: $showingOutlineModelSheet) {
-            if let request = outlinePlanningRequest {
-                OutlinePlanningModelSheet(
-                    initialModelID: preferredOutlineModelID,
-                    request: request,
-                    onConfirm: confirmOutlinePlanningModel,
-                    onCancel: cancelOutlinePlanningModel
-                )
+            OutlinePlanningModelSheet(initialModelID: preferredOutlineModelID) { modelID in
+                preferredOutlineModelID = modelID
+                showingOutlineModelSheet = false
+                Task { await loadSuggestions(modelID: modelID) }
+            } onCancel: {
+                showingOutlineModelSheet = false
             }
         }
         .alert("Suggestions Ready", isPresented: suggestionsFeedbackPresented) {
@@ -835,43 +828,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         showingSuggestionSheet = true
     }
 
-    private func prepareOutlinePlanning() {
-        do {
-            outlinePlanningRequest = try makePlanningRequest(modelID: preferredOutlineModelID)
-            showingOutlineModelSheet = true
-        } catch {
-            suggestionsError = error.localizedDescription
-        }
-    }
-
-    private func confirmOutlinePlanningModel(_ modelID: String) {
-        preferredOutlineModelID = modelID
-        showingOutlineModelSheet = false
-        outlinePlanningRequest = nil
-        Task { await loadSuggestions(modelID: modelID) }
-    }
-
-    private func cancelOutlinePlanningModel() {
-        showingOutlineModelSheet = false
-        outlinePlanningRequest = nil
-    }
-
-    @MainActor
-    private func makePlanningRequest(modelID: String) throws -> OutlineSuggestionRequest {
-        guard let recipe = recipeSelection?.selectedRecipe,
-              let arc = project.storyArcs.first,
-              let templateID = arc.templateID,
-              let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
-            throw OutlineSuggestionError.invalidResponse("Need a Recipe and a Story Arc template first.")
-        }
-        let material = try AuthoritativeProjectMaterial.resolve(project: project, in: modelContext)
-        return try OutlineSuggestionService().makeRequest(
-            recipe: recipe, arc: arc, arcTemplate: template, outline: currentOutline,
-            requestedFormat: "novel", existingSections: currentOutline?.sections ?? [],
-            material: material, requestGenerationID: currentSuggestionGenerationID(), modelID: modelID
-        )
-    }
-
     private func loadSuggestions(modelID: String) async {
         guard !suggestionRunActive else { return }
         // Suggest Sections is an explicit fresh-run intent. Advance the
@@ -995,7 +951,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     }
                     .disabled(projectRunStatus != nil || isGenerationStarting)
                 }
-                Button(action: prepareOutlinePlanning) {
+                Button {
+                    showingOutlineModelSheet = true
+                } label: {
                     if suggestionRunActive {
                         ProgressView()
                     } else {
@@ -1303,7 +1261,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 /// server says a selected model is not currently eligible.
 struct OutlinePlanningModelSheet: View {
     let initialModelID: String
-    let request: OutlineSuggestionRequest
     let onConfirm: (String) -> Void
     let onCancel: () -> Void
 
@@ -1312,9 +1269,6 @@ struct OutlinePlanningModelSheet: View {
     @State private var selectedModelID: String
     @State private var isLoading = true
     @State private var loadError: String?
-    @State private var estimate: OutlinePlanningEstimate?
-    @State private var estimateError: String?
-    @State private var isEstimating = false
 
     private var options: [OutlineSectionsModelCatalog.Option] {
         OutlineSectionsModelCatalog.options(catalogModels: catalogModels)
@@ -1326,12 +1280,10 @@ struct OutlinePlanningModelSheet: View {
 
     init(
         initialModelID: String,
-        request: OutlineSuggestionRequest,
         onConfirm: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.initialModelID = initialModelID
-        self.request = request
         self.onConfirm = onConfirm
         self.onCancel = onCancel
         self._selectedModelID = State(initialValue: initialModelID)
@@ -1344,7 +1296,7 @@ struct OutlinePlanningModelSheet: View {
                     Text("Choose the model for this outline plan. The selection is saved for the next run, but this sheet will appear every time.")
                         .font(CathedralTheme.Typography.body(14))
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    Text("The server calculates the outline estimate below from the selected recipe, Story Arc, and planning stages. Actual charges can vary.")
+                    Text("Displayed credits are the catalog minimum, not an estimate of the full planning run. The server remains authoritative for actual pricing.")
                         .font(CathedralTheme.Typography.caption(11))
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
@@ -1382,7 +1334,6 @@ struct OutlinePlanningModelSheet: View {
                         .buttonStyle(.plain)
                     }
                 }
-                estimateSection
                 if isLoading {
                     HStack(spacing: CathedralTheme.Spacing.sm) {
                         ProgressView()
@@ -1412,63 +1363,7 @@ struct OutlinePlanningModelSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-        .task { await loadSheetData() }
-        .onChange(of: selectedModelID) { _, _ in
-            selectionChanged()
-        }
-    }
-
-    @ViewBuilder
-    private var estimateSection: some View {
-        Section("Outline estimate") {
-            if isEstimating {
-                HStack {
-                    ProgressView()
-                    Text("Estimating outline generation…")
-                }
-            } else if let estimate {
-                Text("Estimated outline generation: \(formatRunCredits(estimate.estimatedCredits)) credits")
-                Text("Your available credits: \(formatRunCredits(estimate.availableCredits)) credits")
-                Text("Estimated balance afterward: \(formatRunCredits(estimate.projectedBalance)) credits")
-                Text("This is a projection across variable-length planning stages; actual charges can vary.")
-                    .font(CathedralTheme.Typography.caption(11))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                if !estimate.allowed {
-                    Text("Insufficient credits for this estimate.")
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                }
-            } else if let estimateError {
-                Text(estimateError)
-                    .foregroundStyle(CathedralTheme.Colors.destructive)
-            }
-        }
-    }
-
-    private func loadSheetData() async {
-        await loadModels()
-        await refreshEstimate()
-    }
-
-    private func selectionChanged() {
-        Task { await refreshEstimate() }
-    }
-
-    @MainActor
-    private func refreshEstimate() async {
-        guard selectedOption?.isAvailable == true else {
-            estimate = nil
-            estimateError = "Pricing could not be estimated until this model is available."
-            return
-        }
-        isEstimating = true
-        estimateError = nil
-        defer { isEstimating = false }
-        do {
-            estimate = try await OutlineSuggestionService().estimate(request: request, modelID: selectedModelID)
-        } catch {
-            estimate = nil
-            estimateError = "Pricing could not be estimated. No credits were consumed."
-        }
+        .task { await loadModels() }
     }
 
     @MainActor

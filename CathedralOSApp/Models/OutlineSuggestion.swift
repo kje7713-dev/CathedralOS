@@ -82,15 +82,6 @@ struct OutlineSuggestionRequest: Codable {
         self.requestedFormat = requestedFormat
         self.modelID = modelID
     }
-
-    func withModelID(_ modelID: String) -> OutlineSuggestionRequest {
-        OutlineSuggestionRequest(
-            recipe: recipe, arcTemplate: arcTemplate, hint: hint,
-            existingSections: existingSections, idempotencyKey: idempotencyKey,
-            outline_id: outline_id, project_lineage_id: project_lineage_id,
-            requestedFormat: requestedFormat, modelID: modelID
-        )
-    }
 }
 
 struct ArcTemplateBlob: Codable {
