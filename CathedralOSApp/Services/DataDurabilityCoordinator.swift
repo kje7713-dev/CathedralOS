@@ -95,6 +95,10 @@ struct SuggestionRunFailure: Equatable {
 @MainActor
 final class DataDurabilityCoordinator: ObservableObject {
 
+    /// A foregrounded app must not leave the Suggest Sections control locked
+    /// forever when a persisted run stopped receiving status updates.
+    static let staleSuggestionRunInterval: TimeInterval = 15 * 60
+
     enum SyncOperationKind: String, Equatable {
         case appLaunch
         case signIn
@@ -855,6 +859,26 @@ final class DataDurabilityCoordinator: ObservableObject {
         activeSuggestionRuns[projectID]
     }
 
+    /// Abandon the local recovery lock so the user can immediately start a
+    /// fresh request with a different model. The server-side lease will expire
+    /// independently; this must never block the model picker.
+    func cancelSuggestionRun(for projectID: UUID, message: String? = nil) {
+        suggestionPollingTasks[projectID]?.cancel()
+        suggestionPollingTasks[projectID] = nil
+        clearSuggestionRun(for: projectID)
+        if let message {
+            suggestionRunFailure = SuggestionRunFailure(projectID: projectID, message: message)
+            suggestionRunRevision &+= 1
+        }
+    }
+
+    func shouldDiscardStaleSuggestionRun(
+        _ metadata: SuggestionRunMetadata,
+        now: Date = Date()
+    ) -> Bool {
+        metadata.isActive && now.timeIntervalSince(metadata.updatedAt) > Self.staleSuggestionRunInterval
+    }
+
     func beginSuggestionRun(
         projectID: UUID,
         lineageID: UUID,
@@ -928,6 +952,15 @@ final class DataDurabilityCoordinator: ObservableObject {
     ) {
         guard suggestionPollingTasks[projectID] == nil else { return }
         if let active = activeSuggestionRuns[projectID] {
+            if shouldDiscardStaleSuggestionRun(active) {
+                failSuggestionRun(
+                    projectID,
+                    message: "The previous outline suggestion run timed out. You can choose a model and try again."
+                )
+                suggestionPollingTasks[projectID]?.cancel()
+                suggestionPollingTasks[projectID] = nil
+                return
+            }
             // PR 6 refactor: surface guard at the active-run layer. If the
             // active run was queued under a different planning identity, do
             // not reattach its polling task — the user has changed the
@@ -935,16 +968,28 @@ final class DataDurabilityCoordinator: ObservableObject {
             if let currentIdempotencyKey,
                active.idempotencyKey != currentIdempotencyKey {
                 clearSuggestionRun(for: projectID)
-            } else {
+            } else if active.isActive {
                 attachSuggestionTask(active, service: service)
                 return
+            } else {
+                activeSuggestionRuns[projectID] = nil
             }
         }
         if let metadata = loadSuggestionRunMetadata(
             lineageID: lineageID,
             projectID: projectID,
             expectedIdempotencyKey: currentIdempotencyKey
-        ) {
+        ), metadata.isActive {
+            if shouldDiscardStaleSuggestionRun(metadata) {
+                // Put the recovered metadata in the active slot first so
+                // clearSuggestionRun also removes its lineage-owned key.
+                activeSuggestionRuns[projectID] = metadata
+                failSuggestionRun(
+                    projectID,
+                    message: "The previous outline suggestion run timed out. You can choose a model and try again."
+                )
+                return
+            }
             activeSuggestionRuns[projectID] = metadata
             attachSuggestionTask(metadata, service: service)
         }
@@ -975,6 +1020,7 @@ final class DataDurabilityCoordinator: ObservableObject {
                   let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else { continue }
             if seen.contains(metadata.projectID) { continue }
             seen.insert(metadata.projectID)
+            guard metadata.isActive else { continue }
             activeSuggestionRuns[metadata.projectID] = metadata
             attachSuggestionTask(metadata, service: service)
         }
@@ -1069,7 +1115,13 @@ final class DataDurabilityCoordinator: ObservableObject {
                         remainingCredits: job.remainingCredits,
                         sourceRecipe: job.sourceRecipe ?? metadata.request.recipe
                     )
-                    clearSuggestionRun(for: metadata.projectID)
+                    // Keep the completed request identity in the same durable
+                    // lineage slot. The next recovery must reconstruct the
+                    // key with this original model, not the user's current
+                    // preference, while active resume still ignores terminal
+                    // metadata.
+                    retainCompletedSuggestionMetadata(metadata)
+                    activeSuggestionRuns[metadata.projectID] = nil
                     completedSuggestionRun = CompletedSuggestionRun(projectID: metadata.projectID, result: result)
                     suggestionRunRevision &+= 1
                     suggestionPollingTasks[metadata.projectID] = nil
@@ -1165,6 +1217,16 @@ final class DataDurabilityCoordinator: ObservableObject {
             return nil
         }
         return metadata
+    }
+
+    /// Retain the terminal request identity for completed-suggestion
+    /// recovery. This deliberately uses the existing lineage-owned metadata
+    /// slot rather than introducing a second persistence mechanism.
+    func retainCompletedSuggestionMetadata(_ metadata: SuggestionRunMetadata) {
+        var completed = metadata
+        completed.status = "completed"
+        completed.updatedAt = Date()
+        persistSuggestionRun(completed)
     }
 
     private func persistSuggestionRun(_ metadata: SuggestionRunMetadata) {
