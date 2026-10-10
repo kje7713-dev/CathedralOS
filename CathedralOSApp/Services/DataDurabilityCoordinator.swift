@@ -95,6 +95,10 @@ struct SuggestionRunFailure: Equatable {
 @MainActor
 final class DataDurabilityCoordinator: ObservableObject {
 
+    /// A foregrounded app must not leave the Suggest Sections control locked
+    /// forever when a persisted run stopped receiving status updates.
+    static let staleSuggestionRunInterval: TimeInterval = 15 * 60
+
     enum SyncOperationKind: String, Equatable {
         case appLaunch
         case signIn
@@ -855,6 +859,26 @@ final class DataDurabilityCoordinator: ObservableObject {
         activeSuggestionRuns[projectID]
     }
 
+    /// Abandon the local recovery lock so the user can immediately start a
+    /// fresh request with a different model. The server-side lease will expire
+    /// independently; this must never block the model picker.
+    func cancelSuggestionRun(for projectID: UUID, message: String? = nil) {
+        suggestionPollingTasks[projectID]?.cancel()
+        suggestionPollingTasks[projectID] = nil
+        clearSuggestionRun(for: projectID)
+        if let message {
+            suggestionRunFailure = SuggestionRunFailure(projectID: projectID, message: message)
+            suggestionRunRevision &+= 1
+        }
+    }
+
+    func shouldDiscardStaleSuggestionRun(
+        _ metadata: SuggestionRunMetadata,
+        now: Date = Date()
+    ) -> Bool {
+        metadata.isActive && now.timeIntervalSince(metadata.updatedAt) > Self.staleSuggestionRunInterval
+    }
+
     func beginSuggestionRun(
         projectID: UUID,
         lineageID: UUID,
@@ -928,6 +952,15 @@ final class DataDurabilityCoordinator: ObservableObject {
     ) {
         guard suggestionPollingTasks[projectID] == nil else { return }
         if let active = activeSuggestionRuns[projectID] {
+            if shouldDiscardStaleSuggestionRun(active) {
+                failSuggestionRun(
+                    projectID,
+                    message: "The previous outline suggestion run timed out. You can choose a model and try again."
+                )
+                suggestionPollingTasks[projectID]?.cancel()
+                suggestionPollingTasks[projectID] = nil
+                return
+            }
             // PR 6 refactor: surface guard at the active-run layer. If the
             // active run was queued under a different planning identity, do
             // not reattach its polling task — the user has changed the
@@ -947,6 +980,16 @@ final class DataDurabilityCoordinator: ObservableObject {
             projectID: projectID,
             expectedIdempotencyKey: currentIdempotencyKey
         ), metadata.isActive {
+            if shouldDiscardStaleSuggestionRun(metadata) {
+                // Put the recovered metadata in the active slot first so
+                // clearSuggestionRun also removes its lineage-owned key.
+                activeSuggestionRuns[projectID] = metadata
+                failSuggestionRun(
+                    projectID,
+                    message: "The previous outline suggestion run timed out. You can choose a model and try again."
+                )
+                return
+            }
             activeSuggestionRuns[projectID] = metadata
             attachSuggestionTask(metadata, service: service)
         }

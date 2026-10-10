@@ -873,7 +873,13 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private func loadSuggestions(modelID: String) async {
-        guard !suggestionRunActive else { return }
+        if suggestionRunActive {
+            durabilityCoordinator.cancelSuggestionRun(
+                for: project.id,
+                message: "The previous outline suggestion run was abandoned. Starting a fresh run."
+            )
+            suggestionsLoading = false
+        }
         // Suggest Sections is an explicit fresh-run intent. Advance the
         // generation before building the request so a completed run from an
         // earlier tap is available only through Resume Suggestions, rather
@@ -996,14 +1002,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     .disabled(projectRunStatus != nil || isGenerationStarting)
                 }
                 Button(action: prepareOutlinePlanning) {
-                    if suggestionRunActive {
-                        ProgressView()
-                    } else {
-                        Label("Suggest Sections", systemImage: "sparkles")
-                            .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                    }
+                    Label("Suggest Sections", systemImage: "sparkles")
+                        .font(CathedralTheme.Typography.body(13, weight: .semibold))
                 }
-                .disabled(suggestionRunActive || !suggestionsReady)
+                .disabled(!suggestionsReady)
             }
             if let run = durabilityCoordinator.activeSuggestionRun(for: project.id), run.status == "reconnecting" {
                 Text("Reconnecting to the server…")

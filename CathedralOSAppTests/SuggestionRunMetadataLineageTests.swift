@@ -229,6 +229,27 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         XCTAssertEqual(retained?.status, "completed")
     }
 
+    func testStaleActiveRunIsDiscardedAfterRecoveryInterval() {
+        let projectID = UUID()
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID,
+            lineageID: UUID(),
+            request: makeRequest(),
+            idempotencyKey: "suggestion-stale",
+            runID: "run-stale",
+            status: "reconnecting",
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let suiteName = "stale-run-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let coordinator = DataDurabilityCoordinator(defaults: defaults)
+        let now = Date(timeIntervalSince1970: 100 + DataDurabilityCoordinator.staleSuggestionRunInterval + 1)
+
+        XCTAssertTrue(coordinator.shouldDiscardStaleSuggestionRun(metadata, now: now))
+    }
+
     // MARK: - Exact-match resume (PR 6 refactor)
     //
     // PR 6 refactor: `loadSuggestionRunMetadata` accepts an
