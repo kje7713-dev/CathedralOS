@@ -873,13 +873,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private func loadSuggestions(modelID: String) async {
-        if suggestionRunActive {
-            durabilityCoordinator.cancelSuggestionRun(
-                for: project.id,
-                message: "The previous outline suggestion run was abandoned. Starting a fresh run."
-            )
-            suggestionsLoading = false
-        }
+        // Never replace a live server run just because the local view appears stalled.
+        // The durable coordinator must receive an authoritative terminal status first.
+        guard !suggestionRunActive else { return }
         // Suggest Sections is an explicit fresh-run intent. Advance the
         // generation before building the request so a completed run from an
         // earlier tap is available only through Resume Suggestions, rather
@@ -1001,9 +997,18 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     }
                     .disabled(projectRunStatus != nil || isGenerationStarting)
                 }
-                Button(action: prepareOutlinePlanning) {
-                    Label("Suggest Sections", systemImage: "sparkles")
-                        .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                Button {
+                    if suggestionRunActive {
+                        suggestionsNotice = "Your outline suggestions are still running or reconnecting. The original job and selected model are preserved. No new generation was started."
+                    } else {
+                        prepareOutlinePlanning()
+                    }
+                } label: {
+                    Label(
+                        suggestionRunActive ? "Suggestions Running" : "Suggest Sections",
+                        systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
+                    )
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
                 }
                 .disabled(!suggestionsReady)
             }
