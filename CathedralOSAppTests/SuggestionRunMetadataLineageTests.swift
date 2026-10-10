@@ -15,10 +15,7 @@ import XCTest
 @MainActor
 final class SuggestionRunMetadataLineageTests: XCTestCase {
 
-    private func makeRequest(
-        modelID: String? = nil,
-        idempotencyKey: String = "suggestion-test"
-    ) -> OutlineSuggestionRequest {
+    private func makeRequest() -> OutlineSuggestionRequest {
         let projectPayload = PromptPackExportPayload.ProjectPayload(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
             name: "Douche",
@@ -48,11 +45,10 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             arcTemplate: arcPayload,
             hint: nil,
             existingSections: nil,
-            idempotencyKey: idempotencyKey,
+            idempotencyKey: "suggestion-test",
             outline_id: nil,
             project_lineage_id: nil,
-            requestedFormat: nil,
-            modelID: modelID
+            requestedFormat: nil
         )
     }
 
@@ -112,122 +108,6 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         XCTAssertNil(reDecoded.lineageID)
     }
 
-
-
-
-    // MARK: - Original model survives preference changes
-
-    func testOriginalModelAndIdentitySurviveChangedPreference() throws {
-        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
-        let lineageID = UUID()
-        let projectID = UUID()
-        let originalRequest = makeRequest(modelID: "gpt-6.1-sol")
-        let originalKey = OutlineSuggestionService.idempotencyKey(for: originalRequest)
-        let changedPreferenceRequest = makeRequest(modelID: "gpt-6-luna")
-        let changedPreferenceKey = OutlineSuggestionService.idempotencyKey(for: changedPreferenceRequest)
-        XCTAssertNotEqual(originalKey, changedPreferenceKey)
-
-        let metadata = SuggestionRunMetadata(
-            projectID: projectID,
-            lineageID: lineageID,
-            request: originalRequest,
-            idempotencyKey: originalKey,
-            runID: "run-sol",
-            status: "running",
-            createdAt: Date(timeIntervalSince1970: 10),
-            updatedAt: Date(timeIntervalSince1970: 11)
-        )
-        coordinator.retainCompletedSuggestionMetadata(metadata)
-
-        let recovered = coordinator.loadSuggestionRunMetadata(
-            lineageID: lineageID,
-            projectID: projectID,
-            expectedIdempotencyKey: originalKey
-        )
-        XCTAssertEqual(recovered?.request.modelID, "gpt-6.1-sol")
-        XCTAssertEqual(recovered?.idempotencyKey, originalKey)
-        XCTAssertEqual(recovered?.runID, "run-sol")
-        XCTAssertNil(
-            coordinator.loadSuggestionRunMetadata(
-                lineageID: lineageID,
-                projectID: projectID,
-                expectedIdempotencyKey: changedPreferenceKey
-            ),
-            "A changed preference must not reinterpret the original run as a Luna request"
-        )
-    }
-
-    func testCompletedMetadataSurvivesCoordinatorRelaunch() throws {
-        let suiteName = "SuggestionRunMetadataLineageTests.relaunch.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
-        let lineageID = UUID()
-        let projectID = UUID()
-        let request = makeRequest(modelID: "gpt-6-luna")
-        let key = OutlineSuggestionService.idempotencyKey(for: request)
-        let metadata = SuggestionRunMetadata(
-            projectID: projectID,
-            lineageID: lineageID,
-            request: request,
-            idempotencyKey: key,
-            runID: "run-luna",
-            status: "running",
-            createdAt: Date(timeIntervalSince1970: 20),
-            updatedAt: Date(timeIntervalSince1970: 21)
-        )
-        let writer = DataDurabilityCoordinator(defaults: defaults)
-        writer.retainCompletedSuggestionMetadata(metadata)
-
-        // A new coordinator models app termination/relaunch while preserving
-        // the same existing lineage-owned UserDefaults store.
-        let relaunched = DataDurabilityCoordinator(defaults: defaults)
-        let recovered = relaunched.loadSuggestionRunMetadata(
-            lineageID: lineageID,
-            projectID: projectID,
-            expectedIdempotencyKey: key
-        )
-        XCTAssertEqual(recovered?.status, "completed")
-        XCTAssertEqual(recovered?.request.modelID, "gpt-6-luna")
-        XCTAssertEqual(recovered?.runID, "run-luna")
-    }
-
-    func testCompletedMetadataIsNotResumedAsAnActiveJob() throws {
-        let suiteName = "SuggestionRunMetadataLineageTests.completed-no-resume.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
-        let lineageID = UUID()
-        let projectID = UUID()
-        let request = makeRequest(modelID: "gpt-6-astra")
-        let metadata = SuggestionRunMetadata(
-            projectID: projectID,
-            lineageID: lineageID,
-            request: request,
-            idempotencyKey: OutlineSuggestionService.idempotencyKey(for: request),
-            runID: "run-astra",
-            status: "running",
-            createdAt: Date(timeIntervalSince1970: 30),
-            updatedAt: Date(timeIntervalSince1970: 31)
-        )
-        let coordinator = DataDurabilityCoordinator(defaults: defaults)
-        coordinator.retainCompletedSuggestionMetadata(metadata)
-        coordinator.resumeSuggestionRunIfNeeded(
-            projectID: projectID,
-            lineageID: lineageID,
-            currentIdempotencyKey: metadata.idempotencyKey
-        )
-
-        XCTAssertNil(coordinator.activeSuggestionRun(for: projectID))
-        let retained = coordinator.loadSuggestionRunMetadata(
-            lineageID: lineageID,
-            projectID: projectID,
-            expectedIdempotencyKey: metadata.idempotencyKey
-        )
-        XCTAssertEqual(retained?.status, "completed")
-    }
 
     // MARK: - Exact-match resume (PR 6 refactor)
     //

@@ -93,8 +93,7 @@ struct OutlineSuggestionService {
         hint: String? = nil,
         existingSections: [OutlineSection] = [],
         material: AuthoritativeProjectMaterial? = nil,
-        requestGenerationID: UUID? = nil,
-        modelID: String? = nil
+        requestGenerationID: UUID? = nil
     ) throws -> OutlineSuggestionRequest {
         guard let project = recipe.project else {
             throw OutlineSuggestionError.invalidResponse("Recipe has no project")
@@ -136,16 +135,14 @@ struct OutlineSuggestionService {
             existingSections: existing, idempotencyKey: "",
             outline_id: outlineID,
             project_lineage_id: lineageID,
-            requestedFormat: requestedFormat,
-            modelID: modelID
+            requestedFormat: requestedFormat
         )
         return OutlineSuggestionRequest(
             recipe: sourceRecipe, arcTemplate: arcBlob, hint: hint,
             existingSections: existing, idempotencyKey: Self.idempotencyKey(for: identityRequest, generationID: requestGenerationID),
             outline_id: outlineID,
             project_lineage_id: lineageID,
-            requestedFormat: requestedFormat,
-            modelID: modelID
+            requestedFormat: requestedFormat
         )
     }
 

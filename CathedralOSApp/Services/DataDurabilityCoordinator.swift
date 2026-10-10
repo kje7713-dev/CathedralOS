@@ -935,18 +935,16 @@ final class DataDurabilityCoordinator: ObservableObject {
             if let currentIdempotencyKey,
                active.idempotencyKey != currentIdempotencyKey {
                 clearSuggestionRun(for: projectID)
-            } else if active.isActive {
+            } else {
                 attachSuggestionTask(active, service: service)
                 return
-            } else {
-                activeSuggestionRuns[projectID] = nil
             }
         }
         if let metadata = loadSuggestionRunMetadata(
             lineageID: lineageID,
             projectID: projectID,
             expectedIdempotencyKey: currentIdempotencyKey
-        ), metadata.isActive {
+        ) {
             activeSuggestionRuns[projectID] = metadata
             attachSuggestionTask(metadata, service: service)
         }
@@ -977,7 +975,6 @@ final class DataDurabilityCoordinator: ObservableObject {
                   let metadata = try? JSONDecoder().decode(SuggestionRunMetadata.self, from: data) else { continue }
             if seen.contains(metadata.projectID) { continue }
             seen.insert(metadata.projectID)
-            guard metadata.isActive else { continue }
             activeSuggestionRuns[metadata.projectID] = metadata
             attachSuggestionTask(metadata, service: service)
         }
@@ -1072,13 +1069,7 @@ final class DataDurabilityCoordinator: ObservableObject {
                         remainingCredits: job.remainingCredits,
                         sourceRecipe: job.sourceRecipe ?? metadata.request.recipe
                     )
-                    // Keep the completed request identity in the same durable
-                    // lineage slot. The next recovery must reconstruct the
-                    // key with this original model, not the user's current
-                    // preference, while active resume still ignores terminal
-                    // metadata.
-                    retainCompletedSuggestionMetadata(metadata)
-                    activeSuggestionRuns[metadata.projectID] = nil
+                    clearSuggestionRun(for: metadata.projectID)
                     completedSuggestionRun = CompletedSuggestionRun(projectID: metadata.projectID, result: result)
                     suggestionRunRevision &+= 1
                     suggestionPollingTasks[metadata.projectID] = nil
@@ -1174,16 +1165,6 @@ final class DataDurabilityCoordinator: ObservableObject {
             return nil
         }
         return metadata
-    }
-
-    /// Retain the terminal request identity for completed-suggestion
-    /// recovery. This deliberately uses the existing lineage-owned metadata
-    /// slot rather than introducing a second persistence mechanism.
-    func retainCompletedSuggestionMetadata(_ metadata: SuggestionRunMetadata) {
-        var completed = metadata
-        completed.status = "completed"
-        completed.updatedAt = Date()
-        persistSuggestionRun(completed)
     }
 
     private func persistSuggestionRun(_ metadata: SuggestionRunMetadata) {

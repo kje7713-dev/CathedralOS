@@ -669,7 +669,7 @@ struct ProjectDetailView: View {
         case .define: return "Define your premise"
         case .recipe: return "Create or refine your recipe"
         case .shape: return "Shape the story arc"
-        case .outline: return "Generate or review outline sections"
+        case .outline: return "Add an outline section"
         case .write: return "Write your first section"
         case .review: return "Review your latest output"
         case .read: return "Read your latest output"
@@ -1517,7 +1517,7 @@ struct ProjectDetailView: View {
     private var sectionsToRunSection: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
             if outlineSections.isEmpty {
-                Text("Generate or review sections in Outline before writing the novel.")
+                Text("Add sections in Outline before writing the novel.")
                     .font(CathedralTheme.Typography.caption())
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 CathedralPrimaryButton("Open Outline", systemImage: "list.number") {

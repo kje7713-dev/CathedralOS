@@ -20,10 +20,6 @@ import {
   requireRunOutlineRecipe,
   RunOutlineOutlineError,
   runOutlineSectionLifecycle,
-  validateOutlineSectionsModelID,
-  OUTLINE_SECTIONS_DEFAULT_MODEL_ID,
-  LEGACY_RUN_OUTLINE_DEFAULT_MODEL_ID,
-  runOutlineIdempotencyKey,
 } from "./index.ts";
 import {
   buildGenerateStoryRequest,
@@ -70,24 +66,6 @@ function mockOutlineClient(result: { data: unknown; error: unknown }) {
     }),
   } as never;
 }
-
-Deno.test("Outline Sections accepts only approved models and defaults to Sol", () => {
-  assertEquals(OUTLINE_SECTIONS_DEFAULT_MODEL_ID, "gpt-6.1-sol");
-  assertEquals(LEGACY_RUN_OUTLINE_DEFAULT_MODEL_ID, "gpt-4o-mini");
-  for (const modelID of ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]) {
-    assertEquals(validateOutlineSectionsModelID(modelID), null);
-  }
-  assertEquals(validateOutlineSectionsModelID("gpt-5.6-luna"), "model must be one of the approved Outline Sections models");
-  assertEquals(validateOutlineSectionsModelID(""), "model must be one of the approved Outline Sections models");
-});
-
-Deno.test("Run All target identity blocks conflicting model launches but permits terminal reruns", () => {
-  const luna = runOutlineIdempotencyKey("u", "o", "s");
-  const astra = runOutlineIdempotencyKey("u", "o", "s");
-  const otherTarget = runOutlineIdempotencyKey("u", "o", "other");
-  assertEquals(luna, astra);
-  assertEquals(luna === otherTarget, false);
-});
 
 Deno.test("outline loader accepts a valid authoritative outline", async () => {
   const outline = await loadRunOutline(
@@ -374,19 +352,6 @@ Deno.test("finds a project snapshot through either local ID or lineage", () => {
   );
 });
 
-Deno.test("Run All validates the approved model and availability before durable billing", async () => {
-  const source = await Deno.readTextFile(
-    "./supabase/functions/run-outline/index.ts",
-  );
-  assertEquals(source.includes("validateOutlineSectionsModelID(selectedModelID)"), false);
-  assertStringIncludes(source, "The iOS Outline Sections picker is intentionally limited");
-  assertStringIncludes(source, "body.model ?? LEGACY_RUN_OUTLINE_DEFAULT_MODEL_ID");
-  assertStringIncludes(source, "new SupabaseGenerationModelStore(adminClient)");
-  assertStringIncludes(source, 'return errorResponse(\n      "model_unavailable"');
-  assertStringIncludes(source, 'body = { ...body, model: selectedModelID }');
-  assertEquals(source.includes('body.model ?? OUTLINE_SECTIONS_DEFAULT_MODEL_ID'), false);
-});
-
 Deno.test("run-outline uses leased bounded continuations", async () => {
   const source = await Deno.readTextFile(
     "./supabase/functions/run-outline/index.ts",
@@ -399,10 +364,7 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   );
   assertEquals(source.includes("idempotency_key: null"), true);
   assertEquals(source.includes("latest replacement"), false); // replacement lookup is client/server contract
-  assertEquals(source.includes("runOutlineIdempotencyKey("), true);
-  assertEquals(source.includes('return `${userID}:${outlineID}:${startParentSectionID}`;'), true);
-  assertEquals(source.includes('`${userId}:${body.outline_id}:${body.start_parent_section_id}:${body.scope || "single"}:${selectedModelID}`'), false);
-  assertEquals(source.includes("body = { ...body, model: selectedModelID }"), true);
+  assertEquals(source.includes("outline_id + start_parent_section_id"), true);
   assertEquals(
     source.includes('.from("chapter_runs")\n      .delete()'),
     false,

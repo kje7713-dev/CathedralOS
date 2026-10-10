@@ -68,7 +68,6 @@ import {
   getEnabledModelByProviderModel,
   getEnabledPricedModelByProviderModel,
   snapshotPricing,
-  SupabaseGenerationModelStore,
 } from "../generate-story/_generation_models.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -77,32 +76,6 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const MAX_TRANSIENT_OUTLINE_LOOKUP_ATTEMPTS = 3;
 const TRANSIENT_OUTLINE_LOOKUP_RETRY_SECONDS = 30;
-
-export const OUTLINE_SECTIONS_DEFAULT_MODEL_ID = "gpt-6.1-sol";
-// New iOS Outline Sections requests send the picker default explicitly. Older
-// callers omitted `model`, which historically flowed to the generation
-// infrastructure's gpt-4o-mini default; preserve that behavior.
-export const LEGACY_RUN_OUTLINE_DEFAULT_MODEL_ID = "gpt-4o-mini";
-export const APPROVED_OUTLINE_SECTIONS_MODEL_IDS = new Set([
-  "gpt-6-luna",
-  "gpt-6.1-sol",
-  "gpt-6-astra",
-]);
-
-export function validateOutlineSectionsModelID(modelID: unknown): string | null {
-  if (typeof modelID !== "string" || !APPROVED_OUTLINE_SECTIONS_MODEL_IDS.has(modelID)) {
-    return "model must be one of the approved Outline Sections models";
-  }
-  return null;
-}
-
-export function runOutlineIdempotencyKey(
-  userID: string,
-  outlineID: string,
-  startParentSectionID: string,
-): string {
-  return `${userID}:${outlineID}:${startParentSectionID}`;
-}
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -398,15 +371,7 @@ async function handleKickoff(req: Request): Promise<Response> {
       400,
     );
   }
-  const selectedModelID = body.model ?? LEGACY_RUN_OUTLINE_DEFAULT_MODEL_ID;
-  // The iOS Outline Sections picker is intentionally limited to the three
-  // MVP IDs above. The endpoint must remain compatible with older legitimate
-  // callers, however; the catalog lookup below is the authority for whether
-  // any explicitly requested model is enabled, priced, and provider-available.
-  if (typeof selectedModelID !== "string" || selectedModelID.trim() === "") {
-    return errorResponse("invalid_model", "model must be a non-empty catalog model ID", 400);
-  }
-  body = { ...body, model: selectedModelID };
+
   // 3. Idempotency: try insert; on 23505 return existing run
   let readinessOutline: ReadinessOutline;
   try {
@@ -466,15 +431,8 @@ async function handleKickoff(req: Request): Promise<Response> {
     );
   }
 
-  // Model and scope are persisted on the durable run, but are deliberately
-  // not part of the active-run identity. A second launch for the same target
-  // must reconnect to the existing run rather than create a competing job.
-  // Terminal runs release this target key before a legitimate rerun.
-  const idempotencyKey = runOutlineIdempotencyKey(
-    userId,
-    body.outline_id,
-    body.start_parent_section_id,
-  );
+  const idempotencyKey =
+    `${userId}:${body.outline_id}:${body.start_parent_section_id}`;
 
   // Idempotency: check for existing run first.
   // - running → return 409 already_running
@@ -523,16 +481,6 @@ async function handleKickoff(req: Request): Promise<Response> {
         500,
       );
     }
-  }
-
-  const selectedCatalogModel = await new SupabaseGenerationModelStore(adminClient)
-    .getEnabledModelById(selectedModelID);
-  if (!selectedCatalogModel) {
-    return errorResponse(
-      "model_unavailable",
-      `Selected Outline Sections model is unavailable: ${selectedModelID}`,
-      422,
-    );
   }
 
   const { data: run, error: insertErr } = await adminClient
