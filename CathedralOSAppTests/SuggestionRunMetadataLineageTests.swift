@@ -229,25 +229,42 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         XCTAssertEqual(retained?.status, "completed")
     }
 
-    func testStaleActiveRunIsDiscardedAfterRecoveryInterval() {
+    func testOldPendingRunKeepsModelAndRecoveryIdentityAfterRelaunch() throws {
         let projectID = UUID()
+        let lineageID = UUID()
+        let request = makeRequest(modelID: "gpt-6.1-sol")
+        let originalKey = OutlineSuggestionService.idempotencyKey(for: request)
         let metadata = SuggestionRunMetadata(
             projectID: projectID,
-            lineageID: UUID(),
-            request: makeRequest(),
-            idempotencyKey: "suggestion-stale",
-            runID: "run-stale",
+            lineageID: lineageID,
+            request: request,
+            idempotencyKey: originalKey,
+            runID: "run-still-pending",
             status: "reconnecting",
             createdAt: Date(timeIntervalSince1970: 0),
             updatedAt: Date(timeIntervalSince1970: 100)
         )
-        let suiteName = "stale-run-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let suiteName = "old-pending-run-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        let coordinator = DataDurabilityCoordinator(defaults: defaults)
-        let now = Date(timeIntervalSince1970: 100 + DataDurabilityCoordinator.staleSuggestionRunInterval + 1)
+        defaults.set(
+            try JSONEncoder().encode(metadata),
+            forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)"
+        )
 
-        XCTAssertTrue(coordinator.shouldDiscardStaleSuggestionRun(metadata, now: now))
+        // A stale local timestamp is not evidence of a terminal server run.
+        // A newly created coordinator must retain the server run ID/model
+        // rather than creating a second potentially billable generation.
+        let coordinator = DataDurabilityCoordinator(defaults: defaults)
+        let restored = coordinator.loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID,
+            expectedIdempotencyKey: originalKey
+        )
+        XCTAssertEqual(restored?.status, "reconnecting")
+        XCTAssertEqual(restored?.runID, "run-still-pending")
+        XCTAssertEqual(restored?.request.modelID, "gpt-6.1-sol")
+        XCTAssertEqual(restored?.idempotencyKey, originalKey)
     }
 
     // MARK: - Exact-match resume (PR 6 refactor)
