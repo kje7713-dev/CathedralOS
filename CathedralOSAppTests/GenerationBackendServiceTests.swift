@@ -785,4 +785,38 @@ final class RunAllBillingLifecycleTests: XCTestCase {
         XCTAssertEqual(status.actualCreditsText, "91.27")
         XCTAssertFalse(status.isPausedForInsufficientCredits)
     }
+
+    func testTerminalRunDoesNotBlockAnotherRunSectionsKickoff() {
+        // The coordinator retains terminal run status for the banner after
+        // relaunch; only nonterminal statuses may disable Run Sections.
+        let cases: [(String, Bool)] = [
+            ("queued", true),
+            ("running", true),
+            ("paused_insufficient_credits", true),
+            ("completed", false),
+            ("failed", false),
+            ("unrecognized_status", true)
+        ]
+        for (state, expectedBlock) in cases {
+            let status = RunOutlineStatus(
+                run_id: "run-eligibility",
+                status: state,
+                outline_id: nil,
+                start_parent_section_id: nil,
+                sections_done: nil,
+                sections_total: nil,
+                sections_failed: nil,
+                current_section: nil,
+                sections: nil,
+                error: nil,
+                credits_reserved: nil,
+                credits_actual: nil,
+                created_at: nil,
+                updated_at: nil,
+                completed_at: nil
+            )
+            XCTAssertEqual(status.blocksNewGeneration, expectedBlock, "status: \(state)")
+        }
+    }
+
 }
