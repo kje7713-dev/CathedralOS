@@ -873,6 +873,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private func loadSuggestions(modelID: String) async {
+        // Never replace a live server run just because the local view appears stalled.
+        // The durable coordinator must receive an authoritative terminal status first.
         guard !suggestionRunActive else { return }
         // Suggest Sections is an explicit fresh-run intent. Advance the
         // generation before building the request so a completed run from an
@@ -993,17 +995,23 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         Label("Run Sections", systemImage: "play.fill")
                             .font(CathedralTheme.Typography.body(13, weight: .semibold))
                     }
-                    .disabled(projectRunStatus != nil || isGenerationStarting)
+                    // A completed or failed banner is historical, not an active run.
+                    .disabled((projectRunStatus?.blocksNewGeneration ?? false) || isGenerationStarting)
                 }
-                Button(action: prepareOutlinePlanning) {
+                Button {
                     if suggestionRunActive {
-                        ProgressView()
+                        suggestionsNotice = "Your outline suggestions are still running or reconnecting. The original job and selected model are preserved. No new generation was started."
                     } else {
-                        Label("Suggest Sections", systemImage: "sparkles")
-                            .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                        prepareOutlinePlanning()
                     }
+                } label: {
+                    Label(
+                        suggestionRunActive ? "Suggestions Running" : "Suggest Sections",
+                        systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
+                    )
+                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
                 }
-                .disabled(suggestionRunActive || !suggestionsReady)
+                .disabled(!suggestionsReady)
             }
             if let run = durabilityCoordinator.activeSuggestionRun(for: project.id), run.status == "reconnecting" {
                 Text("Reconnecting to the server…")

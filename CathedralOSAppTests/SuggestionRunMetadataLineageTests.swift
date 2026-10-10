@@ -229,6 +229,44 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         XCTAssertEqual(retained?.status, "completed")
     }
 
+    func testOldPendingRunKeepsModelAndRecoveryIdentityAfterRelaunch() throws {
+        let projectID = UUID()
+        let lineageID = UUID()
+        let request = makeRequest(modelID: "gpt-6.1-sol")
+        let originalKey = OutlineSuggestionService.idempotencyKey(for: request)
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID,
+            lineageID: lineageID,
+            request: request,
+            idempotencyKey: originalKey,
+            runID: "run-still-pending",
+            status: "reconnecting",
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let suiteName = "old-pending-run-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(
+            try JSONEncoder().encode(metadata),
+            forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)"
+        )
+
+        // A stale local timestamp is not evidence of a terminal server run.
+        // A newly created coordinator must retain the server run ID/model
+        // rather than creating a second potentially billable generation.
+        let coordinator = DataDurabilityCoordinator(defaults: defaults)
+        let restored = coordinator.loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID,
+            expectedIdempotencyKey: originalKey
+        )
+        XCTAssertEqual(restored?.status, "reconnecting")
+        XCTAssertEqual(restored?.runID, "run-still-pending")
+        XCTAssertEqual(restored?.request.modelID, "gpt-6.1-sol")
+        XCTAssertEqual(restored?.idempotencyKey, originalKey)
+    }
+
     // MARK: - Exact-match resume (PR 6 refactor)
     //
     // PR 6 refactor: `loadSuggestionRunMetadata` accepts an
