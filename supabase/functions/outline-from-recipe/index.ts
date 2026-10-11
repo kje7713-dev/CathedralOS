@@ -3759,7 +3759,15 @@ export async function runSuggestionJob(
       const promptCacheKey = `cath:outline:${projectIdentity}:${provenance.sourceRecipeHash}:${stageFamily}:pcv2:promptv4`;
       const promptCacheKeyHash = await sha256Hex(promptCacheKey);
       await touchLease();
-      const result = await billableLLM({
+      // Provider calls can exceed the three-minute worker lease, especially
+      // for worksheet enrichment. Renew while the call is in flight so the
+      // lease cannot expire and reclaim a healthy provider attempt.
+      const leaseHeartbeat = setInterval(() => {
+        void touchLease();
+      }, 30_000);
+      let result: any;
+      try {
+        result = await billableLLM({
         userID: userId,
         purpose: "outline-suggestion",
         action,
@@ -3788,7 +3796,10 @@ export async function runSuggestionJob(
           if (validateResponse) await validateResponse(providerResult.content);
           return providerResult.content;
         },
-      }, { adminClient: db, provider, creditStore });
+        }, { adminClient: db, provider, creditStore });
+      } finally {
+        clearInterval(leaseHeartbeat);
+      }
       await persistBilling();
       return {
         content: result.featureResult,
