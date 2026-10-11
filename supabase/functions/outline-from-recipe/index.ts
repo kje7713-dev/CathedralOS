@@ -4810,7 +4810,7 @@ Deno.serve(async (req: Request) => {
   // failure could allow one extra request through the limit window.
   if (isFreshInsert) {
     try {
-      await logRequest(db, user.id, "queued", undefined, body.modelID ?? OPENAI_MODEL);
+      await logRequest(db, user.id, "queued");
     } catch (logError) {
       console.error("[outline-from-recipe] logRequest failed", logError);
     }

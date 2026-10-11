@@ -52,7 +52,7 @@ enum OutlineSuggestionError: Error, LocalizedError {
         case .unsupportedModelConfiguration: return "This model is not configured for outline planning. Choose another model; no credits were charged."
         case .providerRateLimited: return "The AI provider is rate-limiting outline planning. Wait a moment before trying again."
         case .providerOutage: return "The AI provider is temporarily unavailable. No credits were charged; try again later."
-        case .providerError:         return "The AI outline planner returned an unexpected error. Review the run status before retrying."
+        case .providerError:         return "The AI suggestion failed. Try again."
         case .insufficientCredits(let needed, let available, let message):
             if let needed, let available { return "Insufficient credits: need \(needed.cleanCreditCount), have \(available.cleanCreditCount)." }
             return message
