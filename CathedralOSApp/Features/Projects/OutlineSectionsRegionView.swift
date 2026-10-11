@@ -1107,7 +1107,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private var emptyState: some View {
-        Text("Pick a Story Arc template above to start — your project's outline is created automatically.")
+        Text("No outline sections yet. Tap Suggest Sections above to choose a model and generate your outline.")
             .font(CathedralTheme.Typography.body(13))
             .foregroundStyle(CathedralTheme.Colors.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
