@@ -99,7 +99,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// a persisted run stopped receiving status updates. The server job is
     /// left intact; this only releases the local UI lock so the user can
     /// choose a model and start a new request.
-    static let staleSuggestionRunInterval: TimeInterval = 15 * 60
+    static let staleSuggestionRunInterval: TimeInterval = 60
 
     enum SyncOperationKind: String, Equatable {
         case appLaunch
