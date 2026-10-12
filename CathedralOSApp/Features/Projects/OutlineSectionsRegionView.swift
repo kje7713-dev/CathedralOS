@@ -1040,8 +1040,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         )
                         .font(CathedralTheme.Typography.body(13, weight: .semibold))
                     }
+                    .disabled(!suggestionsReady)
                 }
-                .disabled(!suggestionsReady && !connectionUnavailable)
             }
             if let run = durabilityCoordinator.activeSuggestionRun(for: project.id) {
                 switch run.status {
