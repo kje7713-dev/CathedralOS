@@ -3473,6 +3473,25 @@ export class SuggestionWorkerSlice {
   }
 }
 
+/** Advance the no-progress clock only after a durable planning checkpoint. */
+export function markMeaningfulProgress(
+  diagnostics: Record<string, unknown>,
+  checkpoint: string,
+  at = new Date().toISOString(),
+): Record<string, unknown> {
+  const worker = diagnostics.worker && typeof diagnostics.worker === "object"
+    ? diagnostics.worker as Record<string, unknown>
+    : {};
+  return {
+    ...diagnostics,
+    worker: {
+      ...worker,
+      lastMeaningfulProgressAt: at,
+      lastMeaningfulProgressCheckpoint: checkpoint,
+    },
+  };
+}
+
 function leaseExpiry(): string {
   return new Date(Date.now() + SUGGESTION_LEASE_MS).toISOString();
 }
@@ -3503,26 +3522,31 @@ async function reconcileExhaustedSuggestionBilling(
 ): Promise<number | null> {
   // Recompute the durable total from provider-attempt rows before explaining
   // an exhausted run. If reconciliation is unavailable, say so explicitly.
-  if (typeof db.rpc === "function") {
-    const { error } = await db.rpc("reconcile_outline_provider_attempts", { p_run_id: run.id });
-    if (error) {
-      console.error("[outline-from-recipe] exhausted-run billing reconciliation failed", error);
+  try {
+    if (typeof db.rpc === "function") {
+      const { error } = await db.rpc("reconcile_outline_provider_attempts", { p_run_id: run.id });
+      if (error) {
+        console.error("[outline-from-recipe] exhausted-run billing reconciliation failed", error);
+        return null;
+      }
+      if (typeof db.from === "function") {
+        const result = await db.from("outline_suggestion_runs")
+          .select("credit_cost_charged")
+          .eq("id", run.id)
+          .maybeSingle();
+        if (!result.error && result.data && typeof result.data.credit_cost_charged === "number") {
+          return result.data.credit_cost_charged;
+        }
+      }
+      // The RPC succeeded but the authoritative read did not. Do not fall back
+      // to a stale run object and accidentally claim zero customer charge.
       return null;
     }
-    if (typeof db.from === "function") {
-      const result = await db.from("outline_suggestion_runs")
-        .select("credit_cost_charged")
-        .eq("id", run.id)
-        .maybeSingle();
-      if (!result.error && result.data && typeof result.data.credit_cost_charged === "number") {
-        return result.data.credit_cost_charged;
-      }
-    }
-    // The RPC succeeded but the authoritative read did not. Do not fall back
-    // to a stale run object and accidentally claim zero customer charge.
+    return typeof run.credit_cost_charged === "number" ? run.credit_cost_charged : null;
+  } catch (error) {
+    console.error("[outline-from-recipe] exhausted-run billing reconciliation threw", error);
     return null;
   }
-  return typeof run.credit_cost_charged === "number" ? run.credit_cost_charged : null;
 }
 
 function exhaustedSuggestionBillingMessage(settledCredits: number | null): string {
@@ -3984,10 +4008,14 @@ export async function runSuggestionJob(
           };
           const expansionCheckpoint = buildExpansionCheckpoint(current, body.existingSections ?? [], allDiagnostics);
           planningState = { ...planningState, phase: "expansion", expansionCheckpoint };
+          diagnostics = markMeaningfulProgress(
+            { ...diagnostics, expansionCheckpoint },
+            "expansion_round_checkpoint",
+          );
           await updateRun({
             suggestions: current,
             planning_state: planningState,
-            diagnostics: { ...diagnostics, expansionCheckpoint },
+            diagnostics,
           });
         },
         {
@@ -4011,6 +4039,7 @@ export async function runSuggestionJob(
               expansionRounds: allDiagnostics,
               novelScale: expansionCheckpoint.scale,
             };
+            diagnostics = markMeaningfulProgress(diagnostics, "expansion_beat_checkpoint");
             await updateRun({ suggestions: current, planning_state: planningState, diagnostics });
           },
         },
@@ -4072,6 +4101,7 @@ export async function runSuggestionJob(
       };
       const expansionCheckpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], []);
       diagnostics = { ...diagnostics, stage: outlineNeedsExpansion ? "expansion_pending" : "outline_complete", expansionCheckpoint };
+      diagnostics = markMeaningfulProgress(diagnostics, "validated_suggestions_persisted");
       await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
       if (outlineNeedsExpansion) {
         const expanded = await expandNovel(completedSuggestions, recipeObligations, 1, 0, []);
@@ -4140,6 +4170,7 @@ export async function runSuggestionJob(
       // any earlier persist inside resumeOrRepairStoryMaterial — the final
       // updateRun below overwrites the same fields with completed-stage
       // diagnostics on success.
+      diagnostics = markMeaningfulProgress(diagnostics, "story_material_repaired");
       await updateRun({
         story_material: resumedMaterial,
         diagnostics,
@@ -4273,12 +4304,20 @@ export async function runSuggestionJob(
         nextAction: "outline-plan",
         enrichmentRepairReason: undefined,
       };
-      await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" } });
+      diagnostics = markMeaningfulProgress(
+        { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" },
+        "story_material_complete",
+      );
+      await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics });
     }
     if (!storyMaterial) throw new Error("story material enrichment was not produced");
+    diagnostics = markMeaningfulProgress(
+      { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" },
+      "story_material_ready",
+    );
     await updateRun({
       story_material: storyMaterial,
-      diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" },
+      diagnostics,
     });
     await persistPlanningProvenance(db, body, runId, storyMaterial, provenance);
     body = { ...body, storyMaterialEnrichment: storyMaterial };
@@ -4315,7 +4354,8 @@ export async function runSuggestionJob(
       planningContext = persistedPlanningContext;
       planningContextHash = claimedRun.planning_context_hash;
     }
-    await updateRun({ planning_context: planningContext, planning_context_hash: planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1 });
+    diagnostics = markMeaningfulProgress(diagnostics, "planning_context_persisted");
+    await updateRun({ planning_context: planningContext, planning_context_hash: planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1, diagnostics });
     // PR 5: allocation counts are residual NEW sections. Persist the validated
     // plan before the next provider boundary so continuation does not rerun a
     // settled allocation call or double-subtract existing coverage.
@@ -4355,7 +4395,11 @@ export async function runSuggestionJob(
         allocationEntries: Array.from(allocation.entries()),
         allocationRetryReason: undefined,
       };
-      await updateRun({ planning_state: planningState });
+      diagnostics = markMeaningfulProgress(
+        { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
+        "allocation_validated",
+      );
+      await updateRun({ planning_state: planningState, diagnostics });
     }
     const allocationCountsByBeat = Object.fromEntries(
       Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections]),
@@ -4439,7 +4483,11 @@ export async function runSuggestionJob(
     let completionWarnings = result.warnings;
     if (coverage.missingRequired.length > 0) {
       planningState = { ...planningState, phase: "obligation_repair_pending", nextAction: "obligation-repair" };
-      await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics: { ...diagnostics, stage: "obligation_repair_pending" } });
+      diagnostics = markMeaningfulProgress(
+        { ...diagnostics, stage: "obligation_repair_pending" },
+        "validated_suggestions_persisted",
+      );
+      await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
       throw new SuggestionWorkerYield();
     }
     await postValidatedOutline(completedSuggestions, completionWarnings);
@@ -4497,19 +4545,31 @@ export async function runSuggestionJob(
           ? "provider_error"
           : "server_error"));
     const message = err instanceof Error ? err.message : String(err);
-    const publicError = providerBillingUnavailable
+    const publicErrorBase = providerBillingUnavailable
       ? "Temporarily unavailable — try again later."
       : configurationFailure
-      ? "This selected model does not support the outline planner configuration. Choose another model; no credits were charged."
+      ? "This selected model does not support the outline planner configuration."
       : providerRateLimited
       ? "The AI provider is rate-limiting outline planning. Wait a moment before trying again."
       : providerOutage
-      ? "The AI provider is temporarily unavailable. No credits were charged; try again later."
+      ? "The AI provider is temporarily unavailable; try again later."
       : providerErrorCode
-      ? "The AI outline planner could not complete this request. No credits were charged; review the run status before retrying."
+      ? "The AI outline planner could not complete this request; review the run status before retrying."
       : message.slice(0, 2000);
+    const settledCredits = await reconcileExhaustedSuggestionBilling(db, {
+      id: runId,
+      credit_cost_charged: claimedRun.credit_cost_charged,
+    });
+    const billingStatus = settledCredits === null
+      ? "Billing reconciliation is unresolved; any settled stages were preserved."
+      : settledCredits > 0
+      ? `${settledCredits.toFixed(2)} credits were already settled for completed stages; no duplicate charge will be created.`
+      : "No settled customer charge is recorded for this run.";
+    const publicError = `${publicErrorBase} ${billingStatus}`;
     const failedDiagnostics = {
       ...diagnostics,
+      billingReconciliation: settledCredits === null ? "unresolved" : settledCredits > 0 ? "settled" : "no_settled_charge",
+      settledCredits,
       stage: "failed",
       runID: runId,
       selectedModel: providerModelForAlert,

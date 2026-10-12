@@ -81,6 +81,7 @@ import {
   SuggestionWorkerSlice,
   assertWorkerSliceCanDispatch,
   reclaimExpiredSuggestionRun,
+  markMeaningfulProgress,
   suggestionLifecycleFailure,
   MAX_SUGGESTION_LIFETIME_MS,
   MAX_SUGGESTION_NO_PROGRESS_MS,
@@ -4194,7 +4195,8 @@ Deno.test("provider billing unavailable during allocation bypasses retry and fai
   assertEquals(continuationCount, 0);
   assertEquals(db.row.status, "failed");
   assertEquals(db.row.error_code, "provider_billing_unavailable");
-  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.error.startsWith("Temporarily unavailable — try again later."), true);
+  assertEquals(db.row.error.includes("No settled customer charge is recorded"), true);
   assertEquals(db.row.suggestions, [existingSuggestion]);
   assertEquals(db.row.planning_state.nextAction, "outline-plan");
   assertEquals("allocationRetryReason" in db.row.planning_state, false);
@@ -4281,7 +4283,8 @@ Deno.test("provider billing unavailable during resumed expansion suppresses raw 
 
   assertEquals(db.row.status, "failed");
   assertEquals(db.row.error_code, "provider_billing_unavailable");
-  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.error.startsWith("Temporarily unavailable — try again later."), true);
+  assertEquals(db.row.error.includes("No settled customer charge is recorded"), true);
   assertEquals(db.row.suggestions, suggestions);
   assertEquals(db.row.completed_at !== null, true);
   assertEquals(db.row.lease_owner, null);
@@ -4323,7 +4326,8 @@ Deno.test("provider billing unavailable fails Suggest Sections safely and alerts
 
   assertEquals(db.row.status, "failed");
   assertEquals(db.row.error_code, "provider_billing_unavailable");
-  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.error.startsWith("Temporarily unavailable — try again later."), true);
+  assertEquals(db.row.error.includes("No settled customer charge is recorded"), true);
   assertEquals(db.row.suggestions, [existingSuggestion]);
   assertEquals(db.row.completed_at !== null, true);
   assertEquals(db.row.lease_owner, null);
@@ -4367,7 +4371,8 @@ Deno.test("provider alert failure cannot change terminal Suggest Sections state"
 
   assertEquals(db.row.status, "failed");
   assertEquals(db.row.error_code, "provider_billing_unavailable");
-  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.error.startsWith("Temporarily unavailable — try again later."), true);
+  assertEquals(db.row.error.includes("No settled customer charge is recorded"), true);
   assertEquals(db.row.lease_owner, null);
   assertEquals(db.row.lease_expires_at, null);
 });
@@ -4473,6 +4478,16 @@ Deno.test("exhausted worker preserves settled billing in its terminal message", 
   assertEquals(db.row.error_code, "worker_attempts_exhausted");
   assertEquals(db.row.error.includes("2.50 credits were already settled"), true);
   assertEquals(db.row.error.includes("No credits were charged"), false);
+});
+
+Deno.test("meaningful progress advances only at durable checkpoints", () => {
+  const before = "2026-01-01T00:00:00.000Z";
+  const diagnostics = { worker: { lastMeaningfulProgressAt: before, sliceCount: 4 } };
+  const progressed = markMeaningfulProgress(diagnostics, "allocation_validated", "2026-01-01T00:05:00.000Z");
+  assertEquals((progressed.worker as Record<string, unknown>).lastMeaningfulProgressAt, "2026-01-01T00:05:00.000Z");
+  assertEquals((progressed.worker as Record<string, unknown>).lastMeaningfulProgressCheckpoint, "allocation_validated");
+  assertEquals((diagnostics.worker as Record<string, unknown>).lastMeaningfulProgressAt, before);
+  assertEquals((progressed.worker as Record<string, unknown>).sliceCount, 4);
 });
 
 Deno.test("suggestion lifecycle bounds distinguish elapsed lifetime and no progress", () => {
