@@ -1046,7 +1046,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func runSuggestion(_ initial: SuggestionRunMetadata, service: OutlineSuggestionService) async {
         var metadata = initial
         var reconnectMisses = 0
-        let maxReconnectMisses = 3
+        let maxReconnectMisses = 20
         while !Task.isCancelled {
             do {
                 let job: OutlineSuggestionJob
@@ -1084,6 +1084,7 @@ final class DataDurabilityCoordinator: ObservableObject {
                     }
                 }
 
+                reconnectMisses = 0
                 metadata.status = job.status
                 metadata.updatedAt = Date()
                 if metadata.runID == nil { metadata.runID = job.runID }
@@ -1144,14 +1145,33 @@ final class DataDurabilityCoordinator: ObservableObject {
                     return
                 }
                 // Authentication/network loss is not a server generation
-                // failure. Keep the durable identity so relaunch/sign-in can
-                // reconnect to the same run.
+                // failure. Keep the durable identity for a bounded recovery
+                // window; do not refresh the local lock forever when the
+                // server cannot be reached.
+                reconnectMisses += 1
+                if reconnectMisses >= maxReconnectMisses {
+                    failSuggestionRun(
+                        metadata.projectID,
+                        message: "The outline suggestion server could not be reached. You can choose a model and try again."
+                    )
+                    suggestionPollingTasks[metadata.projectID] = nil
+                    return
+                }
                 metadata.status = "reconnecting"
                 metadata.updatedAt = Date()
                 activeSuggestionRuns[metadata.projectID] = metadata
                 persistSuggestionRun(metadata)
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             } catch {
+                reconnectMisses += 1
+                if reconnectMisses >= maxReconnectMisses {
+                    failSuggestionRun(
+                        metadata.projectID,
+                        message: "The outline suggestion server could not be reached. You can choose a model and try again."
+                    )
+                    suggestionPollingTasks[metadata.projectID] = nil
+                    return
+                }
                 metadata.status = "reconnecting"
                 metadata.updatedAt = Date()
                 activeSuggestionRuns[metadata.projectID] = metadata
