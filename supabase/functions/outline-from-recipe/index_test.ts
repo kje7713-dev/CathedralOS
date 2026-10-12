@@ -4434,17 +4434,30 @@ Deno.test("two continuation workers race on one pending claim and produce one pr
 
 Deno.test("stale reclaim is a compare-and-set race and only the winner cleans orphan attempts", async () => {
   const expired = new Date(Date.now() - 1000).toISOString();
-  const db = new ExecutableRunDb({ id: "run-stale", status: "running", lease_expires_at: expired, attempt_count: 4 });
+  const db = new ExecutableRunDb({ id: "run-stale", status: "running", lease_expires_at: expired, attempt_count: 1 });
   db.attempts = [{ feature_run_id: "run-stale", status: "started", started_at: new Date(Date.now() - 2000).toISOString() }];
-  const run = { id: "run-stale", status: "running", lease_expires_at: expired, attempt_count: 4 };
+  const run = { id: "run-stale", status: "running", lease_expires_at: expired, attempt_count: 1 };
   const results = await Promise.all([reclaimExpiredSuggestionRun(db, run), reclaimExpiredSuggestionRun(db, run)]);
   assertEquals(results, [true, false]);
   assertEquals(db.row.status, "pending");
-  assertEquals(db.row.attempt_count, 5);
+  assertEquals(db.row.attempt_count, 2);
   assertEquals(db.cleanupCalls, 1);
   assertEquals(db.attempts[0].status, "provider_failed");
   assertEquals(db.attempts[0].provider_error_code, "worker_interrupted");
   assertEquals(db.attempts[0].completed_at !== null, true);
+});
+
+Deno.test("expired worker reaches a terminal state after finite attempts", async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb({ id: "run-exhausted", status: "running", lease_expires_at: expired, attempt_count: 4 });
+  db.attempts = [{ feature_run_id: "run-exhausted", status: "started", started_at: new Date(Date.now() - 2000).toISOString() }];
+  const run = { id: "run-exhausted", status: "running", lease_expires_at: expired, attempt_count: 4 };
+  assertEquals(await reclaimExpiredSuggestionRun(db, run), true);
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "worker_attempts_exhausted");
+  assertEquals(db.row.lease_owner, null);
+  assertEquals(db.row.lease_expires_at, null);
+  assertEquals(db.attempts[0].provider_error_code, "worker_interrupted");
 });
 
 Deno.test("active lease recovery is a no-op", async () => {

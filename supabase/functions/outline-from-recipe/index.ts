@@ -3439,7 +3439,13 @@ export function isRetryableStoryMaterialFailure(run: {
       run.error === "story material enrichment contains a duplicate or missing item id");
 }
 
+// Supabase Edge Functions can be terminated by the wall-clock limit before a
+// long provider request returns. Keep the provider deadline below that limit
+// so the worker can persist a terminal provider_timeout instead of being
+// killed while its run remains `running`.
+const OUTLINE_PROVIDER_TIMEOUT_MS = 90_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
+export const MAX_SUGGESTION_ATTEMPTS = 5;
 
 export class SuggestionWorkerYield extends Error {
   constructor() {
@@ -3506,17 +3512,23 @@ export async function reclaimExpiredSuggestionRun(db: any, run: {
   status?: string;
   lease_expires_at?: string | null;
   attempt_count?: number | null;
+  error_code?: string | null;
+  error?: string | null;
 }): Promise<boolean> {
   const observedLeaseExpiry = run.lease_expires_at;
   if (run.status !== "running" || !observedLeaseExpiry || new Date(observedLeaseExpiry).getTime() >= Date.now()) return false;
+  const nextAttemptCount = (run.attempt_count ?? 0) + 1;
+  const exhausted = nextAttemptCount >= MAX_SUGGESTION_ATTEMPTS;
   const reclaimed = await db.from("outline_suggestion_runs").update({
-    status: "pending",
-    error_code: null,
-    error: null,
-    completed_at: null,
+    status: exhausted ? "failed" : "pending",
+    error_code: exhausted ? "worker_attempts_exhausted" : null,
+    error: exhausted
+      ? "The outline planner worker stopped before completion. No credits were charged; retry the request."
+      : null,
+    completed_at: exhausted ? new Date().toISOString() : null,
     lease_owner: null,
     lease_expires_at: null,
-    attempt_count: (run.attempt_count ?? 0) + 1,
+    attempt_count: nextAttemptCount,
   })
     .eq("id", run.id)
     .eq("status", "running")
@@ -3525,6 +3537,12 @@ export async function reclaimExpiredSuggestionRun(db: any, run: {
     .maybeSingle();
   if (reclaimed.error || !reclaimed.data) return false;
   await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
+  run.status = exhausted ? "failed" : "pending";
+  run.attempt_count = nextAttemptCount;
+  if (exhausted) {
+    run.error_code = "worker_attempts_exhausted";
+    run.error = "The outline planner worker stopped before completion. No credits were charged; retry the request.";
+  }
   return true;
 }
 
@@ -3710,7 +3728,11 @@ export async function runSuggestionJob(
     }
     providerModelForAlert = model.provider_model ?? selectedModelID;
     const creditStore = dependencies.creditStore ?? new SupabaseCreditStore(db);
-    const provider = dependencies.provider ?? new OpenAIProvider(openaiKey, model.provider_model);
+    const provider = dependencies.provider ?? new OpenAIProvider(
+      openaiKey,
+      model.provider_model,
+      OUTLINE_PROVIDER_TIMEOUT_MS,
+    );
     const billableLLM = dependencies.billableLLM ?? runBillableLLM;
     // Reclaimed workers resume from persisted billing/material state. The
     // usage-event idempotency key is the final no-double-charge guard, while
@@ -4513,7 +4535,13 @@ Deno.serve(async (req: Request) => {
     let recoveredRun = run;
     if (run.status === "running") {
       const reclaimed = await reclaimExpiredSuggestionRun(admin(), run);
-      if (reclaimed) recoveredRun = { ...run, status: "pending", lease_expires_at: null };
+      if (reclaimed) {
+        recoveredRun = {
+          ...run,
+          status: run.status === "failed" ? "failed" : "pending",
+          lease_expires_at: null,
+        };
+      }
     }
     if (recoveredRun.status === "pending") {
       const recoveryKey = Deno.env.get("OPENAI_API_KEY");
@@ -4704,7 +4732,7 @@ Deno.serve(async (req: Request) => {
     }
     if (existing.status === "running") {
       const reclaimed = await reclaimExpiredSuggestionRun(db, existing);
-      if (reclaimed) existing.status = "pending";
+      if (reclaimed) existing.status = existing.status === "failed" ? "failed" : "pending";
     }
     if (existing.status === "pending") {
       // Reconnects and continuation POSTs do not consume another rate-limit
