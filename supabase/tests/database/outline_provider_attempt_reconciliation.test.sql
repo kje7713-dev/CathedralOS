@@ -1,5 +1,12 @@
 begin;
 select plan(12);
+
+-- auth.users is owned by the initially authorized test role; create the
+-- deterministic fixture before switching to service_role for reconciliation.
+insert into auth.users (id, email)
+  values ('00000000-0000-0000-0000-000000007062', 'pr706-reconcile@example.invalid')
+  on conflict (id) do nothing;
+
 set local role service_role;
 
 do $$
@@ -9,10 +16,6 @@ declare
   v_zero_run_id uuid := gen_random_uuid();
   v_remaining numeric;
 begin
-  insert into auth.users (id, email)
-    values (v_user_id, 'pr706-reconcile@example.invalid')
-    on conflict (id) do nothing;
-
   insert into public.user_entitlements(user_id, monthly_credit_allowance, purchased_credit_balance)
     values (v_user_id, 20, 3)
     on conflict (user_id) do update
