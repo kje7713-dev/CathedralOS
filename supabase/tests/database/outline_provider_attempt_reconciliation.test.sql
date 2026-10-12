@@ -4,13 +4,14 @@ set local role service_role;
 
 do $$
 declare
-  v_user_id uuid;
+  v_user_id uuid := '00000000-0000-0000-0000-000000007062';
   v_run_id uuid := gen_random_uuid();
   v_zero_run_id uuid := gen_random_uuid();
   v_remaining numeric;
 begin
-  select id into v_user_id from auth.users limit 1;
-  if v_user_id is null then raise exception 'requires an auth.users fixture'; end if;
+  insert into auth.users (id, email)
+    values (v_user_id, 'pr706-reconcile@example.invalid')
+    on conflict (id) do nothing;
 
   insert into public.user_entitlements(user_id, monthly_credit_allowance, purchased_credit_balance)
     values (v_user_id, 20, 3)
