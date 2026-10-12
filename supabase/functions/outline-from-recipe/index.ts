@@ -3473,6 +3473,18 @@ export class SuggestionWorkerSlice {
   }
 }
 
+export function assertDurableUpdateSucceeded(
+  result: { data?: unknown; error?: { message?: string } | null } | null | undefined,
+  context = "durable run checkpoint",
+): void {
+  if (result?.error) {
+    throw new Error(`${context} persistence failed: ${result.error.message ?? String(result.error)}`);
+  }
+  if (!result?.data) {
+    throw new Error(`${context} persistence lost ownership or updated zero rows`);
+  }
+}
+
 /** Advance the no-progress clock only after a durable planning checkpoint. */
 export function markMeaningfulProgress(
   diagnostics: Record<string, unknown>,
@@ -3482,6 +3494,12 @@ export function markMeaningfulProgress(
   const worker = diagnostics.worker && typeof diagnostics.worker === "object"
     ? diagnostics.worker as Record<string, unknown>
     : {};
+  // A worker restart or replay may reach the same durable checkpoint again.
+  // The persisted checkpoint identity, not the current clock, is the evidence
+  // of advancement; identical checkpoints must retain their original marker.
+  if (worker.lastMeaningfulProgressCheckpoint === checkpoint) {
+    return { ...diagnostics, worker: { ...worker } };
+  }
   return {
     ...diagnostics,
     worker: {
@@ -3835,7 +3853,14 @@ export async function runSuggestionJob(
     await db.from("outline_suggestion_runs").update({ lease_expires_at: leaseExpiry() }).eq("id", runId).eq("lease_owner", workerToken);
   };
   const updateRun = async (patch: Record<string, unknown>) => {
-    return await db.from("outline_suggestion_runs").update(patch).eq("id", runId).eq("lease_owner", workerToken);
+    const result = await db.from("outline_suggestion_runs")
+      .update(patch)
+      .eq("id", runId)
+      .eq("lease_owner", workerToken)
+      .select("id")
+      .maybeSingle();
+    assertDurableUpdateSucceeded(result);
+    return result;
   };
   let plannedMinimumSections: number | null = null;
   let providerModelForAlert: string | null = null;
@@ -4010,7 +4035,7 @@ export async function runSuggestionJob(
           planningState = { ...planningState, phase: "expansion", expansionCheckpoint };
           diagnostics = markMeaningfulProgress(
             { ...diagnostics, expansionCheckpoint },
-            "expansion_round_checkpoint",
+            `expansion_round_checkpoint:${stableJSONStringify(expansionCheckpoint)}`,
           );
           await updateRun({
             suggestions: current,
@@ -4039,7 +4064,10 @@ export async function runSuggestionJob(
               expansionRounds: allDiagnostics,
               novelScale: expansionCheckpoint.scale,
             };
-            diagnostics = markMeaningfulProgress(diagnostics, "expansion_beat_checkpoint");
+            diagnostics = markMeaningfulProgress(
+              diagnostics,
+              `expansion_beat_checkpoint:${stableJSONStringify(expansionCheckpoint)}`,
+            );
             await updateRun({ suggestions: current, planning_state: planningState, diagnostics });
           },
         },

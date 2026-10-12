@@ -82,6 +82,7 @@ import {
   assertWorkerSliceCanDispatch,
   reclaimExpiredSuggestionRun,
   markMeaningfulProgress,
+  assertDurableUpdateSucceeded,
   suggestionLifecycleFailure,
   MAX_SUGGESTION_LIFETIME_MS,
   MAX_SUGGESTION_NO_PROGRESS_MS,
@@ -4478,6 +4479,29 @@ Deno.test("exhausted worker preserves settled billing in its terminal message", 
   assertEquals(db.row.error_code, "worker_attempts_exhausted");
   assertEquals(db.row.error.includes("2.50 credits were already settled"), true);
   assertEquals(db.row.error.includes("No credits were charged"), false);
+});
+
+Deno.test("durable checkpoint update fails closed on database errors and lost ownership", () => {
+  assertThrows(
+    () => assertDurableUpdateSucceeded({ data: null, error: { message: "lease lost" } }),
+    Error,
+    "persistence failed: lease lost",
+  );
+  assertThrows(
+    () => assertDurableUpdateSucceeded({ data: null, error: null }),
+    Error,
+    "updated zero rows",
+  );
+  assertDurableUpdateSucceeded({ data: { id: "run-1" }, error: null });
+});
+
+Deno.test("identical durable checkpoint preserves its original progress marker", () => {
+  const before = "2026-01-01T00:00:00.000Z";
+  const diagnostics = { worker: { lastMeaningfulProgressAt: before, lastMeaningfulProgressCheckpoint: "allocation_validated", sliceCount: 4 } };
+  const replayed = markMeaningfulProgress(diagnostics, "allocation_validated", "2026-01-01T01:00:00.000Z");
+  assertEquals((replayed.worker as Record<string, unknown>).lastMeaningfulProgressAt, before);
+  assertEquals((replayed.worker as Record<string, unknown>).lastMeaningfulProgressCheckpoint, "allocation_validated");
+  assertEquals((replayed.worker as Record<string, unknown>).sliceCount, 4);
 });
 
 Deno.test("meaningful progress advances only at durable checkpoints", () => {
