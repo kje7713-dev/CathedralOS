@@ -3518,6 +3518,9 @@ async function reconcileExhaustedSuggestionBilling(
         return result.data.credit_cost_charged;
       }
     }
+    // The RPC succeeded but the authoritative read did not. Do not fall back
+    // to a stale run object and accidentally claim zero customer charge.
+    return null;
   }
   return typeof run.credit_cost_charged === "number" ? run.credit_cost_charged : null;
 }
