@@ -999,24 +999,40 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     .disabled((projectRunStatus?.blocksNewGeneration ?? false) || isGenerationStarting)
                 }
                 Button {
-                    if suggestionRunActive {
+                    if let run = durabilityCoordinator.activeSuggestionRun(for: project.id), run.status == "connection_unavailable" {
+                        suggestionsNotice = "Connection unavailable. The original server run, selected model, and billing identity are preserved. Reconnect to reconcile it before starting another generation."
+                    } else if suggestionRunActive {
                         suggestionsNotice = "Your outline suggestions are still running or reconnecting. The original job and selected model are preserved. No new generation was started."
                     } else {
                         prepareOutlinePlanning()
                     }
                 } label: {
+                    let connectionUnavailable = durabilityCoordinator.activeSuggestionRun(for: project.id)?.status == "connection_unavailable"
                     Label(
-                        suggestionRunActive ? "Suggestions Running" : "Suggest Sections",
-                        systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
+                        connectionUnavailable ? "Connection Unavailable" : (suggestionRunActive ? "Suggestions Running" : "Suggest Sections"),
+                        systemImage: connectionUnavailable ? "wifi.slash" : (suggestionRunActive ? "arrow.clockwise" : "sparkles")
                     )
                     .font(CathedralTheme.Typography.body(13, weight: .semibold))
                 }
                 .disabled(!suggestionsReady)
             }
-            if let run = durabilityCoordinator.activeSuggestionRun(for: project.id), run.status == "reconnecting" {
-                Text("Reconnecting to the server…")
-                    .font(CathedralTheme.Typography.caption(12))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            if let run = durabilityCoordinator.activeSuggestionRun(for: project.id) {
+                switch run.status {
+                case "reconnecting":
+                    Text("Reconnecting to the server…")
+                        .font(CathedralTheme.Typography.caption(12))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                case "connection_unavailable":
+                    Text("Connection unavailable. The server run is preserved; reconnect to reconcile it.")
+                        .font(CathedralTheme.Typography.caption(12))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                case "generating", "starting", "pending", "running":
+                    Text("Generating outline suggestions…")
+                        .font(CathedralTheme.Typography.caption(12))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                default:
+                    EmptyView()
+                }
             }
             Text("Your outline defines the structure of your novel. Run your sections to turn the plan into written chapters and scenes.")
                 .font(CathedralTheme.Typography.body(13))

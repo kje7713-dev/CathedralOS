@@ -641,3 +641,89 @@ Deno.test("getProviderBillingUnavailableUpstream: returns undefined for unrelate
   );
   assertEquals(getProviderBillingUnavailableUpstream(null), undefined);
 });
+
+Deno.test("OpenAIProvider: Responses body stall stays under the deadline and becomes provider_timeout", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+    const signal = init?.signal as AbortSignal | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        signal?.addEventListener("abort", () => {
+          controller.error(new DOMException("deadline", "AbortError"));
+        }, { once: true });
+      },
+    });
+    return Promise.resolve(new Response(body, { status: 200 }));
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider("test-key", "gpt-5.6-luna", 10);
+    let caught: unknown;
+    try {
+      await provider.complete([{ role: "user", content: "stall" }], 100, "gpt-5.6-luna");
+    } catch (error) {
+      caught = error;
+    }
+    assertExists(caught);
+    assertEquals((caught as { errorCode?: string }).errorCode, "provider_timeout");
+  } finally {
+    globalThis.fetch = originalFetch as typeof fetch;
+  }
+});
+
+Deno.test("OpenAIProvider: chat/completions body stall stays under the deadline and becomes provider_timeout", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+    const signal = init?.signal as AbortSignal | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        signal?.addEventListener("abort", () => {
+          controller.error(new DOMException("deadline", "AbortError"));
+        }, { once: true });
+      },
+    });
+    return Promise.resolve(new Response(body, { status: 200 }));
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider("test-key", "gpt-4o-mini", 10);
+    let caught: unknown;
+    try {
+      await provider.complete(
+        [{ role: "user", content: "stall" }],
+        100,
+        "gpt-4o-mini",
+        { responseFormat: { type: "json_schema" }, responseFormatTarget: "chat" },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    assertExists(caught);
+    assertEquals((caught as { errorCode?: string }).errorCode, "provider_timeout");
+  } finally {
+    globalThis.fetch = originalFetch as typeof fetch;
+  }
+});
+
+Deno.test("OpenAIProvider: no response before deadline becomes provider_timeout", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+    const signal = init?.signal as AbortSignal | undefined;
+    return new Promise<Response>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        reject(new DOMException("deadline", "AbortError"));
+      }, { once: true });
+    });
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider("test-key", "gpt-5.6-luna", 10);
+    let caught: unknown;
+    try {
+      await provider.complete([{ role: "user", content: "no response" }], 100, "gpt-5.6-luna");
+    } catch (error) {
+      caught = error;
+    }
+    assertExists(caught);
+    assertEquals((caught as { errorCode?: string }).errorCode, "provider_timeout");
+  } finally {
+    globalThis.fetch = originalFetch as typeof fetch;
+  }
+});

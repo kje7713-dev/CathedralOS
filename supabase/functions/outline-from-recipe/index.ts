@@ -3446,6 +3446,8 @@ export function isRetryableStoryMaterialFailure(run: {
 const OUTLINE_PROVIDER_TIMEOUT_MS = 90_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
 export const MAX_SUGGESTION_ATTEMPTS = 5;
+export const MAX_SUGGESTION_LIFETIME_MS = 30 * 60 * 1000;
+export const MAX_SUGGESTION_NO_PROGRESS_MS = 10 * 60 * 1000;
 
 export class SuggestionWorkerYield extends Error {
   constructor() {
@@ -3495,6 +3497,51 @@ const admin = () =>
     { auth: { persistSession: false } },
   );
 
+async function reconcileExhaustedSuggestionBilling(
+  db: any,
+  run: { id: string; credit_cost_charged?: number | null },
+): Promise<number | null> {
+  // Recompute the durable total from provider-attempt rows before explaining
+  // an exhausted run. If reconciliation is unavailable, say so explicitly.
+  if (typeof db.rpc === "function") {
+    const { error } = await db.rpc("reconcile_outline_provider_attempts", { p_run_id: run.id });
+    if (error) {
+      console.error("[outline-from-recipe] exhausted-run billing reconciliation failed", error);
+      return null;
+    }
+    if (typeof db.from === "function") {
+      const result = await db.from("outline_suggestion_runs")
+        .select("credit_cost_charged")
+        .eq("id", run.id)
+        .maybeSingle();
+      if (!result.error && result.data && typeof result.data.credit_cost_charged === "number") {
+        return result.data.credit_cost_charged;
+      }
+    }
+  }
+  return typeof run.credit_cost_charged === "number" ? run.credit_cost_charged : null;
+}
+
+function exhaustedSuggestionBillingMessage(settledCredits: number | null): string {
+  if (settledCredits === null) return "The outline planner stopped before completion. Billing reconciliation is unresolved; any settled stages were preserved. Review the run before retrying.";
+  if (settledCredits > 0) return `The outline planner stopped before completion. ${settledCredits.toFixed(2)} credits were already settled for completed stages; no duplicate charge will be created. Retry after reviewing the run.`;
+  return "The outline planner stopped before completion. No settled customer charge is recorded for this run; retry the request.";
+}
+
+export function suggestionLifecycleFailure(run: {
+  created_at?: string | null;
+  updated_at?: string | null;
+  diagnostics?: Record<string, unknown> | null;
+}, now = Date.now()): "worker_lifetime_exceeded" | "worker_no_progress" | null {
+  if (run.created_at && now - new Date(run.created_at).getTime() > MAX_SUGGESTION_LIFETIME_MS) return "worker_lifetime_exceeded";
+  const worker = run.diagnostics?.worker;
+  const progressAt = worker && typeof worker === "object" && typeof (worker as Record<string, unknown>).lastMeaningfulProgressAt === "string"
+    ? String((worker as Record<string, unknown>).lastMeaningfulProgressAt)
+    : run.updated_at;
+  if (progressAt && now - new Date(progressAt).getTime() > MAX_SUGGESTION_NO_PROGRESS_MS) return "worker_no_progress";
+  return null;
+}
+
 async function markInterruptedProviderAttempts(db: any, runId: string, observedLeaseExpiry: string): Promise<void> {
   const { error } = await db.from("generation_provider_attempts").update({
     status: "provider_failed",
@@ -3514,34 +3561,42 @@ export async function reclaimExpiredSuggestionRun(db: any, run: {
   attempt_count?: number | null;
   error_code?: string | null;
   error?: string | null;
+  credit_cost_charged?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  diagnostics?: Record<string, unknown> | null;
 }): Promise<boolean> {
   const observedLeaseExpiry = run.lease_expires_at;
-  if (run.status !== "running" || !observedLeaseExpiry || new Date(observedLeaseExpiry).getTime() >= Date.now()) return false;
+  const now = Date.now();
+  const lifecycleFailure = suggestionLifecycleFailure(run, now);
+  const leaseExpired = !!observedLeaseExpiry && new Date(observedLeaseExpiry).getTime() < now;
+  if (run.status !== "running" || (!leaseExpired && !lifecycleFailure)) return false;
   const nextAttemptCount = (run.attempt_count ?? 0) + 1;
   const exhausted = nextAttemptCount >= MAX_SUGGESTION_ATTEMPTS;
-  const reclaimed = await db.from("outline_suggestion_runs").update({
-    status: exhausted ? "failed" : "pending",
-    error_code: exhausted ? "worker_attempts_exhausted" : null,
-    error: exhausted
-      ? "The outline planner worker stopped before completion. No credits were charged; retry the request."
-      : null,
-    completed_at: exhausted ? new Date().toISOString() : null,
+  const terminalCode = lifecycleFailure ?? (exhausted ? "worker_attempts_exhausted" : null);
+  const settledCredits = terminalCode ? await reconcileExhaustedSuggestionBilling(db, run) : null;
+  const terminalMessage = terminalCode ? exhaustedSuggestionBillingMessage(settledCredits) : null;
+  let reclaimQuery = db.from("outline_suggestion_runs").update({
+    status: terminalCode ? "failed" : "pending",
+    error_code: terminalCode,
+    error: terminalMessage,
+    completed_at: terminalCode ? new Date().toISOString() : null,
     lease_owner: null,
     lease_expires_at: null,
     attempt_count: nextAttemptCount,
-  })
-    .eq("id", run.id)
-    .eq("status", "running")
-    .eq("lease_expires_at", observedLeaseExpiry)
-    .select("id")
-    .maybeSingle();
+  });
+  reclaimQuery = reclaimQuery.eq("id", run.id).eq("status", "running");
+  reclaimQuery = observedLeaseExpiry
+    ? reclaimQuery.eq("lease_expires_at", observedLeaseExpiry)
+    : reclaimQuery.is("lease_expires_at", null);
+  const reclaimed = await reclaimQuery.select("id").maybeSingle();
   if (reclaimed.error || !reclaimed.data) return false;
-  await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
-  run.status = exhausted ? "failed" : "pending";
+  await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry ?? new Date(now).toISOString());
+  run.status = terminalCode ? "failed" : "pending";
   run.attempt_count = nextAttemptCount;
-  if (exhausted) {
-    run.error_code = "worker_attempts_exhausted";
-    run.error = "The outline planner worker stopped before completion. No credits were charged; retry the request.";
+  if (terminalCode) {
+    run.error_code = terminalCode;
+    run.error = terminalMessage;
   }
   return true;
 }
@@ -3698,6 +3753,7 @@ export async function runSuggestionJob(
       ...priorWorker,
       sliceCount: workerSliceCount,
       lastSliceStartedAt: new Date().toISOString(),
+      lastMeaningfulProgressAt: new Date().toISOString(),
       lastYieldReason: null,
       nextAction: "resume persisted planning checkpoint",
     },

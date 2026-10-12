@@ -81,6 +81,9 @@ import {
   SuggestionWorkerSlice,
   assertWorkerSliceCanDispatch,
   reclaimExpiredSuggestionRun,
+  suggestionLifecycleFailure,
+  MAX_SUGGESTION_LIFETIME_MS,
+  MAX_SUGGESTION_NO_PROGRESS_MS,
   returnSuggestionRunToPending,
   recoverPendingSuggestionRun,
   runSuggestionJob,
@@ -4458,6 +4461,26 @@ Deno.test("expired worker reaches a terminal state after finite attempts", async
   assertEquals(db.row.lease_owner, null);
   assertEquals(db.row.lease_expires_at, null);
   assertEquals(db.attempts[0].provider_error_code, "worker_interrupted");
+});
+
+Deno.test("exhausted worker preserves settled billing in its terminal message", async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb({ id: "run-partially-settled", status: "running", lease_expires_at: expired, attempt_count: 4 });
+  const run = { id: "run-partially-settled", status: "running", lease_expires_at: expired, attempt_count: 4, credit_cost_charged: 2.5 };
+  assertEquals(await reclaimExpiredSuggestionRun(db, run), true);
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "worker_attempts_exhausted");
+  assertEquals(db.row.error.includes("2.50 credits were already settled"), true);
+  assertEquals(db.row.error.includes("No credits were charged"), false);
+});
+
+Deno.test("suggestion lifecycle bounds distinguish elapsed lifetime and no progress", () => {
+  const now = Date.now();
+  assertEquals(suggestionLifecycleFailure({ created_at: new Date(now - MAX_SUGGESTION_LIFETIME_MS - 1).toISOString() }, now), "worker_lifetime_exceeded");
+  assertEquals(suggestionLifecycleFailure({
+    created_at: new Date(now - 1000).toISOString(),
+    updated_at: new Date(now - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString(),
+  }, now), "worker_no_progress");
 });
 
 Deno.test("active lease recovery is a no-op", async () => {

@@ -115,6 +115,42 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
 
 
 
+    func testConnectionUnavailablePreservesServerRunIdentityAndPersistence() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let projectID = UUID()
+        let lineageID = UUID()
+        let request = makeRequest(modelID: "gpt-6.1-sol", idempotencyKey: "server-owned-run")
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID,
+            lineageID: lineageID,
+            request: request,
+            idempotencyKey: request.idempotencyKey,
+            runID: "server-run-123",
+            status: "reconnecting",
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 101)
+        )
+
+        coordinator.markSuggestionConnectionUnavailable(metadata)
+
+        let active = try XCTUnwrap(coordinator.activeSuggestionRun(for: projectID))
+        XCTAssertEqual(active.status, "connection_unavailable")
+        XCTAssertTrue(active.isActive)
+        XCTAssertEqual(active.runID, "server-run-123")
+        XCTAssertEqual(active.lineageID, lineageID)
+        XCTAssertEqual(active.idempotencyKey, "server-owned-run")
+        XCTAssertEqual(active.request.modelID, "gpt-6.1-sol")
+        let persisted = coordinator.loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID,
+            expectedIdempotencyKey: "server-owned-run"
+        )
+        XCTAssertEqual(persisted?.status, "connection_unavailable")
+        XCTAssertEqual(persisted?.runID, "server-run-123")
+        XCTAssertNotNil(defaults.data(forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)"))
+    }
+
     // MARK: - Original model survives preference changes
 
     func testOriginalModelAndIdentitySurviveChangedPreference() throws {
