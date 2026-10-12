@@ -122,11 +122,6 @@ jobs:
       # "provider_billing_unavailable terminal" matched 0 tests and was
       # removed.
 
-      # PR #706: every terminal outline failure must reconcile provider attempts
-      - name: Run outline provider-attempt reconciliation pgTAP test
-        run: >-
-          supabase db test --local
-          supabase/tests/database/outline_provider_attempt_reconciliation.test.sql
       # PR #609: operator alert module (Resend + dedupe + sanitization)
       - name: Test operator alert module
         run: >-
@@ -267,6 +262,11 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/provider_billing_alerts.test.sql
+      # PR #706: every terminal outline failure must reconcile provider attempts
+      - name: Run outline provider-attempt reconciliation pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/outline_provider_attempt_reconciliation.test.sql
       # PR #619: verify both replace_export_metadata overloads during rolling deployment.
       - name: Run EPUB acknowledgements RPC pgTAP test
         run: >-
