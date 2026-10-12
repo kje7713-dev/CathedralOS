@@ -3494,16 +3494,22 @@ export function markMeaningfulProgress(
   const worker = diagnostics.worker && typeof diagnostics.worker === "object"
     ? diagnostics.worker as Record<string, unknown>
     : {};
-  // A worker restart or replay may reach the same durable checkpoint again.
-  // The persisted checkpoint identity, not the current clock, is the evidence
-  // of advancement; identical checkpoints must retain their original marker.
-  if (worker.lastMeaningfulProgressCheckpoint === checkpoint) {
+  // A worker restart or replay may reach an earlier durable checkpoint after
+  // other stages have run. Track the completed identity set, not only the
+  // immediately preceding marker, so cross-stage rehydration cannot refresh
+  // the no-progress clock. Older rows simply start recording new identities
+  // when a genuinely new checkpoint is persisted.
+  const completedIdentities = Array.isArray(worker.completedMeaningfulCheckpointIdentities)
+    ? worker.completedMeaningfulCheckpointIdentities.filter((value): value is string => typeof value === "string")
+    : [];
+  if (completedIdentities.includes(checkpoint) || worker.lastMeaningfulProgressCheckpoint === checkpoint) {
     return { ...diagnostics, worker: { ...worker } };
   }
   return {
     ...diagnostics,
     worker: {
       ...worker,
+      completedMeaningfulCheckpointIdentities: [...completedIdentities, checkpoint],
       lastMeaningfulProgressAt: at,
       lastMeaningfulProgressCheckpoint: checkpoint,
     },
@@ -4129,7 +4135,10 @@ export async function runSuggestionJob(
       };
       const expansionCheckpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], []);
       diagnostics = { ...diagnostics, stage: outlineNeedsExpansion ? "expansion_pending" : "outline_complete", expansionCheckpoint };
-      diagnostics = markMeaningfulProgress(diagnostics, "validated_suggestions_persisted");
+      diagnostics = markMeaningfulProgress(
+        diagnostics,
+        `validated_suggestions_persisted:${stableJSONStringify(completedSuggestions)}`,
+      );
       await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
       if (outlineNeedsExpansion) {
         const expanded = await expandNovel(completedSuggestions, recipeObligations, 1, 0, []);
@@ -4198,7 +4207,12 @@ export async function runSuggestionJob(
       // any earlier persist inside resumeOrRepairStoryMaterial — the final
       // updateRun below overwrites the same fields with completed-stage
       // diagnostics on success.
-      diagnostics = markMeaningfulProgress(diagnostics, "story_material_repaired");
+      if (repairAudit) {
+        diagnostics = markMeaningfulProgress(
+          diagnostics,
+          `story_material_repaired:${stableJSONStringify(resumedMaterial)}`,
+        );
+      }
       await updateRun({
         story_material: resumedMaterial,
         diagnostics,
@@ -4334,15 +4348,13 @@ export async function runSuggestionJob(
       };
       diagnostics = markMeaningfulProgress(
         { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" },
-        "story_material_complete",
+        `story_material_complete:${stableJSONStringify(storyMaterial)}`,
       );
       await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics });
     }
     if (!storyMaterial) throw new Error("story material enrichment was not produced");
-    diagnostics = markMeaningfulProgress(
-      { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" },
-      "story_material_ready",
-    );
+    // Loading already persisted enrichment is rehydration, not progress.
+    diagnostics = { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" };
     await updateRun({
       story_material: storyMaterial,
       diagnostics,
@@ -4382,7 +4394,12 @@ export async function runSuggestionJob(
       planningContext = persistedPlanningContext;
       planningContextHash = claimedRun.planning_context_hash;
     }
-    diagnostics = markMeaningfulProgress(diagnostics, "planning_context_persisted");
+    if (!persistedPlanningContext) {
+      diagnostics = markMeaningfulProgress(
+        diagnostics,
+        `planning_context_persisted:${planningContextHash}`,
+      );
+    }
     await updateRun({ planning_context: planningContext, planning_context_hash: planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1, diagnostics });
     // PR 5: allocation counts are residual NEW sections. Persist the validated
     // plan before the next provider boundary so continuation does not rerun a
@@ -4425,7 +4442,7 @@ export async function runSuggestionJob(
       };
       diagnostics = markMeaningfulProgress(
         { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
-        "allocation_validated",
+        `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
       );
       await updateRun({ planning_state: planningState, diagnostics });
     }

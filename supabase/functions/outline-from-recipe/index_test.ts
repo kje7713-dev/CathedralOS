@@ -3592,9 +3592,14 @@ class ExecutableRunDb {
   cleanupCalls = 0;
   claims = 0;
   singleClaimOnly = false;
-  constructor(row: any, options: { singleClaimOnly?: boolean } = {}) {
+  patchHistory: Array<Record<string, unknown>> = [];
+  failPatchField: string | null = null;
+  failAsZeroRows = false;
+  constructor(row: any, options: { singleClaimOnly?: boolean; failPatchField?: string; failAsZeroRows?: boolean } = {}) {
     this.row = structuredClone(row);
     this.singleClaimOnly = options.singleClaimOnly ?? false;
+    this.failPatchField = options.failPatchField ?? null;
+    this.failAsZeroRows = options.failAsZeroRows ?? false;
   }
   from(table: string) {
     const self = this;
@@ -3623,8 +3628,16 @@ class ExecutableRunDb {
     if (table === "outline_suggestion_runs") {
       if (!this.matches(this.row, filters, ranges)) return { data: null, error: null };
       if (patch?.status === "running" && this.singleClaimOnly && this.claims > 0) return { data: null, error: null };
+      if (patch && this.failPatchField && this.failPatchField in patch) {
+        return this.failAsZeroRows
+          ? { data: null, error: null }
+          : { data: null, error: { message: "simulated PostgREST checkpoint failure" } };
+      }
       if (patch?.status === "running") this.claims++;
-      if (patch) Object.assign(this.row, patch);
+      if (patch) {
+        this.patchHistory.push(structuredClone(patch));
+        Object.assign(this.row, patch);
+      }
       if (!selected) return { data: [this.row], error: null };
       return { data: selected && filters.some(([column]) => column === "lease_expires_at") ? { id: this.row.id } : { ...this.row }, error: null };
     }
@@ -3883,6 +3896,129 @@ Deno.test("fresh novel worker sequence is enrichment then allocation then one gl
   assertEquals(actions.some((action) => action.startsWith("outline-route-")), false);
   assertEquals(actions.some((action) => action.startsWith("outline-suggestions-beat-")), false);
   assertEquals(db.row.status, "completed");
+});
+
+Deno.test("worker resume rehydrates prior stages without fabricating cross-stage progress", async () => {
+  const fullBody = await executableWorkerBody();
+  const body = { ...fullBody, storyMaterialEnrichment: undefined } as any;
+  const row = {
+    ...checkpointedWorkerRow(body),
+    story_material: null,
+    planning_state: { version: 2, phase: "start" },
+    request_json: body,
+  };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const materialJSON = JSON.stringify(fullBody.storyMaterialEnrichment);
+  const billable = async (request: any) => {
+    actions.push(request.action);
+    if (request.action === "story-material-enrichment") {
+      return { featureResult: materialJSON, charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+    }
+    return fakeWorkerBilling([])(request);
+  };
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+
+  await run();
+  const afterEnrichment = db.row.diagnostics.worker.lastMeaningfulProgressAt;
+  await run();
+  const afterAllocation = db.row.diagnostics.worker.lastMeaningfulProgressAt;
+  assertEquals(afterAllocation !== afterEnrichment, true);
+  assertEquals(db.row.id, "run-worker-fixture");
+
+  const replayStart = db.patchHistory.length;
+  await run();
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions"]);
+  assertEquals(db.row.status, "completed");
+  const replayedStages = db.patchHistory.slice(replayStart)
+    .filter((patch) => (patch.diagnostics as any)?.stage === "story_material_ready")
+    .map((patch) => (patch.diagnostics as any).worker.lastMeaningfulProgressAt);
+  assertEquals(replayedStages.length > 0, true);
+  assertEquals(replayedStages.every((value) => value === afterAllocation), true);
+  assertEquals((db.row.diagnostics.worker.completedMeaningfulCheckpointIdentities as string[]).some((value) => value.startsWith("allocation_validated:")), true);
+});
+
+Deno.test("actual worker replay of the same persisted checkpoint keeps its timestamp", async () => {
+  const body = await executableWorkerBody();
+  const before = "2026-01-01T00:00:00.000Z";
+  const row = {
+    ...checkpointedWorkerRow(body),
+    diagnostics: {
+      worker: {
+        lastMeaningfulProgressAt: before,
+        lastMeaningfulProgressCheckpoint: "allocation_validated:fixture",
+        completedMeaningfulCheckpointIdentities: ["planning_context_persisted:fixture", "allocation_validated:fixture"],
+      },
+    },
+  };
+  const db = new ExecutableRunDb(row);
+  const dispatches: string[] = [];
+  const billable = async (request: any) => {
+    dispatches.push(request.action);
+    throw new SuggestionWorkerYield();
+  };
+  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  await run();
+  const firstReplay = db.row.diagnostics.worker.lastMeaningfulProgressAt;
+  await run();
+  const secondReplay = db.row.diagnostics.worker.lastMeaningfulProgressAt;
+  assertEquals(dispatches, ["outline-suggestions", "outline-suggestions"]);
+  assertEquals(firstReplay !== before, true);
+  assertEquals(secondReplay, firstReplay);
+  assertEquals(db.row.status, "pending");
+});
+
+Deno.test("actual worker persistence advances for a genuinely new allocation checkpoint", async () => {
+  const body = await executableWorkerBody();
+  const before = "2026-01-01T00:00:00.000Z";
+  const row = {
+    ...checkpointedWorkerRow(body),
+    diagnostics: { worker: { lastMeaningfulProgressAt: before, completedMeaningfulCheckpointIdentities: [] } },
+    planning_state: { version: 2, phase: "enrichment_complete", nextAction: "outline-plan" },
+  };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const billable = validatedWorkerBilling(actions, (action) => action === "outline-plan"
+    ? { allocations: [{ beatIndex: 0, minSections: 1, rationale: "new" }, { beatIndex: 1, minSections: 1, rationale: "new" }] }
+    : { beats: { "beat-1": [], "beat-2": [] } });
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(actions, ["outline-plan"]);
+  assertEquals(db.row.status, "pending");
+  assertEquals(db.row.diagnostics.worker.lastMeaningfulProgressAt !== before, true);
+  assertEquals((db.row.diagnostics.worker.completedMeaningfulCheckpointIdentities as string[]).some((value) => value.startsWith("allocation_validated:")), true);
+});
+
+Deno.test("failed durable checkpoint persistence prevents the next provider stage", async () => {
+  const body = await executableWorkerBody();
+  for (const failAsZeroRows of [false, true]) {
+    const before = "2026-01-01T00:00:00.000Z";
+    const db = new ExecutableRunDb({
+      ...checkpointedWorkerRow(body),
+      diagnostics: { worker: { lastMeaningfulProgressAt: before, completedMeaningfulCheckpointIdentities: [] } },
+    }, { failPatchField: "diagnostics", failAsZeroRows });
+    const providerCalls: string[] = [];
+    await assertRejects(
+      () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+        db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+        billableLLM: (async (request: any) => { providerCalls.push(request.action); return fakeWorkerBilling([])(request); }) as any,
+        scheduleContinuation: async () => {},
+      }),
+      Error,
+      failAsZeroRows ? "updated zero rows" : "simulated PostgREST checkpoint failure",
+    );
+    assertEquals(providerCalls, []);
+    assertEquals(db.row.status === "completed", false);
+    assertEquals(db.row.diagnostics.worker.lastMeaningfulProgressAt, before);
+  }
 });
 
 Deno.test("reclaimed worker trusts an intact persisted planning checkpoint after JSON normalization", async () => {
