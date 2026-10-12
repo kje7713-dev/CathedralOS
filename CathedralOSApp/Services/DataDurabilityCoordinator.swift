@@ -71,6 +71,8 @@ struct SuggestionRunMetadata: Codable {
 struct CompletedSuggestionRun {
     let projectID: UUID
     let result: OutlineSuggestionResult
+    let idempotencyKey: String
+    let modelID: String?
 }
 
 struct SuggestionRunFailure: Equatable {
@@ -940,14 +942,11 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// lineage-owned UserDefaults slot, falling back to the legacy
     /// project-keyed slot for metadata written before PR 6.
     ///
-    /// `currentIdempotencyKey` enables exact-match resume. When the caller
-    /// has already built the current `OutlineSuggestionRequest`, any
-    /// persisted or active run whose stored key differs is discarded rather
-    /// than reattached. This blocks stale in-flight runs (the user edited the
-    /// recipe, arc beats, or existing sections between launch and resume)
-    /// from completing against the user's changed planning identity. Pass
-    /// nil to skip the check (legacy / external callers that have not yet
-    /// been migrated to lineage-aware resume).
+    /// `currentIdempotencyKey` enables exact-match resume. A mismatch never
+    /// deletes the stored run: the server may still own an in-flight paid
+    /// request. Instead, preserve the original identity and expose an
+    /// explicit reconnect path. Pass nil to skip the check (legacy / external
+    /// callers that have not yet been migrated to lineage-aware resume).
     func resumeSuggestionRunIfNeeded(
         projectID: UUID,
         lineageID: UUID,
@@ -971,7 +970,12 @@ final class DataDurabilityCoordinator: ObservableObject {
             // request and the active run no longer represents their intent.
             if let currentIdempotencyKey,
                active.idempotencyKey != currentIdempotencyKey {
-                clearSuggestionRun(for: projectID)
+                markSuggestionConnectionUnavailable(
+                    active,
+                    message: "The outline recipe changed while the original server run was active. Reconnect to reconcile the original run before starting another generation."
+                )
+                suggestionPollingTasks[projectID] = nil
+                return
             } else if active.isActive {
                 attachSuggestionTask(active, service: service)
                 return
@@ -994,7 +998,40 @@ final class DataDurabilityCoordinator: ObservableObject {
             }
             activeSuggestionRuns[projectID] = metadata
             attachSuggestionTask(metadata, service: service)
+        } else if let preserved = loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID
+        ), preserved.isActive {
+            // The current recipe may have changed since the server run was
+            // persisted. Keep the original server-owned identity available
+            // for explicit reconciliation rather than deleting it.
+            activeSuggestionRuns[projectID] = preserved
+            if let currentIdempotencyKey,
+               preserved.idempotencyKey != currentIdempotencyKey {
+                markSuggestionConnectionUnavailable(
+                    preserved,
+                    message: "The outline recipe changed while the original server run was active. Reconnect to reconcile the original run before starting another generation."
+                )
+            } else {
+                attachSuggestionTask(preserved, service: service)
+            }
         }
+    }
+
+    /// Reconnects to the durable server run without rebuilding a request.
+    /// This intentionally does not accept a current request or idempotency
+    /// key: the persisted run's identity is authoritative for reconciliation.
+    func reconnectSuggestionRun(
+        projectID: UUID,
+        lineageID: UUID,
+        service: OutlineSuggestionService = OutlineSuggestionService()
+    ) {
+        guard suggestionPollingTasks[projectID] == nil else { return }
+        let metadata = activeSuggestionRuns[projectID]
+            ?? loadSuggestionRunMetadata(lineageID: lineageID, projectID: projectID)
+        guard let metadata, metadata.isActive else { return }
+        activeSuggestionRuns[projectID] = metadata
+        attachSuggestionTask(metadata, service: service)
     }
 
     /// Legacy entry point. Reads from the legacy project-keyed slot only;
@@ -1125,7 +1162,12 @@ final class DataDurabilityCoordinator: ObservableObject {
                     // metadata.
                     retainCompletedSuggestionMetadata(metadata)
                     activeSuggestionRuns[metadata.projectID] = nil
-                    completedSuggestionRun = CompletedSuggestionRun(projectID: metadata.projectID, result: result)
+                    completedSuggestionRun = CompletedSuggestionRun(
+                        projectID: metadata.projectID,
+                        result: result,
+                        idempotencyKey: metadata.idempotencyKey,
+                        modelID: metadata.request.modelID
+                    )
                     suggestionRunRevision &+= 1
                     suggestionPollingTasks[metadata.projectID] = nil
                     return

@@ -3573,34 +3573,76 @@ export async function reclaimExpiredSuggestionRun(db: any, run: {
   const now = Date.now();
   const lifecycleFailure = suggestionLifecycleFailure(run, now);
   const leaseExpired = !!observedLeaseExpiry && new Date(observedLeaseExpiry).getTime() < now;
-  if (run.status !== "running" || (!leaseExpired && !lifecycleFailure)) return false;
+
+  // A valid running lease is authoritative. Wall-clock/no-progress limits do
+  // not revoke it while the worker is still renewing it. Pending runs have no
+  // owner, so lifecycle limits apply to them as well as running runs.
+  if (run.status !== "running" && run.status !== "pending") return false;
+  if (run.status === "running" && !leaseExpired) return false;
+  if (!leaseExpired && !lifecycleFailure) return false;
+
   const nextAttemptCount = (run.attempt_count ?? 0) + 1;
   const exhausted = nextAttemptCount >= MAX_SUGGESTION_ATTEMPTS;
   const terminalCode = lifecycleFailure ?? (exhausted ? "worker_attempts_exhausted" : null);
-  const settledCredits = terminalCode ? await reconcileExhaustedSuggestionBilling(db, run) : null;
-  const terminalMessage = terminalCode ? exhaustedSuggestionBillingMessage(settledCredits) : null;
+
+  if (terminalCode) {
+    // Fence the run before reconciling billing. The temporary owner prevents
+    // a concurrent GET/POST recovery or the old worker from claiming or
+    // persisting output while the authoritative attempt total is resolved.
+    const fenceToken = `reclaimer:${crypto.randomUUID()}`;
+    let fenceQuery = db.from("outline_suggestion_runs").update({
+      status: "running",
+      lease_owner: fenceToken,
+      lease_expires_at: new Date(now + SUGGESTION_LEASE_MS).toISOString(),
+    }).eq("id", run.id).eq("status", run.status);
+    if (run.status === "running") {
+      fenceQuery = observedLeaseExpiry
+        ? fenceQuery.eq("lease_expires_at", observedLeaseExpiry)
+        : fenceQuery.is("lease_expires_at", null);
+    } else {
+      fenceQuery = fenceQuery.is("lease_owner", null);
+    }
+    const fenced = await fenceQuery.select("id").maybeSingle();
+    if (fenced.error || !fenced.data) return false;
+
+    const settledCredits = await reconcileExhaustedSuggestionBilling(db, run);
+    const terminalMessage = exhaustedSuggestionBillingMessage(settledCredits);
+    const terminalized = await db.from("outline_suggestion_runs").update({
+      status: "failed",
+      error_code: terminalCode,
+      error: terminalMessage,
+      completed_at: new Date().toISOString(),
+      lease_owner: null,
+      lease_expires_at: null,
+      attempt_count: nextAttemptCount,
+    }).eq("id", run.id).eq("status", "running").eq("lease_owner", fenceToken)
+      .select("id").maybeSingle();
+    if (terminalized.error || !terminalized.data) return false;
+    if (observedLeaseExpiry) await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
+    run.status = "failed";
+    run.attempt_count = nextAttemptCount;
+    run.error_code = terminalCode;
+    run.error = terminalMessage;
+    return true;
+  }
+
+  // Non-terminal reclaim: atomically release only the observed expired lease.
+  // A concurrent recovery can win this compare-and-set, but cannot also win
+  // the pending claim inside runSuggestionJob.
   let reclaimQuery = db.from("outline_suggestion_runs").update({
-    status: terminalCode ? "failed" : "pending",
-    error_code: terminalCode,
-    error: terminalMessage,
-    completed_at: terminalCode ? new Date().toISOString() : null,
+    status: "pending",
     lease_owner: null,
     lease_expires_at: null,
     attempt_count: nextAttemptCount,
-  });
-  reclaimQuery = reclaimQuery.eq("id", run.id).eq("status", "running");
+  }).eq("id", run.id).eq("status", "running");
   reclaimQuery = observedLeaseExpiry
     ? reclaimQuery.eq("lease_expires_at", observedLeaseExpiry)
     : reclaimQuery.is("lease_expires_at", null);
   const reclaimed = await reclaimQuery.select("id").maybeSingle();
   if (reclaimed.error || !reclaimed.data) return false;
-  await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry ?? new Date(now).toISOString());
-  run.status = terminalCode ? "failed" : "pending";
+  if (observedLeaseExpiry) await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
+  run.status = "pending";
   run.attempt_count = nextAttemptCount;
-  if (terminalCode) {
-    run.error_code = terminalCode;
-    run.error = terminalMessage;
-  }
   return true;
 }
 
@@ -3756,7 +3798,11 @@ export async function runSuggestionJob(
       ...priorWorker,
       sliceCount: workerSliceCount,
       lastSliceStartedAt: new Date().toISOString(),
-      lastMeaningfulProgressAt: new Date().toISOString(),
+      // A dispatch/launch is not meaningful progress. Preserve the last
+      // durable checkpoint timestamp so repeated pending launches age out.
+      lastMeaningfulProgressAt: typeof priorWorker.lastMeaningfulProgressAt === "string"
+        ? priorWorker.lastMeaningfulProgressAt
+        : (claimedRun.updated_at ?? new Date().toISOString()),
       lastYieldReason: null,
       nextAction: "resume persisted planning checkpoint",
     },
@@ -4592,7 +4638,7 @@ Deno.serve(async (req: Request) => {
     // GET polling is a recovery backstop for suspended workers. The durable
     // pending claim inside runSuggestionJob is the final race guard.
     let recoveredRun = run;
-    if (run.status === "running") {
+    if (run.status === "running" || run.status === "pending") {
       const reclaimed = await reclaimExpiredSuggestionRun(admin(), run);
       if (reclaimed) {
         recoveredRun = {
@@ -4789,7 +4835,7 @@ Deno.serve(async (req: Request) => {
         { status: 200 },
       );
     }
-    if (existing.status === "running") {
+    if (existing.status === "running" || existing.status === "pending") {
       const reclaimed = await reclaimExpiredSuggestionRun(db, existing);
       if (reclaimed) existing.status = existing.status === "failed" ? "failed" : "pending";
     }

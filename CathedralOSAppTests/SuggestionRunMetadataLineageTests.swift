@@ -397,6 +397,43 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         XCTAssertEqual(loaded?.idempotencyKey, currentKey)
     }
 
+    func testResumeMismatchPreservesActiveServerRunForExplicitReconnect() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let projectID = UUID()
+        let lineageID = UUID()
+        let original = makeRequest(modelID: "gpt-6.1-sol", idempotencyKey: "server-original")
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID,
+            lineageID: lineageID,
+            request: original,
+            idempotencyKey: original.idempotencyKey,
+            runID: "server-run-original",
+            status: "running",
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 11)
+        )
+        defaults.set(
+            try JSONEncoder().encode(metadata),
+            forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)"
+        )
+
+        coordinator.resumeSuggestionRunIfNeeded(
+            projectID: projectID,
+            lineageID: lineageID,
+            currentIdempotencyKey: "new-recipe-key"
+        )
+
+        let preserved = try XCTUnwrap(coordinator.activeSuggestionRun(for: projectID))
+        XCTAssertEqual(preserved.status, "connection_unavailable")
+        XCTAssertEqual(preserved.runID, "server-run-original")
+        XCTAssertEqual(preserved.request.modelID, "gpt-6.1-sol")
+        XCTAssertEqual(preserved.idempotencyKey, "server-original")
+        let persisted = coordinator.loadSuggestionRunMetadata(lineageID: lineageID, projectID: projectID)
+        XCTAssertEqual(persisted?.runID, "server-run-original")
+        XCTAssertEqual(persisted?.idempotencyKey, "server-original")
+    }
+
     func testLoadDiscardsLineageEntryWhenExpectedIdempotencyKeyDiffers() throws {
         let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }

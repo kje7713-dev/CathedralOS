@@ -3603,6 +3603,7 @@ class ExecutableRunDb {
     const query: any = {
       update(value: Record<string, unknown>) { patch = value; return query; },
       eq(column: string, value: unknown) { filters.push([column, value]); return query; },
+      is(column: string, value: unknown) { filters.push([column, value]); return query; },
       lte(column: string, value: unknown) { ranges.push([column, value]); return query; },
       select(_columns?: string) { selected = true; return query; },
       maybeSingle() { return Promise.resolve(self.execute(table, patch, filters, ranges, selected)); },
@@ -4481,6 +4482,60 @@ Deno.test("suggestion lifecycle bounds distinguish elapsed lifetime and no progr
     created_at: new Date(now - 1000).toISOString(),
     updated_at: new Date(now - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString(),
   }, now), "worker_no_progress");
+});
+
+Deno.test("active lease is never terminalized by an old lifecycle timestamp", async () => {
+  const future = new Date(Date.now() + 60_000).toISOString();
+  const db = new ExecutableRunDb({
+    id: "run-active-old-progress",
+    status: "running",
+    lease_owner: "worker-token",
+    lease_expires_at: future,
+    attempt_count: 4,
+    created_at: new Date(Date.now() - MAX_SUGGESTION_LIFETIME_MS - 1).toISOString(),
+    updated_at: new Date(Date.now() - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString(),
+  });
+  const result = await reclaimExpiredSuggestionRun(db, {
+    id: db.row.id,
+    status: db.row.status,
+    lease_expires_at: future,
+    attempt_count: db.row.attempt_count,
+    created_at: db.row.created_at,
+    updated_at: db.row.updated_at,
+  });
+  assertEquals(result, false);
+  assertEquals(db.row.status, "running");
+  assertEquals(db.row.lease_owner, "worker-token");
+  assertEquals(db.claims, 0);
+});
+
+Deno.test("pending jobs with no durable progress reach a fenced terminal failure", async () => {
+  const old = new Date(Date.now() - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString();
+  const db = new ExecutableRunDb({
+    id: "run-pending-stuck",
+    status: "pending",
+    lease_owner: null,
+    lease_expires_at: null,
+    attempt_count: 1,
+    created_at: new Date(Date.now() - 1_000).toISOString(),
+    updated_at: old,
+    diagnostics: { worker: { lastMeaningfulProgressAt: old } },
+  });
+  const result = await reclaimExpiredSuggestionRun(db, {
+    id: db.row.id,
+    status: db.row.status,
+    lease_expires_at: null,
+    attempt_count: db.row.attempt_count,
+    created_at: db.row.created_at,
+    updated_at: db.row.updated_at,
+    diagnostics: db.row.diagnostics,
+  });
+  assertEquals(result, true);
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "worker_no_progress");
+  assertEquals(db.row.lease_owner, null);
+  assertEquals(db.row.lease_expires_at, null);
+  assertEquals(db.row.error.includes("Billing reconciliation is unresolved") || db.row.error.includes("No settled customer charge"), true);
 });
 
 Deno.test("active lease recovery is a no-op", async () => {
