@@ -4630,6 +4630,26 @@ Deno.test("exhausted worker preserves settled billing in its terminal message", 
   assertEquals(db.row.error.includes("No credits were charged"), false);
 });
 
+Deno.test("GET terminal recovery serializes the refreshed authoritative billing row", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes("JSON.stringify(suggestionRunResponse(recoveredRun))"), true);
+
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb(
+    { id: "run-get-authoritative-billing", status: "running", lease_expires_at: expired, attempt_count: 4, credit_cost_charged: 0, remaining_credits: 100 },
+    { reconciledCredits: 2, reconciledRemainingCredits: 98 },
+  );
+  const staleSnapshot = { ...db.row };
+  assertEquals(await reclaimExpiredSuggestionRun(db, staleSnapshot), true);
+  const recoveredRun = await loadAuthoritativeSuggestionRun(db, staleSnapshot.id);
+  if (!recoveredRun) throw new Error("expected authoritative recovered row");
+  const response = suggestionRunResponse(recoveredRun);
+  assertEquals(response.status, "failed");
+  assertEquals(response.creditCostCharged, 2);
+  assertEquals(response.remainingCredits, 98);
+  assertEquals(suggestionRunResponse({ ...recoveredRun, credit_cost_charged: null, remaining_credits: null, error: "Billing reconciliation is unresolved; any settled stages were preserved." }).creditCostCharged, null);
+});
+
 Deno.test("terminal recovery refreshes authoritative settled and remaining credits", async () => {
   const expired = new Date(Date.now() - 1000).toISOString();
   const db = new ExecutableRunDb(

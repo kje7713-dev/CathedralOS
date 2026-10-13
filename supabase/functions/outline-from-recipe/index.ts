@@ -4816,7 +4816,7 @@ Deno.serve(async (req: Request) => {
       run = recoveredRun;
     }
     return corsResponse(
-      JSON.stringify(suggestionRunResponse(run)),
+      JSON.stringify(suggestionRunResponse(recoveredRun)),
       { status: 200 },
     );
   }

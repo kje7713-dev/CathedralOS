@@ -1,6 +1,25 @@
 import XCTest
 @testable import CathedralOSApp
 
+private final class NeverRespondingSuggestionURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { }
+    override func stopLoading() { }
+}
+
+private final class SuggestionRunTestSessionProvider: SupabaseSessionProvider {
+    func ensureSignedInUser() async throws -> AuthUser { throw SupabaseSessionProviderError.notSignedIn }
+    func validAccessToken(forceRefresh: Bool) async throws -> String { "test-token" }
+    func refreshSessionIfNeeded() async throws -> String { "test-token" }
+    func retryOnceAfterExpiredJWT(request: URLRequest, session: URLSession) async throws -> (Data, URLResponse) {
+        try await session.data(for: request)
+    }
+    func diagnosticsSnapshot() -> AuthSessionDiagnosticsSnapshot {
+        AuthSessionDiagnosticsSnapshot(signedIn: true, accessTokenPresent: true, lastRefreshSucceeded: true, lastAuthError: nil)
+    }
+}
+
 // MARK: - SuggestionRunMetadataLineageTests
 //
 // PR 6 — move durable suggestion-run client identity from local project UUID
@@ -167,9 +186,16 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         defaults.set(try JSONEncoder().encode(metadata), forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)")
 
         let relaunched = DataDurabilityCoordinator(defaults: defaults)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NeverRespondingSuggestionURLProtocol.self]
+        let suspendedService = OutlineSuggestionService(
+            session: URLSession(configuration: configuration),
+            sessionProvider: SuggestionRunTestSessionProvider()
+        )
         relaunched.resumeSuggestionRunIfNeeded(
             projectID: projectID, lineageID: lineageID,
-            currentIdempotencyKey: request.idempotencyKey
+            currentIdempotencyKey: request.idempotencyKey,
+            service: suspendedService
         )
         let restored = try XCTUnwrap(relaunched.activeSuggestionRun(for: projectID))
         XCTAssertTrue(restored.isActive)
@@ -193,16 +219,25 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             updatedAt: Date()
         )
         defaults.set(try JSONEncoder().encode(metadata), forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NeverRespondingSuggestionURLProtocol.self]
+        let suspendedService = OutlineSuggestionService(
+            session: URLSession(configuration: configuration),
+            sessionProvider: SuggestionRunTestSessionProvider()
+        )
         coordinator.resumeSuggestionRunIfNeeded(
             projectID: projectID, lineageID: lineageID,
-            currentIdempotencyKey: original.idempotencyKey
+            currentIdempotencyKey: original.idempotencyKey,
+            service: suspendedService
         )
         let replacement = makeRequest(modelID: "gpt-6-luna", idempotencyKey: "replacement-request")
         coordinator.beginSuggestionRun(projectID: projectID, lineageID: lineageID, request: replacement)
 
         XCTAssertEqual(coordinator.activeSuggestionRun(for: projectID)?.runID, "server-generating-run")
         XCTAssertEqual(coordinator.activeSuggestionRun(for: projectID)?.idempotencyKey, original.idempotencyKey)
-        XCTAssertTrue(coordinator.consumeSuggestionFailure(for: projectID)?.contains("already owned") == true)
+        let rejection = coordinator.consumeSuggestionFailure(for: projectID)
+        XCTAssertTrue(rejection?.contains("still owned by the server") == true)
+        XCTAssertEqual(coordinator.activeSuggestionRun(for: projectID)?.runID, "server-generating-run")
         coordinator.cancelSuggestionRun(for: projectID)
     }
 
