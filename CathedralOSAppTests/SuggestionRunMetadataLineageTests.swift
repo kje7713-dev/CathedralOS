@@ -1,19 +1,15 @@
 import XCTest
 @testable import CathedralOSApp
 
-private final class NeverRespondingSuggestionURLProtocol: URLProtocol {
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() { }
-    override func stopLoading() { }
-}
-
 private final class SuggestionRunTestSessionProvider: SupabaseSessionProvider {
     func ensureSignedInUser() async throws -> AuthUser { throw SupabaseSessionProviderError.notSignedIn }
-    func validAccessToken(forceRefresh: Bool) async throws -> String { "test-token" }
+    func validAccessToken(forceRefresh: Bool) async throws -> String {
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+        return "test-token"
+    }
     func refreshSessionIfNeeded() async throws -> String { "test-token" }
     func retryOnceAfterExpiredJWT(request: URLRequest, session: URLSession) async throws -> (Data, URLResponse) {
-        try await session.data(for: request)
+        throw CancellationError()
     }
     func diagnosticsSnapshot() -> AuthSessionDiagnosticsSnapshot {
         AuthSessionDiagnosticsSnapshot(signedIn: true, accessTokenPresent: true, lastRefreshSucceeded: true, lastAuthError: nil)
@@ -186,10 +182,7 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         defaults.set(try JSONEncoder().encode(metadata), forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)")
 
         let relaunched = DataDurabilityCoordinator(defaults: defaults)
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [NeverRespondingSuggestionURLProtocol.self]
         let suspendedService = OutlineSuggestionService(
-            session: URLSession(configuration: configuration),
             sessionProvider: SuggestionRunTestSessionProvider()
         )
         relaunched.resumeSuggestionRunIfNeeded(
@@ -219,10 +212,7 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             updatedAt: Date()
         )
         defaults.set(try JSONEncoder().encode(metadata), forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)")
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [NeverRespondingSuggestionURLProtocol.self]
         let suspendedService = OutlineSuggestionService(
-            session: URLSession(configuration: configuration),
             sessionProvider: SuggestionRunTestSessionProvider()
         )
         coordinator.resumeSuggestionRunIfNeeded(
