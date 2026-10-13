@@ -161,8 +161,8 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         let metadata = SuggestionRunMetadata(
             projectID: projectID, lineageID: lineageID, request: request,
             idempotencyKey: request.idempotencyKey, runID: "server-generating-run",
-            status: "generating", createdAt: Date(timeIntervalSince1970: 100),
-            updatedAt: Date(timeIntervalSince1970: 101)
+            status: "generating", createdAt: Date().addingTimeInterval(-1),
+            updatedAt: Date()
         )
         defaults.set(try JSONEncoder().encode(metadata), forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)")
 
@@ -189,8 +189,8 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         let metadata = SuggestionRunMetadata(
             projectID: projectID, lineageID: lineageID, request: original,
             idempotencyKey: original.idempotencyKey, runID: "server-generating-run",
-            status: "generating", createdAt: Date(timeIntervalSince1970: 100),
-            updatedAt: Date(timeIntervalSince1970: 101)
+            status: "generating", createdAt: Date().addingTimeInterval(-1),
+            updatedAt: Date()
         )
         defaults.set(try JSONEncoder().encode(metadata), forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)")
         coordinator.resumeSuggestionRunIfNeeded(
