@@ -583,7 +583,7 @@ final class OutlineSuggestionErrorContractTests: XCTestCase {
 
     func testProviderFailureRemainsProviderError() {
         let error = OutlineSuggestionService.errorForFailedJob(errorCode: "provider_error", message: "OpenAI timeout")
-        XCTAssertEqual(error.localizedDescription, "The AI suggestion failed. Try again.")
+        XCTAssertEqual(error.localizedDescription, "OpenAI timeout")
     }
 
     func testGenericJobFailureRemainsServerError() {
@@ -596,6 +596,40 @@ final class OutlineSuggestionErrorContractTests: XCTestCase {
         let error = OutlineSuggestionService.errorForFailedJob(errorCode: nil, message: nil)
         XCTAssertTrue(error.localizedDescription.contains("Server error 500."))
         XCTAssertTrue(error.localizedDescription.contains("The suggestion job failed."))
+    }
+
+    func testTerminalFailureMappingsPreserveAuthoritativeBillingMessages() {
+        let settled = "The outline planner stopped before completion. 2.00 credits were already settled for completed stages; no duplicate charge will be created. Retry after reviewing the run."
+        let unsupported = OutlineSuggestionService.errorForFailedJob(
+            errorCode: "unsupported_model_configuration", message: settled
+        )
+        XCTAssertTrue(unsupported.localizedDescription.contains("2.00 credits were already settled"))
+        XCTAssertFalse(unsupported.localizedDescription.contains("No credits were charged"))
+
+        let billing = OutlineSuggestionService.errorForFailedJob(
+            errorCode: "provider_billing_unavailable", message: settled
+        )
+        XCTAssertTrue(billing.localizedDescription.contains("2.00 credits were already settled"))
+        XCTAssertFalse(billing.localizedDescription.contains("No credits were charged"))
+
+        let zero = "The outline planner stopped before completion. No settled customer charge is recorded for this run; retry the request."
+        XCTAssertEqual(
+            OutlineSuggestionService.errorForFailedJob(errorCode: "provider_outage", message: zero).localizedDescription,
+            zero
+        )
+
+        let unresolved = "The outline planner stopped before completion. Billing reconciliation is unresolved; any settled stages were preserved. Review the run before retrying."
+        XCTAssertTrue(OutlineSuggestionService.errorForFailedJob(errorCode: "worker_attempts_exhausted", message: unresolved).localizedDescription.contains("Billing reconciliation is unresolved"))
+        XCTAssertTrue(OutlineSuggestionService.errorForFailedJob(errorCode: "worker_lifetime_exceeded", message: settled).localizedDescription.contains("2.00 credits were already settled"))
+        XCTAssertTrue(OutlineSuggestionService.errorForFailedJob(errorCode: "worker_no_progress", message: settled).localizedDescription.contains("2.00 credits were already settled"))
+    }
+
+    func testMissingTerminalMessageUsesConservativeFallback() {
+        let description = OutlineSuggestionService.errorForFailedJob(
+            errorCode: "provider_billing_unavailable", message: nil
+        ).localizedDescription
+        XCTAssertTrue(description.contains("Billing status is unavailable"))
+        XCTAssertFalse(description.contains("No credits were charged"))
     }
 }
 

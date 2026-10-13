@@ -6,44 +6,6 @@ private func formatRunCredits(_ value: Double) -> String {
     String(format: "%.2f", value)
 }
 
-/// The Outline Sections MVP intentionally has a narrower model surface than
-/// the general generation picker. Availability is resolved from the server's
-/// eligible catalog response; a missing model is shown, not substituted.
-enum OutlineSectionsModelCatalog {
-    static let defaultID = "gpt-6.1-sol"
-    static let preferenceKey = "cathedralos.outline.selectedModelID"
-
-    struct Option: Identifiable, Equatable {
-        let id: String
-        let tier: String
-        let displayName: String
-        let description: String
-        let catalogModel: GenerationModelOption?
-
-        var isAvailable: Bool { catalogModel != nil }
-
-        var costDescription: String { catalogModel == nil ? "Currently unavailable" : "Available for outline planning" }
-    }
-
-    static let definitions: [(id: String, tier: String, name: String, description: String)] = [
-        ("gpt-6-luna", "Economy", "GPT-6 Luna", "Fast, economical planning for high-volume outlines."),
-        ("gpt-6.1-sol", "Recommended", "GPT-6.1 Sol", "Balanced planning quality and cost for most novels."),
-        ("gpt-6-astra", "Premium", "GPT-6 Astra", "Highest-capability planning for complex story architecture."),
-    ]
-
-    static func options(catalogModels: [GenerationModelOption]) -> [Option] {
-        definitions.map { definition in
-            Option(
-                id: definition.id,
-                tier: definition.tier,
-                displayName: definition.name,
-                description: definition.description,
-                catalogModel: catalogModels.first(where: { $0.id == definition.id })
-            )
-        }
-    }
-}
-
 /// Captured at Generate-tap time. Stores the outline ID so the kickoff
 /// never has to re-resolve the outline through `section.outline`,
 /// `currentOutline`, or `project.outlines` — those lookups were returning
@@ -246,9 +208,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestionsError: String?
     @State private var suggestionsNotice: String?
     @State private var suggestionsFeedback: String?
-    @State private var showingOutlineModelSheet = false
-    @State private var outlinePlanningRequest: OutlineSuggestionRequest?
-    @AppStorage(OutlineSectionsModelCatalog.preferenceKey) private var preferredOutlineModelID = OutlineSectionsModelCatalog.defaultID
+    @State private var showingSuggestionChargeWarning = false
+    @State private var showingOutlineModelChoice = false
+    @AppStorage("cathedralos.outline.selectedModelID") private var preferredOutlineModelID = "gpt-5.6-luna"
     @State private var acceptingSectionID: UUID?
     @State private var publicSharingStatuses: [UUID: PublicSharingEligibilityStatus] = [:]
     @State private var embedError: String?
@@ -258,10 +220,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     /// At most one Outline per project in Phase 0/1.
     private var currentOutline: Outline? {
         project.outlines.first
-    }
-
-    private var outlineHasSections: Bool {
-        !sectionsOrder.isEmpty
     }
 
     /// Only show the coordinator's live run when it belongs to this project.
@@ -276,22 +234,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             ?? durabilityCoordinator.runStatus(for: project.stableLineageID)
     }
 
-    private var projectActiveRunPollingError: String? {
-        guard durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID else {
-            return nil
-        }
-        return durabilityCoordinator.activeRunPollingError
-    }
-
     /// Beat picker source — current arc's beats (empty if no arc picked yet).
     private var availableBeats: [StoryArcBeat] {
         guard let arc = project.storyArcs.first else { return [] }
         return arc.beats.sorted(by: { $0.position < $1.position })
-    }
-
-    private func saveEditedSection() {
-        try? modelContext.save()
-        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
     }
 
     var body: some View {
@@ -302,7 +248,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             if let status = projectRunStatus {
                 ActiveRunBanner(
                     status: status,
-                    pollingError: projectActiveRunPollingError,
+                    pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
+                        ? durabilityCoordinator.activeRunPollingError
+                        : nil,
                     onResume: { await self.resumeRun(status) }
                 )
             }
@@ -346,11 +294,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             // reattached or surfaced. The coordinator's exact-match guard
             // will discard any persisted/active entry whose idempotency key
             // differs from the freshly built current key.
-            let recoveryMetadata = suggestionRunMetadataForRecovery()
-            let currentKey = currentSuggestionIdempotencyKey(
-                modelID: recoveryMetadata?.request.modelID,
-                usePreferredModel: recoveryMetadata == nil
-            )
+            let currentKey = currentSuggestionIdempotencyKey()
             // PR 6: pass canonical stableLineageID so resume-state survives
             // local project UUID drift (delete + recreate, restore from backup).
             durabilityCoordinator.resumeSuggestionRunIfNeeded(
@@ -373,13 +317,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // selection state mutates. The chooser Menu and Suggest Sections
         // button both consume `recipeSelection` so this keeps them in sync.
         .onChange(of: recipeSelectionKey) { _, _ in
-            let previousSelection = recipeSelection
-            let prior = previousSelection?.selectedRecipe?.id
+            let prior = recipeSelection?.selectedRecipe?.id
             // A `.autoSelected -> .pending` transition happens when a 2nd
             // recipe is added; preserve recoverable suggestions so re-picking
             // the original recipe re-surfaces them. Only an EXPLICIT prior
             // selection that has now changed should clear recoverable.
-            let priorWasExplicit = previousSelection?.kind == .selected
+            let priorWasExplicit = recipeSelection?.kind == .selected
             recipeSelection = recipeSelectionService.resolve(for: project)
             if priorWasExplicit,
                let priorID = prior,
@@ -415,7 +358,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             OutlineSectionEditView(
                 section: section,
                 availableBeats: availableBeats,
-                onSave: saveEditedSection
+                onSave: {
+                    try? modelContext.save()
+                    Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+                }
             )
         }
         .sheet(item: $generationToView) { output in
@@ -445,15 +391,28 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 runOutlineError = nil
             }
         }
-        .sheet(isPresented: $showingOutlineModelSheet) {
-            if let request = outlinePlanningRequest {
-                OutlinePlanningModelSheet(
-                    initialModelID: preferredOutlineModelID,
-                    request: request,
-                    onConfirm: confirmOutlinePlanningModel,
-                    onCancel: cancelOutlinePlanningModel
-                )
+        .confirmationDialog("Choose Planning Model", isPresented: $showingOutlineModelChoice, titleVisibility: .visible) {
+            Button("GPT-5.6 Luna") {
+                preferredOutlineModelID = "gpt-5.6-luna"
+                showingSuggestionChargeWarning = true
             }
+            Button("GPT-6 Luna") {
+                preferredOutlineModelID = "gpt-6-luna"
+                showingSuggestionChargeWarning = true
+            }
+            Button("GPT-6.1 Sol") {
+                preferredOutlineModelID = "gpt-6.1-sol"
+                showingSuggestionChargeWarning = true
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Choose the model for this outline plan.")
+        }
+        .alert("Suggest Sections Uses Credits", isPresented: $showingSuggestionChargeWarning) {
+            Button("Continue") { Task { await loadSuggestions() } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Suggest Sections makes paid AI calls. Credits are charged from actual usage, and the final charge may vary.")
         }
         .alert("Suggestions Ready", isPresented: suggestionsFeedbackPresented) {
             Button("Review Suggestions") {
@@ -717,10 +676,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         durabilityCoordinator.suggestionGenerationID(for: project.stableLineageID)
     }
 
-    private func currentSuggestionIdempotencyKey(
-        modelID: String? = nil,
-        usePreferredModel: Bool = true
-    ) -> String? {
+    private func currentSuggestionIdempotencyKey() -> String? {
         guard let recipe = recipeSelection?.selectedRecipe,
               let project = recipe.project,
               let arc = project.storyArcs.first,
@@ -744,20 +700,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             existingSections: currentOutline?.sections ?? [],
             material: material,
             requestGenerationID: currentSuggestionGenerationID(),
-            modelID: usePreferredModel ? (modelID ?? preferredOutlineModelID) : modelID
+            modelID: preferredOutlineModelID
         ).idempotencyKey
-    }
-
-    /// Existing runs own their model identity. The preference is only used
-    /// when there is no persisted/active run and a new request is being built.
-    private func suggestionRunMetadataForRecovery() -> SuggestionRunMetadata? {
-        if let active = durabilityCoordinator.activeSuggestionRun(for: project.id) {
-            return active
-        }
-        return durabilityCoordinator.loadSuggestionRunMetadata(
-            lineageID: project.stableLineageID,
-            projectID: project.id
-        )
     }
 
     private func loadRecoverableSuggestions() async {
@@ -800,7 +744,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 existingSections: currentOutline?.sections ?? [],
                 material: material,
                 requestGenerationID: currentSuggestionGenerationID(),
-                modelID: suggestionRunMetadataForRecovery()?.request.modelID
+                modelID: preferredOutlineModelID
             )
             // 3 + 4. recover only a completed run whose idempotency key
             //    matches that exact request. `findRun` is best-effort and
@@ -835,46 +779,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         showingSuggestionSheet = true
     }
 
-    private func prepareOutlinePlanning() {
-        do {
-            outlinePlanningRequest = try makePlanningRequest(modelID: preferredOutlineModelID)
-            showingOutlineModelSheet = true
-        } catch {
-            suggestionsError = error.localizedDescription
-        }
-    }
-
-    private func confirmOutlinePlanningModel(_ modelID: String) {
-        preferredOutlineModelID = modelID
-        showingOutlineModelSheet = false
-        outlinePlanningRequest = nil
-        Task { await loadSuggestions(modelID: modelID) }
-    }
-
-    private func cancelOutlinePlanningModel() {
-        showingOutlineModelSheet = false
-        outlinePlanningRequest = nil
-    }
-
-    @MainActor
-    private func makePlanningRequest(modelID: String) throws -> OutlineSuggestionRequest {
-        guard let recipe = recipeSelection?.selectedRecipe,
-              let arc = project.storyArcs.first,
-              let templateID = arc.templateID,
-              let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
-            throw OutlineSuggestionError.invalidResponse("Need a Recipe and a Story Arc template first.")
-        }
-        let material = try AuthoritativeProjectMaterial.resolve(project: project, in: modelContext)
-        return try OutlineSuggestionService().makeRequest(
-            recipe: recipe, arc: arc, arcTemplate: template, outline: currentOutline,
-            requestedFormat: "novel", existingSections: currentOutline?.sections ?? [],
-            material: material, requestGenerationID: currentSuggestionGenerationID(), modelID: modelID
-        )
-    }
-
-    private func loadSuggestions(modelID: String) async {
-        // Never replace a live server run just because the local view appears stalled.
-        // The durable coordinator must receive an authoritative terminal status first.
+    private func loadSuggestions() async {
         guard !suggestionRunActive else { return }
         // Suggest Sections is an explicit fresh-run intent. Advance the
         // generation before building the request so a completed run from an
@@ -915,7 +820,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 existingSections: currentOutline?.sections ?? [],
                 material: material,
                 requestGenerationID: currentSuggestionGenerationID(),
-                modelID: modelID
+                modelID: preferredOutlineModelID
             )
             suggestionsError = nil
             suggestionsNotice = nil
@@ -988,37 +893,24 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         }
                     }
                 }
-                if outlineHasSections {
-                    Button {
-                        runAllSections()
-                    } label: {
-                        Label("Run Sections", systemImage: "play.fill")
+                Button {
+                    showingOutlineModelChoice = true
+                } label: {
+                    if suggestionRunActive {
+                        ProgressView()
+                    } else {
+                        Label("Suggest Sections", systemImage: "sparkles")
                             .font(CathedralTheme.Typography.body(13, weight: .semibold))
                     }
-                    // A completed or failed banner is historical, not an active run.
-                    .disabled((projectRunStatus?.blocksNewGeneration ?? false) || isGenerationStarting)
                 }
-                Button {
-                    if suggestionRunActive {
-                        suggestionsNotice = "Your outline suggestions are still running or reconnecting. The original job and selected model are preserved. No new generation was started."
-                    } else {
-                        prepareOutlinePlanning()
-                    }
-                } label: {
-                    Label(
-                        suggestionRunActive ? "Suggestions Running" : "Suggest Sections",
-                        systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
-                    )
-                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                }
-                .disabled(!suggestionsReady)
+                .disabled(suggestionRunActive || !suggestionsReady)
             }
             if let run = durabilityCoordinator.activeSuggestionRun(for: project.id), run.status == "reconnecting" {
                 Text("Reconnecting to the server…")
                     .font(CathedralTheme.Typography.caption(12))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
-            Text("Your outline defines the structure of your novel. Run your sections to turn the plan into written chapters and scenes.")
+            Text("Add sections, tag them with arc beats, generate one Container run per section (coming soon).")
                 .font(CathedralTheme.Typography.body(13))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
         }
@@ -1036,8 +928,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     runOutlineError = nil
                     generationTarget = OutlineGenerationTarget(
                         section: section,
-                        outlineID: outline.id,
-                        modelID: preferredOutlineModelID
+                        outlineID: outline.id
                     )
                     DiagnosticLog.write("tap: outlineID=\(outline.id.uuidString.prefix(8)) sectionID=\(section.id.uuidString.prefix(8))")
                 }
@@ -1050,7 +941,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         .listRowBackground(CathedralTheme.Colors.background)
         .listRowSeparator(.hidden)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            // Edit first (non-destructive), Delete last (destructive).
+            // Edit first (non-destructive), Duplicate middle, Delete last (destructive).
             // Edit sets editingSection, which triggers the existing .sheet(item: $editingSection)
             // modifier to open OutlineSectionEditView. Restores the edit affordance PR #348
             // accidentally obscured by wrapping chapter rows in NavigationLink.
@@ -1060,6 +951,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 Label("Edit", systemImage: "pencil")
             }
             .tint(.indigo)
+            Button {
+                duplicateSection(section)
+            } label: {
+                Label("Duplicate", systemImage: "doc.on.doc")
+            }
+            .tint(.blue)
             Button(role: .destructive) {
                 deleteSection(section)
             } label: {
@@ -1100,6 +997,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             .onMove(perform: moveSections)
             .onDelete(perform: deleteSections)
 
+            Button(action: addSection) {
+                Label("Add Section", systemImage: "plus.circle")
+                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+            }
+            .listRowBackground(Color.clear)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -1107,13 +1009,26 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private var emptyState: some View {
-        Text("No outline sections yet. Tap Suggest Sections above to choose a model and generate your outline.")
+        Text("Pick a Story Arc template above to start — your project's outline is created automatically.")
             .font(CathedralTheme.Typography.body(13))
             .foregroundStyle(CathedralTheme.Colors.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Section mutations
+
+    private func addSection() {
+        guard let outline = currentOutline else { return }
+        let nextPosition = (outline.sections.map { $0.position }.max() ?? -1) + 1
+        let newSection = OutlineSection(
+            position: nextPosition,
+            title: "New Section",
+            summary: ""
+        )
+        modelContext.insert(newSection)
+        newSection.outline = outline
+        try? modelContext.save()
+    }
 
     /// PR-XXX-K: cloud DELETE first per section, then local mirror.
     private func deleteSections(at offsets: IndexSet) {
@@ -1135,6 +1050,23 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             }
             try? modelContext.save()
         }
+    }
+
+    private func duplicateSection(_ section: OutlineSection) {
+        guard let outline = currentOutline else { return }
+        let nextPosition = (outline.sections.map { $0.position }.max() ?? -1) + 1
+        let dup = OutlineSection(
+            position: nextPosition,
+            title: section.title + " (copy)",
+            summary: section.summary
+        )
+        dup.container = section.container
+        dup.pov = section.pov
+        dup.terminalBeat = section.terminalBeat
+        dup.storyArcBeatID = section.storyArcBeatID
+        modelContext.insert(dup)
+        dup.outline = outline
+        try? modelContext.save()
     }
 
     /// Delete a section via the swipe action. PR-XXX-K: was local-only —
@@ -1184,18 +1116,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         }
     }
 
-    private func runAllSections() {
-        guard let outline = currentOutline,
-              let first = outline.sections.filter({ $0.parent == nil }).sorted(by: { $0.position < $1.position }).first else { return }
-        generationTarget = OutlineGenerationTarget(
-            section: first,
-            outlineID: outline.id,
-            initialScope: "from_here",
-            modelID: preferredOutlineModelID
-        )
-        runOutlineError = nil
-    }
-
     private func moveSections(from offsets: IndexSet, to destination: Int) {
         sectionsOrder.move(fromOffsets: offsets, toOffset: destination)
         for (index, section) in sectionsOrder.enumerated() {
@@ -1219,8 +1139,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     /// 2. Scene-memory extraction (`embed-section` → LLM extract + embed +
     ///    section_embeddings UPSERT) is fired fire-and-forget only when
     ///    real prose exists — i.e. the section has at least one
-    ///    GenerationOutput. A planned section without prose is accepted
-    ///    with NO extraction call and NO section_embeddings row.
+    ///    GenerationOutput. A manual / blank New Section (no outputs)
+    ///    accepts with NO LLM call and NO section_embeddings row.
     ///
     /// 3. If the embed call fails for a generated section, the failure is
     ///    surfaced as `embedError` (non-blocking warning) but the planning
@@ -1235,7 +1155,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         defer { acceptingSectionID = nil }
 
         // (1) Planning acceptance: synchronous, unconditional on the embed
-        // call. A planned section without prose needs no extraction call.
+        // call. A manual / blank New Section accepts here with no LLM call.
         guard let outlineID = section.outline?.id ?? currentOutline?.id else {
             embedError = "Section has no outline. Refresh the project and try again."
             return
@@ -1306,191 +1226,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             embedError = "Section accepted; scene memory extract failed: \(error.localizedDescription)"
         }
     }
-    /// Native selection sheet used before every new outline-planning run.
-/// It always renders the exact three MVP models and never falls back when the
-/// server says a selected model is not currently eligible.
-struct OutlinePlanningModelSheet: View {
-    let initialModelID: String
-    let request: OutlineSuggestionRequest
-    let onConfirm: (String) -> Void
-    let onCancel: () -> Void
-
-    private let generationModelService: any GenerationModelServiceProtocol = BackendGenerationModelService()
-    @State private var catalogModels: [GenerationModelOption] = []
-    @State private var selectedModelID: String
-    @State private var isLoading = true
-    @State private var loadError: String?
-    @State private var estimate: OutlinePlanningEstimate?
-    @State private var estimateError: String?
-    @State private var isEstimating = false
-
-    private var options: [OutlineSectionsModelCatalog.Option] {
-        OutlineSectionsModelCatalog.options(catalogModels: catalogModels)
-    }
-
-    private var selectedOption: OutlineSectionsModelCatalog.Option? {
-        options.first(where: { $0.id == selectedModelID })
-    }
-
-    init(
-        initialModelID: String,
-        request: OutlineSuggestionRequest,
-        onConfirm: @escaping (String) -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.initialModelID = initialModelID
-        self.request = request
-        self.onConfirm = onConfirm
-        self.onCancel = onCancel
-        self._selectedModelID = State(initialValue: initialModelID)
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Text("Choose the model for this outline plan. The selection is saved for the next run, but this sheet will appear every time.")
-                        .font(CathedralTheme.Typography.body(14))
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    Text("The server calculates the outline estimate below from the selected recipe, Story Arc, and planning stages. Actual charges can vary.")
-                        .font(CathedralTheme.Typography.caption(11))
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                }
-                Section("Outline planning model") {
-                    ForEach(options) { option in
-                        Button {
-                            selectedModelID = option.id
-                        } label: {
-                            HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
-                                Image(systemName: selectedModelID == option.id ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(selectedModelID == option.id ? CathedralTheme.Colors.accent : CathedralTheme.Colors.tertiaryText)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    HStack {
-                                        Text(option.displayName)
-                                            .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                                        Spacer()
-                                        Text(option.tier)
-                                            .font(CathedralTheme.Typography.caption(11, weight: .semibold))
-                                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                                    }
-                                    Text(option.description)
-                                        .font(CathedralTheme.Typography.caption(12))
-                                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                                    Text(option.costDescription)
-                                        .font(CathedralTheme.Typography.caption(12, weight: .medium))
-                                        .foregroundStyle(option.isAvailable ? CathedralTheme.Colors.primaryText : CathedralTheme.Colors.destructive)
-                                    if !option.isAvailable {
-                                        Text("This model cannot be used right now. Choose an available model; no fallback will be applied.")
-                                            .font(CathedralTheme.Typography.caption(11))
-                                            .foregroundStyle(CathedralTheme.Colors.destructive)
-                                    }
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                estimateSection
-                if isLoading {
-                    HStack(spacing: CathedralTheme.Spacing.sm) {
-                        ProgressView()
-                        Text("Verifying model availability…")
-                            .font(CathedralTheme.Typography.caption())
-                    }
-                } else if let loadError {
-                    Text(loadError)
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                }
-            }
-            .navigationTitle("Choose Planning Model")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Confirm") {
-                        guard selectedOption?.isAvailable == true else { return }
-                        onConfirm(selectedModelID)
-                    }
-                    .fontWeight(.semibold)
-                    .disabled(isLoading || selectedOption?.isAvailable != true)
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-        .task { await loadSheetData() }
-        .onChange(of: selectedModelID) { _, _ in
-            selectionChanged()
-        }
-    }
-
-    @ViewBuilder
-    private var estimateSection: some View {
-        Section("Outline estimate") {
-            if isEstimating {
-                HStack {
-                    ProgressView()
-                    Text("Estimating outline generation…")
-                }
-            } else if let estimate {
-                Text("Estimated outline generation: \(formatRunCredits(estimate.estimatedCredits)) credits")
-                Text("Your available credits: \(formatRunCredits(estimate.availableCredits)) credits")
-                Text("Estimated balance afterward: \(formatRunCredits(estimate.projectedBalance)) credits")
-                Text("This is a projection across variable-length planning stages; actual charges can vary.")
-                    .font(CathedralTheme.Typography.caption(11))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                if !estimate.allowed {
-                    Text("Insufficient credits for this estimate.")
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                }
-            } else if let estimateError {
-                Text(estimateError)
-                    .foregroundStyle(CathedralTheme.Colors.destructive)
-            }
-        }
-    }
-
-    private func loadSheetData() async {
-        await loadModels()
-        await refreshEstimate()
-    }
-
-    private func selectionChanged() {
-        Task { await refreshEstimate() }
-    }
-
-    @MainActor
-    private func refreshEstimate() async {
-        guard selectedOption?.isAvailable == true else {
-            estimate = nil
-            estimateError = "Pricing could not be estimated until this model is available."
-            return
-        }
-        isEstimating = true
-        estimateError = nil
-        defer { isEstimating = false }
-        do {
-            estimate = try await OutlineSuggestionService().estimate(request: request, modelID: selectedModelID)
-        } catch {
-            estimate = nil
-            estimateError = "Pricing could not be estimated. No credits were consumed."
-        }
-    }
-
-    @MainActor
-    private func loadModels() async {
-        defer { isLoading = false }
-        do {
-            catalogModels = try await generationModelService.fetchEnabledModels()
-        } catch {
-            loadError = "Could not verify model availability: \(error.localizedDescription)"
-        }
-    }
-}
-
-// MARK: - Day 4 generation wiring
+    // MARK: - Day 4 generation wiring
 
     /// Queue a server-side generation run for the given target and start
     /// polling for status. The server owns the long-running work, so locking
@@ -1534,8 +1270,9 @@ struct OutlinePlanningModelSheet: View {
         do {
             // Sync the outline to the cloud before kickoff. The edge function
             // looks up the outline by ID and returns 404 if it doesn't exist yet.
-            // Persisted outline edits must reach the cloud before kickoff;
-            // the edge function validates the authoritative outline identity.
+            // (addSection doesn't trigger a sync on its own — only
+            // modelContext.save() — so an outline added manually can be
+            // local-only at kickoff time.)
             DiagnosticLog.write("kickoff: syncing project to cloud")
             try await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
             DiagnosticLog.write("kickoff: sync complete")
@@ -1902,7 +1639,6 @@ struct KickoffConfirmationSheet: View {
     @State private var selectedScope: String
     @State private var estimateError: String?
     @State private var hasLoadedModels = false
-    @AppStorage(OutlineSectionsModelCatalog.preferenceKey) private var rememberedModelID = OutlineSectionsModelCatalog.defaultID
 
     // Coherence v2 (2026-08-20): pre-gen coherence check REMOVED.
     // The check is now user-initiated via the "Check for inconsistencies"
@@ -1919,9 +1655,8 @@ struct KickoffConfirmationSheet: View {
         return arc.beats.sorted(by: { $0.position < $1.position })
     }
 
-    private var selectedModel: OutlineSectionsModelCatalog.Option? {
-        OutlineSectionsModelCatalog.options(catalogModels: generationModels)
-            .first(where: { $0.id == selectedModelId })
+    private var selectedModel: GenerationModelOption? {
+        generationModels.first(where: { $0.id == selectedModelId })
     }
 
     /// Mirrors run-outline's section walker so the confirmation sheet estimates
@@ -1993,8 +1728,6 @@ struct KickoffConfirmationSheet: View {
                 .buttonStyle(.bordered)
                 .disabled(isStarting)
                 Button {
-                    guard selectedModel?.isAvailable == true, let selectedModelId else { return }
-                    rememberedModelID = selectedModelId
                     Task { await onConfirm(selectedModelId, selectedScope) }
                 } label: {
                     if isStarting {
@@ -2004,7 +1737,7 @@ struct KickoffConfirmationSheet: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(!canStart || selectedModel?.isAvailable != true)
+                .disabled(!canStart)
             }
             .padding(.top, CathedralTheme.Spacing.md)
         }
@@ -2033,33 +1766,21 @@ struct KickoffConfirmationSheet: View {
                 .font(CathedralTheme.Typography.label(10, weight: .semibold))
                 .tracking(1.5)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            if generationModels.isEmpty && !hasLoadedModels {
+            if generationModels.isEmpty {
                 Text("Loading models…")
                     .font(CathedralTheme.Typography.caption())
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            } else if generationModels.isEmpty {
-                Text("Could not verify an available approved model. Try again before starting.")
-                    .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.destructive)
             } else {
                 Picker("Model", selection: $selectedModelId) {
-                    ForEach(OutlineSectionsModelCatalog.options(catalogModels: generationModels)) { option in
-                        Text("\(option.displayName) · \(option.tier)").tag(Optional(option.id))
+                    ForEach(generationModels) { model in
+                        Text(model.displayName).tag(Optional(model.id))
                     }
                 }
                 .pickerStyle(.menu)
                 if let selectedModel {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(selectedModel.description)
-                        Text(selectedModel.costDescription)
-                            .fontWeight(.medium)
-                        if !selectedModel.isAvailable {
-                            Text("Unavailable — no fallback will be used.")
-                                .foregroundStyle(CathedralTheme.Colors.destructive)
-                        }
-                    }
-                    .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(selectedModel.isAvailable ? CathedralTheme.Colors.secondaryText : CathedralTheme.Colors.destructive)
+                    Text(selectedModel.description ?? "No description.")
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
             }
         }
@@ -2120,9 +1841,7 @@ struct KickoffConfirmationSheet: View {
         self.onConfirm = onConfirm
         self.onCancel = onCancel
         self._generationModels = State(initialValue: [])
-        let approvedIDs = Set(OutlineSectionsModelCatalog.definitions.map { $0.id })
-        let initialModel = modelID.flatMap { approvedIDs.contains($0) ? $0 : nil } ?? OutlineSectionsModelCatalog.defaultID
-        self._selectedModelId = State(initialValue: initialModel)
+        self._selectedModelId = State(initialValue: modelID)
         self._runEstimate = State(initialValue: nil)
         self._isEstimating = State(initialValue: false)
         self._estimateError = State(initialValue: nil)
@@ -2160,12 +1879,12 @@ struct KickoffConfirmationSheet: View {
     private func loadModelsAndEstimate() async {
         do {
             generationModels = try await generationModelService.fetchEnabledModels()
-            if modelID == nil {
-                selectedModelId = rememberedModelID
+            if selectedModelId == nil, let first = generationModels.first {
+                selectedModelId = first.id
             }
         } catch {
-            generationModels = []
-            estimateError = "Could not verify model availability: \(error.localizedDescription)"
+            // Models failed to load -- continue with empty list; user can still attempt kickoff
+            // and the run-outline endpoint will use its own default model.
         }
         // Guard the initial state assignment above from triggering a second
         // estimate through selectedModelId's onChange handler.
@@ -2180,10 +1899,6 @@ struct KickoffConfirmationSheet: View {
         runEstimate = nil
         defer { isEstimating = false }
 
-        guard selectedModel?.isAvailable == true, let selectedModelId else {
-            estimateError = "The selected model is unavailable. Choose an available model; no fallback will be used."
-            return
-        }
         do {
             // The server walks the same scope and runs the same combined
             // estimate used by durable Run All credit reservation. Do not
