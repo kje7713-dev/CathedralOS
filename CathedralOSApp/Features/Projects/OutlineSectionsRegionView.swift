@@ -268,7 +268,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         await loadRecoverableSuggestions()
     }
 
-    var body: some View {
+    @ViewBuilder
+    private var sectionsRootContent: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
             if isGenerationStarting && projectRunStatus == nil {
                 GenerationStartingBanner()
@@ -289,6 +290,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 emptyState
             }
         }
+    }
+
+    var body: some View {
+        sectionsRootContent
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(CathedralTheme.Spacing.base)
         .background(CathedralTheme.Colors.surface)
